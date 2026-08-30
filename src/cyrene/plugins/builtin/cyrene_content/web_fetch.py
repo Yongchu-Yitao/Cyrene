@@ -12,7 +12,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 import httpx
 
 from .definitions import get_native_tool_def
-from cyrene.model_runtime.messages import truncate
+from cyrene.model.messages import truncate
 
 TOOL_NAME = 'WebFetch'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)

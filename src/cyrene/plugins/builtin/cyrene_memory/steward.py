@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.localization import app_language
-from cyrene.runtime.io import atomic_write_json, read_json_safe
+from cyrene.platform.io import atomic_write_json, read_json_safe
 
 logger = logging.getLogger(__name__)
 

@@ -12,6 +12,7 @@ from .services import terminal_service
 
 TOOL_NAME = "ShowShell"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
+TOOL_METADATA = {"public_errors": True}
 
 
 async def _tool_show_shell(

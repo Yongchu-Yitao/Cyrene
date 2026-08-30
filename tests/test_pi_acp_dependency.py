@@ -20,7 +20,7 @@ import os
 
 import pytest
 
-from cyrene.agent_runtime import AcpProcessManager
+from cyrene.agents import AcpProcessManager
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +232,7 @@ def _installation(**overrides):
 
 
 def test_prepend_path_dirs_prepends_dedupes_and_preserves_original():
-    from cyrene.agent_runtime.process_manager import prepend_path_dirs
+    from cyrene.agents.process_manager import prepend_path_dirs
 
     original = f"/usr/bin{os.pathsep}/bin"
     merged = prepend_path_dirs(original, ["/opt/a", "/opt/b", "/usr/bin"])
@@ -246,7 +246,7 @@ def test_prepend_path_dirs_prepends_dedupes_and_preserves_original():
 
 
 def test_agent_child_path_dirs_uses_install_shim_dir_and_managed_node_bin(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import process_manager
+    from cyrene.agents import process_manager
 
     monkeypatch.setattr(
         process_manager,
@@ -266,7 +266,7 @@ def test_agent_child_path_dirs_uses_install_shim_dir_and_managed_node_bin(monkey
 
 
 def test_agent_child_path_dirs_skips_missing_install_dir(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import process_manager
+    from cyrene.agents import process_manager
 
     monkeypatch.setattr(process_manager, "_managed_runtime_bin_dir", lambda: None)
     # managed_path points at a directory that does not exist on disk.
@@ -277,7 +277,7 @@ def test_agent_child_path_dirs_skips_missing_install_dir(monkeypatch, tmp_path):
 
 
 def test_validation_accepts_global_agent_and_dependency_fallback(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import process_manager
+    from cyrene.agents import process_manager
 
     monkeypatch.setattr(process_manager, "_managed_runtime_bin_dir", lambda: None)
     global_bin = tmp_path / "global-bin"
@@ -297,8 +297,8 @@ def test_validation_accepts_global_agent_and_dependency_fallback(monkeypatch, tm
 
 
 def test_validation_rejects_component_missing_from_managed_and_global_path(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import process_manager
-    from cyrene.agent_runtime.errors import AgentRuntimeError
+    from cyrene.agents import process_manager
+    from cyrene.agents.errors import AgentRuntimeError
 
     monkeypatch.setattr(process_manager, "_managed_runtime_bin_dir", lambda: None)
     shim_dir = tmp_path / "agents" / "pi-acp" / "node_modules" / ".bin"
@@ -350,7 +350,7 @@ class _CapturingTransport:
 
 @pytest.mark.asyncio
 async def test_get_transport_prepends_dependency_path_to_child_env(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import process_manager
+    from cyrene.agents import process_manager
 
     monkeypatch.setattr(process_manager, "_managed_runtime_bin_dir", lambda: str(tmp_path / "node-bin"))
     shim_dir = tmp_path / "agents" / "pi-acp" / "0.0.33" / "node_modules" / ".bin"

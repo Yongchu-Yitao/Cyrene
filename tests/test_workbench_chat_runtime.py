@@ -435,7 +435,7 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.runtime import host_bridge
+    from cyrene.platform import host_bridge
     from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     captured = {}
@@ -516,6 +516,7 @@ def test_builtin_workbench_route_always_uses_new_runtime(
         run_id="run-route",
         publish=lambda _event: None,
         events=[],
+        guidance_channel=None,
     )
 
     result = run(operation._run_turn(workbench_run))

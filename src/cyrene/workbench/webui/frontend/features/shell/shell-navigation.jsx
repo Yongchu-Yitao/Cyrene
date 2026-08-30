@@ -21,26 +21,8 @@ function wbNavigateFromSearch(context, requestedPayload) {
   if (!project) return;
   var pageMap = { chat: "chat", knowledge: "knowledge", memory: "memory", schedule: "schedule" };
   var moduleMap = { chat: "work", knowledge: "knowledge", memory: "memory", schedule: "schedule" };
-  if (type === "task" && project && payload.sessionId) {
-    var session = project.sessions.find(function (item) { return item.id === payload.sessionId; });
-    if (session) {
-      context.setStore(function (previous) {
-        return {
-          ...previous, activeProjectId: project.id, activeProject: project,
-          activeSessionId: session.id, activeSession: session,
-        };
-      });
-      context.setExpandedStepId("");
-      context.setTaskView("detail");
-      context.setFullPage("chat");
-      context.setTaskOpenRequest(function (current) {
-        return { id: session.id, sequence: Number(current && current.sequence || 0) + 1 };
-      });
-      context.model.setActiveProject(project.id, session.id).catch(function () {});
-    }
-  } else if (type === "project" && project) {
+  if (type === "project" && project) {
     context.getSelectProject()(project.id);
-    context.setTaskView("board");
     context.setFullPage(null);
   } else {
     if (project && project.id !== context.store.activeProjectId) context.getSelectProject()(project.id);

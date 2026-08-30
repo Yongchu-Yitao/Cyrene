@@ -368,9 +368,21 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     feedback = (frontend / "shared/feedback/service.jsx").read_text(encoding="utf-8")
     styles = (frontend / "workbench.css").read_text(encoding="utf-8")
     terminal_styles = (frontend / "terminal/terminal.css").read_text(encoding="utf-8")
+    workspace_styles = (frontend / "features/chat/workspace.css").read_text(encoding="utf-8")
 
     assert 'background: "#17181C"' in source
     assert "--wbc-terminal-background: #17181c;" in terminal_styles
+    assert "React.useLayoutEffect(function () {\n    var host = hostRef.current;" in source
+    assert ".wbc-pane-card-terminal {" in terminal_styles
+    terminal_frame = terminal_styles.split(".wbc-pane-card-terminal {", 1)[1].split("}", 1)[0]
+    assert "background: var(--wbc-terminal-background);" in terminal_frame
+    assert "backdrop-filter: none;" in terminal_frame
+    terminal_row = workspace_styles.split(
+        ".wbc-project-terminal-list .wbc-terminal-card {", 1
+    )[1].split("}", 1)[0]
+    assert "min-height: 36px;" in terminal_row
+    assert "padding: 0 6px;" in terminal_row
+    assert "border-radius: 9px;" in terminal_row
     assert 'cursorBlink: true' in source
     assert 'cursorStyle: "bar"' in source
     assert 'cursorWidth: 2' in source
@@ -460,7 +472,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'actionLabel = notice.reconnect' in source
     assert '"terminal.restart": "重启"' in zh_catalog
     assert 'var [railMode, setRailMode] = useWbcState("chat")' in chat_source
-    assert 'setRailMode(lastWorkRailModeRef.current === "task" ? "task" : "chat");\n    replaceWithTerminal(pending.terminalId' in chat_source
+    assert 'setRailMode("chat");\n    replaceWithTerminal(pending.terminalId' in chat_source
     assert 'railMode={railMode}' in chat_source
 
 
@@ -468,6 +480,8 @@ def test_agent_terminal_show_uses_split_and_replaces_one_existing_pane() -> None
     source = workbench_chat_source()
 
     assert "function showAgentTerminal(terminalId, preferredSide)" in source
+    assert 'if (!id) return { ok: false, error: "terminal_id_required" };' in source
+    assert 'error: "terminal_not_found"' not in source
     assert "if (count <= 1)" in source
     assert "next[targetSide] = [card]" in source
     assert "next[replaceSide][replaceIndex] = card" in source

@@ -20,7 +20,7 @@ from cyrene.core.context import ContextStoreRouter
 from cyrene.core.hook import SESSION_START
 from cyrene.plugins.builtin.cyrene_soul.service import setup_soul
 from cyrene.plugins.builtin.cyrene_context.service import setup_runtime_context
-from cyrene.runtime import settings_store
+from cyrene.platform import settings_store
 from cyrene.workbench.http.plugins import register_plugin_routes
 
 

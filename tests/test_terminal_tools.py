@@ -1,9 +1,44 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
 import pytest
+
+
+@pytest.mark.asyncio
+async def test_ui_surface_request_runs_on_the_websocket_owner_loop() -> None:
+    from cyrene.workbench.ui import ui_surface
+
+    owner_loop = asyncio.get_running_loop()
+    connection = None
+
+    class FakeWebSocket:
+        async def send_json(self, payload):
+            assert asyncio.get_running_loop() is owner_loop
+            ui_surface.receive(connection, {
+                "type": "response",
+                "requestId": payload["requestId"],
+                "result": {"ok": True, "method": payload["method"]},
+            })
+
+    connection = await ui_surface.register("surface-cross-loop", FakeWebSocket())
+    try:
+        result = await asyncio.to_thread(
+            lambda: asyncio.run(
+                ui_surface.request(
+                    "surface-cross-loop",
+                    "terminal.show",
+                    {"terminalId": "term-1"},
+                    timeout=0.5,
+                )
+            )
+        )
+    finally:
+        await ui_surface.unregister("surface-cross-loop", connection)
+
+    assert result == {"ok": True, "method": "terminal.show"}
 
 
 def test_requested_terminal_title_preserves_user_supplied_name() -> None:

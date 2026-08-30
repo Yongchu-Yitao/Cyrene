@@ -202,15 +202,6 @@ import { wbcErrorText } from "./errors.jsx"
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), { method: "DELETE" });
   }
 
-  function toTask(chatId, input) {
-    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/to-task", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input || {}),
-      timeout: 180000, // LLM reads & distills the whole conversation — long budget
-    });
-  }
-
   function compactChat(chatId) {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/compact", {
       method: "POST",
@@ -499,7 +490,6 @@ import { wbcErrorText } from "./errors.jsx"
     replaceChatGroups: replaceChatGroups,
     migrateChatGroups: migrateChatGroups,
     deleteChat: deleteChat,
-    toTask: toTask,
     compactChat: compactChat,
     generateMemory: generateMemory,
     interrupt: interrupt,

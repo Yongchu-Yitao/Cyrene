@@ -236,7 +236,7 @@ class _AnswerOperation:
             self.workspace_dir,
             self.agent_run_id or run.run_id,
         )
-        from cyrene.runtime.host_bridge import resolve_conversation_source
+        from cyrene.platform.host_bridge import resolve_conversation_source
 
         self.conversation_source = await resolve_conversation_source(self.ui_instance_id)
 
@@ -597,7 +597,7 @@ class _AnswerOperation:
             chat,
             base_chat=base_chat,
         )
-        from cyrene.runtime.host_actions import finalize_origin
+        from cyrene.platform.host_actions import finalize_origin
 
         asyncio.create_task(finalize_origin(self.chat_id, ""))
         return completed
@@ -670,6 +670,24 @@ class _AnswerOperation:
             "settled",
             **details,
         )
+        # Conversation lifecycle extensions may resume durable workflows after
+        # an interactive answer. The route knows no workflow-specific service.
+        from cyrene.core.plugin import application_plugin_scope
+
+        scope = application_plugin_scope()
+        for service in dict(scope.active_services).values() if scope is not None else ():
+            handler = getattr(service, "on_conversation_settled", None)
+            if not callable(handler):
+                continue
+            try:
+                result = handler(self.chat_id)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception(
+                    "Conversation lifecycle extension failed after answer for %s",
+                    self.chat_id,
+                )
 
 def register_run_answer_routes(
     router: APIRouter,

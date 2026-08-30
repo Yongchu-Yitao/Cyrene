@@ -13,7 +13,7 @@ uv run python -m cyrene
 ### 无 Web 的交互 CLI
 
 ```bash
-python -m cyrene.runtime.host
+python -m cyrene.platform.host
 ```
 
 ### `cyrene` 后台 Client
@@ -214,7 +214,7 @@ CLI 可以同时运行，并共享相同的 Project、Conversation、Task、Memo
 ## 进程内 Local CLI（Legacy）
 
 ```bash
-python -m cyrene.runtime.host
+python -m cyrene.platform.host
 ```
 
 | 命令 | 功能 |

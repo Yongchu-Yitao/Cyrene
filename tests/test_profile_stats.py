@@ -8,7 +8,7 @@ import pytest
 
 import aiosqlite
 
-from cyrene.runtime import database as cy_db
+from cyrene.platform import database as cy_db
 from cyrene.workbench.artifacts import presentation_runtime as routes
 
 
@@ -152,11 +152,11 @@ async def test_tool_stats_merges_profile_display_aliases_before_limit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_task_time_totals_merges_task_logs_and_goal_runs(tmp_path, monkeypatch):
+async def test_execution_time_totals_merge_scheduled_runs_and_goal_runs(tmp_path, monkeypatch):
     import cyrene.core.plugin
     from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
-    db_path = str(tmp_path / "tasks.db")
+    db_path = str(tmp_path / "execution.db")
     await cy_db.init_db(db_path)
     schedules = ScheduleRuntimeService(db_path)
     monkeypatch.setattr(
@@ -166,7 +166,7 @@ async def test_task_time_totals_merges_task_logs_and_goal_runs(tmp_path, monkeyp
     )
 
     # Empty DB → zeroed totals.
-    empty = await cy_db.get_task_time_totals(db_path)
+    empty = await cy_db.get_execution_time_totals(db_path)
     assert empty == {"total_ms": 0, "longest_ms": 0, "runs": 0}
 
     repository = schedules.repository
@@ -187,10 +187,10 @@ async def test_task_time_totals_merges_task_logs_and_goal_runs(tmp_path, monkeyp
             )
         await db.commit()
 
-    totals = await cy_db.get_task_time_totals(db_path)
-    # tasks: 1000 + 3000 = 4000ms; goals: (2 + 5)s = 7000ms
+    totals = await cy_db.get_execution_time_totals(db_path)
+    # scheduled runs: 1000 + 3000 = 4000ms; goals: (2 + 5)s = 7000ms
     assert totals["total_ms"] == 11000
-    assert totals["longest_ms"] == 5000  # max(3000ms task, 5000ms goal)
+    assert totals["longest_ms"] == 5000  # max(3000ms scheduled run, 5000ms goal)
     assert totals["runs"] == 4
 
 
@@ -202,7 +202,7 @@ def test_build_user_prefers_stored_profile(monkeypatch):
         "profile_avatar_color": "#1D9E75",
         "profile_bio": "first programmer",
     }
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", lambda key, default="": stored.get(key, default))
+    monkeypatch.setattr("cyrene.platform.settings_store.get", lambda key, default="": stored.get(key, default))
 
     user = routes._build_user()
     assert user["name"] == "Ada Lovelace"
@@ -214,7 +214,7 @@ def test_build_user_prefers_stored_profile(monkeypatch):
 
 
 def test_build_user_falls_back_to_local_name(monkeypatch):
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", lambda key, default="": default)
+    monkeypatch.setattr("cyrene.platform.settings_store.get", lambda key, default="": default)
     monkeypatch.setattr(routes, "_resolve_local_username", lambda: "Sam")
 
     user = routes._build_user()

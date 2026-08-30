@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 
 class ConversationNotFoundError(LookupError):
+    pass
+
+
+class ConversationContextUpdateError(ValueError):
     pass
 
 
@@ -371,12 +376,21 @@ def _agent_turn_context_layer(
     blocks = [
         {
             "id": f"context.{mount.get('kind') or 'turn'}",
+            "nodeId": str(mount.get("id") or ""),
             "type": "ephemeral",
             "tokens_est": allocation,
             "chars": len(str(mount.get("content") or "")),
             "contextKind": str(mount.get("kind") or "turn_context"),
             "source": str(mount.get("source") or "TurnStart"),
             "reason": str(mount.get("kind") or "turn_context"),
+            "lifecycle": str(mount.get("lifecycle") or ""),
+            "createdAt": str(mount.get("createdAt") or ""),
+            "updatedAt": str(mount.get("updatedAt") or ""),
+            "metadata": (
+                copy.deepcopy(dict(mount.get("metadata") or {}))
+                if isinstance(mount.get("metadata"), Mapping)
+                else {}
+            ),
         }
         for mount, allocation in zip(mounts, allocations, strict=True)
         if allocation > 0
@@ -506,6 +520,135 @@ def _agent_path_plugin_usage(
     return packs, standalone
 
 
+def _agent_path_timeline(
+    nodes: list[Any],
+    plugin_owner: Callable[[str], tuple[str | None, str] | None] | None = None,
+) -> list[dict[str, Any]]:
+    """Project the active path into chronological, content-safe audit records."""
+
+    def tool_result_record(result: Mapping[str, Any]) -> dict[str, Any]:
+        value = result.get("value")
+        invocation = value if isinstance(value, Mapping) else {}
+        result_name = str(result.get("name") or "").strip()
+        operation = str(invocation.get("operation") or "").strip()
+        pack_id = ""
+        plugin_name = ""
+        if result_name == "toolbox":
+            if operation == "invoke":
+                pack_id = str(invocation.get("pack") or "").strip()
+                plugin_name = str(invocation.get("name") or "").strip()
+            else:
+                plugin_name = "toolbox"
+        else:
+            owner = plugin_owner(result_name) if plugin_owner is not None else None
+            if owner is not None:
+                raw_pack_id, raw_plugin_name = owner
+                pack_id = str(raw_pack_id or "").strip()
+                plugin_name = str(raw_plugin_name or result_name).strip()
+            else:
+                plugin_name = result_name
+        return {
+            "call_id": str(result.get("call_id") or ""),
+            "name": result_name,
+            "success": bool(result.get("success")),
+            "error": str(result.get("error") or ""),
+            "operation": operation,
+            "plugin_pack": pack_id,
+            "plugin_name": plugin_name,
+        }
+
+    records: list[dict[str, Any]] = []
+    for order, node in enumerate(nodes):
+        value = node.value if isinstance(node.value, Mapping) else {}
+        role = str(value.get("role") or "").strip()
+        if not role:
+            continue
+        content = value.get("content")
+        if not isinstance(content, str):
+            if role == "tool_results":
+                content = json.dumps(
+                    value.get("results") or [],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            elif role in {"context_compaction", "context_reflection"}:
+                content = json.dumps(
+                    value.get("messages") or [],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            else:
+                content = ""
+        technical: dict[str, Any] = {}
+        for key in (
+            "metadata",
+            "run_id",
+            "model",
+            "model_identity",
+            "usage",
+            "finish_reason",
+            "before_tokens",
+            "after_tokens",
+            "context_limit",
+            "distilled",
+        ):
+            if key in value:
+                technical[key] = copy.deepcopy(value[key])
+        calls = value.get("tool_calls")
+        if isinstance(calls, list):
+            technical["tool_calls"] = [
+                {
+                    "id": str(call.get("id") or ""),
+                    "name": str(call.get("name") or ""),
+                    "arguments": copy.deepcopy(call.get("arguments") or {}),
+                }
+                for call in calls
+                if isinstance(call, Mapping)
+            ]
+        results = value.get("results")
+        if isinstance(results, list):
+            technical["tool_results"] = [
+                tool_result_record(result)
+                for result in results
+                if isinstance(result, Mapping)
+            ]
+        effect_results = value.get("effect_results")
+        if isinstance(effect_results, Mapping):
+            technical["effect_results"] = [
+                tool_result_record(result)
+                for result in effect_results.values()
+                if isinstance(result, Mapping)
+            ]
+        technical["raw_value"] = {
+            str(key): copy.deepcopy(item)
+            for key, item in value.items()
+            if key != "content"
+        }
+        records.append({
+            "id": str(node.id),
+            "parentId": str(node.parent_id or ""),
+            "role": role,
+            "contextKind": str(value.get("context_kind") or ""),
+            "source": str(value.get("context_source") or "context_tree"),
+            "lifecycle": str(value.get("context_lifecycle") or ""),
+            "createdAt": node.created_at.isoformat(),
+            "updatedAt": node.updated_at.isoformat(),
+            "order": order,
+            "technical": technical,
+            "_content": content,
+            "_contentFormat": (
+                "json"
+                if role in {
+                    "tool_results",
+                    "context_compaction",
+                    "context_reflection",
+                }
+                else "text"
+            ),
+        })
+    return records
+
+
 def _agent_context_limit_key(state: Mapping[str, Any], fallback: str) -> str:
     identity = state.get("modelIdentity")
     identity = identity if isinstance(identity, Mapping) else {}
@@ -516,6 +659,28 @@ def _agent_context_limit_key(state: Mapping[str, Any], fallback: str) -> str:
         or fallback
         or ""
     ).strip()
+
+
+def _agent_context_mounts(path: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": node.id,
+            "parentId": str(node.parent_id or ""),
+            "kind": str(node.value.get("context_kind") or "context"),
+            "content": str(node.value.get("content") or ""),
+            "source": str(node.value.get("context_source") or "context_tree"),
+            "lifecycle": str(node.value.get("context_lifecycle") or ""),
+            "metadata": (
+                copy.deepcopy(dict(node.value.get("metadata") or {}))
+                if isinstance(node.value.get("metadata"), Mapping)
+                else {}
+            ),
+            "createdAt": node.created_at.isoformat(),
+            "updatedAt": node.updated_at.isoformat(),
+        }
+        for node in _agent_active_context_nodes(path)
+        if isinstance(node.value, Mapping)
+    ]
 
 
 class AgentContextRepository:
@@ -572,6 +737,174 @@ class AgentContextRepository:
                     )
         return states
 
+    def write_plugin_session_state(
+        self,
+        tree_id: str,
+        pack_id: str,
+        patch: Mapping[str, Any],
+    ) -> bool:
+        """Merge trusted application state into one ContextTree root Plugin slot."""
+
+        target = str(tree_id or "").strip()
+        owner = str(pack_id or "").strip()
+        if not target or not owner or not (self.context_directory / "index.sqlite3").is_file():
+            return False
+        from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
+        from cyrene.core.plugin import plugin_session_state, with_plugin_session_state
+
+        try:
+            with ContextStoreRouter(self.context_directory) as router:
+                tree = router.get_tree(target)
+                root = router.get_node(tree.id, tree.root_id)
+                if not isinstance(root.value, Mapping):
+                    return False
+                previous = plugin_session_state(root.value, owner)
+                incoming = copy.deepcopy(dict(patch))
+                previous_public = previous.get("public_snapshot")
+                incoming_public = incoming.get("public_snapshot")
+                if isinstance(incoming_public, Mapping):
+                    incoming["public_snapshot"] = {
+                        **(
+                            dict(previous_public)
+                            if isinstance(previous_public, Mapping)
+                            else {}
+                        ),
+                        **dict(incoming_public),
+                    }
+                router.update_node(
+                    tree.id,
+                    root.id,
+                    with_plugin_session_state(
+                        root.value,
+                        owner,
+                        {**previous, **incoming},
+                    ),
+                )
+            return True
+        except TreeNotFoundError:
+            return False
+
+    def update_node_content(
+        self,
+        tree_id: str,
+        node_id: str,
+        content: str,
+        expected_updated_at: str = "",
+    ) -> dict[str, Any]:
+        """Replace one persisted timeline node's content without changing identity."""
+
+        target_tree = str(tree_id or "").strip()
+        target_node = str(node_id or "").strip()
+        replacement = str(content or "")
+        if not target_tree or not target_node:
+            raise ConversationContextUpdateError("context node is required")
+        if len(replacement) > 1_000_000:
+            raise ConversationContextUpdateError("context node content is too large")
+        from cyrene.core.context import (
+            ContextStoreRouter,
+            NodeNotFoundError,
+            TreeNotFoundError,
+        )
+
+        try:
+            with ContextStoreRouter(self.context_directory) as router:
+                node = router.get_node(target_tree, target_node)
+                expected = str(expected_updated_at or "").strip()
+                if expected and node.updated_at.isoformat() != expected:
+                    raise ConversationContextUpdateError(
+                        "context node changed before this update"
+                    )
+                value = node.value if isinstance(node.value, Mapping) else {}
+                role = str(value.get("role") or "")
+                if not role:
+                    raise ConversationContextUpdateError(
+                        "context node does not expose editable content"
+                    )
+                updated_value = copy.deepcopy(dict(value))
+                if role == "tool_results":
+                    try:
+                        results = json.loads(replacement)
+                    except json.JSONDecodeError as exc:
+                        raise ConversationContextUpdateError(
+                            "tool results must be valid JSON"
+                        ) from exc
+                    if not isinstance(results, list):
+                        raise ConversationContextUpdateError(
+                            "tool results must be a JSON array"
+                        )
+                    updated_value["results"] = results
+                elif role in {"context_compaction", "context_reflection"}:
+                    try:
+                        messages = json.loads(replacement)
+                    except json.JSONDecodeError as exc:
+                        raise ConversationContextUpdateError(
+                            "compacted messages must be valid JSON"
+                        ) from exc
+                    if not isinstance(messages, list):
+                        raise ConversationContextUpdateError(
+                            "compacted messages must be a JSON array"
+                        )
+                    updated_value["messages"] = messages
+                else:
+                    updated_value["content"] = replacement
+                updated = router.update_node(
+                    target_tree,
+                    target_node,
+                    updated_value,
+                )
+        except (NodeNotFoundError, TreeNotFoundError) as exc:
+            raise ConversationContextUpdateError(
+                "context node was not found"
+            ) from exc
+        return {
+            "nodeId": str(updated.id),
+            "updatedAt": updated.updated_at.isoformat(),
+            "chars": len(replacement),
+        }
+
+    def update_system_prompt(
+        self,
+        tree_id: str,
+        node_id: str,
+        content: str,
+        expected_updated_at: str = "",
+    ) -> dict[str, Any]:
+        """Backward-compatible system prompt update entrypoint."""
+
+        target_tree = str(tree_id or "").strip()
+        target_node = str(node_id or "").strip()
+        prompt = str(content or "")
+        if not prompt.strip():
+            raise ConversationContextUpdateError("system prompt cannot be empty")
+        from cyrene.core.context import (
+            ContextStoreRouter,
+            NodeNotFoundError,
+            TreeNotFoundError,
+        )
+
+        try:
+            with ContextStoreRouter(self.context_directory) as router:
+                node = router.get_node(target_tree, target_node)
+                value = node.value if isinstance(node.value, Mapping) else {}
+                role = str(value.get("role") or "")
+                kind = str(value.get("context_kind") or "")
+                if role != "system" and not (
+                    role == "context" and kind == "system_prompt"
+                ):
+                    raise ConversationContextUpdateError(
+                        "context node is not an editable system prompt"
+                    )
+        except (NodeNotFoundError, TreeNotFoundError) as exc:
+            raise ConversationContextUpdateError(
+                "context node was not found"
+            ) from exc
+        return self.update_node_content(
+            target_tree,
+            target_node,
+            prompt,
+            expected_updated_at,
+        )
+
     def _read_tree(self, router: Any, tree_id: str) -> dict[str, Any]:
         tree = router.get_tree(tree_id)
         nodes = list(router.get_subtree(tree.id, tree.root_id))
@@ -627,17 +960,7 @@ class AgentContextRepository:
             path,
             self.plugin_owner,
         )
-        context_mounts = [
-            {
-                "id": node.id,
-                "kind": str(node.value.get("context_kind") or "context"),
-                "content": str(node.value.get("content") or ""),
-                "source": str(node.value.get("context_source") or "context_tree"),
-                "lifecycle": str(node.value.get("context_lifecycle") or ""),
-            }
-            for node in _agent_active_context_nodes(path)
-            if isinstance(node.value, Mapping)
-        ]
+        context_mounts = _agent_context_mounts(path)
         root_value = path[0].value if path and isinstance(path[0].value, Mapping) else {}
         mounted_system_prompt = next(
             (
@@ -695,6 +1018,7 @@ class AgentContextRepository:
             "modelIdentity": model_identity,
             "ephemeralContext": ephemeral_context,
             "contextMounts": context_mounts,
+            "timeline": _agent_path_timeline(path, self.plugin_owner),
             "usedPluginPacks": used_packs,
             "usedStandalonePlugins": used_standalone,
             "activityMessages": [dict(message) for message in activity_messages],
@@ -746,6 +1070,12 @@ class AgentContextRepository:
         checkpoint = context_checkpoint_from_nodes(nodes)
         if isinstance(checkpoint, Mapping):
             state["checkpoint"] = dict(checkpoint)
+        active_plan = plugin_snapshot.get("activePlan")
+        if isinstance(active_plan, Mapping):
+            state["activePlan"] = copy.deepcopy(dict(active_plan))
+        active_goal = plugin_snapshot.get("activeGoal")
+        if isinstance(active_goal, Mapping):
+            state["activeGoal"] = copy.deepcopy(dict(active_goal))
         return state
 
 
@@ -835,10 +1165,69 @@ def _system_prompt_blocks(
             "chars": len(text),
             "source": "context_tree",
             "reason": key,
+            "content": text,
         }
         for (key, text), tokens in zip(populated, allocations, strict=True)
         if tokens > 0
     ]
+
+
+def _persistent_context_blocks(
+    state: Mapping[str, Any],
+    approx_token_count: Callable[[str], int],
+) -> tuple[list[dict[str, Any]], int]:
+    blocks: list[dict[str, Any]] = []
+    total_tokens = 0
+    raw_mounts = state.get("contextMounts")
+    for mount in raw_mounts if isinstance(raw_mounts, list) else ():
+        if not isinstance(mount, Mapping) or context_is_turn({
+            "context_lifecycle": mount.get("lifecycle"),
+            "context_kind": mount.get("kind"),
+            "context_source": mount.get("source"),
+        }):
+            continue
+        content = str(mount.get("content") or "")
+        tokens = max(0, int(approx_token_count(content) or 0))
+        if tokens <= 0:
+            continue
+        kind = str(mount.get("kind") or "context")
+        total_tokens += tokens
+        common = {
+            "nodeId": str(mount.get("id") or ""),
+            "contextKind": kind,
+            "source": str(mount.get("source") or "context_tree"),
+            "lifecycle": str(mount.get("lifecycle") or ""),
+            "createdAt": str(mount.get("createdAt") or ""),
+            "updatedAt": str(mount.get("updatedAt") or ""),
+            "metadata": (
+                copy.deepcopy(dict(mount.get("metadata") or {}))
+                if isinstance(mount.get("metadata"), Mapping)
+                else {}
+            ),
+        }
+        if kind == "system_prompt":
+            mounted = _system_prompt_blocks(content, tokens, approx_token_count)
+            for block in mounted:
+                block.update({
+                    **common,
+                    "nodeContent": content,
+                    "editable": bool(mount.get("id")),
+                })
+            blocks.extend(mounted)
+            continue
+        blocks.append({
+            "id": f"context.{kind}" if kind != "context" else "context",
+            "type": (
+                "memory" if "memory" in kind
+                else "runtime" if kind == "plugin_session"
+                else "system"
+            ),
+            "tokens_est": tokens,
+            "chars": len(content),
+            "reason": kind,
+            **common,
+        })
+    return blocks, total_tokens
 
 
 def _agent_system_prefix_layer(
@@ -854,44 +1243,10 @@ def _agent_system_prefix_layer(
     )
     if system_tokens <= 0:
         return None, messages[1:]
-    context_blocks: list[dict[str, Any]] = []
-    context_tokens = 0
-    raw_mounts = state.get("contextMounts")
-    for mount in raw_mounts if isinstance(raw_mounts, list) else ():
-        if not isinstance(mount, Mapping):
-            continue
-        if context_is_turn({
-            "context_lifecycle": mount.get("lifecycle"),
-            "context_kind": mount.get("kind"),
-            "context_source": mount.get("source"),
-        }):
-            continue
-        content = str(mount.get("content") or "")
-        tokens = max(0, int(approx_token_count(content) or 0))
-        if tokens <= 0:
-            continue
-        kind = str(mount.get("kind") or "context")
-        context_tokens += tokens
-        if kind == "system_prompt":
-            context_blocks.extend(
-                _system_prompt_blocks(content, tokens, approx_token_count)
-            )
-            continue
-        context_blocks.append({
-            "id": f"context.{kind}" if kind != "context" else "context",
-            "type": (
-                "memory"
-                if "memory" in kind
-                else "runtime"
-                if kind == "plugin_session"
-                else "system"
-            ),
-            "tokens_est": tokens,
-            "chars": len(content),
-            "contextKind": kind,
-            "source": str(mount.get("source") or "context_tree"),
-            "reason": kind,
-        })
+    context_blocks, context_tokens = _persistent_context_blocks(
+        state,
+        approx_token_count,
+    )
     root_content = str(
         state.get("rootSystemPrompt")
         if "rootSystemPrompt" in state
@@ -910,6 +1265,37 @@ def _agent_system_prefix_layer(
         root_content_tokens,
         approx_token_count,
     )
+    raw_timeline = state.get("timeline")
+    timeline = raw_timeline if isinstance(raw_timeline, list) else []
+    root_id = str(state.get("rootId") or "")
+    root_record = next(
+        (
+            item
+            for item in timeline
+            if isinstance(item, Mapping) and str(item.get("id") or "") == root_id
+        ),
+        {},
+    )
+    root_technical = root_record.get("technical")
+    root_technical = root_technical if isinstance(root_technical, Mapping) else {}
+    root_metadata = root_technical.get("metadata")
+    root_metadata = root_metadata if isinstance(root_metadata, Mapping) else {}
+    for block in system_blocks:
+        block.update({
+            "nodeId": root_id,
+            "contextKind": "system_prompt",
+            "source": str(root_record.get("source") or "context_tree"),
+            "lifecycle": str(root_record.get("lifecycle") or "persistent"),
+            "createdAt": str(
+                root_record.get("createdAt") or state.get("createdAt") or ""
+            ),
+            "updatedAt": str(
+                root_record.get("updatedAt") or state.get("updatedAt") or ""
+            ),
+            "nodeContent": root_content,
+            "editable": bool(root_id),
+            "metadata": copy.deepcopy(dict(root_metadata)),
+        })
     system_blocks.extend(context_blocks)
     if overhead_tokens > 0:
         system_blocks.append({
@@ -1135,6 +1521,40 @@ class ConversationContextQueryService:
         chat = await self._chat(chat_id)
         return self._agent_blocks(chat, await self._agent_state(chat_id))
 
+    async def update_system_prompt(
+        self,
+        chat_id: str,
+        node_id: str,
+        content: str,
+        expected_updated_at: str = "",
+    ) -> dict[str, Any]:
+        await self._chat(chat_id)
+        updated = await asyncio.to_thread(
+            self.agent_states.update_system_prompt,
+            chat_id,
+            node_id,
+            content,
+            expected_updated_at,
+        )
+        return {"ok": True, **updated}
+
+    async def update_node_content(
+        self,
+        chat_id: str,
+        node_id: str,
+        content: str,
+        expected_updated_at: str = "",
+    ) -> dict[str, Any]:
+        await self._chat(chat_id)
+        updated = await asyncio.to_thread(
+            self.agent_states.update_node_content,
+            chat_id,
+            node_id,
+            content,
+            expected_updated_at,
+        )
+        return {"ok": True, **updated}
+
     async def _agent_state(self, chat_id: str) -> dict[str, Any]:
         return await asyncio.to_thread(self.agent_states.read, chat_id)
 
@@ -1248,6 +1668,10 @@ class ConversationContextQueryService:
                     "type": "ephemeral",
                     "tokens_est": tokens,
                     "chars": len(ephemeral),
+                    "source": "turn_metadata",
+                    "reason": "ephemeral_context",
+                    "lifecycle": "turn",
+                    "createdAt": str(state.get("updatedAt") or ""),
                 }],
                 "totalTokens": tokens,
             })
@@ -1263,7 +1687,7 @@ class ConversationContextQueryService:
         configured = str(chat.get("model") or self.default_model() or "")
         selection = str(chat.get("modelSelectionId") or configured).strip()
         total = sum(int(layer.get("totalTokens") or 0) for layer in layers)
-        return self._blocks_payload(
+        payload = self._blocks_payload(
             layers,
             message_total,
             context_used=total,
@@ -1275,6 +1699,122 @@ class ConversationContextQueryService:
             message_count=len(messages),
             updated_at=str(state.get("updatedAt") or ""),
         )
+        raw_identity = state.get("modelIdentity")
+        raw_compaction = state.get("compaction")
+        payload.update({
+            "treeId": str(state.get("treeId") or ""),
+            "rootId": str(state.get("rootId") or ""),
+            "leafId": str(state.get("leafId") or ""),
+            "createdAt": str(state.get("createdAt") or ""),
+            "selectedModel": selection,
+            "actualModel": str(state.get("model") or ""),
+            "modelIdentity": (
+                dict(raw_identity) if isinstance(raw_identity, Mapping) else {}
+            ),
+            "compaction": (
+                dict(raw_compaction) if isinstance(raw_compaction, Mapping) else {}
+            ),
+            "contextMounts": self._context_mounts_payload(state),
+            "timeline": self._timeline_payload(state),
+            "chronology": "ascending",
+        })
+        return payload
+
+    def _context_mounts_payload(
+        self,
+        state: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        raw_mounts = state.get("contextMounts")
+        mounts = raw_mounts if isinstance(raw_mounts, list) else []
+        records = []
+        for order, mount in enumerate(mounts):
+            if not isinstance(mount, Mapping):
+                continue
+            content = str(mount.get("content") or "")
+            records.append({
+                "id": str(mount.get("id") or ""),
+                "parentId": str(mount.get("parentId") or ""),
+                "kind": str(mount.get("kind") or "context"),
+                "source": str(mount.get("source") or "context_tree"),
+                "lifecycle": str(mount.get("lifecycle") or ""),
+                "tokensEst": max(0, int(self.approx_token_count(content) or 0)),
+                "chars": len(content),
+                "createdAt": str(mount.get("createdAt") or ""),
+                "updatedAt": str(mount.get("updatedAt") or ""),
+                "metadata": (
+                    copy.deepcopy(dict(mount.get("metadata") or {}))
+                    if isinstance(mount.get("metadata"), Mapping)
+                    else {}
+                ),
+                "order": order,
+            })
+        return sorted(records, key=lambda item: (item["createdAt"], item["order"]))
+
+    def _timeline_payload(
+        self,
+        state: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        raw_timeline = state.get("timeline")
+        timeline = raw_timeline if isinstance(raw_timeline, list) else []
+        raw_mounts = state.get("contextMounts")
+        mounts = raw_mounts if isinstance(raw_mounts, list) else []
+        mounted_ids = {
+            str(mount.get("id") or "")
+            for mount in mounts
+            if isinstance(mount, Mapping) and str(mount.get("id") or "")
+        }
+        records = []
+        for fallback_order, item in enumerate(timeline):
+            if not isinstance(item, Mapping):
+                continue
+            item_id = str(item.get("id") or "")
+            content = str(item.get("_content") or "")
+            record = {
+                key: copy.deepcopy(value)
+                for key, value in item.items()
+                if key not in {"_content", "_contentFormat"}
+            }
+            record["order"] = max(0, int(item.get("order") or fallback_order))
+            record["tokensEst"] = max(
+                0,
+                int(self.approx_token_count(content) or 0),
+            )
+            record["chars"] = len(content)
+            record["type"] = str(record.get("role") or "")
+            record["nodeId"] = str(record.get("id") or "")
+            record["tokens_est"] = record["tokensEst"]
+            record["reason"] = str(
+                record.get("contextKind") or record.get("role") or ""
+            )
+            technical = record.get("technical")
+            technical = technical if isinstance(technical, Mapping) else {}
+            metadata = technical.get("metadata")
+            record["metadata"] = (
+                copy.deepcopy(dict(metadata))
+                if isinstance(metadata, Mapping)
+                else {}
+            )
+            record["content"] = content
+            record["nodeContent"] = content
+            record["contentFormat"] = str(item.get("_contentFormat") or "text")
+            record["editable"] = bool(record.get("id"))
+            record["activeMount"] = item_id in mounted_ids
+            raw_tool_results = technical.get("tool_results")
+            record["toolAttributions"] = [
+                {
+                    "pluginPack": str(result.get("plugin_pack") or ""),
+                    "pluginName": str(result.get("plugin_name") or ""),
+                    "operation": str(result.get("operation") or ""),
+                }
+                for result in (
+                    raw_tool_results
+                    if isinstance(raw_tool_results, list)
+                    else []
+                )
+                if isinstance(result, Mapping)
+            ]
+            records.append(record)
+        return sorted(records, key=lambda item: (item["createdAt"], item["order"]))
 
     @staticmethod
     def _blocks_payload(

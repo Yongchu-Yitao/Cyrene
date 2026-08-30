@@ -31,6 +31,7 @@ TOOL_PACK_IDS = frozenset(
         "cyrene_desktop",
         "cyrene_entity",
         "cyrene_extensions",
+        "cyrene_goal",
         "cyrene_image",
         "cyrene_knowledge",
         "cyrene_map",
@@ -42,7 +43,6 @@ TOOL_PACK_IDS = frozenset(
         "cyrene_schedule",
         "cyrene_skills",
         "cyrene_subagent",
-        "cyrene_task",
     }
 )
 MODEL_VISIBLE_PACK_IDS = TOOL_PACK_IDS - {"cyrene_image"}

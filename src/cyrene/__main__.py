@@ -48,17 +48,17 @@ async def _prepare_runtime() -> None:
         DB_PATH,
         INBOX_DIR,
     )
-    from cyrene.runtime.bootstrap import initialize_runtime
+    from cyrene.platform.bootstrap import initialize_runtime
 
     await initialize_runtime()
     logger.info("Database initialized at %s", DB_PATH)
     logger.info("Inbox ready at %s", INBOX_DIR)
     # 人格设置检测（Telegram 模式跳过交互，提示用户先运行 CLI）
-    from cyrene.runtime.setup import init_setup_flag, is_setup_done
+    from cyrene.platform.setup import init_setup_flag, is_setup_done
     init_setup_flag()
     if not is_setup_done():
         logger.warning("首次启动检测到未设置人格。请先运行 CLI 模式完成设置：")
-        logger.warning("  python -m cyrene.runtime.host")
+        logger.warning("  python -m cyrene.platform.host")
 
 
 def _run_plugin_launcher(name: str) -> None:
@@ -66,7 +66,7 @@ def _run_plugin_launcher(name: str) -> None:
 
     from cyrene.core.plugin import PluginRegistry, default_plugin_impl_directory
     from cyrene.plugins.native_tools import seed_builtin_plugin_directory
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     plugin_directory = default_plugin_impl_directory()
     seed_builtin_plugin_directory(plugin_directory)
@@ -113,18 +113,18 @@ def main() -> None:
     # GUI-launched Electron inherits LaunchServices' minimal PATH; pull the
     # user's login-shell PATH so ACP agents and toolchain subprocesses can
     # find shell-managed runtimes (nvm, Homebrew, mise).
-    from cyrene.runtime.user_path import ensure_user_path
+    from cyrene.platform.user_path import ensure_user_path
 
     ensure_user_path()
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
-        from cyrene.runtime.host import main as _local_main
+        from cyrene.platform.host import main as _local_main
         _local_main()
         return
     if "--telegram" in sys.argv:
         asyncio.run(_prepare_runtime())
         _run_plugin_launcher("telegram")
         return
-    from cyrene.runtime.host import run_web_mode
+    from cyrene.platform.host import run_web_mode
     run_web_mode(ui_mode="workbench")
 
 

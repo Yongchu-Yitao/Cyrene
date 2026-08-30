@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from cyrene.runtime.attachments import (
+from cyrene.platform.attachments import (
     EXPORTS_DIR,
     UPLOADS_DIR,
     image_dimensions,

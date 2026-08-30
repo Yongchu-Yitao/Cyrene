@@ -43,7 +43,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from cyrene.localization import accept_language, locale_tag, localized
-from cyrene.runtime.paths import TEMP_DIR
+from cyrene.platform.paths import TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -510,7 +510,7 @@ _CHROME_VERSION_CACHE: str | None = None
 
 def _cfg(key: str, default: str) -> str:
     try:
-        from cyrene.runtime.config_store import get_env
+        from cyrene.platform.config_store import get_env
         return str(get_env(key, default) or default)
     except Exception:
         return default

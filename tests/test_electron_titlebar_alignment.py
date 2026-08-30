@@ -40,3 +40,23 @@ def test_macos_traffic_lights_are_centered_in_workbench_topbar():
         'html[data-platform="darwin"] .workbench-topbar {', 1
     )[1].split("}", 1)[0]
     assert "grid-template-columns: 236px" in darwin_topbar_styles
+
+
+def test_workbench_modal_scrim_covers_the_fixed_titlebar():
+    root = Path(__file__).resolve().parent.parent
+    css_source = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    def z_index(selector: str) -> int:
+        rule = css_source.split(f"{selector} {{", 1)[1].split("}", 1)[0]
+        match = re.search(r"z-index:\s*(\d+)", rule)
+        assert match is not None
+        return int(match.group(1))
+
+    scrim_rule = css_source.split(".workbench-modal-scrim {", 1)[1].split("}", 1)[0]
+
+    assert z_index(".workbench-topbar") < z_index(".workbench-modal-scrim")
+    assert z_index(".workbench-modal-scrim") < z_index(".workbench-confirm-scrim")
+    assert "inset: 0;" in scrim_rule
+    assert "backdrop-filter: var(--wb-modal-scrim-filter);" in scrim_rule

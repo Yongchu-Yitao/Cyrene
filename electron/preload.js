@@ -62,10 +62,7 @@ contextBridge.exposeInMainWorld('cyrene', {
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', {
     path: String(filePath == null ? '' : filePath),
   }),
-  pickDirectory: () => {
-    if (process.platform !== 'linux') return Promise.resolve(null);
-    return ipcRenderer.invoke('dialog:pick-directory');
-  },
+  pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
   pickExtensionPath: (options) => ipcRenderer.invoke('dialog:pick-extension-path', options || {}),
   pickBackupSavePath: (options) => ipcRenderer.invoke('dialog:pick-backup-save-path', options || {}),
   pickBackupFile: (options) => ipcRenderer.invoke('dialog:pick-backup-file', options || {}),

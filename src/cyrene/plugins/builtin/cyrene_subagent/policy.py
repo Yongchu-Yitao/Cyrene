@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from cyrene.core.hook import TURN_START, HookEvent
 from cyrene.core.plugin import PluginSetupContext
-from cyrene.runtime import settings_store
+from cyrene.platform import settings_store
 
 _DEFAULT_POLICY = "conservative"
 _SUPPORTED_POLICIES = frozenset({"aggressive", "conservative", "off"})

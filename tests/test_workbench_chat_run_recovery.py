@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 
 def test_startup_recovers_crashed_running_chat_and_clears_stale_question(tmp_path):
-    from cyrene.runtime.database import init_db
+    from cyrene.platform.database import init_db
     from cyrene.workbench.chat.chat_repository import ChatRepository
     from cyrene.workbench.chat.chat_runs import ChatRunManager
 

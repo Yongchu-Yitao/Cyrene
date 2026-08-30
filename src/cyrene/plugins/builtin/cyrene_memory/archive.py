@@ -130,7 +130,7 @@ def archive_session_exchange(
 
         # Keep the profile activity heatmap in sync with Workbench conversations.
         try:
-            from cyrene.runtime import database as cy_db
+            from cyrene.platform import database as cy_db
 
             if _STATS_DB_PATH:
                 cy_db.bump_activity_sync(_STATS_DB_PATH, timestamp=now.isoformat())
@@ -233,7 +233,7 @@ async def archive_exchange(
         content += entry
         filepath.write_text(content, encoding="utf-8")
         if _STATS_DB_PATH:
-            from cyrene.runtime import database as cy_db
+            from cyrene.platform import database as cy_db
 
             await cy_db.record_archive_exchange(
                 _STATS_DB_PATH,

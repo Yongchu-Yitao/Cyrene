@@ -1,7 +1,7 @@
 import os
 
 from cyrene.core.plugin import registry as plugin_registry
-from cyrene.runtime.paths import cleanup_temporary_artifacts, resolve_app_paths
+from cyrene.platform.paths import cleanup_temporary_artifacts, resolve_app_paths
 
 
 def test_source_paths_use_independent_development_roots():

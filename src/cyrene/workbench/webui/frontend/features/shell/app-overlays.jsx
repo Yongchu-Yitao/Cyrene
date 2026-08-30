@@ -7,7 +7,6 @@ function WorkbenchSearchPortal({
   onClose,
   onOpenChatPage,
   onCreateChat,
-  onCreateTask,
   onCreateProject,
   onToggleTheme,
   onToggleSidebar,
@@ -25,7 +24,6 @@ function WorkbenchSearchPortal({
       onCommand: function (id) {
         onClose();
         if (id === "new-chat") { onCreateChat(); return; }
-        if (id === "new-task") { onCreateTask(); return; }
         if (id === "new-project") { onCreateProject(); return; }
         if (id === "toggle-theme") { onToggleTheme(); return; }
         if (id === "toggle-sidebar") { onToggleSidebar(); return; }
@@ -53,9 +51,6 @@ function WorkbenchAppModals({
   editMemoryProject,
   memoryAvailable,
   onCloseEditMemory,
-  newTaskOpen,
-  onCloseNewTask,
-  onCreateTask,
   onOpenPage,
   onOpenSettings,
 }) {
@@ -84,15 +79,6 @@ function WorkbenchAppModals({
         project={editMemoryProject}
         onClose={onCloseEditMemory}
       />
-    )}
-    {newTaskOpen && workbenchServices.create().NewTaskModal && React.createElement(
-      workbenchServices.create().NewTaskModal,
-      {
-        onClose: onCloseNewTask,
-        onCreate: function (input) {
-          return onCreateTask(input).then(onCloseNewTask);
-        },
-      }
     )}
     {React.createElement(workbenchServices.feedback().Host)}
     {React.createElement(workbenchServices.tourHost().Host, {

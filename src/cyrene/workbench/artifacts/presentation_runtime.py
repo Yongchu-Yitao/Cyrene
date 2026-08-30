@@ -22,8 +22,8 @@ from cyrene.config import (
     WORKSPACE_DIR,
 )
 from cyrene.localization import localized
-from cyrene.runtime.onboarding import get_onboarding_status
-from cyrene.runtime.version import get_version_label
+from cyrene.platform.onboarding import get_onboarding_status
+from cyrene.platform.version import get_version_label
 from cyrene.workbench.projects import project_repository, project_runtime
 from cyrene.workbench.sessions import session_metrics, session_view
 from cyrene.workbench.sessions.session_presentation import (
@@ -142,19 +142,6 @@ async def _search_workbench_items(
                 groups['project'].append({'id': pid, 'type': 'project', 'title': name, 'titleKey': '' if name else 'search.default.workspace', 'snippet': _search_snippet(desc or summary, query), 'projectId': pid, 'projectName': project_names.get(pid, ''), 'projectNameDefault': not bool(project_names.get(pid, '')), 'updatedAt': project.get('updatedAt') or project.get('createdAt') or ''})
                 if len(groups['project']) >= per_type_limit:
                     break
-    if 'task' in types:
-        for project in projects:
-            pid = str(project.get('id') or '')
-            for session in project.get('sessions', []):
-                sid = str(session.get('id') or '')
-                title = str(session.get('title') or '')
-                goal = str(session.get('goal') or '')
-                if _search_matches(query, title) or _search_matches(query, goal):
-                    groups['task'].append({'id': sid, 'type': 'task', 'title': title, 'titleKey': '' if title else 'search.default.newTask', 'snippet': _search_snippet(goal or title, query), 'projectId': pid, 'projectName': project_names.get(pid, ''), 'projectNameDefault': not bool(project_names.get(pid, '')), 'sessionId': sid, 'status': session.get('status') or 'idle', 'updatedAt': session.get('updatedAt') or session.get('createdAt') or ''})
-                    if len(groups['task']) >= per_type_limit:
-                        break
-            if len(groups['task']) >= per_type_limit:
-                break
     if 'chat' in types:
         try:
             from cyrene.workbench.chat.chat_application import chat_preview
@@ -220,7 +207,7 @@ async def _build_entities_summary(db_path: str | Path | None = None) -> list:
 
 def _build_user() -> dict:
     """User identity from the stored profile, falling back to the local account name."""
-    from cyrene.runtime.settings_store import get as get_setting
+    from cyrene.platform.settings_store import get as get_setting
     name = str(get_setting('profile_name', '') or '').strip() or _resolve_local_username()
     handle = re.sub('[^a-z0-9._-]+', '', name.lower().replace(' ', '')) or 'user'
     parts = [part for part in re.split('[\\s._-]+', name) if part]
@@ -315,7 +302,7 @@ async def _build_dashboard(
     sessions: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Aggregate homepage data from memory, soul, archive, and scheduler state."""
-    from cyrene.runtime import database as cy_db
+    from cyrene.platform import database as cy_db
     resolved_db_path = str(db_path or project_repository._db_path or DB_PATH)
     ui_tz = ui_tz or (datetime.now().astimezone().tzinfo or timezone.utc)
     now_local = datetime.now(ui_tz)
@@ -374,7 +361,7 @@ async def _build_dashboard(
     model_stats_rows = await cy_db.get_model_stats_range(resolved_db_path, day_from, day_to)
     topic_rows = await cy_db.get_topic_counts_range(resolved_db_path, day_from, day_to, limit=18)
     tool_rows = await cy_db.get_tool_counts_range(resolved_db_path, day_from, day_to, limit=5)
-    task_time = await cy_db.get_task_time_totals(resolved_db_path)
+    execution_time = await cy_db.get_execution_time_totals(resolved_db_path)
     archive_day_count = await cy_db.count_stat_days(resolved_db_path)
     historical_prompt = sum((r.get('prompt_tokens') or 0 for r in stats_by_day.values()))
     historical_completion = sum((r.get('completion_tokens') or 0 for r in stats_by_day.values()))
@@ -382,7 +369,7 @@ async def _build_dashboard(
     historical_cache_hit = sum((r.get('cache_hit_tokens') or 0 for r in stats_by_day.values()))
     historical_cache_miss = sum((r.get('cache_miss_tokens') or 0 for r in stats_by_day.values()))
     historical_requests = sum((r.get('llm_requests') or 0 for r in stats_by_day.values()))
-    from cyrene.model_runtime.pricing import CNY_PER_USD, effective_price, estimate_cost
+    from cyrene.model.pricing import CNY_PER_USD, effective_price, estimate_cost
     total_spend_cny = 0.0
     total_spend_usd = 0.0
     for row in model_stats_rows:
@@ -423,7 +410,7 @@ async def _build_dashboard(
         column = heatmap_column_map[label]
         heatmap_buckets[label] = [int((stats_by_day.get(day) or {}).get(column) or 0) for day in heatmap_days]
     activity_heatmap = {'days': heatmap_days, 'rows': [{'label': label, 'values': heatmap_buckets[label]} for label, _, _ in heatmap_row_defs]}
-    return {'today': {'learned': learned_today, 'learned_count': len(today_entries), 'memory_count': len(st_entries), 'archive_days': archive_day_count}, 'soul': {'path': str(soul.get('path') or ''), 'updated_at': str(soul.get('updated_at') or ''), 'recent_items': list(soul.get('recent_items') or ()), 'section_count': int(soul.get('section_count') or 0)}, 'topic_cloud': topic_rows, 'emotion': emotion_series, 'usage': {'requests': historical_requests, 'tokens': session_metrics.format_tokens({'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total}), 'spend': spend_str, 'spend_cny': round(total_spend_cny, 6), 'spend_usd': round(total_spend_usd, 6), 'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total, 'cache_hit_tokens': historical_cache_hit, 'cache_miss_tokens': historical_cache_miss, 'total_messages': session_message_count, 'active_days': sum((1 for row in stats_by_day.values() if int(row.get('llm_requests') or 0) > 0)), 'current_streak': _calc_current_streak(stats_by_day, today), 'longest_streak': _calc_longest_streak(stats_by_day), 'peak_hour': _calc_peak_hour(stats_by_day), 'task_time': task_time, 'top_tools': tool_rows, 'timeline': [{'date': day, 'prompt': values['prompt'], 'completion': values['completion'], 'requests': values['requests']} for day, values in token_timeline.items()]}, 'reminders': reminder_items, 'recent_memories': recent_memories, 'recent_archive': archive_snippets, 'activity_heatmap': activity_heatmap, 'model_stats': model_stats_rows}
+    return {'today': {'learned': learned_today, 'learned_count': len(today_entries), 'memory_count': len(st_entries), 'archive_days': archive_day_count}, 'soul': {'path': str(soul.get('path') or ''), 'updated_at': str(soul.get('updated_at') or ''), 'recent_items': list(soul.get('recent_items') or ()), 'section_count': int(soul.get('section_count') or 0)}, 'topic_cloud': topic_rows, 'emotion': emotion_series, 'usage': {'requests': historical_requests, 'tokens': session_metrics.format_tokens({'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total}), 'spend': spend_str, 'spend_cny': round(total_spend_cny, 6), 'spend_usd': round(total_spend_usd, 6), 'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total, 'cache_hit_tokens': historical_cache_hit, 'cache_miss_tokens': historical_cache_miss, 'total_messages': session_message_count, 'active_days': sum((1 for row in stats_by_day.values() if int(row.get('llm_requests') or 0) > 0)), 'current_streak': _calc_current_streak(stats_by_day, today), 'longest_streak': _calc_longest_streak(stats_by_day), 'peak_hour': _calc_peak_hour(stats_by_day), 'execution_time': execution_time, 'top_tools': tool_rows, 'timeline': [{'date': day, 'prompt': values['prompt'], 'completion': values['completion'], 'requests': values['requests']} for day, values in token_timeline.items()]}, 'reminders': reminder_items, 'recent_memories': recent_memories, 'recent_archive': archive_snippets, 'activity_heatmap': activity_heatmap, 'model_stats': model_stats_rows}
 
 def _extract_topic_terms(text: str, limit: int=12) -> list[str]:
     """Extract simple high-signal topic terms from mixed Chinese/English text."""
@@ -512,8 +499,8 @@ def _build_settings_meta() -> dict:
     }
 
 def _build_config() -> dict:
-    from cyrene.runtime.config_store import get_settings_revision
-    from cyrene.runtime.settings_service import read_public
+    from cyrene.platform.config_store import get_settings_revision
+    from cyrene.platform.settings_service import read_public
 
     live_model, live_base_url = project_runtime._live_llm_config()
     soul = _soul_presentation()
@@ -582,7 +569,7 @@ def _model_pricing(model: str='') -> dict[str, float] | None:
     Missing or invalid configured prices use the built-in catalog when known;
     unknown models resolve to zero.
     """
-    from cyrene.model_runtime.pricing import effective_price
+    from cyrene.model.pricing import effective_price
     return effective_price(str(model or project_runtime._get_model()))
 
 def _calc_spend(usage: dict[str, int | None] | None, model: str='') -> str:
@@ -595,7 +582,7 @@ def _calc_spend(usage: dict[str, int | None] | None, model: str='') -> str:
     completion_tokens = usage.get('completion_tokens')
     cache_hit_tokens = usage.get('prompt_cache_hit_tokens')
     cache_miss_tokens = usage.get('prompt_cache_miss_tokens')
-    from cyrene.model_runtime.pricing import estimate_cost
+    from cyrene.model.pricing import estimate_cost
     cost = estimate_cost(pricing, int(prompt_tokens or 0), int(completion_tokens or 0), cache_hit_tokens=int(cache_hit_tokens or 0), cache_miss_tokens=int(cache_miss_tokens or 0))
     currency = pricing.get('currency', 'USD')
     if currency == 'CNY':
@@ -617,7 +604,7 @@ def _calc_messages_spend(messages: list[dict[str, Any]]) -> str:
     tokens first and applying the configured primary price misprices those
     mixed-model sessions, so calculate each recorded response independently.
     """
-    from cyrene.model_runtime.pricing import CNY_PER_USD, estimate_cost
+    from cyrene.model.pricing import CNY_PER_USD, estimate_cost
     totals = {'CNY': 0.0, 'USD': 0.0}
     found = False
     for message in messages or []:

@@ -12,7 +12,7 @@ def register_notification_routes(router: APIRouter, bot: Any, db_path: str) -> N
 
     @router.post("/api/notifications/send")
     async def api_notifications_send(request: Request):
-        from cyrene.runtime.notifications import notify
+        from cyrene.platform.notifications import notify
         body = await request.json()
         title = str(body.get("title") or "Cyrene").strip()
         text = str(body.get("text") or "").strip()

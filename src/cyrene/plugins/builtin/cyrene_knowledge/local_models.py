@@ -25,6 +25,7 @@ from . import opencv_runtime
 
 
 MODEL_ROOT = Path(CACHE_DIR) / "knowledge_models"
+_READY_MARKER_VERSION = 2
 
 MODEL_CATALOG: dict[str, dict[str, Any]] = {
     "qwen3-embedding-0.6b": {
@@ -268,6 +269,9 @@ _TASKS: dict[str, asyncio.Task] = {}
 _PROGRESS: dict[str, dict[str, Any]] = {}
 _VALIDATED: set[str] = set()
 _RESETTERS: dict[str, Callable[[], None]] = {}
+_HEALTH_CHECKERS: dict[str, Callable[[], None]] = {}
+_ACTIVE_RUNTIMES: dict[str, str] = {}
+_PROBING: set[str] = set()
 _QNN_REGISTERED = False
 
 
@@ -375,6 +379,20 @@ def register_resetter(model_id: str, resetter: Callable[[], None]) -> None:
     _RESETTERS[model_id] = resetter
 
 
+def register_health_checker(model_id: str, checker: Callable[[], None]) -> None:
+    if model_id not in MODEL_CATALOG:
+        raise ValueError("unknown local model")
+    _HEALTH_CHECKERS[model_id] = checker
+
+
+def set_active_runtime(model_id: str, runtime: str) -> None:
+    if model_id in MODEL_CATALOG:
+        if runtime:
+            _ACTIVE_RUNTIMES[model_id] = str(runtime)
+        else:
+            _ACTIVE_RUNTIMES.pop(model_id, None)
+
+
 def model_dir(model_id: str) -> Path:
     if model_id not in MODEL_CATALOG:
         raise ValueError("unknown local model")
@@ -414,6 +432,23 @@ def _item_ready(root: Path, item: dict[str, Any]) -> bool:
         outputs = extract.get("outputs") or []
         return bool(outputs) and all(_output_valid(root, output) for output in outputs)
     return _file_valid(root / item["path"], item)
+
+
+def _item_present(root: Path, item: dict[str, Any]) -> bool:
+    """Cheap post-validation guard against externally removed model files."""
+    extract = item.get("extract")
+    checks = extract.get("outputs") if isinstance(extract, dict) else [item]
+    for output in checks or []:
+        path = root / str(output["path"])
+        try:
+            if output.get("type") == "dir":
+                if not path.is_dir() or not any(path.iterdir()):
+                    return False
+            elif path.stat().st_size < int(output.get("min_bytes") or 1):
+                return False
+        except OSError:
+            return False
+    return bool(checks)
 
 
 def _extract_archive(archive: Path, root: Path, item: dict[str, Any]) -> None:
@@ -462,11 +497,22 @@ def is_ready(model_id: str) -> bool:
     if not spec:
         return False
     root = model_dir(model_id)
-    if not (root / ".ready.json").is_file():
+    if model_id not in _PROBING:
+        try:
+            marker = json.loads((root / ".ready.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            marker = {}
+        if not isinstance(marker, dict) or (
+            marker.get("id") != model_id
+            or marker.get("version") != _READY_MARKER_VERSION
+        ):
+            _VALIDATED.discard(model_id)
+            return False
+    if model_id in _VALIDATED:
+        if all(_item_present(root, item) for item in spec["files"]):
+            return True
         _VALIDATED.discard(model_id)
         return False
-    if model_id in _VALIDATED:
-        return all(_item_ready(root, item) for item in spec["files"])
     valid = all(_item_ready(root, item) for item in spec["files"])
     if valid:
         _VALIDATED.add(model_id)
@@ -497,10 +543,13 @@ def status() -> dict[str, Any]:
                     runtime = "cuda"
                 elif "DmlExecutionProvider" in available:
                     runtime = "directml"
+                elif "CoreMLExecutionProvider" in available:
+                    runtime = "coreml"
                 else:
                     runtime = "onnx-cpu"
             except Exception:
                 runtime = "onnx-cpu"
+        runtime = _ACTIVE_RUNTIMES.get(model_id, runtime)
         models.append({
             "id": model_id,
             "name": spec["name"],
@@ -602,12 +651,26 @@ async def _download(model_id: str) -> None:
         if resetter is not None:
             await asyncio.to_thread(resetter)
         _remove_obsolete_paths(root, spec)
+        checker = _HEALTH_CHECKERS.get(model_id)
+        if checker is not None:
+            _PROBING.add(model_id)
+            try:
+                await asyncio.to_thread(checker)
+            finally:
+                _PROBING.discard(model_id)
         marker = root / ".ready.json"
-        marker.write_text(json.dumps({"id": model_id, "version": 1}), encoding="utf-8")
+        temporary_marker = root / f".ready-{uuid.uuid4().hex}.json"
+        temporary_marker.write_text(
+            json.dumps({"id": model_id, "version": _READY_MARKER_VERSION}),
+            encoding="utf-8",
+        )
+        os.replace(temporary_marker, marker)
         _VALIDATED.add(model_id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        _VALIDATED.discard(model_id)
+        set_active_runtime(model_id, "")
         _PROGRESS[model_id]["error"] = str(exc)
         raise
 
@@ -615,6 +678,9 @@ async def _download(model_id: str) -> None:
 def start_download(model_id: str) -> dict[str, Any]:
     if model_id not in MODEL_CATALOG:
         raise ValueError("unknown local model")
+    if model_id == "qwen3-embedding-0.6b":
+        # The adapter registers the post-download inference smoke check.
+        from . import local_onnx as _local_onnx  # noqa: F401
     task = _TASKS.get(model_id)
     if task and not task.done():
         return status()
@@ -636,6 +702,7 @@ async def delete_model(model_id: str) -> dict[str, Any]:
     resetter = _RESETTERS.get(model_id)
     if resetter is not None:
         resetter()
+    set_active_runtime(model_id, "")
     await asyncio.to_thread(shutil.rmtree, model_dir(model_id), True)
     _PROGRESS.pop(model_id, None)
     _VALIDATED.discard(model_id)
@@ -660,4 +727,5 @@ async def delete_all_models() -> dict[str, Any]:
     _TASKS.clear()
     _PROGRESS.clear()
     _VALIDATED.clear()
+    _ACTIVE_RUNTIMES.clear()
     return status()

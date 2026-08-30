@@ -13,14 +13,14 @@ from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
 
-from cyrene.model_runtime.adapter_registry import list_adapters, require_adapter
-from cyrene.model_runtime.cache_invalidation import invalidate_model_runtime_caches
-from cyrene.model_runtime.transcript_policy import (
+from cyrene.model.adapter_registry import list_adapters, require_adapter
+from cyrene.model.cache_invalidation import invalidate_model_runtime_caches
+from cyrene.model.transcript_policy import (
     ProviderFamily,
     ProviderFamilyError,
     provider_family_for_candidate,
 )
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 
 
 CONFIG_VERSION = 10
@@ -334,6 +334,8 @@ def _plugin_seed_configuration() -> dict[str, Any]:
     if not catalog:
         raise RuntimeError("no Model Provider Plugins are available to seed settings")
     connections: list[dict[str, Any]] = []
+    profiles: list[dict[str, Any]] = []
+    routes = {name: [] for name in ROUTE_NAMES}
     for provider in catalog:
         provider_id = _identifier(provider.get("id"), kind="provider")
         adapter = str(provider.get("adapter") or "").strip().lower()
@@ -349,11 +351,23 @@ def _plugin_seed_configuration() -> dict[str, Any]:
             "api_key": "",
             "options": {"provider_preset": provider_id},
         })
+        if adapter == "local_onnx":
+            profile_id = f"{provider_id}:qwen3-embedding-0.6b"
+            profiles.append({
+                "id": profile_id,
+                "connection_id": provider_id,
+                "model": "qwen3-embedding-0.6b",
+                "name": "Qwen3 Embedding 0.6B",
+                "enabled": True,
+                "capabilities": ["embedding"],
+                "dimensions": 1024,
+            })
+            routes["embedding"].append(profile_id)
     return normalize_model_configuration({
         "version": CONFIG_VERSION,
         "connections": connections,
-        "profiles": [],
-        "routes": {name: [] for name in ROUTE_NAMES},
+        "profiles": profiles,
+        "routes": routes,
     })
 
 

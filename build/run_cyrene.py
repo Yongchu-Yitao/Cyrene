@@ -20,7 +20,7 @@ from playwright_bundle import find_bundled_browser_dir
 
 def _run_smoke_test() -> None:
     """Verify frozen runtime can import critical dependencies before release."""
-    from cyrene.runtime.version import get_version
+    from cyrene.platform.version import get_version
 
     modules = {
         "httpx": httpx.__version__,
@@ -80,7 +80,7 @@ def _run_smoke_test() -> None:
     # import cleanly in the frozen build.
     from openai_codex import CodexConfig
 
-    import cyrene.model_runtime.codex_cli as _codex_cli
+    import cyrene.model.codex_cli as _codex_cli
 
     if not hasattr(_codex_cli, "status") or not hasattr(_codex_cli, "start_download"):
         raise RuntimeError("On-demand Codex CLI downloader is incomplete")
@@ -370,7 +370,7 @@ if __name__ == "__main__":
         else:
             sys.argv.append("--workbench")
         try:
-            from cyrene.runtime.host import main
+            from cyrene.platform.host import main
             main()
         except Exception as _exc:
             _write_crash_log(_exc)
@@ -381,7 +381,7 @@ if __name__ == "__main__":
         sys.argv.append("--gui")
 
     try:
-        from cyrene.runtime.host import main
+        from cyrene.platform.host import main
         main()
     except Exception as _exc:
         _write_crash_log(_exc)

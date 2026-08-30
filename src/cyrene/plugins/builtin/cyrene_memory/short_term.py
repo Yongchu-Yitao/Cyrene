@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.localization import app_language, localized
-from cyrene.runtime.io import atomic_write_json, read_json_safe
+from cyrene.platform.io import atomic_write_json, read_json_safe
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ def touch_entry(content_keyword: str, metadata: dict | None = None) -> None:
     try:
         if not _STATS_DB_PATH:
             return
-        from cyrene.runtime import database as cy_db
+        from cyrene.platform import database as cy_db
 
         cy_db.record_memory_touch_sync(
             _STATS_DB_PATH,
@@ -285,7 +285,7 @@ Output format (one per line, no explanations):
 [emotion] user was frustrated about a project deadline
 [preference] user likes casual short replies
 """
-    from cyrene.model_runtime.messages import assistant_text
+    from cyrene.model.messages import assistant_text
 
     if model_gateway is None or not callable(getattr(model_gateway, "complete", None)):
         raise RuntimeError("Memory model gateway is unavailable")

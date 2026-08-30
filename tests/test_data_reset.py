@@ -11,7 +11,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_plugin_data_reset_uses_generic_service_lifecycle():
-    from cyrene.runtime.data_reset import prepare_plugin_data_reset
+    from cyrene.platform.data_reset import prepare_plugin_data_reset
 
     calls = []
 
@@ -65,7 +65,7 @@ def test_reset_endpoint_requires_explicit_confirmation(monkeypatch, tmp_path: Pa
 
 
 def test_config_reset_replaces_persisted_and_live_environment(monkeypatch):
-    from cyrene.runtime import config_store
+    from cyrene.platform import config_store
 
     current = {
         "env": {

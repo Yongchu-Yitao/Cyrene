@@ -12,7 +12,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
 
-from cyrene.runtime.version import get_version
+from cyrene.platform.version import get_version
 
 logger = logging.getLogger(__name__)
 

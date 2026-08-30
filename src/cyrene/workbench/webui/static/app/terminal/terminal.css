@@ -26,6 +26,21 @@ html[data-theme="light"] .wbc-terminal-pane {
   --wbc-terminal-muted: #717c88;
 }
 
+/* The split frame can reach the compositor before xterm's canvas is visible.
+   Give that frame the terminal's final opaque surface from its first paint;
+   the glass backdrop would otherwise promote a transient white compositor
+   layer while the new split animates into place. */
+.wbc-pane-card-terminal {
+  --wbc-terminal-background: #17181c;
+  background: var(--wbc-terminal-background);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-theme="light"] .wbc-pane-card-terminal {
+  --wbc-terminal-background: #fcfdfd;
+}
+
 .wbc-pane-card > .wbc-terminal-pane {
   box-sizing: border-box;
   padding-top: 34px;

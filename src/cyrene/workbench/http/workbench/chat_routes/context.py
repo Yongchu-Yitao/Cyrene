@@ -48,7 +48,7 @@ class ChatRouteContext:
         chat_groups.configure_store(db_path)
         configure_workbench_store(db_path)
         from cyrene.workbench.core_adapter.chat_runtime import workbench_agent_data_directory
-        from cyrene.runtime.inbox import peek_messages as peek_agent_inbox_messages
+        from cyrene.platform.inbox import peek_messages as peek_agent_inbox_messages
 
         agent_state_root = workbench_agent_data_directory(str(db_path))
 
@@ -337,8 +337,8 @@ class ChatRouteContext:
         """Apply the application spending guard without the retired Agent."""
 
         from cyrene.observability import debug
-        from cyrene.runtime.budget import check_budget_and_block
-        from cyrene.runtime.settings_store import get_all
+        from cyrene.platform.budget import check_budget_and_block
+        from cyrene.platform.settings_store import get_all
 
         settings = get_all()
         result = await check_budget_and_block(
@@ -432,7 +432,7 @@ class ChatRouteContext:
         return public
 
     def _configure_shell_wake(self) -> None:
-        from cyrene.runtime.shell_wake import get_shell_wake_service
+        from cyrene.platform.shell_wake import get_shell_wake_service
 
         async def dispatch(wake: dict[str, Any]) -> str:
             return await self.service.dispatch_shell_wake_run(

@@ -172,7 +172,7 @@ def test_module_help_has_no_runtime_side_effects(tmp_path):
 
 def test_module_defaults_to_workbench(monkeypatch):
     import cyrene.__main__ as module_entry
-    from cyrene.runtime import host
+    from cyrene.platform import host
 
     calls = []
     monkeypatch.setattr(sys, "argv", ["cyrene"])
@@ -189,8 +189,8 @@ def test_module_defaults_to_workbench(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_interactive_cli_drains_background_work_before_loop_closes(monkeypatch):
-    from cyrene.runtime import host as local_cli
-    from cyrene.runtime import lifecycle as runtime_lifecycle
+    from cyrene.platform import host as local_cli
+    from cyrene.platform import lifecycle as runtime_lifecycle
 
     events = []
 

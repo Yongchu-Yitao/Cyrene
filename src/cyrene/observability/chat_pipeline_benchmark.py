@@ -147,7 +147,7 @@ class _ProfileInstrumentation:
     original_append_many: Any
 
     def restore(self) -> None:
-        self.inbox_module.WorkbenchAgentInbox._connect = self.original_inbox_connect
+        self.inbox_module._InboxSQLiteWriter._connect = self.original_inbox_connect
         self.inbox_module.WorkbenchAgentInbox._record_events = self.original_inbox_record_events
         if self.event_store is not None and self.original_event_store_connect is not None and self.original_append_many is not None:
             self.event_store._connect = self.original_event_store_connect
@@ -170,7 +170,7 @@ def _install_profile_instrumentation(
     metrics: _ProfileMetrics,
     inbox_module: Any,
 ) -> _ProfileInstrumentation:
-    original_inbox_connect = inbox_module.WorkbenchAgentInbox._connect
+    original_inbox_connect = inbox_module._InboxSQLiteWriter._connect
     original_inbox_record_events = inbox_module.WorkbenchAgentInbox._record_events
     event_store = manager._event_store
     original_event_store_connect = event_store._connect if event_store is not None else None
@@ -180,7 +180,7 @@ def _install_profile_instrumentation(
             metrics.inbox_connections += 1
         return original_inbox_connect(self)
 
-    inbox_module.WorkbenchAgentInbox._connect = tracked_inbox_connect
+    inbox_module._InboxSQLiteWriter._connect = tracked_inbox_connect
 
     def tracked_inbox_record_events(self: Any, rows: list[tuple[Any, ...]]) -> None:
         with metrics.counter_lock:

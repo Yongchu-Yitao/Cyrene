@@ -5,7 +5,7 @@ async def test_telemetry_flush_preserves_events_appended_during_database_write(
     monkeypatch,
 ) -> None:
     from cyrene.observability import debug
-    from cyrene.runtime import database
+    from cyrene.platform import database
 
     first = {"type": "tool_call", "timestamp": "t1", "tool": "Read"}
     appended_during_write = {
@@ -30,7 +30,7 @@ async def test_telemetry_flush_preserves_events_appended_during_database_write(
 
 async def test_plugin_llm_event_updates_both_usage_projections(monkeypatch) -> None:
     from cyrene.observability import debug
-    from cyrene.runtime import database
+    from cyrene.platform import database
 
     captured = {}
 

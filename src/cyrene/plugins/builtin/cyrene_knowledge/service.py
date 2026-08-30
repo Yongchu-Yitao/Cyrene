@@ -44,7 +44,7 @@ _EDITABLE_FIELDS = {
 
 
 def _default_data_root() -> Path:
-    from cyrene.runtime.paths import DATA_DIR
+    from cyrene.platform.paths import DATA_DIR
 
     return Path(DATA_DIR).expanduser().resolve() / "plugin_data" / "cyrene_knowledge"
 
@@ -187,6 +187,117 @@ class KnowledgeService:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    @staticmethod
+    def _embedding_identity() -> tuple[bool, str, int]:
+        from . import embeddings
+
+        configured = embeddings.is_configured()
+        model, dimensions = embeddings.current_identity()
+        if not configured or not model or dimensions <= 0:
+            return False, "cyrene-hash-v1", 128
+        return True, model, dimensions
+
+    async def _query_embedding(
+        self,
+        query: str,
+    ) -> tuple[list[float] | None, str, int]:
+        if not str(query or "").strip():
+            return None, "cyrene-hash-v1", 128
+        configured, model, dimensions = self._embedding_identity()
+        if not configured:
+            return None, model, dimensions
+        from . import embeddings
+
+        try:
+            vectors = await embeddings.embed_texts([query], input_type="query")
+            return vectors[0], model, dimensions
+        except Exception:
+            logger.warning(
+                "Configured knowledge embedding query failed; using lexical/hash fallback",
+                exc_info=True,
+            )
+            return None, "cyrene-hash-v1", 128
+
+    async def _refresh_embeddings(self, workspace: str) -> int:
+        configured, model, dimensions = self._embedding_identity()
+        if not configured:
+            return 0
+        from . import embeddings
+
+        updated = 0
+        while True:
+            chunks = await asyncio.to_thread(
+                self.store.embedding_chunks,
+                workspace,
+                model,
+                dimensions,
+                limit=64,
+            )
+            if not chunks:
+                return updated
+            vectors = await embeddings.embed_texts(
+                [chunk["content"] for chunk in chunks],
+                input_type="document",
+            )
+            applied = await asyncio.to_thread(
+                self.store.apply_embeddings,
+                workspace,
+                model,
+                dimensions,
+                [
+                    (chunk["id"], vector)
+                    for chunk, vector in zip(chunks, vectors, strict=True)
+                ],
+            )
+            # Chunks can be replaced or deleted while inference is running.
+            # The next pass sees their replacements, so a short update is safe.
+            updated += applied
+
+    def _start_embedding_refresh(
+        self,
+        workspace: str,
+        *,
+        invalidate: bool = False,
+    ) -> dict[str, Any]:
+        current = self._reembed.get(workspace) or {}
+        if current.get("running"):
+            current["rerun"] = True
+            current["invalidate"] = bool(current.get("invalidate") or invalidate)
+            return dict(current)
+        state: dict[str, Any] = {
+            "running": True,
+            "updated": 0,
+            "error": "",
+            "rerun": False,
+            "invalidate": invalidate,
+        }
+        self._reembed[workspace] = state
+
+        async def run() -> None:
+            try:
+                while True:
+                    should_invalidate = bool(state.get("invalidate"))
+                    state["invalidate"] = False
+                    state["rerun"] = False
+                    if should_invalidate:
+                        await asyncio.to_thread(
+                            self.store.invalidate_embeddings,
+                            workspace,
+                        )
+                    state["updated"] += await self._refresh_embeddings(workspace)
+                    if not state.get("rerun") and not state.get("invalidate"):
+                        break
+            except Exception as exc:
+                state["error"] = str(exc)
+                logger.exception("Knowledge embedding refresh failed for %s", workspace)
+            finally:
+                state.pop("rerun", None)
+                state.pop("invalidate", None)
+                state["running"] = False
+
+        self._track(asyncio.create_task(run()))
+        return dict(state)
+
     async def list_documents(
         self,
         context: PluginContext,
@@ -213,7 +324,17 @@ class KnowledgeService:
         needle = str(query or "").strip()
         if not needle:
             raise ValueError("query cannot be empty")
-        return await retrieve_knowledge(self.store, workspace, needle, limit=limit)
+        query_vector, model, dimensions = await self._query_embedding(needle)
+        self._start_embedding_refresh(workspace)
+        return await retrieve_knowledge(
+            self.store,
+            workspace,
+            needle,
+            limit=limit,
+            query_vector=query_vector,
+            embedding_model=model,
+            embedding_dimensions=dimensions,
+        )
 
     async def list_library_items(
         self,
@@ -247,6 +368,8 @@ class KnowledgeService:
         needle = str(query or "").strip()
         if not needle:
             raise ValueError("query cannot be empty")
+        query_vector, model, dimensions = await self._query_embedding(needle)
+        self._start_embedding_refresh(workspace)
         return await asyncio.to_thread(
             self.store.search_library,
             workspace,
@@ -254,6 +377,9 @@ class KnowledgeService:
             limit=max(1, min(int(limit or 8), 30)),
             status=str(status or "").strip(),
             tag=str(tag or "").strip(),
+            query_vector=query_vector,
+            embedding_model=model,
+            embedding_dimensions=dimensions,
         )
 
     async def update_library_metadata(
@@ -288,6 +414,8 @@ class KnowledgeService:
             else:
                 skipped.append("authors")
         updated = await asyncio.to_thread(self.store.update_item, workspace, paper_id, patch) if patch else item
+        if patch:
+            self._start_embedding_refresh(workspace)
         return updated, sorted(patch), sorted(set(skipped))
 
     async def items(self, workspace: str, **filters: Any) -> dict[str, Any]:
@@ -313,7 +441,10 @@ class KnowledgeService:
         )
 
     async def create_item(self, workspace: str, body: Mapping[str, Any]) -> dict[str, Any]:
-        return await asyncio.to_thread(self.store.create_item, self.resolve_workspace(workspace), body)
+        workspace = self.resolve_workspace(workspace)
+        item = await asyncio.to_thread(self.store.create_item, workspace, body)
+        self._start_embedding_refresh(workspace)
+        return item
 
     async def get_item(self, workspace: str, item_id: str) -> dict[str, Any] | None:
         return await asyncio.to_thread(self.store.get_item, self.resolve_workspace(workspace), item_id)
@@ -333,7 +464,10 @@ class KnowledgeService:
             "read",
         }:
             raise ValueError("reading_status must be unread, reading, or read")
-        return await asyncio.to_thread(self.store.update_item, workspace, item_id, body)
+        item = await asyncio.to_thread(self.store.update_item, workspace, item_id, body)
+        if item is not None and any(key in body for key in ("title", "abstract", "content")):
+            self._start_embedding_refresh(workspace)
+        return item
 
     async def delete_items(
         self,
@@ -476,6 +610,7 @@ class KnowledgeService:
             value = await asyncio.to_thread(self.store.get_item, workspace, str(item["id"]))
             if value is None:
                 raise RuntimeError("uploaded item disappeared")
+            self._start_embedding_refresh(workspace)
             return value
         except Exception:
             target.unlink(missing_ok=True)
@@ -512,6 +647,8 @@ class KnowledgeService:
                 continue
             content_type = str(getattr(upload, "content_type", "") or mimetypes.guess_type(filename)[0] or "application/octet-stream")
             result.append(await self._write_upload(workspace, filename, content, content_type, item_id=item_id))
+        if result:
+            self._start_embedding_refresh(workspace)
         return result
 
     async def import_records(
@@ -528,6 +665,8 @@ class KnowledgeService:
             if not isinstance(raw, Mapping) or not str(raw.get("title") or "").strip():
                 continue
             created.append(await asyncio.to_thread(self.store.create_item, workspace, dict(raw)))
+        if created:
+            self._start_embedding_refresh(workspace)
         return {"imported": len(created), "created": len(created), "items": created}
 
     async def raw(
@@ -588,39 +727,40 @@ class KnowledgeService:
 
     async def search(self, workspace: str, query: str, limit: int) -> dict[str, Any]:
         workspace = self.resolve_workspace(workspace)
+        needle = str(query or "").strip()
+        query_vector, model, dimensions = await self._query_embedding(needle)
+        self._start_embedding_refresh(workspace)
         results = await asyncio.to_thread(
             self.store.search_library,
             workspace,
-            str(query or ""),
+            needle,
             limit=max(1, min(int(limit or 20), 100)),
+            query_vector=query_vector,
+            embedding_model=model,
+            embedding_dimensions=dimensions,
         )
         return {"results": results}
 
     async def embedding_status(self, workspace: str) -> dict[str, Any]:
         workspace = self.resolve_workspace(workspace)
-        status = await asyncio.to_thread(self.store.embedding_status, workspace)
+        model_configured, model, dimensions = self._embedding_identity()
+        status = await asyncio.to_thread(
+            self.store.embedding_status,
+            workspace,
+            configured=model_configured,
+            model=model,
+            dimensions=dimensions,
+        )
+        status["model_configured"] = model_configured
         status["reembed"] = dict(self._reembed.get(workspace) or {"running": False, "updated": 0, "error": ""})
         return status
 
     async def reembed(self, workspace: str) -> dict[str, Any]:
         workspace = self.resolve_workspace(workspace)
-        current = self._reembed.get(workspace) or {}
-        if current.get("running"):
-            return {"ok": True, "reembed": dict(current)}
-        state = {"running": True, "updated": 0, "error": ""}
-        self._reembed[workspace] = state
-
-        async def run() -> None:
-            try:
-                state["updated"] = await asyncio.to_thread(self.store.reembed, workspace)
-            except Exception as exc:
-                state["error"] = str(exc)
-                logger.exception("Knowledge Plugin reindex failed for %s", workspace)
-            finally:
-                state["running"] = False
-
-        self._track(asyncio.create_task(run()))
-        return {"ok": True, "reembed": dict(state)}
+        return {
+            "ok": True,
+            "reembed": self._start_embedding_refresh(workspace, invalidate=True),
+        }
 
     async def zotero_status(self, workspace: str) -> dict[str, Any]:
         workspace = self.resolve_workspace(workspace)
@@ -657,7 +797,7 @@ class KnowledgeService:
         from .zotero import sync_zotero
 
         settings = dict(self._zotero_settings())
-        return await sync_zotero(
+        result = await sync_zotero(
             self,
             workspace,
             base_url=str(settings.get("base_url") or ""),
@@ -666,9 +806,20 @@ class KnowledgeService:
             collection_key=str(body.get("collection_key") or ""),
             copy_attachments=bool(settings.get("copy_attachments", True)),
         )
+        self._start_embedding_refresh(workspace)
+        return result
 
     async def search_workbench(self, query: str, limit: int) -> list[dict[str, Any]]:
-        hits = await retrieve_knowledge(self.store, None, query, limit=limit)
+        query_vector, model, dimensions = await self._query_embedding(query)
+        hits = await retrieve_knowledge(
+            self.store,
+            None,
+            query,
+            limit=limit,
+            query_vector=query_vector,
+            embedding_model=model,
+            embedding_dimensions=dimensions,
+        )
         try:
             from cyrene.workbench.sessions.context import read_projects
 
@@ -824,7 +975,7 @@ class KnowledgeService:
             source: Path | None = None
             pinned_id = str(attachment.get("id") or "").strip()
             if pinned_id:
-                from cyrene.runtime.attachments import EXPORTS_DIR
+                from cyrene.platform.attachments import EXPORTS_DIR
 
                 pinned_candidate: Path | None = (EXPORTS_DIR / pinned_id).resolve()
                 try:
@@ -965,7 +1116,101 @@ class KnowledgeService:
     def start_local_model_download(self, model_id: str) -> dict[str, Any]:
         from . import local_models
 
-        return local_models.start_download(model_id)
+        if model_id == "qwen3-embedding-0.6b":
+            # Import registers the post-download inference health check.
+            from . import local_onnx as _local_onnx  # noqa: F401
+            self._ensure_local_embedding_configuration()
+
+        result = local_models.start_download(model_id)
+        if model_id == "qwen3-embedding-0.6b":
+            download = local_models._TASKS.get(model_id)
+
+            async def refresh_when_ready() -> None:
+                try:
+                    if download is not None and not download.done():
+                        await asyncio.shield(download)
+                    if not local_models.is_ready(model_id):
+                        return
+                    workspaces = await asyncio.to_thread(
+                        self.store.embedding_workspaces
+                    )
+                    for workspace in workspaces:
+                        self._start_embedding_refresh(workspace)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Local embedding model became ready but vector refresh failed"
+                    )
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # The production HTTP path always has an event loop; keeping
+                # this callable safe also supports synchronous administration.
+                pass
+            else:
+                self._track(loop.create_task(refresh_when_ready()))
+        return result
+
+    @staticmethod
+    def _ensure_local_embedding_configuration() -> None:
+        from cyrene.core.plugin import application_plugin_service
+
+        service = application_plugin_service("model_configuration")
+        if service is None:
+            return
+        configuration = service.get_model_configuration()
+        connection = next(
+            (
+                item
+                for item in configuration.get("connections") or []
+                if item.get("adapter") == "local_onnx" and item.get("enabled", True)
+            ),
+            None,
+        )
+        if connection is None:
+            return
+        profiles = [dict(item) for item in configuration.get("profiles") or []]
+        profile = next(
+            (
+                item
+                for item in profiles
+                if item.get("connection_id") == connection.get("id")
+                and item.get("model") == "qwen3-embedding-0.6b"
+            ),
+            None,
+        )
+        if profile is None:
+            base_id = f"{connection['id']}:qwen3-embedding-0.6b"
+            used = {str(item.get("id") or "") for item in profiles}
+            profile_id = base_id
+            suffix = 2
+            while profile_id in used:
+                profile_id = f"{base_id}:{suffix}"
+                suffix += 1
+            profile = {
+                "id": profile_id,
+                "connection_id": connection["id"],
+                "model": "qwen3-embedding-0.6b",
+                "name": "Qwen3 Embedding 0.6B",
+                "enabled": True,
+                "capabilities": ["embedding"],
+                "dimensions": 1024,
+            }
+            profiles.append(profile)
+        routes = {
+            name: list((configuration.get("routes") or {}).get(name) or [])
+            for name in ("primary", "secondary", "vision", "embedding")
+        }
+        if profile["id"] not in routes["embedding"]:
+            routes["embedding"].append(profile["id"])
+        service.save_model_configuration({
+            "version": configuration.get("version", 1),
+            "connections": configuration.get("connections") or [],
+            "profiles": profiles,
+            "routes": routes,
+        })
 
     async def delete_local_model(self, model_id: str) -> dict[str, Any]:
         from . import local_models
@@ -1023,6 +1268,7 @@ class KnowledgeService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+        await asyncio.to_thread(self.store.close)
 
     async def reset_data(self) -> None:
         await self.shutdown()

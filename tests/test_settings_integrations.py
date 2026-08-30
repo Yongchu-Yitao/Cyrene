@@ -32,7 +32,7 @@ def test_zotero_local_api_rejects_non_loopback_urls():
 
 
 def test_budget_stats_exposes_daily_usage_for_peak_metrics(monkeypatch, tmp_path):
-    from cyrene.runtime import database, settings_store
+    from cyrene.platform import database, settings_store
 
     usage_stats = AsyncMock(return_value={
         "by_model": [],

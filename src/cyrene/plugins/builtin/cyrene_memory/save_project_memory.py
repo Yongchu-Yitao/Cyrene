@@ -1,6 +1,6 @@
 """Tool implementation for save_project_memory.
 
-Lets a Workbench task agent persist a durable fact into its project's long-term
+Lets a Workbench conversation agent persist a durable fact into its project's long-term
 memory store — the same store shown on the project's Memory page and injected
 into future runs. The project scope is resolved from the active session id, so
 the agent never has to know (or be trusted with) the storage key.

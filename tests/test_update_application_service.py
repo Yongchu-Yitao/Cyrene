@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from cyrene.runtime import updater
-from cyrene.runtime.update_service import DownloadCoordinator
+from cyrene.platform import updater
+from cyrene.platform.update_service import DownloadCoordinator
 
 
 class _Progress:

@@ -17,8 +17,8 @@ from .settings import (
     merge_media_settings_update,
     public_media_settings,
 )
-from cyrene.runtime.config_store import SettingsRevisionConflict
-from cyrene.runtime.settings_store import get_revision
+from cyrene.platform.config_store import SettingsRevisionConflict
+from cyrene.platform.settings_store import get_revision
 from cyrene.workbench.http.errors import localized_error_response
 
 

@@ -141,6 +141,58 @@
         "description": "检查并管理外部集成与运行环境。"
       }
     },
+    "cyrene_goal": {
+      "en": {
+        "name": "Conversation Goal",
+        "description": "Define, execute, independently review, and continuously refine a Goal inside its conversation."
+      },
+      "zh": {
+        "name": "对话目标",
+        "description": "在对话中定义、持续执行、独立审查并迭代目标。"
+      }
+    },
+    "cyrene_project_python": {
+      "en": {"name": "Python projects", "description": "Detect Python projects and contribute their workspace actions."},
+      "zh": {"name": "Python 项目", "description": "识别 Python 项目并提供对应的工作区动作。"}
+    },
+    "cyrene_project_javascript": {
+      "en": {"name": "JavaScript projects", "description": "Detect JavaScript and TypeScript projects and contribute their workspace actions."},
+      "zh": {"name": "JavaScript 项目", "description": "识别 JavaScript 与 TypeScript 项目并提供对应的工作区动作。"}
+    },
+    "cyrene_project_tex": {
+      "en": {"name": "TeX projects", "description": "Detect TeX projects and contribute document build and preview actions."},
+      "zh": {"name": "TeX 项目", "description": "识别 TeX 项目并提供文档编译与预览动作。"}
+    },
+    "cyrene_project_go": {
+      "en": {"name": "Go projects", "description": "Detect Go modules and contribute their workspace actions."},
+      "zh": {"name": "Go 项目", "description": "识别 Go 模块并提供对应的工作区动作。"}
+    },
+    "cyrene_project_java": {
+      "en": {"name": "Java projects", "description": "Detect Java build systems and contribute their workspace actions."},
+      "zh": {"name": "Java 项目", "description": "识别 Java 构建系统并提供对应的工作区动作。"}
+    },
+    "cyrene_project_rust": {
+      "en": {"name": "Rust projects", "description": "Detect Cargo projects and contribute their workspace actions."},
+      "zh": {"name": "Rust 项目", "description": "识别 Cargo 项目并提供对应的工作区动作。"}
+    },
+    "cyrene_project_github": {
+      "en": {"name": "GitHub projects", "description": "Detect GitHub repositories and contribute repository workspace actions."},
+      "zh": {"name": "GitHub 项目", "description": "识别 GitHub 仓库并提供仓库工作区动作。"}
+    },
+    "cyrene_project_make": {
+      "en": {"name": "Make projects", "description": "Detect Makefiles and contribute declared build targets as workspace actions."},
+      "zh": {"name": "Make 项目", "description": "识别 Makefile 并将已声明的构建目标提供为工作区动作。"}
+    },
+    "cyrene_split_context": {
+      "en": {
+        "name": "Visible split context",
+        "description": "Tell the Agent which panes are currently visible beside the active conversation."
+      },
+      "zh": {
+        "name": "当前分屏上下文",
+        "description": "每轮自动告诉 Agent 当前对话旁边可见的分屏。"
+      }
+    },
     "cyrene_cli": {
       "en": {
         "name": "CLI Plugins",
@@ -321,16 +373,6 @@
         "description": "在系统上下文最前方挂载 Agent 的基础指令。"
       }
     },
-    "cyrene_task": {
-      "en": {
-        "name": "Task tools",
-        "description": "Manage the current Workbench task goal and execution plan."
-      },
-      "zh": {
-        "name": "任务工具",
-        "description": "管理当前 Workbench 任务目标与执行计划。"
-      }
-    },
     "cyrene_voice": {
       "en": {
         "name": "Voice",
@@ -456,11 +498,11 @@
     "Bash": {
       "en": {
         "name": "Bash",
-        "description": "Run a shell command in the workspace."
+        "description": "Run a shell command in the workspace. Shell file-printing output does not satisfy a request to open or show a named file in the workspace UI."
       },
       "zh": {
         "name": "执行命令",
-        "description": "在工作区中运行 Shell 命令。"
+        "description": "在工作区中运行 Shell 命令。Shell 打印出的文件内容不能替代在工作区界面中打开或显示指定文件。"
       }
     },
     "CodeReview": {
@@ -536,11 +578,11 @@
     "CyreneSessionMessage": {
       "en": {
         "name": "Message another session",
-        "description": "Put text in the composer shown in the exact current UI surface snapshot and dispatch it to that other task/chat as an agent-originated message. It cannot submit the calling session's own composer."
+        "description": "Put text in the composer shown in the exact current UI surface snapshot and dispatch it to that other conversation as an agent-originated message. It cannot submit the calling session's own composer."
       },
       "zh": {
         "name": "向其他会话发送消息",
-        "description": "向指定的另一任务或对话编辑器填入文本并发送代理来源消息。"
+        "description": "向指定的另一对话编辑器填入文本并发送 Agent 来源消息。"
       }
     },
     "CyreneSettingsDescribe": {
@@ -663,10 +705,20 @@
         "description": "检查或更改当前运行界面所绑定的 Cyrene 窗口。"
       }
     },
+    "WorkspaceAction": {
+      "en": {
+        "name": "Workspace action",
+        "description": "Discover or run project-defined Build, Run, Test, and Preview actions. Prefer this over constructing shell commands when a matching action exists. Local build/test actions may be retried inside a Goal; deployment and publishing are intentionally unsupported."
+      },
+      "zh": {
+        "name": "工作区动作",
+        "description": "发现或运行项目插件定义的构建、启动、测试与预览动作。"
+      }
+    },
     "DeepReflect": {
       "en": {
         "name": "Deep reflection",
-        "description": "Main agent only. Reframe the next working context when the current approach is not satisfying the user's goal, repeated work is not converging, or user guidance shows the direction is wrong. Do not use this merely because one tool failed. The visible transcript is preserved; future LLM context uses a compressed reflection packet."
+        "description": "Main agent only. Reframe the next working context when the current approach is not satisfying the user's goal, repeated work is not converging, or user guidance shows the direction is wrong. Do not use this merely because one tool failed. The visible transcript is preserved; future LLM context uses a compressed reflection packet. Call this as the only tool in its tool-call turn; after it completes, continue automatically from the rewritten context."
       },
       "zh": {
         "name": "深度反思",
@@ -1856,7 +1908,7 @@
     "RemoteCyreneAction": {
       "en": {
         "name": "Control remote Cyrene",
-        "description": "Perform a typed action on a paired Cyrene device explicitly selected in the current chat, including remote chat and task lifecycle actions."
+        "description": "Perform a typed action on a paired Cyrene device explicitly selected in the current chat, including remote conversation and Goal actions."
       },
       "zh": {
         "name": "控制远程 Cyrene",
@@ -2566,7 +2618,7 @@
     "enter_plan_mode": {
       "en": {
         "name": "Enter plan mode",
-        "description": "Main agent only. Enter PLAN MODE: decompose the user's request into ordered steps, each broken into concrete tasks, show the plan in the right sidebar's 计划 tab, and ask the user to approve / reject / revise before doing any real work. Use this proactively for complex, multi-step, or risky tasks where the user would benefit from reviewing the approach first. Do NOT combine with other tools in the same turn; calling this pauses the round for the user's decision."
+        "description": "Main agent only. Enter PLAN MODE: decompose the user's request into ordered steps with explicit prerequisites and execution details, show the plan in the right sidebar's 计划 tab, and ask the user to approve / reject / revise before doing any real work. Use this proactively for complex, multi-step, or risky work where the user would benefit from reviewing the approach first. Do NOT combine with other tools in the same turn; calling this pauses the round for the user's decision."
       },
       "zh": {
         "name": "进入计划模式",
@@ -2633,6 +2685,16 @@
         "description": "列出当前项目中的持久用户数据。"
       }
     },
+    "propose_goal": {
+      "en": {
+        "name": "Propose Goal",
+        "description": "Propose a concrete Goal for the user to edit and confirm. Use only during a /goal discussion after understanding the request."
+      },
+      "zh": {
+        "name": "提出目标",
+        "description": "在 /goal 讨论明确后，提出可供用户编辑并确认的目标。"
+      }
+    },
     "pin_location": {
       "en": {
         "name": "Pin location",
@@ -2641,6 +2703,16 @@
       "zh": {
         "name": "标记位置",
         "description": "在地图上标记地点，以便查看并与其他标记连接。"
+      }
+    },
+    "quit": {
+      "en": {
+        "name": "Finish subagent",
+        "description": "Subagent-only terminal protocol. First write the complete result in normal assistant content, then call quit alone."
+      },
+      "zh": {
+        "name": "结束子代理",
+        "description": "子代理完成协议：先输出完整结果，再单独调用 quit。"
       }
     },
     "query_entities": {
@@ -2893,24 +2965,24 @@
         "description": "在微信通道中加密上传并发送代理创建的文件。"
       }
     },
-    "set_task_goal": {
-      "en": {
-        "name": "Set goal",
-        "description": "Set or correct the current Workbench task's goal, short title, and/or one-line summary. Provide at least one field. A title manually locked by the user is preserved."
-      },
-      "zh": {
-        "name": "设置任务目标",
-        "description": "设置或修正当前 Workbench 任务的目标、短标题或摘要。"
-      }
-    },
     "spawn_subagent": {
       "en": {
         "name": "Start subagent",
-        "description": "Main agent only. Create an independent AgentSession with a new ContextTree, copy the main agent's initial root context, and append the supplied task as its first instruction."
+        "description": "Main agent only. Spawn an independent execution worker or a bounded discussion participant. Workers have separate ContextTrees and share only the session-scoped agent inbox."
       },
       "zh": {
         "name": "启动子代理",
         "description": "创建独立代理会话，复制初始上下文并交付指定子任务。"
+      }
+    },
+    "submit_goal_result": {
+      "en": {
+        "name": "Submit Goal result",
+        "description": "Submit the current Goal result and evidence to an independent reviewer. This does not declare completion by itself."
+      },
+      "zh": {
+        "name": "提交目标结果",
+        "description": "将当前目标结果与证据提交给独立审查 Agent，本操作不会自行宣布完成。"
       }
     },
     "submit_plan": {
@@ -2966,21 +3038,11 @@
     "update_plan_progress": {
       "en": {
         "name": "Update plan progress",
-        "description": "Main agent only. Update the durable Workbench plan before and after executing a plan step so the user can see exactly which step is active. Use only when an approved plan is being executed."
+        "description": "Main agent only. Update the durable Workbench plan before and after executing a plan step so the user can see exactly which step is active. This reloads the authoritative plan file every time and returns the latest step instructions. Call it immediately before starting every step and follow the returned title, description, command, files, and prerequisites. Use only when an approved plan is being executed."
       },
       "zh": {
         "name": "更新计划进度",
         "description": "在执行前后更新持久 Workbench 计划的步骤状态。"
-      }
-    },
-    "update_task_plan": {
-      "en": {
-        "name": "Update plan",
-        "description": "Main agent only. Update THE CURRENT Workbench task session's execution plan. Only works inside Workbench task sessions. Use this when user input changes the current task plan, or when execution discovers that a pending step's title, description, dependencies, prompt, or context files need adjustment."
-      },
-      "zh": {
-        "name": "更新计划",
-        "description": "更新当前 Workbench 任务会话的执行计划结构。"
       }
     },
     "use_tools": {

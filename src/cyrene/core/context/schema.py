@@ -57,6 +57,8 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
             node_id TEXT PRIMARY KEY,
             parent_id TEXT,
             value_json TEXT NOT NULL,
+            self_token_count INTEGER,
+            path_token_count INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(parent_id)
@@ -105,9 +107,39 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_hook_queue_status_sequence
             ON hook_queue(status, sequence);
+
+        CREATE TABLE IF NOT EXISTS context_effect_results (
+            assistant_node_id TEXT NOT NULL,
+            call_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(assistant_node_id, call_id),
+            FOREIGN KEY(assistant_node_id)
+                REFERENCES context_nodes(node_id)
+                ON DELETE CASCADE
+        );
         """
     )
+    _ensure_context_token_columns(connection)
     _ensure_closed_hook_failure_policy(connection)
+
+
+def _ensure_context_token_columns(connection: sqlite3.Connection) -> None:
+    """Add nullable counters to trees created before incremental accounting."""
+
+    columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(context_nodes)").fetchall()
+    }
+    if "self_token_count" not in columns:
+        connection.execute(
+            "ALTER TABLE context_nodes ADD COLUMN self_token_count INTEGER"
+        )
+    if "path_token_count" not in columns:
+        connection.execute(
+            "ALTER TABLE context_nodes ADD COLUMN path_token_count INTEGER"
+        )
 
 
 def _ensure_closed_hook_failure_policy(connection: sqlite3.Connection) -> None:

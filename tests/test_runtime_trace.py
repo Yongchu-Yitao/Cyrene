@@ -1,11 +1,14 @@
+import asyncio
 import pytest
+import sqlite3
+import threading
 
 from cyrene.observability.trace import (
     bind_trace_context,
     bind_trace_sink,
     trace_span,
 )
-from cyrene.runtime.database import (
+from cyrene.platform.database import (
     get_runtime_trace,
     init_db,
     record_llm_telemetry_batch,
@@ -71,7 +74,7 @@ async def test_standalone_inbox_trace_does_not_write_sqlite_on_result_path(
     tmp_path,
 ):
     """Inbox diagnostics without a run root must not create a synchronous trace root."""
-    from cyrene.runtime import database
+    from cyrene.platform import database
     from cyrene.workbench.application.inbox import WorkbenchAgentInbox
 
     persistence_calls = 0
@@ -100,3 +103,43 @@ async def test_standalone_inbox_trace_does_not_write_sqlite_on_result_path(
         await inbox.close()
 
     assert persistence_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_inbox_reuses_one_writer_connection_for_tool_result_storm(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene.workbench.application import inbox as inbox_module
+
+    connect_calls = 0
+    original_connect = sqlite3.connect
+
+    def counted_connect(*args, **kwargs):
+        nonlocal connect_calls
+        connect_calls += 1
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(inbox_module.sqlite3, "connect", counted_connect)
+    inbox = inbox_module.WorkbenchAgentInbox(
+        "batched-chat",
+        str(tmp_path / "batched-inbox.sqlite3"),
+        run_id="run-batched",
+    )
+
+    async def runner() -> str:
+        return "ok"
+
+    calls = [(f"call-{index}", "Read", runner) for index in range(24)]
+    inbox.submit_tool_batch(calls)
+    results = await asyncio.gather(
+        *(inbox.wait_for_tool_result(call_id) for call_id, _name, _runner in calls)
+    )
+    assert results == ["ok"] * len(calls)
+    await inbox.close()
+
+    assert connect_calls <= 3
+    assert not any(
+        thread.name == "workbench-inbox-sqlite-batched-chat"
+        for thread in threading.enumerate()
+    )

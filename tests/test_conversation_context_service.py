@@ -5,6 +5,7 @@ import pytest
 from cyrene.workbench.chat.conversation_context_service import (
     AgentContextRepository,
     ConversationContextQueryService,
+    ConversationContextUpdateError,
     ConversationInboxQueryService,
     _agent_path_messages,
     _agent_path_usage,
@@ -455,14 +456,28 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
         "chars": 13,
         "source": "context_tree",
         "reason": "behavior",
+        "content": "system prompt",
+        "nodeId": "root",
+        "contextKind": "system_prompt",
+        "lifecycle": "persistent",
+        "createdAt": blocks["timeline"][0]["createdAt"],
+        "updatedAt": blocks["timeline"][0]["updatedAt"],
+        "nodeContent": "system prompt",
+        "editable": True,
+        "metadata": {},
     }, {
         "id": "context.project_memory",
+        "nodeId": "context",
         "type": "memory",
         "tokens_est": 14,
         "chars": 14,
         "contextKind": "project_memory",
         "source": "context_tree",
         "reason": "project_memory",
+        "lifecycle": "",
+        "createdAt": blocks["contextMounts"][0]["createdAt"],
+        "updatedAt": blocks["contextMounts"][0]["updatedAt"],
+        "metadata": {},
     }, {
         "id": "system.message_overhead",
         "type": "overhead",
@@ -478,6 +493,54 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
     assert "usedStandaloneTools" not in blocks
     assert blocks["messageCount"] == 6
     assert blocks["updatedAt"]
+    assert blocks["treeId"] == "chat_1"
+    assert blocks["rootId"] == "root"
+    assert blocks["leafId"] == "assistant_2"
+    assert blocks["selectedModel"] == "selected-model"
+    assert blocks["actualModel"] == "actual-model"
+    assert blocks["modelIdentity"]["candidateId"] == "actual-candidate"
+    assert blocks["chronology"] == "ascending"
+    assert [item["id"] for item in blocks["timeline"]] == [
+        "root", "user", "context", "assistant_1", "tools", "assistant_2",
+    ]
+    assert [item["createdAt"] for item in blocks["timeline"]] == sorted(
+        item["createdAt"] for item in blocks["timeline"]
+    )
+    assert blocks["timeline"][2]["contextKind"] == "project_memory"
+    assert blocks["timeline"][3]["technical"]["tool_calls"][0] == {
+        "id": "call_1",
+        "name": "toolbox",
+        "arguments": {
+            "operation": "invoke",
+            "name": "subagent.spawn",
+            "arguments": {"agent_id": "reader", "task": "inspect"},
+        },
+    }
+    assert blocks["timeline"][3]["technical"]["effect_results"][0][
+        "plugin_pack"
+    ] == "cyrene_subagent"
+    assert blocks["timeline"][4]["toolAttributions"] == [{
+        "pluginPack": "cyrene_subagent",
+        "pluginName": "subagent.spawn",
+        "operation": "invoke",
+    }, {
+        "pluginPack": "",
+        "pluginName": "CustomLint",
+        "operation": "invoke",
+    }]
+    assert blocks["contextMounts"] == [{
+        "id": "context",
+        "parentId": "user",
+        "kind": "project_memory",
+        "source": "context_tree",
+        "lifecycle": "",
+        "tokensEst": 14,
+        "chars": 14,
+        "createdAt": blocks["timeline"][2]["createdAt"],
+        "updatedAt": blocks["timeline"][2]["updatedAt"],
+        "metadata": {},
+        "order": 0,
+    }]
     assert subagents["activeRoundId"] == "run_1"
     assert subagents["rounds"] == [{
         "id": "run_1",
@@ -495,6 +558,153 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
         "error": "",
         "roundId": "run_1",
     }]
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_block_can_be_inspected_and_persistently_updated(tmp_path):
+    from cyrene.core.context import ContextStoreRouter
+
+    context_directory = tmp_path / "agent-context"
+    router = ContextStoreRouter(context_directory)
+    tree = router.create_tree(
+        {"role": "system", "content": "You are Cyrene.\nFollow the rules."},
+        tree_id="chat_1",
+        root_id="root",
+    )
+    router.mount(
+        tree.id,
+        tree.root_id,
+        {"role": "user", "content": "hello", "run_id": "run_1"},
+        node_id="user",
+    )
+    router.close()
+    service = _context_service(
+        tmp_path,
+        {"id": "chat_1", "model": "model"},
+        agent_states=AgentContextRepository(context_directory),
+    )
+
+    before = await service.blocks("chat_1")
+    prompt_block = before["timeline"][0]
+
+    assert prompt_block["nodeId"] == "root"
+    assert prompt_block["content"] == "You are Cyrene.\nFollow the rules."
+    assert prompt_block["nodeContent"] == "You are Cyrene.\nFollow the rules."
+    assert prompt_block["editable"] is True
+    assert prompt_block["technical"]["raw_value"]["role"] == "system"
+
+    result = await service.update_system_prompt(
+        "chat_1",
+        "root",
+        "You are Cyrene.\nUse concise answers.",
+        prompt_block["updatedAt"],
+    )
+    after = await service.blocks("chat_1")
+
+    assert result["ok"] is True
+    assert after["timeline"][0]["nodeContent"] == (
+        "You are Cyrene.\nUse concise answers."
+    )
+    with pytest.raises(ConversationContextUpdateError):
+        await service.update_system_prompt(
+            "chat_1",
+            "root",
+            "stale update",
+            prompt_block["updatedAt"],
+        )
+
+
+@pytest.mark.asyncio
+async def test_timeline_exposes_mount_state_and_all_node_content_for_editing(tmp_path):
+    from cyrene.core.context import ContextStoreRouter
+
+    context_directory = tmp_path / "agent-context"
+    router = ContextStoreRouter(context_directory)
+    tree = router.create_tree(
+        {"role": "system", "content": "", "metadata": {"root": True}},
+        tree_id="chat_1",
+        root_id="root",
+    )
+    user = router.mount(
+        tree.id,
+        tree.root_id,
+        {"role": "user", "content": "hello", "run_id": "run_1"},
+        node_id="user",
+    )
+    prompt = router.mount(
+        tree.id,
+        user.id,
+        {
+            "role": "context",
+            "content": "real system prompt",
+            "context_kind": "system_prompt",
+            "context_source": "cyrene_system_prompt",
+            "run_id": "run_1",
+        },
+        node_id="prompt",
+    )
+    router.mount(
+        tree.id,
+        prompt.id,
+        {
+            "role": "tool_results",
+            "run_id": "run_1",
+            "results": [{
+                "call_id": "call_1",
+                "name": "lookup",
+                "success": True,
+                "value": {"result": "before"},
+                "error": "",
+            }],
+        },
+        node_id="tools",
+    )
+    router.close()
+    service = _context_service(
+        tmp_path,
+        {"id": "chat_1", "model": "model"},
+        agent_states=AgentContextRepository(context_directory),
+    )
+
+    before = await service.blocks("chat_1")
+    root, user_block, prompt_block, tools_block = before["timeline"]
+
+    assert root["role"] == "system"
+    assert root["chars"] == 0
+    assert root["metadata"] == {"root": True}
+    assert root["editable"] is True
+    assert user_block["content"] == "hello"
+    assert user_block["editable"] is True
+    assert prompt_block["contextKind"] == "system_prompt"
+    assert prompt_block["content"] == "real system prompt"
+    assert prompt_block["activeMount"] is True
+    assert tools_block["contentFormat"] == "json"
+    assert tools_block["editable"] is True
+
+    await service.update_node_content(
+        "chat_1",
+        "user",
+        "",
+        user_block["updatedAt"],
+    )
+    replacement_results = """[{"call_id":"call_1","name":"lookup","success":true,"value":{"result":"after"},"error":""}]"""
+    await service.update_node_content(
+        "chat_1",
+        "tools",
+        replacement_results,
+        tools_block["updatedAt"],
+    )
+    after = await service.blocks("chat_1")
+
+    assert after["timeline"][1]["content"] == ""
+    assert '"after"' in after["timeline"][3]["content"]
+    with pytest.raises(ConversationContextUpdateError):
+        await service.update_node_content(
+            "chat_1",
+            "tools",
+            "not json",
+            after["timeline"][3]["updatedAt"],
+        )
 
 
 @pytest.mark.asyncio

@@ -345,7 +345,7 @@ async def _benchmark_knowledge_write(
 async def _benchmark_database_init(
     _config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
-    from cyrene.runtime.database import init_db
+    from cyrene.platform.database import init_db
 
     db_path = root / "runtime-init.db"
     started = time.perf_counter()
@@ -372,7 +372,7 @@ async def _benchmark_database_init(
 async def _benchmark_scheduled_tasks(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
-    from cyrene.runtime import database
+    from cyrene.platform import database
     from cyrene.plugins.builtin.cyrene_schedule.migrations import (
         initialize_schedule_database,
     )
@@ -451,7 +451,7 @@ async def _benchmark_scheduled_tasks(
 async def _benchmark_file_hashing(
     config: FeatureBenchmarkConfig, root: Path
 ) -> dict[str, Any]:
-    from cyrene.runtime.file_hashing import cached_sha256_file, sha256_file
+    from cyrene.platform.file_hashing import cached_sha256_file, sha256_file
 
     file_size = max(1, config.hash_file_bytes)
     reads = max(1, config.hash_cache_reads)

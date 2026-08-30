@@ -57,7 +57,7 @@ function wbcOpenPaneContent(context, type, payload, options) {
   if (normalizedType === "file" || normalizedType === "viewer") {
     payload = wbcEditableChatFileResource({ projectId: context.projectId }, payload);
   }
-  var canonicalId = ["chat", "terminal", "task"].indexOf(normalizedType) >= 0 && payload
+  var canonicalId = ["chat", "terminal"].indexOf(normalizedType) >= 0 && payload
     ? normalizedType + ":" + String(payload) : "";
   var baseCard = wbcPaneContentCard(context, normalizedType, payload, ownerId);
   var reusableId = canonicalId || (normalizedType === "plugin-view" ? baseCard.id : "");
@@ -84,23 +84,6 @@ function wbcOpenPaneContent(context, type, payload, options) {
     return next;
   }, ownerChatId);
   return card;
-}
-
-function wbcOpenTaskWorkspace(context, taskId) {
-  var id = String(taskId || "");
-  if (!id) return null;
-  context.setRailSelectionSuppressed(false);
-  context.activeTaskWorkspaceRef.current = id;
-  context.lastWorkRailModeRef.current = "task";
-  context.setRailMode("task");
-  context.activeChatIdRef.current = "";
-  context.setActiveChatId("");
-  context.setActiveChat(null);
-  if (context.onSelectTask) context.onSelectTask(id);
-  return wbcOpenPaneContent(context, "task", id, {
-    replaceWorkspace: true,
-    ownerChatId: wbcProjectPaneOwnerKey(context),
-  });
 }
 
 function wbcUpdatePaneCard(context, cardId, updater) {
@@ -315,7 +298,7 @@ function wbcResizePaneRow(context, side, ratio) {
 export {
   wbcCloseDeletedChatSplits, wbcClosePaneCard, wbcCreatePaneConversation,
   wbcMovePaneCard, wbcMovePaneCardLayout, wbcMovePaneCardOtherSide,
-  wbcOpenPaneContent, wbcOpenTaskWorkspace,
+  wbcOpenPaneContent,
   wbcPaneContentCard, wbcPaneLayoutFor, wbcPaneOwnerKey, wbcProjectPaneOwnerKey,
   wbcResizePaneRow, wbcRestoreTerminalReplacement, wbcUpdatePaneCard, wbcUpdatePaneLayout,
   wbcSwapPaneCards, wbcSwapPaneCardsLayout,

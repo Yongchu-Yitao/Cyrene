@@ -7,7 +7,7 @@ envelopes.
 
 import pytest
 
-from cyrene.agent_runtime import (
+from cyrene.agents import (
     FAILURE_KINDS,
     AgentBinding,
     AgentDescriptor,
@@ -29,7 +29,7 @@ from cyrene.agent_runtime import (
     sanitize_event_payload,
     with_conservative_defaults,
 )
-from cyrene.agent_runtime.builtin import (
+from cyrene.agents.builtin import (
     BUILTIN_AGENT_CAPABILITIES,
     BUILTIN_AGENT_ID,
     BUILTIN_DISPLAY_NAME,
@@ -37,7 +37,7 @@ from cyrene.agent_runtime.builtin import (
     BUILTIN_INSTALLATION_ID,
     builtin_descriptor,
 )
-from cyrene.agent_runtime.driver import DriverRegistry
+from cyrene.agents.driver import DriverRegistry
 
 
 # ---------------------------------------------------------------------------

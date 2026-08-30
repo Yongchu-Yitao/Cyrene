@@ -176,7 +176,7 @@ def test_office_gateway_generates_tls_material_manifest_and_protected_assets(mon
     from cryptography import x509
 
     from cyrene.plugins.builtin.cyrene_office.gateway import OfficeGatewayFiles, create_office_gateway_app
-    from cyrene.runtime import settings_service
+    from cyrene.platform import settings_service
 
     def fake_read_public(namespace):
         if namespace == "runtime":

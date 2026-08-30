@@ -15,15 +15,18 @@ logger = logging.getLogger(__name__)
 MODEL_ID = "qwen3-embedding-0.6b"
 _MODEL: tuple[Any, Any] | None = None
 _MLX_MODEL: Any = None
+_MLX_DEVICE = "gpu"
 _MODEL_LOCK = threading.Lock()
 _INFERENCE_LIMIT = asyncio.Semaphore(2)
 
 
 def reset_model() -> None:
-    global _MODEL, _MLX_MODEL
+    global _MODEL, _MLX_MODEL, _MLX_DEVICE
     with _MODEL_LOCK:
         _MODEL = None
         _MLX_MODEL = None
+        _MLX_DEVICE = "gpu"
+    local_models.set_active_runtime(MODEL_ID, "")
 
 
 local_models.register_resetter(MODEL_ID, reset_model)
@@ -106,6 +109,16 @@ def _load() -> tuple[Any, Any]:
         tokenizer.enable_truncation(max_length=1024)
         tokenizer.enable_padding()
         _MODEL = (session, tokenizer)
+        providers = session.get_providers() if hasattr(session, "get_providers") else []
+        active_provider = str(providers[0] if providers else "CPUExecutionProvider")
+        runtime = {
+            "CUDAExecutionProvider": "cuda",
+            "DmlExecutionProvider": "directml",
+            "CoreMLExecutionProvider": "coreml",
+            "QNNExecutionProvider": "qnn-npu",
+            "CPUExecutionProvider": "onnx-cpu",
+        }.get(active_provider, active_provider.casefold() or "onnx-cpu")
+        local_models.set_active_runtime(MODEL_ID, runtime)
         return _MODEL
 
 
@@ -125,6 +138,10 @@ def _load_mlx():
         root = local_models.model_dir(MODEL_ID)
         model, _config = load_model(root / "mlx", lazy=False)
         _MLX_MODEL = model
+        local_models.set_active_runtime(
+            MODEL_ID,
+            "mlx-cpu" if _MLX_DEVICE == "cpu" else "mlx",
+        )
         return _MLX_MODEL
 
 
@@ -133,21 +150,23 @@ def _embed_mlx_sync(texts: list[str]) -> list[list[float]]:
     import numpy as np
     from tokenizers import Tokenizer
 
-    model = _load_mlx()
-    tokenizer = Tokenizer.from_file(
-        str(local_models.model_dir(MODEL_ID) / "tokenizer.json")
-    )
-    tokenizer.enable_truncation(max_length=1024)
-    vectors: list[list[float]] = []
-    for text in texts:
-        ids = tokenizer.encode(text).ids
-        inputs = mx.array([ids])
-        hidden = model.model(inputs)
-        pooled = hidden[0, -1]
-        pooled = pooled / mx.maximum(mx.linalg.norm(pooled), 1e-12)
-        mx.eval(pooled)
-        vectors.append(np.asarray(pooled, dtype=np.float32).tolist())
-    return vectors
+    device = mx.cpu if _MLX_DEVICE == "cpu" else mx.gpu
+    with mx.stream(device):
+        model = _load_mlx()
+        tokenizer = Tokenizer.from_file(
+            str(local_models.model_dir(MODEL_ID) / "tokenizer.json")
+        )
+        tokenizer.enable_truncation(max_length=1024)
+        vectors: list[list[float]] = []
+        for text in texts:
+            ids = tokenizer.encode(text).ids
+            inputs = mx.array([ids])
+            hidden = model.model(inputs)
+            pooled = hidden[0, -1]
+            pooled = pooled / mx.maximum(mx.linalg.norm(pooled), 1e-12)
+            mx.eval(pooled)
+            vectors.append(np.asarray(pooled, dtype=np.float32).tolist())
+        return vectors
 
 
 def _embed_sync(texts: list[str]) -> list[list[float]]:
@@ -189,11 +208,26 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
 
 def _embed_with_runtime_fallback_sync(texts: list[str]) -> list[list[float]]:
     """Prefer MLX on Apple Silicon and retain ONNX as a recovery path."""
+    global _MLX_MODEL, _MLX_DEVICE
     if _runtime() != "mlx":
         return _embed_sync(texts)
     try:
         return _embed_mlx_sync(texts)
     except Exception as mlx_error:
+        if _MLX_DEVICE != "cpu":
+            with _MODEL_LOCK:
+                _MLX_MODEL = None
+                _MLX_DEVICE = "cpu"
+            try:
+                logger.warning(
+                    "MLX GPU embedding failed; retrying on the MLX CPU backend",
+                    exc_info=True,
+                )
+                return _embed_mlx_sync(texts)
+            except Exception as mlx_cpu_error:
+                mlx_error = RuntimeError(
+                    f"MLX GPU failed: {mlx_error}; MLX CPU failed: {mlx_cpu_error}"
+                )
         onnx_path = local_models.model_dir(MODEL_ID) / "model.onnx"
         if not onnx_path.is_file():
             raise RuntimeError(
@@ -218,3 +252,12 @@ async def embed_texts(texts: list[str], *, query: bool = False) -> list[list[flo
         texts = [f"Instruct: {instruction}\nQuery: {text}" for text in texts]
     async with _INFERENCE_LIMIT:
         return await asyncio.to_thread(_embed_with_runtime_fallback_sync, texts)
+
+
+def _health_check_sync() -> None:
+    vectors = _embed_with_runtime_fallback_sync(["Cyrene local embedding health check"])
+    if len(vectors) != 1 or len(vectors[0]) != 1024:
+        raise RuntimeError("local embedding health check returned invalid dimensions")
+
+
+local_models.register_health_checker(MODEL_ID, _health_check_sync)

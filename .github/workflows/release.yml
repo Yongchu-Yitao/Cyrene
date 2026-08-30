@@ -58,7 +58,7 @@ jobs:
           pip install .
           pip install --upgrade typing_extensions pydantic pydantic_core
           # OpenCV is NOT bundled (spec excludes cv2; OCR downloads the full
-          # wheel on demand via cyrene.model_runtime.opencv_runtime). The
+          # wheel on demand via cyrene.plugins.builtin.cyrene_knowledge.opencv_runtime). The
           # headless wheel avoids GUI system deps in the build environment.
           pip uninstall -y opencv-python
           pip install opencv-python-headless
@@ -165,7 +165,7 @@ jobs:
           pip install --upgrade typing_extensions pydantic pydantic_core
           pip install mcp httpx-sse pydantic pydantic-settings jsonschema referencing rpds-py attrs sse-starlette pyjwt
           # OpenCV is NOT bundled (spec excludes cv2; OCR downloads the full
-          # wheel on demand via cyrene.model_runtime.opencv_runtime). The
+          # wheel on demand via cyrene.plugins.builtin.cyrene_knowledge.opencv_runtime). The
           # headless wheel avoids GUI system deps in the build environment.
           pip uninstall -y opencv-python
           pip install opencv-python-headless
@@ -593,7 +593,7 @@ jobs:
           pip install .
           pip install --upgrade typing_extensions pydantic pydantic_core
           # OpenCV is NOT bundled (spec excludes cv2; OCR downloads the full
-          # wheel on demand via cyrene.model_runtime.opencv_runtime). The
+          # wheel on demand via cyrene.plugins.builtin.cyrene_knowledge.opencv_runtime). The
           # headless wheel avoids GUI system deps in the build environment.
           pip uninstall -y opencv-python
           pip install opencv-python-headless

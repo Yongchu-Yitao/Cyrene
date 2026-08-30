@@ -303,7 +303,7 @@ class ScheduleRuntimeService:
                 logger.exception("Failed to deliver scheduled run %s through bot", run_id)
 
         try:
-            from cyrene.runtime.notifications import notify
+            from cyrene.platform.notifications import notify
             from cyrene.workbench.application.notifications import append_notification
 
             title = (

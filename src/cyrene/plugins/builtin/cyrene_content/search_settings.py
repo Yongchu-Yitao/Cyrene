@@ -13,7 +13,7 @@ from cyrene.core.plugin import (
     PluginRegistry,
     application_plugin_scope,
 )
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 from fastapi import Request
 from fastapi.responses import JSONResponse
 

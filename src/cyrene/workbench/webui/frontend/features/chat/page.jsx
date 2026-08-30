@@ -1,6 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { PluginFrontendService, PluginView } from "../../platform/plugins.jsx"
-import { WBC_ICONS, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcCaptureConversationViewport, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcHasTaskDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePaneLayout, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPinPageSplitLayout, wbcPinSplitMotionOpen, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReadTaskDrag, wbcReleasePinnedPageSplitLayout, wbcReleasePinnedSplitMotion, wbcRestoreConversationViewport, wbcSaveDraftAgentBinding, wbcT } from "../../workbench-chat.jsx"
+import { WBC_ICONS, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcCaptureConversationViewport, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePaneLayout, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPinPageSplitLayout, wbcPinSplitMotionOpen, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReleasePinnedPageSplitLayout, wbcReleasePinnedSplitMotion, wbcRestoreConversationViewport, wbcSaveDraftAgentBinding, wbcT } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcChatSplit, WbcChatSplitHost, WbcMapPaneContent, WbcMapSplitHost, WbcPaneCardFrame, WbcPaneColumnResizer, WbcPaneContextTrackDropSurface, WbcPaneRowResizer, WbcSide, WbcSideAgentSplit, WbcSideAgentSplitHost, WbcSplitGripBar, WbcSubagentsSplitHost, WbcSubagentsTab, wbcArtifactFileKey, wbcChatArtifactFiles, wbcDiscardProjectFileDraft, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { WorkbenchChatRuntimes, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence } from "./file-resources.jsx"
 import { resolveRefreshedChatSelection as wbcResolveRefreshedChatSelection } from "./behavior.mjs"
@@ -18,14 +18,14 @@ import { wbcFinishPaneCardDrag, wbcStartPaneCardDrag } from "./pane-card-drag-co
 import { wbcHandleResourceSplitDragOver, wbcHandleResourceSplitDrop, wbcResourceSplitDropGeometry, wbcResourceSplitSideAt } from "./page-drop-controller.jsx"
 import { wbcHandlePaneDrop, wbcPlaceExistingPaneCard } from "./pane-drop-controller.jsx"
 import { WbcPaneSemanticController, wbcPaneSemanticNodeId } from "./pane-semantic-controller.jsx"
-import { wbcOpenTaskRightPanel, wbcRefreshTaskRightPanel, wbcRememberTaskPaneSession } from "./task-pane-controller.jsx"
 import { wbcLoadSubagents, wbcMarkViewerFileRead, wbcOpenProjectFile, wbcOpenViewer, wbcRevealTopbarResource } from "./page-resource-controller.jsx"
 import { useWbcRuntimePageHooks, wbcMergeChatSummary } from "./runtime-page-hooks.jsx"
-import { wbcCloseDeletedChatSplits, wbcClosePaneCard, wbcCreatePaneConversation, wbcMovePaneCard, wbcMovePaneCardOtherSide, wbcOpenPaneContent, wbcOpenTaskWorkspace, wbcPaneContentCard, wbcPaneLayoutFor, wbcPaneOwnerKey, wbcProjectPaneOwnerKey, wbcResizePaneRow, wbcRestoreTerminalReplacement, wbcSwapPaneCards, wbcUpdatePaneCard, wbcUpdatePaneLayout } from "./pane-layout-controller.jsx"
+import { wbcCloseDeletedChatSplits, wbcClosePaneCard, wbcCreatePaneConversation, wbcMovePaneCard, wbcMovePaneCardOtherSide, wbcOpenPaneContent, wbcPaneContentCard, wbcPaneLayoutFor, wbcPaneOwnerKey, wbcProjectPaneOwnerKey, wbcResizePaneRow, wbcRestoreTerminalReplacement, wbcSwapPaneCards, wbcUpdatePaneCard, wbcUpdatePaneLayout } from "./pane-layout-controller.jsx"
 import { wbcCloseActiveSplit, wbcCloseMainConversationSplit, wbcCloseNamedSplit, wbcCloseResourceSplit, wbcDeleteSideAgent, wbcRestoreSplitState, wbcSelectArtifact, wbcSelectChange, wbcSelectResourceSplit, wbcSelectSideAgent, wbcSplitStateSnapshot, wbcUpdateSideAgent } from "./split-selection-controller.jsx"
 import { wbcAnswerQuestionForChat, wbcHandleCreateChat, wbcHandleEditMessage, wbcHandleGuidance, wbcHandleRename, wbcHandleRenameChat, wbcHandleRetryMessage, wbcOpenQuickRename } from "./chat-action-controller.jsx"
 import { useWbcLiveEventController } from "./live-event-controller.jsx"
 import { WBC_SURFACE_INTENT_EVENT, WbcSurfaceHost } from "./dynamic-surfaces.jsx"
+import { WbcGoalConfirmationDialog } from "../goal/goal-ui.jsx"
 import { wbcClaimSurfaceCard, wbcPinSurfaceCard, wbcRevealSurface, wbcSurfaceResourceKey } from "./dynamic-surface-broker.mjs"
 
 // Workbench chat feature module with explicit ESM dependencies.
@@ -76,7 +76,7 @@ function wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer) {
   return Promise.resolve();
 }
 
-function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest, taskWorkspace, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
+function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
   workbenchServices.i18n().use();
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
@@ -88,22 +88,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   var browserAvailable = pluginModules.indexOf("browser") >= 0;
   var memoryAvailable = pluginModules.indexOf("memory") >= 0;
   var knowledgeAvailable = pluginModules.indexOf("knowledge") >= 0;
-  taskWorkspace = taskWorkspace || {};
   pinnedSessions = pinnedSessions || {};
-  var tasks = taskWorkspace.tasks;
-  var activeTaskId = taskWorkspace.activeTaskId;
-  var onSelectTask = taskWorkspace.onSelectTask;
-  var onCreateTask = taskWorkspace.onCreateTask;
-  var onDeleteTask = taskWorkspace.onDeleteTask;
-  var onRenameTask = taskWorkspace.onRenameTask;
-  var onTaskStoreChange = taskWorkspace.onStoreChange;
-  var TaskPaneComponent = taskWorkspace.PaneComponent;
-  var TaskContextPanelComponent = taskWorkspace.ContextPanelComponent;
-  var onOpenTask = taskWorkspace.onOpenTask;
   var pinnedChatIds = pinnedSessions.chatIds;
-  var pinnedTaskIds = pinnedSessions.taskIds;
   var onTogglePinnedChat = pinnedSessions.onToggleChat;
-  var onTogglePinnedTask = pinnedSessions.onToggleTask;
   var isActive = active !== false;
   var model = WorkbenchChatModel;
   var projectId = project ? project.id : "";
@@ -120,7 +107,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   // Switching the rail is browsing, not navigation. Hide selection in the
   // newly opened list until the user explicitly chooses one of its cards.
   var [railSelectionSuppressed, setRailSelectionSuppressed] = useWbcState(false);
-  var lastWorkRailModeRef = useWbcRef("chat");
   var chatCache = wbcChatCache();
   var [chats, setChats] = useWbcState([]);
   var chatsRef = useWbcRef([]);
@@ -142,12 +128,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     lastEventAt: 0,
     waitingForIdle: false,
   });
-  // A full-page task belongs to the project workspace, not to whichever chat
-  // happened to be selected before it opened. Split tasks deliberately leave
-  // this empty so they keep sharing the active conversation's pane layout.
-  var activeTaskWorkspaceRef = useWbcRef("");
-  var [taskPaneSessions, setTaskPaneSessions] = useWbcState({});
-  var [taskRightTabs, setTaskRightTabs] = useWbcState({});
   // Draft Agent binding for a not-yet-created chat (handoff §8.3): the first
   // message's lazy createChat() submits this binding instead of creating a
   // default-Agent chat and immediately rebinding it.
@@ -210,21 +190,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     var nextId = String(chatId || "");
     var previousId = String(activeChatIdRef.current || "");
     setRailSelectionSuppressed(false);
-    activeTaskWorkspaceRef.current = "";
-    lastWorkRailModeRef.current = "chat";
     setRailMode("chat");
     restoreTerminalReplacement(previousId);
     if (nextId !== previousId) restoreTerminalReplacement(nextId);
-    if (nextId) {
-      var nextLayout = paneLayoutFor(nextId);
-      var nextCards = nextLayout.left.concat(nextLayout.right);
-      // Repair layouts produced by older builds, which stored a full task as
-      // the current chat's only card. Selecting the chat must restore its own
-      // conversation rather than reopening that stale task.
-      if (nextCards.length === 1 && nextCards[0].kind === "task") {
-        updatePaneLayout(wbcDefaultPaneLayout(nextId), nextId);
-      }
-    }
     // Publish selection intent immediately. Passive effects run too late to
     // protect a newly-created chat from an already in-flight list refresh.
     activeChatIdRef.current = nextId;
@@ -260,8 +228,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   useWbcEffect(function () {
     setActiveTerminalId("");
     setRailSelectionSuppressed(false);
-    activeTaskWorkspaceRef.current = "";
-    lastWorkRailModeRef.current = "chat";
     setRailMode("chat");
     pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
     refreshTerminals();
@@ -280,7 +246,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       || String(pending.projectId) !== String(projectId)
     ) return;
     pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
-    setRailMode(lastWorkRailModeRef.current === "task" ? "task" : "chat");
+    setRailMode("chat");
     replaceWithTerminal(pending.terminalId, {
       skipPersist: true,
       ownerChatId: String(activeChatId || ""),
@@ -392,6 +358,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }
   var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState({});
   var surfaceSuppressionRef = useWbcRef(new Map());
+  var surfaceRevealedRunRef = useWbcRef(new Set());
 
   useWbcEffect(function () {
     function onSurfaceIntent(event) {
@@ -419,7 +386,23 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
             });
             return !(draftKey && WBC_PROJECT_FILE_DRAFTS[draftKey]);
           },
+          canOpen: function (normalizedIntent) {
+            var resourceKind = normalizedIntent && normalizedIntent.resource && normalizedIntent.resource.kind;
+            if (["file", "directory"].indexOf(resourceKind) < 0) return true;
+            var runId = String(normalizedIntent.runId || "");
+            return !runId || !surfaceRevealedRunRef.current.has(runId);
+          },
         });
+        if (result && ["opened", "replaced"].indexOf(result.outcome) >= 0) {
+          var resourceKind = intent && intent.resource && intent.resource.kind;
+          var openedRunId = String(intent.runId || intent.run_id || "");
+          if (openedRunId && ["file", "directory"].indexOf(resourceKind) >= 0) {
+            surfaceRevealedRunRef.current.add(openedRunId);
+            if (surfaceRevealedRunRef.current.size > 500) {
+              surfaceRevealedRunRef.current.delete(surfaceRevealedRunRef.current.values().next().value);
+            }
+          }
+        }
         if (!result || result.layout === previous) return current;
         return Object.assign({}, current, { [ownerId]: result.layout });
       });
@@ -435,6 +418,54 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     window.addEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent);
     return function () { window.removeEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent); };
   }, [projectId]);
+
+  useWbcEffect(function () {
+    function claimSurface(event) {
+      var resourceKey = String(event && event.detail && event.detail.resourceKey || "");
+      if (!resourceKey) return;
+      setPaneLayoutsByChat(function (current) {
+        var changed = false;
+        var next = {};
+        Object.keys(current).forEach(function (ownerId) {
+          var layout = current[ownerId];
+          var ownerChanged = false;
+          var patched = Object.assign({}, layout);
+          ["left", "right"].forEach(function (side) {
+            patched[side] = (layout[side] || []).map(function (card) {
+              if (card.kind !== "surface" || String(card.payload && card.payload.resourceKey || "") !== resourceKey) return card;
+              ownerChanged = true;
+              return wbcClaimSurfaceCard(card);
+            });
+          });
+          changed = changed || ownerChanged;
+          next[ownerId] = ownerChanged ? patched : layout;
+        });
+        return changed ? next : current;
+      });
+    }
+    window.addEventListener("cyrene:surface-claim", claimSurface);
+    return function () { window.removeEventListener("cyrene:surface-claim", claimSurface); };
+  }, []);
+
+  useWbcEffect(function () {
+    function planUpdated(event) {
+      var detail = event && event.detail || {};
+      var chatId = String(detail.chatId || "");
+      var plan = detail.plan;
+      if (!chatId || !plan || typeof plan !== "object") return;
+      setActiveChat(function (current) {
+        if (!current || String(current.id || "") !== chatId) return current;
+        var next = Object.assign({}, current, { activePlan: plan });
+        chatCache.details[chatId] = next;
+        return next;
+      });
+      setChats(function (current) { return current.map(function (chat) {
+        return String(chat && chat.id || "") === chatId ? Object.assign({}, chat, { activePlan: plan }) : chat;
+      }); });
+    }
+    window.addEventListener("cyrene:conversation-plan-updated", planUpdated);
+    return function () { window.removeEventListener("cyrene:conversation-plan-updated", planUpdated); };
+  }, []);
 
   useWbcEffect(function () {
     var bridge = {
@@ -467,9 +498,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       },
       show: function (terminalId, side) {
         var id = String(terminalId || "");
-        if (!id || !terminals.some(function (item) { return String(item.id) === id; })) {
-          return { ok: false, error: "terminal_not_found" };
-        }
+        if (!id) return { ok: false, error: "terminal_id_required" };
         var requestedSide = side === "left" ? "left" : "right";
         showAgentTerminal(id, requestedSide);
         return { ok: true, terminalId: id, mode: "split", preferredSide: requestedSide };
@@ -492,9 +521,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return {
       projectId: projectId, model: model, chatCache: chatCache,
       paneLayoutsByChat: paneLayoutsByChat, activeChatIdRef: activeChatIdRef,
-      activeTaskWorkspaceRef: activeTaskWorkspaceRef, lastWorkRailModeRef: lastWorkRailModeRef,
       paneLayoutRestoreRef: paneLayoutRestoreRef, floatingSplitRestoreRef: floatingSplitRestoreRef,
-      terminalClient: terminalClient, onSelectTask: onSelectTask,
+      terminalClient: terminalClient,
       setPaneLayoutsByChat: setPaneLayoutsByChat, setResourceSplitByChat: setResourceSplitByChat,
       setActiveTerminalId: setActiveTerminalId, setRailSelectionSuppressed: setRailSelectionSuppressed,
       setRailMode: setRailMode, setActiveChatId: setActiveChatId, setActiveChat: setActiveChat,
@@ -509,16 +537,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   function updatePaneLayout(updater, ownerChatId) { return wbcUpdatePaneLayout(paneLayoutContext(), updater, ownerChatId); }
   function paneContentCard(type, payload, ownerChatId) { return wbcPaneContentCard(paneLayoutContext(), type, payload, ownerChatId); }
   function openPaneContent(type, payload, options) { return wbcOpenPaneContent(paneLayoutContext(), type, payload, options); }
-  function openTaskWorkspace(taskId) { return wbcOpenTaskWorkspace(paneLayoutContext(), taskId); }
-  var handledTaskOpenSequenceRef = useWbcRef(0);
-  useWbcEffect(function () {
-    var request = taskOpenRequest && typeof taskOpenRequest === "object" ? taskOpenRequest : {};
-    var sequence = Number(request.sequence || 0);
-    var taskId = String(request.id || "");
-    if (!sequence || !taskId || handledTaskOpenSequenceRef.current === sequence) return;
-    handledTaskOpenSequenceRef.current = sequence;
-    openTaskWorkspace(taskId);
-  }, [taskOpenRequest && taskOpenRequest.sequence, projectId]);
 
   function updatePaneCard(cardId, updater) { return wbcUpdatePaneCard(paneLayoutContext(), cardId, updater); }
   function closePaneCard(cardId, ownerChatId) { return wbcClosePaneCard(paneLayoutContext(), cardId, ownerChatId); }
@@ -611,6 +629,17 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   // is opened from the floating panel, remember the displaced split so its
   // close action can restore the exact previous layout.
   var [floatingConversationPanelOpen, setFloatingConversationPanelOpen] = useWbcState(false);
+
+  useWbcEffect(function () {
+    function openGoalTab(event) {
+      var requestedChatId = String(event && event.detail && event.detail.chatId || "");
+      if (requestedChatId && requestedChatId !== String(activeChatIdRef.current || "")) return;
+      setSideVisible(true);
+      setSideTab("goal");
+    }
+    window.addEventListener("workbench:open-goal-tab", openGoalTab);
+    return function () { window.removeEventListener("workbench:open-goal-tab", openGoalTab); };
+  }, []);
   var floatingSplitRestoreRef = useWbcRef(null);
   var [sideAgentSplitWidth, setSideAgentSplitWidth] = useWbcState(function () {
     var initial = 520;
@@ -681,8 +710,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }, [isActive, sideVisible]);
   var remoteChatRefreshTimerRef = useWbcRef(null);
   var remoteChangedChatIdsRef = useWbcRef(new Set());
-  // True while the backend reads the whole conversation and synthesizes a task.
-  var [toTaskBusy, setToTaskBusy] = useWbcState(false);
   var [compactBusy, setCompactBusy] = useWbcState(false);
   var [memoryLearningBusy, setMemoryLearningBusy] = useWbcState(false);
   var [pageContextMenu, setPageContextMenu] = useWbcState(null);
@@ -782,6 +809,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return wbcOpenProjectFile(pageResourceContext(), entry);
   }
 
+  // The board deliberately reuses this page's live rail. Any rail action that
+  // opens workspace content must reveal Work before opening that content, or
+  // the result would be created behind the still-visible board canvas.
+  function activateWorkspace() {
+    if (onActivateWorkspace) onActivateWorkspace();
+  }
+
   function resourceDropContext() {
     return {
       pageRef: pageRef, resourceSplitDropSide: resourceSplitDropSide,
@@ -820,12 +854,23 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       // response must never restore a pre-terminal `running` summary after a
       // newer response (or the synchronous terminal patch) has settled it.
       if (!isCurrentChatListRequest(requestedProjectId, requestSequence)) return list;
+      if (!list.length) {
+        return model.createChat(requestedProjectId).then(function (chat) {
+          if (
+            projectIdRef.current !== requestedProjectId
+            || !isCurrentChatListRequest(requestedProjectId, requestSequence)
+          ) return [chat];
+          var initial = [chat];
+          chatCache.lists[requestedProjectId] = initial;
+          chatsProjectIdRef.current = requestedProjectId;
+          setChats(initial);
+          selectChat(chat.id);
+          return initial;
+        });
+      }
       chatCache.lists[requestedProjectId] = list;
       chatsProjectIdRef.current = requestedProjectId;
       setChats(list);
-      // Background chat-list refreshes must not pull a full-page task back
-      // into conversation mode. An explicit chat target still wins.
-      if (!selectId && activeTaskWorkspaceRef.current) return list;
       var targetId = wbcResolveRefreshedChatSelection(
         list,
         selectId,
@@ -852,6 +897,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     }
     var runStatus = String(event.run_status || "");
     var projected = wbcMergeChatSummary({ id: chatId }, summary, runStatus);
+    if (Object.prototype.hasOwnProperty.call(event, "activeGoal")) {
+      projected.activeGoal = event.activeGoal || null;
+    }
     var projectedMessages = [];
     if (event.userMessage && typeof event.userMessage === "object") {
       projectedMessages.push(event.userMessage);
@@ -886,6 +934,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return true;
   }
 
+  function applyGoalChanged(activeGoal) {
+    var chatId = String(activeChatIdRef.current || "");
+    if (!chatId) return;
+    function patch(chat) {
+      if (!chat || String(chat.id || "") !== chatId) return chat;
+      var next = Object.assign({}, chat, { activeGoal: activeGoal || null });
+      if (chatCache.details[chatId]) chatCache.details[chatId] = next;
+      return next;
+    }
+    setActiveChat(patch);
+    setChats(function (current) { return current.map(patch); });
+    if (!activeGoal && sideTab === "goal") setSideTab("");
+  }
+
   // Initial load + project switch.
   useWbcEffect(function () {
     var requestedProjectId = projectId;
@@ -905,10 +967,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     }
     var remembered = wbcLastChatByProject[projectId];
     function selectFrom(list) {
-      if (activeTaskWorkspaceRef.current) {
-        setActiveChat(null);
-        return "";
-      }
       var targetId = pendingChatId && list.some(function (c) { return c.id === pendingChatId; })
         ? pendingChatId
         : (remembered && list.some(function (c) { return c.id === remembered; })
@@ -1684,8 +1742,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   // layer covers the right zone while a chat drag is in progress; the main
   // conversation column keeps its original drop-to-open behaviour untouched.
   var pageRef = useWbcRef(null);
-  // Conversations and tasks share the exact same side-split target. Keep the
-  // dragged kind only so that shared target can describe the card accurately.
   var [chatDragKind, setChatDragKind] = useWbcState("");
   var chatDragSession = !!chatDragKind;
   var [chatSideDropActive, setChatSideDropActive] = useWbcState(false);
@@ -1694,8 +1750,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     function onDocumentDragStart(event) {
       // Bubbles after the rail's React onDragStart has populated the
       // dataTransfer, so the chat MIME is already visible here.
-      if (wbcHasTaskDrag(event)) setChatDragKind("task");
-      else if (wbcHasChatDrag(event)) setChatDragKind("chat");
+      if (wbcHasChatDrag(event)) setChatDragKind("chat");
       else if (wbcHasPluginViewDrag(event)) setChatDragKind("plugin-view");
       if (wbcHasResourceDrag(event)) setResourceDragSession(true);
     }
@@ -1704,7 +1759,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     // track; relying on the target element's dragleave would interpret that
     // layout motion as the pointer leaving and expand the composer again.
     function onDocumentChatDragOver(event) {
-      if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)) return;
+      if (!wbcHasChatDrag(event) && !wbcHasPluginViewDrag(event)) return;
       var inside = wbcChatSideDropZone(event);
       setChatSideDropActive(function (current) {
         return current === inside ? current : inside;
@@ -1731,7 +1786,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
 
   function paneCardDragContext() {
     return {
-      project: project, chatCache: chatCache, activeChat: activeChat, tasks: tasks,
+      project: project, chatCache: chatCache, activeChat: activeChat,
       artifactItems: artifactItems, terminals: terminals, sideAgents: sideAgents,
       activeChatIdRef: activeChatIdRef, paneCardDetachRef: paneCardDetachRef,
       paneCardDragImageCleanupRef: paneCardDragImageCleanupRef,
@@ -1767,7 +1822,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return wbcPlaceExistingPaneCard(paneDropContext(), sourceCardId, targetCardId, edge);
   }
   function handlePaneDropOver(event, cardId, edge, dropKey) {
-    if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event) && !wbcHasTaskDrag(event)
+    if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event)
       && !wbcHasPluginViewDrag(event) && !wbcHasResourceDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1791,7 +1846,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   function paneDropContext() {
     return {
       activeChatIdRef: activeChatIdRef, paneCardDragImageCleanupRef: paneCardDragImageCleanupRef,
-      terminalClient: terminalClient, projectId: projectId, onSelectTask: onSelectTask,
+      paneDropTarget: paneDropTarget,
+      terminalClient: terminalClient, projectId: projectId,
       paneLayoutFor: paneLayoutFor, projectPaneOwnerKey: projectPaneOwnerKey,
       paneContentCard: paneContentCard, updatePaneLayout: updatePaneLayout,
       setActiveTerminalId: setActiveTerminalId, setPaneCardDragId: setPaneCardDragId,
@@ -1803,7 +1859,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     return wbcHandlePaneDrop(paneDropContext(), event, targetCardId, edge);
   }
   function handleSideLayerDragOver(event) {
-    if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)) return;
+    if (!wbcHasChatDrag(event) && !wbcHasPluginViewDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
@@ -1811,19 +1867,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }
 
   function handleSideLayerDrop(event) {
-    if (!wbcHasChatDrag(event) && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)) return;
+    if (!wbcHasChatDrag(event) && !wbcHasPluginViewDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
     setChatSideDropActive(false);
     setChatDragKind("");
-    if (wbcHasTaskDrag(event)) {
-      var taskPayload = wbcReadTaskDrag(event);
-      if (taskPayload && taskPayload.id) {
-        if (onSelectTask) onSelectTask(String(taskPayload.id));
-        openPaneContent("task", String(taskPayload.id), { side: "right" });
-      }
-      return;
-    }
     if (wbcHasPluginViewDrag(event)) {
       var pluginPayload = wbcReadPluginViewDrag(event);
       if (pluginPayload) {
@@ -2019,22 +2067,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     });
   }
 
-  function handleToTask(chatId) {
-    var targetChatId = typeof chatId === "string"
-      ? chatId
-      : String(activeChat && activeChat.id || "");
-    if (!targetChatId || toTaskBusy) return;
-    setToTaskBusy(true);
-    setError("");
-    model.toTask(targetChatId).then(function (payload) {
-      if (onOpenTask) onOpenTask(payload);
-    }).catch(function (err) {
-      setError(wbcErrorText(err));
-    }).then(function () {
-      setToTaskBusy(false);
-    });
-  }
-
   function handleCompact() {
     if (!activeChat || compactBusy) return;
     setCompactBusy(true);
@@ -2102,26 +2134,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   }
 
   function onToggleSide() { setSideVisible(function (v) { return !v; }); }
-
-  function taskPaneContext() {
-    return {
-      setTaskPaneSessions: setTaskPaneSessions,
-      setTaskRightTabs: setTaskRightTabs,
-      setSideVisible: setSideVisible,
-      onTaskStoreChange: onTaskStoreChange,
-    };
-  }
-  function rememberTaskPaneSession(taskId, session) {
-    return wbcRememberTaskPaneSession(taskPaneContext(), taskId, session);
-  }
-
-  function openTaskRightPanel(taskId, tab) {
-    return wbcOpenTaskRightPanel(taskPaneContext(), taskId, tab);
-  }
-
-  function refreshTaskRightPanel(taskId, nextStore) {
-    return wbcRefreshTaskRightPanel(taskPaneContext(), taskId, nextStore);
-  }
 
   useWbcEffect(function () {
     function onBrowserPreviewReady(event) {
@@ -2205,7 +2217,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   var paneLayout = paneLayoutFor(activeChatId);
   var panePresentation = wbcPaneWorkspacePresentation(
     paneLayout, paneCardDragId, chatDragSession, resourceDragSession,
-    activeChatId, taskPaneSessions, tasks
+    activeChatId
   );
   var paneCardCount = panePresentation.paneCardCount;
   var paneHasTwoColumns = panePresentation.paneHasTwoColumns;
@@ -2216,9 +2228,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
   var singlePaneContextDropActive = panePresentation.singlePaneContextDropActive;
   var splitDetailOpen = panePresentation.splitDetailOpen;
   var projectPaneOnly = panePresentation.projectPaneOnly;
-  var projectTaskPanelCard = panePresentation.projectTaskPanelCard;
-  var projectTaskPanelId = panePresentation.projectTaskPanelId;
-  var projectTaskPanelSession = panePresentation.projectTaskPanelSession;
   var showNewConversationWorkspace = panePresentation.showNewConversationWorkspace;
   var singleColumnWorkspaceOpen = panePresentation.singleColumnWorkspaceOpen;
 
@@ -2328,8 +2337,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onViewerViewed={markViewerFileRead}
         onRename={openQuickRename}
         onDelete={handleDelete}
-        onToTask={handleToTask}
-        toTaskBusy={toTaskBusy}
         onCompact={handleCompact}
         compactBusy={compactBusy}
         sideAgents={sideAgents}
@@ -2349,6 +2356,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         browserSuppressed={browserWindowMode === "maximized"}
         mapAvailable={mapAvailable}
         browserAvailable={browserAvailable}
+        onGoalChanged={applyGoalChanged}
         floating={floating}
         widthResizable={!floating && paneCardCount === 1}
         onCloseFloating={function () { setFloatingConversationPanelOpen(false); }}
@@ -2391,8 +2399,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onConversationContextMenu={openPageContextMenu}
         onRename={handleRename}
         onDelete={handleDelete}
-        onToTask={handleToTask}
-        toTaskBusy={toTaskBusy}
         onOpenFile={function (file) { openPaneContent("file", file, { sourceCardId: card.id }); }}
         onOpenDroppedChat={function (chatId) {
           if ((chatsRef.current || []).some(function (item) {
@@ -2520,37 +2526,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         onSplitDragEnd={handlePaneCardDragEnd}
         menuDisabled={singlePane}
       />;
-    } else if (card.kind === "task") {
-      var TaskPane = TaskPaneComponent || window.CyreneTaskPane;
-      var taskId = String(card.payload || "");
-      grip = <WbcSplitGripBar
-        dragSource={card.id}
-        menuDisabled={singlePane}
-        onToggleSide={move}
-        onClose={close}
-        onOpenConversationPanel={function () {
-          window.dispatchEvent(new CustomEvent("cyrene:open-task-context-panel", {
-            detail: { taskId: taskId },
-          }));
-        }}
-        openPanelLabel={wbcT("task.side.openDetailPanel", "Open task details")}
-        onSplitPointerDown={pointerDown}
-        onSplitDragStart={dragStart}
-        onSplitDragEnd={handlePaneCardDragEnd}
-      />;
-      content = TaskPane ? <aside className="wbc-side-agent-split wbc-task-split" aria-label={wbcT("workbench.page.task", "Task")}>
-        <TaskPane
-          taskId={taskId}
-          project={project}
-          split={!singlePane}
-          onTaskStoreChange={onTaskStoreChange}
-          onSessionChange={function (session) { rememberTaskPaneSession(taskId, session); }}
-          onRightTab={function (tab) { openTaskRightPanel(taskId, tab); }}
-          onOpenTask={function (taskId) {
-            openTaskWorkspace(taskId);
-          }}
-        />
-      </aside> : null;
     } else if (card.kind === "side-agent") {
       var paneAgent = sideAgents.find(function (agent) {
         return String(agent && agent.id || "") === String(card.payload || "");
@@ -2599,7 +2574,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
       />;
       content = <WbcSurfaceHost
         descriptor={card.payload}
-        projectId={projectId}
+        projectId={projectId} chatId={String(card.ownerChatId || activeChatId || "")}
         items={artifactItems}
         onSelect={function (resource) {
           var selectedResource = Object.assign({}, resource || {}, {
@@ -2746,19 +2721,17 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
     <div
       ref={pageRef}
       className={"wbc-page"
+        + (workspaceContent ? " wbc-external-workspace" : "")
         + (sideVisible ? "" : " wbc-side-hidden")
         + (navCollapsed ? " wbc-nav-collapsed" : "")
         + (projectPaneOnly ? " wbc-project-pane-only" : "")
-        + (projectTaskPanelCard ? " wbc-project-task-pane" : "")
-        + (splitDetailOpen && !projectPaneOnly && !projectTaskPanelCard ? " side-agent-split-open" : "")
+        + (splitDetailOpen && !projectPaneOnly ? " side-agent-split-open" : "")
         + (singleColumnWorkspaceOpen ? " wbc-pane-single-column-open" : "")
         + (splitDetailOpen && !projectPaneOnly && splitSide === "left" ? " wbc-split-left" : "")
         + (chatSideDropActive && paneCardCount !== 1 ? " wbc-chat-side-drop-active" : "")}
       style={{
         "--wbc-chat-side-preview-width": sideAgentSplitWidth + "px",
-        ...(projectTaskPanelCard && !sideVisible
-          ? { "--wbc-side-track-width": "0px" }
-          : splitDetailOpen && !projectPaneOnly && !singleColumnWorkspaceOpen && !projectTaskPanelCard
+        ...(splitDetailOpen && !projectPaneOnly && !singleColumnWorkspaceOpen
             ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" }
             : {}),
       }}
@@ -2822,9 +2795,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
             onDrop={handleSideLayerDrop}
           >
             <span className="wbc-chat-side-drop-hint" role="status">
-              {chatDragKind === "task"
-                ? wbcT("workbenchChat.dropTaskToOpenSide", "Release to open this task in the side panel")
-                : chatDragKind === "plugin-view"
+              {chatDragKind === "plugin-view"
                   ? wbcT("workbenchChat.dropPluginViewToOpenSide", "Release to open this plugin in the side panel")
                 : wbcT("workbenchChat.dropToOpenSide", "Release to open this conversation in the side panel")}
             </span>
@@ -2854,58 +2825,41 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         projectId={projectId}
         projectName={project && project.name || ""}
         chats={chats}
-        tasks={tasks}
         terminals={terminals}
         terminalsLoading={terminalsLoading}
         activeTerminalId={activeTerminalId}
         railMode={railMode}
-        workRailMode={lastWorkRailModeRef.current}
         pinnedChatIds={pinnedChatIds}
-        pinnedTaskIds={pinnedTaskIds}
         activeChatId={railSelectionSuppressed ? "" : activeChatId}
-        activeTaskId={railSelectionSuppressed ? "" : activeTaskId}
         loading={loading}
         runningChatIds={runningChatIds}
         runtimeEngine={runtimeEngine}
-        onSelect={selectChat}
-        onSelectTask={function (taskId) {
-          openTaskWorkspace(taskId);
-        }}
+        onSelect={function (chatId) { activateWorkspace(); return selectChat(chatId); }}
         onAnswer={handleRailAnswer}
-        onCreate={handleCreateChat}
-        onCreateTask={onCreateTask}
+        onCreate={function () { activateWorkspace(); return handleCreateChat(); }}
         onRename={handleRenameChat}
-        onRenameTask={onRenameTask}
         onDelete={handleDeleteChat}
-        onDeleteTask={onDeleteTask}
-        onToTask={handleToTask}
-        toTaskBusy={toTaskBusy}
         onTogglePinned={onTogglePinnedChat}
-        onTogglePinnedTask={onTogglePinnedTask}
-        onOpenFile={openProjectFile}
-        onOpenTerminal={openTerminal}
-        onCreateTerminal={createTerminal}
+        onOpenFile={function (entry) { activateWorkspace(); return openProjectFile(entry); }}
+        onOpenTerminal={function (terminalId, side) { activateWorkspace(); return openTerminal(terminalId, side); }}
+        onCreateTerminal={function () { activateWorkspace(); return createTerminal(); }}
         onRenameTerminal={renameTerminal}
         onDeleteTerminal={deleteTerminal}
         onUpdateTerminalLayout={updateTerminalLayout}
         onOpenPluginView={function (payload) {
-          openPaneContent("plugin-view", Object.assign({ projectId: projectId }, payload || {}));
+          activateWorkspace();
+          return openPaneContent("plugin-view", Object.assign({ projectId: projectId }, payload || {}));
         }}
         onOpenSplit={function (chatId, options) {
+          activateWorkspace();
           return openPaneContent("chat", String(chatId || ""), options || { side: "right" });
-        }}
-        onRailModeChange={function (mode) {
-          if (mode === "chat" || mode === "task") {
-            lastWorkRailModeRef.current = mode;
-            setRailSelectionSuppressed(true);
-          }
-          setRailMode(mode);
         }}
         collapsed={navCollapsed}
         onToggleCollapsed={onToggleNavCollapsed}
         collapseControl={collapseControl}
         moduleDock={moduleDock}
       />
+      {workspaceContent ? <div className="wbc-external-workspace-host">{workspaceContent}</div> : null}
       <div
         className={"wbc-pane-layout" + (paneHasTwoColumns ? " split" : " single")}
         style={paneHasTwoColumns ? { "--wbc-pane-right-width": paneColumnWidth + "px" } : undefined}
@@ -2915,11 +2869,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
           layout={paneLayout}
           rootRef={pageRef}
           chats={chats}
-          tasks={tasks}
           terminals={terminals}
           onOpenPane={function (kind, id, options) {
             if (kind === "terminal") return openTerminal(id, options && options.side);
-            if (kind === "task" && onSelectTask) onSelectTask(id);
             return openPaneContent(kind, id, options);
           }}
           onMovePane={movePaneCard}
@@ -2946,32 +2898,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
               {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} onResize={resizePaneColumn} /> : null}
             </React.Fragment>}
       </div>
-      {projectTaskPanelCard && TaskContextPanelComponent ? (
-        <TaskContextPanelComponent
-          className="wbc-task-context-panel"
-          project={project}
-          session={projectTaskPanelSession}
-          expandedStepId=""
-          tab={Object.prototype.hasOwnProperty.call(taskRightTabs, projectTaskPanelId)
-            ? taskRightTabs[projectTaskPanelId]
-            : "context"}
-          onTabChange={function (tab) {
-            setTaskRightTabs(function (current) {
-              return Object.assign({}, current, { [projectTaskPanelId]: String(tab || "") });
-            });
-          }}
-          onRefresh={function (nextStore) { refreshTaskRightPanel(projectTaskPanelId, nextStore); }}
-          onToggleSide={onToggleSide}
-        />
-      ) : null}
       <WbcChatPageContextMenu
         menu={pageContextMenu}
         chat={visibleChat}
         onClose={closePageContextMenu}
         onRename={openQuickRename}
         onDelete={handleDelete}
-        onToTask={handleToTask}
-        toTaskBusy={toTaskBusy}
         onCompact={handleCompact}
         compactBusy={compactBusy}
         onGenerateMemory={memoryAvailable ? handleGenerateMemory : null}
@@ -2981,6 +2913,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, taskOpenRequest,
         chat={quickRenameChat}
         onClose={function () { setQuickRenameChat(null); }}
         onRename={handleRenameChat}
+      />
+      <WbcGoalConfirmationDialog
+        chat={visibleChat || selectedChatSummary}
+        onGoalChanged={applyGoalChanged}
       />
       {!projectPaneOnly && !floatingConversationPanelOpen && !splitDetailOpen ? renderConversationPanel(false) : null}
       {false ? <><WbcSideAgentSplitHost

@@ -265,7 +265,7 @@ def _resolve_attachment_reference(
     chat_attachment_ids: set[str],
     context: PluginContext | None = None,
 ) -> str:
-    from cyrene.runtime.attachments import resolve_managed_attachment_id
+    from cyrene.platform.attachments import resolve_managed_attachment_id
 
     if attachment_id not in chat_attachment_ids:
         raise ValueError(_media_localized(

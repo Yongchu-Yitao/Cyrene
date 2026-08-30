@@ -771,12 +771,15 @@ def _bind_hook(
     handler: Callable[[HookEvent], Any],
     *,
     root_only: bool = False,
+    config: Mapping[str, Any] | None = None,
 ) -> None:
     hook_id = f"cyrene-memory-{suffix}"
     plugin_id = f"cyrene_memory.{suffix}"
     existing = {hook.id for hook in context.hooks.list()}
     if hook_id in existing:
         context.hooks.bind_plugin(plugin_id, handler, replace=True)
+        if config is not None:
+            context.hooks.update_config(hook_id, config)
         return
     context.hooks.register(
         event,
@@ -784,6 +787,7 @@ def _bind_hook(
         plugin_id=plugin_id,
         hook_id=hook_id,
         root_only=root_only,
+        config=config,
     )
 
 
@@ -806,7 +810,13 @@ def setup_memory(context: PluginSetupContext) -> None:
     context.provide(MEMORY_SERVICE_ID, service, replace=True)
     _bind_hook(context, SESSION_START, "session_start", service.on_session_start, root_only=True)
     _bind_hook(context, TURN_START, "turn_start", service.on_turn_start, root_only=True)
-    _bind_hook(context, CONTEXT_USED, "context_used", service.on_context_used)
+    _bind_hook(
+        context,
+        CONTEXT_USED,
+        "context_used",
+        service.on_context_used,
+        config={"include_node_tokens": False},
+    )
     _bind_hook(context, SESSION_END, "session_end", service.on_session_end, root_only=True)
     _bind_hook(context, STOP, "stop", service.on_stop)
 

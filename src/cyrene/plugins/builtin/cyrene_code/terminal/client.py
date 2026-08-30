@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cyrene.runtime.paths import user_data_dir
+from cyrene.platform.paths import user_data_dir
 
 PROTOCOL_VERSION = 8
 LIFECYCLE_VERSION = 1

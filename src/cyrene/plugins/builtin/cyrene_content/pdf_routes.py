@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from cyrene.localization import app_language
-from cyrene.runtime.version import get_version
+from cyrene.platform.version import get_version
 from cyrene.workbench.http.errors import localized_error_response
 
 logger = logging.getLogger(__name__)
@@ -321,7 +321,7 @@ def register_pdf_routes(router: APIRouter) -> None:
             )
 
         from cyrene.core.plugin import application_plugin_service
-        from cyrene.model_runtime.messages import assistant_text
+        from cyrene.model.messages import assistant_text
 
         try:
             gateway = application_plugin_service("model")
@@ -381,7 +381,7 @@ def register_pdf_routes(router: APIRouter) -> None:
             )
 
         from cyrene.core.plugin import application_plugin_service
-        from cyrene.model_runtime.messages import assistant_text
+        from cyrene.model.messages import assistant_text
 
         messages = _pdf_analysis_messages(selected_text, pdf_name, body.get("context"), language_name)
         try:

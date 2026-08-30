@@ -489,7 +489,7 @@ async def abort_turn(*, turn_id: str, reason: str = '') -> None:
 
 async def _call_llm_json(prompt: str, *, caller: str = "behavior_learning") -> dict[str, Any]:
     from cyrene.core.plugin import application_plugin_service
-    from cyrene.model_runtime.messages import assistant_text
+    from cyrene.model.messages import assistant_text
 
     try:
         gateway = application_plugin_service("model")
@@ -1229,7 +1229,7 @@ def _fresh_learning_stats() -> dict[str, int]:
 def _background_skill_learning_enabled() -> bool:
     """Read the live toggle without coupling learning module import to settings."""
     try:
-        from cyrene.runtime.config_store import get_setting
+        from cyrene.platform.config_store import get_setting
 
         return bool(get_setting("background_skill_learning", True))
     except Exception:

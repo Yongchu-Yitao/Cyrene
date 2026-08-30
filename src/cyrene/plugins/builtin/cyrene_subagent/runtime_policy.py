@@ -89,8 +89,10 @@ def setup_child_runtime(context: PluginSetupContext, manager: object) -> None:
     )
     existing = {hook.id for hook in context.hooks.list()}
     for event, callback, hook_id, plugin_id, failure_policy in registrations:
+        config = {"include_node_tokens": False} if event == CONTEXT_USED else {}
         if hook_id in existing:
             context.hooks.bind_plugin(plugin_id, callback, replace=True)
+            context.hooks.update_config(hook_id, config)
         else:
             context.hooks.register(
                 event,
@@ -99,6 +101,7 @@ def setup_child_runtime(context: PluginSetupContext, manager: object) -> None:
                 hook_id=hook_id,
                 root_only=(event == TURN_START),
                 failure_policy=failure_policy,
+                config=config,
             )
 
 

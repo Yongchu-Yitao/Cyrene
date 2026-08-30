@@ -9,15 +9,14 @@
   pointer-events: none;
 }
 
-/* Conversation and task inspectors are the same docked-side surface. Keep
-   their reveal/hide timing in one rule so the two modes cannot drift apart. */
-.wbc-page > :is(.wbc-side, .wbc-task-context-panel) {
+/* Keep every conversation inspector on one docked-side reveal/hide contract. */
+.wbc-page > :is(.wbc-side) {
   opacity: 1;
   visibility: visible;
   transition: opacity 180ms ease 100ms, visibility 0s;
 }
 
-.wbc-page.wbc-side-hidden > :is(.wbc-side, .wbc-task-context-panel) {
+.wbc-page.wbc-side-hidden > :is(.wbc-side) {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -75,11 +74,10 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
 }
 
 /* In single-card workspaces width is adjusted from the 12px seam, never from
-   a card border. Conversation details, task details and browser PiP reuse the
-   same hidden hover target and centred grip treatment. */
+   a card border. Conversation details and browser PiP reuse the same hidden
+   hover target and centred grip treatment. */
 .wbc-side-card > .wb-col-resizer.track-gutter,
-.wbc-browser-window.pip > .wb-col-resizer.track-gutter,
-.wb-task-detail-card > .wb-col-resizer.track-gutter {
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter{
   z-index: 42;
   top: 0;
   bottom: 0;
@@ -89,8 +87,7 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
 }
 
 .wbc-side-card > .wb-col-resizer.track-gutter::after,
-.wbc-browser-window.pip > .wb-col-resizer.track-gutter::after,
-.wb-task-detail-card > .wb-col-resizer.track-gutter::after {
+.wbc-browser-window.pip > .wb-col-resizer.track-gutter::after{
   top: 50%;
   bottom: auto;
   /* Centre on the space between the two visible 1px card edges, rather than
@@ -112,8 +109,6 @@ body.wb-col-resizing .wb-floating-detail-card > .wb-col-resizer.card-edge::after
 .wbc-side-card > .wb-col-resizer.track-gutter:focus-visible::after,
 .wbc-browser-window.pip > .wb-col-resizer.track-gutter:hover::after,
 .wbc-browser-window.pip > .wb-col-resizer.track-gutter:focus-visible::after,
-.wb-task-detail-card > .wb-col-resizer.track-gutter:hover::after,
-.wb-task-detail-card > .wb-col-resizer.track-gutter:focus-visible::after,
 body.wb-col-resizing .wb-col-resizer.track-gutter.is-resizing::after {
   background: var(--wb-accent);
   opacity: 1;
@@ -325,52 +320,6 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   width: 0;
   height: 0;
 }
-
-/* Initialization uses the task inspector as a compact progress navigator.
-   A single heading avoids the old Context -> Initialization progress nesting. */
-.wb-task-detail-init .wbc-side-card-head {
-  flex-basis: 54px;
-  min-height: 54px;
-  padding: 0 8px 0 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 64%, transparent);
-}
-
-.wb-task-detail-init .wbc-side-card-head strong {
-  color: var(--wb-text);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.wb-task-detail-init .wb-task-side-hide-btn {
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
-  border-radius: 10px;
-}
-
-.wb-task-detail-init .wb-task-side-hide-btn:hover,
-.wb-task-detail-init .wb-task-side-hide-btn:focus-visible {
-  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
-  color: var(--wb-text);
-}
-
-.wb-task-detail-init .wbc-side-accordion-trigger {
-  min-height: 48px;
-  padding-inline: 18px 42px;
-}
-
-.wb-task-detail-init .wbc-side-accordion-label {
-  color: var(--wb-text);
-  font-size: 12.5px;
-  font-weight: 620;
-}
-
-.wb-task-detail-init .wbc-side-body {
-  max-height: min(680px, calc(100vh - 210px));
-  padding: 6px 12px 12px;
-}
-
-.wb-task-detail-init .wb-init-progress-stack { gap: 0; }
 
 .wbc-changes-tab {
   width: 100%;
@@ -635,8 +584,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 
 /* Only positioning override; visual appearance shared with
    .workbench-rail-collapse-btn above. */
-.wbc-side .wbc-side-hide-btn,
-.wb-task-detail-card .wb-task-side-hide-btn {
+.wbc-side .wbc-side-hide-btn{
   margin-left: auto;
   margin-bottom: 0;
   border-color: transparent;
@@ -644,8 +592,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   color: var(--wb-muted);
 }
 
-.wbc-side .wbc-side-hide-btn:hover,
-.wb-task-detail-card .wb-task-side-hide-btn:hover {
+.wbc-side .wbc-side-hide-btn:hover{
   border-color: transparent;
   background: transparent;
   color: var(--wb-muted);
@@ -883,7 +830,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   color: var(--wb-blue);
 }
 
-/* Spotlight — the focused agent's task brief + result. */
+/* Spotlight — the focused agent's assignment brief and result. */
 .wbc-subagent-spotlight {
   flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--wb-agent-color, var(--wb-accent)) 34%, var(--wb-line));
@@ -1302,16 +1249,6 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 .wbc-plan-step.completed .wbc-plan-step-title > b { color: var(--wb-muted); }
 .wbc-plan-step.failed .wbc-plan-step-title > b,
 .wbc-plan-step.failed .wbc-plan-step-title > span { color: var(--wb-red); }
-.wbc-plan-tasks {
-  list-style: disc;
-  margin: 4px 0 0;
-  padding-left: 16px;
-}
-.wbc-plan-tasks li {
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  color: var(--wb-faint);
-  margin: 2px 0;
-}
 .wbc-plan-note {
   margin: 6px 0 0;
   padding: 5px 7px;
@@ -1893,7 +1830,7 @@ html[data-theme="dark"] .wbc-context-layer-summary {
 
 /* Expanded accordion content uses Workbench's information density without the
    legacy stack of elevated cards. Each group is separated by a quiet rule. */
-.wbc-side-body .workbench-side-stack:not(.wb-task-context-tab),
+
 .wbc-side-body .wbc-sortable-card-stack {
   gap: 0;
 }
@@ -2177,12 +2114,6 @@ html[data-theme="dark"] .wbc-context-layer-summary {
 
 .wbc-side-body .wbc-plan-step-title > b {
   font-size: 12px;
-}
-
-.wbc-side-body .wbc-plan-step-title > span,
-.wbc-side-body .wbc-plan-tasks li,
-.wbc-side-body .wbc-plan-note {
-  font-size: 10.5px;
 }
 
 .wbc-side-body .wbc-file-row {
@@ -3198,19 +3129,11 @@ html[data-theme="dark"] .wbc-overview-token-grid {
     display: none;
   }
 
-  .wbc-page.wbc-project-pane-only.wbc-project-task-pane,
-  .wbc-page.wbc-side-hidden.wbc-project-pane-only.wbc-project-task-pane {
-    grid-template-columns: var(--wbc-rail-width) minmax(0, 1fr);
-  }
 
-  .wbc-page > .wbc-task-context-panel {
-    display: none;
-  }
 
-  .wbc-page.wbc-project-task-pane > .wbc-pane-layout.single {
-    grid-column: 2 / 3;
-    padding-right: var(--wbc-card-gutter);
-  }
+
+
+
 
   .wbc-pane-layout.single {
     grid-column: 2 / 3;

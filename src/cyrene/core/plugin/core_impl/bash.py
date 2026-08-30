@@ -63,7 +63,10 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
 
 BASH_PLUGIN = Plugin(
     name="Bash",
-    description="Run a shell command in the workspace.",
+    description=(
+        "Run a shell command in the workspace. Shell file-printing output does "
+        "not satisfy a request to open or show a named file in the workspace UI."
+    ),
     input_schema={
         "type": "object",
         "properties": {

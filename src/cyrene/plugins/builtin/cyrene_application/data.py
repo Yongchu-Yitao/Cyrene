@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Any
 from cyrene.core.plugin import PluginContext
 
-from cyrene.runtime.backup import delete_backup, export_backup, list_backups, restore_backup
+from cyrene.platform.backup import delete_backup, export_backup, list_backups, restore_backup
 from cyrene.plugins.native_runtime import json_result
-from cyrene.runtime.attachments import register_generated_attachment
+from cyrene.platform.attachments import register_generated_attachment
 from cyrene.workbench.application.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 
 TOOL_NAME = "CyreneDataControl"

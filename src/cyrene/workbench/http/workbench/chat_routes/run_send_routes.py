@@ -182,12 +182,61 @@ class _SendOperation:
         error = await self._persist_user_turn()
         if error is not None:
             return error
+        error = await self._begin_plugin_workflow()
+        if error is not None:
+            return error
         self._build_agent_message()
         if self.is_external_agent:
             await self._capture_state_ids()
         else:
             self.state_ids_before = set()
         return await self._dispatch()
+
+    async def _begin_plugin_workflow(self):
+        descriptor = self.dynamic_command if isinstance(self.dynamic_command, dict) else {}
+        workflow = (
+            descriptor.get("workflow")
+            if isinstance(descriptor.get("workflow"), dict)
+            else {}
+        )
+        service_name = str(workflow.get("service") or "").strip()
+        action = str(workflow.get("action") or "").strip()
+        if not service_name or not action:
+            return None
+        from cyrene.core.plugin import application_plugin_service
+
+        service = application_plugin_service(service_name)
+        handler = getattr(service, action, None) if service is not None else None
+        if not callable(handler):
+            return localized_error_response(
+                "This workflow is currently unavailable.",
+                "此工作流当前不可用。",
+                503,
+                "workflow_unavailable",
+                language=self.lang,
+            )
+        try:
+            result = handler(
+                self.chat_id,
+                initial_request=self.message,
+                project_id=self.project_id,
+            )
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            logger.exception(
+                "Failed to start plugin workflow %s.%s",
+                service_name,
+                action,
+            )
+            return localized_error_response(
+                "The workflow could not be started.",
+                "无法启动此工作流。",
+                503,
+                "workflow_start_failed",
+                language=self.lang,
+            )
+        return None
 
     async def _parse_request(self):
         body = self.body
@@ -250,7 +299,7 @@ class _SendOperation:
                 language=self.lang,
             )
         self.base_chat = copy.deepcopy(self.chat)
-        from cyrene.agent_runtime.builtin import normalize_agent_binding
+        from cyrene.agents.builtin import normalize_agent_binding
 
         binding = normalize_agent_binding(self.chat.get("agent") if isinstance(self.chat.get("agent"), dict) else None)
         self.is_external_agent = not binding.is_builtin
@@ -297,6 +346,10 @@ class _SendOperation:
                 )
                 if parsed and parsed.get("matched"):
                     self.message = str(parsed.get("arguments") or "")
+                if self.dynamic_command:
+                    self.dynamic_command_prompt = str(
+                        self.dynamic_command.get("system_prompt") or ""
+                    ).strip()
             elif self.command:
                 return localized_error_response(
                     "Unknown Cyrene command.",
@@ -590,6 +643,9 @@ class _SendOperation:
                     self.command = ""
                 elif descriptor.get("source") != "builtin":
                     self.dynamic_command = descriptor
+                    self.dynamic_command_prompt = str(
+                        descriptor.get("system_prompt") or ""
+                    ).strip()
             self.normalized = self.routes.normalize_attachments(self.user_entry.get("agentAttachments") or [])
             self.public_attachments = self.user_entry.get("attachments") if isinstance(self.user_entry.get("attachments"), list) else []
             return None
@@ -757,7 +813,7 @@ class _SendOperation:
                 workspace_path=self.workspace_dir,
                 projection=self.external,
             )
-        from cyrene.runtime.host_bridge import resolve_conversation_source
+        from cyrene.platform.host_bridge import resolve_conversation_source
 
         from cyrene.workbench.application.commands import command_system_prompt
 
@@ -1126,7 +1182,7 @@ class _SendOperation:
             }
             run.outcome = {"kind": "reply", "payload": payload}
             await run.publish(saved)
-            from cyrene.runtime.host_actions import finalize_origin
+            from cyrene.platform.host_actions import finalize_origin
 
             asyncio.create_task(
                 finalize_origin(

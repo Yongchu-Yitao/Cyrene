@@ -505,7 +505,7 @@ def _source_health_targets(settings: Mapping[str, Any]) -> dict[str, str]:
 async def _test_extension_sources(
     settings: Mapping[str, Any],
 ) -> dict[str, Any]:
-    from cyrene.runtime.network_proxy import scoped_proxy_url
+    from cyrene.platform.network_proxy import scoped_proxy_url
 
     token = str(settings.get("github_token") or "")
     github_headers = {"Authorization": f"Bearer {token}"} if token else None

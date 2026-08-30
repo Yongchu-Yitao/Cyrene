@@ -4,9 +4,7 @@ var { useEffect } = React;
 
 function createWorkbenchNavigationActions(
   fullPage,
-  taskView,
   setFullPage,
-  setTaskView,
   setSettingsTab,
   setSettingsScrollTo,
   setRailCollapsed,
@@ -15,16 +13,15 @@ function createWorkbenchNavigationActions(
   enabledModules
 ) {
   var moduleOrder = Array.isArray(enabledModules) && enabledModules.length
-    ? enabledModules.slice()
+    ? enabledModules
     : ["schedule", "board", "work", "knowledge", "memory"];
 
   function openPage(page) {
-    var destination = page === "task" ? "board" : page;
+    var destination = page;
     if (["schedule", "board", "work", "knowledge", "memory"].indexOf(destination) >= 0
         && moduleOrder.indexOf(destination) < 0) return;
-    if (page === "board" || page === "task") {
-      if (!fullPage && taskView === "board") return;
-      setTaskView("board");
+    if (page === "board") {
+      if (!fullPage) return;
       setFullPage(null);
       return;
     }
@@ -77,9 +74,9 @@ function createWorkbenchNavigationActions(
   return { openPage: openPage, toggleSidebar: toggleSidebar, onModuleWheel: onModuleWheel };
 }
 
-function useWorkbenchBoardNavigation(setTaskView, setFullPage) {
+function useWorkbenchBoardNavigation(setFullPage) {
   useEffect(function () {
-    function openBoard() { setTaskView("board"); setFullPage(null); }
+    function openBoard() { setFullPage(null); }
     window.addEventListener("cyrene:open-workbench-board", openBoard);
     return function () { window.removeEventListener("cyrene:open-workbench-board", openBoard); };
   }, []);
@@ -87,7 +84,6 @@ function useWorkbenchBoardNavigation(setTaskView, setFullPage) {
 
 function useWorkbenchNavigationSurface(
   fullPage,
-  taskView,
   settingsTab,
   railCollapsed,
   t,
@@ -126,7 +122,7 @@ function useWorkbenchNavigationSurface(
             role: "navigation_item",
             name: item[1],
             state: {
-              selected: page === "board" ? !fullPage && taskView === "board"
+              selected: page === "board" ? !fullPage
                 : page === "work" ? fullPage === "chat" : fullPage === page,
             },
           };

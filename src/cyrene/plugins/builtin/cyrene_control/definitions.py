@@ -55,10 +55,10 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
  {'type': 'function',
   'function': {'name': 'enter_plan_mode',
                'description': "Main agent only. Enter PLAN MODE: decompose the user's request into "
-                              'ordered steps, each broken into concrete tasks, show the plan in '
+                              'ordered steps with explicit prerequisites and execution details, show the plan in '
                               "the right sidebar's 计划 tab, and ask the user to approve / reject / "
                               'revise before doing any real work. Use this proactively for '
-                              'complex, multi-step, or risky tasks where the user would benefit '
+                              'complex, multi-step, or risky work where the user would benefit '
                               'from reviewing the approach first. Do NOT combine with other tools '
                               "in the same turn; calling this pauses the round for the user's "
                               'decision.',
@@ -72,9 +72,18 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                                                        'maxItems': 20,
                                                        'items': {'type': 'object',
                                                                  'properties': {'title': {'type': 'string'},
-                                                                                'tasks': {'type': 'array',
-                                                                                          'items': {'type': 'string'},
-                                                                                          'maxItems': 20}},
+                                                                                'description': {'type': 'string',
+                                                                                                'description': 'What this step should accomplish.'},
+                                                                                'dependsOnStepIndexes': {'type': 'array',
+                                                                                                         'description': '1-based indexes of earlier prerequisite steps.',
+                                                                                                         'items': {'type': 'integer', 'minimum': 1},
+                                                                                                         'maxItems': 20},
+                                                                                'command': {'type': 'string',
+                                                                                            'description': 'Optional concrete command or execution instruction.'},
+                                                                                'contextFiles': {'type': 'array',
+                                                                                                 'description': 'Optional workspace-relative files needed by this step.',
+                                                                                                 'items': {'type': 'string'},
+                                                                                                 'maxItems': 20}},
                                                                  'required': ['title'],
                                                                  'additionalProperties': False}}},
                               'required': ['title', 'steps'],
@@ -83,7 +92,11 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
   'function': {'name': 'update_plan_progress',
                'description': 'Main agent only. Update the durable Workbench plan before and after '
                               'executing a plan step so the user can see exactly which step is '
-                              'active. Use only when an approved plan is being executed.',
+                              'active. This reloads the authoritative plan file every time and '
+                              'returns the latest step instructions. Call it immediately before '
+                              'starting every step and follow the returned title, description, '
+                              'command, files, and prerequisites. Use only when an approved plan '
+                              'is being executed.',
                'parameters': {'type': 'object',
                               'properties': {'step': {'type': 'integer',
                                                       'minimum': 1,

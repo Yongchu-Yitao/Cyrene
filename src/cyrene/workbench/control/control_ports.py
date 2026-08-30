@@ -15,13 +15,7 @@ from cyrene.workbench.chat.chat_guidance_service import (
 )
 from cyrene.workbench.chat.chat_run_lifecycle_service import ChatRunDispatchResult
 from cyrene.workbench.control.control_services import ControlServiceError
-from cyrene.workbench.goals.goal_loop_service import GoalLoopApplicationError
 from cyrene.workbench.projects.project_services import ProjectApplicationService, ProjectNotFoundError
-from cyrene.workbench.tasks.task_execution_service import TaskExecutionResponse
-from cyrene.workbench.tasks.task_services import (
-    TaskMutationError,
-    TaskSessionNotFoundError,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +36,6 @@ def _domain_result(value: Any) -> dict[str, Any]:
             return payload
         raise ControlServiceError(
             str(payload.get("error") or "chat operation failed"),
-            code=str(payload.get("code") or ""),
-            status_code=value.status_code,
-            payload=payload,
-        )
-    if isinstance(value, TaskExecutionResponse):
-        payload = dict(value.payload)
-        raise ControlServiceError(
-            str(payload.get("error") or "task operation failed"),
             code=str(payload.get("code") or ""),
             status_code=value.status_code,
             payload=payload,
@@ -276,93 +262,6 @@ class WorkbenchProjectApplicationPort:
         payload = await self.projects.list("summary")
         return [item for item in payload.get("projects") or [] if isinstance(item, dict)]
 
-    async def list_tasks(self, project_id: str) -> dict[str, Any]:
-        try:
-            return {"sessions": self.projects.sessions(project_id)}
-        except ProjectNotFoundError as exc:
-            raise ControlServiceError(str(exc), status_code=404) from exc
-
-    async def create_task(self, project_id: str, command: Any) -> dict[str, Any]:
-        try:
-            return self.projects.create_task(project_id, _body(command))
-        except ProjectNotFoundError as exc:
-            raise ControlServiceError(str(exc), status_code=404) from exc
-
-
-class WorkbenchTaskApplicationPort:
-    def __init__(self, context: Any) -> None:
-        self.context = context
-
-    async def get(self, task_id: str) -> dict[str, Any]:
-        try:
-            return self.context.tasks.read(task_id)
-        except TaskSessionNotFoundError as exc:
-            raise ControlServiceError("session not found", status_code=404) from exc
-
-    async def update(self, task_id: str, command: Any) -> dict[str, Any]:
-        try:
-            return self.context.tasks.update(task_id, _body(command))
-        except TaskSessionNotFoundError as exc:
-            raise ControlServiceError("session not found", status_code=404) from exc
-        except TaskMutationError as exc:
-            raise ControlServiceError(exc.message, code=exc.code, status_code=exc.status_code) from exc
-
-    async def dispatch(self, task_id: str, command: Any) -> dict[str, Any]:
-        return await self._execute("dispatch", task_id, command, self.context.execution.dispatch)
-
-    async def create_run(self, task_id: str, command: Any) -> dict[str, Any]:
-        return await self._execute("execution", task_id, command, self.context.execution.create_run)
-
-    async def answer(self, task_id: str, command: Any) -> dict[str, Any]:
-        return await self._execute("answer", task_id, command, self.context.execution.answer, bypass=True)
-
-    async def artifacts(self, task_id: str) -> dict[str, Any]:
-        try:
-            return {"artifacts": await self.context.artifacts.list(task_id)}
-        except TaskSessionNotFoundError as exc:
-            raise ControlServiceError("session not found", status_code=404) from exc
-
-    def artifact_download(self, task_id: str, artifact_id: str):
-        try:
-            return self.context.artifacts.download(task_id, artifact_id)
-        except TaskSessionNotFoundError as exc:
-            raise ControlServiceError("session not found", status_code=404) from exc
-        except (LookupError, ValueError, FileNotFoundError) as exc:
-            raise ControlServiceError(str(exc), status_code=404) from exc
-
-    async def _execute(self, kind: str, task_id: str, command: Any, operation: Callable[..., Awaitable[Any]], *, bypass: bool = False) -> dict[str, Any]:
-        values = _body(command)
-        result = await self.context.run_coordination.execute(
-            kind,
-            task_id,
-            values,
-            lambda: operation(task_id, values),
-            bypass_goal_loop_answer=bypass,
-        )
-        return _domain_result(result)
-
-
-class WorkbenchGoalLoopApplicationPort:
-    def __init__(self, service: Any) -> None:
-        self.service = service
-
-    async def get(self, task_id: str) -> dict[str, Any]:
-        return await self._invoke(self.service.get(task_id))
-
-    async def control(self, action: str, task_id: str) -> dict[str, Any]:
-        return await self._invoke(getattr(self.service, action)(task_id))
-
-    @staticmethod
-    async def _invoke(operation: Awaitable[dict[str, Any]]) -> dict[str, Any]:
-        try:
-            return await operation
-        except GoalLoopApplicationError as exc:
-            raise ControlServiceError(
-                str(exc), status_code=exc.status_code, payload=exc.payload
-            ) from exc
-
-
 __all__ = [
-    "WorkbenchChatApplicationPort", "WorkbenchGoalLoopApplicationPort",
-    "WorkbenchProjectApplicationPort", "WorkbenchTaskApplicationPort",
+    "WorkbenchChatApplicationPort", "WorkbenchProjectApplicationPort",
 ]

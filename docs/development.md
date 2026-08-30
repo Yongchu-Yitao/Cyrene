@@ -20,7 +20,7 @@ files; caches and runtime directories from the installed build are excluded.
 Logs every LLM call (full prompt, tools, response, duration) and context trace to `data/debug_*.jsonl`:
 
 ```bash
-python -m cyrene.runtime.host --verbose
+python -m cyrene.platform.host --verbose
 # or
 uv run python -m cyrene --verbose
 ```
@@ -158,7 +158,7 @@ Each module has a single responsibility. Cross-module communication uses:
 
 - Function calls for direct imports
 - Event bus (`cyrene.observability.debug`) for real-time UI updates
-- Runtime inbox (`cyrene.runtime.inbox`) for inter-agent messaging
+- Runtime inbox (`cyrene.platform.inbox`) for inter-agent messaging
 - SQLite for structured persistence
 
 The canonical layers are:
@@ -171,8 +171,8 @@ The canonical layers are:
   under `application`, `chat`, `tasks`, `projects`, `goals`, `planning`,
   `artifacts`, `sessions`, `control`, `workspaces`, and `ui`; persistence,
   FastAPI composition, and WebUI remain dedicated adapter packages;
-- `cyrene.agent_runtime`: external ACP agent integration;
-- `cyrene.model_runtime`, `cyrene.runtime`, and `cyrene.observability`: provider
+- `cyrene.agents`: external ACP agent integration;
+- `cyrene.model`, `cyrene.platform`, and `cyrene.observability`: provider
   support, process lifecycle, and diagnostics.
 
 `cyrene.core` must not import product or adapter layers. FastAPI adapters belong

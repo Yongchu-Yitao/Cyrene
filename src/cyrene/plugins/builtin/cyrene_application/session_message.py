@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.core.plugin import PluginContext
-from cyrene.runtime.host_bridge import HostBridgeError, call_host
+from cyrene.platform.host_bridge import HostBridgeError, call_host
 from cyrene.plugins.native_runtime import json_result, run_context_value
 from cyrene.workbench.application import app_services
 from cyrene.workbench.application.app_control import (
@@ -22,7 +22,7 @@ TOOL_DEF = {"type": "function", "function": {
     "name": TOOL_NAME,
     "description": (
         "Put text in the composer shown in the exact current UI surface snapshot and dispatch it "
-        "to that other task/chat as an agent-originated message. It cannot submit the "
+        "to that other conversation as an agent-originated message. It cannot submit the "
         "calling session's own composer."
     ),
     "parameters": {
@@ -111,7 +111,7 @@ async def handler(args: dict[str, Any], context: PluginContext) -> str:
     if (
         not node
         or str(node.get("role") or "") != "textbox"
-        or target_kind not in {"chat", "task"}
+        or target_kind != "chat"
         or not target_id
         or not bool(state.get("draft_empty"))
         or state.get("submit_exposed") is not False

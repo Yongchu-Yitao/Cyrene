@@ -137,34 +137,10 @@ def create_app(
 
     async def _start_workbench_chat_runs() -> None:
         from cyrene.workbench.chat.chat_runs import startup_chat_runs
-        from cyrene.workbench.tasks.task_runs import recover_interrupted_task_runs
 
         startup_chat_runs(db_path)
-        task_context = getattr(app.state, "task_session_context", None)
-        if task_context is not None:
-            await recover_interrupted_task_runs(
-                db_path,
-                task_context.resume_interrupted_run,
-            )
-        manager = getattr(app.state, "goal_loop_manager", None)
-        if manager is not None:
-            await manager.startup()
 
     async def _shutdown_native_runs() -> None:
-        manager = getattr(app.state, "goal_loop_manager", None)
-        if manager is not None:
-            try:
-                await manager.shutdown()
-            except Exception:
-                logger.warning("Goal-loop shutdown failed", exc_info=True)
-
-        try:
-            from cyrene.workbench.tasks.task_runs import shutdown_task_runs
-
-            await shutdown_task_runs(db_path)
-        except Exception:
-            logger.warning("Workbench task run shutdown failed", exc_info=True)
-
         try:
             from cyrene.workbench.chat.chat_runs import shutdown_chat_runs
             from cyrene.workbench.chat.chat_service import shutdown_chat_services
@@ -179,7 +155,7 @@ def create_app(
         # Cancel and await all agent/telemetry/indexing work while the event loop
         # and SQLite worker threads are still alive.
         try:
-            from cyrene.runtime.lifecycle import shutdown_background_work
+            from cyrene.platform.lifecycle import shutdown_background_work
 
             await shutdown_background_work()
         except Exception:
@@ -197,7 +173,7 @@ async def run_web(bot: Any, db_path: str, port: int = WEB_PORT, instance_id: str
         enable_background_plugins=True,
     )
     app.state.web_port = int(port)
-    from cyrene.agent_runtime.model_gateway import configure_model_gateway
+    from cyrene.agents.model_gateway import configure_model_gateway
     configure_model_gateway(port)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info", loop="asyncio")
     server = uvicorn.Server(config)

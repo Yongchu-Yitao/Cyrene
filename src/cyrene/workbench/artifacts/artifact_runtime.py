@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.config import WORKSPACE_DIR, cyrene_dir
-from cyrene.runtime.attachments import EXPORTS_DIR as _EXPORTS_DIR
+from cyrene.platform.attachments import EXPORTS_DIR as _EXPORTS_DIR
 from cyrene.workbench.projects import project_runtime
 from cyrene.workbench.workspaces.workspace_changes import is_cyrene_managed_workspace_path
 

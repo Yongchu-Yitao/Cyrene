@@ -785,7 +785,7 @@ def _parse_memory_agent_response(
     identity: dict[str, Any],
     language: str,
 ) -> tuple[str, str, dict[str, Any]]:
-    from cyrene.model_runtime.messages import parse_tool_arguments
+    from cyrene.model.messages import parse_tool_arguments
 
     if not isinstance(response, dict):
         raise _RetryableProjectMemoryOutput(localized(

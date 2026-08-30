@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from cyrene.workbench.chat.conversation_context_service import (
     ConversationContextQueryService,
+    ConversationContextUpdateError,
     ConversationInboxQueryService,
     ConversationNotFoundError,
 )
@@ -59,6 +60,78 @@ def register_context_routes(
             payload = await context_queries.blocks(chat_id)
         except ConversationNotFoundError as exc:
             return _not_found(exc)
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+    @router.patch(
+        "/api/workbench/chats/{chat_id}/context-nodes/{node_id}/system-prompt"
+    )
+    async def api_workbench_update_system_prompt(
+        chat_id: str,
+        node_id: str,
+        request: Request,
+    ):
+        """Replace the persisted prompt text for one editable system node."""
+        try:
+            body = await request.json()
+            content = body.get("content") if isinstance(body, dict) else None
+            expected_updated_at = (
+                str(body.get("expectedUpdatedAt") or "")
+                if isinstance(body, dict)
+                else ""
+            )
+            if not isinstance(content, str):
+                raise ConversationContextUpdateError("system prompt is required")
+            payload = await context_queries.update_system_prompt(
+                chat_id,
+                node_id,
+                content,
+                expected_updated_at,
+            )
+        except ConversationNotFoundError as exc:
+            return _not_found(exc)
+        except (ConversationContextUpdateError, ValueError):
+            return localized_error_response(
+                "The system prompt could not be updated.",
+                "无法更新 System Prompt。",
+                400,
+                "system_prompt_update_failed",
+            )
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+    @router.patch(
+        "/api/workbench/chats/{chat_id}/context-nodes/{node_id}"
+    )
+    async def api_workbench_update_context_node(
+        chat_id: str,
+        node_id: str,
+        request: Request,
+    ):
+        """Replace the editable content represented by one timeline node."""
+        try:
+            body = await request.json()
+            content = body.get("content") if isinstance(body, dict) else None
+            expected_updated_at = (
+                str(body.get("expectedUpdatedAt") or "")
+                if isinstance(body, dict)
+                else ""
+            )
+            if not isinstance(content, str):
+                raise ConversationContextUpdateError("node content is required")
+            payload = await context_queries.update_node_content(
+                chat_id,
+                node_id,
+                content,
+                expected_updated_at,
+            )
+        except ConversationNotFoundError as exc:
+            return _not_found(exc)
+        except (ConversationContextUpdateError, ValueError):
+            return localized_error_response(
+                "The context node could not be updated. Check its content format and reload before retrying.",
+                "无法更新上下文节点。请检查内容格式，并刷新后重试。",
+                400,
+                "context_node_update_failed",
+            )
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
     @router.get("/api/workbench/chats/{chat_id}/inbox")

@@ -50,7 +50,7 @@ def resolve_endpoint() -> tuple[str, str, str]:
 
     try:
         from agent.plugin.model_catalog import configured_model_candidates
-        from cyrene.model_runtime.protocol_adapters import protocol_endpoints
+        from cyrene.model.protocol_adapters import protocol_endpoints
 
         cands = configured_model_candidates(route="primary")
         if cands:

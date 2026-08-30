@@ -14,7 +14,7 @@ async def generate_session_title(
 ) -> str:
     """Generate one compact UI title from a session's opening user message."""
     from cyrene.core.plugin import application_plugin_service
-    from cyrene.model_runtime.messages import assistant_text
+    from cyrene.model.messages import assistant_text
 
     prompt = str(user_message or "").strip()
     if not prompt:

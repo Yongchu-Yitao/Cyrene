@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
@@ -15,7 +17,9 @@ from cyrene.plugins.builtin.cyrene_knowledge.service import (
     KnowledgeService,
     WorkspaceNotFoundError,
     WorkspaceRequiredError,
+    create_knowledge_service,
 )
+from cyrene.plugins.builtin.cyrene_knowledge.store import cosine, vectorize
 from cyrene.plugins.builtin.cyrene_knowledge.zotero import sync_zotero
 
 
@@ -45,6 +49,161 @@ def _client(service: KnowledgeService) -> TestClient:
     register_routes(router, service)
     app.include_router(router)
     return TestClient(app)
+
+
+def test_chunk_search_uses_fts_candidates_and_blob_vectors(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    item = service.store.create_item(
+        "project-one",
+        {
+            "title": "Indexed retrieval",
+            "content": "bounded candidate retrieval avoids a complete Python scan",
+        },
+    )
+    with sqlite3.connect(service.store.db_path) as connection:
+        row = connection.execute(
+            "SELECT vector_blob FROM chunks WHERE item_id=? LIMIT 1",
+            (item["id"],),
+        ).fetchone()
+        assert row is not None and len(row[0]) == 128 * 4
+        connection.execute(
+            "UPDATE chunks SET vector_json='{invalid legacy json' WHERE item_id=?",
+            (item["id"],),
+        )
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunks_fts'"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM chunk_vector_index v "
+            "JOIN chunks c ON c.id=v.chunk_id WHERE c.item_id=?",
+            (item["id"],),
+        ).fetchone()[0] > 0
+
+    hits = service.store.search_chunks(
+        "project-one",
+        "candidate retrieval",
+        limit=5,
+    )
+    assert hits and hits[0]["item_id"] == item["id"]
+
+    # A distinct token with the same signed hash dimension cannot match FTS;
+    # finding the item proves the vector index supplied the candidate.
+    source = "vectorprobe"
+    collision = next(
+        candidate
+        for index in range(10_000)
+        if (candidate := f"candidate{index}") != source
+        and cosine(vectorize(source), vectorize(candidate)) > 0
+    )
+    vector_item = service.store.create_item(
+        "project-one",
+        {"title": "Vector-only candidate", "content": source},
+    )
+    vector_hits = service.store.search_chunks("project-one", collision, limit=5)
+    assert vector_item["id"] in {hit["item_id"] for hit in vector_hits}
+
+
+@pytest.mark.asyncio
+async def test_configured_embedding_drives_index_status_and_semantic_search(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from cyrene.plugins.builtin.cyrene_knowledge import embeddings
+
+    async def fake_embed_texts(texts, *, input_type="document"):
+        assert input_type in {"document", "query"}
+        return [[1.0, 0.0, 0.0] for _text in texts]
+
+    monkeypatch.setattr(embeddings, "is_configured", lambda: True)
+    monkeypatch.setattr(embeddings, "current_identity", lambda: ("test-embed", 3))
+    monkeypatch.setattr(embeddings, "embed_texts", fake_embed_texts)
+
+    service = _service(tmp_path)
+    item = await service.create_item(
+        "project-one",
+        {"title": "Meaningful document", "content": "unrelated source wording"},
+    )
+    if service._tasks:
+        await asyncio.gather(*tuple(service._tasks))
+
+    status = await service.embedding_status("project-one")
+    assert status["configured"] is True
+    assert status["model"] == "test-embed"
+    assert status["dimensions"] == 3
+    assert status["compatible_vectors"] == status["total_chunks"]
+
+    hits = await service.search_knowledge(
+        PluginContext(data={"workspace_id": "project-one"}),
+        "semantic phrase absent from the document",
+        limit=5,
+    )
+    assert hits and hits[0]["item_id"] == item["id"]
+    assert hits[0]["cosine_similarity"] == pytest.approx(1.0)
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_completed_local_embedding_download_schedules_existing_vectors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from cyrene.plugins.builtin.cyrene_knowledge import local_models
+
+    service = _service(tmp_path)
+    refreshed: list[str] = []
+    monkeypatch.setattr(
+        service,
+        "_ensure_local_embedding_configuration",
+        lambda: None,
+    )
+    monkeypatch.setattr(local_models, "start_download", lambda _model_id: {"models": []})
+    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: True)
+    monkeypatch.delitem(
+        local_models._TASKS,
+        "qwen3-embedding-0.6b",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service.store,
+        "embedding_workspaces",
+        lambda: ["project-one", "project-two"],
+    )
+    monkeypatch.setattr(
+        service,
+        "_start_embedding_refresh",
+        lambda workspace: refreshed.append(workspace) or {"running": True},
+    )
+
+    service.start_local_model_download("qwen3-embedding-0.6b")
+    if service._tasks:
+        await asyncio.gather(*tuple(service._tasks))
+
+    assert refreshed == ["project-one", "project-two"]
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_deferred_store_startup_opens_and_shutdown_closes_read_pool(
+    tmp_path: Path,
+) -> None:
+    service = create_knowledge_service(
+        tmp_path / "knowledge",
+        workspace_resolver=lambda value: value or "project-one",
+        zotero_settings=lambda: {},
+        initialize_store=False,
+    )
+
+    await service.startup()
+    item = service.store.create_item(
+        "project-one",
+        {"title": "Lifecycle", "content": "pooled retrieval remains available"},
+    )
+    hits = service.store.search_chunks("project-one", "pooled retrieval", limit=5)
+    assert hits and hits[0]["item_id"] == item["id"]
+    assert service.store._read_pool_open is True
+
+    await service.shutdown()
+    assert service.store._read_pool_open is False
 
 
 def test_frontend_library_contract_uses_plugin_owned_backend(tmp_path: Path) -> None:
@@ -154,7 +313,7 @@ def test_frontend_library_contract_uses_plugin_owned_backend(tmp_path: Path) -> 
     ).json()
     assert search["results"][0]["item"]["id"] == uploaded_item["id"]
     status = client.get("/api/workbench/library/embedding/status", params=workspace).json()
-    assert status["configured"] is True
+    assert status["configured"] is False
     assert status["compatible_vectors"] == status["total_chunks"]
 
     marked = client.post(

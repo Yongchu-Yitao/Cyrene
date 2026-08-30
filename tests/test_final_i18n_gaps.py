@@ -34,7 +34,8 @@ async def test_plugin_argument_validation_follows_invocation_language() -> None:
     )
 
     assert result.success is False
-    assert result.error == "插件参数无效。"
+    assert result.error.startswith("插件参数无效：")
+    assert "'value' is a required property" in result.error
 
 
 @pytest.mark.asyncio

@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import queue
 import re
 import shutil
 import sqlite3
 import threading
+from array import array
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -49,6 +52,13 @@ _SORT_FIELDS = {
     "updated_at": "updated_at",
     "year": "COALESCE(year, 0)",
 }
+_HASH_VECTOR_DIMENSIONS = 128
+_VECTOR_INDEX_COMPONENTS = 64
+_HASH_EMBEDDING_MODEL = "cyrene-hash-v1"
+_FTS_CANDIDATE_MULTIPLIER = 8
+_FTS_MIN_CANDIDATES = 64
+_FTS_MAX_CANDIDATES = 1000
+_READ_CONNECTIONS = 4
 _SCHEMA = """
 PRAGMA foreign_keys=ON;
 PRAGMA journal_mode=WAL;
@@ -159,9 +169,22 @@ CREATE TABLE IF NOT EXISTS chunks (
     attachment_id TEXT REFERENCES attachments(id) ON DELETE CASCADE,
     ordinal INTEGER NOT NULL,
     content TEXT NOT NULL,
-    vector_json TEXT NOT NULL DEFAULT '[]'
+    vector_json TEXT NOT NULL DEFAULT '[]',
+    vector_blob BLOB,
+    embedding_model TEXT NOT NULL DEFAULT 'cyrene-hash-v1',
+    embedding_dimensions INTEGER NOT NULL DEFAULT 128
 );
 CREATE INDEX IF NOT EXISTS chunk_workspace_item ON chunks(workspace, item_id, ordinal);
+
+CREATE TABLE IF NOT EXISTS chunk_vector_index (
+    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    workspace TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    weight REAL NOT NULL,
+    PRIMARY KEY(chunk_id, dimension)
+);
+CREATE INDEX IF NOT EXISTS chunk_vector_dimension
+    ON chunk_vector_index(workspace, dimension);
 
 CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
@@ -305,7 +328,7 @@ def file_type(filename: str, content_type: str) -> str:
     return "other"
 
 
-def vectorize(text: str, dimensions: int = 128) -> list[float]:
+def vectorize(text: str, dimensions: int = _HASH_VECTOR_DIMENSIONS) -> list[float]:
     tokens = re.findall(r"[a-z0-9_]+|[\u3400-\u9fff]", str(text or "").casefold())
     values = [0.0] * dimensions
     for token in tokens:
@@ -320,6 +343,76 @@ def cosine(left: Sequence[float], right: Sequence[float]) -> float:
     return sum(a * b for a, b in zip(left, right)) if left and right else 0.0
 
 
+def _pack_vector(values: Sequence[float]) -> bytes:
+    return array("f", (float(value) for value in values)).tobytes()
+
+
+def _unpack_vector(value: Any) -> tuple[float, ...]:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if (
+        not isinstance(value, (bytes, bytearray))
+        or not value
+        or len(value) % array("f").itemsize
+    ):
+        return ()
+    result = array("f")
+    result.frombytes(bytes(value))
+    return tuple(result)
+
+
+def _indexed_dimensions(vector: Sequence[float]) -> list[tuple[int, float]]:
+    """Keep a compact ANN candidate index while preserving full vectors."""
+    weighted = [
+        (dimension, float(weight))
+        for dimension, weight in enumerate(vector)
+        if weight
+    ]
+    weighted.sort(key=lambda item: abs(item[1]), reverse=True)
+    return weighted[:_VECTOR_INDEX_COMPONENTS]
+
+
+def _vector_index_rows(
+    chunk_id: str,
+    workspace: str,
+    vector: Sequence[float],
+) -> list[tuple[str, str, int, float]]:
+    return [
+        (chunk_id, workspace, dimension, float(weight))
+        for dimension, weight in _indexed_dimensions(vector)
+    ]
+
+
+def _attachment_raw_url(item_id: str, workspace: str, attachment_id: str) -> str:
+    return (
+        f"/api/workbench/library/items/{quote(item_id, safe='')}/attachments/"
+        f"{quote(attachment_id, safe='')}/raw?workspace={quote(workspace, safe='')}"
+    )
+
+
+def _item_attachments(
+    connection: sqlite3.Connection,
+    item_id: str,
+    workspace: str,
+) -> list[dict[str, Any]]:
+    attachments = [
+        dict(value)
+        for value in connection.execute(
+            "SELECT id,filename,path,content_type,file_type,size,page_count,"
+            "content_hash,created_at,updated_at FROM attachments "
+            "WHERE item_id=? ORDER BY created_at",
+            (item_id,),
+        ).fetchall()
+    ]
+    for attachment in attachments:
+        attachment["raw_url"] = _attachment_raw_url(
+            item_id,
+            workspace,
+            str(attachment["id"]),
+        )
+    return attachments
+
+
 class KnowledgeStore:
     """One new database shared by all workspaces and owned by the Plugin."""
 
@@ -328,6 +421,12 @@ class KnowledgeStore:
         self.db_path = self.root / "knowledge.sqlite3"
         self.files_root = self.root / "files"
         self._lock = threading.RLock()
+        self._read_pool_lifecycle = threading.RLock()
+        self._read_pool_open = False
+        self._read_slots = threading.BoundedSemaphore(_READ_CONNECTIONS)
+        self._read_pool: queue.LifoQueue[sqlite3.Connection] = queue.LifoQueue(
+            maxsize=_READ_CONNECTIONS
+        )
         if initialize:
             self.initialize()
 
@@ -338,11 +437,177 @@ class KnowledgeStore:
         connection.execute("PRAGMA busy_timeout=30000")
         return connection
 
+    def _open_read_pool(self) -> None:
+        with self._read_pool_lifecycle:
+            if self._read_pool_open:
+                return
+            for _index in range(_READ_CONNECTIONS):
+                connection = sqlite3.connect(
+                    self.db_path,
+                    timeout=30,
+                    check_same_thread=False,
+                )
+                connection.row_factory = sqlite3.Row
+                connection.execute("PRAGMA foreign_keys=ON")
+                connection.execute("PRAGMA busy_timeout=30000")
+                connection.execute("PRAGMA query_only=ON")
+                self._read_pool.put(connection)
+            self._read_pool_open = True
+
+    @contextmanager
+    def _read_connection(self):
+        with self._read_pool_lifecycle:
+            if not self._read_pool_open:
+                raise RuntimeError("KnowledgeStore read pool is closed")
+            self._read_slots.acquire()
+        connection = self._read_pool.get()
+        try:
+            yield connection
+        finally:
+            self._read_pool.put(connection)
+            self._read_slots.release()
+
+    def _close_read_pool(self) -> None:
+        with self._read_pool_lifecycle:
+            if not self._read_pool_open:
+                return
+            connections: list[sqlite3.Connection] = []
+            for _index in range(_READ_CONNECTIONS):
+                self._read_slots.acquire()
+            try:
+                while not self._read_pool.empty():
+                    connections.append(self._read_pool.get_nowait())
+                for connection in connections:
+                    connection.close()
+                self._read_pool_open = False
+            finally:
+                for _index in range(_READ_CONNECTIONS):
+                    self._read_slots.release()
+
     def initialize(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.files_root.mkdir(parents=True, exist_ok=True)
         with self._lock, self._connect() as connection:
             connection.executescript(_SCHEMA)
+            self._ensure_search_schema(connection)
+        # Application-owned stores are constructed before Plugin startup, so
+        # initialize() is also the single transition that makes reads ready.
+        # Keeping this here prevents an initialized store from having a schema
+        # but no usable read connections.
+        self._open_read_pool()
+
+    def _ensure_search_schema(self, connection: sqlite3.Connection) -> None:
+        self._ensure_chunk_vector_schema(connection)
+        self._ensure_fts_schema(connection)
+
+    @staticmethod
+    def _ensure_chunk_vector_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(chunks)").fetchall()
+        }
+        if "vector_blob" not in columns:
+            connection.execute("ALTER TABLE chunks ADD COLUMN vector_blob BLOB")
+        if "embedding_model" not in columns:
+            connection.execute(
+                "ALTER TABLE chunks ADD COLUMN embedding_model TEXT "
+                "NOT NULL DEFAULT 'cyrene-hash-v1'"
+            )
+        if "embedding_dimensions" not in columns:
+            connection.execute(
+                "ALTER TABLE chunks ADD COLUMN embedding_dimensions INTEGER "
+                "NOT NULL DEFAULT 128"
+            )
+
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS knowledge_schema_meta "
+            "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        vector_index = connection.execute(
+            "SELECT value FROM knowledge_schema_meta "
+            "WHERE key='chunk_vector_index_version'"
+        ).fetchone()
+        if vector_index is None or str(vector_index[0]) != "2":
+            connection.execute("DELETE FROM chunk_vector_index")
+            chunk_rows = connection.execute(
+                "SELECT id,workspace,content,vector_blob,vector_json FROM chunks"
+            ).fetchall()
+            index_rows: list[tuple[str, str, int, float]] = []
+            repaired_vectors: list[tuple[bytes, str]] = []
+            for row in chunk_rows:
+                vector: Sequence[float] = _unpack_vector(row["vector_blob"])
+                if not vector:
+                    try:
+                        legacy = json.loads(str(row["vector_json"] or "[]"))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        legacy = []
+                    vector = (
+                        legacy
+                        if isinstance(legacy, list) and legacy
+                        else vectorize(str(row["content"] or ""))
+                    )
+                    repaired_vectors.append((_pack_vector(vector), str(row["id"])))
+                index_rows.extend(
+                    _vector_index_rows(
+                        str(row["id"]),
+                        str(row["workspace"]),
+                        vector,
+                    )
+                )
+            if repaired_vectors:
+                connection.executemany(
+                    "UPDATE chunks SET vector_json='[]',vector_blob=? WHERE id=?",
+                    repaired_vectors,
+                )
+            if index_rows:
+                connection.executemany(
+                    "INSERT INTO chunk_vector_index(chunk_id,workspace,dimension,weight) "
+                    "VALUES(?,?,?,?)",
+                    index_rows,
+                )
+            connection.execute(
+                "INSERT INTO knowledge_schema_meta(key,value) "
+                "VALUES('chunk_vector_index_version','2') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+            )
+
+    @staticmethod
+    def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
+        try:
+            connection.executescript(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                    content,
+                    content='chunks',
+                    content_rowid='rowid',
+                    tokenize='unicode61'
+                );
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+                END;
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+                    INSERT INTO chunks_fts(chunks_fts, rowid, content)
+                    VALUES ('delete', old.rowid, old.content);
+                END;
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE OF content ON chunks BEGIN
+                    INSERT INTO chunks_fts(chunks_fts, rowid, content)
+                    VALUES ('delete', old.rowid, old.content);
+                    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+                END;
+                """
+            )
+            indexed = connection.execute(
+                "SELECT value FROM knowledge_schema_meta WHERE key='chunks_fts_version'"
+            ).fetchone()
+            if indexed is None or str(indexed[0]) != "1":
+                connection.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+                connection.execute(
+                    "INSERT INTO knowledge_schema_meta(key,value) VALUES('chunks_fts_version','1') "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+                )
+        except sqlite3.OperationalError as exc:
+            if "fts5" not in str(exc).casefold():
+                raise
 
     @staticmethod
     def _workspace_directory_name(workspace: str) -> str:
@@ -397,17 +662,11 @@ class KnowledgeStore:
                 (item_id,),
             ).fetchall()
         ]
-        attachments = [
-            dict(value)
-            for value in connection.execute(
-                "SELECT id,filename,path,content_type,file_type,size,page_count,content_hash,created_at,updated_at FROM attachments WHERE item_id=? ORDER BY created_at",
-                (item_id,),
-            ).fetchall()
-        ]
-        for attachment in attachments:
-            attachment["raw_url"] = (
-                f"/api/workbench/library/items/{quote(item_id, safe='')}/attachments/{quote(str(attachment['id']), safe='')}/raw?workspace={quote(str(item['workspace']), safe='')}"
-            )
+        attachments = _item_attachments(
+            connection,
+            item_id,
+            str(item["workspace"]),
+        )
         item["attachments"] = attachments
         item["attachment_count"] = len(attachments)
         primary = next(
@@ -420,7 +679,8 @@ class KnowledgeStore:
             item["attachment_size"] = int(primary.get("size") or 0)
             item["content_type"] = primary.get("content_type") or ""
         counts = connection.execute(
-            "SELECT COUNT(*),SUM(CASE WHEN vector_json<>'[]' THEN 1 ELSE 0 END) FROM chunks WHERE item_id=?",
+            "SELECT COUNT(*),SUM(vector_blob IS NOT NULL) "
+            "FROM chunks WHERE item_id=?",
             (item_id,),
         ).fetchone()
         total_chunks = int(counts[0] or 0)
@@ -528,18 +788,148 @@ class KnowledgeStore:
     ) -> None:
         connection.execute("DELETE FROM chunks WHERE item_id=? AND attachment_id IS NULL", (item_id,))
         for ordinal, chunk in enumerate(split_text(text)):
-            connection.execute(
-                "INSERT INTO chunks(id,workspace,item_id,attachment_id,ordinal,content,vector_json) VALUES(?,?,?,?,?,?,?)",
-                (
-                    new_id("chunk"),
-                    workspace,
-                    item_id,
-                    None,
-                    ordinal,
-                    chunk,
-                    json.dumps(vectorize(chunk), separators=(",", ":")),
-                ),
+            self._insert_chunk(
+                connection,
+                workspace=workspace,
+                item_id=item_id,
+                attachment_id=None,
+                ordinal=ordinal,
+                content=chunk,
             )
+
+    @staticmethod
+    def _insert_chunk(
+        connection: sqlite3.Connection,
+        *,
+        workspace: str,
+        item_id: str,
+        attachment_id: str | None,
+        ordinal: int,
+        content: str,
+    ) -> None:
+        chunk_id = new_id("chunk")
+        vector = vectorize(content)
+        connection.execute(
+            "INSERT INTO chunks(id,workspace,item_id,attachment_id,ordinal,content,"
+            "vector_json,vector_blob,embedding_model,embedding_dimensions) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                chunk_id,
+                workspace,
+                item_id,
+                attachment_id,
+                ordinal,
+                content,
+                "[]",
+                _pack_vector(vector),
+                _HASH_EMBEDDING_MODEL,
+                _HASH_VECTOR_DIMENSIONS,
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO chunk_vector_index(chunk_id,workspace,dimension,weight) "
+            "VALUES(?,?,?,?)",
+            _vector_index_rows(chunk_id, workspace, vector),
+        )
+
+    def embedding_chunks(
+        self,
+        workspace: str,
+        model: str,
+        dimensions: int,
+        *,
+        limit: int = 256,
+        force: bool = False,
+    ) -> list[dict[str, str]]:
+        where = "c.workspace=? AND i.deleted_at IS NULL"
+        values: list[Any] = [workspace]
+        if not force:
+            where += " AND (c.embedding_model<>? OR c.embedding_dimensions<>?)"
+            values.extend([str(model), int(dimensions)])
+        values.append(max(1, min(int(limit or 256), 2048)))
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                "SELECT c.id,c.content FROM chunks c JOIN items i ON i.id=c.item_id "
+                f"WHERE {where} ORDER BY c.rowid LIMIT ?",
+                values,
+            ).fetchall()
+        return [
+            {"id": str(row["id"]), "content": str(row["content"] or "")}
+            for row in rows
+        ]
+
+    def embedding_workspaces(self) -> list[str]:
+        with self._read_connection() as connection:
+            return [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT c.workspace FROM chunks c "
+                    "JOIN items i ON i.id=c.item_id "
+                    "WHERE i.deleted_at IS NULL ORDER BY c.workspace"
+                ).fetchall()
+            ]
+
+    def apply_embeddings(
+        self,
+        workspace: str,
+        model: str,
+        dimensions: int,
+        embeddings: Sequence[tuple[str, Sequence[float]]],
+    ) -> int:
+        normalized = [
+            (str(chunk_id), [float(value) for value in vector])
+            for chunk_id, vector in embeddings
+            if chunk_id and len(vector) == int(dimensions)
+        ]
+        if not normalized:
+            return 0
+        with self._lock, self._connect() as connection:
+            requested = {chunk_id: vector for chunk_id, vector in normalized}
+            existing: set[str] = set()
+            chunk_ids = list(requested)
+            for start in range(0, len(chunk_ids), 500):
+                batch = chunk_ids[start:start + 500]
+                placeholders = ",".join("?" for _ in batch)
+                existing.update(
+                    str(row[0])
+                    for row in connection.execute(
+                        f"SELECT id FROM chunks WHERE workspace=? AND id IN ({placeholders})",
+                        (workspace, *batch),
+                    ).fetchall()
+                )
+            normalized = [
+                (chunk_id, vector)
+                for chunk_id, vector in requested.items()
+                if chunk_id in existing
+            ]
+            if not normalized:
+                return 0
+            chunk_ids = [chunk_id for chunk_id, _vector in normalized]
+            for start in range(0, len(chunk_ids), 500):
+                batch = chunk_ids[start:start + 500]
+                placeholders = ",".join("?" for _ in batch)
+                connection.execute(
+                    f"DELETE FROM chunk_vector_index WHERE chunk_id IN ({placeholders})",
+                    batch,
+                )
+            connection.executemany(
+                "UPDATE chunks SET vector_json='[]',vector_blob=?,embedding_model=?,"
+                "embedding_dimensions=? WHERE workspace=? AND id=?",
+                [
+                    (_pack_vector(vector), str(model), int(dimensions), workspace, chunk_id)
+                    for chunk_id, vector in normalized
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO chunk_vector_index(chunk_id,workspace,dimension,weight) "
+                "VALUES(?,?,?,?)",
+                [
+                    index_row
+                    for chunk_id, vector in normalized
+                    for index_row in _vector_index_rows(chunk_id, workspace, vector)
+                ],
+            )
+        return len(normalized)
 
     def create_item(self, workspace: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         title = _clean_string(payload.get("title"))
@@ -1089,17 +1479,13 @@ class KnowledgeStore:
                     (attachment_id, item_id, workspace, *values, now, now),
                 )
             for ordinal, chunk in enumerate(chunks):
-                connection.execute(
-                    "INSERT INTO chunks(id,workspace,item_id,attachment_id,ordinal,content,vector_json) VALUES(?,?,?,?,?,?,?)",
-                    (
-                        new_id("chunk"),
-                        workspace,
-                        item_id,
-                        attachment_id,
-                        ordinal,
-                        chunk,
-                        json.dumps(vectorize(chunk), separators=(",", ":")),
-                    ),
+                self._insert_chunk(
+                    connection,
+                    workspace=workspace,
+                    item_id=item_id,
+                    attachment_id=attachment_id,
+                    ordinal=ordinal,
+                    content=chunk,
                 )
             connection.execute("UPDATE items SET updated_at=? WHERE id=?", (now, item_id))
             result = dict(
@@ -1215,47 +1601,159 @@ class KnowledgeStore:
             return documents
         return [document for document in documents if str(document["status"]).casefold() == requested_status]
 
-    def search_chunks(self, workspace: str | None, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
-        needle = _clean_string(query)
-        if not needle:
-            return []
-        tokens = re.findall(r"[a-z0-9_]+|[\u3400-\u9fff]", needle.casefold())
-        query_vector = vectorize(needle)
-        sql = "SELECT c.*,i.title,a.filename FROM chunks c JOIN items i ON i.id=c.item_id LEFT JOIN attachments a ON a.id=c.attachment_id WHERE i.deleted_at IS NULL"
-        values: tuple[Any, ...] = ()
+    @staticmethod
+    def _candidate_chunk_ids(
+        connection: sqlite3.Connection,
+        *,
+        workspace: str | None,
+        fts_query: str,
+        query_vector: Sequence[float],
+        embedding_model: str,
+        embedding_dimensions: int,
+        limit: int,
+    ) -> set[str]:
+        candidate_ids: set[str] = set()
+        if fts_query and connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunks_fts'"
+        ).fetchone():
+            sql = (
+                "SELECT c.id FROM chunks_fts "
+                "JOIN chunks c ON c.rowid=chunks_fts.rowid "
+                "JOIN items i ON i.id=c.item_id "
+                "WHERE chunks_fts MATCH ? AND i.deleted_at IS NULL"
+            )
+            values: list[Any] = [fts_query]
+            if workspace is not None:
+                sql += " AND c.workspace=?"
+                values.append(workspace)
+            sql += " ORDER BY bm25(chunks_fts) LIMIT ?"
+            values.append(limit)
+            candidate_ids.update(
+                str(row[0]) for row in connection.execute(sql, values).fetchall()
+            )
+        dimensions = _indexed_dimensions(query_vector)
+        if not dimensions:
+            return candidate_ids
+        query_values = ",".join("(?,?)" for _ in dimensions)
+        sql = (
+            f"WITH query_vector(dimension,weight) AS (VALUES {query_values}) "
+            "SELECT v.chunk_id,SUM(v.weight*q.weight) AS similarity "
+            "FROM chunk_vector_index v JOIN query_vector q ON q.dimension=v.dimension "
+            "JOIN chunks c ON c.id=v.chunk_id JOIN items i ON i.id=c.item_id "
+            "WHERE i.deleted_at IS NULL"
+        )
+        values = [value for pair in dimensions for value in pair]
         if workspace is not None:
-            sql += " AND c.workspace=?"
-            values = (workspace,)
-        with self._lock, self._connect() as connection:
-            rows = connection.execute(sql, values).fetchall()
+            sql += " AND v.workspace=?"
+            values.append(workspace)
+        if embedding_model and embedding_dimensions:
+            sql += " AND c.embedding_model=? AND c.embedding_dimensions=?"
+            values.extend([embedding_model, int(embedding_dimensions)])
+        sql += (
+            " GROUP BY v.chunk_id HAVING SUM(v.weight*q.weight)>0 "
+            "ORDER BY similarity DESC LIMIT ?"
+        )
+        values.append(limit)
+        candidate_ids.update(
+            str(row[0]) for row in connection.execute(sql, values).fetchall()
+        )
+        return candidate_ids
+
+    @staticmethod
+    def _candidate_chunk_rows(
+        connection: sqlite3.Connection,
+        candidate_ids: set[str],
+    ) -> list[sqlite3.Row]:
+        rows: list[sqlite3.Row] = []
+        ordered_ids = sorted(candidate_ids)
+        for start in range(0, len(ordered_ids), 500):
+            batch_ids = ordered_ids[start:start + 500]
+            candidate_values = ",".join("(?)" for _ in batch_ids)
+            rows.extend(connection.execute(
+                f"WITH candidate_ids(id) AS (VALUES {candidate_values}) "
+                "SELECT c.id,c.workspace,c.item_id,c.attachment_id,c.ordinal,c.content,"
+                "c.vector_blob,c.embedding_model,c.embedding_dimensions,i.title,a.filename "
+                "FROM candidate_ids candidate JOIN chunks c ON c.id=candidate.id "
+                "JOIN items i ON i.id=c.item_id "
+                "LEFT JOIN attachments a ON a.id=c.attachment_id "
+                "WHERE i.deleted_at IS NULL",
+                batch_ids,
+            ).fetchall())
+        return rows
+
+    @staticmethod
+    def _score_chunk_rows(
+        rows: Sequence[sqlite3.Row],
+        tokens: Sequence[str],
+        query_vector: Sequence[float],
+        embedding_model: str,
+    ) -> list[tuple[float, float, sqlite3.Row]]:
         scored: list[tuple[float, float, sqlite3.Row]] = []
         for row in rows:
-            content = str(row["content"] or "")
-            folded = content.casefold()
+            folded = str(row["content"] or "").casefold()
             lexical = sum(folded.count(token) for token in tokens) / max(1, len(tokens))
-            try:
-                stored_vector = json.loads(str(row["vector_json"] or "[]"))
-            except json.JSONDecodeError:
-                stored_vector = []
-            similarity = cosine(query_vector, stored_vector)
+            stored_vector = _unpack_vector(row["vector_blob"])
+            compatible = len(stored_vector) == len(query_vector) and (
+                not embedding_model
+                or str(row["embedding_model"] or "") == embedding_model
+            )
+            similarity = cosine(query_vector, stored_vector) if compatible else 0.0
             score = lexical + similarity
             if score > 0:
                 scored.append((score, similarity, row))
         scored.sort(key=lambda value: value[0], reverse=True)
-        return [
-            {
-                "chunk_id": str(row["id"]),
-                "document_id": str(row["attachment_id"] or row["item_id"]),
-                "item_id": str(row["item_id"]),
-                "workspace": str(row["workspace"]),
-                "document_name": str(row["filename"] or row["title"]),
-                "content": str(row["content"]),
-                "score": score,
-                "cosine_similarity": similarity,
-                "mode": "hybrid",
-            }
-            for score, similarity, row in scored[: max(1, min(int(limit or 20), 200))]
-        ]
+        return scored
+
+    def search_chunks(
+        self,
+        workspace: str | None,
+        query: str,
+        *,
+        limit: int = 20,
+        query_vector: Sequence[float] | None = None,
+        embedding_model: str = "",
+        embedding_dimensions: int = 0,
+    ) -> list[dict[str, Any]]:
+        needle = _clean_string(query)
+        if not needle:
+            return []
+        tokens = re.findall(r"[a-z0-9_]+|[\u3400-\u9fff]", needle.casefold())
+        resolved_vector = (
+            [float(value) for value in query_vector]
+            if query_vector is not None else vectorize(needle)
+        )
+        result_limit = max(1, min(int(limit or 20), 200))
+        candidate_limit = min(
+            _FTS_MAX_CANDIDATES,
+            max(_FTS_MIN_CANDIDATES, result_limit * _FTS_CANDIDATE_MULTIPLIER),
+        )
+        fts_query = " OR ".join(
+            f'"{token.replace(chr(34), chr(34) * 2)}"'
+            for token in list(dict.fromkeys(tokens))[:64]
+        )
+        with self._read_connection() as connection:
+            candidate_ids = self._candidate_chunk_ids(
+                connection,
+                workspace=workspace,
+                fts_query=fts_query,
+                query_vector=resolved_vector,
+                embedding_model=embedding_model,
+                embedding_dimensions=embedding_dimensions,
+                limit=candidate_limit,
+            )
+            rows = self._candidate_chunk_rows(connection, candidate_ids)
+        scored = self._score_chunk_rows(rows, tokens, resolved_vector, embedding_model)
+        return [{
+            "chunk_id": str(row["id"]),
+            "document_id": str(row["attachment_id"] or row["item_id"]),
+            "item_id": str(row["item_id"]),
+            "workspace": str(row["workspace"]),
+            "document_name": str(row["filename"] or row["title"]),
+            "content": str(row["content"]),
+            "score": score,
+            "cosine_similarity": similarity,
+            "mode": "hybrid",
+        } for score, similarity, row in scored[:result_limit]]
 
     def search_library(
         self,
@@ -1265,9 +1763,19 @@ class KnowledgeStore:
         limit: int,
         status: str = "",
         tag: str = "",
+        query_vector: Sequence[float] | None = None,
+        embedding_model: str = "",
+        embedding_dimensions: int = 0,
     ) -> list[dict[str, Any]]:
         metadata = self.list_items(workspace, q=query, status=status, tag=tag, limit=limit)["items"]
-        evidence = self.search_chunks(workspace, query, limit=max(limit * 3, 12))
+        evidence = self.search_chunks(
+            workspace,
+            query,
+            limit=max(limit * 3, 12),
+            query_vector=query_vector,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+        )
         by_item: dict[str, list[dict[str, Any]]] = {}
         for hit in evidence:
             by_item.setdefault(str(hit["item_id"]), []).append(hit)
@@ -1299,19 +1807,29 @@ class KnowledgeStore:
             row = connection.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
             return self._hydrate(connection, row, detail=False)
 
-    def embedding_status(self, workspace: str) -> dict[str, Any]:
+    def embedding_status(
+        self,
+        workspace: str,
+        *,
+        configured: bool = False,
+        model: str = _HASH_EMBEDDING_MODEL,
+        dimensions: int = _HASH_VECTOR_DIMENSIONS,
+    ) -> dict[str, Any]:
         with self._lock, self._connect() as connection:
             row = connection.execute(
-                "SELECT COUNT(*),SUM(CASE WHEN vector_json<>'[]' THEN 1 ELSE 0 END) FROM chunks WHERE workspace=?",
-                (workspace,),
+                "SELECT COUNT(*),SUM(vector_blob IS NOT NULL AND "
+                "embedding_model=? AND embedding_dimensions=?) "
+                "FROM chunks c JOIN items i ON i.id=c.item_id "
+                "WHERE c.workspace=? AND i.deleted_at IS NULL",
+                (str(model), int(dimensions), workspace),
             ).fetchone()
             total = int(row[0] or 0)
             compatible = int(row[1] or 0)
             return {
-                "configured": True,
-                "provider": "plugin_local",
-                "model": "cyrene-hash-v1",
-                "dimensions": 128,
+                "configured": bool(configured),
+                "provider": "model_configuration" if configured else "plugin_local",
+                "model": str(model),
+                "dimensions": int(dimensions),
                 "total_chunks": total,
                 "compatible_chunks": compatible,
                 "compatible_vectors": compatible,
@@ -1322,11 +1840,75 @@ class KnowledgeStore:
     def reembed(self, workspace: str) -> int:
         with self._lock, self._connect() as connection:
             rows = connection.execute("SELECT id,content FROM chunks WHERE workspace=?", (workspace,)).fetchall()
+            vectors = [
+                (str(row["id"]), vectorize(str(row["content"] or "")))
+                for row in rows
+            ]
             connection.executemany(
-                "UPDATE chunks SET vector_json=? WHERE id=?",
-                [(json.dumps(vectorize(str(row["content"])), separators=(",", ":")), str(row["id"])) for row in rows],
+                "UPDATE chunks SET vector_json='[]',vector_blob=?,embedding_model=?,"
+                "embedding_dimensions=? WHERE id=?",
+                [
+                    (
+                        _pack_vector(vector),
+                        _HASH_EMBEDDING_MODEL,
+                        _HASH_VECTOR_DIMENSIONS,
+                        chunk_id,
+                    )
+                    for chunk_id, vector in vectors
+                ],
+            )
+            connection.execute(
+                "DELETE FROM chunk_vector_index WHERE workspace=?",
+                (workspace,),
+            )
+            connection.executemany(
+                "INSERT INTO chunk_vector_index(chunk_id,workspace,dimension,weight) "
+                "VALUES(?,?,?,?)",
+                [
+                    index_row
+                    for chunk_id, vector in vectors
+                    for index_row in _vector_index_rows(chunk_id, workspace, vector)
+                ],
             )
             return len(rows)
+
+    def invalidate_embeddings(self, workspace: str) -> None:
+        """Mark model vectors stale while retaining hash/search availability."""
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id,content FROM chunks WHERE workspace=?",
+                (workspace,),
+            ).fetchall()
+            vectors = [
+                (str(row["id"]), vectorize(str(row["content"] or "")))
+                for row in rows
+            ]
+            connection.execute(
+                "DELETE FROM chunk_vector_index WHERE workspace=?",
+                (workspace,),
+            )
+            connection.executemany(
+                "UPDATE chunks SET vector_json='[]',vector_blob=?,embedding_model=?,"
+                "embedding_dimensions=? WHERE id=?",
+                [
+                    (
+                        _pack_vector(vector),
+                        _HASH_EMBEDDING_MODEL,
+                        _HASH_VECTOR_DIMENSIONS,
+                        chunk_id,
+                    )
+                    for chunk_id, vector in vectors
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO chunk_vector_index(chunk_id,workspace,dimension,weight) "
+                "VALUES(?,?,?,?)",
+                [
+                    index_row
+                    for chunk_id, vector in vectors
+                    for index_row in _vector_index_rows(chunk_id, workspace, vector)
+                ],
+            )
 
     def get_sync_state(self, workspace: str, provider: str, library_id: str, collection_key: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as connection:
@@ -1398,11 +1980,19 @@ class KnowledgeStore:
         shutil.rmtree(directory, ignore_errors=True)
 
     def reset(self) -> None:
-        with self._lock:
-            shutil.rmtree(self.root, ignore_errors=True)
-            self.root.mkdir(parents=True, exist_ok=True)
-            self.files_root.mkdir(parents=True, exist_ok=True)
-            self.initialize()
+        with self._read_pool_lifecycle:
+            self._close_read_pool()
+            try:
+                with self._lock:
+                    shutil.rmtree(self.root, ignore_errors=True)
+                    self.root.mkdir(parents=True, exist_ok=True)
+                    self.files_root.mkdir(parents=True, exist_ok=True)
+                    self.initialize()
+            finally:
+                self._open_read_pool()
+
+    def close(self) -> None:
+        self._close_read_pool()
 
 
 __all__ = [

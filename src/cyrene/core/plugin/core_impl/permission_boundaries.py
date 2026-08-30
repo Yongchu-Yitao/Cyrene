@@ -107,7 +107,7 @@ def _is_safe_review_directory_refresh(
         return False
     allowed_roots = [(workspace / ".cyrene" / "scratch").resolve()]
     try:
-        from cyrene.runtime.paths import TEMP_DIR
+        from cyrene.platform.paths import TEMP_DIR
 
         allowed_roots.append((TEMP_DIR / "reviews").resolve())
     except Exception:

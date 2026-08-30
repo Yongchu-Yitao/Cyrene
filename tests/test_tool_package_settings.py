@@ -7,7 +7,7 @@ from cyrene.workbench.http.registry import register_routes
 
 
 def _client(monkeypatch, tmp_path):
-    from cyrene.runtime import settings_service, settings_store
+    from cyrene.platform import settings_service, settings_store
 
     state = {
         "packs": {"cyrene_browser": False},

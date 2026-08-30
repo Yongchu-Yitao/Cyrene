@@ -21,7 +21,7 @@ TOOL_DEF = {
         "name": TOOL_NAME,
         "description": (
             "Perform a typed action on a paired Cyrene device explicitly selected "
-            "in the current chat, including remote chat and task lifecycle actions."
+            "in the current chat, including remote conversation and Goal actions."
         ),
         "parameters": {
             "type": "object",
@@ -39,13 +39,12 @@ TOOL_DEF = {
                         "chats.send",
                         "runs.guide",
                         "runs.interrupt",
-                        "tasks.create",
-                        "tasks.dispatch",
-                        "tasks.approve_plan",
-                        "tasks.run_step",
-                        "tasks.pause",
-                        "tasks.resume",
-                        "tasks.cancel",
+                        "goals.update",
+                        "goals.confirm",
+                        "goals.pause",
+                        "goals.resume",
+                        "goals.abort",
+                        "goals.accept",
                         "approvals.respond",
                     ],
                 },
@@ -60,10 +59,10 @@ TOOL_DEF = {
                         "{chat_id,title}; chats.delete {chat_id}; chats.send "
                         "{chat_id,message,permission_mode?:auto|default|plan,language?}; "
                         "runs.guide {chat_id,message,request_id?}; runs.interrupt "
-                        "{chat_id}; tasks.create {title?,goal,priority?}; tasks.dispatch "
-                        "{task_id,message}; tasks.approve_plan {task_id}; tasks.run_step "
-                        "{task_id,step_id,message}; tasks.pause/resume/cancel {task_id}; "
-                        "approvals.respond {chat_id|task_id,question_id,answer}."
+                        "{chat_id}; goals.update/confirm {chat_id,objective?,"
+                        "acceptanceCriteria?,constraints?,outOfScope?,durationSeconds?}; "
+                        "goals.pause/resume/abort/accept {chat_id}; approvals.respond "
+                        "{chat_id,question_id,answer}."
                     ),
                 },
                 "idempotency_key": {
@@ -114,11 +113,7 @@ async def handler(
             return json_result(permission)
         request_args = dict(args)
         request_payload = dict(args.get("payload") or {})
-        if str(args.get("command") or "") in {
-            "chats.send",
-            "tasks.dispatch",
-            "tasks.run_step",
-        }:
+        if str(args.get("command") or "") == "chats.send":
             request_payload["permission_mode"] = str(
                 run_context_value(context, "permission_mode", "default")
                 or "default"

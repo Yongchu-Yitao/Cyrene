@@ -247,7 +247,7 @@ async def test_steward_background_plugin_delegates_to_memory_service():
 
 
 async def test_llm_usage_and_latency_can_share_one_batch(tmp_path):
-    from cyrene.runtime import database as db
+    from cyrene.platform import database as db
 
     db_path = tmp_path / "telemetry.db"
     await db.init_db(str(db_path))

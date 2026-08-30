@@ -5,8 +5,49 @@ from __future__ import annotations
 import pytest
 
 
+def test_model_client_ignores_implicit_proxy_and_uses_only_opted_in_proxy(
+    monkeypatch,
+):
+    from cyrene.core.plugin import PluginContext
+    from cyrene.platform import network_proxy
+    from cyrene.plugins.builtin.cyrene_model._shared import (
+        ModelProvider,
+        _client_options,
+    )
+
+    provider = ModelProvider(
+        id="custom",
+        name="Custom",
+        plugin_name="Custom",
+        adapter="openai_compatible",
+        default_base_url="https://custom.test/v1",
+    )
+    direct = _client_options(
+        PluginContext(data={"model_connection": {"use_proxy": False}}),
+        provider,
+        discovery=True,
+    )
+
+    assert direct["trust_env"] is False
+    assert "proxy" not in direct
+
+    monkeypatch.setattr(
+        network_proxy,
+        "configured_proxy_url",
+        lambda *, opt_in: "http://127.0.0.1:6578" if opt_in else "",
+    )
+    proxied = _client_options(
+        PluginContext(data={"model_connection": {"use_proxy": True}}),
+        provider,
+        discovery=True,
+    )
+
+    assert proxied["trust_env"] is False
+    assert proxied["proxy"] == "http://127.0.0.1:6578"
+
+
 def test_proxy_master_and_feature_scopes_are_both_required(monkeypatch):
-    from cyrene.runtime import config_store, network_proxy
+    from cyrene.platform import config_store, network_proxy
 
     values = {
         "external_agent_proxy_enabled": False,
@@ -32,7 +73,7 @@ def test_proxy_master_and_feature_scopes_are_both_required(monkeypatch):
 
 
 def test_proxy_policy_rejects_invalid_ports_and_builds_process_environment(monkeypatch):
-    from cyrene.runtime import config_store, network_proxy
+    from cyrene.platform import config_store, network_proxy
 
     values = {
         "external_agent_proxy_enabled": True,
@@ -55,7 +96,7 @@ def test_proxy_policy_rejects_invalid_ports_and_builds_process_environment(monke
 
 
 def test_custom_proxy_address_overrides_legacy_localhost_port(monkeypatch):
-    from cyrene.runtime import config_store, network_proxy
+    from cyrene.platform import config_store, network_proxy
 
     values = {
         "external_agent_proxy_enabled": True,
@@ -76,7 +117,7 @@ def test_custom_proxy_address_overrides_legacy_localhost_port(monkeypatch):
 
 
 def test_proxy_address_setting_is_validated_and_canonicalized():
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         SettingsValidationError,
         _normalize,
         plugin_setting_spec,
@@ -92,8 +133,8 @@ def test_proxy_address_setting_is_validated_and_canonicalized():
 
 
 def test_config_projection_exposes_proxy_feature_scopes(monkeypatch):
-    from cyrene.runtime import config_store
-    from cyrene.runtime.config_integration_service import (
+    from cyrene.platform import config_store
+    from cyrene.platform.config_integration_service import (
         ConfigIntegrationApplicationService,
     )
 

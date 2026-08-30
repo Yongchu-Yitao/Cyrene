@@ -287,7 +287,7 @@ function WbcAgentNotification({ notice }) {
   );
 }
 
-function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onToTask, toTaskBusy }) {
+function WbcHeader({ project, chat, running, finalizing, onRename, onDelete }) {
   var [editing, setEditing] = useWbcState(false);
   var [draft, setDraft] = useWbcState(chat.title || "");
   var [menuOpen, setMenuOpen] = useWbcState(false);
@@ -350,11 +350,6 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
         </div>
       </div>
       <div className="wbc-header-actions">
-        <button type="button" className={"wb-btn primary wbc-totask" + (toTaskBusy ? " is-busy" : "")} disabled={running || toTaskBusy} onClick={onToTask} title={wbcT("workbenchChat.toTaskTitle", "Create a task from this chat")}>
-          {toTaskBusy
-            ? <><span className="wbc-spinner" aria-hidden="true"></span><span>{wbcT("workbenchChat.toTaskBusy", "Analyzing chat…")}</span></>
-            : <>{WBC_ICONS.play}<span>{wbcT("workbenchChat.toTask", "Convert to task")}</span></>}
-        </button>
         <div className="wbc-menu-wrap">
           <button type="button" className="wbc-icon-btn" title={wbcT("workbenchChat.more", "More")} onClick={function () { setMenuOpen(!menuOpen); }}>
             {WBC_ICONS.dots}
@@ -364,7 +359,6 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
               <div className="wbc-menu-scrim" onClick={function () { setMenuOpen(false); }}></div>
               <div className="wbc-menu">
                 <button type="button" onClick={function () { setMenuOpen(false); setEditing(true); }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
-                <button type="button" disabled={toTaskBusy} onClick={function () { setMenuOpen(false); onToTask(); }}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
                 <button type="button" className="danger" onClick={function () { setMenuOpen(false); onDelete(); }}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
               </div>
             </>
@@ -830,7 +824,7 @@ function wbcTraceActionKind(entry) {
   if (/(browser|navigate|click|screenshot)/.test(name)) return "browser";
   if (/(git|branch|commit)/.test(name)) return "git";
   if (/(code|symbol|reference|lint|format|index)/.test(name)) return "code";
-  if (/(task|plan|goal|schedule)/.test(name)) return "task";
+  if (/(plan|goal|schedule)/.test(name)) return "planning";
   if (/(memor|recall|learnpattern)/.test(name)) return "memory";
   if (/(knowledge|library)/.test(name)) return "knowledge";
   if (/(^|_)(entit)/.test(name)) return "entity";
@@ -858,9 +852,9 @@ function wbcTraceActionLabel(entry) {
     if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.codeRead", "Read terminal");
     return wbcT("workbenchChat.traceAction.code", "Operated terminal");
   }
-  if (kind === "task") {
-    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.taskRead", "Read tasks");
-    return wbcT("workbenchChat.traceAction.task", "Updated tasks or plans");
+  if (kind === "planning") {
+    if (wbcTraceNameIsRead(raw)) return wbcT("workbenchChat.traceAction.planningRead", "Read plans or schedules");
+    return wbcT("workbenchChat.traceAction.planning", "Updated plans or schedules");
   }
   if (kind === "memory") return wbcT("workbenchChat.traceAction.memory", "Used memory");
   if (kind === "knowledge") return wbcT("workbenchChat.traceAction.knowledge", "Used knowledge");
@@ -900,7 +894,7 @@ function wbcTraceActionIcon(entry) {
   if (kind === "browser") return WBC_ICONS.browser;
   if (kind === "git") return WBC_ICONS.fork;
   if (kind === "code") return WBC_ICONS.code;
-  if (kind === "task") return WBC_ICONS.task;
+  if (kind === "planning") return WBC_ICONS.checklist;
   if (kind === "memory") return WBC_ICONS.database;
   if (kind === "knowledge") return WBC_ICONS.book;
   if (kind === "entity") return WBC_ICONS.pin;
@@ -1218,6 +1212,26 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
         hasReplyText={activityView.hasReplyText}
         live={activityView.live}
       />
+    );
+  }
+  if (String(msg && msg.kind || "") === "goal_milestone") {
+    var milestone = msg.goalMilestone && typeof msg.goalMilestone === "object"
+      ? msg.goalMilestone : {};
+    var terminalGoal = milestone.status === "completed" || milestone.status === "aborted";
+    return (
+      <article className={"wbc-goal-milestone " + String(milestone.type || "update")}>
+        <span className="wbc-goal-milestone-mark" aria-hidden="true">{WBC_ICONS.phase}</span>
+        <div className="wbc-goal-milestone-body">
+          <header>
+            <small>{wbcT("goal.milestone", "Goal milestone")}</small>
+            {Number(milestone.attempt || 0) > 0 ? <span className="wbc-goal-milestone-attempt">{wbcT("goal.attempt", "Attempt {attempt}", { attempt: Number(milestone.attempt) })}</span> : null}
+          </header>
+          <div className="wbc-goal-milestone-copy">{msg.content}</div>
+        </div>
+        {!terminalGoal ? <button type="button" className="wbc-goal-milestone-action" onClick={function () {
+          window.dispatchEvent(new CustomEvent("workbench:open-goal-tab", { detail: { chatId: String(chatId || "") } }));
+        }}><span>{wbcT("goal.openTab", "Open Goal")}</span>{WBC_ICONS.chevronRight}</button> : null}
+      </article>
     );
   }
   if (

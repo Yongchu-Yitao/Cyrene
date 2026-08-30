@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from cyrene.localization import app_language, localized
-from cyrene.model_runtime.constants import NETWORK_RETRY_LIMIT
+from cyrene.model.constants import NETWORK_RETRY_LIMIT
 from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.workspaces.workspace_changes import (
     WorkspaceSnapshot,
@@ -633,6 +633,9 @@ def public_chat_light(
     plan = chat.get("activePlan")
     if isinstance(plan, Mapping) and str(plan.get("status") or "") in _VISIBLE_PLAN_STATUSES:
         payload["activePlan"] = copy.deepcopy(dict(plan))
+    goal = chat.get("activeGoal")
+    if isinstance(goal, Mapping):
+        payload["activeGoal"] = copy.deepcopy(dict(goal))
     fields = agent_fields(chat)
     payload.update(fields)
     payload["agentConfigOptions"] = chat.get("agentConfigOptions") or []

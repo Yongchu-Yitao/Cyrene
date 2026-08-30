@@ -640,6 +640,11 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                         "name": str(call.get("name") or ""),
                         "status": "running",
                         "args": dict(call.get("arguments") or {}),
+                        "presentation": (
+                            dict(call.get("presentation") or {})
+                            if isinstance(call.get("presentation"), Mapping)
+                            else {}
+                        ),
                     },
                 )
             )
@@ -667,6 +672,13 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
             and isinstance(decoded_value, Mapping)
             and str(decoded_value.get("status") or "") == "awaiting_user"
         )
+        presentation = (
+            dict(data.get("presentation") or {})
+            if isinstance(data.get("presentation"), Mapping)
+            else {}
+        )
+        if not presentation and isinstance(decoded_value, Mapping):
+            presentation = dict(decoded_value.get("presentation") or {})
         return (
             _envelope(
                 event,
@@ -679,6 +691,7 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                     "failed": not success,
                     "outputSummary": data.get("value"),
                     "error": str(data.get("error") or ""),
+                    "presentation": presentation,
                 },
             ),
         )
@@ -689,6 +702,14 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                 continue
             call_id = str(result.get("call_id") or "")
             success = bool(result.get("success"))
+            result_value = result.get("value")
+            presentation = (
+                dict(result.get("presentation") or {})
+                if isinstance(result.get("presentation"), Mapping)
+                else {}
+            )
+            if not presentation and isinstance(result_value, Mapping):
+                presentation = dict(result_value.get("presentation") or {})
             projected.append(
                 _envelope(
                     event,
@@ -701,6 +722,7 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                         "failed": not success,
                         "outputSummary": result.get("value"),
                         "error": str(result.get("error") or ""),
+                        "presentation": presentation,
                     },
                 )
             )

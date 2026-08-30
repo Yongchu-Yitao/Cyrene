@@ -22,7 +22,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     context.provide("knowledge", service)
     context.provide_search("knowledge", service.search_workbench)
     context.expose_frontend("knowledge")
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )

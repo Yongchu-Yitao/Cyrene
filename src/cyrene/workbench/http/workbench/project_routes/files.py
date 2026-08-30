@@ -54,6 +54,24 @@ def register_project_query_file_routes(
             content_disposition_type="inline",
         )
 
+    @router.get("/api/projects/{project_id}/files/exists")
+    async def api_workbench_project_file_exists(project_id: str, path: str):
+        """Validate one Plan-related file without exposing paths outside the workspace."""
+        try:
+            await files.resolve_preview(project_id, path)
+        except ProjectFileError as exc:
+            return {
+                "ok": True,
+                "exists": False,
+                "path": str(path or "").replace("\\", "/"),
+                "error": exc.message,
+            }
+        return {
+            "ok": True,
+            "exists": True,
+            "path": str(path or "").replace("\\", "/"),
+        }
+
     @router.get("/api/projects/{project_id}/files/edit/{file_path:path}")
     async def api_workbench_project_text_file(project_id: str, file_path: str):
         """Read an editable UTF-8 project file with an optimistic-lock version."""

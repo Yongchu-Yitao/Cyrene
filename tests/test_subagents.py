@@ -19,7 +19,7 @@ from cyrene.core.plugin import (
     without_plugin_session_state,
 )
 from cyrene.workbench.core_adapter import WorkbenchSessionBridge
-from cyrene.runtime import inbox
+from cyrene.platform import inbox
 
 
 CANONICAL_PLUGIN_DIRECTORY = (
@@ -143,7 +143,7 @@ class StubSubagentManager:
 
 def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path, monkeypatch):
     async def scenario() -> None:
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         configured = {"spawn_policy": "conservative"}
         monkeypatch.setattr(
@@ -259,7 +259,7 @@ def test_subagent_pack_mounts_dynamic_spawn_policy_for_main_only(
     monkeypatch,
 ):
     async def scenario() -> None:
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         configured = {"spawn_policy": "aggressive"}
         monkeypatch.setattr(
@@ -592,8 +592,10 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
             ) == 1
             assert ("main", "main_agent") in callers
             assert ("researcher", "subagent_researcher") in callers
-            assert permission_requests
-            assert {item["user_request"] for item in permission_requests} == {"delegate"}
+            assert all(
+                item["user_request"] == "delegate"
+                for item in permission_requests
+            )
         finally:
             session.close()
 

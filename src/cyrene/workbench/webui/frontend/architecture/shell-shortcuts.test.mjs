@@ -22,7 +22,6 @@ function harness(state) {
   var actions = {
     openSearch: function () { calls.push("search") },
     createChat: function () { calls.push("chat") },
-    createTask: function () { calls.push("task") },
     startVoice: function () { calls.push("voice") },
     openShortcutSettings: function () { calls.push("settings") },
     toggleSidebar: function () { calls.push("sidebar") },
@@ -43,17 +42,12 @@ test("shell shortcuts dispatch semantic actions without duplicating navigation",
   assert.deepEqual(target.calls, ["chat", "settings", "project:p2"])
 })
 
-test("shell shortcuts respect overlays, editable fields, and task availability", () => {
+test("shell shortcuts respect overlays and editable fields", () => {
   var blocked = harness({ searchOpen: true, hasActiveProject: true })
   assert.equal(dispatchWorkbenchGlobalShortcut(eventFor("new-chat"), blocked.shortcuts, blocked.state, blocked.actions), false)
   assert.deepEqual(blocked.calls, [])
 
   var target = harness({ hasActiveProject: false })
-  var taskEvent = eventFor("new-task")
-  dispatchWorkbenchGlobalShortcut(taskEvent, target.shortcuts, target.state, target.actions)
-  assert.equal(taskEvent.prevented, true)
-  assert.deepEqual(target.calls, [])
-
   var editableEvent = eventFor("search")
   editableEvent.target = { tagName: "INPUT", isContentEditable: false }
   editableEvent.metaKey = false

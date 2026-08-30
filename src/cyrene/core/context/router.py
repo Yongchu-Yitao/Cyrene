@@ -667,6 +667,24 @@ class ContextStoreRouter:
         )
         return node
 
+    def save_effect_result(
+        self,
+        tree_id: str,
+        assistant_node_id: str,
+        call_id: str,
+        result: Any,
+    ) -> None:
+        with self._lease(tree_id) as store:
+            store.save_effect_result(assistant_node_id, call_id, result)
+
+    def effect_results(self, tree_id: str, assistant_node_id: str) -> dict[str, Any]:
+        with self._lease(tree_id) as store:
+            return store.effect_results(assistant_node_id)
+
+    def clear_effect_results(self, tree_id: str, assistant_node_id: str) -> int:
+        with self._lease(tree_id) as store:
+            return store.clear_effect_results(assistant_node_id)
+
     def replace_subtree(
         self,
         tree_id: str,

@@ -149,8 +149,8 @@ Subagent、Terminal、媒体和 Browser 都可以产生独立支线。Plugin 可
 
 ### 1.6 与 Cyrene 其他运行时的边界
 
-- 新内核固定放在 [`src/cyrene/core`](../src/cyrene/core/)，不放进 `src/cyrene/agent_runtime`。
-- 外部 Agent/ACP 的 `cyrene.agent_runtime` 独立存在，不属于这次内核重写。
+- 新内核固定放在 [`src/cyrene/core`](../src/cyrene/core/)，不放进 `src/cyrene/agents`。
+- 外部 Agent/ACP 的 `cyrene.agents` 独立存在，不属于这次内核重写。
 - 旧 `src/agent` 已完全弃用，不作为新内核内部依赖或兼容层。
 - 现有 Workbench 合同由 `cyrene.workbench` Adapter 保持。
 - Terminal、Media、Browser、Office、Knowledge 等业务 Manager 可以继续复用；它们通过 Plugin 接入。
@@ -205,7 +205,7 @@ Context Tree 把任务进度变成可持久化数据；Hook 把“数据变化�
 | 数据 | Memory、SOUL、Knowledge、Attachment、Library | 作为 Context source/artifact Plugin 接入 |
 | 主动入口 | Scheduler、Telegram、WeChat、Remote | 外部触发统一表现为 Plugin 输入和树修改 |
 | 个性化 | Skill、learning、behavior replay | 组合 Plugin、Hook 和上下文策略，不固化 workflow |
-| 外部 Agent | ACP、process、permission、artifact | 保持 `cyrene.agent_runtime` 独立 |
+| 外部 Agent | ACP、process、permission、artifact | 保持 `cyrene.agents` 独立 |
 
 ### 2.2 最近 30 天双版本会话带来的约束
 
@@ -607,7 +607,7 @@ read tool-call node
 | Skill | 可注册 Plugin、Hook binding 和上下文编排策略 | Skill/Plugin Platform |
 | Memory/Knowledge | Context source Plugin 选择并挂载内容 | Context Plugin |
 | Streaming | 短期 observation，不把每个 delta 挂成节点 | Frontend adapter |
-| 外部 Agent/ACP | 独立 runtime，必要时由 adapter 与树交换结果 | `cyrene.agent_runtime` |
+| 外部 Agent/ACP | 独立 runtime，必要时由 adapter 与树交换结果 | `cyrene.agents` |
 
 这个映射说明基座具有表达能力，但不等于上述 Plugin 已经实现。功能切换必须以端到端测试为准。
 
@@ -930,7 +930,7 @@ src/cyrene/core/
 - 完整验收后删除旧 `src/agent`；
 - 不让新内核依赖旧 Agent loop 作为永久 fallback。
 
-外部 Agent/ACP 不参与这次删除，继续由独立 `cyrene.agent_runtime` 管理。
+外部 Agent/ACP 不参与这次删除，继续由独立 `cyrene.agents` 管理。
 
 ## 17. 必须继续解决的问题
 

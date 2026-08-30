@@ -10,9 +10,9 @@ from cyrene.core.plugin import PluginContext
 from .common import remote_tool_error, request_remote_command
 from cyrene.core.plugin.execution import publish_plugin_progress as publish_tool_progress
 from cyrene.plugins.native_runtime import json_result
-from cyrene.runtime.attachments import register_generated_attachment
+from cyrene.platform.attachments import register_generated_attachment
 
-_TRANSFER_COMMANDS = frozenset({"artifacts.read", "attachments.read"})
+_TRANSFER_COMMANDS = frozenset({"attachments.read"})
 _TRANSFER_CHUNK_BYTES = 512 * 1024
 
 TOOL_NAME = "RemoteCyreneStatus"
@@ -41,10 +41,7 @@ TOOL_DEF = {
                         "runs.read",
                         "runs.events",
                         "runs.wait",
-                        "tasks.list",
-                        "tasks.read",
-                        "artifacts.list",
-                        "artifacts.read",
+                        "goals.read",
                         "attachments.read",
                     ],
                 },
@@ -57,12 +54,11 @@ TOOL_DEF = {
                     "description": (
                         "Command payload: chats.read {chat_id}; runs.read {run_id}; "
                         "runs.events {run_id,cursor?,limit?}; runs.wait "
-                        "{run_id,cursor?,limit?,timeout_seconds?}; tasks.read {task_id}; "
-                        "artifacts.list {task_id}; artifacts.read {task_id,artifact_id}. "
+                        "{run_id,cursor?,limit?,timeout_seconds?}; goals.read {chat_id}; "
                         "attachments.read {chat_id,attachment_id}. File reads are "
                         "downloaded in chunks with live progress and return a local "
                         "attachment path; complete file size is not limited. "
-                        "capabilities.read, projects.list, chats.list and tasks.list "
+                        "capabilities.read, projects.list and chats.list "
                         "need no payload beyond project_id where applicable."
                     ),
                 },
@@ -116,7 +112,7 @@ async def _download_remote_file(
     transfer_key = str(args.get("idempotency_key") or uuid4().hex)
 
     from cyrene.config import DATA_DIR
-    from cyrene.runtime.attachments import safe_attachment_filename
+    from cyrene.platform.attachments import safe_attachment_filename
 
     transfer_dir = DATA_DIR / "remote_transfers"
     transfer_dir.mkdir(parents=True, exist_ok=True)

@@ -48,7 +48,7 @@ function wbcVoiceWavBlob(chunks, sourceRate) {
 }
 
 // Shared by every composer that supports local voice input. Keep FireRedASR's
-// silence-token handling and response parsing in one place so task and chat
+// silence-token handling and response parsing in one place so conversation
 // inputs cannot drift into subtly different behavior.
 function wbcCleanVoiceTranscript(value) {
   var content = String(value || "").trim();

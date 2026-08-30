@@ -900,8 +900,8 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
     var learnedSkills = snap.skills.filter(function (s) { return s.status === "active"; });
     var pendingCandidates = snap.candidates.filter(function (candidate) { return candidate.status === "awaiting_user"; });
     var shownSkills = learnedSkills;
-    var activeSessionId = props.sessionId || (sessions[0] && sessions[0].id) || "";
-    var activeSession = sessions.find(function (session) { return session.id === activeSessionId; }) || sessions[0] || null;
+    var selectedMemorySessionId = props.sessionId || (sessions[0] && sessions[0].id) || "";
+    var activeSession = sessions.find(function (session) { return session.id === selectedMemorySessionId; }) || sessions[0] || null;
     var chains = activeSession ? activeSession.chains : [];
     var activeChain = props.chain && chains.some(function (chain) { return chain.id === props.chain.id; }) ? props.chain : chains[0] || null;
     var onSelectChain = props.onSelectChain;

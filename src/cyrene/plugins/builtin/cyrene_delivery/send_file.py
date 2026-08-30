@@ -16,7 +16,7 @@ from cyrene.plugins.native_runtime import (
     resolve_exportable_path,
     run_context_value,
 )
-from cyrene.runtime.attachments import (
+from cyrene.platform.attachments import (
     build_public_attachment_payload,
     register_generated_attachment,
 )
@@ -43,18 +43,14 @@ async def _tool_send_file(args: dict[str, Any], context: PluginContext) -> str:
     registered = register_generated_attachment(str(path), display_name=str(args.get("name", "") or "").strip() or None)
     attachment = build_public_attachment_payload(registered)
 
-    # Register generated files through the knowledge Plugin only. Workbench tasks
-    # archive final deliverables after review, so mid-run task files stay out.
+    # Register generated files through the knowledge Plugin for the active
+    # conversation.
     try:
-        from cyrene.workbench.sessions.context import (
-            resolve_workbench_session_kind,
-        )
         import mimetypes
         doc_path = registered.get("path", "")
         current_session_id = str(run_context_value(context, "session_id") or "")
-        session_kind = resolve_workbench_session_kind(current_session_id)
         knowledge = context.services.get("knowledge")
-        if knowledge is not None and doc_path and session_kind not in {"task", "init"}:
+        if knowledge is not None and doc_path:
             from pathlib import Path
             doc_file = Path(doc_path)
             content_type = mimetypes.guess_type(str(doc_file))[0] or "application/octet-stream"

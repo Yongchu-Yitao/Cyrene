@@ -96,19 +96,10 @@ function wbcNormalizeSurfaceIntent(rawIntent, catalog) {
   }
 }
 
-function activityAttention(presentation, resourceKey) {
-  const grant = presentation && presentation.attention
-  if (!grant || typeof grant !== "object") return SURFACE_ATTENTION.OBSERVE
-  const keys = Array.isArray(grant.resource_keys) ? grant.resource_keys.map(String) : []
-  if (keys.indexOf(resourceKey) < 0) return SURFACE_ATTENTION.OBSERVE
-  const mode = String(grant.mode || "")
-  if (mode === SURFACE_ATTENTION.UPDATE) return mode
-  if (
-    mode === SURFACE_ATTENTION.REVEAL
-    && String(grant.reason || "") === "explicit-user-resource-request"
-    && String(grant.operation || "") === "edit"
-  ) return mode
-  return SURFACE_ATTENTION.OBSERVE
+function activityAttention(presentation) {
+  return presentation && presentation.reveal === true
+    ? SURFACE_ATTENTION.REVEAL
+    : SURFACE_ATTENTION.UPDATE
 }
 
 function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
@@ -119,7 +110,7 @@ function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
     const presentation = payload.presentation && typeof payload.presentation === "object"
       ? payload.presentation : {}
     const normalized = wbcNormalizeSurfaceIntent(Object.assign({}, explicit, {
-      attention: activityAttention(presentation, wbcSurfaceResourceKey(explicit.resource)),
+      attention: activityAttention(presentation),
     }), catalog)
     return normalized ? [normalized] : []
   }
@@ -144,11 +135,15 @@ function wbcSurfaceIntentsFromActivity(rawEvent, catalog) {
       surfaceId: surface.id,
       resource: location,
       activity: access,
-      attention: activityAttention(presentation, wbcSurfaceResourceKey(location)),
+      attention: activityAttention(presentation),
       chatId: event.chatId || event.chat_id || payload.chatId || payload.chat_id,
       runId: event.runId || event.run_id || payload.runId || payload.run_id,
       priority: surface.priority,
       lifetime: surface.lifetime,
+      state: {
+        phase: String(presentation.phase || payload.status || ""),
+        revision: String(event.eventId || event.event_id || payload.revision || payload.createdAt || ""),
+      },
     }, surfaces)
     if (normalized) intents.push(normalized)
   }
@@ -245,6 +240,9 @@ function wbcRevealSurface(layoutValue, rawIntent, options) {
   }
   if (intent.attention !== SURFACE_ATTENTION.REVEAL) {
     return { layout: layoutValue, outcome: SURFACE_OUTCOMES.OBSERVED, cardId: "", reason: "update-only" }
+  }
+  if (typeof opts.canOpen === "function" && opts.canOpen(intent) === false) {
+    return { layout: layoutValue, outcome: SURFACE_OUTCOMES.OBSERVED, cardId: "", reason: "run-reveal-limit" }
   }
   const card = surfaceCard(intent, now)
   const sides = preferredSides(intent, layout)

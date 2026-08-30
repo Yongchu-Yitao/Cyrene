@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from cyrene.runtime import database as db
-from cyrene.model_runtime.pricing import (
+from cyrene.platform import database as db
+from cyrene.model.pricing import (
     cost_from_cny,
     cost_to_cny,
     effective_price,
@@ -64,7 +64,7 @@ def test_price_hint_and_user_price_parsing():
 
 
 def test_explicit_user_price_overrides_built_in(monkeypatch):
-    monkeypatch.setattr("cyrene.model_runtime.pricing.configured_user_price", lambda model: None)
+    monkeypatch.setattr("cyrene.model.pricing.configured_user_price", lambda model: None)
     assert effective_price("gpt-5.5", "9/10") == {
         "input": 9.0,
         "output": 10.0,
@@ -73,7 +73,7 @@ def test_explicit_user_price_overrides_built_in(monkeypatch):
 
 
 def test_unset_price_uses_catalog_for_known_model(monkeypatch):
-    monkeypatch.setattr("cyrene.model_runtime.pricing.configured_user_price", lambda model: None)
+    monkeypatch.setattr("cyrene.model.pricing.configured_user_price", lambda model: None)
 
     assert effective_price("deepseek-v4-flash") == {
         "input": 1.0,
@@ -84,7 +84,7 @@ def test_unset_price_uses_catalog_for_known_model(monkeypatch):
 
 
 def test_unset_price_is_zero_for_unknown_model(monkeypatch):
-    monkeypatch.setattr("cyrene.model_runtime.pricing.configured_user_price", lambda model: None)
+    monkeypatch.setattr("cyrene.model.pricing.configured_user_price", lambda model: None)
 
     assert effective_price("private-unknown-model") == {
         "input": 0.0,
@@ -127,7 +127,7 @@ def test_estimate_cost_uses_cache_hit_price():
 
 def test_db_estimate_cost_uses_saved_custom_price(monkeypatch):
     monkeypatch.setattr(
-        "cyrene.model_runtime.pricing.configured_user_price",
+        "cyrene.model.pricing.configured_user_price",
         lambda model: {"input": 7.25, "output": 14.5, "currency": "CNY"},
     )
     assert db._estimate_cost("custom-model", 1_000_000, 1_000_000) == pytest.approx(21.75)
@@ -135,7 +135,7 @@ def test_db_estimate_cost_uses_saved_custom_price(monkeypatch):
 
 def test_db_estimate_cost_normalizes_usd_price_to_cny(monkeypatch):
     monkeypatch.setattr(
-        "cyrene.model_runtime.pricing.configured_user_price",
+        "cyrene.model.pricing.configured_user_price",
         lambda model: {"input": 1.0, "output": 2.0, "cache_hit": 0.1, "currency": "USD"},
     )
     assert db._estimate_cost(

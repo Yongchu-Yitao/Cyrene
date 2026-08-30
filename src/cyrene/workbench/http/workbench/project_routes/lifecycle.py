@@ -31,6 +31,8 @@ def _project_error(exc: Exception):
             ("Workspace path is invalid.", "工作区路径无效。"),
         )
         return error_response(localized(en, zh), 400, exc.code)
+    if isinstance(exc, ValueError):
+        return error_response(str(exc), 400, "invalid_project_execution_config")
     return error_response(
         localized("Project not found.", "未找到项目。"),
         404,
@@ -44,14 +46,14 @@ def register_project_lifecycle_routes(
 ) -> None:
     @router.patch("/api/workbench/activate")
     async def api_workbench_activate(body: api_models.WorkbenchActivateBody):
-        selection = await projects.activate(body.projectId, body.sessionId)
+        selection = await projects.activate(body.projectId)
         return {"ok": True, **selection}
 
     @router.post("/api/projects")
     async def api_workbench_create_project(body_model: api_models.ProjectCreateBody):
         try:
             return projects.create(api_models.body_dict(body_model))
-        except WorkspacePathError as exc:
+        except (WorkspacePathError, ValueError) as exc:
             return _project_error(exc)
 
     @router.patch("/api/projects/{project_id}")
@@ -61,7 +63,7 @@ def register_project_lifecycle_routes(
     ):
         try:
             return projects.update(project_id, api_models.body_dict(body_model))
-        except (ProjectNotFoundError, WorkspacePathError) as exc:
+        except (ProjectNotFoundError, WorkspacePathError, ValueError) as exc:
             return _project_error(exc)
 
     @router.delete("/api/projects/{project_id}")

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.runtime import storage
+from cyrene.platform import storage
 
 
 @pytest.fixture

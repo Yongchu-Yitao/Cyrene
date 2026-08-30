@@ -1,4 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { PluginFrontendService } from "../../platform/plugins.jsx"
 import { WBC_ICONS, WBC_OFFICE_MAX_FILE_BYTES, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcFileViewKind, wbcHardenOfficeLinks, wbcLoadOfficeRenderer, wbcRenderMapMarkdown, wbcRenderMarkdown, wbcT, wbcValidateOfficeArchive } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, useWbcMapData, wbcCanEditProjectTextFile, wbcMapItemKey, wbcProjectFileDraftKey, wbcProjectFileEditUrl, wbcZoomAnchorRestorer } from "./split-pane.jsx"
 import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcHtmlPreviewDocument } from "./file-resources.jsx"
@@ -645,6 +646,13 @@ function WbcMarkdownRenderedEditor({ value, onChange, onSave, onLinkClick, conta
 
 function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode, onHtmlModeChange, markdownMode: controlledMarkdownMode, onMarkdownModeChange, onDirtyChange }) {
   var kind = wbcFileViewKind(file);
+  var [pluginSnapshot, setPluginSnapshot] = useWbcState(function () { return PluginFrontendService.snapshot(); });
+  useWbcEffect(function () { return PluginFrontendService.subscribe(setPluginSnapshot); }, []);
+  var contributedFileType = pluginSnapshot.loaded ? PluginFrontendService.fileTypeFor(
+    file && (file.path || file.name),
+    file && (file.content_type || file.contentType)
+  ) : null;
+  if (kind === "download" && contributedFileType && contributedFileType.editable === true) kind = "code";
   var [text, setText] = useWbcState("");
   var [localHtmlMode, setLocalHtmlMode] = useWbcState("rendered");
   var htmlMode = controlledHtmlMode || localHtmlMode;
@@ -775,6 +783,23 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     window.addEventListener("beforeunload", warnBeforeUnload);
     return function () { window.removeEventListener("beforeunload", warnBeforeUnload); };
   }, [editorDirty]);
+
+  useWbcEffect(function () {
+    if (!editUrl || !file || !file.projectId || !file.path) return undefined;
+    function onWorkspaceFileChanged(event) {
+      var detail = event && event.detail || {};
+      if (String(detail.projectId || "") !== String(file.projectId || "")
+        || String(detail.path || "") !== String(file.path || "")) return;
+      if (editorDirtyRef.current) {
+        setEditorConflict({ external: true, version: String(detail.version || "") });
+        setEditorAutoSavePaused(true);
+        return;
+      }
+      reloadEditor();
+    }
+    window.addEventListener("cyrene:workspace-file-changed", onWorkspaceFileChanged);
+    return function () { window.removeEventListener("cyrene:workspace-file-changed", onWorkspaceFileChanged); };
+  }, [editUrl, file && file.projectId, file && file.path]);
 
   useWbcEffect(function () {
     if (!editUrl || textLoading || !editorDirty || editorSaving || editorConflict || editorAutoSavePaused) return undefined;
@@ -920,6 +945,7 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     fetch(editUrl, { cache: "no-store" }).then(readEditorResponse).then(function (payload) {
       if (draftKey) delete WBC_PROJECT_FILE_DRAFTS[draftKey];
       applyLoadedEditor(payload, false);
+      setFailed(false);
     }).catch(function (error) {
       workbenchServices.feedback().showToast(
         error.message || wbcT("workbenchChat.viewerLoadFailed", "File failed to load."),
@@ -1077,6 +1103,11 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
   return (
     <div className="wbc-viewer">
       {(!hideHeader || kind === "image") && head}
+      {editorConflict ? <div className="wbc-editor-external-conflict" role="status">
+        <span>{wbcT("workbenchChat.editorExternalChange", "This file changed outside the editor.")}</span>
+        <button type="button" onClick={reloadEditor}>{wbcT("workbenchChat.editorReload", "Reload latest")}</button>
+        <button type="button" onClick={function () { setEditorConflict(null); setEditorAutoSavePaused(true); }}>{wbcT("workbenchChat.editorKeepDraft", "Keep draft")}</button>
+      </div> : null}
       {body}
     </div>
   );

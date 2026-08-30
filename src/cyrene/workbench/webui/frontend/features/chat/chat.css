@@ -66,14 +66,126 @@ html[data-theme="dark"] .wbc-page {
 .wbc-page.wbc-nav-collapsed {
   --wbc-rail-width: 64px;
 }
+
+/* Column resizing is direct manipulation. Keep the grid edge under the
+   pointer and disable the under-damped open/close transition while dragging;
+   its overshoot can otherwise push a maximized panel past the viewport. */
+body.wb-col-resizing .wbc-page {
+  transition: none;
+}
+
 /* Pin each column explicitly; with the reserved 0-width second track the DOM
    order (rail, main, side) no longer matches the track order. */
 .wbc-page > .wbc-rail { grid-column: 1; }
 .wbc-page > .wbc-main { grid-column: 3; }
 .wbc-page > .wbc-side { grid-column: 4; }
+.wbc-page > .wbc-external-workspace-host {
+  grid-column: 3 / 5;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Preserve the established board canvas after moving it into the shared Work
+   page. The rail floats above the full-width canvas: its initial inset keeps
+   the first column visible, while horizontal scrolling can still carry board
+   content underneath the glass rail. */
+.wbc-page.wbc-external-workspace {
+  --wb-conversation-board-rail-reserve: var(--wbc-rail-width);
+  --wb-conversation-board-edge-gap: 12px;
+  --wb-conversation-board-canvas-gutter: 22px;
+}
+
+.wbc-page.wbc-external-workspace > .wbc-rail {
+  z-index: 30;
+}
+
+.workbench-grid.integrated-sidebars .wbc-page.wbc-external-workspace > .wbc-rail.workbench-integrated-rail {
+  /* Reuse the message input's glass recipe exactly. Dark mode provides
+     --wb-composer-surface; the fallback is the input's light-mode material. */
+  background: var(--wb-composer-surface, color-mix(in srgb, #fff 76%, transparent));
+  -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
+  backdrop-filter: var(--wbc-composer-glass-filter);
+}
+
+.wbc-page.wbc-external-workspace > .wbc-external-workspace-host {
+  grid-column: 1 / 5;
+  position: relative;
+  z-index: 0;
+}
+
+/* The Chat grid extends behind the fixed 58px topbar. Restore the board's
+   original 24px content inset below that bar so the kicker and project name
+   are never painted underneath it. */
+.wbc-page.wbc-external-workspace .workbench-conversation-board {
+  padding-top: calc(var(--wbc-card-top-inset) + 24px);
+}
+
+.wbc-page.wbc-external-workspace :is(
+  .wb-board-header,
+  .wb-board-error,
+  .wb-board-loading,
+  .wb-board-empty-overall,
+  .wb-board-default-empty-hint
+) {
+  margin-left: var(--wb-conversation-board-rail-reserve);
+  transition: margin-left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.wbc-page.wbc-external-workspace .wb-board-columns {
+  box-sizing: border-box;
+  min-width: calc(1748px + var(--wb-conversation-board-rail-reserve) + var(--wb-conversation-board-edge-gap) + var(--wb-conversation-board-canvas-gutter));
+  grid-template-columns: repeat(5, minmax(340px, 1fr));
+  padding-left: calc(var(--wb-conversation-board-rail-reserve) + var(--wb-conversation-board-canvas-gutter));
+  padding-right: var(--wb-conversation-board-edge-gap);
+  transition:
+    min-width var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
+    padding-left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
+}
+
+.wbc-page.wbc-external-workspace .wb-board-scroll {
+  margin-inline: calc(0px - var(--wb-conversation-board-canvas-gutter));
+  scrollbar-width: none;
+}
+
+.wbc-page.wbc-external-workspace .wb-board-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.wbc-page.wbc-external-workspace .wb-board-card {
+  width: 100%;
+  height: calc(140px * var(--wb-ui-font-scale, 1));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-page.wbc-external-workspace :is(
+    .wb-board-header,
+    .wb-board-error,
+    .wb-board-loading,
+    .wb-board-empty-overall,
+    .wb-board-default-empty-hint,
+    .wb-board-columns
+  ) {
+    transition: none;
+  }
+}
+
+@media (max-width: 1040px) {
+  .wbc-page.wbc-external-workspace .workbench-conversation-board {
+    padding-top: calc(var(--wbc-card-top-inset) + 20px);
+  }
+}
+
 .wbc-page > .wbc-rail,
 .wbc-page > .wbc-side,
 .wbc-page > .wbc-pane-layout { grid-row: 1; }
+
+/* Work and Board share this live rail instance. Replacing only the content
+   tracks preserves rail expansion, scroll, selection, and transient state. */
+.wbc-page.wbc-external-workspace > :not(.wbc-rail):not(.wbc-external-workspace-host) {
+  display: none !important;
+}
 
 /* Collapse the right panel when hidden via the × / show button toggle. */
 .wbc-page.wbc-side-hidden {
@@ -1716,67 +1828,6 @@ span.wbc-chat-group-toggle {
   display: none;
 }
 
-/* A task opened from Work is still a project-owned workspace, but unlike a
-   bare file it has a real detail inspector. Reuse the conversation page's
-   fourth track so hide/show and width resizing follow the same geometry. */
-.wbc-page.wbc-project-pane-only.wbc-project-task-pane {
-  /* Restore the same responsive dock width used by a conversation. The
-     project-only base collapses this track for bare files, while tasks own a
-     real inspector. */
-  --wbc-side-track-width: var(--wbc-docked-side-open-width);
-  grid-template-columns:
-    var(--wbc-rail-width)
-    0px
-    minmax(var(--wbc-main-min-width), 1fr)
-    var(--wbc-side-track-width);
-}
-
-.wbc-page.wbc-side-hidden.wbc-project-pane-only.wbc-project-task-pane {
-  --wbc-side-track-width: 0px;
-  grid-template-columns:
-    var(--wbc-rail-width)
-    0px
-    minmax(0, 1fr)
-    0px;
-}
-
-.wbc-page.wbc-project-pane-only.wbc-project-task-pane > .wbc-pane-layout.single {
-  grid-column: 2 / 4;
-  padding-right: 0;
-  transition:
-    grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1),
-    padding-right var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
-}
-
-.wbc-page.wbc-side-hidden.wbc-project-pane-only.wbc-project-task-pane > .wbc-pane-layout.single {
-  /* Keep the same grid lines while the inspector track collapses. Changing
-     the end line to 5 is a discrete layout jump, which made the task canvas
-     appear to snap closed even though the page grid itself was animating. */
-  grid-column: 2 / 4;
-  padding-right: var(--wbc-card-gutter);
-}
-
-.wbc-page.wbc-project-task-pane:not(.wbc-project-pane-only) > .wbc-pane-layout.single {
-  grid-column: 3;
-  padding-right: 0;
-}
-
-.wbc-page > .wbc-task-context-panel {
-  grid-column: 4;
-  grid-row: 1;
-  height: 100%;
-  padding: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);
-  border: 0;
-  background: transparent;
-  overflow: visible;
-}
-
-.wbc-page > .wbc-task-context-panel > .wb-task-detail-card {
-  width: 100%;
-  max-height: calc(100vh - var(--wbc-card-top-inset) - var(--wbc-card-gutter));
-  background: var(--wbc-panel-surface);
-}
-
 .wbc-pane-column {
   position: relative;
   min-width: 0;
@@ -1929,7 +1980,7 @@ span.wbc-chat-group-toggle {
   grid-row: 1;
 }
 
-.wbc-pane-context-drop-sensor.left {
+.wbc-pane-context-drop-sensor.replace {
   grid-column: 1;
   grid-row: 2;
 }
@@ -1957,7 +2008,7 @@ span.wbc-chat-group-toggle {
   border-radius: 17px 17px 8px 8px;
 }
 
-.wbc-pane-card-drop-zone.context-preview.left {
+.wbc-pane-card-drop-zone.context-preview.replace {
   grid-column: 1;
   grid-row: 2;
   margin-left: calc(var(--wbc-card-gutter) - 4px);
@@ -3722,18 +3773,7 @@ html[data-platform="darwin"] .wbc-browser-split.maximized .wbc-side-agent-split-
   flex: 0 0 auto;
 }
 
-.wbc-totask {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.wbc-totask.is-busy {
-  cursor: progress;
-}
-
-/* Inline spinner shown on the primary "转为任务" button while the backend reads
-   the full conversation and synthesizes the task. */
+/* Compact spinner shared by async conversation controls. */
 .wbc-spinner {
   width: 13px;
   height: 13px;
@@ -3743,23 +3783,6 @@ html[data-platform="darwin"] .wbc-browser-split.maximized .wbc-side-agent-split-
   opacity: 0.85;
   animation: wb-spin 0.7s linear infinite;
   flex: 0 0 auto;
-}
-
-/* "已转为任务 → <title>" note in the chat overview, so the original chat is
-   visibly preserved and linked to the task it produced. */
-.wbc-converted-note {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--wb-control-hover-bg);
-  color: var(--wb-muted);
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  line-height: 1.5;
-}
-
-.wbc-converted-note b {
-  color: var(--wb-text);
-  font-weight: 600;
 }
 
 .wbc-icon-btn {

@@ -61,6 +61,7 @@ class ContextTreeStore:
         self._deleted = False
         self._connection = connect(self.database)
         ensure_tree_schema(self._connection)
+        self._backfill_token_counts()
         self.hooks = TreeHookStore(self._connection, self._lock)
 
         try:
@@ -179,8 +180,58 @@ class ContextTreeStore:
     def _now(self) -> datetime:
         return normalize_time(self._clock())
 
+    def _count_tokens(self, value: Any) -> int:
+        count = self._token_counter(value)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError("token_counter must return a non-negative integer")
+        return count
+
+    def _backfill_token_counts(self) -> None:
+        """Calculate counters once for databases created before token caching."""
+
+        missing = self._connection.execute(
+            "SELECT 1 FROM context_nodes "
+            "WHERE self_token_count IS NULL OR path_token_count IS NULL LIMIT 1"
+        ).fetchone()
+        if missing is None:
+            return
+        rows = self._connection.execute(
+            """
+            WITH RECURSIVE ordered(node_id, parent_id, value_json, depth) AS (
+                SELECT node_id, parent_id, value_json, 0
+                FROM context_nodes WHERE parent_id IS NULL
+                UNION ALL
+                SELECT child.node_id, child.parent_id, child.value_json,
+                       ordered.depth + 1
+                FROM context_nodes AS child
+                JOIN ordered ON child.parent_id = ordered.node_id
+            )
+            SELECT node_id, parent_id, value_json
+            FROM ordered ORDER BY depth, node_id
+            """
+        ).fetchall()
+        path_tokens: dict[str, int] = {}
+        updates: list[tuple[int, int, str]] = []
+        for row in rows:
+            node_id = str(row["node_id"])
+            parent_id = (
+                str(row["parent_id"]) if row["parent_id"] is not None else None
+            )
+            self_tokens = self._count_tokens(decode_value(str(row["value_json"])))
+            path_total = self_tokens + (path_tokens.get(parent_id, 0) if parent_id else 0)
+            path_tokens[node_id] = path_total
+            updates.append((self_tokens, path_total, node_id))
+        if updates:
+            with transaction(self._connection):
+                self._connection.executemany(
+                    "UPDATE context_nodes SET self_token_count = ?, "
+                    "path_token_count = ? WHERE node_id = ?",
+                    updates,
+                )
+
     def _initialize_tree(self, tree_id: str, root_id: str, root_value: Any) -> ContextTree:
         encoded = encode_value(root_value)
+        self_tokens = self._count_tokens(root_value)
         created_at = self._now()
         timestamp = created_at.isoformat()
         with transaction(self._connection):
@@ -199,10 +250,11 @@ class ContextTreeStore:
             self._connection.execute(
                 """
                 INSERT INTO context_nodes(
-                    node_id, parent_id, value_json, created_at, updated_at
-                ) VALUES (?, NULL, ?, ?, ?)
+                    node_id, parent_id, value_json, self_token_count,
+                    path_token_count, created_at, updated_at
+                ) VALUES (?, NULL, ?, ?, ?, ?, ?)
                 """,
-                (root_id, encoded, timestamp, timestamp),
+                (root_id, encoded, self_tokens, self_tokens, timestamp, timestamp),
             )
         return ContextTree(tree_id, root_id, created_at)
 
@@ -233,34 +285,48 @@ class ContextTreeStore:
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
 
-    def _context_usage(self, node_id: str, time: datetime) -> ContextUsed:
-        rows = self._connection.execute(
+    def _context_usage(
+        self,
+        node_id: str,
+        time: datetime,
+        *,
+        include_node_tokens: bool,
+    ) -> ContextUsed:
+        row = self._connection.execute(
+            "SELECT path_token_count FROM context_nodes WHERE node_id = ?",
+            (str(node_id),),
+        ).fetchone()
+        if row is None:
+            raise NodeNotFoundError(
+                f"context node not found in tree {self._tree.id}: {node_id}"
+            )
+        tokens = int(row["path_token_count"] or 0)
+        node_tokens: dict[str, int] = {}
+        if include_node_tokens:
+            rows = self._connection.execute(
             """
             WITH RECURSIVE ancestors(
-                node_id, parent_id, value_json, depth
+                node_id, parent_id, self_token_count, depth
             ) AS (
-                SELECT node_id, parent_id, value_json, 0
+                SELECT node_id, parent_id, self_token_count, 0
                 FROM context_nodes
                 WHERE node_id = ?
                 UNION ALL
-                SELECT parent.node_id, parent.parent_id, parent.value_json,
+                SELECT parent.node_id, parent.parent_id, parent.self_token_count,
                        ancestors.depth + 1
                 FROM context_nodes AS parent
                 JOIN ancestors ON parent.node_id = ancestors.parent_id
             )
-            SELECT node_id, value_json
+            SELECT node_id, self_token_count
             FROM ancestors
             ORDER BY depth DESC
             """,
             (str(node_id),),
-        ).fetchall()
-        node_tokens: dict[str, int] = {}
-        for row in rows:
-            count = self._token_counter(decode_value(str(row["value_json"])))
-            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-                raise ValueError("token_counter must return a non-negative integer")
-            node_tokens[str(row["node_id"])] = count
-        tokens = sum(node_tokens.values())
+            ).fetchall()
+            node_tokens = {
+                str(ancestor["node_id"]): int(ancestor["self_token_count"] or 0)
+                for ancestor in rows
+            }
         usage = ContextUsed(
             tree_id=self._tree.id,
             node_id=str(node_id),
@@ -296,17 +362,26 @@ class ContextTreeStore:
             )
         )
         if report_usage:
-            usage = self._context_usage(change.node_id, change.time)
-            usage_deliveries = self.hooks.enqueue(
-                HookEvent(
-                    CONTEXT_USED,
-                    usage.tree_id,
-                    usage.time,
-                    payload=usage,
-                    node_id=usage.node_id,
-                    is_root=usage.node_id == self._tree.root_id,
+            if self.hooks.has_enabled_hook(CONTEXT_USED):
+                usage = self._context_usage(
+                    change.node_id,
+                    change.time,
+                    include_node_tokens=(
+                        self.hooks.context_used_node_tokens_required()
+                    ),
                 )
-            )
+                usage_deliveries = self.hooks.enqueue(
+                    HookEvent(
+                        CONTEXT_USED,
+                        usage.tree_id,
+                        usage.time,
+                        payload=usage,
+                        node_id=usage.node_id,
+                        is_root=usage.node_id == self._tree.root_id,
+                    )
+                )
+            else:
+                usage_deliveries = 0
         else:
             usage_deliveries = 0
         log_operation(
@@ -372,7 +447,8 @@ class ContextTreeStore:
     def _require_node_row(self, node_id: str) -> sqlite3.Row:
         row = self._connection.execute(
             """
-            SELECT node_id, parent_id, value_json, created_at, updated_at
+            SELECT node_id, parent_id, value_json, self_token_count,
+                   path_token_count, created_at, updated_at
             FROM context_nodes
             WHERE node_id = ?
             """,
@@ -414,20 +490,31 @@ class ContextTreeStore:
             value=value,
         )
         encoded = encode_value(value)
+        self_tokens = self._count_tokens(value)
         created_at = self._now()
         timestamp = created_at.isoformat()
         with self._lock:
             self._ensure_available()
             try:
                 with transaction(self._connection):
-                    self._require_node_row(parent_id)
+                    parent = self._require_node_row(parent_id)
+                    parent_path_tokens = int(parent["path_token_count"] or 0)
                     self._connection.execute(
                         """
                         INSERT INTO context_nodes(
-                            node_id, parent_id, value_json, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?)
+                            node_id, parent_id, value_json, self_token_count,
+                            path_token_count, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (node_id, parent_id, encoded, timestamp, timestamp),
+                        (
+                            node_id,
+                            parent_id,
+                            encoded,
+                            self_tokens,
+                            parent_path_tokens + self_tokens,
+                            timestamp,
+                            timestamp,
+                        ),
                     )
                     self._enqueue_change(
                         ContextChange(
@@ -453,6 +540,58 @@ class ContextTreeStore:
         )
         return node
 
+    def save_effect_result(
+        self,
+        assistant_node_id: str,
+        call_id: str,
+        result: Any,
+    ) -> None:
+        """Persist one in-flight tool result without rewriting its Assistant."""
+
+        assistant_node_id = str(assistant_node_id)
+        call_id = str(call_id)
+        encoded = encode_value(result)
+        timestamp = self._now().isoformat()
+        with self._lock:
+            self._ensure_available()
+            with transaction(self._connection):
+                self._require_node_row(assistant_node_id)
+                self._connection.execute(
+                    """
+                    INSERT INTO context_effect_results(
+                        assistant_node_id, call_id, result_json,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(assistant_node_id, call_id) DO UPDATE SET
+                        result_json = excluded.result_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (assistant_node_id, call_id, encoded, timestamp, timestamp),
+                )
+
+    def effect_results(self, assistant_node_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._ensure_available()
+            rows = self._connection.execute(
+                "SELECT call_id, result_json FROM context_effect_results "
+                "WHERE assistant_node_id = ? ORDER BY created_at, call_id",
+                (str(assistant_node_id),),
+            ).fetchall()
+        return {
+            str(row["call_id"]): decode_value(str(row["result_json"]))
+            for row in rows
+        }
+
+    def clear_effect_results(self, assistant_node_id: str) -> int:
+        with self._lock:
+            self._ensure_available()
+            with transaction(self._connection):
+                cursor = self._connection.execute(
+                    "DELETE FROM context_effect_results WHERE assistant_node_id = ?",
+                    (str(assistant_node_id),),
+                )
+        return max(0, cursor.rowcount)
+
     def update_node(self, node_id: str, value: Any) -> ContextNode:
         node_id = str(node_id)
         log_operation(
@@ -465,16 +604,35 @@ class ContextTreeStore:
             value=value,
         )
         encoded = encode_value(value)
+        self_tokens = self._count_tokens(value)
         updated_at = self._now()
         timestamp = updated_at.isoformat()
         with self._lock:
             self._ensure_available()
             with transaction(self._connection):
                 existing = self._require_node_row(node_id)
+                token_delta = self_tokens - int(existing["self_token_count"] or 0)
                 self._connection.execute(
-                    "UPDATE context_nodes SET value_json = ?, updated_at = ? WHERE node_id = ?",
-                    (encoded, timestamp, node_id),
+                    "UPDATE context_nodes SET value_json = ?, self_token_count = ?, "
+                    "updated_at = ? WHERE node_id = ?",
+                    (encoded, self_tokens, timestamp, node_id),
                 )
+                if token_delta:
+                    self._connection.execute(
+                        """
+                        WITH RECURSIVE descendants(node_id) AS (
+                            SELECT node_id FROM context_nodes WHERE node_id = ?
+                            UNION ALL
+                            SELECT child.node_id
+                            FROM context_nodes AS child
+                            JOIN descendants ON child.parent_id = descendants.node_id
+                        )
+                        UPDATE context_nodes
+                        SET path_token_count = path_token_count + ?
+                        WHERE node_id IN (SELECT node_id FROM descendants)
+                        """,
+                        (node_id, token_delta),
+                    )
                 self._enqueue_change(
                     ContextChange(
                         self._tree.id,
@@ -524,12 +682,14 @@ class ContextTreeStore:
 
         node_id = str(node_id)
         encoded = encode_value(value)
+        self_tokens = self._count_tokens(value)
         updated_at = self._now()
         timestamp = updated_at.isoformat()
         with self._lock:
             self._ensure_available()
             with transaction(self._connection):
                 existing = self._require_node_row(node_id)
+                token_delta = self_tokens - int(existing["self_token_count"] or 0)
                 subtree = self.get_subtree(node_id)
                 actual_ids = tuple(node.id for node in subtree)
                 if expected_node_ids is not None and actual_ids != tuple(
@@ -554,8 +714,10 @@ class ContextTreeStore:
                         (node_id,),
                     )
                 self._connection.execute(
-                    "UPDATE context_nodes SET value_json = ?, updated_at = ? WHERE node_id = ?",
-                    (encoded, timestamp, node_id),
+                    "UPDATE context_nodes SET value_json = ?, self_token_count = ?, "
+                    "path_token_count = path_token_count + ?, updated_at = ? "
+                    "WHERE node_id = ?",
+                    (encoded, self_tokens, token_delta, timestamp, node_id),
                 )
                 update_change = ContextChange(
                     self._tree.id,

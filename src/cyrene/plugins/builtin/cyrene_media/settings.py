@@ -8,7 +8,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from cyrene.runtime.settings_store import get as get_setting, update_atomic
+from cyrene.platform.settings_store import get as get_setting, update_atomic
 
 
 PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {

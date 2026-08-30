@@ -9,7 +9,7 @@ from .store import SoulApplication
 
 
 def application_setup(context: PluginApplicationContext) -> None:
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )

@@ -301,6 +301,7 @@ def plugin_registry_status(host: PluginApplicationHost) -> dict[str, Any]:
         "workbench_surfaces": frontend["surfaces"],
         "workspace_file_types": frontend["file_types"],
         "workspace_actions": frontend["actions"],
+        "workspace_project_types": frontend["project_types"],
     }
 
 
@@ -545,7 +546,7 @@ def register_plugin_routes(
             registered = host.registry.customize_tool(canonical_name, body)
             if registered is None:
                 raise RuntimeError("Tool was unexpectedly deleted")
-            from cyrene.runtime import settings_store
+            from cyrene.platform import settings_store
 
             settings_store.set_(
                 "plugin_tool_customizations",
@@ -572,7 +573,7 @@ def register_plugin_routes(
     async def api_delete_plugin_tool(canonical_name: str):
         try:
             host.registry.customize_tool(canonical_name, {"deleted": True})
-            from cyrene.runtime import settings_store
+            from cyrene.platform import settings_store
 
             settings_store.set_(
                 "plugin_tool_customizations",

@@ -388,7 +388,7 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
                     {
                         "id": "read-file",
                         "name": "Read",
-                        "arguments": {"path": "answer.txt"},
+                        "arguments": {"path": str(answer_path)},
                     }
                 ],
                 "usage": {"prompt_tokens": 10},
@@ -405,7 +405,8 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "answer.txt").write_text("forty-two", encoding="utf-8")
+    answer_path = tmp_path / "answer.txt"
+    answer_path.write_text("forty-two", encoding="utf-8")
     plugin_directory = tmp_path / "plugin_impl"
     plugin_directory.mkdir()
     registry = PluginRegistry()
@@ -430,6 +431,9 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
         workspace,
         plugin_directory,
         registry=registry,
+        plugin_context_data={
+            "run_context": {"agent_id": "main", "permission_mode": "auto"}
+        },
     )
     registry.register_pack(
         PluginPack(

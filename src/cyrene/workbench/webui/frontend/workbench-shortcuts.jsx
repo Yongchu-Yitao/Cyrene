@@ -3,8 +3,8 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
 //
 // Goals:
 //   • One source of truth for the global workbench shortcuts (search, new chat,
-//     new task, command palette, switch project …) and the composer "send"
-//     binding used by the chat / task input boxes.
+//     new conversation, command palette, switch project …) and the composer
+//     "send" binding used by conversation inputs.
 //   • Platform-aware by default: `mod` resolves to ⌘ on macOS / iOS and Ctrl
 //     everywhere else (Windows, Linux, Electron). The active binding is read
 //     from the event's metaKey/ctrlKey flags so a Mac user with a Windows
@@ -74,14 +74,6 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
       group: "global",
       allowRebind: true,
       keys: ["mod", "N"],
-    },
-    {
-      id: "new-task",
-      labelKey: "shortcut.action.newTask",
-      descKey: "shortcut.action.newTaskDesc",
-      group: "global",
-      allowRebind: true,
-      keys: ["mod", "T"],
     },
     {
       id: "command-palette",

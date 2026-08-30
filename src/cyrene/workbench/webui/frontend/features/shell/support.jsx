@@ -32,7 +32,7 @@ function wbShortcutKey(token, isMac) {
   return token;
 }
 
-function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }) {
+function WorkbenchHelpCenter({ onNewProject, onOpenPage, onSettings }) {
   var { t } = workbenchServices.i18n().use();
   var dataState = workbenchServices.data().state;
   var [open, setOpen] = useWorkbenchState(false);
@@ -89,11 +89,6 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
       id: "new-project", tone: "blue", title: t("help.newProject"), desc: t("help.newProjectDesc"),
       icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/><path d="M7 14h7M7 17h4"/></svg>,
       action: function () { onNewProject && onNewProject(); },
-    },
-    {
-      id: "new-task", tone: "green", title: t("help.createTask"), desc: t("help.createTaskDesc"),
-      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><path d="m8 12 2.8 2.8L16.5 9"/></svg>,
-      action: function () { onNewTask && onNewTask(); },
     },
     {
       id: "knowledge", tone: "amber", title: t("help.uploadKnowledge"), desc: t("help.uploadKnowledgeDesc"),
@@ -191,14 +186,121 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
   );
 }
 
+function wbProjectExecutionAction(value, index) {
+  var item = value && typeof value === "object" ? value : {};
+  return {
+    id: String(item.id || "custom-" + (index + 1)),
+    label: String(item.label || ""),
+    kind: String(item.kind || "run"),
+    program: String(item.program || ""),
+    argsText: Array.isArray(item.args) ? item.args.join(" ") : String(item.argsText || ""),
+    artifactPatternsText: Array.isArray(item.artifactPatterns) ? item.artifactPatterns.join(", ") : String(item.artifactPatternsText || ""),
+    cwd: String(item.cwd || "."),
+    longRunning: item.longRunning === true,
+    previewPort: item.previewPort == null ? "" : String(item.previewPort),
+    source: String(item.source || "user"),
+    readyPattern: String(item.readyPattern || ""),
+  };
+}
+
+function wbProjectExecutionPayload(actions) {
+  return (actions || []).map(function (item, index) {
+    var args = String(item.argsText || "").match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+    return {
+      id: String(item.id || "custom-" + (index + 1)).trim(),
+      label: String(item.label || item.id || "").trim(),
+      kind: String(item.kind || "run"),
+      program: String(item.program || "").trim(),
+      args: args.map(function (value) { return value.replace(/^"|"$/g, ""); }),
+      artifactPatterns: String(item.artifactPatternsText || "").split(",").map(function (value) { return value.trim(); }).filter(Boolean),
+      cwd: String(item.cwd || ".").trim() || ".",
+      longRunning: item.longRunning === true,
+      previewPort: item.previewPort === "" ? null : Number(item.previewPort),
+      readyPattern: String(item.readyPattern || ""),
+    };
+  });
+}
+
+function WorkbenchProjectExecutionEditor({ actions, busy, detecting, onAdd, onDetect, onRemove, onUpdate, scope, setScope, t }) {
+  return <React.Fragment>
+    <div className="workbench-project-execution-heading">
+      <span><b>{t("project.execution.title")}</b><small>{t("project.execution.optional")}</small></span>
+      <button type="button" className="wb-btn ghost compact" disabled={detecting || busy} onClick={onDetect}>
+        {detecting ? t("common.loading") : t("project.execution.detect")}
+      </button>
+    </div>
+    <label htmlFor="workbench-project-execution-scope">{t("project.execution.scope")}</label>
+    <input id="workbench-project-execution-scope" value={scope} onChange={function (e) { setScope(e.target.value); }} placeholder="." />
+    <div className="workbench-project-actions" aria-label={t("project.execution.actions")}>
+      {actions.length ? actions.map(function (action, index) {
+        return <div className="workbench-project-action-row" key={action.id + ":" + index}>
+          <select value={action.kind} aria-label={t("project.execution.kind")} onChange={function (e) { onUpdate(index, "kind", e.target.value); }}>
+            <option value="run">{t("project.execution.kind.run")}</option><option value="build">{t("project.execution.kind.build")}</option><option value="test">{t("project.execution.kind.test")}</option><option value="preview">{t("project.execution.kind.preview")}</option>
+          </select>
+          <input value={action.label} aria-label={t("project.execution.label")} placeholder={t("project.execution.label")} onChange={function (e) { onUpdate(index, "label", e.target.value); }} />
+          <input value={action.program} aria-label={t("project.execution.program")} placeholder={t("project.execution.program")} onChange={function (e) { onUpdate(index, "program", e.target.value); }} />
+          <input value={action.argsText} aria-label={t("project.execution.args")} placeholder={t("project.execution.args")} onChange={function (e) { onUpdate(index, "argsText", e.target.value); }} />
+          <input value={action.artifactPatternsText} aria-label={t("project.execution.artifacts")} placeholder={t("project.execution.artifacts")} onChange={function (e) { onUpdate(index, "artifactPatternsText", e.target.value); }} />
+          <input value={action.cwd} aria-label={t("project.execution.cwd")} placeholder="." onChange={function (e) { onUpdate(index, "cwd", e.target.value); }} />
+          <label className="workbench-project-action-check"><input type="checkbox" checked={action.longRunning} onChange={function (e) { onUpdate(index, "longRunning", e.target.checked); }} /><span>{t("project.execution.longRunning")}</span></label>
+          <input type="number" min="1" max="65535" value={action.previewPort} aria-label={t("project.execution.previewPort")} placeholder={t("project.execution.port")} onChange={function (e) { onUpdate(index, "previewPort", e.target.value); }} />
+          <button type="button" className="workbench-icon-btn" aria-label={t("common.delete")} onClick={function () { onRemove(index); }}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13" /></svg>
+          </button>
+        </div>;
+      }) : <div className="workbench-project-action-empty">{t("project.execution.empty")}</div>}
+      <button type="button" className="wb-btn ghost compact workbench-project-action-add" onClick={onAdd}>{t("project.execution.add")}</button>
+    </div>
+  </React.Fragment>;
+}
+
 function WorkbenchEditProjectModal({ project, onClose, onSave }) {
   var { t } = workbenchServices.i18n().use();
   var [name, setName] = useWorkbenchState(project.name || "");
   var [description, setDescription] = useWorkbenchState(project.description || "");
   var [workspacePath, setWorkspacePath] = useWorkbenchState(project.workspacePath || "");
   var [color, setColor] = useWorkbenchState(project.color || "#22b07a");
+  var [executionScope, setExecutionScope] = useWorkbenchState(project.executionScope || ".");
+  var [executionActions, setExecutionActions] = useWorkbenchState(function () {
+    return (project.executionActions || []).map(wbProjectExecutionAction);
+  });
+  var [detecting, setDetecting] = useWorkbenchState(false);
   var [busy, setBusy] = useWorkbenchState(false);
   var [error, setError] = useWorkbenchState("");
+  function detectActions() {
+    if (!project.id) return Promise.resolve();
+    setDetecting(true);
+    setError("");
+    return workbenchServices.api().json(
+      "/api/code/workspace-actions?projectId=" + encodeURIComponent(project.id),
+      { toast: false }
+    ).then(function (payload) {
+      setExecutionActions((payload.actions || []).map(wbProjectExecutionAction));
+      if (payload.executionScope) setExecutionScope(payload.executionScope);
+    }).catch(function (err) {
+      setError(wbErrorText(err));
+    }).finally(function () { setDetecting(false); });
+  }
+  useWorkbenchEffect(function () {
+    if (!executionActions.length) detectActions();
+  }, [project.id]);
+  function updateAction(index, field, value) {
+    setExecutionActions(function (current) {
+      return current.map(function (item, itemIndex) {
+        return itemIndex === index ? Object.assign({}, item, { [field]: value }) : item;
+      });
+    });
+  }
+  function addAction() {
+    setExecutionActions(function (current) {
+      var number = 1;
+      while (current.some(function (item) { return item.id === "custom-" + number; })) number += 1;
+      return current.concat([wbProjectExecutionAction({
+        id: "custom-" + number, label: "", kind: "run",
+        program: "", args: [], cwd: ".",
+      }, current.length)]);
+    });
+  }
   function save() {
     var trimmed = name.trim();
     if (!trimmed) { setError(t("create.project.error.nameRequired")); return; }
@@ -209,6 +311,8 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
       description: description.trim(),
       workspacePath: workspacePath.trim(),
       color: color,
+      executionScope: executionScope.trim() || ".",
+      executionActions: wbProjectExecutionPayload(executionActions),
     })).catch(function (err) {
       setBusy(false);
       setError(wbErrorText(err));
@@ -230,6 +334,12 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
           <textarea value={description} rows={3} maxLength={240} onChange={function (e) { setDescription(e.target.value); }} />
           <label>{t("create.project.workspacePath")}</label>
           <input value={workspacePath} onChange={function (e) { setWorkspacePath(e.target.value); }} />
+          <WorkbenchProjectExecutionEditor
+            actions={executionActions} busy={busy} detecting={detecting}
+            onAdd={addAction} onDetect={detectActions}
+            onRemove={function (index) { setExecutionActions(function (current) { return current.filter(function (_, itemIndex) { return itemIndex !== index; }); }); }}
+            onUpdate={updateAction} scope={executionScope} setScope={setExecutionScope} t={t}
+          />
           <label>{t("create.project.color")}</label>
           <input className="workbench-project-color-input" type="color" value={color || "#22b07a"} onChange={function (e) { setColor(e.target.value); }} />
         </div>
@@ -468,7 +578,7 @@ function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSet
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>
     ) },
     { id: "board", label: t("workbench.page.board", null, "Board"), icon: (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M8.5 4v16M15.5 4v16"/><path d="M5.5 8h1M10.5 11h3M17.5 7h1M17.5 13h1"/></svg>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="18" rx="2"/><rect x="14" y="3" width="7" height="10" rx="2"/><path d="M14 17h7M14 21h7"/></svg>
     ) },
     { id: "work", label: t("workbench.page.work", null, "Work"), icon: (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M9.5 12v2h5v-2"/></svg>

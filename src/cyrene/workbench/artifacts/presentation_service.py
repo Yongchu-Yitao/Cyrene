@@ -18,7 +18,7 @@ from cyrene.workbench.sessions.session_presentation import (
 
 logger = logging.getLogger(__name__)
 
-_CORE_SEARCH_TYPES = frozenset({"project", "task", "chat"})
+_CORE_SEARCH_TYPES = frozenset({"project", "chat"})
 
 
 class PresentationQueryService:

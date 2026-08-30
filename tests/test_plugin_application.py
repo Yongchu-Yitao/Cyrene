@@ -140,7 +140,7 @@ def test_application_setup_commits_routes_services_lifecycle_and_search(
         frontend_modules=host.frontend_modules,
         search_providers=host.search_providers,
     )
-    assert queries.search_types == frozenset({"project", "task", "chat", "demo"})
+    assert queries.search_types == frozenset({"project", "chat", "demo"})
 
     async def scenario() -> None:
         assert await queries.search_workbench("needle", {"demo"}, 5) == {
@@ -574,7 +574,7 @@ def test_code_pack_gates_http_websocket_frontend_and_wake_lifecycle(
     monkeypatch,
 ):
     from cyrene.plugins.builtin.cyrene_code import plugin_pack
-    from cyrene.runtime import shell_wake
+    from cyrene.platform import shell_wake
     from cyrene.plugins.builtin.cyrene_code.terminal import client as terminal_client
 
     class FakeConnection:

@@ -60,7 +60,7 @@ def workbench_agent_data_directory(
         return Path(override).expanduser().resolve()
     if str(db_path or "").strip():
         return Path(db_path).expanduser().resolve().parent / "agent-state"
-    from cyrene.runtime.paths import USER_DATA_DIR
+    from cyrene.platform.paths import USER_DATA_DIR
 
     return Path(USER_DATA_DIR).expanduser().resolve() / "agent-state"
 

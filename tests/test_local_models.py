@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import sys
 import tarfile
 from types import SimpleNamespace
@@ -9,6 +10,64 @@ import pytest
 
 from cyrene.plugins.builtin.cyrene_knowledge import local_models
 from cyrene.plugins.builtin.cyrene_knowledge import local_onnx
+
+
+@pytest.mark.asyncio
+async def test_download_health_check_gates_versioned_ready_marker(
+    monkeypatch,
+    tmp_path,
+):
+    model_id = "test-embedding"
+    root = tmp_path / model_id
+    root.mkdir()
+    (root / "weights.bin").write_bytes(b"valid")
+    monkeypatch.setitem(local_models.MODEL_CATALOG, model_id, {
+        "name": "Test embedding",
+        "kind": "embedding",
+        "description": "test",
+        "files": [{"path": "weights.bin", "min_bytes": 5}],
+    })
+    monkeypatch.setattr(
+        local_models,
+        "model_dir",
+        lambda requested: root if requested == model_id else tmp_path / requested,
+    )
+    checked = []
+    monkeypatch.setitem(
+        local_models._HEALTH_CHECKERS,
+        model_id,
+        lambda: checked.append(True),
+    )
+    (root / ".ready.json").write_text(
+        json.dumps({"id": model_id, "version": 1}),
+        encoding="utf-8",
+    )
+
+    assert local_models.is_ready(model_id) is False
+    await local_models._download(model_id)
+
+    assert checked == [True]
+    assert json.loads((root / ".ready.json").read_text(encoding="utf-8")) == {
+        "id": model_id,
+        "version": local_models._READY_MARKER_VERSION,
+    }
+    assert local_models.is_ready(model_id) is True
+
+
+def test_status_reports_the_runtime_used_by_the_loaded_session(monkeypatch):
+    monkeypatch.setattr(local_models, "is_ready", lambda _model_id: False)
+    monkeypatch.setitem(
+        local_models._ACTIVE_RUNTIMES,
+        "qwen3-embedding-0.6b",
+        "onnx-cpu",
+    )
+
+    qwen = next(
+        model
+        for model in local_models.status()["models"]
+        if model["id"] == "qwen3-embedding-0.6b"
+    )
+    assert qwen["runtime"] == "onnx-cpu"
 
 
 def test_sherpa_provider_prefers_cuda_then_apple_coreml(monkeypatch):
@@ -75,6 +134,7 @@ def test_onnx_session_falls_back_when_cuda_initialization_fails():
 def test_mlx_embedding_falls_back_to_existing_onnx_pack(monkeypatch, tmp_path):
     (tmp_path / "model.onnx").touch()
     monkeypatch.setattr(local_onnx, "_runtime", lambda: "mlx")
+    monkeypatch.setattr(local_onnx, "_MLX_DEVICE", "gpu")
     monkeypatch.setattr(local_models, "model_dir", lambda _model_id: tmp_path)
     monkeypatch.setattr(
         local_onnx,
@@ -84,6 +144,23 @@ def test_mlx_embedding_falls_back_to_existing_onnx_pack(monkeypatch, tmp_path):
     monkeypatch.setattr(local_onnx, "_embed_sync", lambda _texts: [[0.0, 1.0]])
 
     assert local_onnx._embed_with_runtime_fallback_sync(["hello"]) == [[0.0, 1.0]]
+
+
+def test_mlx_embedding_retries_on_cpu_without_an_onnx_pack(monkeypatch, tmp_path):
+    monkeypatch.setattr(local_onnx, "_runtime", lambda: "mlx")
+    monkeypatch.setattr(local_onnx, "_MLX_DEVICE", "gpu")
+    monkeypatch.setattr(local_onnx, "_MLX_MODEL", object())
+    monkeypatch.setattr(local_models, "model_dir", lambda _model_id: tmp_path)
+
+    def embed(_texts):
+        if local_onnx._MLX_DEVICE == "gpu":
+            raise RuntimeError("Metal device unavailable")
+        return [[1.0, 0.0]]
+
+    monkeypatch.setattr(local_onnx, "_embed_mlx_sync", embed)
+
+    assert local_onnx._embed_with_runtime_fallback_sync(["hello"]) == [[1.0, 0.0]]
+    assert local_onnx._MLX_DEVICE == "cpu"
 
 
 def test_apple_silicon_bundle_explicitly_collects_mlx_runtime():

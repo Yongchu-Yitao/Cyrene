@@ -117,7 +117,7 @@ class SubagentManager:
             for record in records
         ):
             return True
-        from cyrene.runtime.inbox import get_unread_count
+        from cyrene.platform.inbox import get_unread_count
 
         participants = (self.owner.agent_id, *(record.agent_id for record in records))
         return any(
@@ -423,7 +423,7 @@ class SubagentManager:
                     0, int(observation.get("total_tokens") or prompt + completion)
                 )
                 try:
-                    from cyrene.model_runtime.pricing import (
+                    from cyrene.model.pricing import (
                         effective_price,
                         estimate_cost,
                         to_usd,
@@ -895,7 +895,7 @@ class SubagentManager:
             retired_session.close()
         self._persist()
         if generation > 1:
-            from cyrene.runtime.inbox import clear_inbox
+            from cyrene.platform.inbox import clear_inbox
 
             await clear_inbox(normalized_id, session_id=self.session_id)
         try:
@@ -1002,7 +1002,7 @@ class SubagentManager:
                     source.metrics.messages += 1
                     claim = (state, source, effect_key)
 
-        from cyrene.runtime.inbox import send_message
+        from cyrene.platform.inbox import send_message
         try:
             message_id = await send_message(
                 sender,
@@ -1249,7 +1249,7 @@ class SubagentManager:
     async def _deliver_inbox(self, session: AgentSession, agent_id: str) -> bool:
         if not session.is_idle:
             return False
-        from cyrene.runtime.inbox import mark_read_count, read_unread_messages
+        from cyrene.platform.inbox import mark_read_count, read_unread_messages
 
         messages = await read_unread_messages(agent_id, session_id=self.session_id)
         if not messages:
@@ -1320,7 +1320,7 @@ class SubagentManager:
         return True
 
     async def _deliver_child_inboxes(self) -> bool:
-        from cyrene.runtime.inbox import get_unread_count
+        from cyrene.platform.inbox import get_unread_count
 
         delivered = False
         with self._lock:
@@ -1414,7 +1414,7 @@ class SubagentManager:
         return reported
 
     async def _send_result(self, record: SubagentRecord, node_id: str) -> None:
-        from cyrene.runtime.inbox import send_message
+        from cyrene.platform.inbox import send_message
 
         content = record.result or record.error
         message_id = await send_message(
@@ -1574,7 +1574,7 @@ class SubagentManager:
                         if child.final_output(run_id or None) is None:
                             stalled.append(record)
             if stalled:
-                from cyrene.runtime.inbox import send_message
+                from cyrene.platform.inbox import send_message
 
                 for record in stalled:
                     error = "Subagent became idle without a terminal response."
@@ -1666,7 +1666,7 @@ class SubagentManager:
         round_id: str,
         peers: list[SubagentRecord],
     ) -> str:
-        from cyrene.runtime.inbox import read_messages
+        from cyrene.platform.inbox import read_messages
 
         sections = [
             "Synthesize the following completed subagent work into one parent-facing "

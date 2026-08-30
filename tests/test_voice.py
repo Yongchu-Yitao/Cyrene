@@ -611,16 +611,6 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'aria-pressed={voicePhase === "recording"}' in composer
     assert 'aria-busy={voicePhase === "starting" || voicePhase === "transcribing"}' in composer
 
-    task_composer = shell.split("function TaskComposer(", 1)[1].split(
-        "function ComposerDisclaimer", 1
-    )[0]
-    assert "wbcCreateComposerVoiceFeedback()" in task_composer
-    assert "voiceFeedbackRef.current.starting();" in task_composer
-    assert "voiceFeedbackRef.current.listening();" in task_composer
-    assert "voiceFeedbackRef.current.transcribing();" in task_composer
-    assert "voiceFeedbackRef.current.noSpeech();" in task_composer
-    assert "voiceFeedbackRef.current.complete();" in task_composer
-
     styles = workbench_style_source()
     composer_recording_css = styles.split(".wbc-voice-input.recording {", 1)[1].split("}", 1)[0]
     assert "animation: wb-voice-command-pulse 1.4s ease-in-out infinite;" in composer_recording_css

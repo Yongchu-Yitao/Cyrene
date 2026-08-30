@@ -145,7 +145,7 @@ def test_input_context_state_prunes_unavailable_toggle_but_session_fails_closed(
 def test_activate_workspace_is_owned_by_composer_context(
     monkeypatch, tmp_path,
 ) -> None:
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     selected = str((tmp_path / "selected").resolve())
     old = str((tmp_path / "old").resolve())
@@ -315,6 +315,53 @@ async def test_dynamic_slash_catalog_exposes_context_commands(monkeypatch) -> No
     assert by_id["mcp:docs"]["activation"]["kind"] == "mcpServers"
     assert by_id["plugin:code_tools"]["activation"]["kind"] == "pluginPacks"
     assert await slash_commands.resolve_slash_command("review", "project-1") is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_pack_has_only_its_first_class_slash_command(monkeypatch) -> None:
+    service = _composer_service(monkeypatch)
+    monkeypatch.setattr(
+        service,
+        "_plugin_pack_catalog",
+        lambda: [
+            {
+                "id": "code_tools",
+                "name": "Code tools",
+                "enabled": True,
+                "available": True,
+            },
+            {
+                "id": "cyrene_goal",
+                "name": "Conversation Goal",
+                "enabled": True,
+                "available": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        slash_commands,
+        "_plugin_workflow_catalog",
+        lambda: [{
+            "id": "goal",
+            "pack_id": "cyrene_goal",
+            "source": "plugin_workflow",
+            "activation": {"kind": "pluginPacks", "id": "cyrene_goal"},
+            "workflow": {"service": "goal", "action": "begin_negotiation"},
+        }],
+    )
+
+    catalog = await slash_commands.slash_command_catalog("project-1")
+    by_id = {item["id"]: item for item in catalog}
+
+    assert by_id["goal"]["activation"] == {
+        "kind": "pluginPacks",
+        "id": "cyrene_goal",
+    }
+    assert "plugin:cyrene_goal" not in by_id
+    assert "plugin:code_tools" in by_id
+    assert await slash_commands.resolve_slash_command(
+        "plugin:cyrene_goal", "project-1"
+    ) is None
 
 
 @pytest.mark.asyncio

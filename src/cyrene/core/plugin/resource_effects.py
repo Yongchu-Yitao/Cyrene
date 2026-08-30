@@ -1,7 +1,7 @@
 """Declarative resource effects attached to executable Plugins.
 
-The core validates and resolves argument values only.  Product adapters remain
-responsible for workspace containment, presentation, and any UI side effects.
+The core validates metadata and provides workspace-safe location projection.
+Product adapters remain responsible for presentation and every UI side effect.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 ResourceKind = Literal["file", "directory"]
@@ -19,6 +20,14 @@ _ARGUMENT_SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
 _RESOURCE_KINDS = frozenset({"file", "directory"})
 _RESOURCE_ACCESS = frozenset({"read", "write", "scan", "execute"})
 _RESOURCE_PHASES = frozenset({"started", "completed", "both"})
+
+RESOURCE_REVEAL_ARGUMENT = "reveal"
+RESOURCE_REVEAL_DESCRIPTION = (
+    "Set true when the user explicitly asked to edit, open, show, or view this "
+    "exact file, or inspect this exact directory. If a requested edit is already "
+    "satisfied, still set true to complete the file-display request. Omit it for "
+    "incidental reads, searches, dependency analysis, and background scans."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,11 +129,89 @@ def resolve_resource_effect_values(
     return tuple(resolved)
 
 
+def resource_effect_input_schema(
+    schema: Mapping[str, Any],
+    *,
+    effects: Sequence[PluginResourceEffect],
+    allow_reveal: bool,
+) -> dict[str, Any]:
+    """Return a model-facing schema with the host-owned reveal hint."""
+
+    prepared = dict(schema)
+    if not effects or not allow_reveal:
+        return prepared
+    properties = dict(prepared.get("properties") or {})
+    if RESOURCE_REVEAL_ARGUMENT in properties:
+        raise ValueError(
+            "Plugin resource tools reserve the reveal input property for the host"
+        )
+    properties[RESOURCE_REVEAL_ARGUMENT] = {
+        "type": "boolean",
+        "description": RESOURCE_REVEAL_DESCRIPTION,
+    }
+    prepared["properties"] = properties
+    return prepared
+
+
+def split_resource_reveal(
+    arguments: Mapping[str, Any],
+    *,
+    effects: Sequence[PluginResourceEffect],
+    allow_reveal: bool,
+) -> tuple[dict[str, Any], bool]:
+    """Strip the host-only reveal hint before Plugin validation and execution."""
+
+    prepared = dict(arguments)
+    if not effects or not allow_reveal:
+        return prepared, False
+    raw = prepared.pop(RESOURCE_REVEAL_ARGUMENT, False)
+    if not isinstance(raw, bool):
+        raise TypeError("Plugin resource reveal must be a boolean")
+    return prepared, raw
+
+
+def workspace_resource_locations(
+    effects: Sequence[PluginResourceEffect],
+    arguments: Mapping[str, Any],
+    *,
+    workspace: Path,
+    project_id: str,
+    phase: Literal["started", "completed"],
+) -> tuple[dict[str, Any], ...]:
+    """Resolve effects into canonical workspace-relative presentation locations."""
+
+    root = Path(workspace).expanduser().resolve()
+    locations: list[dict[str, Any]] = []
+    for effect in resolve_resource_effect_values(effects, arguments, phase=phase):
+        raw_path = Path(str(effect["value"])).expanduser()
+        candidate = raw_path.resolve() if raw_path.is_absolute() else (root / raw_path).resolve()
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            continue
+        normalized = relative.as_posix()
+        if not normalized or normalized == ".":
+            normalized = "."
+        locations.append({
+            "kind": effect["kind"],
+            "access": effect["access"],
+            "phase": phase,
+            "projectId": str(project_id or ""),
+            "path": normalized,
+        })
+    return tuple(locations)
+
+
 __all__ = [
     "PluginResourceEffect",
+    "RESOURCE_REVEAL_ARGUMENT",
+    "RESOURCE_REVEAL_DESCRIPTION",
     "ResourceAccess",
     "ResourceEffectPhase",
     "ResourceKind",
     "normalize_resource_effects",
+    "resource_effect_input_schema",
     "resolve_resource_effect_values",
+    "split_resource_reveal",
+    "workspace_resource_locations",
 ]

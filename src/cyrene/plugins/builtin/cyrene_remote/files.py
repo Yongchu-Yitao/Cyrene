@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from cyrene.core.plugin import PluginContext
 from cyrene.config import DATA_DIR
-from cyrene.runtime.attachments import register_generated_attachment, safe_attachment_filename
+from cyrene.platform.attachments import register_generated_attachment, safe_attachment_filename
 from .common import (
     remote_tool_error,
     request_remote_command,

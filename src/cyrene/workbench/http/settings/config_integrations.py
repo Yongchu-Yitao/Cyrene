@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from cyrene.runtime.config_integration_service import (
+from cyrene.platform.config_integration_service import (
     ConfigIntegrationApplicationService,
     ConfigIntegrationError,
 )

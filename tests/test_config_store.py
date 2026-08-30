@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 @pytest.fixture
 def isolated_config_store(tmp_path, monkeypatch):
     """Return a config_store module whose paths point into a temp directory."""
-    from cyrene.runtime import config_store
+    from cyrene.platform import config_store
 
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "data" / "config.enc")

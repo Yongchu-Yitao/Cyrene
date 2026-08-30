@@ -1,7 +1,7 @@
 """Tool implementation for enter_plan_mode.
 
 Lets the main agent self-trigger 计划模式: decompose the current request into
-steps → tasks, show it in the right sidebar 计划 tab, and pause for the user's
+steps, show it in the right sidebar 计划 tab, and pause for the user's
 approve / reject / revise decision.
 """
 
@@ -18,6 +18,7 @@ from cyrene.plugins.native_runtime import (
     run_context_value,
 )
 from .definitions import get_native_tool_def
+from .state import current_plan, persist_plan
 
 TOOL_NAME = 'enter_plan_mode'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -73,15 +74,49 @@ async def _tool_enter_plan_mode(args: dict[str, Any], context: PluginContext) ->
                     index=index - 1,
                 ),
             })
-        tasks = [
-            str(item or "").strip()
-            for item in (raw.get("tasks") or ())[:20]
+        dependency_indexes: list[int] = []
+        for dependency in (
+            raw.get("dependsOnStepIndexes")
+            if isinstance(raw.get("dependsOnStepIndexes"), list)
+            else ()
+        ):
+            try:
+                dependency_index = int(dependency)
+            except (TypeError, ValueError):
+                dependency_index = 0
+            if dependency_index < 1 or dependency_index >= index:
+                return json_result({
+                    "status": "invalid_arguments",
+                    "error": plugin_localized(
+                        context,
+                        "Step {step} has an invalid prerequisite index: {dependency}.",
+                        "步骤 {step} 的前置步骤序号无效：{dependency}。",
+                        step=index,
+                        dependency=dependency,
+                    ),
+                })
+            if dependency_index not in dependency_indexes:
+                dependency_indexes.append(dependency_index)
+        context_files = [
+            {
+                "source": "workspace",
+                "path": str(item or "").strip(),
+                "name": str(item or "").strip().replace("\\", "/").split("/")[-1],
+            }
+            for item in (
+                raw.get("contextFiles")
+                if isinstance(raw.get("contextFiles"), list)
+                else ()
+            )[:20]
             if str(item or "").strip()
-        ] if isinstance(raw.get("tasks") or (), list) else []
+        ]
         steps.append({
             "id": f"step_{index}",
             "title": step_title,
-            "tasks": tasks,
+            "description": str(raw.get("description") or "").strip(),
+            "dependsOn": [f"step_{dependency}" for dependency in dependency_indexes],
+            "command": str(raw.get("command") or "").strip(),
+            "contextFiles": context_files,
             "status": "pending",
             "note": "",
         })
@@ -93,6 +128,16 @@ async def _tool_enter_plan_mode(args: dict[str, Any], context: PluginContext) ->
         "status": "proposed",
         "steps": steps,
     }
+    if not persist_plan(context, plan):
+        return json_result({
+            "status": "plan_storage_unavailable",
+            "error": plugin_localized(
+                context,
+                "The plan file could not be saved.",
+                "无法保存计划文件。",
+            ),
+        })
+    plan = current_plan(context) or plan
     await publish_runtime_event(context, {
         "type": "plan",
         "status": "proposed",

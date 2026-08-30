@@ -29,7 +29,7 @@
       steps: [
         { id: "rail", target: "rail_chat", interact: "click",
           bodyKey: "tour.overview.rail.body" },
-        { id: "dock", target: "rail_task", interact: "click",
+        { id: "dock", target: "conversation_board", interact: "click",
           bodyKey: "tour.overview.dock.body" },
         { id: "search", target: "open_search", interact: "click",
           bodyKey: "tour.overview.search.body" },
@@ -105,26 +105,6 @@
           bodyKey: "tour.chat-deep.permission.body" },
         { id: "blocks", points: ["tour.chat-deep.blocks.p1", "tour.chat-deep.blocks.p2", "tour.chat-deep.blocks.p3"],
           bodyKey: "tour.chat-deep.blocks.body" },
-      ],
-    },
-    {
-      id: "task-basics",
-      module: "task",
-      order: 1,
-      minutes: 4,
-      titleKey: "tour.task-basics.title",
-      descKey: "tour.task-basics.desc",
-      steps: [
-        { id: "board", target: "task_board", interact: "click",
-          bodyKey: "tour.task-basics.board.body" },
-        { id: "new", target: "task_new", interact: "click",
-          bodyKey: "tour.task-basics.new.body" },
-        { id: "plan", points: ["tour.task-basics.plan.p1", "tour.task-basics.plan.p2"],
-          bodyKey: "tour.task-basics.plan.body" },
-        { id: "approve", points: ["tour.task-basics.approve.p1", "tour.task-basics.approve.p2"],
-          bodyKey: "tour.task-basics.approve.body" },
-        { id: "control", points: ["tour.task-basics.control.p1", "tour.task-basics.control.p2"],
-          bodyKey: "tour.task-basics.control.body" },
       ],
     },
     {
@@ -280,7 +260,6 @@
   var MODULES = [
     { id: "overview", labelKey: "tour.module.overview" },
     { id: "chat", labelKey: "tour.module.chat" },
-    { id: "task", labelKey: "tour.module.task" },
     { id: "knowledge", labelKey: "tour.module.knowledge" },
     { id: "memory", labelKey: "tour.module.memory" },
     { id: "schedule", labelKey: "tour.module.schedule" },

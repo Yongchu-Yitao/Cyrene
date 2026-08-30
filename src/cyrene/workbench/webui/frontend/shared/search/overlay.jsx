@@ -7,7 +7,6 @@ const { useState: useStateSr, useEffect: useEffectSr, useRef: useRefSr, useCallb
 var SEARCH_TYPES = [
   { id: "all", labelKey: "search.allTypes" },
   { id: "project", labelKey: "search.type.project" },
-  { id: "task", labelKey: "search.type.task" },
   { id: "chat", labelKey: "search.type.chat" },
   { id: "knowledge", labelKey: "search.type.knowledge" },
   { id: "memory", labelKey: "search.type.memory" },
@@ -18,7 +17,6 @@ var SEARCH_TYPES = [
 // and executed through the onCommand prop (wired in the workbench shell).
 var SEARCH_COMMANDS = [
   { id: "new-chat", labelKey: "search.command.newChat", hintKey: "search.command.newChatHint", keywords: ["新对话", "对话", "chat", "new chat"] },
-  { id: "new-task", labelKey: "search.command.newTask", hintKey: "search.command.newTaskHint", keywords: ["新任务", "任务", "task", "new task"] },
   { id: "new-project", labelKey: "search.command.newProject", hintKey: "search.command.newProjectHint", keywords: ["新项目", "项目", "project", "new project"] },
   { id: "open-settings", labelKey: "search.command.openSettings", hintKey: "search.command.openSettingsHint", keywords: ["设置", "settings", "偏好"] },
   { id: "open-shortcuts", labelKey: "search.command.openShortcuts", hintKey: "search.command.openShortcutsHint", keywords: ["快捷键", "shortcuts", "按键"] },
@@ -37,11 +35,10 @@ var SETTINGS_INDEX = (function () {
   }
 })();
 
-var SEARCH_TYPE_ORDER = ["project", "task", "chat", "knowledge", "memory", "schedule"];
+var SEARCH_TYPE_ORDER = ["project", "chat", "knowledge", "memory", "schedule"];
 var SEARCH_REQUEST_TIMEOUT_MS = 10000;
 var SEARCH_GROUP_KEYS = {
   project: "search.group.projects",
-  task: "search.group.tasks",
   chat: "search.group.chats",
   knowledge: "search.group.knowledge",
   memory: "search.group.memory",
@@ -51,9 +48,6 @@ var SEARCH_GROUP_KEYS = {
 var NEW_ACTION_ICONS = {
   "new-chat": React.createElement(React.Fragment, null,
     React.createElement("path", { d: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" }),
-  ),
-  "new-task": React.createElement(React.Fragment, null,
-    React.createElement("path", { d: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" }),
   ),
   "new-project": React.createElement(React.Fragment, null,
     React.createElement("path", { d: "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" }),
@@ -419,7 +413,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
       onClose && onClose();
       return;
     }
-    // Workbench-aware navigation for project/task/chat/knowledge/memory/schedule.
+    // Workbench-aware navigation for project/chat/knowledge/memory/schedule.
     if (navigateWorkbench(result)) {
       return;
     }

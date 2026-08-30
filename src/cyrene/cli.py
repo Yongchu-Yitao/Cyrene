@@ -228,7 +228,7 @@ def _daemon_auth_headers(token: str = "") -> dict[str, str]:
 
 
 def _desktop_connection_path() -> Path:
-    from cyrene.runtime.paths import app_temp_dir
+    from cyrene.platform.paths import app_temp_dir
 
     return app_temp_dir() / _CLI_CONNECTION_FILENAME
 

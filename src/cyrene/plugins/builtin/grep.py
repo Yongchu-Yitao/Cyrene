@@ -105,6 +105,15 @@ plugin = Plugin(
         "additionalProperties": False,
     },
     handler=grep,
+    metadata={
+        "read_only": True,
+        "resource_effects": ({
+            "argument_path": ("path",),
+            "kind": "directory",
+            "access": "scan",
+            "phase": "both",
+        },),
+    },
     allow_parallel=True,
     timeout_seconds=30.0,
 )

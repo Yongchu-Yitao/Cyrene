@@ -43,7 +43,7 @@ from rich.table import Table
 from rich.text import Text
 
 from cyrene.localization import app_language, normalize_language
-from cyrene.runtime.version import get_version_label
+from cyrene.platform.version import get_version_label
 
 
 DEFAULT_DAEMON_URL = "http://localhost:4242"
@@ -1611,7 +1611,7 @@ class InteractiveChat:
         model = str(status.get("model") or "?")
         self._model = model
         try:
-            from cyrene.runtime.config_store import effective_ctx_limit_for_model
+            from cyrene.platform.config_store import effective_ctx_limit_for_model
 
             self._context_limit = effective_ctx_limit_for_model(model)
         except (ImportError, OSError, ValueError):

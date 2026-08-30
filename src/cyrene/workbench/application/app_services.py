@@ -7,7 +7,6 @@ through HTTP routes.  Route migration can call these functions incrementally.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from collections.abc import Mapping
 from copy import deepcopy
@@ -21,13 +20,7 @@ from cyrene.localization import localized
 from cyrene.workbench.projects import project_repository, project_runtime
 from cyrene.workbench.chat.chat_repository import ChatRepository
 
-_BACKGROUND_SESSION_TASKS: set[asyncio.Task[Any]] = set()
 logger = logging.getLogger(__name__)
-
-
-def _track_background_session_task(task: asyncio.Task[Any]) -> None:
-    _BACKGROUND_SESSION_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_SESSION_TASKS.discard)
 
 
 def _plugin_host_values() -> tuple[Any, str]:
@@ -201,9 +194,8 @@ def list_projects() -> list[dict[str, Any]]:
         {
             key: deepcopy(value)
             for key, value in project.items()
-            if key not in {"sessions", "sharedArtifacts"}
+            if key != "sharedArtifacts"
         }
-        | {"sessionCount": len(project.get("sessions") or [])}
         for project in payload.get("projects", [])
         if isinstance(project, dict)
     ]
@@ -245,7 +237,6 @@ def create_project(name: str, *, description: str = "", workspace_path: str = ""
         "description": str(description or "").strip()[:4000],
         "icon": "spark",
         "color": "",
-        "template": "blank",
         "workspacePath": str(target),
         "workspacePathSource": "generated" if not workspace_path else "agent_scoped",
         "status": "active",
@@ -263,16 +254,12 @@ def create_project(name: str, *, description: str = "", workspace_path: str = ""
         },
         "createdAt": now,
         "updatedAt": now,
-        "sessions": [],
         "sharedArtifacts": [],
     }
-    session = project_runtime._workbench_new_init_session(project_id, project, now)
-    project["sessions"] = [session]
     payload.setdefault("projects", []).insert(0, project)
     payload["activeProjectId"] = project_id
-    payload["activeSessionId"] = session["id"]
     project_repository._write_workbench_store(payload)
-    return {"project": deepcopy(project), "session": deepcopy(session)}
+    return {"project": deepcopy(project)}
 
 
 def update_project(project_id: str, changes: dict[str, Any]) -> dict[str, Any]:
@@ -297,17 +284,16 @@ def update_project(project_id: str, changes: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(project)
 
 
-def activate_project(project_id: str, session_id: str = "") -> dict[str, Any]:
-    return project_repository._persist_workbench_selection(project_id, session_id)
+def activate_project(project_id: str) -> dict[str, Any]:
+    return project_repository._persist_workbench_selection(project_id)
 
 
 async def delete_project(project_id: str) -> dict[str, Any]:
-    bot, db_path = _plugin_host_values()
+    _bot, db_path = _plugin_host_values()
     payload = project_repository._read_workbench_store()
     project = project_repository._workbench_find_project(payload, project_id)
     if not project:
         raise LookupError(localized("Project not found.", "未找到项目。"))
-    session_ids = [str(item.get("id") or "") for item in project.get("sessions", []) if item.get("id")]
     chat_repository = ChatRepository(db_path)
     chat_payload = chat_repository.read()
     project_chats = [
@@ -332,22 +318,6 @@ async def delete_project(project_id: str) -> dict[str, Any]:
     ]
     for chat_id in root_chat_ids:
         await chat_port.delete(chat_id)
-    from cyrene.workbench.core_adapter.task_runtime import TaskAgentRuntime
-    from cyrene.workbench.tasks import task_runs
-
-    agent_runtime = TaskAgentRuntime(bot=bot, db_path=db_path)
-    for session_id in session_ids:
-        coordinator = task_runs.coordinator_for(db_path)
-        lease = coordinator.get("task", session_id)
-        task_runs.interrupt_task_run(db_path, session_id)
-        if (
-            lease is not None
-            and lease.task is not None
-            and lease.task is not asyncio.current_task()
-        ):
-            await asyncio.gather(lease.task, return_exceptions=True)
-        await agent_runtime.clear_session(session_id)
-
     # Cancellation finalizers may have updated other projects while we waited.
     # Remove from a fresh snapshot instead of writing the pre-cancel view back.
     payload = project_repository._read_workbench_store()
@@ -356,8 +326,6 @@ async def delete_project(project_id: str) -> dict[str, Any]:
         payload = project_runtime._workbench_default_project()
     else:
         payload["activeProjectId"] = payload["projects"][0]["id"]
-        sessions = payload["projects"][0].get("sessions") or []
-        payload["activeSessionId"] = str(sessions[0].get("id") or "") if sessions else ""
     project_repository._write_workbench_store(payload)
     # A malformed historical store may contain an orphan side-agent. Remove
     # those records and their ContextTrees without routing through a missing
@@ -374,7 +342,7 @@ async def delete_project(project_id: str) -> dict[str, Any]:
         if str(item.get("projectId") or "") != project_id
     ]
     chat_repository.write(chat_payload)
-    return {"deletedProjectId": project_id, "deletedSessionIds": session_ids, "deletedChatIds": removed_chat_ids}
+    return {"deletedProjectId": project_id, "deletedChatIds": removed_chat_ids}
 
 
 def list_chats(project_id: str = "") -> list[dict[str, Any]]:
@@ -651,7 +619,7 @@ async def dispatch_session_message(
     target_id = str(session_id or "").strip()
     origin_id = str(origin_session_id or "").strip()
     text = str(message or "").strip()
-    if kind not in {"chat", "task"}:
+    if kind != "chat":
         raise ValueError(localized(
             "The current composer is not a supported session.",
             "当前输入区不属于受支持的会话。",
@@ -668,280 +636,17 @@ async def dispatch_session_message(
             "An agent cannot dispatch a second run into its own active session.",
             "智能体不能向自身的活动会话再次分派运行。",
         ))
-    bot, db_path = _plugin_host_values()
-    if kind == "chat":
-        outcome = await _chat_application_port().dispatch_agent_message(
-            target_id,
-            text,
-            origin_session_id=origin_id,
-        )
-        if outcome.get("status") not in {"started", "guided"}:
-            raise ValueError(localized(
-                "The target conversation is unavailable.",
-                "目标对话不可用。",
-            ))
-        return outcome
-
-    from cyrene.workbench.core_adapter.task_runtime import TaskAgentRuntime
-    from cyrene.workbench.tasks import task_runs
-
-    coordinator = task_runs.coordinator_for(db_path)
-    if task_runs.is_task_run_active(db_path, target_id):
-        raise ValueError(localized(
-            "The target task already has a running agent.",
-            "目标任务已有智能体正在运行。",
-        ))
-    payload = project_repository._read_workbench_store()
-    project, session = project_repository._workbench_find_session(payload, target_id)
-    if not project or not session:
-        raise LookupError(localized("Task session not found.", "未找到任务会话。"))
-    if session.get("pendingQuestion"):
-        raise ValueError(localized(
-            "The target task is waiting for a user or delegated answer.",
-            "目标任务正在等待用户或委派回复。",
-        ))
-    run_id = project_runtime._short_id("run")
-    request_id = (
-        f"agent-session:{origin_id}:{target_id}:"
-        f"{hashlib.sha256(text.encode('utf-8')).hexdigest()[:20]}"
-    )
-    lease = coordinator.try_acquire(
-        "task",
+    outcome = await _chat_application_port().dispatch_agent_message(
         target_id,
-        run_id,
-        request_id=request_id,
-        run_type="agent_session",
-        bind_current_task=False,
-        metadata={"origin_session_id": origin_id},
+        text,
+        origin_session_id=origin_id,
     )
-    if lease is None:
+    if outcome.get("status") not in {"started", "guided"}:
         raise ValueError(localized(
-            "The target task already has a running agent.",
-            "目标任务已有智能体正在运行。",
+            "The target conversation is unavailable.",
+            "目标对话不可用。",
         ))
-    if not task_runs.begin_task_run(
-        target_id,
-        run_id,
-        request_id=request_id,
-        run_type="agent_session",
-        body={
-            "message": text,
-            "mode": "default",
-            "clientRequestId": request_id,
-            "agentOriginated": True,
-            "originSessionId": origin_id,
-        },
-    ):
-        coordinator.release(lease)
-        raise LookupError(localized("Task session not found.", "未找到任务会话。"))
-
-    payload = project_repository._read_workbench_store()
-    project, session = project_repository._workbench_find_session(payload, target_id)
-    if not project or not session:
-        coordinator.release(lease)
-        raise LookupError(localized("Task session not found.", "未找到任务会话。"))
-    started_at = project_runtime._utc_now_iso()
-    instruction_event = {
-        "id": project_runtime._short_id("event"),
-        "type": "AgentInstructionEvent",
-        "runId": run_id,
-        "createdAt": started_at,
-        "body": text,
-        "agentOriginated": True,
-        "originSessionId": origin_id,
-    }
-    session["status"] = "running"
-    session["updatedAt"] = started_at
-    session.setdefault("events", []).append(instruction_event)
-    project["updatedAt"] = started_at
-    run = next(
-        (
-            item
-            for item in session.get("runs") or []
-            if isinstance(item, dict) and str(item.get("id") or "") == run_id
-        ),
-        None,
-    )
-    if run is not None:
-        run.setdefault("events", []).append(instruction_event)
-    project_repository._write_workbench_store(payload)
-
-    agent_runtime = TaskAgentRuntime(bot=bot, db_path=db_path)
-
-    async def _run_task_message() -> None:
-        token = task_runs.bind_task_run_id(run_id)
-        terminal_status = "failed"
-        try:
-            fresh_payload = project_repository._read_workbench_store()
-            fresh_project, fresh_session = project_repository._workbench_find_session(
-                fresh_payload, target_id,
-            )
-            if not fresh_project or not fresh_session:
-                return
-            agent_result = await agent_runtime.run_turn(
-                project=fresh_project,
-                session=fresh_session,
-                text=text,
-                run_id=run_id,
-                permission_mode="default",
-                client_request_id=request_id,
-                purpose="agent_session",
-                instruction=(
-                    "This instruction was explicitly delegated by another local Cyrene "
-                    "session. It is agent-originated context, not human approval and not "
-                    "an answer to a pending question. Do not delegate it to another session."
-                ),
-                metadata={
-                    "agent_originated": True,
-                    "origin_session_id": origin_id,
-                    "conversation_source": "agent_session",
-                },
-            )
-            # The delegated run may have used typed tools that persisted task
-            # metadata while the model was running. Re-read before committing
-            # the response so this background delivery never overwrites those
-            # newer authoritative changes with its pre-run snapshot.
-            result_payload = project_repository._read_workbench_store()
-            result_project, result_session = project_repository._workbench_find_session(
-                result_payload, target_id,
-            )
-            if not result_project or not result_session:
-                return
-            reply = str(agent_result.text or "")
-            awaiting_user = bool(agent_result.awaiting_user)
-            if agent_result.pending_question is not None:
-                result_session["pendingQuestion"] = dict(agent_result.pending_question)
-            else:
-                result_session.pop("pendingQuestion", None)
-            finished_at = project_runtime._utc_now_iso()
-            response_event = {
-                "id": project_runtime._short_id("event"),
-                "type": "AgentResponseEvent",
-                "runId": run_id,
-                "createdAt": finished_at,
-                "body": reply,
-                "agentOriginated": True,
-                "originSessionId": origin_id,
-            }
-            run = next(
-                (
-                    item
-                    for item in result_session.get("runs") or []
-                    if isinstance(item, dict) and str(item.get("id") or "") == run_id
-                ),
-                None,
-            )
-            if run is None:
-                raise RuntimeError("delegated task run record disappeared")
-            known_event_ids = {
-                str(item.get("id") or "")
-                for item in run.get("events") or []
-                if isinstance(item, dict)
-            }
-            projected_events = [
-                dict(item)
-                for item in agent_result.tool_events
-                if isinstance(item, dict)
-                and str(item.get("id") or "") not in known_event_ids
-            ]
-            run.update({
-                "agentResponse": reply,
-                "status": "awaiting_user" if awaiting_user else "completed",
-                "endedAt": finished_at,
-                "agentOriginated": True,
-                "originSessionId": origin_id,
-                "error": None,
-                "usage": dict(agent_result.usage),
-                "model": str(agent_result.model or ""),
-                "modelIdentity": dict(agent_result.model_identity),
-                "toolCalls": [
-                    {
-                        "tool": event.get("tool"),
-                        "argsPreview": event.get("argsPreview", ""),
-                    }
-                    for event in projected_events
-                    if event.get("type") == "ToolCallEvent"
-                ],
-            })
-            run.setdefault("events", []).extend([*projected_events, response_event])
-            result_session["agentReply"] = reply
-            result_session["status"] = "waiting_for_user" if awaiting_user else "acted"
-            result_session["updatedAt"] = finished_at
-            result_session.setdefault("events", []).extend([*projected_events, response_event])
-            result_project["updatedAt"] = finished_at
-            project_repository._write_workbench_store(result_payload)
-            terminal_status = "awaiting_user" if awaiting_user else "completed"
-            task_runs.finish_task_run_if_open(
-                target_id,
-                run_id,
-                status=terminal_status,
-            )
-        except asyncio.CancelledError:
-            terminal_status = "cancelled"
-            task_runs.finish_task_run_if_open(
-                target_id,
-                run_id,
-                status="cancelled",
-                error=localized(
-                    "The task instruction was cancelled.",
-                    "任务指令已取消。",
-                ),
-                termination_reason=str(lease.termination_reason or "user_interrupted"),
-            )
-            raise
-        except Exception:
-            logger.exception(
-                "Delegated task instruction failed [session=%s run=%s]",
-                target_id,
-                run_id,
-            )
-            safe_error = localized(
-                "The delegated task instruction failed.",
-                "委派的任务指令执行失败。",
-            )
-            task_runs.finish_task_run_if_open(
-                target_id,
-                run_id,
-                status="failed",
-                error=safe_error,
-            )
-            fresh_payload = project_repository._read_workbench_store()
-            fresh_project, fresh_session = project_repository._workbench_find_session(
-                fresh_payload, target_id,
-            )
-            if fresh_project and fresh_session:
-                fresh_session["status"] = "idle"
-                fresh_session["updatedAt"] = project_runtime._utc_now_iso()
-                fresh_session.setdefault("events", []).append({
-                    "id": project_runtime._short_id("event"),
-                    "type": "AgentResponseErrorEvent",
-                    "runId": run_id,
-                    "createdAt": fresh_session["updatedAt"],
-                    "body": safe_error,
-                    "code": "delegated_task_run_failed",
-                    "agentOriginated": True,
-                })
-                fresh_project["updatedAt"] = fresh_session["updatedAt"]
-                project_repository._write_workbench_store(fresh_payload)
-        finally:
-            task_runs.reset_task_run_id(token)
-            coordinator.finish(
-                lease,
-                status=terminal_status,
-                termination_reason=str(lease.termination_reason or ""),
-            )
-
-    task = asyncio.create_task(_run_task_message())
-    if not coordinator.attach_task(lease, task):
-        task.cancel()
-        coordinator.release(lease)
-        raise ValueError(localized(
-            "The target task run could not be started.",
-            "无法启动目标任务运行。",
-        ))
-    _track_background_session_task(task)
-    return {"status": "started", "session_id": target_id, "run_id": run_id}
-
+    return outcome
 
 __all__ = [
     "activate_project", "compact_chat", "create_chat", "create_project", "delete_chat",

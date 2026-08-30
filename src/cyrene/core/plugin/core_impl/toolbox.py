@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-from ..execution import invoke_plugin
+from ..execution import PluginInvocationError, invoke_plugin
 from ..plugin import Plugin, PluginContext
+from ..resource_effects import split_resource_reveal, workspace_resource_locations
+from ..validation import normalize_plugin_arguments
 
 if TYPE_CHECKING:
     from ..registry import PluginLoadFailure, PluginRegistry, RegisteredPlugin
@@ -210,7 +211,9 @@ class _ToolboxHandler:
                     {
                         "name": plugin.name,
                         "description": plugin.description,
-                        "input_schema": deepcopy(dict(plugin.input_schema)),
+                        "input_schema": plugin.model_input_schema(
+                            allow_resource_reveal=agent_id == "main"
+                        ),
                         "pack": registered.pack_id,
                     }
                 )
@@ -258,12 +261,36 @@ class _ToolboxHandler:
             nested_arguments = arguments.get("arguments") or {}
             if not isinstance(nested_arguments, Mapping):
                 raise TypeError("toolbox invoke arguments must be an object")
-
-            nested_value = await invoke_plugin(
-                name,
-                dict(nested_arguments),
-                review=True,
+            normalization = normalize_plugin_arguments(
+                nested_arguments,
+                registered.plugin.input_schema,
             )
+            nested_arguments = normalization.arguments
+            nested_arguments, reveal = split_resource_reveal(
+                nested_arguments,
+                effects=registered.plugin.resource_effects,
+                allow_reveal=agent_id == "main",
+            )
+
+            nested_error: dict[str, Any] | None = None
+            try:
+                nested_value = await invoke_plugin(
+                    name,
+                    dict(nested_arguments),
+                    review=True,
+                )
+            except PluginInvocationError as exc:
+                nested_value = None
+                message = str(exc.result.error or exc)
+                nested_error = {
+                    "code": (
+                        "invalid_arguments"
+                        if "Invalid arguments" in message or "插件参数无效" in message
+                        else "plugin_invocation_failed"
+                    ),
+                    "plugin": name,
+                    "message": message,
+                }
             result = {
                 "operation": "invoke",
                 "name": name,
@@ -273,6 +300,27 @@ class _ToolboxHandler:
                 "pack": registered.pack_id,
                 "result": nested_value,
             }
+            if normalization.repairs:
+                result["argument_repairs"] = [
+                    repair.as_dict() for repair in normalization.repairs
+                ]
+            if nested_error is not None:
+                result["error"] = nested_error
+            project_id = str(context.data.get("project_id") or "")
+            if nested_error is None and registered.plugin.resource_effects and project_id:
+                locations = workspace_resource_locations(
+                    registered.plugin.resource_effects,
+                    nested_arguments,
+                    workspace=context.workspace,
+                    project_id=project_id,
+                    phase="completed",
+                ) if context.workspace is not None else ()
+                if locations:
+                    result["presentation"] = {
+                        "locations": list(locations),
+                        "reveal": reveal,
+                        "phase": "completed",
+                    }
         else:  # The Runtime schema normally rejects this before execution.
             raise ValueError(f"unsupported toolbox operation: {operation}")
 
@@ -293,6 +341,7 @@ def create_toolbox_plugin(registry: PluginRegistry) -> Plugin:
         ),
         input_schema=_TOOLBOX_INPUT_SCHEMA,
         handler=_ToolboxHandler(registry),
+        metadata={"read_only_gateway": True},
     )
 
 

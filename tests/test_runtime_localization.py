@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from cyrene.plugins.builtin.cyrene_browser import runtime as browser
 from cyrene import localization
-from cyrene.runtime import settings_store
+from cyrene.platform import settings_store
 from cyrene.workbench.application import notifications
 
 

@@ -215,6 +215,25 @@ async def _wait_for_exit(manager: Any, terminal_id: str) -> None:
             await asyncio.sleep(0.005)
 
 
+def _benchmark_argv(workload: str, total_bytes: int, gate: Path, release: Path) -> list[str]:
+    return [
+        sys.executable, "-u", "-c", _CHILD_PROGRAM, workload,
+        str(total_bytes), str(gate), str(release),
+    ]
+
+
+async def _close_benchmark_terminals(manager: Any, terminal_ids: tuple[str, ...]) -> None:
+    for terminal_id in terminal_ids:
+        if terminal_id in manager._sessions:
+            await manager.close(terminal_id, remove=True)
+
+
+def _benchmark_case_root(root: Path, name: str) -> Path:
+    target = root / name
+    target.mkdir(parents=True)
+    return target
+
+
 async def _heartbeat(
     stop: asyncio.Event, latencies_ms: list[float], rss_samples: list[int],
 ) -> None:
@@ -315,13 +334,12 @@ async def _websocket_relay(
 
 
 async def _run_case(
-    root: Path, workload: str, subscribed: bool, total_bytes: int,
-    output_limit: int,
+    root: Path, workload: str, subscribed: bool, total_bytes: int, output_limit: int,
 ) -> dict[str, Any]:
     from cyrene.plugins.builtin.cyrene_code.terminal.manager import TerminalManager
 
-    case_root = root / f"{workload}-{'subscribed' if subscribed else 'unsubscribed'}"
-    case_root.mkdir(parents=True)
+    name = f"{workload}-{'subscribed' if subscribed else 'unsubscribed'}"
+    case_root = _benchmark_case_root(root, name)
     gate = case_root / "start.gate"
     release = case_root / "release.gate"
     manager = TerminalManager(output_limit=output_limit, state_dir=case_root / "state")
@@ -337,10 +355,7 @@ async def _run_case(
         "benchmark",
         cwd=str(case_root),
         shell="python",
-        argv=[
-            sys.executable, "-u", "-c", _CHILD_PROGRAM, workload,
-            str(total_bytes), str(gate), str(release),
-        ],
+        argv=_benchmark_argv(workload, total_bytes, gate, release),
         title=f"{workload}-{subscribed}",
         launch_mode="one_shot",
     )
@@ -399,6 +414,8 @@ async def _run_case(
         process_writes = max(0, _process_write_bytes() - initial_disk_writes)
         worker_writes = worker_metrics["bytesWritten"] - initial_worker["bytesWritten"]
         parsed_bytes = worker_metrics["screenBytesParsed"] - initial_worker["screenBytesParsed"]
+        screen_updates = worker_metrics["screenUpdates"] - initial_worker["screenUpdates"]
+        screen_batches = worker_metrics["screenBatches"] - initial_worker["screenBatches"]
         actual_bytes = session.next_seq
         write_amplification = worker_writes / max(actual_bytes, 1)
         replay_expected = int(replay[0]["seq"]) if replay else actual_bytes
@@ -455,6 +472,8 @@ async def _run_case(
             "segmentsDeleted": worker_metrics["segmentsDeleted"] - initial_worker["segmentsDeleted"],
             "sqliteOutputEventRows": event_rows,
             "screenBytesParsed": parsed_bytes,
+            "screenUpdates": screen_updates,
+            "screenBatches": screen_batches,
             "webSocketLatencyP95Ms": round(_percentile(websocket_latencies, 0.95), 3),
             "webSocketLatencyMaxMs": round(max(websocket_latencies, default=0.0), 3),
             "webSocketBytes": websocket_bytes,
@@ -478,6 +497,7 @@ async def _run_case(
                 and source_frames.bytes_seen == actual_bytes
                 and source_frames.valid
                 and parsed_bytes == actual_bytes
+                and 0 < screen_batches <= screen_updates
                 and replay_sequence_errors == 0
                 and replay_data_matches
                 and write_amplification < 1.1
@@ -494,8 +514,7 @@ async def _run_case(
     finally:
         heartbeat_stop.set()
         await heartbeat_task
-        if terminal_id in manager._sessions:
-            await manager.close(terminal_id, remove=True)
+        await _close_benchmark_terminals(manager, (terminal_id,))
         manager.close_store()
 
 
@@ -508,8 +527,7 @@ async def _run_fairness_case(
 
     from cyrene.plugins.builtin.cyrene_code.terminal.manager import TerminalManager
 
-    case_root = root / "multi-terminal-fairness"
-    case_root.mkdir(parents=True)
+    case_root = _benchmark_case_root(root, "multi-terminal-fairness")
     noisy_gate = case_root / "noisy.gate"
     noisy_release = case_root / "noisy.release"
     manager = TerminalManager(output_limit=output_limit, state_dir=case_root / "state")
@@ -517,10 +535,7 @@ async def _run_fairness_case(
         "benchmark",
         cwd=str(case_root),
         shell="python",
-        argv=[
-            sys.executable, "-u", "-c", _CHILD_PROGRAM,
-            "ansi", str(total_bytes), str(noisy_gate), str(noisy_release),
-        ],
+        argv=_benchmark_argv("ansi", total_bytes, noisy_gate, noisy_release),
         title="fairness-noisy",
         launch_mode="one_shot",
     )
@@ -639,18 +654,19 @@ async def _run_fairness_case(
                 metrics["queryQueueWaitMaxUs"] / 1000, 3
             ),
             "terminalWorkPeakBytes": metrics["terminalWorkPeakBytes"],
+            "screenUpdates": metrics["screenUpdates"],
+            "screenBatches": metrics["screenBatches"],
             "qualityPreserved": bool(
                 echo_latency_ms > 0
                 and noisy_running_at_echo
                 and resyncs == 0
                 and sequence_errors == 0
+                and 0 < metrics["screenBatches"] <= metrics["screenUpdates"]
                 and "INTERACTIVE_ECHO:latency-probe" in screen["screenText"]
             ),
         }
     finally:
-        for terminal_id in (interactive_id, noisy_id):
-            if terminal_id in manager._sessions:
-                await manager.close(terminal_id, remove=True)
+        await _close_benchmark_terminals(manager, (interactive_id, noisy_id))
         manager.close_store()
 
 

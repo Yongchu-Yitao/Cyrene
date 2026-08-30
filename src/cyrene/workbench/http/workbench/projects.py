@@ -13,7 +13,6 @@ from cyrene.workbench.http.workbench.project_routes.lifecycle import register_pr
 from cyrene.workbench.http.workbench.project_routes.notifications import (
     register_project_notification_routes,
 )
-from cyrene.workbench.http.workbench.project_routes.tasks import register_project_task_routes
 
 
 def register_project_routes(
@@ -29,7 +28,7 @@ def register_project_routes(
     register_project_query_file_routes(router, project_service, file_service)
     register_project_notification_routes(router, project_service)
     register_project_lifecycle_routes(router, project_service)
-    return register_project_task_routes(router, project_service)
+    return {}
 
 
 __all__ = ["register_project_routes"]

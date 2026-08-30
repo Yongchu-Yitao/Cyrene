@@ -1,4 +1,17 @@
-import { wbcChatDropReplacesActiveConversation, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcHasTaskDrag, wbcPaneCard, wbcPaneCardLocation, wbcPlacePaneCard, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReadResourceDrag, wbcReadSplitDrag, wbcReadTaskDrag } from "../../workbench-chat.jsx"
+import { wbcChatDropReplacesActiveConversation, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcPaneCard, wbcPaneCardLocation, wbcPlacePaneCard, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReadResourceDrag, wbcReadSplitDrag } from "../../workbench-chat.jsx"
+
+function wbcCommittedPaneDropEdge(context, targetCardId, eventEdge) {
+  var preview = context && context.paneDropTarget;
+  var previewEdge = String(preview && preview.edge || "");
+  var previewMatchesTarget = preview
+    && String(preview.cardId || "") === String(targetCardId || "");
+  if (previewMatchesTarget
+    && ["top", "left", "replace", "right", "bottom"].indexOf(previewEdge) >= 0) {
+    return previewEdge;
+  }
+  return ["top", "left", "replace", "right", "bottom"].indexOf(eventEdge) >= 0
+    ? eventEdge : "bottom";
+}
 
 function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effectiveEdge) {
   var sourceCardId = "";
@@ -27,23 +40,6 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
         ownerChatId: chatId,
         freshInstance: !!existingChat,
       });
-    }
-  } else if (wbcHasTaskDrag(event)) {
-    var taskPayload = wbcReadTaskDrag(event);
-    if (taskPayload && taskPayload.id) {
-      var taskId = String(taskPayload.id);
-      var taskCardId = "task:" + taskId;
-      var existingTask = wbcPaneCardLocation(layout, taskCardId);
-      var replacingTask = existingTask
-        && String(existingTask.card && existingTask.card.id || "") === String(targetCardId || "")
-        && effectiveEdge === "replace";
-      sourceCardId = replacingTask ? taskCardId : "";
-      card = replacingTask ? existingTask.card : wbcPaneCard("task", taskId, {
-        id: existingTask ? undefined : taskCardId,
-        ownerChatId: context.activeChatIdRef.current || context.projectPaneOwnerKey(),
-        freshInstance: !!existingTask,
-      });
-      if (context.onSelectTask) context.onSelectTask(taskId);
     }
   } else if (wbcHasPluginViewDrag(event)) {
     var pluginPayload = wbcReadPluginViewDrag(event);
@@ -81,14 +77,18 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
 
 function wbcHandlePaneDrop(context, event, targetCardId, edge) {
   if (!wbcHasSplitDrag(event) && !wbcHasChatDrag(event)
-    && !wbcHasTaskDrag(event) && !wbcHasPluginViewDrag(event)
+    && !wbcHasPluginViewDrag(event)
     && !wbcHasResourceDrag(event)) return;
   event.preventDefault();
   event.stopPropagation();
   var layout = context.paneLayoutFor();
   var target = wbcPaneCardLocation(layout, targetCardId);
   if (!target) return;
-  var effectiveEdge = (layout[target.side] || []).length >= 2 ? "replace" : edge;
+  // Commit the drop target that was actually presented to the user. Overlapping
+  // native drag sensors can report a different final `drop` element from the
+  // last rendered preview, so the visible replace/split action owns the result.
+  var committedEdge = wbcCommittedPaneDropEdge(context, targetCardId, edge);
+  var effectiveEdge = (layout[target.side] || []).length >= 2 ? "replace" : committedEdge;
   var dropped = wbcDroppedPaneCard(context, event, layout, target, targetCardId, effectiveEdge);
   if (!dropped.card) return;
   if (context.paneCardDragImageCleanupRef.current) context.paneCardDragImageCleanupRef.current();
@@ -141,4 +141,4 @@ function wbcPlaceExistingPaneCard(context, sourceCardId, targetCardId, edge) {
   context.setPaneDropTarget(null);
 }
 
-export { wbcHandlePaneDrop, wbcPlaceExistingPaneCard }
+export { wbcCommittedPaneDropEdge, wbcHandlePaneDrop, wbcPlaceExistingPaneCard }

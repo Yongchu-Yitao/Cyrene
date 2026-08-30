@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from cyrene.core.hook import HOOK_EVENTS, Hook, HookEvent, refresh_active_hook_overrides
-from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
 from .chat_runtime import workbench_agent_data_directory
 

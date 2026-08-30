@@ -79,7 +79,7 @@ def _one_line(value: Any, limit: int) -> str:
 
 
 def _public_job(job: dict[str, Any]) -> dict[str, Any]:
-    from cyrene.runtime.attachments import build_public_attachment_payload
+    from cyrene.platform.attachments import build_public_attachment_payload
 
     raw_request = job.get("request") if isinstance(job.get("request"), dict) else {}
     request = {key: raw_request[key] for key in _PUBLIC_REQUEST_FIELDS if key in raw_request}

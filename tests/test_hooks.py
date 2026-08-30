@@ -8,6 +8,8 @@ import threading
 
 import pytest
 
+from cyrene.core.hook import registry as hook_registry
+
 from cyrene.core.context import ContextStoreRouter
 from cyrene.core.hook import (
     CONTEXT_CHANGE,
@@ -44,6 +46,34 @@ def test_every_tree_owns_an_independent_hook_set(tmp_path):
         assert first_hooks is store.get_hooks(first.id)
         assert first_hooks is not second_hooks
         assert observed == [first.id]
+        store.close()
+
+    run(scenario())
+
+
+def test_hook_worker_exits_when_idle_and_restarts_on_demand(tmp_path, monkeypatch):
+    monkeypatch.setattr(hook_registry, "_HOOK_WORKER_IDLE_SECONDS", 0.02)
+
+    async def scenario():
+        store = ContextStoreRouter(tmp_path / "context")
+        tree = store.create_tree(tree_id="tree", root_id="root")
+        hooks = store.hooks_for(tree.id)
+        observed = []
+        hooks.register(CONTEXT_CHANGE, lambda event: observed.append(event.payload.action))
+
+        store.mount(tree.id, tree.root_id, "first", node_id="first")
+        await hooks.drain()
+        first_thread = hooks._thread
+        assert first_thread is not None
+        await asyncio.sleep(0.05)
+        assert hooks._thread is None
+        assert not first_thread.is_alive()
+
+        store.mount(tree.id, "first", "second", node_id="second")
+        await hooks.drain()
+        second_thread = hooks._thread
+        assert second_thread is not None and second_thread is not first_thread
+        assert observed == ["mount", "mount"]
         store.close()
 
     run(scenario())

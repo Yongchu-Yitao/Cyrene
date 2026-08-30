@@ -4,7 +4,7 @@ import pytest
 
 from cyrene.core.plugin import PluginContext
 from cyrene.plugins.builtin.cyrene_memory.definitions import get_native_tool_def
-from cyrene.runtime import settings_store
+from cyrene.platform import settings_store
 from cyrene.plugins.builtin.cyrene_memory import structured as memory
 
 
@@ -576,7 +576,6 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
             "projects": [{
                 "id": "project-default",
                 "dataKey": "default",
-                "sessions": [{"id": "task-default"}],
             }]
         }
     chat = {"id": "chat-default", "projectId": "project-default"}
@@ -598,9 +597,7 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
         )
     workbench_context.configure_store(str(db_path))
 
-    assert workbench_context.resolve_workbench_project_data_key_for_session("task-default") == "default"
     assert workbench_context.resolve_workbench_project_data_key_for_session("chat-default") == "default"
-    assert workbench_context.resolve_workbench_project_id_for_session("task-default") == "project-default"
     assert workbench_context.resolve_workbench_project_id_for_session("chat-default") == "project-default"
     assert workbench_context.resolve_workbench_project_data_key_for_session("missing") is None
     assert workbench_context.resolve_workbench_project_id_for_session("missing") is None

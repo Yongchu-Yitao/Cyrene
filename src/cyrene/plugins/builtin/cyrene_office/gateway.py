@@ -397,7 +397,7 @@ def _register_asset_routes(app: FastAPI, material: OfficeGatewayFiles) -> None:
     @app.get("/appearance")
     async def appearance(request: Request) -> dict[str, Any]:
         _require_authorized(request, material)
-        from cyrene.runtime.settings_service import read_public
+        from cyrene.platform.settings_service import read_public
 
         snapshot, runtime_snapshot = await asyncio.gather(
             asyncio.to_thread(read_public, "appearance"),

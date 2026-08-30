@@ -14,14 +14,6 @@ CREATE TABLE IF NOT EXISTS workbench_state (
     payload_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS workbench_task_sessions (
-    session_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_workbench_task_sessions_project
-    ON workbench_task_sessions(project_id, updated_at DESC);
 CREATE TABLE IF NOT EXISTS workbench_chats (
     chat_id TEXT PRIMARY KEY,
     ordinal INTEGER NOT NULL,

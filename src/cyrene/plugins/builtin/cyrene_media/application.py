@@ -51,7 +51,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     context.provide("media", manager)
     context.provide("media_daemon", daemon)
     context.provide("media_wake", wake_bridge)
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )

@@ -4,9 +4,9 @@ from dataclasses import asdict
 from typing import Any
 from cyrene.core.plugin import PluginContext
 
-from cyrene.runtime import updater
-from cyrene.runtime.host_actions import schedule_action
-from cyrene.runtime.host_bridge import HostBridgeError, call_host
+from cyrene.platform import updater
+from cyrene.platform.host_actions import schedule_action
+from cyrene.platform.host_bridge import HostBridgeError, call_host
 from cyrene.plugins.native_runtime import json_result
 from cyrene.workbench.application.app_control import DELEGATION_OPERATIONS_SCHEMA, audit, authorization_decision, authorize, canonical_hash, envelope, publish_result, remember_idempotent, replay_idempotent
 

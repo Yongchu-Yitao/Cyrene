@@ -17,7 +17,11 @@ from typing import Any, Literal, TypeAlias
 from uuid import uuid4
 
 from .validation import check_input_schema
-from .resource_effects import PluginResourceEffect, normalize_resource_effects
+from .resource_effects import (
+    PluginResourceEffect,
+    normalize_resource_effects,
+    resource_effect_input_schema,
+)
 from .extensions import (
     APPLICATION_SETUP,
     SESSION_SETUP,
@@ -162,6 +166,9 @@ class Plugin:
         model_visible = metadata.get("model_visible", True)
         if not isinstance(model_visible, bool):
             raise TypeError("Plugin metadata.model_visible must be a boolean")
+        public_errors = metadata.get("public_errors", False)
+        if not isinstance(public_errors, bool):
+            raise TypeError("Plugin metadata.public_errors must be a boolean")
         main_only = metadata.get("main_only", False)
         if not isinstance(main_only, bool):
             raise TypeError("Plugin metadata.main_only must be a boolean")
@@ -198,6 +205,11 @@ class Plugin:
             )
         if schema.get("type", "object") != "object":
             raise ValueError("Plugin input_schema must describe an object")
+        resource_effect_input_schema(
+            schema,
+            effects=resource_effects,
+            allow_reveal=True,
+        )
         check_input_schema(schema)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "description", str(self.description).strip())
@@ -250,6 +262,24 @@ class Plugin:
 
         return normalize_resource_effects(self.metadata.get("resource_effects", ()))
 
+    def permits_read_only(self, arguments: Mapping[str, Any] | None = None) -> bool:
+        """Return whether this invocation is safe in a read-only Agent context."""
+
+        if self.metadata.get("read_only") is True:
+            return True
+        if self.metadata.get("read_only_gateway") is True:
+            return True
+        operations = {
+            str(item or "").strip()
+            for item in self.metadata.get("read_only_operations", ())
+            if str(item or "").strip()
+        }
+        if operations and arguments is not None:
+            operation = str(arguments.get("operation") or "").strip()
+            if operation in operations:
+                return True
+        return False
+
     def localized(self, locale: str) -> tuple[str, str]:
         """Return localized authored metadata with source text as fallback."""
 
@@ -264,7 +294,16 @@ class Plugin:
             ),
         )
 
-    def tool_definition(self) -> dict[str, Any]:
+    def model_input_schema(self, *, allow_resource_reveal: bool = False) -> dict[str, Any]:
+        """Return a model schema, optionally decorated with host presentation hints."""
+
+        return resource_effect_input_schema(
+            deepcopy(dict(self.input_schema)),
+            effects=self.resource_effects,
+            allow_reveal=allow_resource_reveal,
+        )
+
+    def tool_definition(self, *, allow_resource_reveal: bool = False) -> dict[str, Any]:
         """Return a fresh function definition suitable for a model call."""
 
         if self.kind != "tool":
@@ -275,7 +314,9 @@ class Plugin:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": deepcopy(dict(self.input_schema)),
+                "parameters": self.model_input_schema(
+                    allow_resource_reveal=allow_resource_reveal
+                ),
             },
         }
 

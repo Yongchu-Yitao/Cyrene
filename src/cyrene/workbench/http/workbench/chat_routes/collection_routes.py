@@ -172,7 +172,7 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
 
         requested_agent = body.get("agent") if isinstance(body.get("agent"), dict) else None
         requested_installation_id = str((requested_agent or {}).get("installationId") or "").strip()
-        from cyrene.agent_runtime.builtin import BUILTIN_INSTALLATION_ID
+        from cyrene.agents.builtin import BUILTIN_INSTALLATION_ID
 
         agent_snapshot = None
         model_access_snapshot = None

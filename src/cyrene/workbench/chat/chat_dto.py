@@ -40,6 +40,7 @@ class ChatSummaryDTO(TypedDict, total=False):
     running: bool
     usage: dict[str, int]
     latestUsage: dict[str, int]
+    activeGoal: dict[str, Any]
 
 
 class ChatDetailDTO(ChatSummaryDTO, total=False):

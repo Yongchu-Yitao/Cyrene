@@ -1304,18 +1304,27 @@ class PluginRegistry:
 
     def tool_definitions(self, *, agent_id: str = "main") -> tuple[dict, ...]:
         return tuple(
-            item.plugin.tool_definition()
+            item.plugin.tool_definition(
+                allow_resource_reveal=str(agent_id or "main") == "main"
+            )
             for item in self.list_plugins()
             if item.plugin.kind == "tool"
             and item.plugin.model_visible
             and self.plugin_accessible(item.plugin.name, agent_id=agent_id)
         )
 
-    def direct_tool_definitions(self, *, agent_id: str = "main") -> tuple[dict, ...]:
+    def direct_tool_definitions(
+        self,
+        *,
+        agent_id: str = "main",
+        read_only: bool = False,
+    ) -> tuple[dict, ...]:
         """Return core and user-selected tools exposed directly to the model."""
 
         return tuple(
-            item.plugin.tool_definition()
+            item.plugin.tool_definition(
+                allow_resource_reveal=str(agent_id or "main") == "main"
+            )
             for item in self.list_plugins()
             if item.plugin.kind == "tool"
             and item.plugin.model_visible
@@ -1324,6 +1333,7 @@ class PluginRegistry:
                 or item.plugin.agent_exposure == "direct"
             )
             and self.plugin_accessible(item.plugin.name, agent_id=agent_id)
+            and (not read_only or item.plugin.permits_read_only())
         )
 
     @staticmethod

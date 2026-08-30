@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import time
 from types import SimpleNamespace
 
 import pytest
 
-from cyrene.model_runtime.codex_provider import (
+from cyrene.model.codex_provider import (
     CODEX_AUTHENTICATION_EXPIRED,
     CODEX_CLI_REQUIRED,
     CODEX_MODEL_UNAVAILABLE,
@@ -33,7 +34,7 @@ from cyrene.model_runtime.codex_provider import (
     codex_error_should_cooldown,
     provider_request_cache_material,
 )
-from cyrene.model_runtime import codex_cli
+from cyrene.model import codex_cli
 
 
 def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy(
@@ -861,6 +862,76 @@ def test_codex_structured_action_rejects_invalid_arguments_json() -> None:
         )
 
 
+def test_codex_structured_action_repairs_unambiguous_schema_arguments() -> None:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "Plan",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "tasks": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": ["title", "tasks"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "max_steps": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["steps", "max_steps"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    malformed = {
+        "steps": {
+            "item": [
+                {
+                    "title": "Inspect",
+                    "tasks": {"item": ["Read", "Verify"]},
+                }
+            ]
+        },
+        "max_steps": "2",
+    }
+
+    response = _normalize_provider_action(
+        json.dumps(
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "name": "Plan",
+                        "arguments_json": json.dumps(malformed),
+                    }
+                ],
+            }
+        ),
+        tools,
+    )
+
+    arguments = json.loads(
+        response["tool_calls"][0]["function"]["arguments"]
+    )
+    assert arguments == {
+        "steps": [
+            {"title": "Inspect", "tasks": ["Read", "Verify"]}
+        ],
+        "max_steps": 2,
+    }
+
+
 def test_codex_multi_tool_action_contract_allows_direct_completion() -> None:
     tools = [
         {
@@ -1078,7 +1149,7 @@ async def test_codex_without_an_upstream_signal_interrupts_before_request_timeou
 
     monkeypatch.setattr(provider, "_ready_client", ready_client)
     monkeypatch.setattr(
-        "cyrene.model_runtime.codex_provider._first_signal_timeout",
+        "cyrene.model.codex_provider._first_signal_timeout",
         lambda _timeout: 0.01,
     )
     transport_events: list[dict] = []
@@ -1380,7 +1451,7 @@ async def test_codex_start_client_retries_once_with_pinned_cli_on_mismatch(
             pass
 
     monkeypatch.setattr(
-        "cyrene.model_runtime.codex_provider.AsyncCodexClient",
+        "cyrene.model.codex_provider.AsyncCodexClient",
         FailingThenWorkingClient,
     )
     monkeypatch.setattr(
@@ -1399,7 +1470,7 @@ async def test_codex_start_client_retries_once_with_pinned_cli_on_mismatch(
         return True
 
     monkeypatch.setattr(
-        "cyrene.model_runtime.codex_provider._recover_with_pinned_cli",
+        "cyrene.model.codex_provider._recover_with_pinned_cli",
         recover,
     )
 

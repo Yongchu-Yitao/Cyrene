@@ -1,4 +1,4 @@
-from cyrene.runtime.sqlite_json import (
+from cyrene.platform.sqlite_json import (
     deserialize_dict,
     deserialize_list,
     serialize_dict,

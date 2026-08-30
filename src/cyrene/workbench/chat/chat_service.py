@@ -67,10 +67,8 @@ logger = logging.getLogger(__name__)
 
 _WORKSPACE_SERVICES: dict[str, WorkspaceChangeService] = {}
 
-
 def get_chat_run_manager() -> ChatRunManager:
     return _get_chat_run_manager()
-
 
 def _workspace_service(
     db_path: str,
@@ -83,17 +81,14 @@ def _workspace_service(
         _WORKSPACE_SERVICES[key] = service
     return service
 
-
 async def shutdown_chat_services() -> None:
     services = list(_WORKSPACE_SERVICES.values())
     _WORKSPACE_SERVICES.clear()
     for service in services:
         await service.shutdown()
 
-
 def settle_chat_running_status(chat_id: str) -> None:
     get_chat_run_manager().settle_chat_running_status(str(chat_id or ""))
-
 
 class ChatService:
     """Application operations consumed by the split Workbench HTTP routes."""
@@ -249,7 +244,7 @@ class ChatService:
         self._workspace.sync_generated_files(chat_id, change_set)
 
     async def run_external_agent_turn(self, *args: Any, **kwargs: Any):
-        from cyrene.agent_runtime import run_external_agent_turn
+        from cyrene.agents import run_external_agent_turn
 
         return await run_external_agent_turn(*args, **kwargs)
 
@@ -574,48 +569,6 @@ class ChatService:
             "summary": summary,
             "lang": target_lang,
         }
-
-    async def summarize_chat_to_brief(
-        self,
-        chat: dict[str, Any],
-        project: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        language = app_language()
-        transcript = chat_transcript_for_brief(chat)
-        if not transcript:
-            return None
-        project_name = str(
-            project.get("name")
-            or localized("Untitled project", "未命名项目", language=language)
-        )
-        chat_title = str(
-            chat.get("title")
-            or localized("New chat", "新对话", language=language)
-        )
-        prompt = localized(
-            "Turn the complete conversation below into an execution-ready Task "
-            "brief. Return only one JSON object with the exact fields title, goal, "
-            "constraints (an array of strings), and acceptanceCriteria (an array "
-            "of strings). Preserve concrete requirements and do not invent facts. "
-            "Write every user-visible value in English.\n"
-            "Project: {project}\nConversation title: {title}\n"
-            "===== Conversation begins =====\n{transcript}\n"
-            "===== Conversation ends =====",
-            "把以下完整对话整理成可直接执行的任务简报。只返回一个 JSON 对象，字段必须为 "
-            "title、goal、constraints（字符串数组）和 acceptanceCriteria（字符串数组）。"
-            "保留具体要求，不要编造事实；所有用户可见字段值均使用简体中文。\n"
-            "项目：{project}\n对话标题：{title}\n"
-            "===== 对话开始 =====\n{transcript}\n===== 对话结束 =====",
-            language=language,
-            project=project_name,
-            title=chat_title,
-            transcript=transcript,
-        )
-        return await self._secondary_json(
-            prompt,
-            max_tokens=6000,
-            caller="workbench_chat_to_task_brief",
-        )
 
     async def dispatch_shell_wake_run(
         self,
@@ -1066,7 +1019,6 @@ class ChatService:
                 self.run_manager.conversation_runtime.delete_context,
                 chat_id,
             )
-
 
 __all__ = [
     "ChatService",

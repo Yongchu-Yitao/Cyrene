@@ -18,7 +18,7 @@ from .manager import MediaJobManager
 from .models import MediaArtifact, MediaProviderError
 from .providers.helpers import download_to_path, extension_for_mime
 from .settings import get_media_settings
-from cyrene.runtime.attachments import (
+from cyrene.platform.attachments import (
     register_generated_attachment,
     register_generated_attachment_bytes,
     safe_attachment_filename,

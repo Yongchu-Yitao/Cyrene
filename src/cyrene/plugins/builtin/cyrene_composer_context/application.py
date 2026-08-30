@@ -744,7 +744,7 @@ class ComposerContextService:
     def context_state(self) -> dict[str, Any]:
         """Preserve the existing `/api/context/state` response shape."""
 
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         workspace = self._projects.active_workspace() if self._projects is not None else ""
         catalog = self.catalog()
@@ -763,7 +763,7 @@ class ComposerContextService:
     def default_input_context(self, *, workspace_dir: Any = "") -> dict[str, Any]:
         """Resolve persisted composer defaults through the same Plugin boundary."""
 
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         workspace = str(workspace_dir or "").strip()
         if not workspace and self._projects is not None:
@@ -776,7 +776,7 @@ class ComposerContextService:
         )
 
     def set_soul_active(self, active: bool) -> dict[str, bool]:
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         if active and not self._option_catalog()["soul"]["available"]:
             raise RuntimeError(_l(
@@ -787,7 +787,7 @@ class ComposerContextService:
         return {"ok": True}
 
     def set_workspace_active(self, active: bool) -> dict[str, bool]:
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         if active and not self._option_catalog()["workspace"]["available"]:
             raise RuntimeError(_l(
@@ -798,7 +798,7 @@ class ComposerContextService:
         return {"ok": True}
 
     def activate_workspace(self, path: str) -> dict[str, bool]:
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         normalized = self._workspace_path("", path)
         history = [
@@ -870,7 +870,7 @@ def setup_application(context: PluginApplicationContext) -> None:
         projects=ProjectResolver(read_project_state, WORKSPACE_DIR),
     )
     context.provide("composer_context", service)
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
         plugin_setting_spec,

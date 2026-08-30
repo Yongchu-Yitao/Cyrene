@@ -14,6 +14,7 @@ from .services import terminal_service
 
 TOOL_NAME = "ReadShell"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
+TOOL_METADATA = {"read_only": True}
 
 _ANSI_ESCAPE_RE = re.compile(
     r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|P.*?\x1b\\|[@-_])",
@@ -169,6 +170,6 @@ async def _tool_read_shell(
 handler = _tool_read_shell
 
 __all__ = [
-    "TOOL_NAME", "TOOL_DEF", "handler", "_plain_scrollback_text",
+    "TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler", "_plain_scrollback_text",
     "_tool_read_shell",
 ]

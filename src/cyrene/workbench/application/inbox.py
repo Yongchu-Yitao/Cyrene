@@ -5,8 +5,7 @@ background tasks and publish their terminal result into the inbox; the agent
 waits on inbox events, so user guidance can be accepted while a tool is still
 running. Tool lifecycle telemetry is written to a separate audit table so it
 cannot interfere with queue priority or wakeups. This module is deliberately
-scoped to Workbench conversations via a ContextVar. Task sessions and the
-legacy chat loop keep their existing execution semantics.
+scoped to Workbench conversations via a ContextVar.
 """
 
 from __future__ import annotations
@@ -15,10 +14,11 @@ import asyncio
 import inspect
 import json
 import logging
+import queue as thread_queue
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from concurrent.futures import Future
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -36,6 +36,8 @@ ToolRunner = Callable[[], Awaitable[str]]
 _MAX_PARALLEL_TOOL_CALLS = 8
 _TELEMETRY_FLUSH_INTERVAL_SECONDS = 0.05
 _TELEMETRY_BATCH_MAX = 64
+_SQLITE_WRITE_BATCH_MAX = 128
+_SQLITE_WRITE_BATCH_WAIT_SECONDS = 0.002
 _TELEMETRY_INSERT = """
     INSERT OR IGNORE INTO workbench_agent_run_events
     (event_id, session_id, run_id, round_id, batch_id, event_type,
@@ -45,6 +47,147 @@ _TELEMETRY_INSERT = """
      termination_reason, payload_json, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
+
+
+@dataclass(frozen=True)
+class _SQLiteRequest:
+    operation: Callable[[sqlite3.Connection], Any]
+    future: Future[Any]
+    write: bool
+    batchable: bool
+
+
+_SQLITE_STOP = object()
+
+
+class _InboxSQLiteWriter:
+    """Own one SQLite connection and serialize short inbox transactions."""
+
+    def __init__(self, db_path: str, session_id: str) -> None:
+        self._db_path = str(Path(db_path).expanduser().resolve())
+        self._queue: thread_queue.Queue[_SQLiteRequest | object] = thread_queue.Queue()
+        self._pending: _SQLiteRequest | object | None = None
+        self._closed = False
+        self._lock = threading.Lock()
+        self._ready: Future[None] = Future()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"workbench-inbox-sqlite-{session_id}",
+            daemon=True,
+        )
+        self._thread.start()
+        self._ready.result(timeout=5)
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._db_path, timeout=5)
+        connection.execute("PRAGMA busy_timeout = 5000")
+        return connection
+
+    @staticmethod
+    def _settle(request: _SQLiteRequest, *, value: Any = None, error: BaseException | None = None) -> None:
+        if request.future.done():
+            return
+        if error is not None:
+            request.future.set_exception(error)
+        else:
+            request.future.set_result(value)
+
+    def _execute(self, connection: sqlite3.Connection, batch: list[_SQLiteRequest]) -> None:
+        results: list[Any] = []
+        try:
+            write = any(request.write for request in batch)
+            if write:
+                connection.execute("BEGIN IMMEDIATE")
+            for request in batch:
+                results.append(request.operation(connection))
+            if write:
+                connection.execute("COMMIT")
+        except BaseException as exc:
+            if any(request.write for request in batch):
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    pass
+            for request in batch:
+                self._settle(request, error=exc)
+            return
+        for request, value in zip(batch, results):
+            self._settle(request, value=value)
+
+    def _next(self) -> _SQLiteRequest | object:
+        if self._pending is not None:
+            item, self._pending = self._pending, None
+            return item
+        return self._queue.get()
+
+    def _run(self) -> None:
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = self._connect()
+            self._ready.set_result(None)
+            while True:
+                item = self._next()
+                if item is _SQLITE_STOP:
+                    return
+                request = item
+                if not isinstance(request, _SQLiteRequest):
+                    continue
+                batch = [request]
+                if request.write and request.batchable:
+                    deadline = time.perf_counter() + _SQLITE_WRITE_BATCH_WAIT_SECONDS
+                    while len(batch) < _SQLITE_WRITE_BATCH_MAX:
+                        remaining = deadline - time.perf_counter()
+                        if remaining <= 0:
+                            break
+                        try:
+                            following = self._queue.get(timeout=remaining)
+                        except thread_queue.Empty:
+                            break
+                        if following is _SQLITE_STOP or not (
+                            isinstance(following, _SQLiteRequest)
+                            and following.write
+                            and following.batchable
+                        ):
+                            self._pending = following
+                            break
+                        batch.append(following)
+                self._execute(connection, batch)
+        except BaseException as exc:
+            if not self._ready.done():
+                self._ready.set_exception(exc)
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except thread_queue.Empty:
+                    break
+                if isinstance(item, _SQLiteRequest):
+                    self._settle(item, error=exc)
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def call(
+        self,
+        operation: Callable[[sqlite3.Connection], Any],
+        *,
+        write: bool = False,
+        batchable: bool = False,
+    ) -> Any:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Workbench inbox SQLite writer is closed")
+            future: Future[Any] = Future()
+            self._queue.put(_SQLiteRequest(operation, future, write, batchable))
+        return future.result()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._queue.put(_SQLITE_STOP)
+        if self._thread is not threading.current_thread():
+            self._thread.join()
 
 
 class GuidanceAdmissionClosed(RuntimeError):
@@ -117,10 +260,7 @@ class WorkbenchAgentInbox:
         self._telemetry_flush_signal = asyncio.Event()
         self._telemetry_flush_lock = asyncio.Lock()
         self._telemetry_flush_task: asyncio.Task[None] | None = None
-        # Telemetry and queue acknowledgements can run concurrently in worker
-        # threads. Serialize this inbox's short SQLite transactions so a
-        # background trace write cannot hold up the agent's result path.
-        self._db_lock = threading.RLock()
+        self._db_writer: _InboxSQLiteWriter | None = None
         self._result_queued_at: dict[str, float] = {}
         self._tool_submitted_at: dict[str, float] = {}
         self._live_tool_states: dict[str, dict[str, Any]] = {}
@@ -128,6 +268,7 @@ class WorkbenchAgentInbox:
         self._closing = False
         if self.db_path:
             ensure_schema(self.db_path)
+            self._start_db_writer()
             self._recover_pending_guidance()
 
     def set_guidance_listener(
@@ -145,22 +286,21 @@ class WorkbenchAgentInbox:
         if listener is not None and self._guidance_pending_count:
             listener({"type": "guidance_recovered"})
 
-    def _connect(self) -> sqlite3.Connection:
-        path = Path(self.db_path).expanduser().resolve()
-        conn = sqlite3.connect(str(path), timeout=5)
-        conn.execute("PRAGMA busy_timeout = 5000")
-        return conn
+    def _start_db_writer(self) -> None:
+        if self.db_path and self._db_writer is None:
+            self._db_writer = _InboxSQLiteWriter(self.db_path, self.session_id)
 
-    @contextmanager
-    def _db_connection(self):
-        """Commit and close one serialized inbox database transaction."""
-        with self._db_lock:
-            conn = self._connect()
-            try:
-                with conn:
-                    yield conn
-            finally:
-                conn.close()
+    def _db_call(
+        self,
+        operation: Callable[[sqlite3.Connection], Any],
+        *,
+        write: bool = False,
+        batchable: bool = False,
+    ) -> Any:
+        writer = self._db_writer
+        if writer is None:
+            raise RuntimeError("Workbench inbox SQLite storage is not configured")
+        return writer.call(operation, write=write, batchable=batchable)
 
     def configure_storage(self, db_path: str) -> None:
         """Attach durable storage and recover events from a worker thread.
@@ -175,6 +315,7 @@ class WorkbenchAgentInbox:
         self.db_path = str(db_path or "")
         if self.db_path:
             ensure_schema(self.db_path)
+            self._start_db_writer()
             self._recover_pending_guidance()
 
     def _queue_length(self) -> int:
@@ -314,14 +455,17 @@ class WorkbenchAgentInbox:
         """Persist one ordered telemetry batch in a single transaction."""
         if not self.db_path or not rows:
             return
-        with self._db_connection() as conn:
-            conn.executemany(_TELEMETRY_INSERT, rows)
+        self._db_call(
+            lambda conn: conn.executemany(_TELEMETRY_INSERT, rows),
+            write=True,
+            batchable=True,
+        )
 
     def _persist(self, event: dict[str, Any]) -> bool | None:
         if not self.db_path:
             return True
         try:
-            with self._db_connection() as conn:
+            def insert(conn: sqlite3.Connection) -> bool:
                 cursor = conn.execute(
                     """
                     INSERT OR IGNORE INTO workbench_agent_inbox
@@ -340,6 +484,7 @@ class WorkbenchAgentInbox:
                     ),
                 )
                 return cursor.rowcount > 0
+            return bool(self._db_call(insert, write=True, batchable=True))
         except Exception:
             logger.exception("Failed to persist Workbench inbox event")
             return None
@@ -348,11 +493,12 @@ class WorkbenchAgentInbox:
         if not self.db_path or not dedupe_key:
             return ""
         try:
-            with self._db_connection() as conn:
-                row = conn.execute(
+            row = self._db_call(
+                lambda conn: conn.execute(
                     "SELECT event_id FROM workbench_agent_inbox WHERE session_id=? AND dedupe_key=?",
                     (self.session_id, dedupe_key),
                 ).fetchone()
+            )
             return str(row[0]) if row else ""
         except Exception:
             logger.exception("Failed to resolve duplicate Workbench inbox event")
@@ -369,8 +515,8 @@ class WorkbenchAgentInbox:
         if not self.db_path or not dedupe_key:
             return None
         try:
-            with self._db_connection() as conn:
-                row = conn.execute(
+            row = self._db_call(
+                lambda conn: conn.execute(
                     """
                     SELECT event_id, run_id, round_id, batch_id, event_type,
                            priority, dedupe_key, payload_json, created_at
@@ -379,6 +525,7 @@ class WorkbenchAgentInbox:
                     """,
                     (self.session_id, dedupe_key),
                 ).fetchone()
+            )
             if not row:
                 return None
             try:
@@ -405,12 +552,15 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._db_connection() as conn:
-                conn.execute(
+            self._db_call(
+                lambda conn: conn.execute(
                     "UPDATE workbench_agent_inbox SET status='completed', completed_at=? "
                     "WHERE event_id=? AND session_id=?",
                     (_now(), str(event_id), self.session_id),
-                )
+                ),
+                write=True,
+                batchable=True,
+            )
         except Exception:
             logger.exception("Failed to acknowledge Workbench inbox event %s", event_id)
 
@@ -418,12 +568,15 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._db_connection() as conn:
-                conn.execute(
+            self._db_call(
+                lambda conn: conn.execute(
                     "UPDATE workbench_agent_inbox SET status='claimed' "
                     "WHERE event_id=? AND session_id=? AND status='queued'",
                     (str(event_id), self.session_id),
-                )
+                ),
+                write=True,
+                batchable=True,
+            )
         except Exception:
             logger.exception("Failed to claim Workbench inbox event %s", event_id)
 
@@ -435,7 +588,7 @@ class WorkbenchAgentInbox:
         next resumed.
         """
         try:
-            with self._db_connection() as conn:
+            def recover(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                 conn.execute(
                     "UPDATE workbench_agent_inbox SET status='failed', completed_at=?, "
                     "termination_reason='process_recovery' "
@@ -458,6 +611,8 @@ class WorkbenchAgentInbox:
                     "AND event_type='guidance' AND status='queued'",
                     (self.run_id, self.session_id),
                 )
+                return rows
+            rows = self._db_call(recover, write=True)
             for row in rows:
                 event = {
                     "event_id": str(row[0]),
@@ -1230,13 +1385,16 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._db_connection() as conn:
-                conn.execute(
+            self._db_call(
+                lambda conn: conn.execute(
                     "UPDATE workbench_agent_inbox SET status='cancelled', completed_at=?, "
                     "termination_reason=? WHERE session_id=? AND run_id=? "
                     "AND status IN ('queued','claimed')",
                     (_now(), termination_reason, self.session_id, self.run_id),
-                )
+                ),
+                write=True,
+                batchable=True,
+            )
         except Exception:
             logger.exception("Failed to clean pending Workbench inbox events")
 
@@ -1244,13 +1402,16 @@ class WorkbenchAgentInbox:
         if not self.db_path:
             return
         try:
-            with self._db_connection() as conn:
-                conn.execute(
+            self._db_call(
+                lambda conn: conn.execute(
                     "UPDATE workbench_agent_inbox SET status='cancelled', completed_at=?, "
                     "termination_reason=? WHERE event_id=? AND session_id=? "
                     "AND status IN ('queued','claimed')",
                     (_now(), termination_reason, str(event_id), self.session_id),
-                )
+                ),
+                write=True,
+                batchable=True,
+            )
         except Exception:
             logger.exception("Failed to clean Workbench inbox event %s", event_id)
 
@@ -1311,6 +1472,9 @@ class WorkbenchAgentInbox:
                 task.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
+        writer, self._db_writer = self._db_writer, None
+        if writer is not None:
+            await asyncio.to_thread(writer.close)
 
 
 class WorkbenchGuidanceChannel:

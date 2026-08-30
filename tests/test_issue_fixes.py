@@ -125,7 +125,7 @@ def test_invalid_schedules_raise_valueerror(stype, svalue):
 
 
 def test_cache_file_lives_under_data_dir_not_source(tmp_path, monkeypatch):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
     cache_file = attachments._cache_file("deadbeef")
@@ -133,7 +133,7 @@ def test_cache_file_lives_under_data_dir_not_source(tmp_path, monkeypatch):
 
 
 def test_cache_key_changes_with_content(tmp_path):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     f = tmp_path / "a.txt"
     f.write_text("hello", encoding="utf-8")
@@ -144,7 +144,7 @@ def test_cache_key_changes_with_content(tmp_path):
 
 
 def test_cache_key_changes_with_prompt(tmp_path):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     f = tmp_path / "a.txt"
     f.write_text("hello", encoding="utf-8")
@@ -152,7 +152,7 @@ def test_cache_key_changes_with_prompt(tmp_path):
 
 
 def test_cache_key_changes_with_model_and_parser_version(tmp_path, monkeypatch):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     f = tmp_path / "a.txt"
     f.write_text("hello", encoding="utf-8")
@@ -168,7 +168,7 @@ def test_cache_key_changes_with_model_and_parser_version(tmp_path, monkeypatch):
 
 
 async def test_analyze_attachment_does_not_write_next_to_source(tmp_path, monkeypatch):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     cache_dir = tmp_path / "cache"
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", cache_dir)
@@ -188,7 +188,7 @@ async def test_analyze_attachment_does_not_write_next_to_source(tmp_path, monkey
 
 
 async def test_analyze_attachment_reuses_and_invalidates_cache(tmp_path, monkeypatch):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(attachments, "_vision_model_fingerprint", lambda: "fp")
@@ -216,7 +216,7 @@ async def test_analyze_attachment_reuses_and_invalidates_cache(tmp_path, monkeyp
 
 async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(tmp_path, monkeypatch):
     import cyrene.core.plugin
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     image = tmp_path / "clear.png"
     image.write_bytes(b"image")
@@ -242,7 +242,7 @@ async def test_analyze_attachment_uses_local_ocr_without_vision_for_clear_text(t
 
 async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_path, monkeypatch):
     import cyrene.core.plugin
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     image = tmp_path / "short.png"
     image.write_bytes(b"image")
@@ -268,7 +268,7 @@ async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_p
 
 
 async def test_analyze_attachment_reports_missing_file(tmp_path):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     with pytest.raises(FileNotFoundError, match="Attachment file not found"):
         await attachments.analyze_attachment(str(tmp_path / "missing.docx"))
@@ -278,7 +278,7 @@ async def test_analyze_attachment_extracts_extensionless_docx(tmp_path, monkeypa
     import zipfile
     import cyrene.core.plugin
     from cyrene.plugins.builtin.cyrene_knowledge.content import extract_text
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(
@@ -305,7 +305,7 @@ async def test_analyze_attachment_extracts_extensionless_docx(tmp_path, monkeypa
 
 
 def test_safe_attachment_filename_preserves_extension():
-    from cyrene.runtime.attachments import safe_attachment_filename
+    from cyrene.platform.attachments import safe_attachment_filename
 
     assert safe_attachment_filename("毕业事情.docx", fallback_stem="upload") == "upload.docx"
 
@@ -316,7 +316,7 @@ def test_safe_attachment_filename_preserves_extension():
 
 
 def _patch_channels(monkeypatch, *, desktop=True, webhook=True, telegram=True, wechat=True, sse=True):
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     mocks = {
         "_notify_desktop": AsyncMock(return_value={"ok": desktop}),
@@ -332,7 +332,7 @@ def _patch_channels(monkeypatch, *, desktop=True, webhook=True, telegram=True, w
 
 async def test_auto_stops_after_first_success(monkeypatch):
     """A successful desktop notification must NOT fan out to Telegram/WeChat (#45)."""
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     mocks = _patch_channels(monkeypatch, desktop=True)
     result = await n.notify("t", "b", channel="auto")
@@ -345,7 +345,7 @@ async def test_auto_stops_after_first_success(monkeypatch):
 
 
 async def test_auto_falls_through_when_earlier_channels_fail(monkeypatch):
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     # desktop fails, no webhook configured, telegram succeeds -> stop there.
     mocks = _patch_channels(monkeypatch, desktop=False, telegram=True)
@@ -359,7 +359,7 @@ async def test_auto_falls_through_when_earlier_channels_fail(monkeypatch):
 
 
 async def test_broadcast_hits_every_channel(monkeypatch):
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     mocks = _patch_channels(monkeypatch)
     result = await n.notify("t", "b", channel="broadcast", webhook_url="https://example.test/hook")
@@ -372,7 +372,7 @@ async def test_broadcast_hits_every_channel(monkeypatch):
 
 
 async def test_explicit_single_channel(monkeypatch):
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     mocks = _patch_channels(monkeypatch)
     result = await n.notify("t", "b", channel="telegram")
@@ -384,7 +384,7 @@ async def test_explicit_single_channel(monkeypatch):
 
 
 async def test_unknown_channel_is_rejected(monkeypatch):
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     _patch_channels(monkeypatch)
     result = await n.notify("t", "b", channel="carrier-pigeon")
@@ -410,7 +410,7 @@ async def test_macos_desktop_uses_terminal_notifier(monkeypatch):
       (no shell-escaping needed — subprocess uses execv, not a shell).
     """
     import shutil
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     monkeypatch.setattr(n.platform, "system", lambda: "Darwin")
     publish = AsyncMock(return_value={"ok": True})
@@ -442,7 +442,7 @@ async def test_macos_desktop_not_installed_gives_clear_error(monkeypatch):
     """When terminal-notifier is absent the channel reports a helpful error
     so ``auto`` mode falls through to SSE/WeChat/Telegram (#12)."""
     import shutil
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     monkeypatch.setattr(n.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(shutil, "which", lambda _: None)
@@ -458,7 +458,7 @@ async def test_macos_desktop_reports_notifier_failure(monkeypatch):
     """A non-zero terminal-notifier exit surfaces as a failed channel so
     ``auto`` mode can fall through to the next channel (#12)."""
     import shutil
-    from cyrene.runtime import notifications as n
+    from cyrene.platform import notifications as n
 
     monkeypatch.setattr(n.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/local/bin/terminal-notifier")
@@ -486,7 +486,7 @@ def _update_restart_client(tmp_path):
 
 
 def test_update_restart_api_missing_package_keeps_process_running(monkeypatch, tmp_path):
-    from cyrene.runtime import updater
+    from cyrene.platform import updater
 
     monkeypatch.setitem(updater._download_progress, "downloaded", 0)
     monkeypatch.setitem(updater._download_progress, "total", 0)
@@ -503,8 +503,8 @@ def test_update_restart_api_missing_package_keeps_process_running(monkeypatch, t
 
 
 def test_update_restart_api_requires_electron_host_before_scheduling(monkeypatch, tmp_path):
-    from cyrene.runtime import updater
-    from cyrene.runtime import update_install
+    from cyrene.platform import updater
+    from cyrene.platform import update_install
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
@@ -530,9 +530,9 @@ def test_update_restart_api_requires_electron_host_before_scheduling(monkeypatch
 
 
 def test_update_restart_api_schedules_verified_install_without_exiting_in_route(monkeypatch, tmp_path):
-    from cyrene.runtime import updater
-    from cyrene.runtime import host_actions, host_bridge
-    from cyrene.runtime import update_install
+    from cyrene.platform import updater
+    from cyrene.platform import host_actions, host_bridge
+    from cyrene.platform import update_install
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"verified update")

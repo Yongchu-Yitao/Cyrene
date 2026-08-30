@@ -8,6 +8,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from cyrene.core.context import ContextStoreRouter
 from cyrene.core.plugin import (
     ExtensionContribution,
     Plugin,
@@ -15,7 +16,10 @@ from cyrene.core.plugin import (
     PluginPack,
     PluginRegistry,
     PluginSetupContext,
+    resource_effect_input_schema,
     resolve_resource_effect_values,
+    split_resource_reveal,
+    workspace_resource_locations,
 )
 from cyrene.plugins import (
     WORKBENCH_SURFACE,
@@ -27,16 +31,261 @@ from cyrene.plugins import (
     WorkspaceActionContribution,
     WorkspaceFileTypeContribution,
 )
+from cyrene.plugins.builtin.cyrene_code import plugin_pack as code_plugin_pack
+from cyrene.plugins.builtin.cyrene_control import plugin_pack as control_plugin_pack
+from cyrene.plugins.builtin.cyrene_control.enter_plan_mode import _tool_enter_plan_mode
+from cyrene.plugins.builtin.cyrene_control.state import (
+    current_plan,
+    persist_plan,
+    plan_file_path,
+)
+from cyrene.plugins.builtin.cyrene_control.update_plan_progress import (
+    _tool_update_plan_progress,
+)
 from cyrene.plugins.builtin.cyrene_plugin_development.tools import (
     SCAFFOLD_TYPES,
     scaffold,
     validate_pack_directory,
     validate_plugin_source,
 )
+from cyrene.workbench.chat.conversation_context_service import AgentContextRepository
+from cyrene.workbench.http.workbench.chat_routes.detail_routes import _normalize_active_plan
 from cyrene.workbench.http.plugins import plugin_registry_status, register_plugin_routes
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_builtin_dynamic_workspace_contributions_are_plugin_owned() -> None:
+    code_surfaces = [
+        contribution.value
+        for contribution in code_plugin_pack.contributions
+        if contribution.point == WORKBENCH_SURFACE
+    ]
+    assert {surface.id for surface in code_surfaces} == {
+        "file-editor",
+        "directory-tree",
+    }
+    assert {surface.renderer.id for surface in code_surfaces} == {
+        "workspace-composite",
+        "workspace-directory",
+    }
+    editable_extensions = {
+        extension
+        for contribution in code_plugin_pack.contributions
+        if contribution.point == WORKSPACE_FILE_TYPE
+        and contribution.value.editable
+        for extension in contribution.value.extensions
+    }
+    assert {".py", ".md", ".tex", ".json"} <= editable_extensions
+
+    control_surfaces = [
+        contribution.value
+        for contribution in control_plugin_pack.contributions
+        if contribution.point == WORKBENCH_SURFACE
+    ]
+    assert control_surfaces == []
+
+
+def test_control_plan_is_durable_plugin_session_state(tmp_path) -> None:
+    store = ContextStoreRouter(tmp_path / "context")
+    tree = store.create_tree({"role": "system"}, tree_id="chat-1", root_id="root")
+    user = store.mount(
+        tree.id,
+        tree.root_id,
+        {"role": "user", "content": "plan it"},
+        node_id="user",
+    )
+    context = PluginContext(
+        tree=store,
+        tree_id=tree.id,
+        node_id=user.id,
+    )
+    plan = {
+        "planId": "plan-1",
+        "title": "Implement it",
+        "status": "active",
+        "steps": [{"id": "step-1", "title": "Build", "status": "pending"}],
+    }
+
+    assert persist_plan(context, plan) is True
+    assert current_plan(context) == plan
+    root = store.get_node(tree.id, tree.root_id)
+    state = root.value["_plugin_session_state"]["cyrene_control"]
+    assert state["public_snapshot"]["activePlan"] == plan
+    store.close()
+
+
+def test_control_plan_file_is_authoritative_for_agent_progress(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = ContextStoreRouter(tmp_path / "context")
+    tree = store.create_tree({"role": "system"}, tree_id="chat-1", root_id="root")
+    user = store.mount(tree.id, tree.root_id, {"role": "user", "content": "plan"}, node_id="user")
+    context = PluginContext(
+        workspace=workspace,
+        tree=store,
+        tree_id=tree.id,
+        node_id=user.id,
+        data={
+            "run_context": {
+                "agent_id": "main",
+                "session_id": "chat-1",
+                "round_id": "round-1",
+            }
+        },
+    )
+    plan = {
+        "planId": "plan-1",
+        "title": "Implement it",
+        "status": "active",
+        "steps": [
+            {"id": "step_1", "title": "First", "status": "completed", "dependsOn": []},
+            {"id": "step_2", "title": "Second", "status": "pending", "dependsOn": ["step_1"]},
+        ],
+    }
+
+    assert persist_plan(context, plan) is True
+    path = plan_file_path(workspace, "chat-1")
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored["steps"][1]["description"] = "Latest user edit"
+    path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+
+    assert current_plan(context)["steps"][1]["description"] == "Latest user edit"
+    updated = json.loads(asyncio.run(_tool_update_plan_progress(
+        {"step": 2, "status": "in_progress"},
+        context,
+    )))
+    assert updated["status"] == "updated"
+    assert updated["latestStep"]["description"] == "Latest user edit"
+    assert updated["planPath"].startswith(".cyrene/plan/")
+    store.close()
+
+
+def test_control_plan_blocks_steps_with_unfinished_prerequisites(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = ContextStoreRouter(tmp_path / "context")
+    tree = store.create_tree({"role": "system"}, tree_id="chat-1", root_id="root")
+    user = store.mount(tree.id, tree.root_id, {"role": "user", "content": "plan"}, node_id="user")
+    context = PluginContext(
+        workspace=workspace,
+        tree=store,
+        tree_id=tree.id,
+        node_id=user.id,
+        data={"run_context": {"agent_id": "main", "session_id": "chat-1", "round_id": "round-1"}},
+    )
+    plan = {
+        "planId": "plan-1",
+        "title": "Implement it",
+        "status": "active",
+        "steps": [
+            {"id": "step_1", "title": "First", "status": "pending", "dependsOn": []},
+            {"id": "step_2", "title": "Second", "status": "pending", "dependsOn": ["step_1"]},
+        ],
+    }
+
+    assert persist_plan(context, plan) is True
+    result = json.loads(asyncio.run(_tool_update_plan_progress(
+        {"step": 2, "status": "in_progress"},
+        context,
+    )))
+
+    assert result["status"] == "blocked"
+    assert result["unmetPrerequisites"] == [
+        {"id": "step_1", "title": "First", "status": "pending"}
+    ]
+    assert current_plan(context)["steps"][1]["status"] == "pending"
+    store.close()
+
+
+def test_enter_plan_mode_accepts_step_dependencies_and_execution_fields(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = ContextStoreRouter(tmp_path / "context")
+    tree = store.create_tree({"role": "system"}, tree_id="chat-1", root_id="root")
+    user = store.mount(tree.id, tree.root_id, {"role": "user", "content": "plan"}, node_id="user")
+    context = PluginContext(
+        workspace=workspace,
+        tree=store,
+        tree_id=tree.id,
+        node_id=user.id,
+        data={"run_context": {"agent_id": "main", "session_id": "chat-1", "round_id": "round-1"}},
+    )
+
+    result = json.loads(asyncio.run(_tool_enter_plan_mode({
+        "title": "Build",
+        "steps": [
+            {"title": "Inspect", "description": "Read the code", "contextFiles": ["src/app.py"]},
+            {
+                "title": "Implement",
+                "description": "Make the change",
+                "dependsOnStepIndexes": [1],
+                "command": "uv run pytest tests/test_app.py",
+            },
+        ],
+    }, context)))
+
+    plan = result["plan"]
+    assert plan["steps"][1]["dependsOn"] == ["step_1"]
+    assert plan["steps"][1]["command"] == "uv run pytest tests/test_app.py"
+    assert plan["steps"][0]["contextFiles"][0]["path"] == "src/app.py"
+    assert plan_file_path(workspace, "chat-1").is_file()
+    store.close()
+
+
+def test_conversation_plan_editor_updates_the_plugin_owned_root_state(tmp_path) -> None:
+    context_directory = tmp_path / "context"
+    with ContextStoreRouter(context_directory) as store:
+        store.create_tree({"role": "system"}, tree_id="chat-1", root_id="root")
+    plan = {
+        "planId": "plan-1",
+        "title": "Edited plan",
+        "status": "proposed",
+        "steps": [{"id": "step-1", "title": "Build", "status": "pending"}],
+    }
+
+    repository = AgentContextRepository(context_directory)
+    assert repository.write_plugin_session_state(
+        "chat-1",
+        "cyrene_control",
+        {
+            "schema_version": 1,
+            "plan": plan,
+            "public_snapshot": {"activePlan": plan},
+        },
+    ) is True
+
+    with ContextStoreRouter(context_directory) as store:
+        root = store.get_node("chat-1", "root")
+    state = root.value["_plugin_session_state"]["cyrene_control"]
+    assert state["plan"] == plan
+    assert state["public_snapshot"]["activePlan"] == plan
+
+
+def test_conversation_plan_mutation_preserves_started_steps_but_edits_pending_steps() -> None:
+    current = {
+        "planId": "plan-1",
+        "title": "Plan",
+        "steps": [
+            {"id": "step-1", "title": "Finished", "status": "completed", "note": "kept"},
+            {"id": "step-2", "title": "Pending", "status": "pending"},
+        ],
+    }
+    edited = {
+        **current,
+        "steps": [
+            {"id": "step-1", "title": "Tampered", "status": "pending"},
+            {"id": "step-2", "title": "Edited pending", "status": "pending", "dependsOn": ["step-1"]},
+        ],
+    }
+
+    normalized = _normalize_active_plan(edited, current)
+
+    assert normalized["steps"][0] == current["steps"][0]
+    assert normalized["steps"][1]["title"] == "Edited pending"
+    with pytest.raises(ValueError, match="plan_started"):
+        _normalize_active_plan({**edited, "steps": edited["steps"][::-1]}, current)
 
 
 def test_plugin_resource_effects_are_validated_and_resolved_without_path_access() -> None:
@@ -73,6 +322,62 @@ def test_plugin_resource_effects_are_validated_and_resolved_without_path_access(
         phase="completed",
     ) == ()
 
+    model_schema = resource_effect_input_schema(
+        plugin.input_schema,
+        effects=plugin.resource_effects,
+        allow_reveal=True,
+    )
+    assert model_schema["properties"]["reveal"]["type"] == "boolean"
+    reveal_description = model_schema["properties"]["reveal"]["description"]
+    assert "edit, open, show, or view this exact file" in reveal_description
+    assert "requested edit is already satisfied" in reveal_description
+    assert "reveal" not in plugin.input_schema.get("properties", {})
+    assert plugin.tool_definition(
+        allow_resource_reveal=True
+    )["function"]["parameters"]["properties"]["reveal"]["type"] == "boolean"
+    assert "reveal" not in plugin.tool_definition()["function"]["parameters"].get(
+        "properties", {}
+    )
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(plugin, source="test-resource")
+    main_parameters = registry.tool_definitions(
+        agent_id="main"
+    )[0]["function"]["parameters"]
+    child_parameters = registry.tool_definitions(
+        agent_id="worker"
+    )[0]["function"]["parameters"]
+    assert "reveal" in main_parameters["properties"]
+    assert "reveal" not in child_parameters.get("properties", {})
+    clean_arguments, reveal = split_resource_reveal(
+        {"target": {"path": "src/app.py"}, "reveal": True},
+        effects=plugin.resource_effects,
+        allow_reveal=True,
+    )
+    assert clean_arguments == {"target": {"path": "src/app.py"}}
+    assert reveal is True
+
+    workspace = Path.cwd()
+    assert workspace_resource_locations(
+        plugin.resource_effects,
+        clean_arguments,
+        workspace=workspace,
+        project_id="project-1",
+        phase="started",
+    ) == ({
+        "kind": "file",
+        "access": "write",
+        "phase": "started",
+        "projectId": "project-1",
+        "path": "src/app.py",
+    },)
+    assert workspace_resource_locations(
+        plugin.resource_effects,
+        {"target": {"path": "../outside.py"}},
+        workspace=workspace,
+        project_id="project-1",
+        phase="started",
+    ) == ()
+
     with pytest.raises(ValueError, match="argument_path"):
         Plugin(
             name="InvalidResourceTool",
@@ -84,6 +389,24 @@ def test_plugin_resource_effects_are_validated_and_resolved_without_path_access(
                     "argument_path": ("..",),
                     "kind": "file",
                     "access": "write",
+                },),
+            },
+        )
+
+    with pytest.raises(ValueError, match="reserve the reveal"):
+        Plugin(
+            name="RevealCollision",
+            description="invalid",
+            input_schema={
+                "type": "object",
+                "properties": {"reveal": {"type": "boolean"}},
+            },
+            handler=handler,
+            metadata={
+                "resource_effects": ({
+                    "argument_path": ("reveal",),
+                    "kind": "file",
+                    "access": "read",
                 },),
             },
         )

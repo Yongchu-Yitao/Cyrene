@@ -1,6 +1,6 @@
 """
 Debug logging for LLM calls. Logs every request/response to a file.
-Activated by `python -m cyrene.runtime.host --verbose`.
+Activated by `python -m cyrene.platform.host --verbose`.
 """
 
 import asyncio
@@ -287,7 +287,7 @@ async def _flush_telemetry_batch() -> None:
             tool_events.append((timestamp, str(event.get("tool") or "")))
         elif event_type in _PERMISSION_EVENT_TYPES:
             permission_events.append(event)
-    from cyrene.runtime import database as cy_db
+    from cyrene.platform import database as cy_db
 
     await cy_db.record_usage_stats_batch(
         str(DB_PATH),

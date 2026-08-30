@@ -7,12 +7,10 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter
 
-from cyrene.workbench.tasks.task_execution_service import TaskExecutionResponse
 from cyrene.workbench.http import errors as route_errors
 from cyrene.plugins.builtin.cyrene_content.routes import register_search_routes
 from cyrene.workbench.http.workbench.chat_routes import run_action_routes, run_send_routes
 from cyrene.plugins.builtin.cyrene_voice.workbench_routes import register_voice_routes
-from cyrene.workbench.http.workbench.task_session_routes.responses import service_response
 
 
 def _json_body(response) -> dict:
@@ -131,15 +129,4 @@ async def test_voice_route_does_not_expose_raw_service_error() -> None:
         "error": "音频文件无效或过大。",
         "code": "invalid_voice_audio",
         "created": False,
-    }
-
-
-def test_task_service_errors_receive_a_stable_fallback_code() -> None:
-    response = service_response(
-        TaskExecutionResponse({"error": "未找到会话。"}, status_code=404)
-    )
-
-    assert _json_body(response) == {
-        "error": "未找到会话。",
-        "code": "not_found",
     }

@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import cyrene.runtime.updater as updater
+import cyrene.platform.updater as updater
 
 SHA = "a" * 64
 
@@ -37,9 +37,9 @@ def fresh_auto_state(monkeypatch):
     updater._notified_update_keys.clear()
     updater._state_restored = False
     # 阻止测试期间的真实持久化写入（各测试自行 patch get/set_ 模拟存储）。
-    monkeypatch.setattr("cyrene.runtime.settings_store.set_", lambda *a, **k: None)
+    monkeypatch.setattr("cyrene.platform.settings_store.set_", lambda *a, **k: None)
     monkeypatch.setattr(
-        "cyrene.runtime.settings_store.get",
+        "cyrene.platform.settings_store.get",
         lambda _key, default=None: default,
     )
     updater._download_progress.update({
@@ -68,7 +68,7 @@ def test_auto_update_enabled_default_true():
 
 
 def test_auto_update_enabled_off(monkeypatch):
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", lambda key, default: False)
+    monkeypatch.setattr("cyrene.platform.settings_store.get", lambda key, default: False)
     assert updater._auto_update_enabled() is False
 
 
@@ -92,7 +92,7 @@ async def test_auto_download_runs_when_enabled(fresh_auto_state, monkeypatch):
 
 
 async def test_auto_download_disabled_skips(fresh_auto_state, monkeypatch):
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", lambda key, default: False)
+    monkeypatch.setattr("cyrene.platform.settings_store.get", lambda key, default: False)
     monkeypatch.setattr(updater, "download_update", lambda *a, **k: pytest.fail("should not download"))
 
     updater._maybe_auto_download(_info())
@@ -199,9 +199,9 @@ def test_persist_then_restore_verified_state(fresh_auto_state, monkeypatch, tmp_
     def fake_set(key, value):
         stored[key] = value
 
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", lambda key, default: stored.get(key, default))
+    monkeypatch.setattr("cyrene.platform.settings_store.get", lambda key, default: stored.get(key, default))
     # fresh_auto_state 已把 set_ 置为 no-op；这里覆盖为 fake_set 记录写入。
-    monkeypatch.setattr("cyrene.runtime.settings_store.set_", fake_set)
+    monkeypatch.setattr("cyrene.platform.settings_store.set_", fake_set)
 
     pkg = tmp_path / "Cyrene-2.0.0-mac.dmg"
     pkg.write_bytes(b"x")
@@ -235,7 +235,7 @@ def test_restore_skips_when_package_file_missing(fresh_auto_state, monkeypatch, 
             return {"verified": True, "sha256": SHA, "path": str(tmp_path / "gone.dmg"), "downloaded": 1, "total": 1}
         return default
 
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", fake_get)
+    monkeypatch.setattr("cyrene.platform.settings_store.get", fake_get)
 
     updater._state_restored = False
     progress = updater.get_download_progress()
@@ -251,7 +251,7 @@ async def test_restored_verified_package_skips_redownload(fresh_auto_state, monk
     def fake_get(key, default):
         return stored.get(key, default)
 
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", fake_get)
+    monkeypatch.setattr("cyrene.platform.settings_store.get", fake_get)
     monkeypatch.setattr(updater, "download_update", lambda *a, **k: pytest.fail("should not re-download"))
     updater._maybe_auto_download(_info(sha256=digest, size=1))
     assert updater._auto_download_task is None
@@ -275,11 +275,11 @@ def test_restore_rejects_same_size_modified_package(
     }
 
     monkeypatch.setattr(
-        "cyrene.runtime.settings_store.get",
+        "cyrene.platform.settings_store.get",
         lambda key, default: stored.get(key, default),
     )
     monkeypatch.setattr(
-        "cyrene.runtime.settings_store.set_",
+        "cyrene.platform.settings_store.set_",
         lambda key, value: stored.__setitem__(key, value),
     )
 
@@ -481,7 +481,7 @@ def test_restore_pending_partial_download(fresh_auto_state, monkeypatch, tmp_pat
             return {"version": "2.0.0", "sha256": SHA, "total": 3, "path": str(pkg)}
         return default
 
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", fake_get)
+    monkeypatch.setattr("cyrene.platform.settings_store.get", fake_get)
 
     updater._state_restored = False
     progress = updater.get_download_progress()
@@ -508,7 +508,7 @@ async def test_restored_pending_download_resumes(fresh_auto_state, monkeypatch, 
             return {"version": "2.0.0", "sha256": abc_sha, "total": 3, "path": str(pkg)}
         return default
 
-    monkeypatch.setattr("cyrene.runtime.settings_store.get", fake_get)
+    monkeypatch.setattr("cyrene.platform.settings_store.get", fake_get)
 
     resp = FakeResp(status_code=206, headers={"content-range": "bytes 2-2/3", "content-length": "1"}, body=b"c")
     client = FakeClient(responses=[resp])

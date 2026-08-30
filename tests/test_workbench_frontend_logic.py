@@ -51,92 +51,6 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert '"workbenchChat.attachmentType.audio": "音频"' in i18n
 
 
-def test_pane_cards_can_detach_into_native_windows_with_browser_view_migration():
-    root = Path(__file__).resolve().parent.parent
-    chat = workbench_chat_source()
-    bootstrap = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "entry" / "bootstrap.jsx").read_text(
-        encoding="utf-8"
-    )
-    css = workbench_style_source()
-    i18n = workbench_i18n_source()
-    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-
-    assert "paneCardDetachRef" in chat
-    drag_controller = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
-    detach_controller = frontend_module_source("features/chat/pane-detachment.jsx")
-    assert "wbcPreparePaneCardDetach(context, event, cardId, paneOverride)" in drag_controller
-    assert "onSplitPointerDown={pointerDown}" in chat
-    assert "bridge.beginDrag(context.paneCardDetachIpcPayload(pendingDetach))" in drag_controller
-    assert "bridge.finishDrag(context.paneCardDetachIpcPayload(pendingDetach" in drag_controller
-    assert "target.setPointerCapture(event.pointerId)" in chat
-    assert 'document.addEventListener("pointermove", session.move, true)' in drag_controller
-    assert 'draggable="true"' not in chat.split("function WbcSplitGripBar", 1)[1].split(
-        "function WbcSideAgentSplit", 1
-    )[0]
-    assert "bridge.onCreated" in drag_controller
-    assert "detachedBridge.onReturned" in chat
-    assert "wbcSelectAlternateChatAfterDetachment(context, pendingDetach)" in detach_controller
-    assert "wbcRemoveDetachedPaneCard(context, pendingDetach)" in detach_controller
-    assert "context.closePaneCard(pendingDetach.cardId, pendingDetach.layoutOwnerChatId)" in detach_controller
-    returned_pane = detach_controller.split("function wbcRestoreReturnedDetachedPane", 1)[1].split(
-        "useWbcEffect(function ()", 1
-    )[0]
-    assert 'if (descriptor.kind === "chat" && descriptor.payload)' in returned_pane
-    assert "selectChat(String(descriptor.payload))" in returned_pane
-    assert "var singlePane = paneCardCount === 1" in chat
-    assert "menuDisabled={singlePane}" in chat
-    assert "if (!menuDisabled) setMenuOpen" in chat
-    assert "DetachedPaneApp: WbcDetachedPaneApp" in chat
-    assert 'surface === "detached-pane"' in bootstrap
-    assert "wbc-detached-pane-titlebar" in css
-    detached_titlebar_css = css.split(".wbc-detached-pane-titlebar {", 1)[1].split("}", 1)[0]
-    assert "touch-action: none" in detached_titlebar_css
-    assert "-webkit-app-region: drag" not in detached_titlebar_css
-    split_chat = chat.split("function WbcChatSplit(", 1)[1].split(
-        "function WbcPaneCardFrame", 1
-    )[0]
-    split_chat_css = css.split(".wbc-chat-split {", 1)[1].split("}", 1)[0]
-    assert "var splitRef = useWbcRef(null);" in split_chat
-    assert '<aside ref={splitRef} className="wbc-side-agent-split wbc-chat-split' in split_chat
-    assert 'split.style.setProperty("--wbc-composer-reserve-height", height + "px")' in split_chat
-    assert "new ResizeObserver(scheduleComposerReserveHeight)" in split_chat
-    assert "--wbc-composer-reserve-height:" in split_chat_css
-    assert i18n.count('"workbenchChat.detachedReturn"') == 2
-    assert '"workbenchChat.detachedReturn": "松手合并回主窗口"' in i18n
-    assert "const detachedPaneWindows = new Map()" in main
-    assert "const detachedPaneDragSessions = new Map()" in main
-    assert "const detachedBrowserSurfaceWindows = new Map()" in main
-    assert "createDetachedPaneWindow" in main
-    assert "/^[a-z][a-z0-9._-]{0,79}$/i.test(kind)" in main
-    detached_content = chat.split("  function renderContent() {", 1)[1].split(
-        "\n  return (", 1
-    )[0]
-    assert 'if (kind === "task")' in detached_content
-    assert "<TaskPane" in detached_content
-    assert "detached={true}" in detached_content
-    assert "pointInsideBounds(session.sourceWindowBounds, screenPoint)" in main
-    assert "crossedSourceBounds || session.boundaryExitIntent" in main
-    assert "pointAtBlockedDisplayEdge(session.sourceWindowBounds, cursorPoint)" in main
-    assert "updateDetachedPaneDrag" in main
-    assert "updateDetachedPaneCursor" in main
-    assert "beginDetachedPaneDrag" in main
-    assert "startDetachedPaneCreation" in main
-    assert "dragSession.detachedWindow = win" in main
-    assert "win.setIgnoreMouseEvents(true)" in main
-    assert "finishDetachedPaneReturnDrag" in main
-    assert "notifyDetachedPaneCreated(session, { ok: true, detached: false, cancelled: true })" in main
-    assert "detachedBrowserSurfaceWindows.get(this.sessionId)" in main
-    assert "closeDetachedPanesForChat" in main
-    assert "detachedPane:" in preload
-    assert "ipcRenderer.sendSync('detached-pane:begin-drag'" in preload
-    assert "ipcRenderer.send('detached-pane:update-drag'" in preload
-    assert "ipcRenderer.invoke('detached-pane:finish-drag'" in preload
-    assert "ipcRenderer.on('detached-pane:created'" in preload
-    assert "ipcRenderer.invoke('detached-pane:return-begin'" in preload
-    assert "ipcRenderer.on('detached-pane:returned'" in preload
-
-
 def test_context_panel_has_only_the_new_agent_tree_projection():
     source = workbench_chat_source()
     i18n = workbench_i18n_source()
@@ -270,7 +184,7 @@ process.stdout.write(JSON.stringify({{
     open_pane = frontend_module_source("features/chat/pane-layout-controller.jsx").split(
         "function wbcOpenPaneContent(", 1
     )[1].split(
-        "\nfunction wbcOpenTaskWorkspace", 1
+        "\nfunction wbcUpdatePaneCard", 1
     )[0]
     assert 'payload = wbcEditableChatFileResource({ projectId: context.projectId }, payload);' in open_pane
 
@@ -1044,7 +958,7 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
     compact_css = styles.split("@media (max-width: 980px) {", 1)[1].split("}", 3)
     assert any("--wbc-reclaimed-side-width: 0px;" in block for block in compact_css)
     hidden_side_css = styles.split(
-        ".wbc-page.wbc-side-hidden > :is(.wbc-side, .wbc-task-context-panel) {",
+        ".wbc-page.wbc-side-hidden > :is(.wbc-side) {",
         1,
     )[1].split("}", 1)[0]
     assert "display: none;" not in hidden_side_css
@@ -1118,7 +1032,6 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     collapse_control_css = styles.split(
         ".workbench-grid.integrated-sidebars .workbench-sidebar-collapse-control {", 1
     )[1].split("}", 1)[0]
-    mode_toggle_css = styles.split(".workbench-rail-mode-toggle {", 1)[1].split("}", 1)[0]
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-rail-glass"' in source
@@ -1171,8 +1084,12 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     assert "height: var(--wb-rail-toolbar-control-size, 32px);" in new_chat_css
     assert "width: var(--wb-rail-toolbar-control-size, 32px);" in collapse_control_css
     assert "height: var(--wb-rail-toolbar-control-size, 32px);" in collapse_control_css
-    assert "flex: 0 0 60px;" in mode_toggle_css
-    assert "width: 60px;" in mode_toggle_css
+    assert ".workbench-rail-mode-toggle" not in styles
+    assert "flex: 1 1 auto;" in styles.split(".wbc-search {", 1)[1].split("}", 1)[0]
+    assert 'className="workbench-rail-mode-toggle"' not in source
+    assert "function toggleRailMode()" not in source
+    assert "workRailMode" not in source
+    assert "onRailModeChange" not in source
     assert 'className="wbc-project-new-chat"' in source
     assert 'className="wbc-chat-nav-title"' not in source
     assert 'className="wbc-rail-filter"' not in source
@@ -1182,6 +1099,9 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     rail_markup = source.split('<div className="wbc-rail-glass">', 1)[1].split(
         "{menuId &&", 1
     )[0]
+    assert rail_markup.index('data-cyrene-node-id="new_chat"') < rail_markup.index(
+        'data-cyrene-node-id="chat_search_input"'
+    )
     assert 'workbenchChat.railTitle' not in rail_markup
     assert '<span>{wbcT("workbenchChat.newChat"' not in rail_markup
     assert "height: var(--wb-rail-toolbar-control-size, 32px);" in search_input_css
@@ -1292,6 +1212,64 @@ def test_workbench_chat_sidebar_tabs_use_panel_specific_svg_icons():
     assert "WBC_SIDE_TAB_ICONS[item.id]" in source
 
 
+def test_right_panel_maximum_uses_only_the_visible_layout_width():
+    source = frontend_module_source("features/layout/right-panel-resizer.jsx")
+    helper = "function wbVisibleLayoutWidth" + source.split(
+        "function wbVisibleLayoutWidth", 1
+    )[1].split("// Largest the right panel", 1)[0]
+    script = f"""
+global.window = {{ innerWidth: 1200 }};
+eval({json.dumps(helper)});
+function layout(left, right) {{
+  return {{ getBoundingClientRect: () => ({{ left, right, width: right - left }}) }};
+}}
+process.stdout.write(JSON.stringify([
+  wbVisibleLayoutWidth(layout(64, 1200)),
+  wbVisibleLayoutWidth(layout(64, 1500)),
+  wbVisibleLayoutWidth(layout(-80, 1150)),
+  wbVisibleLayoutWidth(layout(1300, 1500)),
+]));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(result.stdout) == [1136, 1136, 1150, 0]
+
+
+def test_right_panel_maximum_reserves_the_collapsed_rail_grid_track():
+    source = frontend_module_source("features/layout/right-panel-resizer.jsx")
+    helpers = "var WB_RIGHT_MIN" + source.split("var WB_RIGHT_MIN", 1)[1].split(
+        "function wbApplyStoredRightWidth", 1
+    )[0]
+    script = f"""
+global.window = {{
+  innerWidth: 1814,
+  getComputedStyle: () => ({{ getPropertyValue: () => "380px" }}),
+}};
+eval({json.dumps(helpers)});
+const classList = (name) => ({{ contains: (candidate) => candidate === name }});
+const rail = {{
+  classList: classList("wbc-rail"),
+  getBoundingClientRect: () => ({{ left: 12, right: 60, width: 48 }}),
+}};
+const pane = {{
+  classList: classList("wbc-pane-layout"),
+  getBoundingClientRect: () => ({{ left: 64, right: 1238, width: 1174 }}),
+}};
+const layout = {{
+  children: [rail, pane],
+  classList: classList("wbc-page"),
+  getBoundingClientRect: () => ({{ left: 0, right: 1814, width: 1814 }}),
+}};
+const panel = {{ closest: (selector) => selector === ".wbc-page" ? layout : null }};
+process.stdout.write(String(wbRightDynamicMax(panel)));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert result.stdout == "1370"
+
+
 def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handles():
     chat = workbench_chat_source()
     shell = workbench_shell_source()
@@ -1315,8 +1293,11 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
     )[0]
     assert 'layout.classList.contains("wbc-page")' in dynamic_max
     assert 'child.classList.contains("wbc-rail")' in dynamic_max
+    assert 'child.classList.contains("wbc-pane-layout")' in dynamic_max
+    assert "pane.getBoundingClientRect().left - layoutRect.left" in dynamic_max
     assert 'getPropertyValue("--wbc-main-min-width")' in dynamic_max
-    assert 'child.classList.contains("wbc-pane-layout")' not in dynamic_max
+    assert "var avail = wbVisibleLayoutWidth(layout);" in dynamic_max
+    assert 'node.querySelector(".wbc-page > .wbc-side")' in shell
     assert '(trackGutter ? " track-gutter" : "")' in shell
     assert "if (cardEdge || trackGutter) return;" in shell
     gutter_css = styles.split(
@@ -1334,6 +1315,7 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
     assert "height: 72px;" in handle_visual_css
     assert ".wb-col-resizer.track-gutter:hover::after" in styles
     assert ".wb-col-resizer.track-gutter:not(.is-resizing)::after" in styles
+    assert "body.wb-col-resizing .wbc-page {\n  transition: none;\n}" in styles
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     rail_card_css = styles.split(".wbc-rail::before {", 1)[1].split("}", 1)[0]
     pane_layout_css = styles.split("\n.wbc-pane-layout {", 1)[1].split("}", 1)[0]
@@ -1527,29 +1509,38 @@ process.stdout.write(JSON.stringify([
     assert "setSideVisible(false)" not in replacement_branch
 
 
-def test_vertical_conversation_split_elastically_reclaims_the_hidden_panel_track():
-    source = workbench_chat_source()
-    styles = workbench_style_source()
-    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
-    reclaim_css = styles.split(
-        ".wbc-page.wbc-pane-single-column-open {", 1
-    )[1].split("}", 1)[0]
-    vertical_workspace_css = styles.split(
-        ".wbc-page.side-agent-split-open > .wbc-pane-layout.single {", 1
-    )[1].split("}", 1)[0]
+def test_pane_drop_commits_the_visible_replace_or_split_action():
+    pane_drop = frontend_module_source("features/chat/pane-drop-controller.jsx")
+    helper = "function wbcCommittedPaneDropEdge" + pane_drop.split(
+        "function wbcCommittedPaneDropEdge", 1
+    )[1].split("function wbcDroppedPaneCard", 1)[0]
+    script = f"""
+eval({json.dumps(helper)});
+const visibleReplace = {{ paneDropTarget: {{ cardId: "chat:main", edge: "replace" }} }};
+const visibleRight = {{ paneDropTarget: {{ cardId: "chat:main", edge: "right" }} }};
+const stalePreview = {{ paneDropTarget: {{ cardId: "chat:other", edge: "replace" }} }};
+process.stdout.write(JSON.stringify([
+  wbcCommittedPaneDropEdge(visibleReplace, "chat:main", "left"),
+  wbcCommittedPaneDropEdge(visibleRight, "chat:main", "replace"),
+  wbcCommittedPaneDropEdge(stalePreview, "chat:main", "left"),
+]));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(result.stdout) == ["replace", "right", "left"]
 
-    pane_presentation = frontend_module_source("features/chat/pane-workspace.jsx")
-    assert "singleColumnWorkspaceOpen: splitDetailOpen && !projectPaneOnly && !paneHasTwoColumns && !projectTaskPanelCard" in pane_presentation
-    assert "var singleColumnWorkspaceOpen = panePresentation.singleColumnWorkspaceOpen" in source
-    assert 'singleColumnWorkspaceOpen ? " wbc-pane-single-column-open"' in source
-    inline_width = source.split(
-        '"--wbc-chat-side-preview-width": sideAgentSplitWidth + "px",', 1
-    )[1].split("      }}", 1)[0]
-    assert "!singleColumnWorkspaceOpen" in inline_width
-    assert "--wbc-side-track-width: 0px;" in reclaim_css
-    assert "transition: grid-template-columns 500ms cubic-bezier(.22, 1.16, .36, 1);" in page_css
-    assert "grid-column:" not in vertical_workspace_css
-    assert "padding-right: var(--wbc-card-gutter);" in vertical_workspace_css
+    page = workbench_chat_source()
+    context_surface = page.split(
+        "function WbcPaneContextTrackDropSurface", 1
+    )[1].split("function WbcPaneFiveWayDropSurface", 1)[0]
+    assert "paneDropTarget: paneDropTarget" in page
+    assert 'className="wbc-pane-context-drop-sensor replace"' in context_surface
+    assert context_surface.count('onDropOver(event, card.id, "replace", dropKey)') == 2
+    assert 'onDrop(event, card.id, "replace")' in context_surface
+    assert 'wbcT("workbenchChat.dropConversationReplace"' in context_surface
+    assert "var committedEdge = wbcCommittedPaneDropEdge(context, targetCardId, edge);" in pane_drop
+    assert "effectiveEdge = (layout[target.side] || []).length >= 2 ? \"replace\" : committedEdge" in pane_drop
 
 
 def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
@@ -1569,271 +1560,6 @@ def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
     assert 'side + ":" + index' in source
 
 
-def test_task_and_chat_side_drop_use_the_same_live_panel_geometry():
-    source = workbench_chat_source()
-
-    helper = source.split("function wbcChatSideZoneRect()", 1)[1].split(
-        "function wbcPinSplitMotionOpen", 1
-    )[0]
-    task_selector = 'page.querySelector(":scope > .wbc-task-context-panel")'
-    chat_selector = 'page.querySelector(":scope > .wbc-side")'
-    assert task_selector in helper
-    assert chat_selector in helper
-    assert helper.index(task_selector) < helper.index(chat_selector)
-    assert "var sr = side.getBoundingClientRect();" in helper
-    assert "return { left: sr.left, top: pr.top, right: sr.right, bottom: pr.bottom };" in helper
-    assert helper.index("var sr = side.getBoundingClientRect();") < helper.index(
-        'getPropertyValue("--wbc-chat-side-preview-width")'
-    )
-
-
-def test_workbench_two_level_card_panes_share_drag_resize_and_menu_contracts():
-    source = workbench_chat_source()
-    styles = workbench_style_source()
-    i18n = workbench_i18n_source()
-
-    helper = "function wbcStablePaneValue" + source.split(
-        "function wbcStablePaneValue", 1
-    )[1].split("function wbcSetSplitDrag", 1)[0]
-    script = f"""
-global.localStorage = {{ getItem: () => null }};
-eval({json.dumps(helper)});
-const base = wbcDefaultPaneLayout("main");
-const fileA = wbcPaneCard("file", {{ path: "a.md" }}, {{ id: "file:a" }});
-const fileB = wbcPaneCard("file", {{ path: "b.md" }}, {{ id: "file:b" }});
-const chatB = wbcPaneCard("chat", "chat-b", {{ id: "chat:chat-b" }});
-const duplicateMain = wbcPaneCard("chat", "main", {{ freshInstance: true, ownerChatId: "main" }});
-const verticalSameChat = wbcPlacePaneCard(base, duplicateMain, "left", "top", "", "chat:main");
-const verticalSource = verticalSameChat.left[1];
-const verticalCompanion = verticalSameChat.left[0];
-const axisLeft = wbcPlacePaneCard(verticalSameChat, verticalSource, "left", "left", verticalSource.id, "chat:main");
-const axisRight = wbcPlacePaneCard(verticalSameChat, verticalSource, "left", "right", verticalSource.id, "chat:main");
-const externalLeft = wbcPlacePaneCard(base, fileA, "left", "left", "", "chat:main");
-const externalRight = wbcPlacePaneCard(base, fileA, "left", "right", "", "chat:main");
-const externalTop = wbcPlacePaneCard(base, fileA, "left", "top", "", "chat:main");
-const externalBottom = wbcPlacePaneCard(base, fileA, "left", "bottom", "", "chat:main");
-const externalReplace = wbcPlacePaneCard(base, fileA, "left", "replace", "", "chat:main");
-const horizontal = wbcPlacePaneCard(base, fileA, "right", "replace", "", "");
-const vertical = wbcPlacePaneCard(horizontal, chatB, "right", "bottom", "", "file:a");
-const replaced = wbcPlacePaneCard(vertical, fileB, "right", "top", "", "file:a");
-const swapped = wbcPlacePaneCard(replaced, chatB, "right", "top", "chat:chat-b", "file:b");
-const files = wbcPlacePaneCard(horizontal, fileB, "left", "replace", "", "chat:main");
-process.stdout.write(JSON.stringify({{
-  base: base.left.map(card => card.id),
-  horizontal: horizontal.right.map(card => card.id),
-  vertical: vertical.right.map(card => card.id),
-  replaced: replaced.right.map(card => card.id),
-  swapped: swapped.right.map(card => card.id),
-  files: [files.left[0].kind, files.right[0].kind],
-  maxDepth: Math.max(replaced.left.length, replaced.right.length),
-  duplicateChat: {{
-    count: verticalSameChat.left.length,
-    distinctIds: verticalSameChat.left[0].id !== verticalSameChat.left[1].id,
-    payloads: verticalSameChat.left.map(card => card.payload),
-  }},
-  axisLeft: [axisLeft.left[0].id === verticalSource.id, axisLeft.right[0].id === verticalCompanion.id],
-  axisRight: [axisRight.left[0].id === verticalCompanion.id, axisRight.right[0].id === verticalSource.id],
-  externalLeft: [externalLeft.left[0].id, externalLeft.right[0].id],
-  externalRight: [externalRight.left[0].id, externalRight.right[0].id],
-  externalTop: externalTop.left.map(card => card.id),
-  externalBottom: externalBottom.left.map(card => card.id),
-  externalReplace: externalReplace.left.map(card => card.id),
-}}));
-"""
-    result = subprocess.run(
-        ["node", "-e", script], check=True, capture_output=True, text=True
-    )
-    contract = json.loads(result.stdout)
-    assert contract == {
-        "base": ["chat:main"],
-        "horizontal": ["file:a"],
-        "vertical": ["file:a", "chat:chat-b"],
-        "replaced": ["file:b", "chat:chat-b"],
-        "swapped": ["chat:chat-b", "file:b"],
-        "files": ["file", "file"],
-        "maxDepth": 2,
-        "duplicateChat": {
-            "count": 2,
-            "distinctIds": True,
-            "payloads": ["main", "main"],
-        },
-        "axisLeft": [True, True],
-        "axisRight": [True, True],
-        "externalLeft": ["file:a", "chat:main"],
-        "externalRight": ["chat:main", "file:a"],
-        "externalTop": ["file:a", "chat:main"],
-        "externalBottom": ["chat:main", "file:a"],
-        "externalReplace": ["file:a"],
-    }
-
-    assert "function WbcPaneCardFrame" in source
-    assert "var singlePane = paneCardCount === 1;" in source
-    assert "grip = <WbcSplitGripBar" in source
-    assert "menuDisabled={singlePane}" in source
-    assert "function WbcPaneRowResizer" in source
-    assert "function WbcPaneColumnResizer" in source
-    assert 'edge === "replace"' in source
-    assert 'menuType="content"' in source
-    assert "onNewConversation={columnLength === 1" in source
-    assert 'next[liveLocation.side] = [' in source
-    assert "movePaneCardOtherSide(card.id)" in source
-    assert 'String(paneCardDragId || "") !== String(card.id || "")' in source
-    assert "replaceOnly={columnLength === 2}" in source
-    assert 'replaceConversation={paneCardCount === 1 && card.kind === "chat"}' in source
-    assert 'dropKey={dropKey || card.id}' in source
-    assert 'dropTarget.dropKey || ""' in source
-    assert 'side + ":" + index' in source
-    assert "freshInstance: !!existingChat" in source
-    pane_layout = frontend_module_source("features/chat/pane-layout-controller.jsx")
-    assert "var canonicalId =" in pane_layout
-    assert "var existing = canonicalId ? wbcPaneCardLocation" in pane_layout
-    assert 'wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true })' in pane_layout
-    assert 'sourceCardId = replacingChat ? chatCardId : ""' in source
-    assert "if (isActiveConversation && singlePane)" in source
-    assert '(layout[target.side] || []).length >= 2 ? "replace" : edge' in source
-    assert 'className={"wbc-pane-card-drop-layer" + (replaceOnly ? " replace-only" : "") + (axisEnabled ? " axis-enabled" : "")}' in source
-    assert "axisEnabled={paneCardCount === 1}" in source
-    assert 'className="wbc-pane-axis-drop-layer"' in source
-    assert 'dropKey: "axis:" + axisEdge' in source
-    assert 'edge === "left" || edge === "right"' in source
-    assert 'promoteSourceLeft: true' in source
-    assert 'restore: !!floating' in source
-    assert 'card.kind === "file" || card.kind === "viewer"' in source
-    assert 'card.kind === "side-agent"' in source
-    assert 'setSideTab("side-agents")' in source
-    assert "current, dropped.card, target.side, effectiveEdge" in source
-    assert "function openConversationPanelFromMainGrip()" in source
-    assert "if (paneCardCount === 1)" in source
-    assert 'window.dispatchEvent(new CustomEvent("workbench:show-chat-side"));' in source.split(
-        "function openConversationPanelFromMainGrip()", 1
-    )[1].split("function renderPaneCard", 1)[0]
-    assert "onOpenConversationPanel={openConversationPanelFromMainGrip}" in source
-    assert ".wbc-page.wbc-side-hidden > :is(.wbc-side, .wbc-task-context-panel)" in styles
-
-    pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
-    assert "border: var(--wb-floating-rail-border);" in pane_card_css
-    assert "border-radius: var(--wb-floating-rail-radius);" in pane_card_css
-    assert "background: var(--wbc-panel-surface);" in pane_card_css
-    assert "box-shadow: var(--wb-floating-rail-shadow);" in pane_card_css
-    assert "overflow: hidden;" in pane_card_css
-    assert "cubic-bezier(.22, 1.16, .36, 1)" in pane_card_css
-    pane_layout_css = styles.split("\n.wbc-pane-layout {", 1)[1].split("}", 1)[0]
-    assert (
-        "padding: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter) "
-        "calc(var(--wbc-card-gutter) - 4px);" in pane_layout_css
-    )
-    assert ".wbc-page > .wbc-pane-layout { grid-row: 1; }" in styles
-    column_resizer = source.split("function WbcPaneColumnResizer", 1)[1].split(
-        "function WbcSideAgentSplitResizer", 1
-    )[0]
-    assert 'style={{ right:' not in column_resizer
-    assert "var minimum = Math.min(380, trackWidth / 2);" in column_resizer
-    assert "maximum: Math.max(minimum, trackWidth - minimum)" in column_resizer
-    assert "handle.setPointerCapture(pointerId)" in column_resizer
-    assert 'handle.addEventListener("lostpointercapture", stop' in column_resizer
-    assert 'window.addEventListener("blur", stop' in column_resizer
-    assert 'moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)' in column_resizer
-    assert '"--wbc-pane-right-width": paneColumnWidth + "px"' in source
-    assert "width={paneColumnWidth} onResize={resizePaneColumn}" in source
-    assert "!floatingConversationPanelOpen && !splitDetailOpen" in source
-    row_resizer = source.split("function WbcPaneRowResizer", 1)[1].split(
-        "function WbcPaneColumnResizer", 1
-    )[0]
-    assert "var seamOffset = 6 - (safeRatio * 12);" in row_resizer
-    assert "rect.height - 12" in row_resizer
-    assert "handle.setPointerCapture(pointerId)" in row_resizer
-    assert 'handle.addEventListener("lostpointercapture", stop' in row_resizer
-    assert 'window.addEventListener("blur", stop' in row_resizer
-    assert 'moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)' in row_resizer
-    assert ".wbc-pane-row-resizer" in styles
-    assert ".wbc-pane-column-resizer" in styles
-    replace_only_css = styles.split(".wbc-pane-card-drop-layer.replace-only {", 1)[1].split("}", 1)[0]
-    assert "grid-template-rows: minmax(0, 1fr);" in replace_only_css
-    assert ".wbc-pane-card-drop-layer.replace-only .wbc-pane-card-drop-zone.replace" in styles
-    axis_drop_css = styles.split(".wbc-pane-card-drop-layer.axis-enabled {", 1)[1].split("}", 1)[0]
-    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in axis_drop_css
-    assert "grid-template-rows: repeat(3, minmax(0, 1fr));" in axis_drop_css
-    assert "minmax(64px" not in axis_drop_css
-    pane_frame = source.split("function WbcPaneCardFrame", 1)[1].split(
-        "function WbcPaneRowResizer", 1
-    )[0]
-    five_way_drop = source.split("function WbcPaneFiveWayDropSurface", 1)[1].split(
-        "function WbcPaneCardFrame", 1
-    )[0]
-    assert ") : axisEnabled ? (" in pane_frame
-    assert "<WbcPaneFiveWayDropSurface" in pane_frame
-    for edge in ("top", "left", "replace", "right", "bottom"):
-        assert f'className="wbc-pane-card-axis-sensor {edge}"' in five_way_drop
-        assert f'onDrop(event, card.id, "{edge}")' in five_way_drop
-    assert '"wbc-pane-card-drop-zone axis-preview " + activeEdge + " active"' in five_way_drop
-    assert 'onDrop(event, card.id, "left")' in five_way_drop
-    assert 'onDrop(event, card.id, "right")' in five_way_drop
-    assert ".wbc-pane-card-drop-zone.axis-preview.top" in styles
-    assert "inset: 0 0 66.6667%;" in styles
-    assert ".wbc-pane-card-drop-zone.axis-preview.replace" in styles
-    assert "inset: 33.3333% 0;" in styles
-    assert ".wbc-pane-card-drop-zone.axis-preview.bottom" in styles
-    assert "inset: 66.6667% 0 0;" in styles
-    assert ".wbc-pane-card-drop-zone.axis-preview.left" in styles
-    assert "inset: 0 50% 0 0;" in styles
-    assert ".wbc-pane-card-drop-zone.axis-preview.right" in styles
-    assert "inset: 0 0 0 50%;" in styles
-    active_drop_css = styles.split(".wbc-pane-card-drop-zone.active {", 1)[1].split("}", 1)[0]
-    assert "background: color-mix(in srgb, var(--wb-accent) 13%, var(--wb-card-bg));" in active_drop_css
-    assert 'className="wbc-pane-context-drop-host"' in source
-    assert 'dropKey="workspace:single"' in source
-    assert 'className="wbc-pane-card-drop-layer context-tracks"' in source
-    assert "<WbcPaneContextTrackDropSurface" in source
-    assert 'paneOnlyCard.kind === "chat" || paneOnlyCard.kind === "task"' in source
-    context_surface = source.split("function WbcPaneContextTrackDropSurface", 1)[1].split(
-        "function WbcPaneFiveWayDropSurface", 1
-    )[0]
-    for edge in ("top", "left", "right", "bottom"):
-        assert f'className="wbc-pane-context-drop-sensor {edge}"' in context_surface
-        assert f'onDrop(event, card.id, "{edge}")' in context_surface
-    assert '"wbc-pane-card-drop-zone context-preview " + activeEdge + " active"' in context_surface
-    context_drop_css = styles.split(".wbc-pane-context-drop-host {", 1)[1].split("}", 1)[0]
-    assert "grid-column: 3 / 5;" in context_drop_css
-    assert "grid-row: 1;" in context_drop_css
-    assert "var(--wbc-card-top-inset)" in context_drop_css
-    context_tracks_css = styles.split(".wbc-pane-card-drop-layer.context-tracks {", 1)[1].split("}", 1)[0]
-    assert "grid-template-columns: minmax(0, 1fr) var(--wbc-side-track-width);" in context_tracks_css
-    assert "grid-template-rows: repeat(3, minmax(0, 1fr));" in context_tracks_css
-    for edge, column, row in (
-        ("top", "1", "1"),
-        ("left", "1", "2"),
-        ("right", "2", "1 / 4"),
-        ("bottom", "1", "3"),
-    ):
-        sensor_css = styles.split(f".wbc-pane-context-drop-sensor.{edge} {{", 1)[1].split("}", 1)[0]
-        preview_css = styles.split(f".wbc-pane-card-drop-zone.context-preview.{edge} {{", 1)[1].split("}", 1)[0]
-        assert f"grid-column: {column};" in sensor_css
-        assert f"grid-row: {row};" in sensor_css
-        assert f"grid-column: {column};" in preview_css
-        assert f"grid-row: {row};" in preview_css
-    assert 'chatSideDropActive && paneCardCount !== 1' in source
-    assert 'resourceSplitDropSide && paneCardCount !== 1' in source
-    assert ".wbc-pane-axis-drop-layer" in styles
-    assert ".wbc-pane-axis-drop-zone.active" in styles
-    assert "--wbc-pane-column-floor: min(380px" in styles
-    assert "grid-template-columns:" in styles
-    assert "grid-column: 2;" in styles
-    assert "align-self: center;" in styles
-    assert "height: 88px;" in styles
-    assert "body.wbc-resizing-pane-row .wbc-pane-column" in styles
-    assert "animation: none;" in styles.split(
-        "@media (prefers-reduced-motion: reduce)", 1
-    )[1]
-    assert i18n.count('"workbenchChat.newConversation"') == 2
-    assert '"workbenchChat.newConversation": "新建对话"' in i18n
-    assert '"workbenchChat.dropPaneTop"' in i18n
-    assert '"workbenchChat.dropPaneBottom"' in i18n
-    assert i18n.count('"workbenchChat.dropPaneLeft"') == 2
-    assert i18n.count('"workbenchChat.dropPaneRight"') == 2
-    assert '"workbenchChat.dropPaneReplace"' in i18n
-    assert '"workbenchChat.dropConversationReplace": "松手替换当前对话"' in i18n
-
-
 def test_agent_can_open_move_close_and_resize_semantic_split_panes():
     page = frontend_module_source("features/chat/page.jsx")
     rail = frontend_module_source("features/chat/rail.jsx")
@@ -1849,7 +1575,6 @@ def test_agent_can_open_move_close_and_resize_semantic_split_panes():
     assert 'onClosePane={closePaneCardWithConfirmation}' in page
     assert 'node_id: "pane_workspace"' in semantic
     assert 'action_id: "open_chat", kind: "move"' in semantic
-    assert 'action_id: "open_task", kind: "move"' in semantic
     assert 'action_id: "open_terminal", kind: "move"' in semantic
     assert 'action_id: "move", kind: "move"' in semantic
     assert 'action_id: "swap", kind: "move"' in semantic
@@ -1929,7 +1654,7 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
     source = workbench_chat_source()
     pane_controller = frontend_module_source("features/chat/pane-layout-controller.jsx")
     opener = pane_controller.split("function wbcOpenPaneContent", 1)[1].split(
-        "function wbcOpenTaskWorkspace", 1
+        "function wbcUpdatePaneCard", 1
     )[0]
     panel = source.split("function renderConversationPanel", 1)[1].split(
         "function openContentFromPaneCard", 1
@@ -1955,451 +1680,6 @@ def test_workbench_message_viewer_action_opens_the_file_split_directly():
     assert 'selectResourceSplit("viewer", wbcArtifactFileKey(file), true);' in open_viewer
     assert 'openPaneContent("file", file' in open_viewer
     assert 'side: preferredSide === "left" ? "left" : "right"' in open_viewer
-
-
-def _legacy_test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_chat_source()
-    styles = workbench_style_source()
-
-    select_handler = source.split("function selectSideAgent", 1)[1].split(
-        "function closeSideAgentSplit", 1
-    )[0]
-    split_component = source.split("function WbcSideAgentSplit({", 1)[1].split(
-        "function WbcSideAgentTab", 1
-    )[0]
-    panel = source.split("function WbcSideAgentsPanel", 1)[1].split(
-        "function WbcSideAccordionBody", 1
-    )[0]
-
-    assert "setSideAgentSplitByChat" in select_handler
-    assert "function WbcSideAgentSplitHost" in source
-    assert "function WbcSideAgentSplitResizer" in source
-    assert "setTimeout(function () { setLastChildren(null); }, 540)" in source
-    assert "requestAnimationFrame(function ()" in source
-    assert '(entered ? " open" : "")' in source
-    assert '<WbcSideAgentTab agent={agent}' in split_component
-    assert 'className="wbc-side-agent-split"' in split_component
-    assert 'className="wbc-side-agent-split-picker"' in split_component
-    assert '<WbcSplitPickerMenu open={pickerOpen}' in split_component
-    assert "items.map(function (item, index)" in split_component
-    assert "if (onSelect) onSelect(item.id);" in split_component
-    assert "<WbcSideAgentTab" not in panel
-    assert '(splitDetailOpen ? " side-agent-split-open" : "")' in source
-    assert "browserVisible={hasActiveBrowser && !browserTabOpen && !splitDetailOpen}" in source
-    assert "activeSideAgentId={splitSideAgentId}" in source
-    assert "position: absolute;" in styles.split(".wbc-side-agent-split-motion {", 1)[1].split("}", 1)[0]
-    # The open-state selector is needed only inside the compact responsive
-    # override, where it restores the split's reserved grid track.
-    assert ".wbc-page.side-agent-split-open {\n  grid-template-columns" not in styles.split(
-        "@media (max-width: 980px) {", 1
-    )[0]
-    split_motion_css = styles.split(".wbc-side-agent-split-motion {", 1)[1].split("}", 1)[0]
-    assert "width: var(--wbc-side-track-width);" in split_motion_css
-    assert "transform 500ms cubic-bezier(.22, 1.16, .36, 1)," in split_motion_css
-    assert "transform: translateX(100%);" in styles
-    assert ".wbc-side-agent-split-motion.open" in styles
-    assert 'localStorage.setItem("wbc-side-agent-split-width"' in source
-    assert "function wbcClampSideSplitWidth" in source
-    assert "var paneMin = Math.min(380, Math.max(0, (available - rail) / 2));" in source
-    assert "function wbcClampSideSplitWidthForPage" in source
-    assert "available - rail - paneMin" in source
-    assert "wbcClampSideSplitWidthForPage(current, pageRef.current)" in source
-    assert 'new ResizeObserver(keepSplitWithinViewport)' in source
-    assert "--wbc-main-min-width: 300px;" not in styles
-    assert "--wbc-main-min-width: 380px;" in styles
-    assert 'window.addEventListener("resize", keepSplitWithinViewport);' in source
-    assert '"--wbc-chat-side-preview-width": sideAgentSplitWidth + "px"' in source
-    assert '...(splitDetailOpen ? { "--wbc-side-track-width": sideAgentSplitWidth + "px" } : {})' in source
-    assert ".wbc-side-agent-split-resizer" in styles
-    assert "body.wbc-resizing-side-agent .wbc-page" in styles
-    # Pointer movement stays out of React while the grid remains live. Heavy
-    # renderer observers pause during the gesture and refresh on pointerup;
-    # the native browser alone keeps its coalesced bounds stream live.
-    resizer = source.split("function WbcSideAgentSplitResizer", 1)[1].split(
-        "function WbcSplitGripBar", 1
-    )[0]
-    move = resizer.split("function move(moveEvent)", 1)[1].split(
-        "function stop(stopEvent)", 1
-    )[0]
-    stop = resizer.split("function stop(stopEvent)", 1)[1].split(
-        "function resizeWithKeyboard", 1
-    )[0]
-    assert 'page.style.setProperty("--wbc-side-track-width", nextWidth + "px")' in resizer
-    assert "requestAnimationFrame(paint)" in move
-    assert "wbcNotifyBrowserLayoutChanged" not in move
-    assert "onResize(" not in move
-    assert 'new CustomEvent("workbench:split-resize-end"' in stop
-    assert "wbcNotifyBrowserLayoutChanged();" in stop
-    assert "onResize(nextWidth);" in stop
-    assert 'window.addEventListener("pointercancel", stop' in resizer
-    assert "aria-valuemin={380}" in resizer
-    assert 'aria-valuenow={Math.round(Number(width) || 520)}' in resizer
-    resize_motion_css = styles.split(
-        "body.wbc-resizing-side-agent .wbc-side-agent-split-motion,", 1
-    )[1].split("}", 1)[0]
-    assert ".wbc-main > .wbc-composer" in resize_motion_css
-    assert "transition: none;" in resize_motion_css
-    # The outside edge is a physical anchor during direct manipulation: only
-    # the divider facing the conversation is allowed to move.
-    right_anchor_css = styles.split(
-        "body.wbc-resizing-side-agent .wbc-page:not(.wbc-split-left) .wbc-side-agent-split-motion {",
-        1,
-    )[1].split("}", 1)[0]
-    left_anchor_css = styles.split(
-        "body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-motion {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "right: 0;" in right_anchor_css
-    assert "left: auto;" in right_anchor_css
-    assert "right: auto;" in left_anchor_css
-    assert "left: var(--wbc-rail-width);" in left_anchor_css
-    assert 'document.body.classList.contains("wbc-resizing-side-agent")' in source
-    chart_mount = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "chart" / "mount.jsx").read_text(
-        encoding="utf-8"
-    )
-    browser_viewport = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(
-        encoding="utf-8"
-    )
-    assert 'root.addEventListener("workbench:split-resize-end", resizeChart)' in chart_mount
-    assert 'root.document.body.classList.contains("wbc-resizing-side-agent")' in chart_mount
-    browser_resize_observer = browser_viewport.split(
-        'const ro = typeof ResizeObserver !== "undefined"', 1
-    )[1].split("if (ro && node)", 1)[0]
-    assert 'if (!splitEntranceActive) scheduleBounds();' in browser_resize_observer
-    assert "wbc-resizing-side-agent" not in browser_resize_observer
-    assert 'window.addEventListener("workbench:split-resize-end", onSplitResizeEnd);' in browser_viewport
-    assert 'lastBoundsRef.current = "";' in browser_viewport.split(
-        "function onSplitResizeEnd()", 1
-    )[1].split("}", 1)[0]
-    # A minimum-width chat split owns a shrinkable, border-box composer.
-    split_composer_css = styles.split(
-        ".wbc-chat-split > .wbc-composer,", 1
-    )[1].split("}", 1)[0]
-    assert "width: 100%;" in split_composer_css
-    assert "min-width: 0;" in split_composer_css
-    assert "box-sizing: border-box;" in split_composer_css
-    assert ".wbc-conversation-split::after" not in styles
-    assert ".workbench-grid.is-task-detail .workbench-main::after" not in styles
-    foreground_composer_css = styles.split(
-        ".wbc-chat-split > .wbc-composer {", 1
-    )[1].split("}", 1)[0]
-    assert "position: absolute;" in foreground_composer_css
-    assert "z-index: 24;" in foreground_composer_css
-    assert "inset: auto 0 0;" in foreground_composer_css
-    assert "padding: 10px 14px 14px;" in foreground_composer_css
-    split_thread_css = styles.split(
-        ".wbc-chat-split-stage .wbc-thread {", 1
-    )[1].split("}", 1)[0]
-    assert "padding: 4px 18px var(--wbc-thread-inset-bottom);" in split_thread_css
-    split_message_css = styles.split(
-        ".wbc-chat-split-stage .wbc-thread-item,", 1
-    )[1].split("}", 1)[0]
-    assert ".wbc-chat-split-stage .wbc-msg-body" in split_message_css
-    assert ".wbc-chat-split-stage .wbc-chart" in split_message_css
-    assert "min-width: 0;" in split_message_css
-    assert "max-width: 100%;" in split_message_css
-    split_overflow_css = styles.split(
-        ".wbc-chat-split-stage .wbc-msg-body.markdown pre,", 1
-    )[1].split("}", 1)[0]
-    assert ".wbc-chat-split-stage .wbc-msg-body.markdown table" in split_overflow_css
-    assert "overflow-x: auto;" in split_overflow_css
-    compact_composer_css = styles.split(
-        "@container wbc-composer (max-width: 420px) {", 1
-    )[1].split("\n}", 1)[0]
-    assert ".wbc-model-button-name" in compact_composer_css
-    assert ".wbc-model-button-effort" in compact_composer_css
-    assert ".wbc-composer-icon.mode > span" not in compact_composer_css
-    assert ".wbc-send > span" not in compact_composer_css
-    assert ".wbc-composer-actions" in compact_composer_css
-    assert "flex-wrap: nowrap;" in compact_composer_css
-    assert ".wbc-composer-spacer" in compact_composer_css
-    assert "flex: 1 1 0;" in compact_composer_css
-    assert "min-width: 44px;" in compact_composer_css
-    main_clip_css = styles.split(
-        ".wbc-page.side-agent-split-open > .wbc-main {", 1
-    )[1].split("}", 1)[0]
-    assert "overflow: hidden;" in main_clip_css
-    main_message_css = styles.split(
-        ".wbc-thread .wbc-thread-item,", 1
-    )[1].split("}", 1)[0]
-    assert ".wbc-thread .wbc-msg-body" in main_message_css
-    assert "min-width: 0;" in main_message_css
-    assert "max-width: 100%;" in main_message_css
-    # Below 980px, an open split must override the generic two-column fallback
-    # and reserve a physical track instead of covering the main conversation.
-    responsive_css = styles.rsplit("@media (max-width: 980px) {", 1)[1].split(
-        "@media (prefers-reduced-motion: reduce)", 1
-    )[0]
-    responsive_right = responsive_css.split(
-        ".wbc-page.side-agent-split-open {", 1
-    )[1].split("}", 1)[0]
-    responsive_left = responsive_css.split(
-        ".wbc-page.side-agent-split-open.wbc-split-left {", 1
-    )[1].split("}", 1)[0]
-    assert "var(--wbc-side-track-width);" in responsive_right
-    assert "minmax(0, 1fr)" in responsive_right
-    assert "var(--wbc-side-track-width)" in responsive_left
-    assert responsive_left.rstrip().endswith("0px;")
-    # The split panel is lifted with a native drag like an image/document:
-    # the grip starts the drag, the panel stays put and drop zones react.
-    assert 'var WBC_SPLIT_DRAG_MIME = "application/x-cyrene-split+json";' in source
-    assert "function wbcSetSplitDrag" in source
-    assert "function wbcHasSplitDrag" in source
-    assert "function handleSplitDragStart" in source
-    assert "setDragImage" in source
-    # The native ghost is hidden with a preloaded transparent image; a raw-DOM overlay (drag ghost
-    # + drop zones) follows the pointer and shrinks to a chat card over the
-    # conversation rail. It is built outside React so the drag source's DOM
-    # never changes mid-drag (a re-render there cancels the drag).
-    assert "var WBC_EMPTY_DRAG_IMAGE = new Image(1, 1);" in source
-    assert "function wbcHideNativeDragImage(transfer)" in source
-    assert "splitOverlayCleanupRef" in source
-    assert "onDocumentDrop" in source
-    assert "function zoneAt" in source
-    # The ghost is a clone of the real split panel (the lifted dialog); over
-    # the conversation rail it switches to the matching rail card clone.
-    assert "function wbcClonePaneWithLiveState(panel)" in source
-    assert "var clone = panel.cloneNode(true);" in source
-    assert "var scrollTop = Number(source.scrollTop) || 0;" in source
-    assert "if (scrollTop || scrollLeft)" in source
-    assert "viewportState[j].target.scrollTop = viewportState[j].scrollTop;" in source
-    assert "if (restoreGhostViewport) {" in source
-    assert "restoreGhostViewport();" in source
-    assert "var removedThreadPadding = Math.max(0, sourceThreadPaddingTop - ghostThreadPaddingTop);" in source
-    assert "ghostThread.scrollTop = Math.max(0, ghostThread.scrollTop - removedThreadPadding);" in source
-    assert "var dragHandleRect = dragHandle && dragHandle.getBoundingClientRect" in source
-    assert "var ghostTopGrabOffset = dragHandleRect" in source
-    assert 'ghost.style.top = (event.clientY - ghostTopGrabOffset) + "px";' in source
-    assert "y: ghostTopGrabOffset" in source
-    assert "function positionGhostAt(clientX, clientY)" in source
-    assert 'ghost.classList.contains("card") && cardW ? cardW' in source
-    assert "window.innerWidth - targetWidth - viewportInset" in source
-    assert "window.innerHeight - targetHeight - viewportInset" in source
-    assert "positionGhostAt(ev.clientX, ev.clientY);" in source
-    assert "positionGhostAt(event.clientX, event.clientY);" in source
-    assert "cardClone" in source
-    assert 'data-chat-id={String(chat.id)}' in source
-    assert "wbc-split-card-lifted" in styles
-    # Only conversation splits carry their own top grip: the split-chat panel
-    # (rail chat dragged onto the side). Side questions belong to the content
-    # tabs and, like artifact/change/map/browser/subagents, render only the
-    # main-conversation grip with no duplicate handle.
-    # Each handle identifies its own conversation explicitly. The split-side
-    # ghost is cloned from the exact pane containing that handle, so a stale
-    # closing host elsewhere on the page cannot make both handles lift the
-    # same conversation.
-    assert 'function handleSplitDragStart(event, dragSource)' in source
-    assert 'var fromMainGrip = dragSource === "main";' in source
-    assert 'page.querySelector(":scope > .wbc-main")' in source
-    assert 'dragHandle.closest(".wbc-side-agent-split")' in source
-    assert 'dragSource="main"' in source
-    assert 'dragSource="split"' in source
-    assert "activeChatIdRef.current" in source
-    assert "splitSideAgentId" in source
-    # A drop zone names the dragged conversation's destination. The split
-    # anchor matches it for the split grip and is opposite for the main grip;
-    # this prevents an immediate exchange at drag start. A midpoint dead band
-    # also filters tiny/stale initial drag coordinates.
-    assert "function wbcSplitSideForDraggedConversation(conversationSide, fromMainGrip)" in source
-    assert "setSplitSideDirect(wbcSplitSideForDraggedConversation(zone, fromMainGrip));" in source
-    assert "var swapThreshold = 24;" in source
-    assert "return previewConversationSide;" in source
-    split_side_helper = "function wbcSplitSideForDraggedConversation(" + source.split(
-        "function wbcSplitSideForDraggedConversation(", 1
-    )[1].split("function wbcChatSideDropZone", 1)[0]
-    mapping_script = f"""
-eval({json.dumps(split_side_helper)});
-process.stdout.write(JSON.stringify([
-  wbcSplitSideForDraggedConversation("left", false),
-  wbcSplitSideForDraggedConversation("right", false),
-  wbcSplitSideForDraggedConversation("left", true),
-  wbcSplitSideForDraggedConversation("right", true)
-]));
-"""
-    mapping_result = subprocess.run(
-        ["node", "-e", mapping_script], check=True, capture_output=True, text=True
-    )
-    assert json.loads(mapping_result.stdout) == ["left", "right", "right", "left"]
-    # A missing exact rail card must not silently turn into another session's
-    # card ghost.
-    assert "if (!railCard && !splitChatId && !fromMainGrip)" in source
-    assert "wbc-conversation-split" in source
-    assert '<div className="wbc-split-panel-grip">' in source
-    side_split = source.split("function WbcSideAgentSplit({", 1)[1].split(
-        "function WbcSideAgentTab", 1
-    )[0]
-    assert "<WbcSplitGripBar" not in side_split
-    assert "wbc-conversation-split" not in side_split
-    chat_split = source.split("function WbcChatSplit({", 1)[1].split(
-        "function WbcChatSplitHost", 1
-    )[0]
-    assert "<WbcSplitGripBar" in chat_split
-    assert "wbc-conversation-split" in chat_split
-    # The split chat's grip menu opens the full conversation panel (the same
-    # WbcSide component as the main float) inside the split, fed with the
-    # split chat's own data — never the main conversation's float.
-    assert "splitPanelOpen" in chat_split
-    assert "setSplitPanelOpen(true)" in chat_split
-    assert '<div className="wbc-split-chat-panel"' in chat_split
-    assert "<WbcSide" in chat_split
-    assert "activeChatId={chatId}" in chat_split
-    assert "chats={chat ? [chat] : []}" in chat_split
-    assert "floating={true}" in chat_split
-    assert "onCloseFloating={function () { setSplitPanelOpen(false); }}" in chat_split
-    # The panel starts collapsed (no accordion tab open), like the main one,
-    # and a pointer-down outside the panel dismisses it.
-    assert 'var [splitPanelTab, setSplitPanelTab] = useWbcState("");' in chat_split
-    assert "splitPanelRef" in chat_split
-    assert "function closeOutside(event)" in chat_split
-    assert "splitPanelRef.current.contains(event.target)" in chat_split
-    assert 'ref={splitPanelRef}' in chat_split
-    for name, marker, tail in (
-        ("artifact", "function WbcArtifactSplit({", "function WbcChangeSplitHost"),
-        ("change", "function WbcChangeSplit({", "function WbcResourceSplitHost"),
-        ("map", "function WbcMapSplit({", "function WbcBrowserSplitHost"),
-        ("browser", "function WbcBrowserSplit({", "function WbcSideAgentSplitHost"),
-        ("subagents", "function WbcSubagentsSplitHost", "function WbcSideAgentSplitHost"),
-        ("side-question", "function WbcSideAgentSplit({", "function WbcSideAgentTab"),
-    ):
-        body = source.split(marker, 1)[1].split(tail, 1)[0]
-        assert "<WbcSplitGripBar" not in body, name
-    assert "wbc-split-drag-ghost" in styles
-    drag_ghost_css = styles.split(".wbc-split-drag-ghost {", 1)[1].split("}", 1)[0]
-    assert "box-sizing: border-box;" in drag_ghost_css
-    assert "background: var(--wb-main-bg);" in drag_ghost_css
-    assert "0 6px 18px rgba(15, 23, 42, 0.08)" in drag_ghost_css
-    assert "--wbc-thread-inset-top: 24px;" in styles
-    assert ".wbc-split-drag-ghost .wbc-thread" in styles
-    assert "padding-inline: 24px;" in styles
-    assert ".wbc-split-drag-ghost > .wbc-conversation-split" in styles
-    assert ".wbc-split-drag-ghost .wbc-split-panel-grip" in styles
-    assert 'wbcT("workbenchChat.splitDropClose"' in source
-    assert 'wbcT("workbenchChat.splitDropLeft"' in source
-    assert 'wbcT("workbenchChat.splitDropRight"' in source
-    side_zone_helper = source.split("function wbcChatSideZoneRect()", 1)[1].split(
-        "function wbcClonePaneWithLiveState", 1
-    )[0]
-    assert 'page.querySelector(":scope > .wbc-task-context-panel")' in side_zone_helper
-    assert 'page.querySelector(":scope > .wbc-side")' in side_zone_helper
-    assert side_zone_helper.index(".wbc-task-context-panel") < side_zone_helper.index(".wbc-side")
-    assert 'page.classList.contains("wbc-side-hidden")' in side_zone_helper
-    assert "if (side && !sideHidden)" in side_zone_helper
-    assert "sr.left < pr.right && sr.right > pr.left" in side_zone_helper
-    assert "left: pr.right - zoneWidth" in side_zone_helper
-    assert 'getPropertyValue("--wbc-chat-side-preview-width")' in side_zone_helper
-    assert 'document.addEventListener("dragover", onDocumentChatDragOver, true)' in source
-    assert 'document.removeEventListener("dragover", onDocumentChatDragOver, true)' in source
-    assert "function handleSideLayerDragLeave" not in source
-    side_drop_layer = source.split('key="chat-side-drop-layer"', 1)[1].split(
-        "{splitDetailOpen &&", 1
-    )[0]
-    assert 'className="wbc-chat-side-drop-hint"' in side_drop_layer
-    assert 'chatDragKind === "task"' in side_drop_layer
-    assert 'wbcT("workbenchChat.dropTaskToOpenSide"' in side_drop_layer
-    assert 'wbcT("workbenchChat.dropToOpenSide"' in side_drop_layer
-    assert "chatSideDropActive &&" not in side_drop_layer
-    side_drop_css = styles.split(".wbc-chat-side-drop-layer {", 1)[1].split("}", 1)[0]
-    side_drop_active_css = styles.split(".wbc-chat-side-drop-layer.active {", 1)[1].split("}", 1)[0]
-    assert "background: transparent;" in side_drop_css
-    assert "background: transparent;" in side_drop_active_css
-    assert "top: 58px;" in side_drop_css
-    assert "border: 2px solid transparent;" in side_drop_css
-    assert "border-color: color-mix(in srgb, var(--wb-accent) 72%, transparent);" in side_drop_active_css
-    assert "dashed" not in side_drop_css
-    assert "var(--wb-accent) 5%" not in side_drop_css
-    assert "var(--wb-accent) 8%" not in side_drop_active_css
-    side_hint_hidden_css = styles.split(
-        ".wbc-chat-side-drop-layer .wbc-chat-side-drop-hint {", 1
-    )[1].split("}", 1)[0]
-    side_hint_visible_css = styles.split(
-        ".wbc-chat-side-drop-layer.active .wbc-chat-side-drop-hint {", 1
-    )[1].split("}", 1)[0]
-    assert "opacity: 0;" in side_hint_hidden_css
-    assert "visibility: hidden;" in side_hint_hidden_css
-    assert "opacity: 1;" in side_hint_visible_css
-    assert "visibility: visible;" in side_hint_visible_css
-    hidden_drop_preview_css = styles.split(
-        ".wbc-page.wbc-side-hidden.wbc-chat-side-drop-active {", 1
-    )[1].split("}", 1)[0]
-    assert "--wbc-side-track-width: var(--wbc-chat-side-preview-width);" in hidden_drop_preview_css
-    assert "--wbc-reclaimed-side-width: 0px;" in hidden_drop_preview_css
-    assert "--wbc-conversation-shift: 0px;" in hidden_drop_preview_css
-    assert "var(--wbc-chat-side-preview-width);" in hidden_drop_preview_css
-    grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
-        "function WbcSideAgentSplit", 1
-    )[0]
-    assert 'draggable="true"' not in grip_bar
-    assert "target.setPointerCapture(event.pointerId)" in grip_bar
-    assert "onPointerMove={trackDragPointer}" in grip_bar
-    assert "onPointerCancel={releaseDragPointer}" in grip_bar
-    assert "onClick" in grip_bar
-    assert "onDragPanel" not in grip_bar
-    assert ".wbc-split-drop-zones" in styles
-    assert ".wbc-split-drop-zone.active" in styles
-    assert ".wbc-split-drop-rail" in styles
-    assert ".wbc-split-drop-left" in styles
-    assert ".wbc-split-drop-right" in styles
-    # Highlights use the pane under the exact grip: the flexible main pane can
-    # be a different width from the fixed split track.
-    drop_zone_css = styles.split(".wbc-split-drop-zone {", 1)[1].split("}", 1)[0]
-    assert "width: var(--wbc-split-drop-width, var(--wbc-side-track-width));" in drop_zone_css
-    drag_start = source.split("function handleSplitDragStart", 1)[1].split(
-        "function handleSplitDragEnd", 1
-    )[0]
-    assert 'zones.style.setProperty("--wbc-split-drop-width", panelW + "px")' in drag_start
-    assert 'zones.setAttribute("data-conversation-side", previewConversationSide)' in drag_start
-    assert '.wbc-split-drop-zones[data-conversation-side="left"] .wbc-split-drop-rail' in styles
-    assert ".wbc-split-drop-main" not in styles
-    assert ".wbc-split-drop-half" not in styles
-    split_head_css = styles.split(".wbc-side-agent-split-head {", 1)[1].split("}", 1)[0]
-    assert "border-radius: 14px;" in split_head_css
-    assert "margin: 12px 12px 8px;" in split_head_css
-    assert "z-index: 1001;" in split_head_css
-    split_css = styles.split(".wbc-side-agent-split {", 1)[1].split("}", 1)[0]
-    # Content splits clear only the fixed app bar; there is no split grip band.
-    assert "padding-top: 58px;" in split_css
-    assert "function WbcSideSplitGrip" not in source
-    resource_host = source.split("function WbcResourceSplitHost", 1)[1].split(
-        "function WbcMapSplitHost", 1
-    )[0]
-    assert "WbcSideSplitGrip" not in resource_host
-    # Conversation splits extend the panel with a 26px grip band below the
-    # fixed app bar; the panel grip mirrors the main-conversation grip.
-    conv_css = styles.split(
-        ".wbc-side-agent-split.wbc-conversation-split {", 1
-    )[1].split("}", 1)[0]
-    assert "position: relative;" in conv_css
-    assert "padding-top: 72px;" in conv_css
-    panel_grip_css = styles.split(".wbc-split-panel-grip {", 1)[1].split("}", 1)[0]
-    assert "top: 58px;" in panel_grip_css
-    assert "height: 26px;" in panel_grip_css
-    assert "z-index: 42;" in panel_grip_css
-    assert ".wbc-split-panel-grip:hover .wbc-side-split-grip-bar" in styles
-    # The split chat's own floating panel reuses the full conversation panel:
-    # the container anchors inside the split, sizes to its content like the
-    # main float (never fills the split) and its card stays opaque.
-    split_panel_css = styles.split(".wbc-split-chat-panel {", 1)[1].split("}", 1)[0]
-    assert "position: absolute;" in split_panel_css
-    assert "z-index: 1190;" in split_panel_css
-    assert "max-height: calc(100% - 100px);" in split_panel_css
-    assert "width: min(var(--wb-right-w, 350px), calc(100% - 24px));" in split_panel_css
-    assert "transform: translateX(-50%);" in split_panel_css
-    # Matches the main floating panel: non-blocking shell, entrance animation,
-    # flush padding so the card spans the full 350px.
-    assert "overflow: visible;" in split_panel_css
-    assert "pointer-events: none;" in split_panel_css
-    assert "animation: wbc-floating-side-panel-in" in split_panel_css
-    split_panel_side_css = styles.split(
-        ".wbc-split-chat-panel .wbc-side {", 1
-    )[1].split("}", 1)[0]
-    assert "padding: 0;" in split_panel_side_css
-    split_panel_card_css = styles.split(
-        ".wbc-split-chat-panel .wbc-side-card {", 1
-    )[1].split("}", 1)[0]
-    assert "max-height: calc(100vh - 104px);" in split_panel_card_css
-    assert "background: var(--wb-card-bg);" in split_panel_card_css
-    assert "--wbc-main-min-width: 380px;" in styles
 
 
 def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
@@ -2468,205 +1748,6 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert "backdrop-filter: none;" in opaque_float_css
 
 
-def _legacy_test_each_conversation_split_grip_closes_its_own_conversation():
-    source = workbench_chat_source()
-    i18n = workbench_i18n_source()
-
-    close_main = source.split("  function closeMainConversationSplit() {", 1)[1].split(
-        "\n  function closeActiveSplit", 1
-    )[0]
-    drag_drop = source.split("    function onDocumentDrop(ev) {", 1)[1].split(
-        "\n    function cleanup", 1
-    )[0]
-    main_grip = source.split('{splitDetailOpen && (\n        <div key="split-main-grip"', 1)[1].split(
-        "\n      )}", 1
-    )[0]
-    chat_split = source.split("function WbcChatSplit({", 1)[1].split(
-        "function WbcSideAgentSplitResizer", 1
-    )[0]
-
-    # Closing A removes A's stored split before the eagerly-updated selection
-    # switches to B, so B remains as the sole visible conversation.
-    assert "delete updated[sourceChatId];" in close_main
-    assert "selectChat(targetChatId);" in close_main
-    assert "closeResourceSplit();" not in close_main
-    assert "onClose={splitChatId ? closeMainConversationSplit : closeActiveSplit}" in main_grip
-    # B keeps its own close callback. Drag-to-rail uses the drag source to make
-    # the same A/B decision instead of closing whichever split is globally active.
-    assert "onClose={onClose}" in chat_split
-    assert "if (fromMainGrip) closeMainConversationSplit();" in drag_drop
-    assert "else closeResourceSplit();" in drag_drop
-
-    # Both physical placements expose one stable, position-independent label.
-    grip_bar = source.split("function WbcSplitGripBar", 1)[1].split(
-        "function WbcSideAgentSplit", 1
-    )[0]
-    assert 'wbcT("workbenchChat.splitMoveOtherSide", "Move split to the other side")' in grip_bar
-    assert '"workbenchChat.splitMoveLeft"' not in i18n
-    assert '"workbenchChat.splitMoveRight"' not in i18n
-    assert i18n.count('"workbenchChat.splitMoveOtherSide"') == 2
-    assert '"workbenchChat.splitMoveOtherSide": "把分屏移动到另一侧"' in i18n
-
-
-def _legacy_test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
-    source = workbench_chat_source()
-    styles = workbench_style_source()
-
-    begin = source.split("  function beginFloatingPanelSplit(openSplit, sourceChatId, sourceChatSnapshot) {", 1)[1].split(
-        "\n  function restoreFloatingPanelSplit", 1
-    )[0]
-    restore = source.split("  function restoreFloatingPanelSplit() {", 1)[1].split(
-        "\n  function closeSideAgentSplit", 1
-    )[0]
-    render_panel = source.split("  function renderConversationPanel(floating) {", 1)[1].split(
-        "\n\n  return (\n    <div", 1
-    )[0]
-
-    split_chat_content = source.split("  function openSplitChatContent(type, payload, sourceChatSnapshot) {", 1)[1].split(
-        "\n  function renderConversationPanel", 1
-    )[0]
-    chat_split = source.split("function WbcChatSplit({", 1)[1].split(
-        "function WbcSideAgentSplitResizer", 1
-    )[0]
-
-    # Snapshot both the original main conversation and, when different, the
-    # conversation that opened the content split.
-    assert "floatingSplitRestoreRef.current = {" in begin
-    assert "splitSide: splitSide" in begin
-    assert "activeChatId: activeId" in begin
-    assert "activeChat: activeChat &&" in begin
-    assert "activeSplit: splitStateSnapshot(activeId)" in begin
-    assert "sourceSplit: sourceId === activeId ? null : splitStateSnapshot(sourceId)" in begin
-    # Whether the source conversation started left or right, it owns the left
-    # track and the new content owns the right. Selecting a right-side source
-    # causes the existing grid transition to slide it into the left position.
-    assert "function promoteSourceAndOpenContent()" in begin
-    assert "selectChat(sourceId);" in begin
-    assert 'setSplitSideDirect("right");' in begin
-    assert "openSplit();" in begin
-    # Reuse the split pane's already-loaded transcript and commit the owner
-    # handoff atomically, preventing a one-frame loading/empty flash.
-    assert "chatCache.details[sourceId] = sourceChat;" in begin
-    assert "setActiveChat(sourceChat);" in begin
-    assert "setChatLoading(false);" in begin
-    assert "window.ReactDOM.flushSync(commitPromotion)" in begin
-    assert "document.startViewTransition" in begin
-    assert 'var transitionName = "wbc-promoted-conversation";' in begin
-    assert 'querySelector(":scope > .wbc-main")' in begin
-    assert "html.wbc-split-view-transition::view-transition-old(root)" in styles
-    assert "::view-transition-group(wbc-promoted-conversation)" in styles
-    assert "animation-duration: 380ms;" in styles
-    assert "cubic-bezier(.4, 0, .6, 1)" in styles
-    # The conversation moves as one solid pane. Do not cross-fade its old and
-    # new snapshots, which reads as two different panels replacing each other.
-    solid_pane_styles = styles.split(
-        "/* Move one solid pane instead of cross-fading the source and destination",
-        1,
-    )[1].split("/* The two supporting surfaces are time-reversed as well", 1)[0]
-    promoted_old = solid_pane_styles.split(
-        "html.wbc-split-view-transition::view-transition-old(wbc-promoted-conversation) {",
-        1,
-    )[1].split("}", 1)[0]
-    promoted_new = solid_pane_styles.split(
-        "html.wbc-split-view-transition::view-transition-new(wbc-promoted-conversation) {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "animation-name: none" in promoted_old
-    assert "opacity: 1" in promoted_old
-    assert "animation-name: none" in promoted_new
-    assert "opacity: 0" in promoted_new
-    assert "wbc-split-view-transition-opening" in begin
-    assert 'var displacedName = "wbc-displaced-conversation";' in begin
-    assert 'var resourceName = "wbc-promoted-resource";' in begin
-    # Position and width change in one shared-element transition. There is no
-    # narrow left-side intermediate layout (or timer boundary) that can snap
-    # to the wider main conversation after arriving.
-    assert 'setSplitSideDirect("left");' not in begin
-    assert 'movingPane.addEventListener("transitionend", onMoveEnd);' not in begin
-    assert "setTimeout(promoteSourceAndOpenContent" not in begin
-    assert 'window.matchMedia("(prefers-reduced-motion: reduce)").matches' in begin
-    # Closing temporary content restores both conversations and the original
-    # left/right placement.
-    assert "restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);" in restore
-    assert "restoreSplitState(snapshot.chatId, snapshot.sourceSplit);" in restore
-    assert "selectChat(snapshot.activeChatId);" in restore
-    assert 'setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");' in restore
-    assert "function commitRestoreNow()" in restore
-    assert "snapshot.activeChat || chatCache.details[snapshot.activeChatId]" in restore
-    assert "window.ReactDOM.flushSync(commitRestore)" in restore
-    assert "document.startViewTransition" in restore
-    assert "wbc-split-view-transition-closing" in restore
-    assert 'sourcePane.style.viewTransitionName = transitionName;' in restore
-    assert 'targetPane.style.viewTransitionName = transitionName;' in restore
-    assert 'targetMainPane.style.viewTransitionName = displacedName;' in restore
-    # Newly mounted split hosts must be captured at their settled rectangle.
-    # Otherwise the close transition targets the host's offscreen enter frame
-    # and then snaps/slides to the real split position after the handoff.
-    assert "function wbcPinSplitMotionOpen(host)" in source
-    assert "host.style.transition = \"none\";" in source
-    assert "host.style.transform = \"translateX(0)\";" in source
-    assert "wbcPinSplitMotionOpen(targetResourcePane);" in begin
-    assert "wbcPinSplitMotionOpen(targetMotion);" in restore
-    assert "wbcReleasePinnedSplitMotion(targetResourcePane);" in begin
-    assert 'wbcReleasePinnedSplitMotion(targetPane.closest(".wbc-side-agent-split-motion"));' in restore
-    # Preserve the same visible message while the pane changes width/owner.
-    # Copying scrollTop directly would drift because text wraps differently in
-    # the narrow main pane and the wider split pane.
-    assert "function wbcCaptureConversationViewport(pane)" in source
-    assert "function wbcRestoreConversationViewport(pane, viewport)" in source
-    assert 'querySelectorAll(":scope > [data-wbc-thread-item]")' in source
-    assert "anchorOffset: anchorOffset" in source
-    assert "var promotedViewport = wbcCaptureConversationViewport(sourcePane);" in begin
-    assert "wbcRestoreConversationViewport(targetPane, promotedViewport);" in begin
-    assert "var restoredViewport = wbcCaptureConversationViewport(sourcePane);" in restore
-    assert "wbcRestoreConversationViewport(targetPane, restoredViewport);" in restore
-    assert "Promise.resolve(transition.ready)" in begin
-    assert "Promise.resolve(transition.ready)" in restore
-    # Swap the split/resource width with the old main width in the same commit.
-    # This keeps the promoted pane's source and destination rectangles equal,
-    # so the whole transcript + composer translates without scaling/reflow.
-    assert "splitWidth: sideAgentSplitWidth" in begin
-    assert "promotedResourceWidth:" in begin
-    assert "floatingSplitRestoreRef.current.promotedResourceWidth" in begin
-    assert "setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(snapshot.splitWidth" in restore
-    assert "function wbcPinPageSplitLayout(page)" in source
-    assert 'page.style.transition = "none";' in source
-    assert "wbcPinPageSplitLayout(page);" in begin
-    assert "wbcPinPageSplitLayout(page);" in restore
-    assert "wbcReleasePinnedPageSplitLayout(page);" in begin
-    assert "wbcReleasePinnedPageSplitLayout(page);" in restore
-    assert 'data-split-open={openKey ? "true" : "false"}' in source
-    assert 'data-split-open="true"' in begin
-    assert 'data-split-open="true"' in restore
-    assert "wbc-split-surface-in" in styles
-    assert "wbc-split-surface-out" in styles
-    assert source.count("if (restoreFloatingPanelSplit()) return;") >= 5
-    assert "if (floating) beginFloatingPanelSplit(openSplit);" in render_panel
-    assert 'selectResourceSplit("viewer"' in render_panel
-    assert 'selectResourceSplit("map"' in render_panel
-    assert 'selectResourceSplit("browser"' in render_panel
-    assert 'selectResourceSplit("subagents"' in render_panel
-    assert "selectArtifact(file)" in render_panel
-    assert "selectChange(change)" in render_panel
-    assert "selectSideAgent(agentId)" in render_panel
-    # The split conversation's own floating panel exposes the same content
-    # entries instead of swallowing them with placeholder callbacks.
-    assert "beginFloatingPanelSplit(function ()" in split_chat_content
-    assert "}, sourceChatId, sourceChatSnapshot);" in split_chat_content
-    assert 'type === "artifact"' in split_chat_content
-    assert 'type === "change"' in split_chat_content
-    assert 'type === "viewer"' in split_chat_content
-    assert 'type === "map"' in split_chat_content
-    assert 'type === "browser"' in split_chat_content
-    assert 'onSelectArtifact={function (file) { openContent("artifact", file); }}' in chat_split
-    assert 'onSelectChange={function (change) { openContent("change", change); }}' in chat_split
-    assert 'onSelectMap={function (item) { openContent("map", item); }}' in chat_split
-    assert 'onSelectBrowser={function (tabId) { openContent("browser", tabId); }}' in chat_split
-    assert "onOpenContent(type, payload, chat)" in chat_split
-    assert "browserActiveByChat={browserActiveByChat}" in chat_split
-    assert "browserSuppressed={false}" in chat_split
-
-
 def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     source = workbench_chat_source()
     split_controller = frontend_module_source("features/chat/split-selection-controller.jsx")
@@ -2726,25 +1807,6 @@ def test_workbench_viewer_split_grip_has_symmetric_vertical_spacing():
     assert "height: 34px;" in grip
     assert "margin-top: 0;" in viewer_header_spacing
     assert "margin-top: 0;" in browser_header_spacing
-
-
-def _legacy_test_workbench_message_viewer_action_opens_the_file_split_directly():
-    source = workbench_chat_source()
-
-    open_viewer = source.split("  function openViewer(file) {", 1)[1].split(
-        "\n  function revealTopbarResource", 1
-    )[0]
-    assert "setViewerFile(file);" in open_viewer
-    assert 'setSideTab("");' in open_viewer
-    assert 'setSideTab("viewer");' not in open_viewer
-    assert 'selectResourceSplit("viewer", wbcArtifactFileKey(file));' in open_viewer
-    assert "viewerFile && wbcArtifactFileKey(viewerFile)" in source
-    close_viewer = source.split("  function closeResourceSplit() {", 1)[1].split(
-        "\n  function closeMainConversationSplit", 1
-    )[0]
-    assert 'resourceSplitByChat[chatId].type === "viewer"' in close_viewer
-    assert "setViewerFile(null);" in close_viewer
-    assert 'return current === "viewer" ? "" : current;' in close_viewer
 
 
 def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
@@ -3289,25 +2351,6 @@ def test_library_workspace_tabs_are_integrated_into_the_floating_right_inspector
         "@media (prefers-reduced-motion: reduce)", 1
     )[0]
     assert ".wb-lib-card-grid { grid-template-columns: 1fr; }" not in compact_css
-
-
-def test_notification_items_navigate_to_their_precise_context():
-    source = workbench_shell_source()
-    chat_source = workbench_chat_source()
-    styles = workbench_style_source()
-
-    assert "function wbNotificationNavigationTarget(item)" in source
-    assert 'type: "chat", chatId: meta.chatId' in source
-    assert 'type: "task", sessionId: meta.sessionId' in source
-    assert 'type: "schedule"' in source
-    assert 'type: "knowledge", docId: meta.documentId || meta.docId' in source
-    assert 'setSettingsTab("about")' in source
-    assert "navigateFromSearch(target);" in source
-    assert "onOpenNotification={navigation.navigateNotification}" in source
-    assert 'className="workbench-notif-item-jump"' in source
-    assert 'targetProjectId === String(projectIdRef.current || "")' in chat_source
-    assert "refreshChats(targetId);" in chat_source
-    assert ".workbench-notif-item:focus-visible" in styles
 
 
 def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhere():
@@ -4153,97 +3196,17 @@ def test_workbench_reused_tool_call_id_starts_a_distinct_occurrence():
     }
 
 
-def test_workbench_plan_revision_guard_only_blocks_unresolved_started_steps():
-    result = _run_workbench_model_js(
-        """
-[
-  window.WorkbenchModel.hasUnresolvedStartedSteps([
-    { status: "completed" },
-    { status: "skipped" }
-  ]),
-  window.WorkbenchModel.hasUnresolvedStartedSteps([
-    { status: "completed" },
-    { status: "failed" },
-    { status: "pending" }
-  ]),
-  window.WorkbenchModel.hasUnresolvedStartedSteps([
-    { status: "pending" },
-    { status: "pending" }
-  ])
-]
-"""
-    )
-
-    assert result == [False, True, False]
-
-
-def test_workbench_dependency_helpers_preserve_visible_order_and_block_unmet_steps():
-    result = _run_workbench_model_js(
-        """
-(() => {
-  const plan = [
-    { id: "a", title: "A", status: "completed", dependsOn: [] },
-    { id: "b", title: "B", status: "pending", dependsOn: ["a"] },
-    { id: "c", title: "C", status: "pending", dependsOn: ["b"] }
-  ];
-  const invalid = [plan[1], plan[0], plan[2]];
-  return {
-    valid: window.WorkbenchModel.validatePlanGraph(plan),
-    invalid: window.WorkbenchModel.validatePlanGraph(invalid),
-    next: window.WorkbenchModel.findNextRunnableStep(plan).id,
-    unmetC: window.WorkbenchModel.unmetDependencyIds(plan, plan[2]),
-    marked: window.WorkbenchModel.markStepById(plan, "b", "running", "go").map(s => s.status)
-  };
-})()
-"""
-    )
-
-    assert result["valid"] == {"valid": True}
-    assert result["invalid"]["code"] == "dependency_order"
-    assert result["next"] == "b"
-    assert result["unmetC"] == ["b"]
-    assert result["marked"] == ["completed", "running", "pending"]
-
-
-def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
-    model = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-
-    assert "function markStepById" in model
-    assert '"/plan"' in model
-    assert "model.markStepById(basePlan, stepId" in source
-    assert "controller.reorderSteps" in source
-    assert "dependsOn" in source
-    assert "function requirePlan(baseSession)" in source
-    assert "firstUnresolvedStepIndex" not in source
-
-
 def test_workbench_keeps_live_subagent_logs_across_silent_refreshes():
     root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
+    source = frontend_module_source("features/session/activity.jsx")
 
     assert 'data.type === "subagent_update"' in source
     assert 'plugin_context_data.get("session_id")' in (
         root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_subagent" / "manager.py"
     ).read_text(encoding="utf-8")
-    assert "event.live && event.id" in source
+    assert "if (!events.some(function (item) { return item && item.id === event.id; }))" in source
+    assert "events.push(event);" in source
     assert "data.message" in source
-
-
-def test_workbench_uses_light_project_payload_and_lazy_session_detail():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
-    model = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-    project_controller = frontend_module_source("features/task/project-controller.jsx")
-
-    assert 'apiJson("/api/projects?detail=summary")' in model
-    assert "function fetchSession(sessionId)" in model
-    assert '"/api/task-sessions/" + encodeURIComponent(sessionId)' in model
-    assert "mergeSessionPayload(prev, payload)" in source
-    assert "if (session.isSummary) fetchAndMergeSession(session.id)" in source
-    assert "if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId)" not in source
-    assert "sequence !== sessionLoadSeqRef.current" in project_controller
 
 
 def test_data_refresh_cancels_superseded_requests_and_is_event_driven():
@@ -4276,21 +3239,6 @@ def test_data_refresh_cancels_superseded_requests_and_is_event_driven():
     assert "refreshFallbackData" not in source
 
 
-def test_persisted_workbench_state_uses_sse_instead_of_polling():
-    root = Path(__file__).resolve().parent.parent
-    shell = workbench_shell_source()
-    chat_page = (
-        root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "features" / "chat" / "page.jsx"
-    ).read_text(encoding="utf-8")
-
-    assert '"notification_changed"' in shell
-    assert '"task_board_changed"' in shell
-    assert "INTERVAL_MS = 30000" not in shell
-    assert "INTERVAL_MS = 4000" not in shell
-    assert 'event.type !== "terminal_list_changed"' in chat_page
-    assert "}, 1500);" not in chat_page
-
-
 def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     root = Path(__file__).resolve().parent.parent
     shell = workbench_shell_source()
@@ -4300,30 +3248,17 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     assert "mountedPages" in shell
     assert "var WorkbenchStableSurface = React.memo(" in shell
     assert "return !prev.active && !next.active;" in shell
-    assert "<WorkbenchStableSurface active={presentation.isChat}>" in shell
+    assert "<WorkbenchStableSurface active={presentation.isChat || presentation.isBoard}>" in shell
     assert '<WorkbenchStableSurface active={p.isKnowledge} enterMotion={true}>' in shell
     assert '<WorkbenchStableSurface active={p.isSchedule} enterMotion={true}>' in shell
     assert '<WorkbenchStableSurface active={p.isMemory} enterMotion={true}>' in shell
-    assert '<WorkbenchStableSurface active={!context.presentation.isModulePage} enterMotion={true}>' in shell
-    assert "active={!context.presentation.isModulePage}" in shell
-    assert "var taskDropEnabled = !!(active && project && session && session.kind !== \"init\")" in shell
+    assert "workspaceContent: sharedWorkspace" in shell
+    assert "WorkbenchBoardModuleSurface" not in shell
     assert "function WorkbenchChatPage({ active, project" in chat
+    assert "}, !!(isActive && project));" in chat
     assert "!!(isActive && project)" in chat
     assert "function WorkbenchLibraryPage(props)" in library
     assert "props.active !== false" in library
-
-
-def test_workbench_task_controller_uses_current_session_from_returned_store():
-    source = workbench_shell_source()
-    controller = source.split("function useTaskController", 1)[1].split("function TaskPlanList", 1)[0]
-
-    assert "function sessionFromStore" in controller
-    assert "sessions[j] && sessions[j].id === sid" in controller
-    assert "return ctrl.executeAll({ baseSession: sessionFromStore(store, session) })" in controller
-    assert "(store && store.activeSession) || current" not in controller
-    assert "(patched && patched.activeSession) || baseSession" not in controller
-    assert "(next && next.activeSession) || baseSession" not in controller
-    assert "(nextStore && nextStore.activeSession) || currentSession" not in controller
 
 
 def test_workbench_memory_skill_learning_selects_tool_chains(monkeypatch, tmp_path):
@@ -5606,7 +4541,7 @@ def test_workbench_chat_model_label_and_context_usage_use_live_data():
 
 def test_workbench_chat_delete_detaches_local_fork_markers():
     source = workbench_chat_source()
-    handler = source.split("function handleDeleteChat(chatId)", 1)[1].split("function handleToTask", 1)[0]
+    handler = source.split("function handleDeleteChat(chatId)", 1)[1].split("function handleCompact", 1)[0]
 
     assert "function detachDeletedForkSource(item)" in handler
     assert "delete cleaned.forkedFromChatId" in handler
@@ -5637,6 +4572,9 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     assert "window.ReactDOM.createPortal(" in rename_dialog
     assert 'document.querySelector(".workbench-shell") || document.body' in rename_dialog
     assert "setRenameChat(chat)" in rail
+    assert "onDoubleClick={function (event)" in rail
+    assert 'event.target.closest("button, a, input, [role=\'menuitem\'], .wbc-fork-marker")' in rail
+    assert rail.index("onDoubleClick={function (event)") < rail.index("onContextMenu={function (event)")
     assert "window.prompt(" not in rail
     assert "onRename(chat.id, nextTitle)" in rename_dialog
     assert "previous && previous.id === chat.id" in rename_controller
@@ -5751,80 +4689,6 @@ def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
     assert 'className="wbc-chat-card-pin"' in rail
     assert "onToggleChat: function (chat, pinned)" in shell
     assert 'togglePinnedSession({ id: chat.id, kind: "chat" }, pinned)' in shell
-
-
-def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
-    source = workbench_chat_source()
-    styles = workbench_style_source()
-    i18n = workbench_i18n_source()
-    rail = source.split("function WbcRail(", 1)[1].split(
-        "// Conversation main (column 3)", 1
-    )[0]
-    ordering = frontend_module_source("features/chat/rail-ordering.jsx")
-    task_rail = frontend_module_source("features/chat/rail-tasks.jsx")
-    main = source.split("function WbcMain(", 1)[1].split(
-        "function WbcAgentMessage", 1
-    )[0]
-
-    assert 'var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";' in source
-    assert "function wbcSetChatDrag(event, chat)" in source
-    assert "function wbcReadChatDrag(event)" in source
-    assert "WBC_CHAT_ORDER_PREFIX" in ordering
-    assert "localStorage.setItem(WBC_CHAT_ORDER_PREFIX" in ordering
-    assert 'draggable="true"' in rail
-    assert "wbcMoveChatOrder(order, dragState.movingId" in rail
-    assert "transfer.setDragImage(" not in rail
-    assert "function prepareRailDragImage(root, transfer, clientX, clientY)" in rail
-    # Chat, chat-group, terminal and plugin rows call the helper directly;
-    # task cards receive the same helper through their focused rail module.
-    assert rail.count("prepareRailDragImage(") == 4
-    assert "prepareDragImage(event.currentTarget, event.dataTransfer" in task_rail
-    assert "function wbcBuildRailCardDragPreview(root, extraClassName)" in source
-    drag_preview_helper = source.split(
-        "function wbcBuildRailCardDragPreview(root, extraClassName) {", 1
-    )[1].split("\n}", 1)[0]
-    assert 'host.style.overflow = "visible"' in drag_preview_helper
-    assert 'host.style.isolation = "auto"' in drag_preview_helper
-    assert 'clone.querySelectorAll(".wbc-chat-row-icon")' in drag_preview_helper
-    assert 'icon.style.opacity = "1"' in drag_preview_helper
-    assert '"wbc-split-return-target"' in drag_preview_helper
-    assert 'wbcBuildRailCardDragPreview(root, "")' in rail
-    assert 'document.body.appendChild(host)' in rail
-    assert 'document.addEventListener("dragover", moveDragImage, true)' in rail
-    assert "wbcHideNativeDragImage(transfer)" in rail
-    assert "clearRailDragImage();" in rail
-    assert ".wbc-native-chat-drag-image::before" in styles
-    drag_image_css = styles.split(
-        ".wbc-rail.wbc-native-chat-drag-image > .wbc-chat-card {", 1
-    )[1].split("}", 1)[0]
-    assert "background: var(--wb-card-bg-strong);" in drag_image_css
-    assert "border-radius: 11px;" in drag_image_css
-    assert "box-shadow:" in drag_image_css
-    assert "event.altKey" in ordering
-    assert "onOpenDroppedChat={function (chatId)" in source
-    assert "onDrop={handleChatDrop}" in main
-    assert 'className="wbc-chat-open-drop-hint"' in main
-    assert ".wbc-chat-card.dragging" in styles
-    dragged_card_css = styles.split(
-        ".wbc-chat-card.dragging {", 1
-    )[1].split("}", 1)[0]
-    assert "opacity: .22;" in dragged_card_css
-    assert "transform: scale(.985);" in dragged_card_css
-    lifted_card_css = styles.split(
-        ".wbc-chat-card.wbc-split-card-lifted {", 1
-    )[1].split("}", 1)[0]
-    assert "opacity: 1;" in lifted_card_css
-    assert "transform: translateY(-3px);" in lifted_card_css
-    assert ".wbc-main.chat-drop-active" in styles
-    drop_border_css = styles.split(
-        ".wbc-main.chat-drop-active::after {", 1
-    )[1].split("}", 1)[0]
-    assert "inset: 58px 0 0;" in drop_border_css
-    assert "z-index: 65;" in drop_border_css
-    assert "border: 2px solid" in drop_border_css
-    assert i18n.count('"workbenchChat.dragChat"') == 2
-    assert i18n.count('"workbenchChat.chatMoved"') == 2
-    assert i18n.count('"workbenchChat.dropToOpen"') == 2
 
 
 def test_plugin_tools_share_conversation_cards_and_split_drop_pipeline():
@@ -5958,20 +4822,6 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
     assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
-
-
-def test_task_answer_resume_uses_interrupt_not_pause_and_suppresses_cancel_error():
-    source = workbench_shell_source()
-    answer = source.split("answer: function (questionId, optionText)", 1)[1].split(
-        "promoteToPlan: function", 1
-    )[0]
-    header = source.split("function TaskHeader", 1)[1].split(
-        "function TaskBriefCard", 1
-    )[0]
-
-    assert "interruptedRef.current = false" in answer
-    assert 'if (interruptedRef.current || (err && err.name === "AbortError"))' in answer
-    assert 'status === "running" || session.agentBusy ? controller.interrupt() : controller.pause()' in header
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -6669,120 +5519,6 @@ def test_workbench_context_tab_has_durable_agent_inbox_card():
     assert ".wbc-inbox-event-meta code" not in css
 
 
-def test_voice_settings_are_scoped_and_context_shows_plugin_disclosure():
-    root = Path(__file__).resolve().parents[1]
-    overlay = workbench_settings_source()
-    chat = workbench_chat_source()
-    i18n = workbench_i18n_source()
-    css = workbench_style_source()
-    classic_settings = root / "src" / "cyrene" / "workbench" / "webui" / "static" / "app" / "settings.jsx"
-    settings_overlay = frontend_module_source("settings-overlay.jsx")
-
-    capabilities = overlay.split("function CapabilitiesPanel", 1)[1].split(
-        "function DataPanel", 1
-    )[0]
-    context_tab = chat.split("function WbcContextTab", 1)[1].split(
-        "function WbcArtifactsTab", 1
-    )[0]
-    assert 'FieldRow(' in capabilities
-    assert 'settings.voiceCapability' in capabilities
-    assert 'mode === "plugins"' not in capabilities
-    assert 'settings.pluginPacks' not in capabilities
-    assert 'settings.pluginStandalone' not in capabilities
-    assert '{ id: "plugins", labelKey: "settings.pluginsTab", icon: "tools" }' not in settings_overlay
-    assert 'tab === "plugins"' not in settings_overlay
-    assert 'settingsFetch("/api/settings/plugins"' not in settings_overlay
-    assert "toggleTool(" not in capabilities
-    assert "toolList.map" not in capabilities
-    assert "saveBrowserTools" not in overlay
-    voice_setting_helpers = overlay.split("function saveVoiceBooleanSetting", 1)[1].split(
-        "function saveVoiceProfile", 1
-    )[0]
-    assert 'setVoiceNotice(t("settings.saved"))' not in voice_setting_helpers
-    assert voice_setting_helpers.count('setVoiceNotice("");') == 4
-    voice_save_actions_css = css.split(
-        ".wb-voice-custom-fields > .wb-save-actions {", 1
-    )[1].split("}", 1)[0]
-    assert "justify-content: flex-end;" in voice_save_actions_css
-
-    disclosure = chat.split("function wbcUsedPluginPacks", 1)[1].split(
-        "function WbcContextTab", 1
-    )[0]
-    assert 'fetch("/api/settings/tools"' not in context_tab
-    assert '"cyrene-tool-packages-change"' not in context_tab
-    assert "wbcUsedPluginPacks(contextBlocks)" in context_tab
-    assert "message.tools" not in disclosure
-    assert "runtime.activities" not in disclosure
-    assert "WBC_PROGRESSIVE_TOOL_PACKAGES" not in chat
-    assert 'compositionSource === "public_transcript"' not in context_tab
-    assert 'compositionSource === "agent_report"' not in context_tab
-    assert "contextBlocks.usedPluginPacks" in disclosure
-    assert "contextBlocks.usedStandalonePlugins" in disclosure
-    assert ".forEach(addReportedPackage)" in disclosure
-    assert "contextBlocks.messageCount" in context_tab
-    assert "contextBlocks.updatedAt" in context_tab
-    assert "chat.messageCount" not in context_tab
-    assert 'item.messageType === "task_result"' in chat
-    assert "workbenchChat.usedPluginPacks" in context_tab
-    assert "usedPluginPacks.length === 0" in context_tab
-    assert "workbenchChat.noUsedPluginPacks" in context_tab
-    assert 'className="wbc-side-empty"' in context_tab
-    assert ".workbench-shell .wbc-side-empty p" in css
-    assert "toolPackage.enabled" not in context_tab
-    assert "workbenchChat.injectedContext" not in context_tab
-    assert "settings.soulMd" not in context_tab
-    assert "workspacePathLabel" not in context_tab
-
-    assert '"toolPackageDesc.' not in i18n
-
-    for package_id in (
-        "cyrene_application",
-        "cyrene_browser",
-        "cyrene_code",
-        "cyrene_content",
-        "cyrene_context",
-        "cyrene_control",
-        "cyrene_delivery",
-        "cyrene_desktop",
-        "cyrene_entity",
-        "cyrene_extensions",
-        "cyrene_cli",
-        "cyrene_image",
-        "cyrene_knowledge",
-        "cyrene_map",
-        "cyrene_media",
-        "cyrene_mcp",
-        "cyrene_memory",
-        "cyrene_model",
-        "cyrene_office",
-        "cyrene_remote",
-        "cyrene_renderer",
-        "cyrene_schedule",
-        "cyrene_skills",
-        "cyrene_soul",
-        "cyrene_subagent",
-        "cyrene_task",
-    ):
-        assert i18n.count(f'"toolName.{package_id}"') == 2
-
-    assert not classic_settings.exists()
-    assert "@media (prefers-reduced-motion: reduce)" in css
-    assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
-    assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
-    assert '"workbenchChat.usedPluginPacks": "Used plugins"' in i18n
-    assert '"workbenchChat.usedPluginPacks": "已使用的插件"' in i18n
-    assert '"workbenchChat.inbox.agentMessage": "Agent message"' in i18n
-    assert '"workbenchChat.inbox.subagentResult": "Subagent 结果"' in i18n
-    assert '"workbenchChat.ctxBlock.system.root": "Agent instructions"' in i18n
-    assert '"workbenchChat.ctxBlock.context.project_memory": "项目记忆"' in i18n
-    assert '"workbenchChat.ctxBlock.context.plugin_session": "Plugin session context"' in i18n
-    assert '"workbenchChat.ctxBlock.context.persona": "Persona"' in i18n
-    assert '"workbenchChat.ctxBlock.context.memory": "Memory"' in i18n
-    assert '"workbenchChat.ctxBlock.context.learned_skills": "Learned skills"' in i18n
-    assert 'id.startsWith("context.")' in chat
-    assert '"workbenchChat.inbox.live"' not in i18n
-
-
 def test_new_context_projection_drives_used_plugin_pack_list():
     source = workbench_chat_source()
     helper = "function wbcUsedPluginPacks" + source.split(
@@ -7042,7 +5778,7 @@ def test_unified_search_only_shows_loading_status_while_results_are_pending():
         "/>\n", 1
     )[0]
     unified_results = source.split("{unifiedSearchActive ? (", 1)[1].split(
-        ') : railMode === "task" ? (', 1
+        ") : (", 1
     )[0]
 
     assert "setGlobalFilesLoading(codeAvailable && Boolean(nextQuery.trim()))" in input_markup
@@ -7074,85 +5810,61 @@ def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
     assert "onWheel={handleSidebarModuleWheel}" in grid_markup
 
 
-def test_collapsed_workspace_headers_center_their_expand_button_and_hide_task_empty_state():
-    styles = workbench_style_source()
-
-    collapsed_head_css = styles.split(
-        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-head {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "justify-content: center;" in collapsed_head_css
-    assert "gap: 0;" in collapsed_head_css
-    assert "padding: 0;" in collapsed_head_css
-    task_rail = frontend_module_source("features/chat/rail-tasks.jsx")
-    assert 'className={"wbc-chat-list workbench-integrated-rail-body wbc-task-list"' in task_rail
-    assert '!loading && state.ordered.length === 0 ? " is-empty" : ""' in task_rail
-    assert 'wbcT("rail.noTasks", "No tasks yet.")' in task_rail
-    collapsed_body_css = styles.split(
-        ".workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed .workbench-integrated-rail-body {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "visibility: hidden;" in collapsed_body_css
-
-
-def test_active_task_rail_and_board_use_their_current_menu_dismissal_surfaces():
-    source = workbench_shell_source()
+def test_active_conversation_rail_and_board_use_their_current_menu_dismissal_surfaces():
     chat = workbench_chat_source()
+    board_source = frontend_module_source("features/chat/conversation-board.jsx")
 
-    task_rail = chat.split("function WbcRail(", 1)[1].split(
+    conversation_rail = chat.split("function WbcRail(", 1)[1].split(
         "function WbcProjectRail(", 1
     )[0]
-    task_board = source.split("function TaskBoard(", 1)[1].split(
-        "function TaskBoardCard(", 1
+    board = board_source.split("function ConversationBoard(", 1)[1].split(
+        "function ConversationBoardCard(", 1
     )[0]
-    assert '{menuId && <div className="wb-card-menu-scrim"' in task_rail
-    assert 'className="wb-card-menu" role="menu"' in task_rail
-    assert 'document.addEventListener("pointerdown", closeOnOutside, true);' in task_board
-    assert 'target.closest(".wb-card-menu")' in task_board
-    assert 'className="wb-card-menu-scrim"' not in task_board
+    assert '{menuId && <div className="wb-card-menu-scrim"' in conversation_rail
+    assert 'className="wb-card-menu" role="menu"' in conversation_rail
+    assert 'document.addEventListener("pointerdown", closeOnOutside, true);' in board
+    assert 'target.closest(".wb-card-menu")' in board
+    assert 'className="wb-card-menu-scrim"' not in board
 
 
-def test_board_new_button_opens_chat_or_task_creation_menu():
+def test_board_new_button_only_creates_a_conversation():
     source = workbench_shell_source()
     styles = workbench_style_source()
-    task_board = source.split("function TaskBoard(", 1)[1].split(
-        "function TaskBoardCard(", 1
+    board_source = frontend_module_source("features/chat/conversation-board.jsx")
+    board = board_source.split("function ConversationBoard(", 1)[1].split(
+        "function ConversationBoardCard(", 1
     )[0]
 
-    assert '<span>{t("taskBoard.new")}</span>' in task_board
-    assert 'className={"wb-board-new-chevron"' in task_board
-    assert 'aria-haspopup="menu"' in task_board
-    assert 'className="wb-card-menu wb-board-create-dropdown" role="menu"' in task_board
-    assert 'if (onCreateChat) onCreateChat();' in task_board
-    assert 'onCreateSession();' in task_board
-    assert 'onCreateChat={createChat}' in source
-    assert ".wb-board-create-menu {" in styles
-    assert ".wb-board-create-dropdown {" in styles
+    assert 'className="wb-board-new-btn" onClick={onCreateChat}' in board
+    assert 't("conversationBoard.newConversation")' in board
+    assert 'aria-haspopup="menu"' not in board
+    assert 'onCreateChat={context.actions.createChat}' in source
+    assert ".wb-board-new-btn" in styles
 
 
-def test_board_search_filters_conversations_and_tasks():
-    source = workbench_shell_source()
+def test_board_search_only_filters_manually_added_conversations():
     styles = workbench_style_source()
     translations = workbench_i18n_source()
-    task_board = source.split("function TaskBoard(", 1)[1].split("function TaskBoardCard(", 1)[0]
+    board_source = frontend_module_source("features/chat/conversation-board.jsx")
+    board = board_source.split("function ConversationBoard(", 1)[1].split("function ConversationBoardCard(", 1)[0]
 
-    assert 'var [query, setQuery] = useWorkbenchState("");' in task_board
-    assert 'var visibleMixedCards = normalizedQuery ? mixedCards.filter' in task_board
-    assert 'card.kind === "task"' in task_board
-    assert 'var cardMap = new Map(visibleMixedCards.map' in task_board
-    assert 'className="wb-board-search"' in task_board
-    assert 'type="search"' in task_board
-    assert 'placeholder={t("taskBoard.searchPlaceholder")}' in task_board
-    assert 't("taskBoard.noSearchResults")' in task_board
-    assert task_board.index('className="wb-board-create-menu"') < task_board.index('className="wb-board-search"')
+    assert 'var [query, setQuery] = useWorkbenchState("");' in board
+    assert 'var orderedIds = layout.columns' in board
+    assert 'orderedIds.map(function (chatId) { return chatMap.get(chatId); })' in board
+    assert 'wbHasConversationDrag(event)' in board
+    assert 'className="wb-board-search"' in board
+    assert 'type="search"' in board
+    assert 'placeholder={t("conversationBoard.searchPlaceholder")}' in board
+    assert 't("conversationBoard.noSearchResults")' in board
+    assert board.index('className="wb-board-new-btn"') < board.index('className="wb-board-search"')
     assert '.wb-board-search {' in styles
     assert '.wb-board-search:focus-within {' in styles
     search_icon_css = styles.split('.wb-board-search > span {', 1)[1].split('}', 1)[0]
     assert 'align-items: center;' in search_icon_css
     assert 'justify-content: center;' in search_icon_css
     assert 'line-height: 0;' in search_icon_css
-    assert '"taskBoard.searchPlaceholder": "Search conversations and tasks"' in translations
-    assert '"taskBoard.searchPlaceholder": "搜索对话和任务"' in translations
+    assert '"conversationBoard.searchPlaceholder": "Search board conversations"' in translations
+    assert '"conversationBoard.searchPlaceholder": "搜索看板中的对话"' in translations
 
 
 def test_board_chat_navigation_uses_the_work_module_gate():
@@ -7167,7 +5879,7 @@ const workbenchServices = {
 };
 const setTimeout = () => 0;
 """ + navigation + """
-const project = {id: "project-1", sessions: []};
+const project = {id: "project-1"};
 wbNavigateFromSearch({
   store: {projects: [project], activeProject: project, activeProjectId: project.id},
   enabledModules: ["schedule", "board", "work", "knowledge", "memory"],
@@ -7204,8 +5916,8 @@ def test_module_target_navigation_is_consumed_across_mount_and_slow_load():
     assert "var id = pendingId || capture(pending);" in pending
 
 
-def test_board_chat_cards_share_task_card_background():
-    styles = workbench_style_source()
+def test_conversation_board_cards_share_the_standard_card_background():
+    styles = frontend_module_source("features/chat/settings-surfaces.css")
 
     board_card_css = styles.split(".wb-board-card {", 1)[1].split("}", 1)[0]
     assert "background: var(--wb-card-bg);" in board_card_css
@@ -7213,7 +5925,7 @@ def test_board_chat_cards_share_task_card_background():
 
 
 def test_board_cards_use_a_consistent_compact_height():
-    styles = workbench_style_source()
+    styles = frontend_module_source("features/chat/settings-surfaces.css")
 
     board_card_css = styles.split(".wb-board-card {", 1)[1].split("}", 1)[0]
     title_css = styles.split(".wb-board-card-title b {", 1)[1].split("}", 1)[0]
@@ -7225,77 +5937,6 @@ def test_board_cards_use_a_consistent_compact_height():
     assert "white-space: nowrap;" in title_css
     assert "margin-top: auto;" in meta_css
     assert "flex-wrap: nowrap;" in meta_css
-
-
-def test_task_rail_menu_reuses_chat_pin_and_rename_actions():
-    chat = workbench_chat_source()
-    workbench = workbench_shell_source()
-    translations = workbench_i18n_source()
-
-    task_card = frontend_module_source("features/chat/rail-tasks.jsx").split(
-        "function WbcTaskRailCard(", 1
-    )[1].split("function WbcTaskRailCards", 1)[0]
-    project_rail = frontend_module_source("features/shell/project-rail-controller.jsx")
-    assert 'className="wbc-chat-pin-action"' in task_card
-    assert 'onTogglePinnedTask(task, !isPinned)' in task_card
-    assert "onRenameTask(task)" in task_card
-    assert 'wbcT("task.rename", "Rename task")' in task_card
-    assert 'wbcT("rail.deleteTask", "Delete task")' in task_card
-    assert 'entity="task"' in chat
-    assert 'chat={renameTask}' in chat
-    assert 'onRename={onRenameTask}' in chat
-    task_rail_source = frontend_module_source("features/chat/rail-tasks.jsx")
-    assert "cards(state.pinned)" in task_rail_source
-    assert "cards(state.recent)" in task_rail_source
-    assert "var renameProjectRailTask = projectRailActions.renameTask" in workbench
-    assert "function renameTask(taskId, title)" in project_rail
-    assert 'model.patchSession(taskId, { title: title })' in project_rail
-    assert 'onTogglePinnedTask' in workbench
-    assert '"task.pin": "置顶任务"' in translations
-    assert '"task.rename": "重命名任务"' in translations
-
-
-def test_expanded_task_detail_rail_uses_its_own_lane_and_hides_scrollbar():
-    styles = workbench_style_source()
-
-    detail_grid_css = styles.split(
-        ".workbench-grid.integrated-sidebars.is-task-detail {", 1
-    )[1].split("}", 1)[0]
-    assert (
-        "grid-template-columns: 300px minmax(420px, 1fr) "
-        "var(--wb-right-w, 350px);" in detail_grid_css
-    )
-    collapsed_detail_grid_css = styles.split(
-        ".workbench-grid.integrated-sidebars.rail-collapsed.is-task-detail {", 1
-    )[1].split("}", 1)[0]
-    assert (
-        "grid-template-columns: 64px minmax(420px, 1fr) "
-        "var(--wb-right-w, 350px);" in collapsed_detail_grid_css
-    )
-    compact_detail_grid_css = styles.rsplit(
-        "@media (max-width: 1320px) {", 1
-    )[1].split("}", 1)[0]
-    assert (
-        "grid-template-columns: 300px minmax(360px, 1fr) "
-        "var(--wb-right-w, 280px);" in compact_detail_grid_css
-    )
-    rail_css = styles.split(
-        ".workbench-grid.integrated-sidebars .workbench-integrated-rail {", 1
-    )[1].split("}", 1)[0]
-    assert "z-index: 21;" in rail_css
-    assert "width: calc(var(--wb-rail-w) - 16px);" in rail_css
-    assert (
-        "height: calc(100% - var(--wb-floating-card-top-gap) - "
-        "var(--wb-floating-card-bottom-gap));" in rail_css
-    )
-    assert (
-        "margin: var(--wb-floating-card-top-gap) 4px "
-        "var(--wb-floating-card-bottom-gap) 12px;" in rail_css
-    )
-    task_list_css = styles.rsplit(".workbench-task-list {", 1)[1].split("}", 1)[0]
-    assert "overflow-y: auto;" in task_list_css
-    assert "scrollbar-width: none;" in task_list_css
-    assert ".workbench-task-list::-webkit-scrollbar {" in styles
 
 
 def test_non_chat_floating_cards_share_the_chat_topbar_baseline():
@@ -7341,12 +5982,10 @@ def test_non_chat_floating_cards_share_the_chat_topbar_baseline():
     assert "--wb-floating-card-top-gap: 1px;" in compact_shell_css
 
 
-def test_task_and_chat_empty_rail_states_center_vertically():
+def test_chat_empty_rail_state_centers_vertically():
     styles = workbench_style_source()
-    chat_source = workbench_chat_source()
+    chat_source = frontend_module_source("features/chat/rail.jsx")
 
-    assert '!loading && state.ordered.length === 0 ? " is-empty" : ""' in chat_source
-    assert 'wbcT("rail.noTasks", "No tasks yet.")' in chat_source
     assert '!loading && visibleRailItemCount === 0 ? " is-empty" : ""' in chat_source
     chat_empty_css = styles.split(
         ".wbc-chat-list.is-empty .wbc-chat-list-primary {", 1
@@ -7356,17 +5995,24 @@ def test_task_and_chat_empty_rail_states_center_vertically():
     assert "justify-content: center;" in chat_empty_css
 
 
-def test_workbench_uses_the_chat_module_project_rail():
+def test_workbench_uses_one_live_chat_page_rail_for_work_and_board():
     root = Path(__file__).resolve().parent.parent
     source = workbench_shell_source()
     chat = workbench_chat_source()
+    styles = workbench_style_source()
     chat_index = (
         root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "features" / "chat" / "index.jsx"
     ).read_text(
         encoding="utf-8"
     )
 
-    assert "React.createElement(context.chat.module.Rail" in source
+    assert "workspaceContent: sharedWorkspace" in source
+    assert "function WorkbenchProjectRail(" not in source
+    assert "<WorkbenchStableSurface active={presentation.isChat || presentation.isBoard}>" in source
+    assert 'workspaceContent ? <div className="wbc-external-workspace-host"' in chat
+    assert '.wbc-page.wbc-external-workspace > :not(.wbc-rail):not(.wbc-external-workspace-host) {' in styles
+    external_host = styles.split(".wbc-page > .wbc-external-workspace-host {", 1)[1].split("}", 1)[0]
+    assert "grid-column: 3 / 5;" in external_host
     assert "function WbcRail(" in chat
     assert "function WbcProjectRail(props)" in chat
     project_rail = chat.split("function WbcProjectRail(props)", 1)[1].split(
@@ -7412,9 +6058,9 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "<WorkbenchModuleRail" not in grid_markup
     assert "function WorkbenchSidebarDock(" in source
     module_dock = source.split("function WorkbenchSidebarDock(", 1)[1].split(
-        "var WB_TASK_BOARD_COLUMNS", 1
+        "var WB_CONVERSATION_BOARD_COLUMNS", 1
     )[0]
-    for module_id in ("board", "work", "knowledge", "schedule", "memory"):
+    for module_id in ("work", "board", "knowledge", "schedule", "memory"):
         assert f'id: "{module_id}"' in module_dock
     dock_item_positions = [
         module_dock.index(f'id: "{module_id}"')
@@ -7434,11 +6080,11 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert grid_markup.count("<WorkbenchSidebarDock") == 1
     assert "persistent={true}" in grid_markup
     assert "collapsed={railCollapsed}" in grid_markup
-    assert "moduleDock: presentation.isChat ? context.navigation.renderDockSlot() : null" in source
+    assert "moduleDock: presentation.isChat || presentation.isBoard ? context.navigation.renderDockSlot() : null" in source
     assert "moduleDock: p.isKnowledge ? navigation.renderDockSlot() : null" in source
     assert "moduleDock: p.isSchedule ? navigation.renderDockSlot() : null" in source
     assert "moduleDock: p.isMemory ? navigation.renderDockSlot() : null" in source
-    assert "moduleDock: !context.presentation.isModulePage ? context.navigation.renderDockSlot() : null" in source
+    assert "function WorkbenchProjectRail(" not in source
     assert "navCollapsed: context.navigation.railCollapsed" in source
     assert "sidebarCollapsed: navigation.railCollapsed" in source
     assert "collapsed={railCollapsed}" in source
@@ -7466,7 +6112,9 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "content: none;" in dock_separator
     assert ".workbench-integrated-rail {" in styles
     integrated_grid_css = styles.split(".workbench-grid.integrated-sidebars {", 1)[1].split("}", 1)[0]
-    integrated_rail_css = styles.split(".workbench-integrated-rail {", 1)[1].split("}", 1)[0]
+    integrated_rail_css = styles.split(
+        ".workbench-grid.integrated-sidebars .workbench-integrated-rail {", 1
+    )[1].split("}", 1)[0]
     assert "--wb-rail-w: 300px;" in integrated_grid_css
     assert "--wb-sidebar-dock-height: 120px;" in integrated_grid_css
     assert "--wb-sidebar-motion-duration: 440ms;" in integrated_grid_css
@@ -7650,32 +6298,17 @@ def test_chat_rail_show_all_expands_recent_items():
     assert "setShowAllRecent(true);" in source
 
 
-def test_active_module_dock_item_is_not_a_toggle_back_to_board_or_work():
-    source = frontend_module_source("features/shell/navigation-controller.jsx")
-
-    handler = source.split("function openPage(page) {", 1)[1].split(
-        "function toggleSidebar()", 1
-    )[0]
-    assert 'if (page === "board" || page === "task") {' in handler
-    assert 'if (!fullPage && taskView === "board") return;' in handler
-    assert 'if (page === "work") {' in handler
-    assert 'if (fullPage === "chat") return;' in handler
-    assert "if (fullPage === page) return;" in handler
-    assert "setFullPage(page);" in handler
-    assert "prev === page ? null : page" not in handler
-
-
 def test_primary_workspace_pages_replay_the_conversation_style_enter_motion():
     source = workbench_shell_source()
     styles = workbench_style_source()
 
     assert "function WorkbenchStableSurface({ active, enterMotion, children })" in source
-    assert source.count("enterMotion={true}") == 4
-    assert '<WorkbenchStableSurface active={presentation.isChat}>' in source
+    assert source.count("enterMotion={true}") == 3
+    assert '<WorkbenchStableSurface active={presentation.isChat || presentation.isBoard}>' in source
     assert '<WorkbenchStableSurface active={p.isKnowledge} enterMotion={true}>' in source
     assert '<WorkbenchStableSurface active={p.isSchedule} enterMotion={true}>' in source
     assert '<WorkbenchStableSurface active={p.isMemory} enterMotion={true}>' in source
-    assert '<WorkbenchStableSurface active={!context.presentation.isModulePage} enterMotion={true}>' in source
+    assert "WorkbenchBoardModuleSurface" not in source
     enter_css = styles.split(
         ".workbench-stable-surface.has-page-enter-motion.is-active :is(", 1
     )[1].split("}", 1)[0]
@@ -7683,7 +6316,7 @@ def test_primary_workspace_pages_replay_the_conversation_style_enter_motion():
         ".wb-sched-main",
         ".wb-lib-main",
         ".wb-mem-main",
-        ".workbench-task-board",
+        ".workbench-conversation-board",
         ".workbench-main",
     ):
         assert primary_surface in enter_css
@@ -7968,8 +6601,8 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert 'wbcT("workbenchChat.thinkingProcess", "Thinking process")' in source
     assert "reasoningOffset: String(activity.reasoning || \"\").length" in source
     assert source.count("&& !(Array.isArray(last.progress) && last.progress.length)") == 2
-    assert source.count("var activityHasReasoning = !!String(latestActivity && latestActivity.reasoning") == 2
-    assert source.count("appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })") == 2
+    assert source.count("var activityHasReasoning = !!String(latestActivity && latestActivity.reasoning") == 3
+    assert source.count("appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })") == 3
     assert 'className="wbc-trace-list wbc-trace-timeline"' in source
     assert "var seen = new Set();" in source
     assert "seen.has(key)" in source
@@ -8346,12 +6979,15 @@ def test_workbench_uses_the_library_as_the_only_knowledge_page():
 def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
     source = workbench_chat_source()
     live_events = frontend_module_source("features/chat/live-event-controller.jsx")
+    split_pane = frontend_module_source("features/chat/split-pane.jsx")
+    conversation_plan = frontend_module_source("features/plan/conversation-plan-timeline.jsx")
 
     assert "function wbcActivePlan(chat)" in source
     assert "var active = chat && chat.activePlan;" in source
     assert 'event.type !== "plan_progress" && event.type !== "plan"' in live_events
-    assert 'className={"wbc-plan-step " + status}' in source
-    assert "wbcPlanStepStatusText(status)" in source
+    assert "<ConversationPlanTimeline" in split_pane
+    assert "<PlanTimeline" in conversation_plan
+    assert 'body: JSON.stringify({ activePlan: nextPlan })' in conversation_plan
 
 
 def test_workbench_chat_tool_trace_preserves_i18n_metadata():
@@ -8704,94 +7340,6 @@ def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
     assert not (classic_root / "chat.jsx").exists()
     assert not (classic_root / "chat-surface.jsx").exists()
     assert not (classic_root / "evolution.jsx").exists()
-
-
-def test_all_builtin_model_visible_tools_have_frontend_i18n(tmp_path):
-    from cyrene.core.plugin import PluginRegistry
-    from cyrene.plugins.native_tools import seed_builtin_plugin_directory
-
-    root = Path(__file__).resolve().parent.parent
-    catalog_paths = {
-        lang: root
-        / "src" / "cyrene" / "workbench" / "webui"
-        / "frontend"
-        / "shared"
-        / "i18n"
-        / f"catalog-{lang}.jsx"
-        for lang in ("en", "zh")
-    }
-    catalogs = {
-        lang: set(
-            re.findall(
-                r'^\s*"toolName\.([^"\\]+)"\s*:',
-                path.read_text(encoding="utf-8"),
-                re.M,
-            )
-        )
-        for lang, path in catalog_paths.items()
-    }
-    alias_path = (
-        root
-        / "src" / "cyrene" / "workbench" / "webui"
-        / "frontend"
-        / "shared"
-        / "i18n"
-        / "tool-name-aliases.jsx"
-    )
-    aliases = dict(
-        re.findall(
-            r'^\s*"([^"\\]+)"\s*:\s*"([^"\\]+)"\s*,?$',
-            alias_path.read_text(encoding="utf-8"),
-            re.M,
-        )
-    )
-
-    plugin_directory = tmp_path / "plugin_impl"
-    seed_builtin_plugin_directory(plugin_directory)
-    registry = PluginRegistry()
-    assert registry.load_directory(plugin_directory) == ()
-    visible_tool_names = {
-        registered.plugin.name
-        for registered in registry.list_plugins()
-        if registered.plugin.kind == "tool" and registered.plugin.model_visible
-    }
-
-    for lang in ("en", "zh"):
-        missing = sorted(
-            name
-            for name in visible_tool_names
-            if name not in catalogs[lang] and aliases.get(name) not in catalogs[lang]
-        )
-        assert missing == [], (lang, missing)
-    assert catalogs["en"] == catalogs["zh"]
-    assert all(
-        target in catalogs["en"] and target in catalogs["zh"]
-        for target in aliases.values()
-    )
-
-    legacy_tool_groups = {
-        "browser_tools": "cyrene_browser",
-        "code_tools": "cyrene_code",
-        "collaboration_tools": "cyrene_subagent",
-        "cyrene_tools": "cyrene_application",
-        "delivery_tools": "cyrene_delivery",
-        "desktop_tools": "cyrene_desktop",
-        "entity_tools": "cyrene_entity",
-        "integration_tools": "cyrene_mcp",
-        "knowledge_tools": "cyrene_knowledge",
-        "map_tools": "cyrene_map",
-        "media_tools": "cyrene_media",
-        "memory_tools": "cyrene_memory",
-        "office_tools": "cyrene_office",
-        "registry_tools": "cyrene_extensions",
-        "remote_tools": "cyrene_remote",
-        "research_tools": "cyrene_knowledge",
-        "skill_tools": "cyrene_skills",
-        "subagent_tools": "cyrene_subagent",
-        "task_tools": "cyrene_task",
-        "work_tools": "cyrene_task",
-    }
-    assert legacy_tool_groups.items() <= aliases.items()
 
 
 def test_profile_top_tools_use_shared_tool_name_i18n():
@@ -9228,142 +7776,6 @@ process.stdout.write(JSON.stringify({{
     }
 
 
-def test_workbench_acceptance_button_calls_agent_endpoint():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
-    model = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-
-    assert "workbenchServices.model().generateAcceptance(session.id)" in source
-    assert '"/acceptance/generate"' in model
-
-
-def test_workbench_artifact_rows_download_registered_files():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
-    model = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-    styles = workbench_style_source()
-
-    assert "WorkbenchModel.ensureArtifacts(session)" in source
-    artifacts_tab = source.split("function ArtifactsTab", 1)[1].split(
-        "function SideSection", 1
-    )[0]
-    assert 'className="wbc-artifact-list wb-task-artifact-list"' in artifacts_tab
-    assert 'className="wbc-artifact-list-row wb-task-artifact-download"' in artifacts_tab
-    assert "<SideSection" not in artifacts_tab
-    assert 'download={artifact.name || true}' in source
-    assert '"/artifacts/" + encodeURIComponent(artifact.id) + "/download"' in source
-    assert "artifact.type !== \"file_change\"" in model
-    assert 'name: "task-summary.md"' not in model
-    assert ".wb-task-detail-tab-panel:last-child.open" in styles
-    assert ".wb-task-artifact-list" in styles
-
-
-def test_workbench_task_panel_reuses_conversation_panel_structure_and_styles():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
-    styles = workbench_style_source()
-    i18n = workbench_i18n_source()
-    index = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
-
-    panel = source.split("function RightContextPanel", 1)[1].split("function ReflectionSection", 1)[0]
-    assert '"workbench-right-panel wb-floating-detail-shell wb-task-detail-shell"' in panel
-    assert '(className ? " " + className : "")' in panel
-    assert 'className="wbc-side-card wb-floating-detail-card wb-task-detail-card"' in panel
-    assert '<WbColResizer trackGutter surfaceId="task-detail" />' in panel
-    assert 'className="wbc-side-card-head"' in panel
-    assert 'className="wbc-side-accordion wb-task-detail-tabs"' in panel
-    assert 'className={"wbc-side-accordion-item"' in panel
-    assert 'className={"wbc-side-accordion-trigger wb-task-detail-tab"' in panel
-    assert 'className="wbc-side-accordion-label"' in panel
-    assert 'className="wbc-side-accordion-chevron"' in panel
-    assert 'aria-expanded={expanded}' in panel
-    assert 'onTabChange(expanded ? "" : item.id)' in panel
-    assert 'artifacts.length ? [{ id: "artifacts"' in panel
-    assert 'tab === "artifacts" && !artifacts.length' in panel
-    assert 'className={"wbc-side-collapse wb-task-detail-tab-panel"' in panel
-    assert 'className="wbc-side-collapse-inner"' in panel
-    assert 'className="wbc-side-body workbench-right-body"' in panel
-    files_tab = source.split("function FilesTab", 1)[1].split("function LogsTab", 1)[0]
-    logs_tab = source.split("function LogsTab", 1)[1].split("function AcceptanceTab", 1)[0]
-    acceptance_tab = source.split("function AcceptanceTab", 1)[1].split("function ArtifactsTab", 1)[0]
-    context_tab = source.split("function ContextTab", 1)[1].split("function FilesTab", 1)[0]
-    assert "<SideSection" not in files_tab
-    assert "<SideSection" not in logs_tab
-    assert "<SideSection" not in acceptance_tab
-    assert 'className="workbench-side-stack wb-task-context-tab"' in context_tab
-    assert 'className="wb-task-overview-meta"' in context_tab
-    assert 'className="wb-task-context-goal"' in context_tab
-    assert 'className="workbench-muted wb-task-context-empty"' in context_tab
-    assert "activeBodyRef.current.scrollTop = 0" in panel
-    assert ".workbench-grid.integrated-sidebars.is-task-detail .workbench-main" in styles
-    assert ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell" in styles
-    task_main_css = styles.split(
-        ".workbench-grid.integrated-sidebars.is-task-detail .workbench-main {", 1
-    )[1].split("}", 1)[0]
-    task_shell_css = styles.split(
-        ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {", 1
-    )[1].split("}", 1)[0]
-    task_card_css = styles.split(".wb-task-detail-card {", 1)[1].split("}", 1)[0]
-    assert (
-        "height: calc(100% - var(--wb-floating-card-top-gap) - "
-        "var(--wb-floating-card-bottom-gap));" in task_main_css
-    )
-    assert (
-        "max-height: calc(100% - var(--wb-floating-card-top-gap) - "
-        "var(--wb-floating-card-bottom-gap));" in task_main_css
-    )
-    assert (
-        "margin: var(--wb-floating-card-top-gap) 8px "
-        "var(--wb-floating-card-bottom-gap);" in task_main_css
-    )
-    assert "border: var(--wb-floating-rail-border);" in task_main_css
-    assert "border-radius: var(--wb-floating-rail-radius);" in task_main_css
-    assert "background: var(--wb-floating-rail-bg);" in task_main_css
-    assert "box-shadow: var(--wb-floating-rail-shadow);" in task_main_css
-    assert (
-        "padding: var(--wb-floating-card-top-gap) 12px "
-        "var(--wb-floating-card-bottom-gap) 4px;" in task_shell_css
-    )
-    assert "overflow: visible;" in task_shell_css
-    assert "height: auto;" in task_card_css
-    assert "max-height: 100%;" in task_card_css
-    assert "overflow: visible;" in task_card_css
-    assert ".wb-task-detail-card > .wb-col-resizer.track-gutter" in styles
-    shared_grip_css = styles.split(
-        ".wbc-side-card > .wb-col-resizer.track-gutter,", 1
-    )[1].split("}", 1)[0]
-    shared_grip_visual_css = styles.split(
-        ".wbc-side-card > .wb-col-resizer.track-gutter::after,", 1
-    )[1].split("}", 1)[0]
-    assert ".wb-task-detail-card > .wb-col-resizer.track-gutter" in shared_grip_css
-    assert "left: -12px;" in shared_grip_css
-    assert "width: 12px;" in shared_grip_css
-    assert ".wb-task-detail-card > .wb-col-resizer.track-gutter::after" in shared_grip_visual_css
-    assert "top: 50%;" in shared_grip_visual_css
-    assert "left: calc(50% - 1px);" in shared_grip_visual_css
-    assert "width: 4px;" in shared_grip_visual_css
-    assert "height: 72px;" in shared_grip_visual_css
-    assert "opacity: 0;" in shared_grip_visual_css
-    assert ".wb-task-detail-tab-panel.open" in styles
-    assert "max-height: none;" in styles
-    assert ".wb-task-detail-card .workbench-side-section + .workbench-side-section" in styles
-    assert ".wb-task-overview-meta" in styles
-    assert ".wb-task-detail-card .wb-task-context-tab" in styles
-    assert "@container (min-width: 430px)" in styles
-    assert ".wb-task-context-empty" in styles
-    assert ".wb-task-detail-card .wb-accept-toggle:hover" in styles
-    assert "background: var(--wb-row-hover-bg);" in styles
-    assert ".wb-acceptance-summary" in styles
-    assert ".wb-acceptance-empty" in styles
-    assert 'className="wb-acceptance-list"' in acceptance_tab
-    assert 'className="wb-empty-action wb-acceptance-empty"' in acceptance_tab
-    assert 'html[data-theme="dark"] .wb-task-detail-card' in styles
-    assert 'html[data-theme="dark"] .wbc-page .wbc-side-card.wb-task-detail-card' in styles
-    assert '"task.side.detailPanel": "Task panel"' in i18n
-    assert '"task.side.detailPanel": "任务面板"' in i18n
-    assert "workbench.css?v=0.9.0-beta3" in index
-
-
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     root = Path(__file__).resolve().parent.parent
     styles = workbench_style_source()
@@ -9409,34 +7821,6 @@ def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
     assert "margin-left: 0;" in head_actions_rule
 
 
-def test_workbench_narrow_window_forces_project_rail_into_stable_icon_strip():
-    styles = workbench_style_source()
-
-    title_rule = styles.split("\n.wb-rail-title {", 1)[1].split("}", 1)[0]
-    actions_rule = styles.split("\n.workbench-rail-head-actions {", 1)[1].split("}", 1)[0]
-    assert "position: absolute;" in title_rule
-    assert "left: 39px;" in title_rule
-    assert "transform: translate(-50%, -50%);" in title_rule
-    assert "margin-left: auto;" in actions_rule
-    compact = styles.split("@media (max-width: 1040px)", 1)[1].split("/* ── Light-mode", 1)[0]
-    assert "--wb-rail-w: 64px;" in compact
-    assert "--wb-rail-w-open: 250px;" in compact
-    assert ".workbench-add-btn > span:last-child" in compact
-    assert ".workbench-project-menu-btn" in compact
-    assert "width: 44px;" in compact
-    assert "overflow-x: hidden;" in compact
-    assert ".workbench-global-nav" in compact
-    assert "display: grid;" in compact
-    assert ".workbench-project-rail:hover" in compact
-    assert "width: var(--wb-rail-w-open);" in compact
-    assert "box-shadow: 18px 0 50px" in compact
-    hover_head = compact.split(".workbench-project-rail:hover .workbench-rail-head", 1)[1].split("}", 1)[0]
-    assert "justify-content: space-between;" in hover_head
-    assert "padding: 0 12px;" in hover_head
-    compact_actions = compact.split(".workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-head-actions", 1)[1].split("}", 1)[0]
-    assert "margin-left: 0;" in compact_actions
-
-
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     root = Path(__file__).resolve().parent.parent
     settings = workbench_settings_source()
@@ -9457,7 +7841,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
 
 
-def test_linux_desktop_uses_native_frame_and_directory_picker():
+def test_desktop_uses_cross_platform_native_directory_picker():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
@@ -9468,12 +7852,19 @@ def test_linux_desktop_uses_native_frame_and_directory_picker():
     assert "const useInsetTitleBar = isMac;" in main
     assert "ipcMain.handle('dialog:pick-directory'" in main
     assert "properties: ['openDirectory', 'createDirectory']" in main
-    assert "if (process.platform !== 'linux') return Promise.resolve(null);" in preload
+    picker_handler = main.split("ipcMain.handle('dialog:pick-directory'", 1)[1].split(
+        "ipcMain.handle('dialog:pick-extension-path'", 1
+    )[0]
+    assert "isLinux" not in picker_handler
+    assert "directoryPickerUnsupported" not in main
+    assert "process.platform !== 'linux'" not in preload
     assert "ipcRenderer.invoke('dialog:pick-directory')" in preload
-    assert 'window.cyrene.platform === "linux"' in create
+    assert 'window.cyrene && typeof window.cyrene.pickDirectory === "function"' in create
     assert "await window.cyrene.pickDirectory()" in create
-    assert 'window.cyrene.platform === "linux"' in chat
+    assert 'fetch("/api/context/pick-directory", { method: "POST" })' in create
+    assert 'window.cyrene.platform === "linux"' not in chat
     assert "window.cyrene.pickDirectory().then(function (data)" in chat
+    assert 'toastError(err, wbcT("workbenchChat.pickDirFailed"' in chat
 
 
 def test_topbar_theme_toggle_persists_to_the_appearance_namespace():
@@ -9544,7 +7935,7 @@ def test_backup_actions_use_native_file_pickers_and_comfortable_density_only(
     assert '"/api/workbench/sessions/" + encodeURIComponent(sessionId) + "/export?format="' in data_panel
     assert '"/api/workbench/sessions/" + encodeURIComponent(session.id) + "/clear"' in data_panel
 
-    from cyrene.runtime import backup as backup_runtime
+    from cyrene.platform import backup as backup_runtime
     from cyrene.workbench.persistence import store as workbench_store
     from cyrene.workbench.sessions.session_presentation import WorkbenchSessionPresentation
 
@@ -9633,7 +8024,7 @@ def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
     assert 'window.CyreneUI.register("browser-overlays"' in workbench
     assert "if (!sessionMenu && !resourceMenu)" in workbench
     assert "if (!overflowMenu && !hoverPreview) return undefined;" in workbench
-    assert "if (!modelOpen) return undefined;" in workbench
+    assert "if (!modelOpen) return undefined;" in chat
     assert "workbenchServices.browserOverlays()" in chat
     assert 'platform.require("browser-overlays")' in feedback
     assert "overlays.adjust(1);" in feedback
@@ -9782,11 +8173,12 @@ def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
     assert "if (!tabs.length" not in panel
 
 
-def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_workspace():
+def test_workbench_chat_directory_picker_supports_desktop_and_browser_modes():
     chat = workbench_chat_source()
     i18n = workbench_i18n_source()
 
-    assert 'window.cyrene.platform === "linux"' in chat
+    assert 'window.cyrene.platform === "linux"' not in chat
+    assert 'typeof window.cyrene.pickDirectory === "function"' in chat
     assert 'fetch("/api/context/pick-directory", { method: "POST" })' in chat
     assert "[wsDir, projectWorkspacePath].concat(wsHistory).forEach" in chat
     assert "workspaceOptions.push({ path: normalized, isDefault: normalized === projectWorkspacePath })" in chat
@@ -9912,37 +8304,6 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
 
 
-def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
-    model = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-    index = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
-
-    assert 'window.prompt("后续任务标题"' not in source
-    assert "model.createFollowUp(sid, options)" in source
-    assert '"/follow-up"' in model
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
-
-
-def test_workbench_regenerate_plan_failure_preserves_current_plan():
-    source = workbench_shell_source()
-    regenerate_block = source.split("regeneratePlan: function ()", 1)[1].split("approvePlan: function ()", 1)[0]
-
-    assert "plan: Array.isArray(session.plan) ? session.plan : []" in regenerate_block
-    assert "acceptanceCriteria: Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : []" in regenerate_block
-    assert "model.buildPlanSteps" not in regenerate_block
-
-
-def test_workbench_plan_conflict_does_not_apply_client_fallback():
-    root = Path(__file__).resolve().parent.parent
-    source = workbench_shell_source()
-    api = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "platform" / "api.jsx").read_text(encoding="utf-8")
-
-    assert 'err.code === "stale_plan_revision"' in source
-    assert "rethrowPlanConflict(err);" in source
-    assert "error.code = (payload && payload.code)" in api
-
-
 def test_workbench_api_timeout_covers_response_body_consumption():
     root = Path(__file__).resolve().parent.parent
     api = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "platform" / "api.jsx").read_text(encoding="utf-8")
@@ -9996,44 +8357,6 @@ window.CyreneUI.api.json("/slow-body", {{ timeout: 10, toast: false }}).then(
     )
 
     assert json.loads(completed.stdout) == {"name": "TimeoutError", "isTimeout": True}
-
-
-def test_workbench_init_plan_failure_shows_details_and_restart():
-    root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
-
-    assert "function InitPlanError" in source
-    assert 'className="wb-init-plan-error"' in source
-    assert "error.attempts" in source
-    assert "onRestart={complete}" in source
-    assert 'T("init.restart")' in source
-    assert "!planReady && !planError" in source
-
-    result = _run_workbench_i18n_js(
-        """
-[
-  window.WorkbenchI18n.t("init.planError.title"),
-  window.WorkbenchI18n.t("init.planError.summary", { count: 5 }),
-  window.WorkbenchI18n.t("init.restart")
-]
-"""
-    )
-    assert result == [
-        "计划生成失败",
-        "连续尝试 5 次后仍未生成计划，系统没有创建兜底计划。",
-        "重新开始",
-    ]
-
-
-def test_workbench_init_answer_updates_do_not_set_parent_state_inside_local_updater():
-    root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
-    answer_block = source.split("function setAnswer(qid, value)", 1)[1].split("function regenerate()", 1)[0]
-
-    assert "answersRef.current = nextAnswers;" in answer_block
-    assert "setAnswers(nextAnswers);" in answer_block
-    assert "persist(nextAnswers);" in answer_block
-    assert "setAnswers(function" not in answer_block
 
 
 def test_workbench_model_settings_preserve_form_on_failed_response():
@@ -10103,7 +8426,7 @@ def test_workbench_chat_quick_actions_include_manual_context_compaction():
     assert result == [
         "压缩对话",
         "正在压缩…",
-        "Agent 正在工作，请在任务完成后再压缩。",
+        "Agent 正在工作，请等待当前运行完成后再压缩。",
         "请先回答 Agent 的问题，再压缩对话。",
         "当前对话没有工具调用，无需主动压缩。",
         "后台正在蒸馏上下文，请稍后再试。",
@@ -10208,7 +8531,6 @@ def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
     )
     assert "search" in ids
     assert "new-chat" in ids
-    assert "new-task" in ids
     assert "composer-send" in ids
     assert "composer-newline" in ids
     assert "switch-session-1" in ids
@@ -10217,6 +8539,18 @@ def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
     assert "next-session" in ids
     assert "previous-session" in ids
     assert "close-session-tab" in ids
+
+
+def test_empty_project_creates_a_default_conversation():
+    source = workbench_chat_source()
+    refresh = source.split("function refreshChats(selectId) {", 1)[1].split(
+        "function applyChatSummaryEvent", 1
+    )[0]
+
+    assert "if (!list.length)" in refresh
+    assert "return model.createChat(requestedProjectId)" in refresh
+    assert "setChats(initial);" in refresh
+    assert "selectChat(chat.id);" in refresh
 
 
 def test_workbench_shortcut_labels_use_tab_terminology_in_both_locales():
@@ -10310,40 +8644,6 @@ def test_workbench_shortcuts_capture_event_converts_ctrl_to_mod_on_windows():
     assert result["pureMod"] == {"cancelled": False, "keys": []}
 
 
-def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
-    source = workbench_shell_source()
-
-    # The old Cmd/Ctrl+Enter to send behavior is replaced by the shortcut module
-    # so Enter sends directly (matching the chat composer).
-    composer_block = source.split("function TaskComposer(", 1)[1].split("function composerPlaceholder", 1)[0]
-    assert 'sc.matches(event, "composer-send")' in composer_block
-    assert "event.metaKey || event.ctrlKey" not in composer_block.split("function onKeyDown")[1].split("}")[0]
-
-
-def test_workbench_task_composer_includes_model_and_reasoning_picker():
-    root = Path(__file__).resolve().parent.parent
-    workbench = workbench_shell_source()
-    model = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
-
-    composer = workbench.split("function TaskComposer(", 1)[1].split(
-        "function RightContextPanel", 1
-    )[0]
-    assert "wbc-model-button" in composer
-    assert 'setModelPanel("models")' in composer
-    assert 'setModelPanel("effort")' in composer
-    assert "onSelectedModelIdChange(id)" in composer
-    assert "onReasoningEffortChange(effort)" in composer
-    assert "model: options.model || undefined" in model
-    assert 'reasoningEffort: options.reasoningEffort || ""' in model
-    task_work_area = workbench.split("function TaskWorkArea(", 1)[1].split(
-        "function TaskComposer(", 1
-    )[0]
-    assert "applyInitialModels(options);" in task_work_area
-    assert task_work_area.index("applyInitialModels(options);") < task_work_area.index(
-        "return catalogRequest.then"
-    )
-
-
 def test_settings_models_use_the_shared_settings_typography():
     styles = workbench_style_source()
 
@@ -10354,125 +8654,6 @@ def test_settings_models_use_the_shared_settings_typography():
     assert "font-family: var(--wb-font) !important;" in typography
     assert "font-size: calc(14px * var(--wb-ui-font-scale)) !important;" in typography
     assert "font-size: calc(12px * var(--wb-ui-font-scale)) !important;" in typography
-
-
-def test_workbench_task_composer_reuses_chat_voice_input_flow():
-    workbench = workbench_shell_source()
-    chat = workbench_chat_source()
-
-    composer = workbench.split("function TaskComposer(", 1)[1].split(
-        "function RightContextPanel", 1
-    )[0]
-    assert "WbcVoice.subscribe(setVoiceSnapshot)" in composer
-    assert "wbcStartVoiceRecorder" in composer
-    assert "wbcTranscribeVoiceBlob(blob)" in composer
-    assert "voiceSnapshot.status.auto_send_after_asr" in composer
-    assert 'ComposerBrowserIcon name="microphone"' in composer
-    assert 'className={"wb-composer-icon wbc-composer-icon wbc-voice-input"' in composer
-    assert "function wbcTranscribeVoiceBlob(blob)" in chat
-
-
-def test_workbench_task_composer_matches_chat_floating_card_material():
-    source = workbench_shell_source()
-    styles = workbench_style_source()
-
-    task_box = styles.split(".workbench-composer-box {", 1)[1].split("}", 1)[0]
-    task_header = source.split("function TaskHeader", 1)[1].split(
-        "function headerMenuActions", 1
-    )[0]
-    task_header_layout = styles.split(".workbench-task-header {", 1)[1].split("}", 1)[0]
-    task_header_sticky = styles.split(".workbench-task-header-sticky {", 1)[1].split("}", 1)[0]
-    task_header_corner_masks = styles.split(
-        ".workbench-task-header-sticky::before,\n.workbench-task-header-sticky::after {", 1
-    )[1].split("}", 1)[0]
-    task_header_left_mask = styles.split(".workbench-task-header-sticky::before {", 1)[1].split("}", 1)[0]
-    task_header_right_mask = styles.split(
-        ".workbench-task-header-sticky::before {", 1
-    )[1].split(".workbench-task-header-sticky::after {", 1)[1].split("}", 1)[0]
-    workbench_shell = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
-    chat_box = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
-    chat_actions = styles.split("\n.wbc-composer-actions {", 1)[1].split("}", 1)[0]
-    task_main = styles.split(
-        ".workbench-grid.is-task-detail .workbench-main {", 1
-    )[1].split("}", 1)[0]
-    assert ".wbc-conversation-split::after" not in styles
-    assert ".workbench-grid.is-task-detail .workbench-main::after" not in styles
-    for declaration in (
-        "border-radius: 14px;",
-    ):
-        assert declaration in task_box
-        assert declaration in chat_box
-    assert "background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in task_box
-    assert "backdrop-filter: blur(18px) saturate(120%) contrast(102%);" in task_box
-    assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in chat_box
-    assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in workbench_shell
-    assert "backdrop-filter: var(--wbc-composer-glass-filter);" in chat_box
-    assert "wb-composer-disclaimer" not in styles
-    assert "ComposerDisclaimer" not in source
-    assert "workbench.composerDisclaimer" not in workbench_chat_source()
-    assert "border-top: 0;" in chat_actions
-    assert "padding: 18px;" in task_main
-    assert "padding-bottom: 4px;" not in task_main
-    assert 'className="workbench-composer wbc-composer"' in source
-    assert 'className="workbench-composer-box wbc-composer-box"' in source
-    assert 'className="workbench-task-header workbench-composer-box wbc-composer-box"' in task_header
-    assert 'className="wb-th-main"' in task_header
-    assert "position: sticky;" in task_header_sticky
-    assert "top: 0;" in task_header_sticky
-    assert "isolation: isolate;" in task_header_sticky
-    assert "position: relative;" in task_header_layout
-    assert "z-index: 1;" in task_header_layout
-    assert "padding: 14px 16px;" in task_header_layout
-    assert "width: 14px;" in task_header_corner_masks
-    assert "height: 14px;" in task_header_corner_masks
-    assert "background: var(--wb-floating-rail-bg, var(--wb-main-bg));" in task_header_corner_masks
-    assert "right: 0;" not in task_header_corner_masks
-    assert "left: 0;" not in task_header_corner_masks
-    assert "radial-gradient(circle at 100% 100%" in task_header_left_mask
-    assert "radial-gradient(circle at 0 100%" in task_header_right_mask
-    task_pane_corner_masks = styles.split(
-        ".wbc-task-pane .workbench-task-header-sticky::before,\n"
-        ".wbc-task-pane .workbench-task-header-sticky::after {",
-        1,
-    )[1].split("}", 1)[0]
-    assert "background: var(--wb-main-bg);" in task_pane_corner_masks
-    task_pane_stage = styles.split(
-        ".wbc-task-pane .workbench-stage {", 1
-    )[1].split("}", 1)[0]
-    assert "clip-path: inset(1px 0 0);" in task_pane_stage
-    task_main = source.split("function TaskWorkArea", 1)[1].split(
-        "function TaskHeader", 1
-    )[0]
-    header_position = task_main.index('<div className="workbench-task-header-sticky">')
-    stage_position = task_main.index('<div className="workbench-stage">')
-    assert header_position < stage_position
-    assert task_main.index("<TaskHeader") < task_main.index("<StateCard")
-    assert 'className="workbench-composer-actions wbc-composer-actions"' in source
-    assert 'className={"wb-composer-send wbc-send"' in source
-    assert '.workbench-composer.wbc-composer {' in styles
-    assert "padding: 0 !important;" in styles
-
-
-def test_workbench_task_detail_max_height_aligns_with_main_card_bottom():
-    styles = workbench_style_source()
-
-    detail_shell = styles.split(
-        ".workbench-grid.integrated-sidebars.is-task-detail .wb-task-detail-shell {",
-        1,
-    )[1].split("}", 1)[0]
-    detail_card = styles.split(".wb-task-detail-card {", 1)[1].split("}", 1)[0]
-    open_panel = styles.split(".wb-task-detail-tab-panel.open {", 1)[1].split("}", 1)[0]
-
-    assert (
-        "padding: var(--wb-floating-card-top-gap) 12px "
-        "var(--wb-floating-card-bottom-gap) 4px;" in detail_shell
-    )
-    assert "height: 100%;" in detail_shell
-    assert "max-height: 100%;" in detail_card
-    assert "max-height: calc(100vh" not in detail_card
-    assert "flex: 1 1 auto;" in open_panel
-    assert "max-height: none;" in open_panel
-    assert "100vh" not in open_panel
 
 
 def test_project_memory_failed_status_shows_attempt_details():
@@ -10486,16 +8667,12 @@ def test_project_memory_failed_status_shows_attempt_details():
     assert ".workbench-project-memory-learning-status small {" in styles
 
 
-def test_pending_question_disables_chat_and_task_composers():
+def test_pending_question_disables_chat_composer_controls():
     chat = workbench_chat_source()
-    workbench = workbench_shell_source()
     chat_composer = chat.split("function WbcComposer(", 1)[1].split(
         "function wbcClearComposerDraft", 1
     )[0]
     chat_attachments = frontend_module_source("features/chat/composer-attachments.jsx")
-    task_composer = workbench.split("function TaskComposer(", 1)[1].split(
-        "function RightContextPanel", 1
-    )[0]
 
     assert "var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id);" in chat_composer
     assert "if (awaitingAnswer) return;" in chat_composer
@@ -10505,12 +8682,6 @@ def test_pending_question_disables_chat_and_task_composers():
     assert "disabled={awaitingAnswer || voicePhase" in chat_composer
     assert "if (awaitingAnswer) return\n      var detail" in chat_attachments
 
-    assert "var awaitingAnswer = !!(session.pendingQuestion && session.pendingQuestion.id);" in task_composer
-    assert "var disabled = controller.busy || running || awaitingAnswer;" in task_composer
-    assert "var sendDisabled = awaitingAnswer ||" in task_composer
-    assert "disabled={disabled}" in task_composer
-    assert "disabled={uploading || disabled}" in task_composer
-    assert "}, [disabled]);" in task_composer
 
 
 def test_workbench_model_picker_compacts_without_overlapping_send_button():
@@ -10529,7 +8700,6 @@ def test_workbench_model_picker_compacts_without_overlapping_send_button():
     assert "min-width: 0;" in anchor_rule
     assert "max-width: 100%;" in button_rule
     assert 'className="wbc-model-button-icon" aria-hidden="true"' in workbench_chat_source()
-    assert 'className="wbc-model-button-icon" aria-hidden="true"' in workbench_shell_source()
     assert ".wbc-model-button-icon" in compact_rule
     assert "display: inline-flex;" in compact_rule
     assert ".wbc-model-button-name" in compact_rule
@@ -10537,7 +8707,7 @@ def test_workbench_model_picker_compacts_without_overlapping_send_button():
     assert "display: none;" in compact_rule
 
 
-def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
+def test_workbench_file_drop_routes_files_to_chat_and_knowledge():
     root = Path(__file__).resolve().parent.parent
     workbench = workbench_shell_source()
     chat = workbench_chat_source()
@@ -10555,11 +8725,8 @@ def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
     assert "event.preventDefault()" in drop_hook
     assert "event.dataTransfer.files" in drop_hook
 
-    # Task and chat route a drop from the whole module to their existing upload
-    # pipelines, which append the uploaded files to the composer attachment row.
-    assert 'new CustomEvent("cyrene:add-task-attachments"' in workbench
-    assert 'window.addEventListener("cyrene:add-task-attachments"' in workbench
-    assert "model.uploadAttachments(files)" in workbench
+    # Chat routes a drop from the whole module to its existing upload pipeline,
+    # which appends the uploaded files to the composer attachment row.
     assert 'new CustomEvent("cyrene:add-chat-attachments"' in chat
     assert 'window.addEventListener("cyrene:add-chat-attachments"' in chat
     assert "model.uploadFiles(files)" in chat
@@ -10998,7 +9165,7 @@ def test_code_and_terminal_frontend_stop_when_code_plugin_marker_is_absent():
     assert "if (!codeAvailable || !projectId || !isActive) return undefined;" in page
     assert "codeAvailable={codeAvailable}" in page
     assert "if (!codeAvailable || !projectId)" in rail
-    assert "codeAvailable && (railMode === \"chat\" || railMode === \"task\")" in rail
+    assert 'codeAvailable && railMode === "chat" && !collapsed' in rail
     assert 'var codeAvailable = pluginModules.indexOf("code") >= 0;' in terminal
     assert "if (!codeAvailable || !host || !terminalId) return undefined;" in terminal
     assert "}, [terminalId, codeAvailable]);" in terminal
@@ -11452,7 +9619,7 @@ def test_workbench_agent_transport_notice_has_structured_event_and_durable_bubbl
     root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     styles = workbench_style_source()
-    events = (root / "src" / "cyrene" / "agent_runtime" / "events.py").read_text(encoding="utf-8")
+    events = (root / "src" / "cyrene" / "agents" / "events.py").read_text(encoding="utf-8")
     route = workbench_chat_route_source()
 
     assert '"notification.created"' in events
@@ -11576,21 +9743,19 @@ def test_packaged_electron_preserves_explicit_runtime_path_overrides():
     assert "process.env.CYRENE_TEMP_DIR || getCyreneTempDir()" in source
 
 
-def test_workbench_composers_upload_files_pasted_from_clipboard():
+def test_workbench_composer_uploads_files_pasted_from_clipboard():
     chat = "\n".join((
         frontend_module_source("features/chat/composer-attachments.jsx"),
         frontend_module_source("features/chat/composer.jsx"),
     ))
-    task = workbench_shell_source()
 
-    for source in (chat, task):
-        assert "onPaste={onPaste}" in source
-        assert "clipboard.files" in source
-        assert "clipboard.items" in source
-        assert 'item.kind === "file" ? item.getAsFile() : null' in source
-        assert "if (!files.length) return" in source
-        assert "event.preventDefault();" in source
-        assert "addFiles(files)" in source
+    assert "onPaste={onPaste}" in chat
+    assert "clipboard.files" in chat
+    assert "clipboard.items" in chat
+    assert 'item.kind === "file" ? item.getAsFile() : null' in chat
+    assert "if (!files.length) return" in chat
+    assert "event.preventDefault();" in chat
+    assert "addFiles(files)" in chat
 
 
 def test_settings_codex_quota_uses_the_shared_duration_parser():
@@ -12307,25 +10472,25 @@ def test_settings_controls_share_memory_floating_material():
     assert ".settings-overlay .wb-export-session-select" not in styles
 
 
-def test_task_board_scroll_canvas_reaches_behind_floating_rail_gutter():
-    source = workbench_shell_source()
+def test_board_scroll_canvas_reaches_behind_floating_rail_gutter():
+    source = frontend_module_source("features/chat/conversation-board.jsx")
     styles = workbench_style_source()
 
     columns_rule = styles.split(
-        ".workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {", 1
+        ".workbench-grid.integrated-sidebars.is-conversation-board .wb-board-columns {", 1
     )[1].split("}", 1)[0]
     scroll_rule = styles.split(
-        ".workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {", 1
+        ".workbench-grid.integrated-sidebars.is-conversation-board .wb-board-scroll {", 1
     )[1].split("}", 1)[0]
     floating_rail_rule = styles.rsplit(
         ".workbench-grid.integrated-sidebars .workbench-integrated-rail {", 1
     )[1].split("}", 1)[0]
 
-    assert "--wb-task-board-canvas-gutter: 22px;" in styles
-    assert 'html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {' in styles
+    assert "--wb-conversation-board-canvas-gutter: 22px;" in styles
+    assert 'html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-conversation-board {' in styles
     assert "--wb-floating-rail-tint: #24323f;" in styles
-    assert "padding-left: calc(var(--wb-task-board-rail-reserve) + var(--wb-task-board-canvas-gutter));" in columns_rule
-    assert "margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));" in scroll_rule
+    assert "padding-left: calc(var(--wb-conversation-board-rail-reserve) + var(--wb-conversation-board-canvas-gutter));" in columns_rule
+    assert "margin-inline: calc(0px - var(--wb-conversation-board-canvas-gutter));" in scroll_rule
     assert "background: var(--wb-floating-rail-bg);" in floating_rail_rule
     assert "opacity:" not in floating_rail_rule
     assert "function handleBoardWheel(event)" in source

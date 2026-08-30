@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 
 DEFAULT_ZOTERO_URL = "http://127.0.0.1:23119/api"
 

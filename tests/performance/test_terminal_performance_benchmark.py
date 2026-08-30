@@ -30,6 +30,10 @@ async def test_real_terminal_benchmark_covers_workloads_and_subscription_modes()
     assert report["fairness"]["interactiveEchoLatencyMs"] > 0
     assert all(case["actualPtyBytes"] >= 64 * 1024 for case in report["cases"])
     assert all(case["screenBytesParsed"] == case["actualPtyBytes"] for case in report["cases"])
+    assert all(
+        0 < case["screenBatches"] <= case["screenUpdates"]
+        for case in report["cases"]
+    )
     assert all(case["scrollbackWriteAmplification"] < 1.1 for case in report["cases"])
     assert all(case["eventLoopDelayP95Ms"] >= 0 for case in report["cases"])
     assert all(case["rssPeakDeltaBytes"] >= 0 for case in report["cases"])

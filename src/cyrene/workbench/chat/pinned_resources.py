@@ -140,7 +140,7 @@ def upsert_resource(raw: dict[str, Any]) -> dict[str, Any]:
         text = str(raw.get("text") or "").strip()
         if not text:
             raise ValueError("snippet text is required")
-        from cyrene.runtime.attachments import EXPORTS_DIR
+        from cyrene.platform.attachments import EXPORTS_DIR
 
         default_title = localized("Excerpt", "摘录")
         summary = str(raw.get("title") or text.splitlines()[0] or default_title).strip()

@@ -16,10 +16,6 @@ function wbcPaneSemanticName(card, catalogs) {
     match = (items.chats || []).find(function (item) { return String(item && item.id || "") === String(payload || ""); });
     return match && match.title || wbcT("workbenchChat.chatSplitLabel", "Chat");
   }
-  if (kind === "task") {
-    match = (items.tasks || []).find(function (item) { return String(item && item.id || "") === String(payload || ""); });
-    return match && match.title || wbcT("workbench.page.task", "Task");
-  }
   if (kind === "terminal") {
     match = (items.terminals || []).find(function (item) { return String(item && item.id || "") === String(payload || ""); });
     return match && (match.displayTitle || match.title) || wbcT("terminal.title", "Terminal");
@@ -36,13 +32,13 @@ function wbcPaneSemanticName(card, catalogs) {
   return kind;
 }
 
-function WbcPaneSemanticController({ active, layout, rootRef, chats, tasks, terminals, onOpenPane, onMovePane, onSwapPanes, onClosePane }) {
+function WbcPaneSemanticController({ active, layout, rootRef, chats, terminals, onOpenPane, onMovePane, onSwapPanes, onClosePane }) {
   useWbcEffect(function () {
     if (!active || !window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = workbenchServices.uiSurface();
     var unregister = [];
     var cards = (layout.left || []).concat(layout.right || []);
-    var catalogs = { chats: chats || [], tasks: tasks || [], terminals: terminals || [] };
+    var catalogs = { chats: chats || [], terminals: terminals || [] };
     function paneElement(nodeId) {
       var root = rootRef && rootRef.current;
       return root && root.querySelector('[data-pane-semantic-node-id="' + nodeId + '"]');
@@ -54,7 +50,7 @@ function WbcPaneSemanticController({ active, layout, rootRef, chats, tasks, term
     }
     function ensureCatalogItem(kind, value) {
       var id = String(value || "");
-      var source = kind === "chat" ? catalogs.chats : kind === "task" ? catalogs.tasks : catalogs.terminals;
+      var source = kind === "chat" ? catalogs.chats : catalogs.terminals;
       if (!id || !source.some(function (item) { return String(item && item.id || "") === id; })) {
         throw new Error(kind + " is not available in the current project");
       }
@@ -63,9 +59,6 @@ function WbcPaneSemanticController({ active, layout, rootRef, chats, tasks, term
     var workspaceActions = [
       { action_id: "open_chat", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { chat_id: "text<=160", side: "text<=5" } },
     ];
-    if (catalogs.tasks.length) workspaceActions.push(
-      { action_id: "open_task", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { task_id: "text<=160", side: "text<=5" } }
-    );
     if (catalogs.terminals.length) workspaceActions.push(
       { action_id: "open_terminal", kind: "move", risk: "R1", gesture_aliases: ["drag_to_split"], input_schema: { terminal_id: "text<=160", side: "text<=5" } }
     );
@@ -96,11 +89,6 @@ function WbcPaneSemanticController({ active, layout, rootRef, chats, tasks, term
           var id = ensureCatalogItem("chat", input && input.chat_id);
           onOpenPane("chat", id, { side: normalizeSide(input) });
           return { kind: "chat", id: id, side: normalizeSide(input) };
-        },
-        open_task: function (input) {
-          var id = ensureCatalogItem("task", input && input.task_id);
-          onOpenPane("task", id, { side: normalizeSide(input) });
-          return { kind: "task", id: id, side: normalizeSide(input) };
         },
         open_terminal: function (input) {
           var id = ensureCatalogItem("terminal", input && input.terminal_id);
@@ -157,7 +145,7 @@ function WbcPaneSemanticController({ active, layout, rootRef, chats, tasks, term
       }));
     });
     return function () { unregister.forEach(function (remove) { remove(); }); };
-  }, [active, layout, chats, tasks, terminals, onOpenPane, onMovePane, onSwapPanes, onClosePane]);
+  }, [active, layout, chats, terminals, onOpenPane, onMovePane, onSwapPanes, onClosePane]);
   return null;
 }
 

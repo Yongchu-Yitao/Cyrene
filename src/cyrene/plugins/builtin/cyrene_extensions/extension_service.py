@@ -43,7 +43,7 @@ from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import (
     UV_VERSION,
 )
 from cyrene.localization import localized
-from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def _localized_catalog_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _extension_proxy_url() -> str:
-    from cyrene.runtime.network_proxy import scoped_proxy_url
+    from cyrene.platform.network_proxy import scoped_proxy_url
 
     return scoped_proxy_url("extensions")
 
@@ -324,7 +324,7 @@ def _managed_npm_executable() -> str | None:
     search_dirs.extend(_COMMON_PATHS.get(os.sys.platform, ()))
     # Shared shell-managed runtime roots (Homebrew, nvm with numerical version
     # ordering, mise) so GUI-minimal PATHs still resolve npm.
-    from cyrene.runtime.user_path import common_install_dirs
+    from cyrene.platform.user_path import common_install_dirs
 
     search_dirs.extend(common_install_dirs())
     env_path = extension_environment().get("PATH", "")
@@ -450,7 +450,7 @@ def extension_environment() -> dict[str, str]:
     _UV_BIN_DIR.mkdir(parents=True, exist_ok=True)
     _UV_TOOL_DIR.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    from cyrene.runtime.network_proxy import proxy_environment
+    from cyrene.platform.network_proxy import proxy_environment
 
     env.update(proxy_environment(opt_in=bool(_extension_proxy_url())))
     env.update({
@@ -528,6 +528,21 @@ def agent_extension_paths(
     managed_tex = any(str(record.get("id") or "") == "tex" for record in managed_toolchains)
     if extensions_enabled and managed_tex and extension_is_enabled("toolchain", "tex"):
         candidates.append(_TEX_DIR / "bin")
+    bindings = get_setting("extension_system_bindings", {})
+    if isinstance(bindings, dict):
+        for extension_id, executable in bindings.items():
+            spec = TOOLCHAINS.get(str(extension_id)) or CURATED_CLIS.get(str(extension_id))
+            if not spec:
+                continue
+            kind = str(spec.get("kind") or "")
+            owner_enabled = cli_enabled if kind == "cli" else extensions_enabled
+            candidate = Path(str(executable or "")).expanduser()
+            if (
+                owner_enabled
+                and extension_is_enabled(kind, str(extension_id))
+                and candidate.is_file()
+            ):
+                candidates.append(candidate.resolve().parent)
     for candidate in candidates:
         if candidate.is_dir():
             result.append(str(candidate))
@@ -873,6 +888,29 @@ class ExtensionService:
     def __init__(self) -> None:
         self.tasks = _get_task_store()
 
+    @staticmethod
+    def _ensure_project_plugins(
+        kind: str,
+        extension_id: str,
+        *,
+        force_enable: bool,
+    ) -> list[dict[str, Any]]:
+        from .project_plugin_dependencies import ensure_project_plugins
+
+        try:
+            return ensure_project_plugins(
+                kind,
+                extension_id,
+                force_enable=force_enable,
+            )
+        except Exception:
+            logger.exception(
+                "Unable to reconcile project Plugin dependency for %s:%s",
+                kind,
+                extension_id,
+            )
+            return []
+
     def process_environment(
         self,
         base: dict[str, str] | None = None,
@@ -912,7 +950,7 @@ class ExtensionService:
         # ACP transports retain their environment for their lifetime. Recycle
         # them so the next external-Agent turn receives the new proxy policy.
         try:
-            from cyrene.agent_runtime.process_manager import get_process_manager
+            from cyrene.agents.process_manager import get_process_manager
 
             await get_process_manager().close_all()
         except Exception:
@@ -998,7 +1036,15 @@ class ExtensionService:
         bindings[extension_id] = str(candidate.resolve())
         set_setting("extension_system_bindings", bindings)
         _audit("user", "system.bind", f"{spec.get('kind')}:{extension_id}", {"path": str(candidate.resolve()), "version": version})
-        return {"ok": True, "path": str(candidate.resolve()), "version": version}
+        project_plugins = self._ensure_project_plugins(
+            str(spec.get("kind") or ""), extension_id, force_enable=True
+        )
+        return {
+            "ok": True,
+            "path": str(candidate.resolve()),
+            "version": version,
+            "project_plugins": project_plugins,
+        }
 
     def unbind_system_executable(self, extension_id: str) -> dict[str, Any]:
         bindings = get_setting("extension_system_bindings", {})
@@ -1065,6 +1111,50 @@ class ExtensionService:
             "installed": [agent_runtime.agent_card(record) for record in agent_runtime.list_agent_installations()],
         }
 
+    def _environment_cards(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        cli_records = {
+            str(item.get("id")): item
+            for item in self._managed_records("extension_clis")
+        }
+        cli_cards = []
+        for cli_id in dict.fromkeys([*CURATED_CLIS, *cli_records]):
+            spec = _localized_catalog_spec(
+                CURATED_CLIS.get(cli_id) or cli_records[cli_id].get("spec") or {}
+            )
+            spec.setdefault("name", cli_id)
+            spec.setdefault("kind", "cli")
+            cli_cards.append(self._extension_card(cli_id, spec, cli_records.get(cli_id)))
+
+        toolchain_records = {
+            str(item.get("id")): item
+            for item in self._managed_records("extension_toolchains")
+        }
+        toolchain_cards = []
+        for tool_id in dict.fromkeys([*TOOLCHAINS, *toolchain_records]):
+            spec = _localized_catalog_spec(
+                TOOLCHAINS.get(tool_id) or toolchain_records[tool_id].get("spec") or {}
+            )
+            spec.setdefault("name", tool_id)
+            spec.setdefault("kind", "toolchain")
+            toolchain_cards.append(
+                self._extension_card(tool_id, spec, toolchain_records.get(tool_id))
+            )
+
+        uv_path = _bundled_binary("uv")
+        uv_version = _command_version(uv_path, ("--version",)) if uv_path else ""
+        uv_enabled = extension_is_enabled("toolchain", "uv") if uv_version else False
+        uv_card = {
+            "key": "internal:uv", "id": "uv", "kind": "toolchain", "name": "uv", "description": localized("Built-in Python installer and package manager.", "内置 Python 安装器和包管理器。"),
+            "icon": "uv",
+            "ownership": "builtin", "desired_state": "enabled" if uv_enabled else "disabled", "observed_state": "installed" if uv_version else "unhealthy",
+            "version": uv_version or UV_VERSION, "path": str(uv_path or ""), "health": "healthy" if uv_version else "missing_bundle",
+            "source": {"type": "bundled", "version": UV_VERSION}, "capabilities": ["enable", "disable"] if uv_version else [], "recommended": True, "recommended_version": UV_VERSION,
+            "enabled": uv_enabled,
+        }
+        return cli_cards, toolchain_cards, uv_card
+
     def list_extensions(self) -> dict[str, Any]:
         skill_cards = []
         skills_service = _active_skills_service()
@@ -1121,45 +1211,21 @@ class ExtensionService:
                 "config": config,
             })
 
-        cli_records = {str(item.get("id")): item for item in self._managed_records("extension_clis")}
-        cli_ids = list(dict.fromkeys([*CURATED_CLIS, *cli_records]))
-        cli_cards = []
-        for cli_id in cli_ids:
-            spec = _localized_catalog_spec(
-                CURATED_CLIS.get(cli_id) or cli_records[cli_id].get("spec") or {}
-            )
-            spec.setdefault("name", cli_id)
-            spec.setdefault("kind", "cli")
-            cli_cards.append(self._extension_card(cli_id, spec, cli_records.get(cli_id)))
-
-        toolchain_records = {str(item.get("id")): item for item in self._managed_records("extension_toolchains")}
-        toolchain_ids = list(dict.fromkeys([*TOOLCHAINS, *toolchain_records]))
-        toolchain_cards = []
-        for tool_id in toolchain_ids:
-            spec = _localized_catalog_spec(
-                TOOLCHAINS.get(tool_id) or toolchain_records[tool_id].get("spec") or {}
-            )
-            spec.setdefault("name", tool_id)
-            spec.setdefault("kind", "toolchain")
-            toolchain_cards.append(self._extension_card(tool_id, spec, toolchain_records.get(tool_id)))
-
-        uv_path = _bundled_binary("uv")
-        uv_version = _command_version(uv_path, ("--version",)) if uv_path else ""
-        uv_enabled = extension_is_enabled("toolchain", "uv") if uv_version else False
-        uv_card = {
-            "key": "internal:uv", "id": "uv", "kind": "toolchain", "name": "uv", "description": localized("Built-in Python installer and package manager.", "内置 Python 安装器和包管理器。"),
-            "icon": "uv",
-            "ownership": "builtin", "desired_state": "enabled" if uv_enabled else "disabled", "observed_state": "installed" if uv_version else "unhealthy",
-            "version": uv_version or UV_VERSION, "path": str(uv_path or ""), "health": "healthy" if uv_version else "missing_bundle",
-            "source": {"type": "bundled", "version": UV_VERSION}, "capabilities": ["enable", "disable"] if uv_version else [], "recommended": True, "recommended_version": UV_VERSION,
-            "enabled": uv_enabled,
-        }
+        cli_cards, toolchain_cards, uv_card = self._environment_cards()
         recommended_lookup = {item["id"]: item for item in [*toolchain_cards, *cli_cards, uv_card]}
         recommended = [recommended_lookup[key] for key in RECOMMENDED_ORDER if key in recommended_lookup]
+        from .project_plugin_dependencies import reconcile_installed_cards
+
+        project_plugins = reconcile_installed_cards([*toolchain_cards, *cli_cards, uv_card])
+        for card in [*toolchain_cards, *cli_cards, uv_card]:
+            card["project_plugins"] = project_plugins.get(
+                f"{card.get('kind')}:{card.get('id')}", []
+            )
         return {
             "recommended": recommended, "skills": skill_cards, "mcp": mcp_cards, "cli": cli_cards, "toolchains": toolchain_cards,
             "agents": self.agent_listing(),
             "infrastructure": {"uv": uv_card, "mise": self.infrastructure_status("mise")}, "tasks": self.tasks.list(),
+            "project_plugins": project_plugins,
             "python_prompt_required": next((item["observed_state"] == "missing" for item in toolchain_cards if item["id"] == "python"), False),
         }
 
@@ -1211,7 +1277,7 @@ class ExtensionService:
             return await self.set_mcp_enabled(extension_id, enabled, actor=actor)
         elif kind == "agent":
             agent_runtime = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_agent_runtime")
-            from cyrene.agent_runtime.process_manager import get_process_manager
+            from cyrene.agents.process_manager import get_process_manager
 
             record = agent_runtime.get_agent_installation(extension_id) or agent_runtime.find_installation_by_agent_id(extension_id)
             if not record:
@@ -1230,7 +1296,14 @@ class ExtensionService:
                 _save_extension_enabled(kind, extension_id, enabled)
                 action = "extension.enable" if enabled else "extension.disable"
                 _audit(actor, action, f"{kind}:{extension_id}", {})
-                return {"ok": True, "enabled": bool(enabled)}
+                project_plugins = (
+                    self._ensure_project_plugins(kind, extension_id, force_enable=True)
+                    if enabled else []
+                )
+                response = {"ok": True, "enabled": bool(enabled)}
+                if project_plugins:
+                    response["project_plugins"] = project_plugins
+                return response
             setting_key = "extension_clis" if kind == "cli" else "extension_toolchains"
             records = self._managed_records(setting_key)
             record = next((item for item in records if str(item.get("id")) == extension_id), None)
@@ -1242,7 +1315,14 @@ class ExtensionService:
         else:
             raise ValueError("Unsupported extension kind")
         _audit(actor, action, f"{kind}:{extension_id}", {})
-        return {"ok": True, "enabled": bool(enabled)}
+        project_plugins = (
+            self._ensure_project_plugins(kind, extension_id, force_enable=True)
+            if enabled and kind in {"cli", "toolchain"} else []
+        )
+        response = {"ok": True, "enabled": bool(enabled)}
+        if project_plugins:
+            response["project_plugins"] = project_plugins
+        return response
 
     def infrastructure_status(self, name: str) -> dict[str, Any]:
         path = _bundled_binary(name)
@@ -1867,16 +1947,24 @@ class ExtensionService:
             ),
         )
         if kind == "agent":
-            return await self._install_agent(task_id, extension_id, request, actor)
-        if kind == "skill":
-            return await self._install_skill(task_id, extension_id, request, staging, actor)
-        if kind == "mcp":
-            return await self._install_mcp(task_id, extension_id, request, actor)
-        if kind == "toolchain" and extension_id == "python":
-            return await self._install_python(task_id, request, actor)
-        if kind == "toolchain" and extension_id == "tex":
-            return await self._install_tex(task_id, request, staging, actor)
-        return await self._install_mise(task_id, kind, extension_id, request, actor)
+            result = await self._install_agent(task_id, extension_id, request, actor)
+        elif kind == "skill":
+            result = await self._install_skill(task_id, extension_id, request, staging, actor)
+        elif kind == "mcp":
+            result = await self._install_mcp(task_id, extension_id, request, actor)
+        elif kind == "toolchain" and extension_id == "python":
+            result = await self._install_python(task_id, request, actor)
+        elif kind == "toolchain" and extension_id == "tex":
+            result = await self._install_tex(task_id, request, staging, actor)
+        else:
+            result = await self._install_mise(task_id, kind, extension_id, request, actor)
+        if kind in {"cli", "toolchain"}:
+            project_plugins = self._ensure_project_plugins(
+                kind, extension_id, force_enable=True
+            )
+            if project_plugins:
+                result = {**result, "project_plugins": project_plugins}
+        return result
 
     async def _install_agent(self, task_id: str, extension_id: str, request: dict[str, Any], actor: str) -> dict[str, Any]:
         """Validate and register an Agent for on-demand ACP stdio execution.
@@ -2763,7 +2851,7 @@ class ExtensionService:
             return {"ok": True}
         if kind == "agent":
             agent_runtime = importlib.import_module("cyrene.plugins.builtin.cyrene_extensions.extension_agent_runtime")
-            from cyrene.agent_runtime.process_manager import get_process_manager
+            from cyrene.agents.process_manager import get_process_manager
 
             record = agent_runtime.get_agent_installation(extension_id) or agent_runtime.find_installation_by_agent_id(extension_id)
             if not record:

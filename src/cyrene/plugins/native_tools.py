@@ -492,6 +492,40 @@ def seed_builtin_plugin_directory(
         return _seed_canonical_directory(root)
 
 
+def restore_builtin_plugin(
+    directory: str | Path,
+    contribution_name: str,
+) -> BuiltinPluginSeedResult:
+    """Restore one bundled Plugin pack that was previously removed.
+
+    The operation only clears Cyrene's explicit tombstone. Normal seeding
+    collision and user-edit protections still apply, so an unrelated
+    same-named user directory is never overwritten.
+    """
+
+    root = Path(directory).expanduser().resolve()
+    normalized = str(contribution_name or "").strip()
+    if (
+        not normalized
+        or len(Path(normalized).parts) != 1
+        or normalized in {".", ".."}
+    ):
+        raise ValueError("Plugin contribution name must be one top-level entry")
+    with _SEED_LOCK:
+        canonical_files = _collect_canonical_files()
+        canonical_entries = {Path(relative).parts[0] for relative in canonical_files}
+        if normalized not in canonical_entries:
+            raise ValueError(f"Bundled Plugin pack is unavailable: {normalized}")
+        root.mkdir(parents=True, exist_ok=True)
+        manifest = root / _UPSTREAM_MANIFEST_RELATIVE
+        hashes = _load_upstream_hashes(manifest)
+        deleted = _load_deleted_contributions(manifest)
+        if normalized in deleted:
+            deleted.remove(normalized)
+            _write_upstream_hashes(manifest, hashes, deleted=deleted)
+        return _seed_canonical_directory(root)
+
+
 def mark_builtin_plugin_deleted(
     directory: str | Path,
     contribution_name: str,
@@ -534,5 +568,6 @@ __all__ = [
     "CORE_PLUGIN_NAMES",
     "USER_STANDALONE_PLUGIN_NAMES",
     "mark_builtin_plugin_deleted",
+    "restore_builtin_plugin",
     "seed_builtin_plugin_directory",
 ]

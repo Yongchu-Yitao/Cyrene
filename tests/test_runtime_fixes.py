@@ -652,7 +652,7 @@ def test_assistant_text_ignores_reasoning_when_tool_calls_present():
     content must NOT surface ``reasoning_content`` as user-facing text — that
     leaked the model's chain-of-thought into proactive messages. Pure-text
     turns (no tool_calls) still fall back to reasoning for Qwen-style models."""
-    from cyrene.model_runtime.messages import _assistant_text
+    from cyrene.model.messages import _assistant_text
 
     quit_turn = {
         "role": "assistant",
@@ -733,7 +733,7 @@ def test_pending_permission_public_shape_keeps_only_localizable_meta():
 
 
 def test_inbox_send_message_is_serialized():
-    from cyrene.runtime import inbox
+    from cyrene.platform import inbox
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:

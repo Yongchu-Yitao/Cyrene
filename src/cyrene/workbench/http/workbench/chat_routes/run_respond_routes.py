@@ -32,7 +32,7 @@ def register_run_respond_routes(router: APIRouter, context: ChatRouteContext) ->
                 "request_expired",
                 failureKind="request_expired",
             )
-        from cyrene.agent_runtime import (
+        from cyrene.agents import (
             AgentRuntimeError,
             respond_to_external_agent_request,
         )

@@ -21,7 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 from cyrene.config import DATA_DIR
-from cyrene.runtime.io import read_json_safe
+from cyrene.platform.io import read_json_safe
 from cyrene.workbench.projects import project_repository
 from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.persistence.store import read_document, write_document

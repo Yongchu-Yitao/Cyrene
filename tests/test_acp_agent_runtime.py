@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from cyrene.agent_runtime import (
+from cyrene.agents import (
     ACP_STDIO_DRIVER,
     AcpProcessManager,
     AcpRuntimeService,
@@ -33,8 +33,8 @@ from cyrene.agent_runtime import (
     redact_secrets,
     run_external_agent_turn,
 )
-from cyrene.agent_runtime.acp_events import AcpEventMapper
-from cyrene.agent_runtime.acp_protocol import (
+from cyrene.agents.acp_events import AcpEventMapper
+from cyrene.agents.acp_protocol import (
     ACP_METHOD_INITIALIZE,
     ACP_METHOD_SESSION_NEW,
     ACP_METHOD_SESSION_PROMPT,
@@ -49,11 +49,11 @@ from cyrene.agent_runtime.acp_protocol import (
     frame_kind,
     parse_frame,
 )
-from cyrene.agent_runtime.acp_transport import is_valid_bare_command
-from cyrene.agent_runtime.builtin import BUILTIN_INSTALLATION_ID
-from cyrene.agent_runtime.runtime_service import AcpConnection, _fresh_session_prompt
-from cyrene.agent_runtime.runtime_service import _materialize_acp_artifacts
-from cyrene.agent_runtime.notices import (
+from cyrene.agents.acp_transport import is_valid_bare_command
+from cyrene.agents.builtin import BUILTIN_INSTALLATION_ID
+from cyrene.agents.runtime_service import AcpConnection, _fresh_session_prompt
+from cyrene.agents.runtime_service import _materialize_acp_artifacts
+from cyrene.agents.notices import (
     LeadingOperationalNoticeFilter,
     classify_operational_notice,
     split_leading_operational_notices,
@@ -359,7 +359,7 @@ def test_redact_secrets_recursive():
 
 @pytest.mark.asyncio
 async def test_connection_captures_and_switches_agent_model(fake_acp_bin):
-    from cyrene.agent_runtime.runtime_service import AcpConnection
+    from cyrene.agents.runtime_service import AcpConnection
 
     transport = await _make_transport(fake_acp_bin)
     connection = AcpConnection(
@@ -493,7 +493,7 @@ def test_mapper_removes_inline_image_data_from_tool_event():
 def test_materialize_acp_inline_image_for_cyrene_viewer(
     tmp_path, monkeypatch, real_pillow_modules
 ):
-    from cyrene.runtime import attachments as attachment_service
+    from cyrene.platform import attachments as attachment_service
 
     monkeypatch.setattr(attachment_service, "EXPORTS_DIR", tmp_path)
     # Some legacy route-test modules install a process-wide PIL shim during
@@ -885,7 +885,7 @@ def test_process_manager_profile_args_ignore_manifest_args():
 
 
 def test_safe_proxy_environment_accepts_explicit_credential_free_proxy():
-    from cyrene.agent_runtime import acp_transport
+    from cyrene.agents import acp_transport
 
     resolved = acp_transport.safe_proxy_environment(
         {"HTTP_PROXY": "http://127.0.0.1:6578", "https_proxy": "http://127.0.0.1:6578"},
@@ -895,7 +895,7 @@ def test_safe_proxy_environment_accepts_explicit_credential_free_proxy():
 
 
 def test_safe_proxy_environment_rejects_embedded_credentials():
-    from cyrene.agent_runtime import acp_transport
+    from cyrene.agents import acp_transport
 
     assert acp_transport.safe_proxy_environment(
         {"HTTPS_PROXY": "http://user:secret@proxy.example:8080"},
@@ -903,8 +903,8 @@ def test_safe_proxy_environment_rejects_embedded_credentials():
 
 
 def test_configured_agent_proxy_is_strictly_opt_in(monkeypatch):
-    from cyrene.agent_runtime import process_manager
-    from cyrene.runtime import config_store
+    from cyrene.agents import process_manager
+    from cyrene.platform import config_store
 
     values = {"external_agent_proxy_enabled": False, "external_agent_proxy_port": 6578}
     monkeypatch.setattr(config_store, "get_setting", lambda key, default=None: values.get(key, default))
@@ -1054,7 +1054,7 @@ def test_validate_before_connect_model_gateway_boundary():
 async def test_run_external_agent_turn_end_to_end(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.agent_runtime.runtime_service._external_agent_installation",
+        "cyrene.agents.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     service = AcpRuntimeService(process_manager=AcpProcessManager())
@@ -1087,11 +1087,11 @@ async def test_run_external_agent_turn_end_to_end(fake_acp_bin, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_external_agent_receives_scoped_cyrene_model_gateway(fake_acp_bin, monkeypatch):
-    from cyrene.agent_runtime import model_gateway
+    from cyrene.agents import model_gateway
 
     install = _installation(model_access={"mode": "cyrene_managed", "profileId": "primary"})
     monkeypatch.setattr(
-        "cyrene.agent_runtime.runtime_service._external_agent_installation",
+        "cyrene.agents.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     monkeypatch.setattr(
@@ -1143,7 +1143,7 @@ async def test_external_agent_receives_scoped_cyrene_model_gateway(fake_acp_bin,
 async def test_run_external_agent_turn_official_v1_prompt_response_is_terminal(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.agent_runtime.runtime_service._external_agent_installation",
+        "cyrene.agents.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     def official_transport(command, args=(), **kwargs):
@@ -1175,7 +1175,7 @@ async def test_run_external_agent_turn_official_v1_prompt_response_is_terminal(f
 async def test_loaded_session_history_is_not_republished_and_new_turn_streams(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.agent_runtime.runtime_service._external_agent_installation",
+        "cyrene.agents.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
 
@@ -1215,7 +1215,7 @@ async def test_loaded_session_history_is_not_republished_and_new_turn_streams(fa
 async def test_loaded_session_service_failure_falls_back_to_new_session(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.agent_runtime.runtime_service._external_agent_installation",
+        "cyrene.agents.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
 
@@ -1249,7 +1249,7 @@ async def test_loaded_session_service_failure_falls_back_to_new_session(fake_acp
 async def test_loaded_session_process_crash_reconnects_before_new_session(fake_acp_bin, monkeypatch):
     install = _installation()
     monkeypatch.setattr(
-        "cyrene.agent_runtime.runtime_service._external_agent_installation",
+        "cyrene.agents.runtime_service._external_agent_installation",
         lambda installation_id: install if installation_id == install["installation_id"] else None,
     )
     spawned = 0

@@ -509,7 +509,6 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     windowErrorLog: 'Check cyrene_error.log in {path} for details.',
     filePathRequired: 'File path is required.',
     fileNoLongerExists: 'File no longer exists.',
-    directoryPickerUnsupported: 'The native directory picker is only available on Linux.',
     selectWorkspaceDirectory: 'Select workspace directory',
     selectExtensionFolder: 'Select extension folder',
     selectExecutable: 'Select executable',
@@ -566,7 +565,6 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     windowErrorLog: '详情请检查 {path} 中的 cyrene_error.log。',
     filePathRequired: '必须提供文件路径。',
     fileNoLongerExists: '文件已不存在。',
-    directoryPickerUnsupported: '原生目录选择器仅在 Linux 上可用。',
     selectWorkspaceDirectory: '选择工作区目录',
     selectExtensionFolder: '选择扩展文件夹',
     selectExecutable: '选择可执行文件',
@@ -5121,7 +5119,6 @@ function rebuildApplicationMenu(maybeSettings) {
       submenu: [
         { label: t('newChat'), accelerator: 'CmdOrCtrl+N', click: () => sendToMainWindow('menu:action', 'new-chat') },
         { label: t('newProject'), accelerator: 'CmdOrCtrl+Shift+N', click: () => sendToMainWindow('menu:action', 'new-project') },
-        { label: t('newTask'), accelerator: 'CmdOrCtrl+Alt+N', click: () => sendToMainWindow('menu:action', 'new-task') },
         { type: 'separator' },
         { role: 'close', label: t('closeWindow') },
       ],
@@ -7548,9 +7545,6 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.handle('dialog:pick-directory', async (event) => {
       const settings = readDesktopSettings();
-      if (!isLinux) {
-        return { path: '', error: desktopT('directoryPickerUnsupported', settings) };
-      }
       const owner = BrowserWindow.fromWebContents(event.sender);
       const result = await dialog.showOpenDialog(owner || mainWindow, {
         title: desktopT('selectWorkspaceDirectory', settings),

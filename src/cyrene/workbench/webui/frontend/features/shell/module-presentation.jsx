@@ -54,7 +54,6 @@ function workbenchSessionTabsPresentation(
 function useWorkbenchModulePresentation(
   fullPage,
   setFullPage,
-  taskView,
   mountedPages,
   setMountedPages,
   store,
@@ -73,12 +72,15 @@ function useWorkbenchModulePresentation(
     || enabledModules.indexOf("schedule") >= 0;
   var memoryEnabled = !Array.isArray(enabledModules)
     || enabledModules.indexOf("memory") >= 0;
+  var boardEnabled = !Array.isArray(enabledModules)
+    || enabledModules.indexOf("board") >= 0;
   var isKnowledge = knowledgeEnabled && fullPage === "knowledge";
   var isSchedule = scheduleEnabled && fullPage === "schedule";
   var isMemory = memoryEnabled && fullPage === "memory";
   var isChat = fullPage === "chat";
   var isSettings = fullPage === "settings";
-  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isSettings;
+  var isBoard = boardEnabled && !fullPage;
+  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isBoard || isSettings;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
 
   useEffect(function () {
@@ -93,12 +95,8 @@ function useWorkbenchModulePresentation(
     : isKnowledge ? "knowledge"
       : isMemory ? "memory"
         : isChat ? "work"
-          : (!isModulePage && taskView === "board" ? "board" : "work");
-  var activeSessionKey = isChat && !activeChatId && taskView === "detail" && store.activeSessionId
-    ? "task:" + store.activeSessionId
-    : (isChat && activeChatId
-      ? "chat:" + activeChatId
-      : (!fullPage && taskView === "detail" && store.activeSessionId ? "task:" + store.activeSessionId : ""));
+          : isBoard ? "board" : "work";
+  var activeSessionKey = isChat && activeChatId ? "chat:" + activeChatId : "";
   var sessions = workbenchSessionTabsPresentation(
     store, recentChatsByProject, sessionKeys, chatRuntimes,
     sessionActivityLive, dataState, activeSessionKey, t
@@ -109,6 +107,7 @@ function useWorkbenchModulePresentation(
     isMemory: isMemory,
     isChat: isChat,
     isSettings: isSettings,
+    isBoard: isBoard,
     isModulePage: isModulePage,
     fullPageConfig: fullPageConfig,
     showChatPage: isChat || mountedPages.chat,

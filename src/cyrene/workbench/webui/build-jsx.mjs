@@ -5,10 +5,12 @@ import { join, relative, dirname, extname, resolve, basename, sep } from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const BUILD_SCRIPT = fileURLToPath(import.meta.url)
 const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
 const WORKBENCH_DIR = resolve(__dirname, 'frontend')
 const ASSETS_DIR = resolve(WORKBENCH_DIR, 'assets')
+const MAX_APP_ENTRY_BYTES = 3.5 * 1024 * 1024
 const TABLER_ICONS_DIR = resolve(__dirname, 'node_modules/@tabler/icons/icons/outline')
 const SIMPLE_ICONS_DIR = resolve(__dirname, 'node_modules/simple-icons/icons')
 const LOBE_ICONS_DIR = resolve(__dirname, 'node_modules/@lobehub/icons-static-svg/icons')
@@ -194,7 +196,7 @@ async function build() {
   mkdirSync(OUT_DIR, { recursive: true })
   mkdirSync(OFFICE_OUT_DIR, { recursive: true })
 
-  await esbuild.build({
+  const esmBuild = await esbuild.build({
     entryPoints: {
       app: resolve(WORKBENCH_DIR, 'entry/app.jsx'),
       pdf: resolve(WORKBENCH_DIR, 'entry/pdf.jsx'),
@@ -202,12 +204,36 @@ async function build() {
     outdir: OUT_DIR,
     bundle: true,
     format: 'esm',
+    splitting: true,
+    minify: true,
+    chunkNames: 'chunks/[name]-[hash]',
     platform: 'browser',
     jsx: 'transform',
     target: 'es2020',
+    supported: { 'template-literal': false },
+    metafile: true,
     logLevel: 'silent',
   })
-  console.log(`✓ ESM surfaces (${relative(WORKBENCH_DIR, resolve(WORKBENCH_DIR, 'entry/app.jsx')).split(sep).join('/')}) → compiled/app.js, compiled/pdf.js (${files.length} source modules)`)
+  const appOutput = Object.entries(esmBuild.metafile.outputs).find(([, output]) =>
+    output.entryPoint
+      && output.entryPoint.replace(/\\/g, '/').endsWith('/entry/app.jsx')
+  )
+  if (!appOutput) throw new Error('Workbench app entry was not emitted')
+  const appEntryBytes = appOutput[1].bytes
+  if (appEntryBytes > MAX_APP_ENTRY_BYTES) {
+    throw new Error(
+      `Workbench app entry is ${(appEntryBytes / 1024 / 1024).toFixed(2)} MiB; `
+      + `budget is ${(MAX_APP_ENTRY_BYTES / 1024 / 1024).toFixed(2)} MiB`,
+    )
+  }
+  const splitChunks = Object.values(esmBuild.metafile.outputs).filter((output) =>
+    !output.entryPoint && output.bytes > 0
+  ).length
+  console.log(
+    `✓ ESM surfaces (${relative(WORKBENCH_DIR, resolve(WORKBENCH_DIR, 'entry/app.jsx')).split(sep).join('/')}) `
+    + `→ compiled/app.js, compiled/pdf.js (${files.length} source modules, `
+    + `${(appEntryBytes / 1024 / 1024).toFixed(2)} MiB app entry, ${splitChunks} shared chunks)`,
+  )
 
   // Office renderers are large and needed only after a DOCX/PPTX is opened.
   // Keep them out of the startup scripts and expose one small global API per
@@ -232,6 +258,7 @@ async function build() {
     settingsIconFiles,
     providerIconFiles,
     EXTENSION_ICON_FILES.map(([source]) => source),
+    [BUILD_SCRIPT],
     [resolve(__dirname, 'package-lock.json')],
   )
   const revision = frontendRevision(revisionSources, cssFiles, assetFiles, indexTemplate)

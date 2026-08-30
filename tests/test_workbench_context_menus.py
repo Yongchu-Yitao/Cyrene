@@ -162,6 +162,7 @@ def test_composer_tools_menu_closes_on_outside_pointerdown():
 def test_existing_item_action_menus_are_available_from_right_click():
     shell = workbench_shell_source()
     chat = workbench_chat_source()
+    board = frontend_module_source("features/chat/conversation-board.jsx")
     library = (ROOT / "src/cyrene/workbench/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
@@ -179,14 +180,11 @@ def test_existing_item_action_menus_are_available_from_right_click():
     assert "event.stopPropagation();" in project_entry
     assert "setProjectActionId(actionsOpen ? \"\" : project.id);" in project_entry
     assert 'className="workbench-top-project-actions" role="menu"' in project_entry
-    task_board_card = shell.split('className={"wb-board-card is-"', 1)[1].split(
+    conversation_board_card = board.split('className={"wb-board-card is-"', 1)[1].split(
         "</article>", 1
     )[0]
-    task_rail_card = chat.split('className={"wbc-chat-card wbc-task-card"', 1)[1].split(
-        "</div>", 1
-    )[0]
     chat_card = chat.split('className={"wbc-chat-card"', 1)[1].split("</div>", 1)[0]
-    for item in (task_board_card, task_rail_card, chat_card):
+    for item in (conversation_board_card, chat_card):
         assert "onContextMenu=" in item
         assert "event.preventDefault();" in item
         assert "event.stopPropagation();" in item
@@ -208,6 +206,21 @@ def test_existing_item_action_menus_are_available_from_right_click():
     assert "libraryContextMenuTheme" in library
     assert "function libraryContextMenuTheme()" in library_columns
     assert "portalTheme: libraryContextMenuTheme()" in library_columns
+
+
+def test_pinned_resource_context_menu_sizes_to_its_content_and_stays_in_viewport():
+    shell = workbench_shell_source()
+    css = workbench_style_source()
+
+    assert 'ref={resourceMenuRef}' in shell
+    assert "bounds = menu.getBoundingClientRect()" in shell
+    assert "window.innerWidth - bounds.width - 8" in shell
+    assert "window.innerHeight - bounds.height - 8" in shell
+    assert ".workbench-account-menu.workbench-session-menu.workbench-resource-menu" in css
+    assert "width: max-content;" in css
+    assert "max-width: min(340px, calc(100vw - 16px));" in css
+    assert ".workbench-resource-menu > button > span:last-child" in css
+    assert "white-space: nowrap;" in css
 
 
 def test_chat_page_blank_area_context_menu_reuses_quick_actions():
@@ -243,7 +256,6 @@ def test_chat_page_blank_area_context_menu_reuses_quick_actions():
     assert overview.count("<WbcQuickActionItems") == 0
     for action in (
         "workbenchChat.rename",
-        "workbenchChat.toTask",
         "workbenchChat.compact",
         "workbenchChat.generateMemory",
         "workbenchChat.delete",
@@ -272,22 +284,6 @@ def test_chat_quick_rename_uses_existing_dialog_instead_of_native_prompt():
     assert "window.prompt" not in overview
 
 
-def test_chat_card_menu_can_convert_the_selected_chat_to_a_task():
-    chat = workbench_chat_source()
-    page = chat.split("function WorkbenchChatPage(", 1)[1].split(
-        "function WbcRenameDialog(", 1
-    )[0]
-    rail = chat.split("function WbcRail(", 1)[1].split(
-        "// Conversation main", 1
-    )[0]
-
-    assert "onToTask={handleToTask}" in page
-    assert "toTaskBusy={toTaskBusy}" in page
-    assert 'wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask"' in rail
-    assert "if (onToTask) onToTask(chat.id);" in rail
-    assert 'typeof chatId === "string"' in page
-
-
 def test_all_chat_action_menu_items_have_icons():
     chat = workbench_chat_source()
 
@@ -297,7 +293,7 @@ def test_all_chat_action_menu_items_have_icons():
     card_menu = rail.split('className="wb-card-menu" role="menu"', 1)[1].split(
         "</div>", 1
     )[0]
-    for icon in ("pin", "edit", "task", "trash"):
+    for icon in ("pin", "edit", "trash"):
         assert f"WBC_ICONS.{icon}" in card_menu
 
     header = chat.split("function WbcHeader(", 1)[1].split(
@@ -306,13 +302,13 @@ def test_all_chat_action_menu_items_have_icons():
     overflow_menu = header.split('className="wbc-menu"', 1)[1].split(
         "</div>", 1
     )[0]
-    for icon in ("edit", "task", "trash"):
+    for icon in ("edit", "trash"):
         assert f"WBC_ICONS.{icon}" in overflow_menu
 
     quick_actions = chat.split("function WbcQuickActionItems(", 1)[1].split(
         "var WBC_SIDE_CARD_ORDER_PREFIX", 1
     )[0]
-    for icon in ("edit", "task", "compact", "spark", "trash"):
+    for icon in ("edit", "compact", "spark", "trash"):
         assert f"WBC_ICONS.{icon}" in quick_actions
 
     assert quick_actions.index("workbenchChat.compact") < quick_actions.index(
@@ -411,14 +407,13 @@ def test_remaining_live_flyouts_use_shared_tokens_and_legacy_picker_css_is_remov
 def test_composer_popmenus_hide_scrollbar_chrome_without_disabling_scrolling():
     styles = workbench_style_source()
 
-    for selector in (".wb-popmenu {", ".wbc-popmenu {"):
-        block = styles.split(selector, 1)[1].split("}", 1)[0]
-        assert "overflow-y: auto;" in block
-        assert "scrollbar-width: none;" in block
-        assert "-ms-overflow-style: none;" in block
+    block = styles.split(".wbc-popmenu {", 1)[1].split("}", 1)[0]
+    assert "overflow-y: auto;" in block
+    assert "scrollbar-width: none;" in block
+    assert "-ms-overflow-style: none;" in block
 
     webkit_rule = styles.split(
-        ".wb-popmenu::-webkit-scrollbar,\n.wbc-popmenu::-webkit-scrollbar {", 1
+        ".wbc-popmenu::-webkit-scrollbar {", 1
     )[1].split("}", 1)[0]
     assert "display: none;" in webkit_rule
     assert "width: 0;" in webkit_rule

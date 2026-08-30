@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from cyrene.runtime.paths import TEMP_DIR
+from cyrene.platform.paths import TEMP_DIR
 
 _RESULT_SCHEME = "tool-result://"
 _RESULT_ROOT = TEMP_DIR / "tool-results"

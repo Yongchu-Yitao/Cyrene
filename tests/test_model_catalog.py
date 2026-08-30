@@ -17,7 +17,7 @@ def test_configured_candidates_honor_session_selection_and_endpoint_affinity(
     monkeypatch,
 ):
     from cyrene.plugins.builtin.cyrene_model import configuration as model_configuration
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     primary = {
         "id": "primary",
@@ -141,7 +141,7 @@ def test_offline_model_registry_loads_persisted_activation_and_customization(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     root = tmp_path / "plugins"
     pack = root / "cyrene_model"

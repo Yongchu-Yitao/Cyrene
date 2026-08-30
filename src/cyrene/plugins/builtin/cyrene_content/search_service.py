@@ -296,7 +296,7 @@ def _build_simplexng_env(settings_path: Path) -> dict[str, str]:
 
 def _get_effective_search_proxy() -> str:
     """Return the configured or system proxy if it is reachable."""
-    from cyrene.runtime.network_proxy import scoped_proxy_url
+    from cyrene.platform.network_proxy import scoped_proxy_url
 
     scoped_proxy = scoped_proxy_url("search")
     if scoped_proxy:

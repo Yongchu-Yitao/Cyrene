@@ -117,7 +117,7 @@ test("surface broker rejects absolute and escaping file locations", () => {
   assert.equal(wbcRevealSurface(base, intent("../secret"), { catalog }).outcome, "unavailable")
 })
 
-test("tool activity stays silent without an exact semantic reveal grant", () => {
+test("tool activity updates only until the model explicitly requests reveal", () => {
   const event = {
     type: "tool.started",
     runId: "run-2",
@@ -138,7 +138,7 @@ test("tool activity stays silent without an exact semantic reveal grant", () => 
   assert.equal(intents[0].surfaceId, "sample/editor")
   assert.equal(intents[0].resourceKey, "project-1:file:src/activity.py")
   assert.equal(intents[0].runId, "run-2")
-  assert.equal(intents[0].attention, "observe")
+  assert.equal(intents[0].attention, "update")
   const observed = wbcRevealSurface(
     { left: [], right: [], leftRatio: 0.5, rightRatio: 0.5 },
     intents[0],
@@ -147,15 +147,7 @@ test("tool activity stays silent without an exact semantic reveal grant", () => 
   assert.equal(observed.outcome, "observed")
   assert.equal(observed.layout.left.length + observed.layout.right.length, 0)
 
-  event.payload.presentation.attention = {
-    mode: "reveal",
-    reason: "explicit-user-resource-request",
-    operation: "edit",
-    resource_keys: ["project-1:file:src/other.py"],
-  }
-  assert.equal(wbcSurfaceIntentsFromActivity(event, catalog)[0].attention, "observe")
-
-  event.payload.presentation.attention.resource_keys = ["project-1:file:src/activity.py"]
+  event.payload.presentation.reveal = true
   const granted = wbcSurfaceIntentsFromActivity(event, catalog)[0]
   assert.equal(granted.attention, "reveal")
   assert.equal(wbcRevealSurface(
@@ -181,19 +173,23 @@ test("update attention refreshes an existing surface but never opens one", () =>
   assert.equal(updated.layout.right[0].payload.activity, "read")
 })
 
-test("automatic explicit surface events still require semantic authorization", () => {
+test("automatic explicit surface events still require the reveal flag", () => {
   const explicit = {
     type: "surface.intent",
     payload: { intent: intent("src/app.py") },
   }
-  assert.equal(wbcSurfaceIntentsFromActivity(explicit, catalog)[0].attention, "observe")
-  explicit.payload.presentation = {
-    attention: {
-      mode: "reveal",
-      reason: "explicit-user-resource-request",
-      operation: "edit",
-      resource_keys: ["project-1:file:src/app.py"],
-    },
-  }
+  assert.equal(wbcSurfaceIntentsFromActivity(explicit, catalog)[0].attention, "update")
+  explicit.payload.presentation = { reveal: true }
   assert.equal(wbcSurfaceIntentsFromActivity(explicit, catalog)[0].attention, "reveal")
+})
+
+test("surface broker can cap automatic resource reveals per run", () => {
+  const base = { left: [], right: [], leftRatio: 0.5, rightRatio: 0.5 }
+  const limited = wbcRevealSurface(base, intent("src/app.py"), {
+    catalog,
+    canOpen: function (candidate) { return candidate.runId !== "run-1" },
+  })
+  assert.equal(limited.outcome, "observed")
+  assert.equal(limited.reason, "run-reveal-limit")
+  assert.equal(limited.layout, base)
 })

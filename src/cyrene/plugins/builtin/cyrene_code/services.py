@@ -405,10 +405,12 @@ class CyreneTerminalService:
             timeout=5.0,
         )
         if not result.get("ok"):
+            error_code = str(result.get("error") or "surface_error")
             raise RuntimeError(plugin_localized(
                 context,
-                "Could not open the terminal.",
-                "无法打开终端。",
+                "Could not open the terminal ({error_code}).",
+                "无法打开终端（{error_code}）。",
+                error_code=error_code,
             ))
         return terminal
 
@@ -521,6 +523,8 @@ def setup_application(context: PluginApplicationContext) -> None:
         resolve_project_workspace_dir_async,
     )
     from .workspace_diff_service import WorkspaceDiffService
+    from .workspace_execution import WorkspaceExecutionService
+    from cyrene.plugins import WORKSPACE_PROJECT_TYPE
     from .code_routes import register_code_routes
     from .terminal_routes import register_terminal_routes
     from .terminal_wake import get_shell_wake_service
@@ -548,20 +552,39 @@ def setup_application(context: PluginApplicationContext) -> None:
         resolve_active_path=resolve_active_path,
         resolve_active_write_target=resolve_active_path,
     )
+    terminal_client = CyreneTerminalService._client()
+    application_extensions = context.services.get("plugin_application_extensions")
+
+    def project_type_provider():
+        if not callable(application_extensions):
+            return ()
+        return application_extensions(WORKSPACE_PROJECT_TYPE)
+
+    execution = WorkspaceExecutionService(
+        db_path=context.db_path,
+        state_path=context.data_directory / "workspace-executions.json",
+        terminal_client=terminal_client,
+        find_project=find_workbench_project_lightweight,
+        resolve_workspace=resolve_project_workspace_dir,
+        project_type_provider=project_type_provider,
+    )
     register_terminal_routes(context.router)
     register_code_routes(
         context.router,
         files,
         WorkspaceDiffService(files, workspace_root),
         CodeFormatService(context.data_directory / "format"),
+        execution,
     )
 
     context.provide("remote_shell", CyreneRemoteShellService())
     wake_bridge = get_shell_wake_service()
-    context.provide("terminal_client", CyreneTerminalService._client())
+    context.provide("terminal_client", terminal_client)
+    context.provide("workspace_execution", execution)
     context.provide("terminal_wake", wake_bridge)
     context.on_startup(wake_bridge.start_daemon_bridge)
     context.on_shutdown(wake_bridge.stop_daemon_bridge)
+    context.on_shutdown(execution.shutdown)
     context.expose_frontend("code")
 
 

@@ -7,7 +7,7 @@ from cyrene.config import (
     DB_PATH,
 )
 from cyrene.observability.logging_setup import setup_persistent_logging
-from cyrene.runtime.bootstrap import (
+from cyrene.platform.bootstrap import (
     initialize_runtime,
     start_update_check,
     stop_runtime_tasks,

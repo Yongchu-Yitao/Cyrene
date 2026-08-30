@@ -56,11 +56,16 @@ from .registry import (
 from .runtime import PluginRuntime, PreparedPluginCall
 from .resource_effects import (
     PluginResourceEffect,
+    RESOURCE_REVEAL_ARGUMENT,
+    RESOURCE_REVEAL_DESCRIPTION,
     ResourceAccess,
     ResourceEffectPhase,
     ResourceKind,
     normalize_resource_effects,
+    resource_effect_input_schema,
     resolve_resource_effect_values,
+    split_resource_reveal,
+    workspace_resource_locations,
 )
 from .scopes import (
     ApplicationPluginScope,
@@ -76,6 +81,13 @@ from .session_state import (
     with_plugin_session_state,
     without_plugin_session_state,
 )
-from .validation import PluginInputValidationError, PluginSchemaError
+from .validation import (
+    PluginArgumentNormalization,
+    PluginArgumentRepair,
+    PluginInputValidationError,
+    PluginSchemaError,
+    normalize_plugin_arguments,
+    validate_plugin_arguments,
+)
 
 __all__ = [name for name in globals() if not name.startswith("_")]

@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from cyrene.model_runtime.protocol_adapters import (
+from cyrene.model.protocol_adapters import (
     PreparedRequest,
     discovery_request,
     handle_stream,

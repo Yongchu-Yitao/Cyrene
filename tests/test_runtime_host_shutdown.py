@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_shielded_application_shutdown_finishes_when_host_is_cancelled():
-    from cyrene.runtime.host import _shielded_application_shutdown
+    from cyrene.platform.host import _shielded_application_shutdown
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -31,7 +31,7 @@ async def test_shielded_application_shutdown_finishes_when_host_is_cancelled():
 
 
 def test_manual_web_mode_treats_keyboard_interrupt_as_normal_exit(monkeypatch):
-    from cyrene.runtime import host
+    from cyrene.platform import host
 
     monkeypatch.setattr(host, "_pick_web_port", lambda _preferred: 4242)
 

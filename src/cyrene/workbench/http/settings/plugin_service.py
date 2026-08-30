@@ -15,7 +15,7 @@ from cyrene.core.plugin import (
     RegisteredPlugin,
 )
 from cyrene.localization import localized
-from cyrene.runtime import config_store, settings_service, settings_store
+from cyrene.platform import config_store, settings_service, settings_store
 from cyrene.workbench.http.errors import localized_error_response
 
 SettingsChangedPublisher = Callable[[str, int | None, list[str]], Awaitable[None]]

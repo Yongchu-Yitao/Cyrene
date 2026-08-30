@@ -55,7 +55,7 @@ def app_language(explicit: Any = None) -> str:
     if normalized:
         return normalized
     try:
-        from cyrene.runtime.settings_store import get as get_setting
+        from cyrene.platform.settings_store import get as get_setting
 
         normalized = normalize_language(get_setting("app_language", ""))
     except Exception:

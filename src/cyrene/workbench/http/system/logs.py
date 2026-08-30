@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from cyrene.runtime.log_repository import LogRepository, LogRepositoryError
+from cyrene.platform.log_repository import LogRepository, LogRepositoryError
 from cyrene.workbench.http.errors import error_response
 
 

@@ -14,7 +14,7 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_send_notification(args: dict[str, Any], context: PluginContext) -> str:
-    from cyrene.runtime.notifications import notify
+    from cyrene.platform.notifications import notify
 
     title = str(args.get("title") or "Cyrene").strip()
     text = str(args.get("text") or "").strip()

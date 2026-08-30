@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 
-from cyrene.runtime import paths as app_paths
-from cyrene.runtime import config_store as _store
+from cyrene.platform import paths as app_paths
+from cyrene.platform import config_store as _store
 
 
 def _strip_wrapping_quotes(value: str | None) -> str:

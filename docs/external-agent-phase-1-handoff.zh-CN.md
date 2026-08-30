@@ -815,8 +815,8 @@ Slash Command 也必须由 Agent Capability/Command 列表提供。Cyrene 专属
 - `src/cyrene/workbench/chat/chat_runs.py` 继续负责持久运行、重连和事件缓存，但缓存统一 Agent Event。
 - `src/cyrene/plugins/builtin/cyrene_extensions/extension_catalog.py` 和 Extension Service 增加 `agent` 类型。
 - `src/cyrene/workbench/http/extensions.py` 继续管理安装生命周期，增加外部 Agent 安装提案、Inspect 和确认接口；新增 Agent Runtime Routes 管理配置、认证、Probe 和诊断。
-- `src/cyrene/runtime/config_store.py` 保存 Agent 默认设置和 Credential Reference，不能在普通 Settings Payload 中返回密钥。
-- `src/cyrene/model_runtime/` 增加本地 Model Gateway 和短期 Token 验证；现有 Provider Client 不能直接作为可公开给 Agent 的 Gateway。
+- `src/cyrene/platform/config_store.py` 保存 Agent 默认设置和 Credential Reference，不能在普通 Settings Payload 中返回密钥。
+- `src/cyrene/model/` 增加本地 Model Gateway 和短期 Token 验证；现有 Provider Client 不能直接作为可公开给 Agent 的 Gateway。
 
 ## 17. Agent Profile 与安装安全
 

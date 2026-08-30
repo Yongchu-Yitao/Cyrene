@@ -10,7 +10,7 @@ import sys
 _ALLOWED_WINDOWS_CONFLICTS = (
     re.compile(r"^simplexng \S+ requires uvloop, which is not installed\.$"),
     # openai-codex's metadata requires openai-codex-cli-bin, but the CLI
-    # binary is downloaded on demand by cyrene.model_runtime.codex_cli and
+    # binary is downloaded on demand by cyrene.model.codex_cli and
     # is intentionally not installed in the build environment.
     re.compile(r"^openai-codex \S+ requires openai-codex-cli-bin, which is not installed\.$"),
     # The build swaps opencv-python for opencv-python-headless on purpose:

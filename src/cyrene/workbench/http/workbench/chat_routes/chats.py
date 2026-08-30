@@ -15,7 +15,6 @@ from cyrene.workbench.http.workbench.chat_routes.fork_routes import register_for
 from cyrene.workbench.http.workbench.chat_routes.groups_routes import register_groups_routes
 from cyrene.workbench.http.workbench.chat_routes.pinned_routes import register_pinned_routes
 from cyrene.workbench.http.workbench.chat_routes.side_agents_routes import register_side_agents_routes
-from cyrene.workbench.http.workbench.chat_routes.to_task_routes import register_to_task_routes
 
 
 def register_chat_routes(
@@ -38,5 +37,4 @@ def register_chat_routes(
     register_groups_routes(router, context)
     handlers.update(register_delete_routes(router, context) or {})
     register_fork_routes(router, context)
-    register_to_task_routes(router, context)
     return handlers

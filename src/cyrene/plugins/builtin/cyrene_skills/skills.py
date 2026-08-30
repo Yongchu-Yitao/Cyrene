@@ -14,7 +14,7 @@ from typing import Any
 
 from cyrene.config import TEMP_DIR
 from cyrene.localization import localized
-from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
 _SKILLS_DIR: Path | None = None
 _ALLOWED_SKILL_EXTENSIONS = {".md", ".txt", ".prompt", ".json", ".yaml", ".yml"}

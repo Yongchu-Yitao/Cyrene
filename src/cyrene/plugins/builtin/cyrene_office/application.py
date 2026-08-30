@@ -19,7 +19,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     runtime = get_office_gateway_runtime()
     register_office_integration_routes(context.router)
     context.provide("office", runtime)
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )

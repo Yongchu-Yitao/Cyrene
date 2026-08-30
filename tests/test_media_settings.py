@@ -9,7 +9,7 @@ from fastapi import APIRouter
 
 @pytest.fixture
 def isolated_config_store(tmp_path, monkeypatch):
-    from cyrene.runtime import config_store
+    from cyrene.platform import config_store
 
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "config.enc")

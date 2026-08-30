@@ -55,6 +55,8 @@ function wbcAgentToolPayload(event) {
       }
     : null;
   return {
+    eventId: String(event.eventId || event.event_id || ""),
+    runId: String(event.runId || event.run_id || payload.runId || payload.run_id || ""),
     toolCallId: String(payload.toolCallId || payload.tool_call_id || ""),
     name: String(payload.name || payload.tool || payload.title || ""),
     title: String(payload.title || payload.name || ""),

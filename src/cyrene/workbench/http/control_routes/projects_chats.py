@@ -24,13 +24,17 @@ def register_project_chat_routes(
     @router.get("/v1/control/projects", response_model=ControlProjectListResponse, tags=["Control"], operation_id="control_v1_list_projects")
     async def control_list_projects() -> ControlProjectListResponse:
         projects = await service.list_projects()
-        return ControlProjectListResponse(projects=[
-            ControlProjectSummary(
-                id=str(raw.get("id") or ""), name=str(raw.get("name") or ""),
-                status=str(raw.get("status") or "active"), updated_at=str(raw.get("updatedAt") or ""),
-                task_count=len([item for item in raw.get("sessions") or [] if isinstance(item, dict) and str(item.get("kind") or "task") == "task"]),
-            ) for raw in projects
-        ])
+        summaries = []
+        for raw in projects:
+            project_id = str(raw.get("id") or "")
+            chats = await service.list_chats(project_id)
+            summaries.append(ControlProjectSummary(
+                id=project_id, name=str(raw.get("name") or ""),
+                status=str(raw.get("status") or "active"),
+                updated_at=str(raw.get("updatedAt") or ""),
+                chat_count=len(chats),
+            ))
+        return ControlProjectListResponse(projects=summaries)
 
     @router.get("/v1/control/chats", response_model=ControlChatListResponse, responses=COMMON_ERRORS, tags=["Control"], operation_id="control_v1_list_chats")
     async def control_list_chats(project_id: str = Query(default="", max_length=200)):

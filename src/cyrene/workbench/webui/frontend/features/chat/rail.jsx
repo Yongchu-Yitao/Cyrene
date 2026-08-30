@@ -1,13 +1,12 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { pluginLocalizedField } from "../../platform/plugins.jsx"
-import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasPluginViewDrag, wbcHasTaskDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetPluginViewDrag, wbcSetResourceDrag, wbcSetTaskDrag, wbcT } from "../../workbench-chat.jsx"
+import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasPluginViewDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetPluginViewDrag, wbcSetResourceDrag, wbcT } from "../../workbench-chat.jsx"
 import { wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue } from "./conversation.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
 
 import { moveChatOrderBlock } from "./behavior.mjs"
 import { WbcRenameDialog } from "./rename-dialog.jsx"
 import { WBC_CHAT_GROUPS_PREFIX, WbcConversationStatusPreview, WbcHoverMarquee, wbcBuildChatRailItems, wbcConversationTrackIsCompleted, wbcConversationTrackIsRunning, wbcConversationTrackPositions, wbcConversationTrackState, wbcConversationTrackRuntimeText, wbcCreateChatGroup, wbcFindChatGroup, wbcLoadChatGroups, wbcLoadChatOrder, wbcMoveChatOrder, wbcMoveChatOrderBlock, wbcNormalizeChatGroups, wbcNormalizeChatOrder, wbcOrderChatsByPinned, wbcProjectFileResource, wbcProjectFileVisual, wbcRemoveChatFromGroups, wbcViewportChatIds } from "./rail-model.jsx"
-import { WbcTaskRailCards, WbcTaskRailList, useWbcTaskRail } from "./rail-tasks.jsx"
 import { useWbcRailOrdering, wbcDefaultRailOrder } from "./rail-ordering.jsx"
 import { useWbcRailDropController } from "./rail-drop-controller.jsx"
 
@@ -46,7 +45,7 @@ function wbcWriteProjectToolView(projectId, value) {
   } catch (error) {}
 }
 
-function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminals, terminalsLoading, activeTerminalId, railMode, workRailMode, pinnedChatIds, pinnedTaskIds, activeChatId, activeTaskId, loading, runningChatIds, runtimeEngine, onSelect, onSelectTask, onAnswer, onCreate, onCreateTask, onRename, onRenameTask, onDelete, onDeleteTask, onToTask, toTaskBusy, onTogglePinned, onTogglePinnedTask, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onOpenSplit, onRailModeChange, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
+function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, terminalsLoading, activeTerminalId, railMode, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onTogglePinned, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onOpenSplit, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
   var [query, setQuery] = useWbcState("");
   var [projectToolView, setProjectToolViewState] = useWbcState(function () {
     return wbcReadProjectToolView(projectId);
@@ -113,7 +112,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
   var [showAllRecent, setShowAllRecent] = useWbcState(false);
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
-  var [renameTask, setRenameTask] = useWbcState(null);
   var [renameGroup, setRenameGroup] = useWbcState(null);
   var [renameTerminalItem, setRenameTerminalItem] = useWbcState(null);
   var terminalDefaultOrder = (codeAvailable && Array.isArray(terminals) ? terminals : []).slice().sort(function (left, right) {
@@ -122,7 +120,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
   var [terminalOrder, setTerminalOrder] = useWbcState([]);
   var [terminalPinnedIds, setTerminalPinnedIds] = useWbcState([]);
   var [terminalDragId, setTerminalDragId] = useWbcState("");
-  var taskRail = useWbcTaskRail(projectId, tasks, pinnedTaskIds, query);
   var [collapsedGroups, setCollapsedGroups] = useWbcState({});
   var [groups, setGroups] = useWbcState([]);
   var [announcement, setAnnouncement] = useWbcState("");
@@ -244,15 +241,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
     setTerminalToolsExpanded(false);
   }, [query]);
 
-  function toggleRailMode() {
-    setQuery("");
-    var nextMode = railMode === "chat"
-      ? "task"
-      : railMode === "task"
-        ? "chat"
-        : (workRailMode === "task" ? "task" : "chat");
-    if (onRailModeChange) onRailModeChange(nextMode);
-  }
   var railMotionCollapsedRef = useWbcRef(!!collapsed);
   /* Derive the phase during the first render that sees the new collapsed prop.
      Waiting for an Effect (or scheduling state while rendering) leaves one
@@ -985,6 +973,17 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
           setMenuId("");
           onSelect(chat.id);
         }}
+        onDoubleClick={function (event) {
+          if (
+            event.target
+            && event.target.closest
+            && event.target.closest("button, a, input, [role='menuitem'], .wbc-fork-marker")
+          ) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setMenuId("");
+          setRenameChat(chat);
+        }}
         onContextMenu={function (event) {
           event.preventDefault();
           event.stopPropagation();
@@ -1182,14 +1181,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
                   }}>
                     <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
                     <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
-                  </button>
-                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_to_task" className="wbc-chat-menu-action" disabled={toTaskBusy} onClick={function (e) {
-                    e.stopPropagation();
-                    setMenuId("");
-                    if (onToTask) onToTask(chat.id);
-                  }}>
-                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.task}</span>
-                    <span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span>
                   </button>
                   <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_delete" className="wbc-chat-menu-action danger" onClick={function (e) {
                     e.stopPropagation();
@@ -1817,15 +1808,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
           handlers: { invoke: function () { setMenuId(""); setRenameChat(menuChat); } },
         }));
         unregister.push(uiSurface.register({
-          node_id: "chat_menu_to_task",
-          parent_id: "chat_context_menu",
-          scope: "chat_menu",
-          order: 40,
-          get_node: function () { return { role: "menuitem", name: wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat..." : "Convert to task"), state: { disabled: !!toTaskBusy } }; },
-          actions: toTaskBusy ? [] : [{ action_id: "invoke", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
-          handlers: { invoke: function () { setMenuId(""); return onToTask && onToTask(menuChatId); } },
-        }));
-        unregister.push(uiSurface.register({
           node_id: "chat_menu_delete",
           parent_id: "chat_context_menu",
           scope: "chat_menu",
@@ -1839,7 +1821,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
       uiSurface.setScope("main");
     }
     return function () { unregister.forEach(function (remove) { remove(); }); };
-  }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onOpenSplit, onCreate, onDelete, onToTask, toTaskBusy, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
+  }, [projectId, defaultOrderKey, filtered, query, collapsed, groups, menuId, activeChatId, pinnedChatIds, onSelect, onOpenSplit, onCreate, onDelete, onTogglePinned, showAllRecent, recentOverflowCount, uiViewportRevision]);
 
   var terminalMap = new Map((Array.isArray(terminals) ? terminals : []).map(function (terminal) {
     return [String(terminal.id), terminal];
@@ -2026,7 +2008,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
   }
 
   var unifiedSearchActive = normalizedQuery.length > 0;
-  var unifiedSearchResultCount = filtered.length + taskRail.ordered.length
+  var unifiedSearchResultCount = filtered.length
     + (codeAvailable ? globalFileEntries.length + orderedTerminals.length : 0);
 
   return (
@@ -2037,12 +2019,16 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
       <div className="wbc-rail-glass">
         <div className="wbc-nav-card">
           <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">
-            {!collapsed && (
-              <button type="button" className="workbench-rail-mode-toggle" onClick={toggleRailMode} aria-label={wbcT("rail.toggleMode", "Switch rail mode")}>
-                {railMode === "task"
-                      ? wbcT("workbench.page.task", "Tasks")
-                      : wbcT("workbench.page.chat", "Chats")}
-              </button>
+            {!collapsed && railMode === "chat" && (
+              <button
+                ref={newChatButtonRef}
+                data-cyrene-node-id="new_chat"
+                type="button"
+                className="wbc-project-new-chat"
+                onClick={onCreate}
+                title={wbcT("workbenchChat.newChat", "New chat")}
+                aria-label={wbcT("workbenchChat.newChat", "New chat")}
+              >{WBC_ICONS.plus}</button>
             )}
             {!collapsed && (
               <div className="wbc-search">
@@ -2057,29 +2043,9 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
                     setQuery(nextQuery);
                   }}
                   placeholder={wbcT("rail.searchEverythingShort", "Search all")}
-                  aria-label={wbcT("rail.searchEverything", "Search chats, tasks, files, and terminals")}
+                  aria-label={wbcT("rail.searchEverything", "Search chats, files, and terminals")}
                 />
               </div>
-            )}
-            {!collapsed && railMode === "chat" && (
-              <button
-                ref={newChatButtonRef}
-                data-cyrene-node-id="new_chat"
-                type="button"
-                className="wbc-project-new-chat"
-                onClick={onCreate}
-                title={wbcT("workbenchChat.newChat", "New chat")}
-                aria-label={wbcT("workbenchChat.newChat", "New chat")}
-              >{WBC_ICONS.plus}</button>
-            )}
-            {!collapsed && railMode === "task" && (
-              <button
-                type="button"
-                className="wbc-project-new-chat"
-                onClick={onCreateTask}
-                title={wbcT("rail.newTask", "New task")}
-                aria-label={wbcT("rail.newTask", "New task")}
-              >{WBC_ICONS.plus}</button>
             )}
             {collapseControl || (
               <button
@@ -2109,22 +2075,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
                 <header className="wbc-rail-section-label"><b>{wbcT("workbench.page.chat", "Chats")}</b><span>{filtered.length}</span></header>
                 <div className="wbc-rail-section-items">{filtered.map(function (chat) { return renderChatCard(chat); })}</div>
               </section> : null}
-              {taskRail.ordered.length ? <section className="wbc-rail-section wbc-unified-search-section is-task">
-                <header className="wbc-rail-section-label"><b>{wbcT("workbench.page.task", "Tasks")}</b><span>{taskRail.ordered.length}</span></header>
-                <div className="wbc-rail-section-items"><WbcTaskRailCards
-                  activeTaskId={activeTaskId}
-                  menuId={menuId}
-                  onDeleteTask={onDeleteTask}
-                  onRenameTask={setRenameTask}
-                  onSelectTask={onSelectTask}
-                  onTogglePinnedTask={onTogglePinnedTask}
-                  prepareDragImage={prepareRailDragImage}
-                  projectId={projectId}
-                  setMenuId={setMenuId}
-                  state={taskRail}
-                  tasks={taskRail.ordered}
-                /></div>
-              </section> : null}
               {codeAvailable && globalFileEntries.length ? <section className="wbc-rail-section wbc-unified-search-section is-file">
                 <header className="wbc-rail-section-label"><b>{wbcT("rail.files", "Files")}</b><span>{globalFileEntries.length}</span></header>
                 <div className="wbc-rail-section-items wbc-unified-search-file-items">{globalFileEntries.map(renderUnifiedFileResult)}</div>
@@ -2134,25 +2084,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
                 <div className="wbc-rail-section-items">{orderedTerminals.map(renderTerminalCard)}</div>
               </section> : null}
               {globalFilesError ? <div className="workbench-error wbc-unified-search-warning">{globalFilesError}</div> : null}
-              {unifiedSearchResultCount === 0 ? <div className="workbench-muted wbc-rail-empty">{wbcT("rail.noUnifiedMatches", "No matching chats, tasks, files, or terminals.")}</div> : null}
+              {unifiedSearchResultCount === 0 ? <div className="workbench-muted wbc-rail-empty">{wbcT("rail.noUnifiedMatches", "No matching chats, files, or terminals.")}</div> : null}
             </>}
           </div>
         </div>
-      ) : railMode === "task" ? (
-        <WbcTaskRailList
-          activeTaskId={activeTaskId}
-          loading={loading}
-          menuId={menuId}
-          onDeleteTask={onDeleteTask}
-          onRenameTask={setRenameTask}
-          onSelectTask={onSelectTask}
-          onTogglePinnedTask={onTogglePinnedTask}
-          prepareDragImage={prepareRailDragImage}
-          projectId={projectId}
-          query={query}
-          setMenuId={setMenuId}
-          state={taskRail}
-        />
       ) : (
       <div
         ref={chatListRef}
@@ -2303,7 +2238,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
           );
         })}
       </div>}
-      {codeAvailable && (railMode === "chat" || railMode === "task") && !collapsed ? (
+      {codeAvailable && railMode === "chat" && !collapsed ? (
         <section
           ref={projectToolsRef}
           className={"wbc-project-tools"
@@ -2449,7 +2384,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
           </div>
         </section>
       ) : null}
-      {pluginTools.length && (railMode === "chat" || railMode === "task") && !collapsed ? (
+      {pluginTools.length && railMode === "chat" && !collapsed ? (
         <section
           className="wbc-project-tools wbc-plugin-project-tools"
           aria-label={wbcT("rail.pluginTools", "Plugin tools")}
@@ -2541,12 +2476,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
         onRename={onRename}
       />
       <WbcRenameDialog
-        chat={renameTask}
-        entity="task"
-        onClose={function () { setRenameTask(null); }}
-        onRename={onRenameTask}
-      />
-      <WbcRenameDialog
         chat={renameGroup}
         entity="group"
         onClose={function () { setRenameGroup(null); }}
@@ -2564,7 +2493,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, tasks, terminal
 
 /* Shared host for module pages that need the exact Work rail without mounting
    the whole conversation workspace. The rail remains the single renderer for
-   chats, tasks, unified search, project files, terminals, drag ordering, and
+   chats, unified search, project files, terminals, drag ordering, and
    menus; this host only supplies the terminal collection normally owned by
    WorkbenchChatPage. */
 function WbcProjectRail(props) {

@@ -60,9 +60,8 @@ def _increment_worker(db_path: str, barrier) -> None:
 def test_patch_project_fields_preserves_unrelated_sqlite_state(tmp_path: Path) -> None:
     db_path = tmp_path / "cyrene.runtime.database"
     original = {
-        "projects": [{"id": "project_1", "sessions": [{"id": "session_1"}]}],
+        "projects": [{"id": "project_1", "description": "keep"}],
         "activeProjectId": "project_old",
-        "activeSessionId": "session_old",
         "unrelated": {"keep": True},
     }
     write_document(db_path, "projects", original, lambda: {"projects": []})
@@ -70,16 +69,15 @@ def test_patch_project_fields_preserves_unrelated_sqlite_state(tmp_path: Path) -
     changed = patch_document_fields(
         db_path,
         "projects",
-        {"activeProjectId": "project_1", "activeSessionId": ""},
+        {"activeProjectId": "project_1"},
         lambda: {"projects": []},
     )
 
-    assert changed == {"activeProjectId": "project_1", "activeSessionId": ""}
+    assert changed == {"activeProjectId": "project_1"}
     persisted = read_document(db_path, "projects", lambda: {"projects": []})
     assert persisted["projects"] == original["projects"]
     assert persisted["unrelated"] == {"keep": True}
     assert persisted["activeProjectId"] == "project_1"
-    assert persisted["activeSessionId"] == ""
 
 
 def test_concurrent_process_appends_are_merged_without_lost_updates(tmp_path: Path) -> None:
@@ -206,25 +204,22 @@ def test_notification_append_and_mark_read_do_not_overwrite_each_other(tmp_path:
 
 def test_remote_entity_deletion_wins_over_stale_local_edit(tmp_path: Path) -> None:
     db_path = str(tmp_path / "cyrene.runtime.database")
-    initial = {
-        "projects": [{
-            "id": "project_1",
-            "sessions": [{"id": "session_1", "status": "running", "runs": []}],
-        }]
-    }
+    initial = {"projects": [
+        {"id": "project_1", "description": "original"},
+        {"id": "project_2", "description": "keep"},
+    ]}
     write_document(db_path, "projects", initial, lambda: {"projects": []})
 
     stale_worker = read_document(db_path, "projects", lambda: {"projects": []})
     deleting_request = read_document(db_path, "projects", lambda: {"projects": []})
-    deleting_request["projects"][0]["sessions"] = []
+    deleting_request["projects"] = [deleting_request["projects"][1]]
     write_document(db_path, "projects", deleting_request, lambda: {"projects": []})
 
-    stale_worker["projects"][0]["sessions"][0]["status"] = "completed"
-    stale_worker["projects"][0]["sessions"][0]["runs"].append({"id": "run_1"})
+    stale_worker["projects"][0]["description"] = "stale edit"
     write_document(db_path, "projects", stale_worker, lambda: {"projects": []})
 
     persisted = read_document(db_path, "projects", lambda: {"projects": []})
-    assert persisted["projects"][0]["sessions"] == []
+    assert [item["id"] for item in persisted["projects"]] == ["project_2"]
 
 
 def test_concurrent_process_counter_increments_use_deltas(tmp_path: Path) -> None:

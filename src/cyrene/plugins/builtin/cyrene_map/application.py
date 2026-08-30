@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _amap_key() -> str:
-    from cyrene.runtime import config_store
+    from cyrene.platform import config_store
 
     return str(config_store.get_env("AMAP_API_KEY", "") or "").strip()
 
@@ -27,7 +27,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     context.on_startup(service.initialize)
     context.on_shutdown(service.shutdown)
     context.expose_frontend("map")
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )

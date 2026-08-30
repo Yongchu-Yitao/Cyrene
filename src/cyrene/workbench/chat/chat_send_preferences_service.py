@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cyrene.localization import app_language, localized, normalize_language
-from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 from cyrene.workbench.application.notifications import append_notification
 
 

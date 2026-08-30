@@ -152,7 +152,7 @@ async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_
 async def test_entity_pack_follows_toolbox_chain_and_shares_service_data(tmp_path):
     from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
     from cyrene.plugins.builtin.cyrene_entity import plugin_pack
-    from cyrene.runtime.database import init_db
+    from cyrene.platform.database import init_db
     from cyrene.plugins.builtin.cyrene_entity.service import EntityService
 
     db_path = str(tmp_path / "entities.db")
@@ -267,7 +267,7 @@ async def test_entity_pack_follows_toolbox_chain_and_shares_service_data(tmp_pat
 
 @pytest.mark.asyncio
 async def test_entity_service_coordinates_reminders_and_candidate_scope(tmp_path):
-    from cyrene.runtime.database import init_db
+    from cyrene.platform.database import init_db
     from cyrene.plugins.builtin.cyrene_entity.service import EntityService
     from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 

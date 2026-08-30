@@ -170,7 +170,7 @@ per-launch security values and should not be persisted manually.
 
 Cyrene records token usage and estimates cost for the model that actually
 served each response. An explicit saved price wins, followed by the built-in
-catalog in `cyrene.model_runtime.pricing`; an unknown unpriced model records
+catalog in `cyrene.model.pricing`; an unknown unpriced model records
 zero. User prices accept `input/output` or `input/cache-hit/output` per one
 million tokens. Prefix a value with `$` for USD or `¥` for CNY; unmarked values
 default to CNY. Recorded costs are normalized to CNY for aggregation, then

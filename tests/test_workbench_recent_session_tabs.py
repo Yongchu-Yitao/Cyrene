@@ -38,76 +38,9 @@ def _session_activity_script(body: str, setup: str = "") -> str:
     return services + setup + source + "\n" + body
 
 
-def test_topbar_uses_three_recent_task_and_conversation_tabs():
-    source = "\n".join([
-        _frontend_source("features/session/activity.jsx"),
-        _frontend_source("features/session/tabs-controller.jsx"),
-        _frontend_source("features/shell/app-lifecycle.jsx"),
-        _frontend_source("features/shell/topbar.jsx"),
-        _frontend_source("features/shell/shell-navigation.jsx"),
-        _frontend_source("features/shell/shell-composition.jsx"),
-        _frontend_source("workbench.jsx"),
-    ])
-
-    assert (
-        "function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedKeys, hiddenKeys, limit)"
-        in source
-    )
-    assert 'kind: "task"' in source
-    assert 'kind: "chat"' in source
-    assert "right.updatedAt.localeCompare(left.updatedAt)" in source
-    assert "recentOpenedSessionKeys" in source
-    assert 'writeSessionKeys("wb-recent-opened-sessions", next)' in source
-    assert 'rememberOpenedSession("chat", activeChatId)' in source
-    assert 'rememberOpenedSession("task", activeSessionId)' in source
-    assert 'className={"workbench-session-tab" + (isActive ? " active" : "")}' in source
-    assert 'item.kind === "chat"' in source
-    assert '{ type: "chat", projectId: item.projectId, chatId: item.id }' in source
-    assert '{ type: "task", projectId: item.projectId, sessionId: item.id }' in source
-    assert 'className="workbench-crumbs"' not in source
-
-
-def test_recent_session_merger_orders_mixed_items_and_caps_at_three():
-    script = _session_activity_script("""
-const projects = [
-  {id: "p1", name: "One", sessions: [
-    {id: "t1", title: "Older task", updatedAt: "2026-07-01T00:00:00Z"},
-    {id: "t2", title: "Newest task", updatedAt: "2026-07-04T00:00:00Z"}
-  ]},
-  {id: "p2", name: "Two", sessions: [
-    {id: "t3", title: "Middle task", updatedAt: "2026-07-02T00:00:00Z"}
-  ]}
-];
-const chats = {
-  p1: [{id: "c1", title: "Recent chat", updatedAt: "2026-07-03T00:00:00Z"}],
-  p2: [{id: "c2", title: "Old chat", updatedAt: "2026-06-01T00:00:00Z"}]
-};
-const opened = ["task:t3", "chat:c1", "task:t2"];
-const pinned = ["chat:c1"];
-const hidden = ["task:t2"];
-process.stdout.write(JSON.stringify(wbRecentSessionTabs(projects, chats, opened, pinned, hidden, 3)));
-"""
-    )
-    result = subprocess.run(
-        ["node", "-e", script],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-    )
-    items = json.loads(result.stdout)
-
-    assert [(item["kind"], item["id"]) for item in items] == [
-        ("chat", "c1"),
-        ("task", "t3"),
-        ("task", "t1"),
-    ]
-    assert items[0]["pinned"] is True
-
-
 def test_pinned_sessions_are_not_dropped_by_the_recent_tab_limit():
     script = _session_activity_script("""
-const projects = [{id: "p1", sessions: []}];
+const projects = [{id: "p1"}];
 const chats = {p1: [
   {id: "c1", title: "One"}, {id: "c2", title: "Two"},
   {id: "c3", title: "Three"}, {id: "c4", title: "Four"}
@@ -131,7 +64,7 @@ process.stdout.write(JSON.stringify(wbRecentSessionTabs(
 
 
 def test_existing_topbar_session_keeps_order_until_an_unshown_session_is_opened():
-    source = workbench_shell_source()
+    source = _frontend_source("features/session/activity.jsx")
     helper = source.split("function wbRememberOpenedSessionKey", 1)[1].split(
         "\nfunction wbDeliverResourceToChat", 1
     )[0]
@@ -139,14 +72,14 @@ def test_existing_topbar_session_keeps_order_until_an_unshown_session_is_opened(
         "function wbRememberOpenedSessionKey"
         + helper
         + """
-const initial = ["task:t1", "chat:c1", "task:t2"];
+const initial = ["chat:c1", "chat:c2", "chat:c3"];
 const visible = initial.slice();
-const existing = wbRememberOpenedSessionKey(initial, visible, "chat:c1", 20);
-const newlyOpened = wbRememberOpenedSessionKey(existing, visible, "task:t3", 20);
+const existing = wbRememberOpenedSessionKey(initial, visible, "chat:c2", 20);
+const newlyOpened = wbRememberOpenedSessionKey(existing, visible, "chat:c4", 20);
 const fallbackSnapshot = wbRememberOpenedSessionKey(
-  ["task:t1"],
-  ["task:t1", "chat:c1", "task:t2"],
-  "chat:c1",
+  ["chat:c1"],
+  ["chat:c1", "chat:c2", "chat:c3"],
+  "chat:c2",
   20
 );
 process.stdout.write(JSON.stringify({
@@ -166,15 +99,15 @@ process.stdout.write(JSON.stringify({
     )
     result = json.loads(completed.stdout)
 
-    assert result["existing"] == ["task:t1", "chat:c1", "task:t2"]
+    assert result["existing"] == ["chat:c1", "chat:c2", "chat:c3"]
     assert result["existingUsesSameArray"] is True
     assert result["newlyOpened"][:4] == [
-        "task:t3",
-        "task:t1",
+        "chat:c4",
         "chat:c1",
-        "task:t2",
+        "chat:c2",
+        "chat:c3",
     ]
-    assert result["fallbackSnapshot"] == ["task:t1", "chat:c1", "task:t2"]
+    assert result["fallbackSnapshot"] == ["chat:c1", "chat:c2", "chat:c3"]
 
 
 def test_recent_conversation_lists_stay_in_sync_with_chat_page():
@@ -315,91 +248,6 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     assert "pendingTopbarResourceRef" in chat
     assert 'resource.type === "browser"' in chat
     assert 'resource.type === "file"' in chat
-
-
-def test_session_activity_view_model_prioritizes_attention_and_preserves_active_tab():
-    source = workbench_shell_source()
-    helper = source.split("function wbVisibleSessionTabs", 1)[1].split(
-        "\nfunction wbRememberOpenedSessionKey", 1
-    )[0]
-    script = (
-        "function wbT(_key, fallback) { return fallback; }\nfunction wbVisibleSessionTabs"
-        + helper
-        + """
-const items = [
-  {kind:"task", id:"t1", source:{status:"idle"}},
-  {kind:"chat", id:"c1", source:{runStatus:"running"}},
-  {kind:"task", id:"t2", source:{status:"waiting_for_user", pendingQuestion:{id:"q1"}}},
-  {kind:"task", id:"t3", source:{status:"running", planStepCount:5, planCompletedCount:2, planCurrentIndex:3}},
-  {kind:"task", id:"t4", source:{status:"planning"}},
-  {kind:"chat", id:"c2", source:{status:"idle", messageCount:4}}
-];
-const layout = wbVisibleSessionTabs(items, "task:t3", 3);
-process.stdout.write(JSON.stringify({
-  visible: layout.visible.map((item) => item.id),
-  overflow: layout.overflow.map((item) => item.id),
-  attention: wbSessionActivityPhase(items[2], null, null),
-  running: wbSessionActivitySnapshot(items[3], null, null, null),
-  staticPlanning: wbSessionActivitySnapshot(items[4], null, null, null),
-  livePlanning: wbSessionActivitySnapshot(items[4], null, {active:true}, null),
-  settledChat: wbSessionActivitySnapshot(items[5], null, {
-    active:true,
-    activity:{kind:"reasoning", label:"phase2", detail:"deepseek-v4-flash"}
-  }, null),
-  finishedTool: wbSessionActivitySnapshot(items[3], null, {
-    active:false,
-    activity:{kind:"tool", label:"browser.navigate", detail:"completed"}
-  }, null),
-  liveTool: wbSessionActivitySnapshot(items[3], null, {
-    active:true,
-    activity:{kind:"tool", label:"browser.navigate", detail:"running"}
-  }, null),
-  runtimeWinsToolFailure: wbSessionActivitySnapshot(items[5], {
-    progress:[], activities:[]
-  }, {
-    status:"failed",
-    active:false,
-    activity:{kind:"tool", label:"shell", failed:true}
-  }, null)
-}));
-"""
-    )
-    completed = subprocess.run(
-        ["node", "-e", script],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-    )
-    result = json.loads(completed.stdout)
-
-    assert result["visible"] == ["t1", "c1", "t3"]
-    assert result["overflow"] == ["t2", "t4", "c2"]
-    assert result["attention"] == {
-        "phase": "attention",
-        "reason": "input",
-        "active": False,
-    }
-    assert result["running"]["phase"] == "running"
-    assert result["running"]["progress"] == {
-        "current": 3,
-        "completed": 2,
-        "total": 5,
-        "title": "",
-        "action": "",
-    }
-    assert result["running"]["capabilities"]["canPause"] is True
-    assert result["running"]["isLive"] is True
-    assert result["staticPlanning"]["phase"] == "planning"
-    assert result["staticPlanning"]["isLive"] is False
-    assert result["livePlanning"]["isLive"] is True
-    assert result["settledChat"]["phase"] == "completed"
-    assert result["settledChat"]["isLive"] is False
-    assert result["settledChat"]["activity"] is None
-    assert result["finishedTool"]["activity"] is None
-    assert result["liveTool"]["activity"]["label"] == "browser.navigate"
-    assert result["runtimeWinsToolFailure"]["phase"] == "running"
-    assert result["runtimeWinsToolFailure"]["isLive"] is True
 
 
 def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
@@ -587,29 +435,6 @@ def test_overflow_count_uses_the_i18n_parameter_position():
     )
 
     assert completed.stdout == "另有 8 个"
-
-
-def test_task_summary_exposes_compact_plan_progress_for_the_topbar():
-    from cyrene.workbench.projects.project_repository import _workbench_session_summary
-
-    summary = _workbench_session_summary(
-        {
-            "id": "task-1",
-            "projectId": "project-1",
-            "status": "running",
-            "plan": [
-                {"title": "Done", "status": "completed"},
-                {"title": "Inspect loader", "status": "running", "currentAction": "Reading files"},
-                {"title": "Verify", "status": "pending"},
-            ],
-        }
-    )
-
-    assert summary["planStepCount"] == 3
-    assert summary["planCompletedCount"] == 1
-    assert summary["planCurrentIndex"] == 2
-    assert summary["planCurrentTitle"] == "Inspect loader"
-    assert summary["planCurrentAction"] == "Reading files"
 
 
 def test_chat_summary_exposes_live_run_status_without_stale_running_state():

@@ -127,7 +127,7 @@ async def test_app_use_forces_visual_mode_and_rejects_cross_scheme_connect(monke
 @pytest.mark.asyncio
 async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
     from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     async def fake_rpc(_operation, _arguments, **_kwargs):
         return {
@@ -620,7 +620,7 @@ async def test_visual_activation_requires_measurement_with_a_bound_target(monkey
 @pytest.mark.asyncio
 async def test_measure_coordinates_crops_marks_and_returns_all_coordinate_spaces(monkeypatch):
     from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     calls = []
 
@@ -793,7 +793,7 @@ async def test_visual_type_rejected_input_requires_isolated_desktop_not_foregrou
 @pytest.mark.asyncio
 async def test_visual_click_scales_capture_coordinates_and_uses_foreground_quartz_click(monkeypatch):
     from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     calls = []
 
@@ -859,7 +859,7 @@ async def test_visual_click_scales_capture_coordinates_and_uses_foreground_quart
 @pytest.mark.asyncio
 async def test_visual_click_never_calls_semantic_find_or_press(monkeypatch):
     from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     calls = []
 
@@ -918,7 +918,7 @@ async def test_visual_click_rejects_removed_cross_scheme_fallback_arguments():
 @pytest.mark.asyncio
 async def test_visual_click_attributes_only_the_visual_pointer_action(monkeypatch):
     from cyrene.plugins.builtin.cyrene_desktop import _app_use_backend as app_use
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     async def fake_rpc(_operation, arguments, **_kwargs):
         capability = arguments.get("capability")

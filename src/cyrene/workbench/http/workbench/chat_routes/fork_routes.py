@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_fork_chat(service, chat: dict[str, Any], message_id: str, new_content: str):
-    from cyrene.agent_runtime.builtin import normalize_agent_binding
+    from cyrene.agents.builtin import normalize_agent_binding
 
     if not normalize_agent_binding(chat.get("agent") if isinstance(chat.get("agent"), dict) else None).is_builtin:
         return localized_error_response(

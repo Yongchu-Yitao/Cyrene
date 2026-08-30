@@ -1003,7 +1003,7 @@ def _memory_result_payload(response: Any) -> dict[str, Any]:
             parsed = _parse_json_object(str(arguments or ""))
             if parsed:
                 return parsed
-    from cyrene.model_runtime.messages import assistant_text
+    from cyrene.model.messages import assistant_text
 
     return _parse_json_object(assistant_text(response))
 

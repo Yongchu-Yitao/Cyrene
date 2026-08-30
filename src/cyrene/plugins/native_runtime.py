@@ -206,7 +206,7 @@ def resolve_tool_path(
     """Resolve a workspace path or a path explicitly exposed as an attachment."""
 
     raw = str(path_str or "").strip() or "."
-    from cyrene.runtime.attachments import resolve_managed_attachment_path
+    from cyrene.platform.attachments import resolve_managed_attachment_path
 
     managed = resolve_managed_attachment_path(raw)
     if managed is not None:

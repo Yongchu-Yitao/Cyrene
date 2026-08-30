@@ -1,6 +1,6 @@
 import { workbenchServices } from "./shared/runtime/services.jsx"
 // Cyrene workbench data adapter.
-// Keeps the new Project/Task Session UI decoupled from the legacy chat shell.
+// Conversation-native project data adapter.
 
 // Pending-question kinds that are real permission / elevation requests and must
 // render as a binary 确认/拒绝 authorization card. This MUST mirror the backend's
@@ -19,7 +19,6 @@ var WB_PERMISSION_QUESTION_KINDS = {
   destructive_confirmation: true,
   self_configuration_confirmation: true,
   host_lifecycle_confirmation: true,
-  task_permission_request: true,
   git_commit: true,
 };
 function wbIsPermissionQuestionKind(kind) {
@@ -41,22 +40,11 @@ function wbIsPermissionQuestionKind(kind) {
   }
 
   // Route through the shared wrapper (workbench-api.jsx) for one normalized fetch
-  // path across the workbench. Default timeout:0 (no death timeout) because most
-  // task-session endpoints below drive open-ended agent/LLM work that legitimately
-  // runs for minutes; toast:false keeps each caller's existing error handling as
+  // path across the workbench. Default timeout:0 (no death timeout) because agent
+  // endpoints may run for minutes; toast:false keeps each caller's error handling as
   // the single feedback channel. Quick CRUD callers may pass a `timeout` per call.
   function apiJson(url, options) {
     return workbenchServices.api().json(url, { toast: false, timeout: 0, ...(options || {}) });
-  }
-
-  function currentUiInstanceId() {
-    return window.CyreneUI.has("uiSurface")
-      ? workbenchServices.uiSurface().getInstanceId()
-      : "";
-  }
-
-  function newClientRequestId(prefix) {
-    return String(prefix || "task") + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 11);
   }
 
   function codexLimitBuckets(limits) {
@@ -158,47 +146,17 @@ function wbIsPermissionQuestionKind(kind) {
   function normalizeStore(payload) {
     var store = payload && typeof payload === "object" ? payload : {};
     var projects = Array.isArray(store.projects) ? store.projects : [];
-    projects.forEach(function (project) {
-      if (!Array.isArray(project.sessions)) project.sessions = [];
-      project.sessions.forEach(function (session) {
-        var isSummary = !!session.isSummary;
-        if (!Array.isArray(session.constraints)) session.constraints = [];
-        if (!Array.isArray(session.plan)) session.plan = [];
-        if (!Number.isFinite(Number(session.planRevision))) session.planRevision = 0;
-        if (!Number.isFinite(Number(session.planDefinitionRevision))) session.planDefinitionRevision = 0;
-        session.plan.forEach(function (step, index) {
-          if (!step || typeof step !== "object") return;
-          if (!Array.isArray(step.dependsOn)) step.dependsOn = [];
-          step.order = index + 1;
-        });
-        if (!isSummary && !Array.isArray(session.events)) session.events = [];
-        if (!isSummary && !Array.isArray(session.runs)) session.runs = [];
-        if (!isSummary && !Array.isArray(session.artifacts)) session.artifacts = [];
-        if (!isSummary && !Array.isArray(session.acceptanceCriteria)) session.acceptanceCriteria = [];
-        if (session.goalLoop && typeof session.goalLoop !== "object") session.goalLoop = null;
-      });
-    });
     var activeProjectId = store.activeProjectId || (projects[0] && projects[0].id) || "";
     var activeProject = projects.find(function (project) { return project.id === activeProjectId; }) || projects[0] || null;
-    var activeSessionId = store.activeSessionId || (activeProject && activeProject.sessions[0] && activeProject.sessions[0].id) || "";
-    var activeSession = activeProject
-      ? (activeProject.sessions.find(function (session) { return session.id === activeSessionId; }) || activeProject.sessions[0] || null)
-      : null;
     return {
       projects: projects,
       activeProjectId: activeProject ? activeProject.id : "",
-      activeSessionId: activeSession ? activeSession.id : "",
       activeProject: activeProject,
-      activeSession: activeSession,
     };
   }
 
   function fetchProjects() {
     return apiJson("/api/projects?detail=summary").then(normalizeStore);
-  }
-
-  function fetchSession(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId));
   }
 
   function createProject(input) {
@@ -223,22 +181,6 @@ function wbIsPermissionQuestionKind(kind) {
     }).then(normalizeStore);
   }
 
-  function createSession(projectId, input) {
-    return apiJson("/api/projects/" + encodeURIComponent(projectId) + "/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input || {}),
-    }).then(normalizeStore);
-  }
-
-  function createFollowUp(sessionId, input) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/follow-up", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input || {}),
-    }).then(normalizeStore);
-  }
-
   function fetchNotifications(tab, limit, visibleView) {
     var qs = "?tab=" + encodeURIComponent(tab || "all") + "&limit=" + encodeURIComponent(limit || 80);
     if (visibleView && visibleView.chatId) {
@@ -260,333 +202,14 @@ function wbIsPermissionQuestionKind(kind) {
     });
   }
 
-  // Ask the agent to (re)generate the onboarding questions for a project's
-  // "初始化项目" session, tailored to the project's name/description/template.
-  function generateInitForm(projectId) {
-    var lang = workbenchServices.i18n().getLang().trim();
-    return apiJson("/api/projects/" + encodeURIComponent(projectId) + "/init/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lang: lang }),
-    }).then(normalizeStore);
-  }
-
-  // Finalize initialization: persist answers, write the project brief, and seed
-  // the first real task. Returns the normalized store (active = first task).
-  function submitInit(sessionId, answers) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/init/submit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answers: answers || {} }),
-    }).then(normalizeStore);
-  }
-
-  function reviseInitPlan(sessionId, feedback, taskPlan) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/init/plan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        feedback: feedback || "",
-        taskPlan: Array.isArray(taskPlan) ? taskPlan : [],
-      }),
-    }).then(normalizeStore);
-  }
-
-  function confirmInitPlan(sessionId, taskPlan) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/init/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ taskPlan: Array.isArray(taskPlan) ? taskPlan : [] }),
-    }).then(normalizeStore);
-  }
-
-  // options: { attachments, mode, command, signal }
-  function createRun(sessionId, input, options) {
-    options = options || {};
-    var init = {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        input: input || "",
-        clientRequestId: options.clientRequestId || newClientRequestId("task_run"),
-        attachments: options.attachments || [],
-        mode: options.mode || undefined,
-        command: options.command || undefined,
-        model: options.model || undefined,
-        reasoningEffort: options.reasoningEffort || "",
-        stepId: options.stepId || undefined,
-        stepTitle: options.stepTitle || undefined,
-        action: options.action || undefined,
-        meta: options.meta || undefined,
-        planDefinitionRevision: options.planDefinitionRevision,
-        uiInstanceId: currentUiInstanceId(),
-      }),
-    };
-    if (options.signal) init.signal = options.signal;
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/runs", init).then(normalizeStore);
-  }
-
-  // Generate a REAL execution plan from the session goal (+ optional revision
-  // feedback). The agent explores the project workspace server-side; no agent
-  // work runs here — it only fills session.plan (all steps pending).
-  // Run deep reflection over a task's accumulated history; attaches the packet
-  // to session.reflection (used by replanning + execution).
-  function reflect(sessionId, options) {
-    options = options || {};
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/reflect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ focus: options.focus || "", goalGap: options.goalGap || "" }),
-    }).then(normalizeStore);
-  }
-
-  // Independent acceptance agent verifies criteria against the real results.
-  function verify(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    }).then(normalizeStore);
-  }
-
-  // Reflect on a failed task, then fork a fresh session carrying the packet.
-  function reflectAndFork(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/reflect-and-fork", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    }).then(normalizeStore);
-  }
-
-  // Accept a sibling-reflection hint → merge its packet into this session.
-  function acceptHint(sessionId, hintId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/hints/" + encodeURIComponent(hintId) + "/accept", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-    }).then(normalizeStore);
-  }
-
-  // Dismiss a sibling-reflection hint (no change to this session).
-  function dismissHint(sessionId, hintId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/hints/" + encodeURIComponent(hintId) + "/dismiss", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-    }).then(normalizeStore);
-  }
-
-  function generatePlan(sessionId, goal, options) {
-    options = options || {};
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/plan/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        goal: goal || "",
-        feedback: options.feedback || "",
-        autoStart: !!options.autoStart,
-        operation: options.operation || "auto",
-        basePlanRevision: options.basePlanRevision,
-      }),
-    }).then(normalizeStore);
-  }
-
-  function generateAcceptance(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/acceptance/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    }).then(normalizeStore);
-  }
-
-  function previewGoalLoop(sessionId, input) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input || {}),
-    });
-  }
-
-  function startGoalLoop(sessionId, draftId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ draftId: draftId || "" }),
-    }).then(normalizeStore);
-  }
-
-  function pauseGoalLoop(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/pause", {
-      method: "POST",
-    }).then(normalizeStore);
-  }
-
-  function resumeGoalLoop(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/resume", {
-      method: "POST",
-    }).then(normalizeStore);
-  }
-
-  function cancelGoalLoop(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/cancel", {
-      method: "POST",
-    }).then(normalizeStore);
-  }
-
-  function updateGoalLoopLimits(sessionId, input) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/limits", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input || {}),
-    }).then(normalizeStore);
-  }
-
-  function fetchGoalLoop(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop");
-  }
-
-  // Intent-aware composer entry: the server classifies the input and routes it
-  // to a direct answer / direct action / plan generation, returning ``replyKind``.
-  // Not every input becomes a plan — see the /dispatch endpoint.
-  function dispatch(sessionId, input, options) {
-    options = options || {};
-    var init = {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        input: input || "",
-        clientRequestId: options.clientRequestId || newClientRequestId("task_dispatch"),
-        attachments: options.attachments || [],
-        mode: options.mode || undefined,
-        command: options.command || undefined,
-        model: options.model || undefined,
-        reasoningEffort: options.reasoningEffort || "",
-        basePlanRevision: options.basePlanRevision,
-        uiInstanceId: currentUiInstanceId(),
-      }),
-    };
-    if (options.signal) init.signal = options.signal;
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/dispatch", init).then(normalizeStore);
-  }
-
-  // Continue an acceptance-failed task in the same session.  The dedicated
-  // command bypasses intent classification and lets the backend attach the
-  // latest per-criterion evidence to the repair prompt.
-  function continueAcceptanceRepair(sessionId, input, options) {
-    options = options || {};
-    return dispatch(sessionId, input, {
-      command: "workbench-task-repair",
-      attachments: options.attachments || [],
-      mode: options.mode,
-      model: options.model,
-      reasoningEffort: options.reasoningEffort,
-    });
-  }
-
-  function sendChat(sessionId, message, options) {
-    options = options || {};
-    var init = {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: message || "",
-        clientRequestId: options.clientRequestId || newClientRequestId("task_chat"),
-        attachments: options.attachments || [],
-        mode: options.mode || undefined,
-        command: options.command || undefined,
-        model: options.model || undefined,
-        reasoningEffort: options.reasoningEffort || "",
-        uiInstanceId: currentUiInstanceId(),
-      }),
-    };
-    if (options.signal) init.signal = options.signal;
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/chat", init).then(normalizeStore);
-  }
-
-  // Answer a paused run's permission / clarification question → resume the round.
-  function answer(sessionId, questionId, answerText) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/answer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question_id: questionId || "",
-        answer: answerText || "",
-        uiInstanceId: currentUiInstanceId(),
-      }),
-    }).then(normalizeStore);
-  }
-
-  function fetchFileDiff(sessionId, path) {
-    return apiJson(
-      "/api/task-sessions/" + encodeURIComponent(sessionId) + "/files/diff?path=" + encodeURIComponent(path || "")
-    );
-  }
-
-  // Validate a workspace-relative context-file path. Resolves to
-  // { exists, path, isDir, error? }; never throws (a 400 still carries a body so
-  // the per-step file editor can show inline feedback).
-  function checkWorkspacePath(sessionId, path) {
-    return fetch(
-      "/api/task-sessions/" + encodeURIComponent(sessionId) + "/workspace/exists?path=" + encodeURIComponent(path || "")
-    )
-      .then(function (r) { return r.json().catch(function () { return {}; }); })
-      .catch(function () { return { exists: false, path: path || "", error: wbModelT("common.networkError", "Network error") }; });
-  }
-
-  // Persist the active project (and optionally session) to the server store so
-  // the selection survives page refresh. The endpoint intentionally returns a
-  // tiny acknowledgement rather than retransmitting the multi-megabyte store.
-  function setActiveProject(projectId, sessionId) {
+  function setActiveProject(projectId) {
     var body = {};
     if (projectId != null) body.projectId = projectId;
-    if (sessionId != null) body.sessionId = sessionId;
     return apiJson("/api/workbench/activate", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-  }
-
-  // Stop the active agent run for a session (best-effort, per-session interrupt).
-  function interruptSession(sessionId) {
-    return fetch("/api/workbench/chats/" + encodeURIComponent(sessionId) + "/interrupt", { method: "POST" })
-      .then(function (r) { return r.json().catch(function () { return {}; }); })
-      .catch(function () { return {}; });
-  }
-
-  // Upload files through the Workbench attachment endpoint. Returns attachment
-  // objects ({ id, name, path, content_type, size, kind, url, ... }).
-  function uploadAttachments(files) {
-    var list = Array.prototype.slice.call(files || []);
-    if (!list.length) return Promise.resolve([]);
-    var form = new FormData();
-    list.forEach(function (f) { form.append("files", f); });
-    return fetch("/api/workbench/uploads", { method: "POST", body: form }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (payload) {
-        if (!r.ok) throw new Error(payload.error || ("HTTP " + r.status));
-        return Array.isArray(payload.files) ? payload.files : [];
-      });
-    });
-  }
-
-  function deleteSession(sessionId) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId), {
-      method: "DELETE",
-    }).then(normalizeStore);
-  }
-
-  // Generic session patch — drives the task state machine entirely from the
-  // client (status / plan / acceptanceCriteria / events / artifacts ...).
-  function patchSession(sessionId, patch) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch || {}),
-    }).then(normalizeStore);
-  }
-
-  function mutatePlan(sessionId, input) {
-    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/plan", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input || {}),
-    }).then(normalizeStore);
   }
 
   function statusText(status) {
@@ -628,32 +251,6 @@ function wbIsPermissionQuestionKind(kind) {
   }
 
   // Short human-readable label for a run-log event type.
-  function eventLabel(type) {
-    var map = {
-      UserMessageEvent: ["event.userMessage", "User input"],
-      AgentResponseEvent: ["event.agentResponse", "Agent response"],
-      PlanUpdatedEvent: ["event.planUpdated", "Plan updated"],
-      PlanGenerated: ["event.planGenerated", "Plan generated"],
-      PlanRevised: ["event.planRevised", "Plan revised"],
-      PlanApproved: ["event.planApproved", "Plan approved"],
-      ActionRejected: ["event.actionRejected", "Action rejected"],
-      ExecutionStarted: ["event.executionStarted", "Execution started"],
-      ExecutionFinished: ["event.executionFinished", "Execution finished"],
-      ExecutionFailed: ["event.executionFailed", "Execution failed"],
-      Paused: ["event.paused", "Task paused"],
-      Resumed: ["event.resumed", "Task resumed"],
-      StepSkipped: ["event.stepSkipped", "Step skipped"],
-      TaskCompleted: ["event.taskCompleted", "Task completed"],
-      Reopened: ["event.reopened", "Reopened"],
-      Cancelled: ["event.cancelled", "Task cancelled"],
-      ToolCallEvent: ["event.toolCall", "Tool call"],
-      LlmCallEvent: ["event.llmCall", "Model reasoning"],
-      SubagentStatusEvent: ["event.subagentStatus", "Subagent status"],
-    };
-    var item = map[String(type || "")];
-    return item ? wbModelT(item[0], item[1]) : String(type || wbModelT("event.generic", "Event"));
-  }
-
   function formatTime(value) {
     if (!value) return "—";
     try {
@@ -737,304 +334,22 @@ function wbIsPermissionQuestionKind(kind) {
     return "linear-gradient(135deg, " + pair[0] + ", " + pair[1] + ")";
   }
 
-  // ---- State-machine data helpers (pure) ----------------------------------
-
-  function shortId(prefix) {
-    return String(prefix || "id") + "_" + Math.random().toString(36).slice(2, 12);
-  }
-
-  // Build a default execution plan. Mirrors the backend's base steps so a plan
-  // generated client-side looks consistent with one the agent produced.
-  function buildPlanSteps(goal, constraints) {
-    var titles = [
-      wbModelT("task.defaultPlan.understand", "Understand the goal and constraints"),
-      wbModelT("task.defaultPlan.readContext", "Read the project context"),
-      wbModelT("task.defaultPlan.analyzeFiles", "Analyze the relevant file structure"),
-      wbModelT("task.defaultPlan.design", "Design the execution approach"),
-      wbModelT("task.defaultPlan.implement", "Implement or generate the changes"),
-      wbModelT("task.defaultPlan.verify", "Verify the results and summarize"),
-    ];
-    return titles.map(function (title, index) {
-      return {
-        id: shortId("step"),
-        title: title,
-        description: "",
-        status: "pending",
-        order: index + 1,
-        dependsOn: [],
-        currentAction: "",
-        relatedFiles: [],
-        progressEvents: [],
-        toolCalls: [],
-        artifacts: [],
-        error: null,
-      };
-    });
-  }
-
-  function buildAcceptance(goal, constraints) {
-    var items = (Array.isArray(constraints) ? constraints : [])
-      .map(function (item) { return String(item || "").trim(); })
-      .filter(Boolean)
-      .slice(0, 4);
-    if (!items.length) items = [
-      wbModelT("task.defaultAcceptance.goal", "The task goal is clear"),
-      wbModelT("task.defaultAcceptance.plan", "An execution plan has been created"),
-      wbModelT("task.defaultAcceptance.changes", "Relevant changes are traceable"),
-      wbModelT("task.defaultAcceptance.summary", "A final summary has been provided"),
-    ];
-    return items.map(function (text) {
-      return { id: shortId("accept"), text: text, status: "pending" };
-    });
-  }
-
-  // Summary shown in the "需要你确认" card before a sensitive run.
-  function confirmSummary(session) {
-    var plan = session && Array.isArray(session.plan) ? session.plan : [];
-    var actions = plan.slice(0, 5).map(function (step) { return step.title; });
-    if (!actions.length) actions = [wbModelT("task.confirm.executeCurrent", "Execute the current task")];
-    var constraints = session && Array.isArray(session.constraints) ? session.constraints : [];
-    var riskLevel = constraints.length ? "medium" : "low";
-    return {
-      actions: actions,
-      scope: [
-        wbModelT("task.confirm.scope.execution", "Current task workspace"),
-        wbModelT("task.confirm.scope.context", "Right-side context and run log"),
-        wbModelT("task.confirm.scope.acceptance", "Acceptance criteria and artifacts"),
-      ],
-      riskLevel: riskLevel,
-      risk: riskLevel === "medium" ? wbModelT("task.risk.medium", "Medium") : wbModelT("task.risk.low", "Low"),
-      files: [],
-    };
-  }
-
-  function makeEvent(type, body, extra) {
-    return Object.assign(
-      { id: shortId("event"), type: type, createdAt: new Date().toISOString(), body: body || "" },
-      extra || {}
-    );
-  }
-
-  // Returns a NEW events array with one appended (never mutates the session).
-  function withEvent(session, type, body, extra) {
-    var events = session && Array.isArray(session.events) ? session.events.slice() : [];
-    events.push(makeEvent(type, body, extra));
-    return events;
-  }
-
-  // Stamp a step's lifecycle timing so the plan card can show 时间/时长:
-  // record startedAt on the running transition and a concrete durationSec
-  // (start → now) once it completes.
-  function applyStepTiming(step, status, nowIso) {
-    if (status === "running" && !step.startedAt) step.startedAt = nowIso;
-    if (status === "completed" || status === "done") {
-      if (!step.completedAt) step.completedAt = nowIso;
-      if (step.startedAt && step.durationSec == null) {
-        var sec = Math.round((Date.parse(nowIso) - Date.parse(step.startedAt)) / 1000);
-        if (sec >= 1) step.durationSec = sec;
-      }
-    }
-    return step;
-  }
-
-  function markStep(plan, index, status, action) {
-    if (!Array.isArray(plan)) return [];
-    var now = new Date().toISOString();
-    return plan.map(function (step, i) {
-      if (i !== index) return step;
-      var next = Object.assign({}, step, {
-        status: status,
-        currentAction: action != null ? action : step.currentAction,
-        updatedAt: now,
-      });
-      return applyStepTiming(next, status, now);
-    });
-  }
-
-  function markStepById(plan, stepId, status, action) {
-    if (!Array.isArray(plan)) return [];
-    var now = new Date().toISOString();
-    return plan.map(function (step) {
-      if (!step || step.id !== stepId) return step;
-      var next = Object.assign({}, step, {
-        status: status,
-        currentAction: action != null ? action : step.currentAction,
-        updatedAt: now,
-      });
-      return applyStepTiming(next, status, now);
-    });
-  }
-
-  function doneDependencyStatus(status) {
-    return status === "completed" || status === "done";
-  }
-
-  function unmetDependencyIds(plan, step) {
-    if (!step) return [];
-    var byId = {};
-    (Array.isArray(plan) ? plan : []).forEach(function (item) {
-      if (item && item.id) byId[item.id] = item;
-    });
-    return (Array.isArray(step.dependsOn) ? step.dependsOn : []).filter(function (dependencyId) {
-      var dependency = byId[dependencyId];
-      return !dependency || !doneDependencyStatus(dependency.status);
-    });
-  }
-
-  function validatePlanGraph(plan) {
-    var items = Array.isArray(plan) ? plan : [];
-    var ids = {};
-    var positions = {};
-    for (var i = 0; i < items.length; i++) {
-      var step = items[i];
-      var stepId = String(step && step.id || "");
-      if (!stepId || ids[stepId]) return { valid: false, code: "duplicate_step_id" };
-      ids[stepId] = step;
-      positions[stepId] = i;
-    }
-    for (var j = 0; j < items.length; j++) {
-      var current = items[j];
-      var dependencies = Array.isArray(current.dependsOn) ? current.dependsOn : [];
-      for (var d = 0; d < dependencies.length; d++) {
-        var dependencyId = dependencies[d];
-        if (dependencyId === current.id) return { valid: false, code: "self_dependency", stepId: current.id };
-        if (!ids[dependencyId]) return { valid: false, code: "missing_dependency", stepId: current.id };
-        if (positions[dependencyId] >= j) {
-          return { valid: false, code: "dependency_order", stepId: current.id, dependencyId: dependencyId };
-        }
-      }
-    }
-    return { valid: true };
-  }
-
-  function findNextRunnableStep(plan) {
-    var items = Array.isArray(plan) ? plan : [];
-    for (var i = 0; i < items.length; i++) {
-      var step = items[i];
-      if (!step || isResolvedStepStatus(step.status) || step.status === "running") continue;
-      if (unmetDependencyIds(items, step).length === 0) return step;
-    }
-    return null;
-  }
-
-  function markAllSteps(plan, status) {
-    if (!Array.isArray(plan)) return [];
-    var now = new Date().toISOString();
-    return plan.map(function (step) {
-      var next = Object.assign({}, step, { status: status, updatedAt: now });
-      return applyStepTiming(next, status, now);
-    });
-  }
-
-  function markAllAcceptance(items, status) {
-    if (!Array.isArray(items)) return [];
-    return items.map(function (item) { return Object.assign({}, item, { status: status }); });
-  }
-
-  function isDoneStepStatus(status) {
-    return status === "completed" || status === "done";
-  }
-
-  function isResolvedStepStatus(status) {
-    return isDoneStepStatus(status) || status === "skipped";
-  }
-
-  function hasUnresolvedStartedSteps(plan) {
-    if (!Array.isArray(plan)) return false;
-    return plan.some(function (step) {
-      if (!step) return false;
-      var status = step.status || "pending";
-      return status !== "pending" && !isResolvedStepStatus(status);
-    });
-  }
-
-  // Artifacts are real, downloadable files only. Never manufacture summaries
-  // or task briefs just to make this collection non-empty.
-  function ensureArtifacts(session) {
-    var arr = session && Array.isArray(session.artifacts) ? session.artifacts.slice() : [];
-    var seen = Object.create(null);
-    return arr.filter(function (artifact) {
-      if (!artifact || artifact.type !== "file_change" || !artifact.id) return false;
-      var key = String(artifact.path || artifact.name || "").trim();
-      if (!key || seen[key]) return false;
-      seen[key] = true;
-      return true;
-    });
-  }
-
-  // Heuristic: does this composer message ask for something beyond the current
-  // task (rule 2 — "Agent 不应脱离当前任务")?
-  function looksOutOfScope(text) {
-    var src = String(text || "");
-    return /(顺便|另外|额外|再帮我|再做|加一个新的|重新做一个|新建一个)/.test(src);
-  }
-
   var service = {
     normalizeStore: normalizeStore,
-    fetchSession: fetchSession,
     fetchProjects: fetchProjects,
     createProject: createProject,
     updateProject: updateProject,
     deleteProject: deleteProject,
-    createSession: createSession,
-    createFollowUp: createFollowUp,
-    deleteSession: deleteSession,
     fetchNotifications: fetchNotifications,
     markNotificationsRead: markNotificationsRead,
-    generateInitForm: generateInitForm,
-    submitInit: submitInit,
-    reviseInitPlan: reviseInitPlan,
-    confirmInitPlan: confirmInitPlan,
-    createRun: createRun,
-    reflect: reflect,
-    verify: verify,
-    reflectAndFork: reflectAndFork,
-    acceptHint: acceptHint,
-    dismissHint: dismissHint,
-    generatePlan: generatePlan,
-    generateAcceptance: generateAcceptance,
-    previewGoalLoop: previewGoalLoop,
-    startGoalLoop: startGoalLoop,
-    pauseGoalLoop: pauseGoalLoop,
-    resumeGoalLoop: resumeGoalLoop,
-    cancelGoalLoop: cancelGoalLoop,
-    updateGoalLoopLimits: updateGoalLoopLimits,
-    fetchGoalLoop: fetchGoalLoop,
-    dispatch: dispatch,
-    continueAcceptanceRepair: continueAcceptanceRepair,
-    sendChat: sendChat,
-    answer: answer,
-    fetchFileDiff: fetchFileDiff,
-    checkWorkspacePath: checkWorkspacePath,
-    patchSession: patchSession,
-    mutatePlan: mutatePlan,
     setActiveProject: setActiveProject,
-    interruptSession: interruptSession,
-    uploadAttachments: uploadAttachments,
     statusText: statusText,
     statusTone: statusTone,
-    eventLabel: eventLabel,
     formatTime: formatTime,
     formatRelativeTime: formatRelativeTime,
     initials: initials,
     pathLabel: pathLabel,
     projectGradient: projectGradient,
-    shortId: shortId,
-    buildPlanSteps: buildPlanSteps,
-    buildAcceptance: buildAcceptance,
-    confirmSummary: confirmSummary,
-    makeEvent: makeEvent,
-    withEvent: withEvent,
-    markStep: markStep,
-    markStepById: markStepById,
-    markAllSteps: markAllSteps,
-    markAllAcceptance: markAllAcceptance,
-    hasUnresolvedStartedSteps: hasUnresolvedStartedSteps,
-    unmetDependencyIds: unmetDependencyIds,
-    validatePlanGraph: validatePlanGraph,
-    findNextRunnableStep: findNextRunnableStep,
-    ensureArtifacts: ensureArtifacts,
-    looksOutOfScope: looksOutOfScope,
     isPermissionQuestionKind: wbIsPermissionQuestionKind,
     codexLimitBuckets: codexLimitBuckets,
     codexWindowLabel: codexWindowLabel,

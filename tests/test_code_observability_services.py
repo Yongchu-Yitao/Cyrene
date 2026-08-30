@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from cyrene.observability.debug_event_repository import DebugEventRepository
-from cyrene.runtime.log_repository import LogRepository, LogRepositoryError
+from cyrene.platform.log_repository import LogRepository, LogRepositoryError
 from cyrene.workbench.artifacts import code_format_service as format_module
 from cyrene.plugins.builtin.cyrene_code.code_format_service import CodeFormatService
 from cyrene.plugins.builtin.cyrene_code.project_files import ProjectFileService

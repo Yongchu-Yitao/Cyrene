@@ -294,6 +294,60 @@ def test_permission_review_projects_to_unified_workbench_event():
     assert projected[0]["payload"] == event.data
 
 
+def test_resource_presentation_projects_through_tool_activity_events():
+    presentation = {
+        "locations": [{
+            "kind": "file",
+            "access": "write",
+            "phase": "started",
+            "projectId": "project-1",
+            "path": "src/app.py",
+        }],
+        "reveal": True,
+        "phase": "started",
+    }
+    started = AgentSessionEvent(
+        sequence=4,
+        type="assistant.tool_calls",
+        tree_id="tree-1",
+        run_id="run-1",
+        node_id="assistant-1",
+        time=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        data={"tool_calls": [{
+            "id": "call-1",
+            "name": "Write",
+            "arguments": {"path": "src/app.py", "content": "value = 1"},
+            "presentation": presentation,
+        }]},
+    )
+    projected_started = workbench_events(started)
+    assert projected_started[0]["payload"]["presentation"] == presentation
+
+    completed_presentation = {
+        **presentation,
+        "phase": "completed",
+        "locations": [{**presentation["locations"][0], "phase": "completed"}],
+    }
+    completed = AgentSessionEvent(
+        sequence=5,
+        type="tool.completed",
+        tree_id="tree-1",
+        run_id="run-1",
+        node_id="assistant-1",
+        time=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        data={
+            "call_id": "call-1",
+            "name": "Write",
+            "success": True,
+            "value": "ok",
+            "error": "",
+            "presentation": completed_presentation,
+        },
+    )
+    projected_completed = workbench_events(completed)
+    assert projected_completed[0]["payload"]["presentation"] == completed_presentation
+
+
 def model_registry(handler) -> PluginRegistry:
     registry = PluginRegistry()
     registry.register_pack(
@@ -333,6 +387,73 @@ def replace_model(registry: PluginRegistry, handler) -> None:
         source="test",
         replace=True,
     )
+
+
+def test_session_prepares_nested_resource_reveal_before_toolbox_execution(tmp_path):
+    async def model(_arguments, _context):
+        return {"content": "", "tool_calls": []}
+
+    def edit_resource(_arguments, _context):
+        return "ok"
+
+    registry = model_registry(model)
+    registry.register_plugin(
+        Plugin(
+            "DeferredEdit",
+            "edit a file",
+            {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            edit_resource,
+            metadata={"resource_effects": ({
+                "argument_path": ("path",),
+                "kind": "file",
+                "access": "write",
+                "phase": "both",
+            },)},
+        ),
+        source="test-resource",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    workspace = tmp_path / "workspace"
+    plugin_directory.mkdir()
+    workspace.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        workspace,
+        plugin_directory,
+        tree_id="resource-chat",
+        registry=registry,
+        plugin_context_data={"project_id": "project-1"},
+    )
+    prepared = session._prepare_resource_tool_calls([{
+        "id": "call-1",
+        "name": "toolbox",
+        "arguments": {
+            "operation": "invoke",
+            "name": "DeferredEdit",
+            "arguments": {"path": "src/app.py", "reveal": True},
+        },
+    }])[0]
+
+    assert prepared["arguments"]["arguments"] == {"path": "src/app.py"}
+    assert prepared["resource_plugin_name"] == "DeferredEdit"
+    assert prepared["resource_reveal"] is True
+    assert prepared["presentation"] == {
+        "locations": [{
+            "kind": "file",
+            "access": "write",
+            "phase": "started",
+            "projectId": "project-1",
+            "path": "src/app.py",
+        }],
+        "reveal": True,
+        "phase": "started",
+    }
+    session.close()
 
 
 def test_plain_chat_bridge_submits_publishes_and_forwards_plugin_context(tmp_path):
@@ -430,19 +551,17 @@ def test_plain_chat_bridge_submits_publishes_and_forwards_plugin_context(tmp_pat
     assert reply_delta["delta"] == "echo=hello"
     reply_done = next(event for event in published if event["type"] == "reply_done")
     assert reply_done["response"] == "echo=hello"
-    assert {item["model_call_kind"] for item in model_contexts} == {
-        "agent",
-        "permission",
-    }
+    assert {item["model_call_kind"] for item in model_contexts} == {"agent"}
     assert all(item["chat_id"] == "chat-1" for item in model_contexts)
     assert all(item["run_id"] == "run-chat-1" for item in model_contexts)
     assert tool_contexts == [
         {
             "bot": session.plugin_context_data["bot"],
             "chat_id": "chat-1",
-                "db_path": "/tmp/workbench.sqlite3",
-                "language": "en",
-                "run_id": "run-chat-1",
+            "db_path": "/tmp/workbench.sqlite3",
+            "language": "en",
+            "run_id": "run-chat-1",
+            "permission_user_request": "use the probe",
             "model_call_kind": "tool",
             "user_request": "use the probe",
         }
@@ -954,7 +1073,7 @@ def test_live_session_reconciles_memory_soul_and_subagent_style_setups(tmp_path)
     session.close()
 
 
-def test_cancelling_workbench_task_cancels_and_persists_agent_run(tmp_path):
+def test_cancelling_workbench_run_cancels_and_persists_agent_state(tmp_path):
     started = threading.Event()
 
     async def blocking_model(_arguments, _context):
@@ -974,13 +1093,13 @@ def test_cancelling_workbench_task_cancels_and_persists_agent_run(tmp_path):
     bridge = WorkbenchSessionBridge(session)
 
     async def scenario():
-        task = asyncio.create_task(
+        run_task = asyncio.create_task(
             bridge.submit("wait forever", run_id="cancel-run")
         )
         assert await asyncio.to_thread(started.wait, 2)
-        task.cancel()
+        run_task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await run_task
 
     run(scenario())
     output = session.final_output("cancel-run")

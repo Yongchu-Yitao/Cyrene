@@ -24,7 +24,7 @@ _REAL_PIL_IMAGE = importlib.import_module("PIL.Image")
 def _isolate_persisted_app_language(monkeypatch):
     """Keep unit tests independent from the developer's saved UI language."""
     from cyrene.plugins import set_application_plugin_scope
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     set_application_plugin_scope(None)
     original_get = settings_store.get
@@ -74,7 +74,6 @@ _WORKBENCH_CHAT_SOURCE_FILES = (
     "features/chat/rail-model.jsx",
     "features/chat/rail-drop-controller.jsx",
     "features/chat/rail-ordering.jsx",
-    "features/chat/rail-tasks.jsx",
     "features/chat/rail.jsx",
     "features/chat/conversation.jsx",
     "features/chat/conversation-navigator.jsx",
@@ -88,7 +87,6 @@ _WORKBENCH_CHAT_SOURCE_FILES = (
     "features/chat/split-pane.jsx",
     "features/chat/split-drag-controller.jsx",
     "features/chat/split-selection-controller.jsx",
-    "features/chat/task-pane-controller.jsx",
     "features/chat/viewer.jsx",
     "features/chat/context-panel.jsx",
     "features/chat/terminal-controller.jsx",
@@ -112,24 +110,15 @@ _WORKBENCH_SHELL_SOURCE_FILES = (
     "features/shell/global-shortcuts.mjs",
     "features/shell/module-presentation.jsx",
     "features/shell/navigation-controller.jsx",
-    "features/shell/project-rail-controller.jsx",
     "features/shell/resource-controller.jsx",
     "features/shell/shell-navigation.jsx",
     "features/shell/shell-composition.jsx",
-    "features/task/controller.jsx",
-    "features/task/presentation.jsx",
-    "features/task/board.jsx",
-    "features/task/context-panel.jsx",
-    "features/task/index.jsx",
-    "features/task/project-controller.jsx",
-    "features/task/selection-controller.jsx",
-    "features/task/store-merge.jsx",
+    "features/chat/conversation-board.jsx",
     "workbench.jsx",
 )
 
 _WORKBENCH_STYLE_FILES = (
     "workbench.css",
-    "features/task/task.css",
     "features/settings/settings.css",
     "features/settings/extensions.css",
     "features/settings/controls.css",
@@ -243,7 +232,6 @@ def workbench_chat_route_source() -> str:
         src / "chat_routes" / "groups_routes.py",
         src / "chat_routes" / "delete_routes.py",
         src / "chat_routes" / "fork_routes.py",
-        src / "chat_routes" / "to_task_routes.py",
         src / "chat_routes" / "runs.py",
         src / "chat_routes" / "run_stream_routes.py",
         src / "chat_routes" / "run_send_routes.py",
@@ -266,12 +254,9 @@ def workbench_runtime_source() -> str:
         "artifacts",
         "chat",
         "control",
-        "goals",
         "persistence",
-        "planning",
         "projects",
         "sessions",
-        "tasks",
         "ui",
         "workspace",
     )
@@ -350,8 +335,8 @@ def pytest_runtest_call(item):
     if loop.is_closed() or loop.is_running():
         return
 
-    from cyrene.runtime.lifecycle import shutdown_background_work
-    from cyrene.runtime.task_lifecycle import cancel_and_wait
+    from cyrene.platform.lifecycle import shutdown_background_work
+    from cyrene.platform.task_lifecycle import cancel_and_wait
 
     loop.run_until_complete(shutdown_background_work())
     # Some tests intentionally exercise detached work that is outside the

@@ -18,11 +18,6 @@ function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
     var detachedChat = context.chatCache.details[detachedChatId]
       || (context.activeChat && String(context.activeChat.id || "") === detachedChatId ? context.activeChat : null);
     descriptor.title = detachedChat && detachedChat.title || wbcT("workbenchChat.chatSplitLabel", "Chat");
-  } else if (pane.kind === "task") {
-    var detachedTask = (Array.isArray(context.tasks) ? context.tasks : []).find(function (task) {
-      return String(task && task.id || "") === String(pane.payload || "");
-    });
-    descriptor.title = detachedTask && detachedTask.title || wbcT("workbench.page.task", "Task");
   } else if (pane.kind === "file" || pane.kind === "viewer") {
     var detachedFile = pane.payload;
     descriptor.title = detachedFile && detachedFile.name || wbcT("workbenchChat.viewer", "Viewer");

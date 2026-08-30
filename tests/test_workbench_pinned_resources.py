@@ -115,7 +115,7 @@ def test_pinned_library_file_keeps_resolvable_source_metadata(tmp_path):
 
 def test_selected_text_is_materialized_as_pinned_markdown_file(tmp_path, monkeypatch):
     service = _service(tmp_path)
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     export_dir = tmp_path / "exports"
     monkeypatch.setattr(attachments, "EXPORTS_DIR", export_dir)

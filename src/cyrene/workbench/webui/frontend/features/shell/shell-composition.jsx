@@ -1,9 +1,8 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WorkbenchTopbar } from "./topbar.jsx"
-import { RightContextPanel, TaskBoard, TaskWorkArea, WorkbenchTaskPane } from "../task/index.jsx"
+import { ConversationBoard } from "../chat/conversation-board.jsx"
 import { wbDeliverResourceToChat } from "../session/activity.jsx"
 import { loadSessionTabBrowserPreview, loadSessionTabResources } from "../session/resources.jsx"
-import { mergeTaskResponse } from "../task/store-merge.jsx"
 import { wbErrorText } from "../../shared/errors.jsx"
 
 var WorkbenchStableSurface = React.memo(
@@ -58,11 +57,9 @@ function wbOpenPinnedResource(context, resource) {
 }
 
 function wbOpenTopbarSession(context, item) {
-  if (!item) return;
-  context.sessions.rememberOpened(item.kind, item.id);
-  context.navigation.navigate(item.kind === "chat"
-    ? { type: "chat", projectId: item.projectId, chatId: item.id }
-    : { type: "task", projectId: item.projectId, sessionId: item.id });
+  if (!item || item.kind !== "chat") return;
+  context.sessions.rememberOpened("chat", item.id);
+  context.navigation.navigate({ type: "chat", projectId: item.projectId, chatId: item.id });
 }
 
 function wbOpenBrowserPage(context, page, owner) {
@@ -72,41 +69,6 @@ function wbOpenBrowserPage(context, page, owner) {
   if (!target) return;
   context.sessions.rememberOpened("chat", target.id);
   context.navigation.navigate({ type: "chat", projectId: target.projectId, chatId: target.id });
-}
-
-function wbPauseTopbarSession(context, item) {
-  if (!item || item.kind !== "task") return Promise.resolve(null);
-  var model = context.model;
-  var t = context.t;
-  return model.fetchSession(item.id).then(function (payload) {
-    var session = payload && payload.session;
-    if (!session) throw new Error(t("workbench.sessionActivity.missing", "Session is unavailable"));
-    if (session.goalLoop && session.goalLoop.status === "running") return model.pauseGoalLoop(item.id);
-    return model.interruptSession(item.id).then(function () {
-      var now = new Date().toISOString();
-      var plan = Array.isArray(session.plan) ? session.plan.map(function (step) {
-        if (!step || step.status !== "running") return step;
-        return Object.assign({}, step, {
-          status: "pending", startedAt: null,
-          currentAction: t("workbench.sessionActivity.stoppedAction", "Stopped; ready to run again."),
-          updatedAt: now,
-        });
-      }) : session.plan;
-      return model.patchSession(item.id, {
-        status: "paused", plan: plan,
-        agentReply: t("workbench.sessionActivity.pausedReply", "Execution was paused from the topbar."),
-        events: model.withEvent(session, "Paused", t("workbench.sessionActivity.pausedEvent", "Paused from the topbar.")),
-      });
-    });
-  }).then(function (next) {
-    if (next && next.projects) context.setStore(function (previous) {
-      return mergeTaskResponse(previous, next, item.id);
-    });
-    return next;
-  }).catch(function (error) {
-    workbenchServices.feedback().showToast(wbErrorText(error), "error");
-    return null;
-  });
 }
 
 function wbStopTopbarSession(context, item) {
@@ -126,14 +88,12 @@ function WorkbenchShellTopbar({ context }) {
     projects={context.store.projects}
     activeProject={context.store.activeProject}
     activePage={navigation.fullPage}
-    taskView={context.task.view}
-    activeTaskId={context.store.activeSessionId}
     activeChatId={sessions.activeChatId}
     recentSessions={sessions.recent}
     overflowSessions={sessions.overflow}
     browserOwners={sessions.browserOwners}
     pinnedResources={context.resources.pinned}
-    keyboardEnabled={!dialogs.searchOpen && !dialogs.newProjectOpen && !dialogs.newTaskOpen && !dialogs.editProject && !dialogs.editMemoryProject}
+    keyboardEnabled={!dialogs.searchOpen && !dialogs.newProjectOpen && !dialogs.editProject && !dialogs.editMemoryProject}
     onPinResource={context.resources.pin}
     onUnpinResource={context.resources.unpin}
     onOpenPinnedResource={function (resource) { wbOpenPinnedResource(context, resource); }}
@@ -144,7 +104,6 @@ function WorkbenchShellTopbar({ context }) {
     onOpenSessionResource={sessions.openResource}
     onOpenSession={function (item) { wbOpenTopbarSession(context, item); }}
     onOpenBrowserPage={function (page, owner) { wbOpenBrowserPage(context, page, owner); }}
-    onPauseSession={function (item) { return wbPauseTopbarSession(context, item); }}
     onStopSession={function (item) { return wbStopTopbarSession(context, item); }}
     notifications={context.resources.notifications}
     onReloadNotifications={context.resources.reloadNotifications}
@@ -156,7 +115,6 @@ function WorkbenchShellTopbar({ context }) {
     onEditProject={dialogs.setEditProject}
     onEditMemory={dialogs.setEditMemoryProject}
     onDeleteProject={context.actions.deleteProject}
-    onNewTask={context.actions.createSession}
     onOpenPage={navigation.openPage}
     theme={appearance.theme}
     actualTheme={appearance.actualTheme}
@@ -166,30 +124,33 @@ function WorkbenchShellTopbar({ context }) {
 
 function WorkbenchChatModuleSurface({ context }) {
   var presentation = context.presentation;
-  var task = context.task;
   var sessions = context.sessions;
-  return presentation.showChatPage ? (
-    <WorkbenchStableSurface active={presentation.isChat}>
+  var project = context.store.activeProject;
+  var sharedWorkspace = presentation.isBoard ? (
+    <ConversationBoard
+      project={project}
+      chats={project && context.projectRail.recentChatsByProject[project.id] || []}
+      loading={context.board.loading}
+      error={context.board.error}
+      onOpenChat={context.board.openChat}
+      onCreateChat={context.actions.createChat}
+    />
+  ) : null;
+  return presentation.showChatPage || presentation.isBoard ? (
+    <WorkbenchStableSurface active={presentation.isChat || presentation.isBoard}>
       {React.createElement(workbenchServices.chat().Page || function () { return <div className="workbench-empty">{context.t("workbench.chatLoading")}</div>; }, {
         active: presentation.isChat,
         project: context.store.activeProject,
+        workspaceContent: sharedWorkspace,
+        onActivateWorkspace: function () { context.navigation.openPage("work"); },
         newChatRequestId: context.chat.newChatRequestId,
-        taskOpenRequest: task.openRequest,
-        taskWorkspace: {
-          tasks: context.store.activeProject && Array.isArray(context.store.activeProject.sessions) ? context.store.activeProject.sessions : [],
-          activeTaskId: context.store.activeSessionId,
-          onSelectTask: task.selectSession, onCreateTask: context.actions.createSession,
-          onDeleteTask: context.actions.deleteSession, onRenameTask: task.renameRailTask,
-          onStoreChange: task.mergeStore, PaneComponent: WorkbenchTaskPane,
-          ContextPanelComponent: RightContextPanel, onOpenTask: task.chatToTask,
-        },
         onActiveChatIdChange: sessions.setActiveChatId,
         onChatsChange: sessions.updateRecentChats,
         pinnedSessions: sessions.pinnedView,
         navCollapsed: context.navigation.railCollapsed,
         onToggleNavCollapsed: context.navigation.toggleSidebar,
-        collapseControl: presentation.isChat ? context.navigation.renderCollapseControl() : null,
-        moduleDock: presentation.isChat ? context.navigation.renderDockSlot() : null,
+        collapseControl: presentation.isChat || presentation.isBoard ? context.navigation.renderCollapseControl() : null,
+        moduleDock: presentation.isChat || presentation.isBoard ? context.navigation.renderDockSlot() : null,
       })}
     </WorkbenchStableSurface>
   ) : null;
@@ -247,99 +208,4 @@ function WorkbenchModuleSurfaces({ context }) {
   </>;
 }
 
-function WorkbenchProjectRail({ context }) {
-  var rail = context.projectRail;
-  var sessions = context.sessions;
-  var project = context.store.activeProject;
-  return React.createElement(context.chat.module.Rail, {
-    active: !context.presentation.isModulePage,
-    projectId: project && project.id || "",
-    projectName: project && project.name || "",
-    chats: project && rail.recentChatsByProject[project.id] || [],
-    tasks: project && project.sessions || [],
-    railMode: rail.mode,
-    workRailMode: rail.mode,
-    pinnedChatIds: sessions.pinnedView.chatIds,
-    pinnedTaskIds: sessions.pinnedView.taskIds,
-    activeChatId: sessions.activeChatId,
-    activeTaskId: context.store.activeSessionId,
-    loading: context.task.loading,
-    runningChatIds: [],
-    runtimeEngine: context.chat.runtimeEngine,
-    onSelect: rail.selectChat,
-    onSelectTask: context.task.openTask,
-    onAnswer: function () {},
-    onCreate: context.actions.createChat,
-    onCreateTask: context.actions.createSession,
-    onRename: rail.renameChat,
-    onRenameTask: rail.renameTask,
-    onDelete: rail.deleteChat,
-    onDeleteTask: context.actions.deleteSession,
-    onToTask: rail.promoteChat,
-    toTaskBusy: rail.toTaskBusy,
-    onTogglePinned: sessions.pinnedView.onToggleChat,
-    onTogglePinnedTask: sessions.pinnedView.onToggleTask,
-    onOpenFile: function (entry) { rail.openResource("file", entry); },
-    onOpenTerminal: function (terminalId) { rail.openResource("terminal", terminalId); },
-    onRailModeChange: rail.setMode,
-    collapsed: context.navigation.railCollapsed,
-    onToggleCollapsed: context.navigation.toggleSidebar,
-    collapseControl: context.navigation.renderCollapseControl(),
-    moduleDock: !context.presentation.isModulePage ? context.navigation.renderDockSlot() : null,
-  });
-}
-
-function WorkbenchTaskContent({ context }) {
-  var task = context.task;
-  var store = context.store;
-  if (task.view === "board") return <TaskBoard
-    project={store.activeProject}
-    chats={store.activeProject && context.projectRail.recentChatsByProject[store.activeProject.id] || []}
-    loading={task.loading}
-    error={task.error}
-    onOpenSession={task.openTask}
-    onOpenChat={task.openChat}
-    onCreateSession={context.actions.createSession}
-    onCreateChat={context.actions.createChat}
-    onDeleteSession={context.actions.deleteSession}
-  />;
-  return <>
-    <TaskWorkArea
-      key={store.activeSessionId || "none"}
-      project={store.activeProject}
-      session={store.activeSession}
-      expandedStepId={task.expandedStepId}
-      onToggleStep={task.toggleStep}
-      onCreateRun={task.runCreated}
-      onRightTab={task.setRightTab}
-      onSelectSession={task.selectSession}
-      onBackToBoard={task.backToBoard}
-      onCreateSession={context.actions.createSession}
-      onInitPatch={task.patchInit}
-      onLocalPatch={task.patchLocal}
-      onRefresh={task.refresh}
-      error={task.error}
-      loading={task.loading}
-      active={!context.presentation.isModulePage}
-    />
-    <RightContextPanel
-      project={store.activeProject}
-      session={store.activeSession}
-      expandedStepId={task.expandedStepId}
-      tab={task.rightTab}
-      onTabChange={task.setRightTab}
-      onRefresh={task.refresh}
-    />
-  </>;
-}
-
-function WorkbenchTaskModuleSurface({ context }) {
-  return <WorkbenchStableSurface active={!context.presentation.isModulePage} enterMotion={true}>
-    <>
-      <WorkbenchProjectRail context={context} />
-      <WorkbenchTaskContent context={context} />
-    </>
-  </WorkbenchStableSurface>;
-}
-
-export { WorkbenchModuleSurfaces, WorkbenchShellTopbar, WorkbenchStableSurface, WorkbenchTaskModuleSurface }
+export { WorkbenchModuleSurfaces, WorkbenchShellTopbar, WorkbenchStableSurface }

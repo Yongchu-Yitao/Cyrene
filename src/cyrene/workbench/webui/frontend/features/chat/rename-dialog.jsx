@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasTaskDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetResourceDrag, wbcSetTaskDrag, wbcT } from "../../workbench-chat.jsx"
+import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetResourceDrag, wbcT } from "../../workbench-chat.jsx"
 import { wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue } from "./conversation.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
 
@@ -16,7 +16,6 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
   var canSave = !!nextTitle && nextTitle !== originalTitle && !saving;
   var isGroup = entity === "group";
   var isTerminal = entity === "terminal";
-  var isTask = entity === "task";
 
   useWbcEffect(function () {
     setDraft(originalTitle);
@@ -45,9 +44,7 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
           ? wbcT("workbenchChat.groupRenameSuccess", "Chat group renamed")
           : isTerminal
             ? wbcT("terminal.renameSuccess", "Terminal renamed")
-            : isTask
-              ? wbcT("task.renameSuccess", "Task renamed")
-          : wbcT("workbenchChat.renameSuccess", "Chat renamed"),
+            : wbcT("workbenchChat.renameSuccess", "Chat renamed"),
         "success"
       );
       if (onClose) onClose();
@@ -76,9 +73,7 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
             ? wbcT("workbenchChat.groupRename", "Rename group")
             : isTerminal
               ? wbcT("terminal.rename", "Rename terminal")
-              : isTask
-                ? wbcT("task.rename", "Rename task")
-            : wbcT("workbenchChat.rename", "Rename chat")}</strong>
+              : wbcT("workbenchChat.rename", "Rename chat")}</strong>
           <button
             type="button"
             className="wbc-rename-close"
@@ -92,9 +87,7 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
             ? wbcT("workbenchChat.groupTitleLabel", "Group title")
             : isTerminal
               ? wbcT("terminal.titleLabel", "Terminal title")
-              : isTask
-                ? wbcT("task.titleLabel", "Task title")
-            : wbcT("workbenchChat.titleLabel", "Chat title")}</label>
+              : wbcT("workbenchChat.titleLabel", "Chat title")}</label>
           <input
             id="wbc-rename-input"
             ref={inputRef}
@@ -107,8 +100,6 @@ function WbcRenameDialog({ chat, onClose, onRename, entity }) {
             }}
             placeholder={isGroup
               ? wbcT("workbenchChat.groupRenamePlaceholder", "Enter a group title")
-              : isTask
-                ? wbcT("task.renamePlaceholder", "Enter a task title")
               : wbcT("workbenchChat.renamePlaceholder", "Enter a chat title")}
           />
           <div className="wbc-rename-meta">

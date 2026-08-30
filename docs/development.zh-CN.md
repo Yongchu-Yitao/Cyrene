@@ -18,7 +18,7 @@
 记录每次 LLM 调用、Tool、Response、耗时和 Context Trace：
 
 ```bash
-python -m cyrene.runtime.host --verbose
+python -m cyrene.platform.host --verbose
 # 或
 uv run python -m cyrene --verbose
 ```
@@ -134,8 +134,8 @@ Baseline 与 Hash。
   `tasks`、`projects`、`goals`、`planning`、`artifacts`、`sessions`、
   `control`、`workspaces`、`ui` 领域组织，持久化、FastAPI 与 WebUI 各自使用
   独立适配包；
-- `cyrene.agent_runtime`：外部 ACP Agent 集成；
-- `cyrene.model_runtime`、`cyrene.runtime`、`cyrene.observability`：Provider
+- `cyrene.agents`：外部 ACP Agent 集成；
+- `cyrene.model`、`cyrene.platform`、`cyrene.observability`：Provider
   支持、进程生命周期和诊断。
 
 `cyrene.core` 不得依赖产品层或适配层。FastAPI Adapter 位于
@@ -147,7 +147,7 @@ Baseline 与 Hash。
 
 - 显式 Function/Service 调用；
 - `cyrene.observability.debug` Event Bus；
-- `cyrene.runtime.inbox` Agent Message；
+- `cyrene.platform.inbox` Agent Message；
 - SQLite/Document Store 持久化。
 
 ### 新增 Tool

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
 from cyrene.plugins.native_tools import seed_builtin_plugin_directory
-from cyrene.runtime.database import init_db
+from cyrene.platform.database import init_db
 from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
 

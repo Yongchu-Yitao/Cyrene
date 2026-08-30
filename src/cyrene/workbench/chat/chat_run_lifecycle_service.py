@@ -428,7 +428,7 @@ class ChatRunLifecycleApplicationService:
 
     @staticmethod
     def _schedule_origin_finalize(request: ChatRunLifecycleRequest) -> None:
-        from cyrene.runtime.host_actions import finalize_origin
+        from cyrene.platform.host_actions import finalize_origin
 
         asyncio.create_task(
             finalize_origin(request.chat_id, "", origin_run_id=request.client_request_id)

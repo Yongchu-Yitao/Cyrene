@@ -146,11 +146,11 @@ html[data-theme="light"] .workbench-status-pill.green { color: var(--wb-green); 
 html[data-theme="light"] .workbench-status-pill.amber { color: #9c6c1a;         border-color: rgba(156, 108, 26, 0.30); background: rgba(156, 108, 26, 0.06); }
 html[data-theme="light"] .workbench-status-pill.red   { color: #b53232;         border-color: rgba(181, 50, 50, 0.30);  background: rgba(181, 50, 50, 0.06); }
 
-/* Task-status chips */
-html[data-theme="light"] .workbench-task-status.blue  { background: rgba(29, 110, 201, 0.10); color: var(--wb-blue); }
-html[data-theme="light"] .workbench-task-status.green { background: rgba(26, 138, 76, 0.10);  color: var(--wb-green); }
-html[data-theme="light"] .workbench-task-status.amber { background: rgba(156, 108, 26, 0.10); color: #9c6c1a; }
-html[data-theme="light"] .workbench-task-status.red   { background: rgba(181, 50, 50, 0.10);  color: #b53232; }
+/* Conversation-status chips */
+html[data-theme="light"] .workbench-conversation-status.blue  { background: rgba(29, 110, 201, 0.10); color: var(--wb-blue); }
+html[data-theme="light"] .workbench-conversation-status.green { background: rgba(26, 138, 76, 0.10);  color: var(--wb-green); }
+html[data-theme="light"] .workbench-conversation-status.amber { background: rgba(156, 108, 26, 0.10); color: #9c6c1a; }
+html[data-theme="light"] .workbench-conversation-status.red   { background: rgba(181, 50, 50, 0.10);  color: #b53232; }
 
 /* Panel title accent (purple spark) */
 html[data-theme="light"] .workbench-panel-title span {

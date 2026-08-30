@@ -173,7 +173,7 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
             pending_question=None,
         )
 
-    import cyrene.runtime.settings_store as settings_store
+    import cyrene.platform.settings_store as settings_store
     monkeypatch.setattr(
         settings_store, "get",
         lambda key, default=None: "zh" if key == "app_language" else default,

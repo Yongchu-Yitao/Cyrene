@@ -738,6 +738,19 @@ var WorkbenchChatRuntimes = (function () {
     var eventAt = Number(event.createdAt || event.startedAt);
     if (!Number.isFinite(eventAt)) eventAt = Date.now();
     var terminal = status === "completed" || status === "failed" || event.terminal === true;
+    var dynamicSurfaces = window.CyreneUI && window.CyreneUI.dynamicSurfaces;
+    if (dynamicSurfaces && typeof dynamicSurfaces.requestActivity === "function") {
+      dynamicSurfaces.requestActivity({
+        type: terminal ? "tool.completed" : "tool.started",
+        eventId: String(event.eventId || ""),
+        chatId: chatId,
+        runId: String(event.runId || ""),
+        payload: Object.assign({}, event, {
+          status: terminal ? "completed" : status,
+          presentation: event.presentation && typeof event.presentation === "object" ? event.presentation : {},
+        }),
+      });
+    }
     var progress = event.progress && typeof event.progress === "object" ? event.progress : null;
     var entry = {
       kind: "tool",
@@ -1641,22 +1654,4 @@ function wbcSameRuntimePresence(left, right) {
   return leftKeys.every(function (chatId) { return !!right[chatId]; });
 }
 
-function wbcTaskSessionFromStore(store, taskId) {
-  var id = String(taskId || "");
-  if (!store || !id) return null;
-  if (store.session && String(store.session.id || "") === id) return store.session;
-  if (store.activeSession && String(store.activeSession.id || "") === id) return store.activeSession;
-  var projects = Array.isArray(store.projects) ? store.projects : [];
-  for (var index = 0; index < projects.length; index += 1) {
-    var sessions = Array.isArray(projects[index] && projects[index].sessions)
-      ? projects[index].sessions
-      : [];
-    var found = sessions.find(function (session) {
-      return String(session && session.id || "") === id;
-    });
-    if (found) return found;
-  }
-  return null;
-}
-
-export { WbcFileVisual, WorkbenchChatRuntimes, wbcCanOpenExternally, wbcChatUsedMap, wbcCommandMeta, wbcDownloadLink, wbcHtmlPreviewDocument, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence, wbcStartFileDrag, wbcStartFilePointerDrag, wbcTaskSessionFromStore, wbcUsesFilePointerDrag }
+export { WbcFileVisual, WorkbenchChatRuntimes, wbcCanOpenExternally, wbcChatUsedMap, wbcCommandMeta, wbcDownloadLink, wbcHtmlPreviewDocument, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence, wbcStartFileDrag, wbcStartFilePointerDrag, wbcUsesFilePointerDrag }

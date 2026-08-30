@@ -15,24 +15,46 @@ function wbRightMaxWidth() {
   return Math.max(WB_RIGHT_MIN, Math.min(640, Math.round(vw * 0.45)));
 }
 
+// A grid item can already be wider than the viewport when an old stored width
+// is restored after the window shrinks. Measuring rect.width in that state
+// makes the next drag inherit the overflow and permits an even larger width.
+// Use only the part of the layout that is currently inside the viewport so the
+// panel's maximum is derived from the visible workspace, not its overflow.
+function wbVisibleLayoutWidth(layout) {
+  var rect = layout.getBoundingClientRect();
+  var viewportWidth = window.innerWidth || document.documentElement.clientWidth || rect.right;
+  var visibleLeft = Math.max(0, rect.left);
+  var visibleRight = Math.min(viewportWidth, rect.right);
+  return Math.max(0, visibleRight - visibleLeft);
+}
+
 // Largest the right panel may grow without pushing the main column below
-// WB_MAIN_MIN. Measures the actual layout row (task grid OR chat .wbc-page) so
+// WB_MAIN_MIN. Measures the actual conversation layout row so
 // it works for both the collapsed and expanded rail.
 function wbRightDynamicMax(panel) {
   var layout = panel.closest(".wbc-page") || panel.closest(".workbench-grid");
   if (!layout) return wbRightMaxWidth();
-  var avail = layout.getBoundingClientRect().width;
+  var avail = wbVisibleLayoutWidth(layout);
   var leftFixed = 0;
   var mainMin = WB_MAIN_MIN;
   // Chat now renders its main conversation inside .wbc-pane-layout. Counting
   // every page child as fixed therefore deducted the entire main card and
   // collapsed the right panel's maximum to its 280px minimum. In the chat
-  // grid only the direct rail is fixed; the pane layout is the flexible lane.
+  // grid only the rail track is fixed; the pane layout is the flexible lane.
+  // Measure the pane's grid position instead of the visible rail element: the
+  // compact rail is inset inside a wider track (48px inside 64px), so using its
+  // border box lets the right panel overshoot the viewport by that difference.
   if (layout.classList.contains("wbc-page")) {
+    var layoutRect = layout.getBoundingClientRect();
+    var pane = Array.prototype.find.call(layout.children, function (child) {
+      return child.classList && child.classList.contains("wbc-pane-layout");
+    });
     var rail = Array.prototype.find.call(layout.children, function (child) {
       return child.classList && child.classList.contains("wbc-rail");
     });
-    leftFixed = rail ? rail.getBoundingClientRect().width : 0;
+    leftFixed = pane
+      ? Math.max(0, pane.getBoundingClientRect().left - layoutRect.left)
+      : (rail ? rail.getBoundingClientRect().width : 0);
     try {
       mainMin = parseFloat(window.getComputedStyle(layout).getPropertyValue("--wbc-main-min-width")) || WB_MAIN_MIN;
     } catch (err) {}
@@ -57,12 +79,14 @@ function wbApplyStoredRightWidth(node) {
     var n = parseInt(raw, 10);
     if (!isFinite(n)) return;
     n = Math.max(WB_RIGHT_MIN, Math.min(wbRightMaxWidth(), n));
+    var panel = node.querySelector(".wbc-page > .wbc-side") || node.querySelector(".workbench-right-panel");
+    if (panel) n = Math.min(n, wbRightDynamicMax(panel));
     node.style.setProperty("--wb-right-w", n + "px");
   } catch (e) {}
 }
 
 // Drag handle pinned to the left edge of the rightmost panel. Shared by the
-// task context panel and the chat side panel (exposed on window for the
+// conversation side panel (exposed on window for the
 // separately-bundled workbench-chat.js).
 function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
   var handleRef = useWorkbenchRef(null);

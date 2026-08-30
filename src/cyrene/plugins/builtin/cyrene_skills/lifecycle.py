@@ -448,7 +448,7 @@ class LifecycleService:
 
     async def record_manual_skill_run(self, skill_id: str, version: int, *, execution_status: str='success', consistency_score: float=0.0) -> None:
         """Record a skill run initiated through the explicit learned-skill tool."""
-        from cyrene.runtime.settings_store import get_write_permission_mode as _get_perm_mode
+        from cyrene.platform.settings_store import get_write_permission_mode as _get_perm_mode
         run_id = self.ports.new_id('skill_run')
         turn_id = self.ports.current_turn_id.get()
         async with self.ports.connect() as conn:

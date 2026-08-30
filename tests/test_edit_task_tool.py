@@ -4,7 +4,7 @@ import pytest
 
 from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
 from cyrene.plugins.builtin.cyrene_schedule import plugin_pack
-from cyrene.runtime.database import init_db
+from cyrene.platform.database import init_db
 from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
 
 

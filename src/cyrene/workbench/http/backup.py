@@ -5,7 +5,7 @@ import json
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
-from cyrene.runtime.backup import BackupDownloadError, BackupRepository
+from cyrene.platform.backup import BackupDownloadError, BackupRepository
 from cyrene.workbench.http.errors import localized_error_payload, localized_error_response
 
 

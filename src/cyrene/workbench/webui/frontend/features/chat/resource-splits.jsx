@@ -1,4 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { PluginFrontendService } from "../../platform/plugins.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, WbcSplitPickerMenu, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcClampSideSplitWidthForPage, wbcErrorText, wbcFileViewKind, wbcNotifyBrowserLayoutChanged, wbcRenderMapMarkdown, wbcT } from "../../workbench-chat.jsx"
 import { wbcBrowserStateForChat } from "./composer.jsx"
 import { wbcProjectFileResource } from "./rail.jsx"
@@ -108,7 +109,13 @@ function wbcProjectFileEditUrl(file) {
 
 function wbcCanEditProjectTextFile(file) {
   var kind = wbcFileViewKind(file);
-  return !!(wbcProjectFileEditUrl(file) && (kind === "markdown" || kind === "code" || kind === "html"));
+  var contributed = PluginFrontendService.fileTypeFor(
+    file && (file.path || file.name),
+    file && (file.content_type || file.contentType)
+  );
+  var editable = contributed ? contributed.editable === true
+    : (kind === "markdown" || kind === "code" || kind === "html");
+  return !!(wbcProjectFileEditUrl(file) && editable);
 }
 
 function wbcDiscardProjectFileDraft(file) {

@@ -7,13 +7,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from cyrene.workbench.core_adapter import ConversationRuntime
-from cyrene.workbench.core_adapter.task_runtime import TaskAgentRuntime
 from cyrene.config import WORKSPACE_DIR, cyrene_dir
-from cyrene.runtime.run_coordinator import run_coordinator_for
-from cyrene.workbench.tasks import task_runs
+from cyrene.platform.run_coordinator import run_coordinator_for
 from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.projects.project_services import (
-    AgentRunProjectPort,
     ChatProjectPort,
     KnowledgeProjectPort,
     MemoryProjectPort,
@@ -29,7 +26,6 @@ def build_project_application_service(
     db_path: str,
     dependencies: ProjectRouteDependencies,
     *,
-    agent_runtime: TaskAgentRuntime,
     validate_workspace: Callable[..., Path],
 ) -> ProjectApplicationService:
     """Bind project ports to their concrete application owners."""
@@ -119,26 +115,11 @@ def build_project_application_service(
 
         return int(chats.mutate(remove) or 0)
 
-    def interrupt_task_session(*, session_id: str) -> bool:
-        return task_runs.interrupt_task_run(db_path, session_id)
-
-    async def clear_task_session(*, session_id: str) -> bool:
-        lease = task_runs.coordinator_for(db_path).get("task", session_id)
-        current = asyncio.current_task()
-        if (
-            lease is not None
-            and lease.task is not None
-            and lease.task is not current
-        ):
-            await asyncio.gather(lease.task, return_exceptions=True)
-        return await agent_runtime.clear_session(session_id)
-
     repository = ProjectRepository(
         read_store=dependencies.read_store,
         read_store_lightweight=dependencies.read_store_lightweight,
         write_store=dependencies.write_store,
         find_project=dependencies.find_project,
-        find_session=dependencies.find_session,
     )
     lifecycle = ProjectLifecyclePort(
         workspace_root=cyrene_dir(WORKSPACE_DIR) / "projects",
@@ -147,12 +128,7 @@ def build_project_application_service(
         safe_data_key=dependencies.safe_data_key,
         short_id=dependencies.short_id,
         utc_now=dependencies.utc_now,
-        default_init_form=dependencies.default_init_form,
         default_project=dependencies.default_project,
-        follow_up_seed=dependencies.follow_up_seed,
-        generate_init_form=dependencies.generate_init_form,
-        new_init_session=dependencies.new_init_session,
-        new_session=dependencies.new_session,
         project_data_key=dependencies.project_data_key,
         project_resource_key=dependencies.project_resource_key,
         notify=dependencies.append_notification,
@@ -162,10 +138,6 @@ def build_project_application_service(
     return ProjectApplicationService(
         repository,
         lifecycle=lifecycle,
-        agent_runs=AgentRunProjectPort(
-            interrupt=interrupt_task_session,
-            clear_session=clear_task_session,
-        ),
         chats=ChatProjectPort(
             list_project_chat_ids=list_project_chat_ids,
             remove_project=remove_project_chats,

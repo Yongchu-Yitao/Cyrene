@@ -516,7 +516,6 @@ function wbcCanOpenPageContextMenu(event) {
     ".wbc-selection-menu",
     ".wbc-conversation-nav",
     ".wbc-chat-card",
-    ".wb-task-detail-tabs",
     ".workbench-confirm-modal",
   ].join(","));
 }
@@ -604,7 +603,7 @@ function wbcNotifyResourceShelfPointerDrag(active) {
 }
 
 // Shared budget error code → i18n key suffix mapping.  Defined here and
-// re-used by the task controller through the registered chat service
+// shared through the registered conversation service
 // so adding a new budget code only needs one update.
 
 export { wbcToolPresentationKind, wbcToolPresentationText, wbcTraceDedupeKey, wbcCurrentModel, WBC_CHAT_MODEL_CHANGED_EVENT, wbcModelContextLimit, wbcPublishChatModelChanged, wbcSubagentStatusText, wbcSubagentStatusClass, WBC_SUBAGENT_COLORS, wbcAgentColor, wbcAgentInitials, wbcHighlightMentions, wbcCompactNumber, wbcFormatToolParameter, wbcFlattenToolObjectLiterals, wbcToolPreviewText, wbcToolArgsPreview, wbcThinkingPhrases, wbcRandomThinkingPhrase, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserWindowTitle, WBC_BROWSER_TAB_PICKER_TOGGLE_DEBOUNCE_MS, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserTabPickerPayload, wbcClampBrowserWindowFrame, wbcBrowserComposerDockFrame, wbcKeepBrowserWindowClearOfComposer, WBC_BROWSER_FRAME_STORAGE_PREFIX, wbcLoadBrowserWindowFrame, wbcSaveBrowserWindowFrame, wbcBrowserAvoidancePlan, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcRectsOverlap, wbcPageContextMenuPlacement, wbcCanOpenPageContextMenu, wbcPointInsideResourceShelf, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcNotifyResourceShelfPointerDrag }

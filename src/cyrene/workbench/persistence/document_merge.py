@@ -132,7 +132,7 @@ def _three_way_merge(base: Any, local: Any, remote: Any, path: tuple[str, ...] =
             return _plain(local)
         # A deletion committed after this caller's baseline must win over the
         # caller's stale edits. Preserving the edited entity here resurrects
-        # tasks/chats that another request explicitly deleted.
+        # records that another request explicitly deleted.
         return _MISSING
     if base is _MISSING:
         if local == remote:

@@ -320,3 +320,68 @@ def test_different_tree_writes_do_not_share_a_router_lock(tmp_path, monkeypatch)
     assert not first_thread.is_alive()
     assert not second_thread.is_alive()
     store.close()
+
+
+def test_token_counts_are_incremental_and_propagate_only_integer_deltas(tmp_path):
+    counted: list[object] = []
+
+    def token_counter(value):
+        counted.append(value)
+        return len(str(value))
+
+    store = ContextStoreRouter(
+        tmp_path / "context",
+        token_counter=token_counter,
+        token_limit=100,
+    )
+    tree = store.create_tree("root", tree_id="tree", root_id="root")
+    first = store.mount(tree.id, tree.root_id, "first", node_id="first")
+    leaf = store.mount(tree.id, first.id, "leaf", node_id="leaf")
+
+    assert counted == ["root", "first", "leaf"]
+    store.update_node(tree.id, leaf.id, "longer-leaf")
+    assert counted == ["root", "first", "leaf", "longer-leaf"]
+
+    database = store.tree_database_path(tree.id)
+    with sqlite3.connect(database) as connection:
+        before = connection.execute(
+            "SELECT self_token_count,path_token_count FROM context_nodes WHERE node_id='leaf'"
+        ).fetchone()
+    assert before == (len("longer-leaf"), len("root") + len("first") + len("longer-leaf"))
+
+    store.update_node(tree.id, tree.root_id, "expanded-root")
+    with sqlite3.connect(database) as connection:
+        after = connection.execute(
+            "SELECT self_token_count,path_token_count FROM context_nodes WHERE node_id='leaf'"
+        ).fetchone()
+    assert after == (
+        len("longer-leaf"),
+        len("expanded-root") + len("first") + len("longer-leaf"),
+    )
+    assert counted[-1] == "expanded-root"
+    store.close()
+
+
+def test_inflight_effect_results_do_not_rewrite_assistant_nodes(tmp_path):
+    store = ContextStoreRouter(tmp_path / "context")
+    tree = store.create_tree({"role": "system"}, tree_id="tree", root_id="root")
+    assistant = store.mount(
+        tree.id,
+        tree.root_id,
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "call-1"}]},
+        node_id="assistant",
+    )
+    original = store.get_node(tree.id, assistant.id)
+
+    result = {"call_id": "call-1", "name": "Read", "success": True, "value": "ok"}
+    store.save_effect_result(tree.id, assistant.id, "call-1", result)
+
+    assert store.get_node(tree.id, assistant.id) == original
+    assert store.effect_results(tree.id, assistant.id) == {"call-1": result}
+    store.close()
+
+    reopened = ContextStoreRouter(tmp_path / "context")
+    assert reopened.effect_results(tree.id, assistant.id) == {"call-1": result}
+    assert reopened.clear_effect_results(tree.id, assistant.id) == 1
+    assert reopened.effect_results(tree.id, assistant.id) == {}
+    reopened.close()

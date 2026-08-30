@@ -55,8 +55,12 @@ from .plugin import (
     PluginRegistry,
     PluginRuntime,
     PluginSetupContext,
+    TOOLBOX_PLUGIN_NAME,
+    normalize_plugin_arguments,
     plugin_session_state,
+    split_resource_reveal,
     with_plugin_session_state,
+    workspace_resource_locations,
 )
 from .plugin.core_impl import (
     PERMISSION_BATCH_DECIDE_TOOL,
@@ -209,6 +213,18 @@ class AgentSession:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.agent_id = str(agent_id or "main").strip() or "main"
         self.parent_agent_id = str(parent_agent_id or "").strip()
+        context_values = {
+            **dict(host_context or {}),
+            **dict(plugin_context_data or {}),
+        }
+        run_context = context_values.get("run_context")
+        self._read_only = bool(
+            context_values.get("read_only") is True
+            or (
+                isinstance(run_context, Mapping)
+                and run_context.get("read_only") is True
+            )
+        )
         self._permission_user_request = (
             None
             if permission_user_request is None
@@ -228,17 +244,17 @@ class AgentSession:
                 ),
             )
         self._initial_plugin_load_failures = failures
-        self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
+        self._model_tools = self.registry.direct_tool_definitions(
+            agent_id=self.agent_id,
+            read_only=self._read_only,
+        )
         model = self.registry.resolve(model_plugin)
         if model.kind != "model":
             raise ValueError(f"Plugin is not a model component: {model_plugin}")
         self.model_plugin = model_plugin
         self.runtime = PluginRuntime(self.registry)
         self.batch = PluginBatchRunner(self.runtime)
-        self._plugin_context_data = {
-            **dict(host_context or {}),
-            **dict(plugin_context_data or {}),
-        }
+        self._plugin_context_data = context_values
         self._plugin_service_values = dict(plugin_services or {})
         self._application_scope = application_scope or application_plugin_scope()
         if "model" not in self._plugin_service_values:
@@ -565,7 +581,7 @@ class AgentSession:
         global_full_path_access = False
         if kind in {"read_elevation", "write_permission_request"}:
             try:
-                from cyrene.runtime.settings_store import get_write_permission_mode
+                from cyrene.platform.settings_store import get_write_permission_mode
 
                 global_full_path_access = get_write_permission_mode() == "full_access"
             except Exception:
@@ -790,7 +806,11 @@ class AgentSession:
     def plugin_services(self) -> dict[str, Any]:
         """Return host-owned services inherited by child Agent sessions."""
 
-        return dict(self._plugin_service_values)
+        return {
+            name: service
+            for name, service in self._plugin_service_values.items()
+            if name != "permission"
+        }
 
     def application_plugin_services(self) -> dict[str, Any]:
         """Return reconciled services after enforcing required session packs."""
@@ -3010,7 +3030,10 @@ class AgentSession:
     def _model_tool_tokens(self) -> int:
         self.reconcile_plugins()
         self._ensure_required_session_packs()
-        self._model_tools = self.registry.direct_tool_definitions(agent_id=self.agent_id)
+        self._model_tools = self.registry.direct_tool_definitions(
+            agent_id=self.agent_id,
+            read_only=self._read_only,
+        )
         if not self._model_tools:
             return 0
         return message_token_estimate(
@@ -3033,7 +3056,8 @@ class AgentSession:
             self.reconcile_plugins()
             self._ensure_required_session_packs()
             self._model_tools = self.registry.direct_tool_definitions(
-                agent_id=self.agent_id
+                agent_id=self.agent_id,
+                read_only=self._read_only,
             )
             tools = deepcopy(list(self._model_tools))
             messages = self._messages(trigger.id)
@@ -3612,7 +3636,9 @@ class AgentSession:
             return
         output = dict(result.value)
         calls = output.get("tool_calls")
-        calls = calls if isinstance(calls, list) else []
+        calls = self._prepare_resource_tool_calls(
+            calls if isinstance(calls, list) else []
+        )
         with self._state_lock:
             streamed = transition_key in self._streamed_transition_keys
             self._streamed_transition_keys.discard(transition_key)
@@ -3650,7 +3676,6 @@ class AgentSession:
                     "run_id": run_id,
                     "caused_by": transition_key,
                     "batch_key": batch_key,
-                    "effect_results": {},
                 },
                 node_id=self._stable_id("assistant", transition_key),
             )
@@ -3835,21 +3860,143 @@ class AgentSession:
             datetime.fromisoformat(str(raw.get("time"))),
         )
 
+    def _resource_presentation(
+        self,
+        call: Mapping[str, Any] | None,
+        *,
+        phase: Literal["started", "completed"],
+    ) -> dict[str, Any]:
+        if not isinstance(call, Mapping):
+            return {}
+        try:
+            plugin = self.registry.resolve(
+                str(call.get("resource_plugin_name") or call.get("name") or ""),
+                agent_id=self.agent_id,
+            )
+        except Exception:
+            return {}
+        project_id = str(self._plugin_context_data.get("project_id") or "")
+        if not plugin.resource_effects or not project_id:
+            return {}
+        locations = workspace_resource_locations(
+            plugin.resource_effects,
+            dict(call.get("resource_arguments") or call.get("arguments") or {}),
+            workspace=self.workspace,
+            project_id=project_id,
+            phase=phase,
+        )
+        if not locations:
+            return {}
+        return {
+            "locations": list(locations),
+            "reveal": bool(call.get("resource_reveal")) and self.agent_id == "main",
+            "phase": phase,
+        }
+
+    def _prepare_resource_tool_calls(self, calls: Sequence[Any]) -> list[Any]:
+        """Strip the host-only reveal hint before Plugin validation."""
+
+        prepared: list[Any] = []
+        for raw in calls:
+            if not isinstance(raw, Mapping):
+                prepared.append(raw)
+                continue
+            call = dict(raw)
+            try:
+                plugin = self.registry.resolve(
+                    str(call.get("name") or ""),
+                    agent_id=self.agent_id,
+                )
+                normalization = normalize_plugin_arguments(
+                    dict(call.get("arguments") or {}),
+                    plugin.input_schema,
+                )
+                arguments = normalization.arguments
+                argument_repairs = [
+                    repair.as_dict() for repair in normalization.repairs
+                ]
+                resource_plugin = plugin
+                resource_arguments = arguments
+                if (
+                    plugin.name == TOOLBOX_PLUGIN_NAME
+                    and str(arguments.get("operation") or "") == "invoke"
+                    and str(arguments.get("name") or "").strip()
+                ):
+                    resource_plugin = self.registry.resolve(
+                        str(arguments.get("name") or ""),
+                        agent_id=self.agent_id,
+                    )
+                    nested_arguments = arguments.get("arguments") or {}
+                    if not isinstance(nested_arguments, Mapping):
+                        raise TypeError("toolbox invoke arguments must be an object")
+                    nested_normalization = normalize_plugin_arguments(
+                        nested_arguments,
+                        resource_plugin.input_schema,
+                    )
+                    nested_arguments = nested_normalization.arguments
+                    argument_repairs.extend(
+                        repair.as_dict() for repair in nested_normalization.repairs
+                    )
+                    resource_arguments, reveal = split_resource_reveal(
+                        nested_arguments,
+                        effects=resource_plugin.resource_effects,
+                        allow_reveal=self.agent_id == "main",
+                    )
+                    arguments["arguments"] = resource_arguments
+                else:
+                    arguments, reveal = split_resource_reveal(
+                        arguments,
+                        effects=plugin.resource_effects,
+                        allow_reveal=self.agent_id == "main",
+                    )
+                    resource_arguments = arguments
+            except Exception:
+                prepared.append(call)
+                continue
+            call["arguments"] = arguments
+            if argument_repairs:
+                call["argument_repairs"] = argument_repairs
+            if resource_plugin.resource_effects:
+                call["resource_plugin_name"] = resource_plugin.name
+                call["resource_arguments"] = resource_arguments
+                call["resource_reveal"] = reveal
+                presentation = self._resource_presentation(call, phase="started")
+                if presentation:
+                    call["presentation"] = presentation
+            prepared.append(call)
+        return prepared
+
     def _persist_effect_result(self, assistant_id: str, result: PluginCallResult) -> None:
         with self._state_lock:
             node = self.store.get_node(self.tree.id, assistant_id)
             value = dict(node.value) if isinstance(node.value, Mapping) else {}
-            effects = dict(value.get("effect_results") or {})
-            effects[result.call_id] = self._stored_result(result)
-            value["effect_results"] = effects
-            self.store.update_node(self.tree.id, assistant_id, value)
+            calls = value.get("tool_calls")
+            calls = calls if isinstance(calls, list) else []
+            source_call = next((
+                call for call in calls
+                if isinstance(call, Mapping)
+                and str(call.get("id") or "") == result.call_id
+            ), None)
+            stored_result = self._stored_result(result)
+            presentation = self._resource_presentation(
+                source_call,
+                phase="completed",
+            )
+            if presentation:
+                stored_result["presentation"] = presentation
+            self.store.save_effect_result(
+                self.tree.id,
+                assistant_id,
+                result.call_id,
+                stored_result,
+            )
             run_id = str(value.get("run_id") or "")
         self._emit_event(
             "tool.completed",
             run_id=run_id,
             node_id=assistant_id,
             time=result.time,
-            data=self._stored_result(result),
+            data=stored_result,
         )
 
     def _reflection_call(
@@ -4051,7 +4198,11 @@ class AgentSession:
                 await self._finish_terminal(failure, status="failed")
             return
         completed: dict[str, PluginCallResult] = {}
-        for call_id, raw in dict(value.get("effect_results") or {}).items():
+        persisted_effects = dict(value.get("effect_results") or {})
+        persisted_effects.update(
+            self.store.effect_results(self.tree.id, assistant.id)
+        )
+        for call_id, raw in persisted_effects.items():
             if not isinstance(raw, Mapping):
                 continue
             try:
@@ -4108,6 +4259,12 @@ class AgentSession:
         with self._linearized_context_commit():
             if self._closed or run_id in self._cancelled_run_ids:
                 return
+            call_by_id = {
+                str(call.get("id") or ""): call
+                for call in calls
+                if isinstance(call, Mapping)
+            }
+            result_values = self._tool_result_values(call_by_id, results)
             tool_node = self.store.mount(
                 self.tree.id,
                 assistant.id,
@@ -4116,16 +4273,7 @@ class AgentSession:
                     "trigger_model": pending_question is None and not guidance_events,
                     "run_id": run_id,
                     "caused_by": batch_key,
-                    "results": [
-                        {
-                            "call_id": item.call_id,
-                            "name": item.name,
-                            "success": item.success,
-                            "value": self._json_value(item.value),
-                            "error": item.error,
-                        }
-                        for item in results
-                    ],
+                    "results": result_values,
                     **(
                         {"pending_question": pending_question}
                         if pending_question is not None
@@ -4134,6 +4282,7 @@ class AgentSession:
                 },
                 node_id=self._stable_id("tool_results", batch_key),
             )
+            self.store.clear_effect_results(self.tree.id, assistant.id)
             if pending_question is not None:
                 tool_state = self._set_state_locked(
                     "awaiting_user",
@@ -4159,6 +4308,29 @@ class AgentSession:
                 guidance_events,
                 run_id=run_id,
             )
+
+    def _tool_result_values(
+        self,
+        call_by_id: Mapping[str, Mapping[str, Any]],
+        results: Sequence[PluginCallResult],
+    ) -> list[dict[str, Any]]:
+        values: list[dict[str, Any]] = []
+        for item in results:
+            stored = {
+                "call_id": item.call_id,
+                "name": item.name,
+                "success": item.success,
+                "value": self._json_value(item.value),
+                "error": item.error,
+            }
+            presentation = self._resource_presentation(
+                call_by_id.get(item.call_id),
+                phase="completed",
+            )
+            if presentation:
+                stored["presentation"] = presentation
+            values.append(stored)
+        return values
 
     def _mount_assistant(
         self,

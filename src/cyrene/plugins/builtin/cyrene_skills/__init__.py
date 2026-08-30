@@ -5,7 +5,7 @@ from typing import Any
 
 from cyrene.plugins.context import PluginApplicationContext
 from cyrene.core.plugin import Plugin, PluginContext, PluginPack
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 
 from .learning_capture import setup_learning_capture
 

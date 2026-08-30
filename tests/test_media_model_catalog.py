@@ -248,7 +248,7 @@ def test_model_catalog_route_degrades_to_200_and_rejects_unknown_provider(
     monkeypatch,
 ):
     import cyrene.plugins.builtin.cyrene_media.model_catalog as catalog
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
     from cyrene.plugins.builtin.cyrene_media import settings_routes as media_routes
 
     secret = "route-private-key"

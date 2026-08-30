@@ -25,7 +25,7 @@ def test_pinned_topbar_context_mounts_resources_added_between_user_turns(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
     from cyrene.workbench.chat import chat_application, pinned_resources
 
     monkeypatch.setattr(
@@ -70,7 +70,7 @@ def test_pinned_topbar_context_mounts_resources_added_between_user_turns(
     tree = store.create_tree(tree_id="target-chat", root_id="root")
     hooks = store.hooks_for(tree.id)
     assert pack.setup is not None
-    pack.setup(PluginSetupContext(
+    setup_context = PluginSetupContext(
         data_directory=tmp_path / "data",
         plugin_directory=plugin_root,
         workspace=tmp_path,
@@ -80,13 +80,23 @@ def test_pinned_topbar_context_mounts_resources_added_between_user_turns(
         hooks=hooks,
         data={"db_path": str(db_path)},
         services={},
-    ))
+    )
+    pack.setup(setup_context)
 
     first_turn = asyncio.run(hooks.turn_start_mounts())
     assert len(first_turn) == 1
     assert first_turn[0]["context_kind"] == "pinned_topbar_resources"
     assert first_turn[0]["context_source"] == "pinned_topbar_context"
     assert first["id"] in first_turn[0]["context"]
+    store.mount(tree.id, tree.root_id, {
+        "role": "context",
+        "content": first_turn[0]["context"],
+        "context_kind": first_turn[0]["context_kind"],
+    })
+    # Rebinding simulates reopening the conversation; persisted snapshots still
+    # participate in change detection instead of being injected again.
+    pack.setup(setup_context)
+    assert asyncio.run(hooks.turn_start_mounts()) == ()
 
     snippet = pinned_resources.upsert_resource({
         "kind": "snippet",
@@ -132,5 +142,14 @@ def test_pinned_topbar_context_mounts_resources_added_between_user_turns(
     assert "整理发布说明" in second_context
     assert "发布说明已经整理完成" in second_context
     assert "release-notes.md" in second_context
+    assert asyncio.run(hooks.turn_start_mounts()) == ()
+
+    assert pinned_resources.remove_resource(first["id"]) is True
+    assert pinned_resources.remove_resource(snippet["id"]) is True
+    assert pinned_resources.remove_resource(conversation["id"]) is True
+    cleared_turn = asyncio.run(hooks.turn_start_mounts())
+    assert len(cleared_turn) == 1
+    assert "No Workbench resources are currently pinned" in cleared_turn[0]["context"]
+    assert asyncio.run(hooks.turn_start_mounts()) == ()
 
     store.close()

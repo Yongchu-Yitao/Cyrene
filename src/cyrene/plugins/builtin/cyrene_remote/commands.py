@@ -50,8 +50,8 @@ from .control import (
 )
 from .pairing import DirectPairingServer
 from .workspace import RemoteJobManager, RemoteWorkspaceFiles
-from cyrene.runtime.settings_store import get_all as get_web_settings
-from cyrene.runtime.settings_store import set_ as set_setting
+from cyrene.platform.settings_store import get_all as get_web_settings
+from cyrene.platform.settings_store import set_ as set_setting
 from cyrene.workbench.artifacts import artifact_runtime
 from cyrene.workbench.projects import project_repository
 from cyrene.workbench.workspaces.workspace_changes import (
@@ -90,10 +90,10 @@ _REMOTE_ERROR_MESSAGES: dict[str, tuple[str, str]] = {
     "attachment_unavailable": ("The attachment is unavailable.", "附件不可用。"),
     "attachment_variant_invalid": ("The attachment variant is invalid.", "附件版本无效。"),
     "change_not_found": ("Workspace change not found.", "未找到工作区变更。"),
+    "goal_not_found": ("Goal not found.", "未找到目标。"),
     "chat_interrupt_timeout": ("The chat is still stopping. Try again shortly.", "对话仍在停止中，请稍后重试。"),
     "invalid_status_transition": ("This status change is not allowed.", "不允许进行此状态变更。"),
     "model_plugin_unavailable": ("The model Plugin is unavailable.", "模型插件不可用。"),
-    "plan_not_approved": ("The current task plan has not been approved.", "当前任务计划尚未获批。"),
     "plugin_host_unavailable": ("The Plugin application host is unavailable.", "插件应用宿主不可用。"),
     "remote_authorization_invalid": ("Remote authorization is invalid.", "远程授权无效。"),
     "remote_command_failed": ("The remote command failed.", "远程命令执行失败。"),
@@ -115,13 +115,10 @@ _REMOTE_ERROR_MESSAGES: dict[str, tuple[str, str]] = {
     "remote_project_not_found": ("The authorized project no longer exists.", "已授权项目已不存在。"),
     "remote_target_approval_required": ("This operation requires approval on the target device.", "此操作需要在目标设备上批准。"),
     "run_not_found": ("Run not found.", "未找到运行记录。"),
-    "step_not_found": ("Task step not found.", "未找到任务步骤。"),
-    "task_plan_empty": ("The task plan is empty.", "任务计划为空。"),
     "thumbnail_unavailable": ("The thumbnail is unavailable.", "缩略图不可用。"),
     "thumbnail_unsupported": ("Thumbnail previews are available only for images.", "仅图片支持缩略图预览。"),
     "transfer_offset_invalid": ("The transfer offset is invalid.", "传输偏移量无效。"),
 }
-
 
 def _localized_remote_error(result: dict[str, Any]) -> dict[str, Any]:
     """Replace implementation details with a stable localized protocol error."""
@@ -138,14 +135,12 @@ def _localized_remote_error(result: dict[str, Any]) -> dict[str, Any]:
 def _remote_project(project_id: str) -> dict[str, Any] | None:
     return project_repository.find_workbench_project_lightweight(project_id)
 
-
 def _remote_project_workspace(project: dict[str, Any]) -> str:
     root = artifact_runtime._workbench_workspace_root(project)
     if root is None:
         root = Path(WORKSPACE_DIR).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     return str(root)
-
 
 def _remote_pack_is_available(pack_id: str) -> bool:
     """Resolve pack availability from the same live host used for dispatch.
@@ -211,10 +206,8 @@ def _remote_setting_field(
         field["options"] = options
     return field
 
-
 def _option(value: Any, label: str, label_zh: str) -> dict[str, Any]:
     return {"value": value, "label": label, "label_zh": label_zh}
-
 
 _REMOTE_SETTING_FIELDS = (
     _remote_setting_field(
@@ -369,7 +362,6 @@ _REMOTE_SETTING_FIELDS = (
     ),
 )
 
-
 def _public_model_settings() -> dict[str, Any]:
     from cyrene.core.plugin import application_plugin_service
 
@@ -377,7 +369,6 @@ def _public_model_settings() -> dict[str, Any]:
     if service is None:
         raise RuntimeError("Model Plugin is disabled or unavailable")
     return service.public_model_configuration(service.get_model_configuration())
-
 
 def _update_remote_model_settings(raw: Any) -> None:
     from cyrene.core.plugin import application_plugin_service
@@ -418,7 +409,6 @@ def _update_remote_model_settings(raw: Any) -> None:
         expected_revision=expected_revision,
     )
 
-
 def _public_pending_question(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -442,7 +432,6 @@ def _public_pending_question(value: Any) -> dict[str, Any] | None:
     }
     return result or None
 
-
 def _require_text(
     payload: dict[str, Any],
     field: str,
@@ -456,7 +445,6 @@ def _require_text(
         raise ValueError(f"{field} is too long")
     return value
 
-
 def _permission_mode(
     payload: dict[str, Any],
     *,
@@ -468,34 +456,6 @@ def _permission_mode(
         expected = ", ".join(sorted(allowed))
         raise ValueError(f"permission_mode must be one of: {expected}")
     return value
-
-
-def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
-    plan = [
-        {
-            key: item[key]
-            for key in ("id", "title", "description", "status")
-            if key in item
-        }
-        for item in task.get("plan") or []
-        if isinstance(item, dict)
-    ]
-    return {
-        "id": str(task.get("id") or ""),
-        "project_id": str(task.get("projectId") or ""),
-        "title": str(task.get("title") or ""),
-        "goal": str(task.get("goal") or ""),
-        "status": str(task.get("status") or "idle"),
-        "priority": str(task.get("priority") or "medium"),
-        "created_at": str(task.get("createdAt") or ""),
-        "updated_at": str(task.get("updatedAt") or ""),
-        "plan": plan,
-        "pending_question": _public_pending_question(
-            task.get("pendingQuestion")
-        ),
-        "artifact_count": len(task.get("artifacts") or []),
-    }
-
 
 def _attachment_summary(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict):
@@ -517,12 +477,11 @@ def _attachment_summary(item: Any) -> dict[str, Any] | None:
     }
     return result or None
 
-
 def _store_remote_attachments(value: Any) -> list[dict[str, Any]]:
     """Persist a bounded, encrypted mobile upload as a regular chat attachment."""
     if not isinstance(value, list):
         return []
-    from cyrene.runtime.attachments import (
+    from cyrene.platform.attachments import (
         UPLOADS_DIR,
         attachment_kind_from_meta,
         safe_attachment_filename,
@@ -569,7 +528,6 @@ def _store_remote_attachments(value: Any) -> list[dict[str, Any]]:
         raise
     return uploaded
 
-
 def _remote_chat_usage(chat: dict[str, Any]) -> dict[str, int]:
     totals = {
         "prompt_tokens": 0,
@@ -607,7 +565,6 @@ def _remote_chat_usage(chat: dict[str, Any]) -> dict[str, int]:
         )
     return totals
 
-
 def _remote_chat_model(chat: dict[str, Any]) -> str:
     direct = str(chat.get("lastModel") or chat.get("model") or "").strip()
     if direct:
@@ -624,7 +581,6 @@ def _remote_chat_model(chat: dict[str, Any]) -> str:
         if model:
             return model
     return ""
-
 
 def _chat_summary(chat: dict[str, Any]) -> dict[str, Any]:
     summary = {
@@ -649,7 +605,6 @@ def _chat_summary(chat: dict[str, Any]) -> dict[str, Any]:
     if isinstance(active_plan, dict):
         summary["active_plan"] = active_plan
     return summary
-
 
 def _chat_detail(chat: dict[str, Any]) -> dict[str, Any]:
     messages = []
@@ -685,7 +640,6 @@ def _chat_detail(chat: dict[str, Any]) -> dict[str, Any]:
         "pending_question": _public_pending_question(chat.get("pendingQuestion")),
     }
 
-
 def _context_value_text(value: Mapping[str, Any]) -> str:
     role = str(value.get("role") or "")
     if role == "tool_results":
@@ -704,7 +658,6 @@ def _context_value_text(value: Mapping[str, Any]) -> str:
     if role == "assistant" and value.get("tool_calls"):
         text += json.dumps(value.get("tool_calls"), ensure_ascii=False, default=str)
     return text
-
 
 def _remote_agent_plugin_usage(nodes: list[Any]) -> tuple[list[str], list[str]]:
     packs: list[str] = []
@@ -747,7 +700,6 @@ def _remote_agent_plugin_usage(nodes: list[Any]) -> tuple[list[str], list[str]]:
         for result in results if isinstance(results, list) else ():
             record(result, str(node.parent_id or node.id))
     return packs, standalone
-
 
 def _remote_agent_context(
     chat_id: str,
@@ -993,7 +945,6 @@ def _remote_agent_context(
     }
     return metrics, blocks, subagents
 
-
 def _remote_map_data(chat_id: str) -> dict[str, Any]:
     from cyrene.core.plugin import application_plugin_service
 
@@ -1018,7 +969,6 @@ def _remote_map_data(chat_id: str) -> dict[str, Any]:
             if isinstance(item, dict)
         ],
     }
-
 
 def _remote_inbox_snapshot(chat_id: str, run_manager: Any) -> dict[str, Any]:
     run = run_manager.get(chat_id) if run_manager is not None else None
@@ -1059,23 +1009,6 @@ def _remote_inbox_snapshot(chat_id: str, run_manager: Any) -> dict[str, Any]:
         "live": live,
     }
 
-
-def _artifact_summary(item: Any) -> dict[str, Any] | None:
-    if not isinstance(item, dict):
-        return None
-    artifact_id = str(item.get("id") or "")
-    if not artifact_id:
-        return None
-    return {
-        "id": artifact_id,
-        "name": str(item.get("name") or ""),
-        "type": str(item.get("type") or ""),
-        "status": str(item.get("status") or ""),
-        "created_at": str(item.get("createdAt") or ""),
-        "size": int(item["size"]) if item.get("size") is not None else None,
-    }
-
-
 def _file_chunk(file_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     """Read one bounded transport chunk without limiting the complete file."""
     size = file_path.stat().st_size
@@ -1103,7 +1036,6 @@ def _file_chunk(file_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
         "progress": 1.0 if size == 0 else min(1.0, next_offset / size),
         "content_base64": base64.b64encode(content).decode("ascii"),
     }
-
 
 def _image_thumbnail(file_path: Path) -> tuple[Path, int, int]:
     """Return a cached, bounded WebP preview without altering the source."""
@@ -1145,7 +1077,6 @@ def _image_thumbnail(file_path: Path) -> tuple[Path, int, int]:
     finally:
         temporary.unlink(missing_ok=True)
 
-
 def referenced_chat_attachment_target(
     chat: dict[str, Any],
     attachment_id: str,
@@ -1171,7 +1102,7 @@ def referenced_chat_attachment_target(
         if candidate.exists() and candidate.is_file():
             return attachment, candidate
 
-    from cyrene.runtime.attachments import EXPORTS_DIR, UPLOADS_DIR
+    from cyrene.platform.attachments import EXPORTS_DIR, UPLOADS_DIR
 
     url = str(attachment.get("url") or "")
     if url.startswith("/api/workbench/uploads/"):
@@ -1191,53 +1122,6 @@ def referenced_chat_attachment_target(
             return attachment, candidate
     raise FileNotFoundError("referenced attachment file is unavailable")
 
-
-def _task_detail(task: dict[str, Any]) -> dict[str, Any]:
-    plan = [
-        {
-            key: item[key]
-            for key in ("id", "title", "description", "status")
-            if key in item
-        }
-        for item in task.get("plan") or []
-        if isinstance(item, dict)
-    ]
-    artifacts = [
-        summary
-        for item in task.get("artifacts") or []
-        if (summary := _artifact_summary(item)) is not None
-    ]
-    goal_loop = task.get("goalLoop")
-    return {
-        **_task_summary(task),
-        "plan": plan,
-        "pending_question": _public_pending_question(
-            task.get("pendingQuestion")
-        ),
-        "artifacts": artifacts,
-        "goal_loop": (
-            {
-                key: goal_loop[key]
-                for key in (
-                    "id",
-                    "status",
-                    "phase",
-                    "currentStepId",
-                    "stopReason",
-                    "activeSeconds",
-                    "maxActiveSeconds",
-                    "repairRound",
-                    "maxRepairRounds",
-                    "updatedAt",
-                )
-                if key in goal_loop
-            }
-            if isinstance(goal_loop, dict)
-            else None
-        ),
-    }
-
-
 class RemoteCommandExecutor:
     """Execute the protocol's fixed command set against local Workbench state."""
 
@@ -1247,8 +1131,6 @@ class RemoteCommandExecutor:
         store: RemoteControlStore,
         chat: Any = None,
         projects: Any = None,
-        tasks: Any = None,
-        goals: Any = None,
         bot: Any = None,
         db_path: str = "",
     ) -> None:
@@ -1257,8 +1139,6 @@ class RemoteCommandExecutor:
         self.db_path = str(db_path or "")
         self.chat = chat
         self.projects = projects
-        self.tasks = tasks
-        self.goals = goals
         self._remote_shell_owners: dict[str, tuple[str, str]] = {}
         self._remote_files = RemoteWorkspaceFiles(store)
         self._remote_jobs = RemoteJobManager(store)
@@ -1277,6 +1157,10 @@ class RemoteCommandExecutor:
             result = await self._execute(peer_device_id, command, payload, project_id)
         except ControlServiceError as exc:
             result = {"ok": False, "status_code": exc.status_code, **exc.payload}
+        except LookupError as exc:
+            result = {"ok": False, "code": "goal_not_found", "error": str(exc)}
+        except ValueError as exc:
+            result = {"ok": False, "code": "invalid_status_transition", "error": str(exc)}
         return _localized_remote_error(result)
 
     async def _execute(
@@ -1354,7 +1238,6 @@ class RemoteCommandExecutor:
     ) -> dict[str, Any] | None:
         no_payload = {
             "chats.list": self._chats_list,
-            "tasks.list": self._tasks_list,
         }
         with_payload = {
             "chats.create": self._chats_create, "chats.update": self._chats_update,
@@ -1362,20 +1245,19 @@ class RemoteCommandExecutor:
             "changes.read": self._changes_read, "chats.send": self._chats_send,
             "runs.read": self._runs_read, "runs.events": self._runs_events,
             "runs.wait": self._runs_wait, "runs.guide": self._runs_guide,
-            "runs.interrupt": self._runs_interrupt, "tasks.create": self._tasks_create,
-            "tasks.read": self._tasks_read, "tasks.dispatch": self._tasks_dispatch,
-            "tasks.approve_plan": self._tasks_approve_plan,
-            "tasks.run_step": self._tasks_run_step,
+            "runs.interrupt": self._runs_interrupt,
+            "goals.read": self._goals_read,
+            "goals.update": self._goals_update,
+            "goals.confirm": self._goals_confirm,
             "approvals.respond": self._approvals_respond,
-            "artifacts.list": self._artifacts_list, "artifacts.read": self._artifacts_read,
             "attachments.read": self._attachments_read,
         }
         if operation := no_payload.get(command):
             return await operation(project_id)
         if operation := with_payload.get(command):
             return await operation(project_id, payload)
-        if command in {"tasks.pause", "tasks.resume", "tasks.cancel"}:
-            return await self._tasks_control(command, project_id, payload)
+        if command in {"goals.pause", "goals.resume", "goals.abort", "goals.accept"}:
+            return await self._goals_control(command, project_id, payload)
         return None
 
     async def _execute_settings(
@@ -1562,8 +1444,8 @@ class RemoteCommandExecutor:
         raise ValueError("unsupported shell operation")
 
     def _settings_read(self) -> dict[str, Any]:
-        from cyrene.runtime.settings_service import setting_spec_by_key
-        from cyrene.runtime.settings_store import get_enabled_plugin_packs
+        from cyrene.platform.settings_service import setting_spec_by_key
+        from cyrene.platform.settings_store import get_enabled_plugin_packs
 
         settings = get_web_settings()
         active_keys = set(setting_spec_by_key())
@@ -1675,7 +1557,7 @@ class RemoteCommandExecutor:
         model_service = host.service("model_configuration") if host is not None else None
         if model_service is None:
             raise RuntimeError("Model Plugin is disabled or unavailable")
-        from cyrene.runtime import config_store
+        from cyrene.platform import config_store
 
         graph = model_service.get_model_configuration()
         graph["revision"] = config_store.get_settings_revision()
@@ -1685,8 +1567,8 @@ class RemoteCommandExecutor:
         }
 
     async def _settings_update(self, payload: dict[str, Any]) -> dict[str, Any]:
-        from cyrene.runtime.settings_service import setting_spec_by_key
-        from cyrene.runtime.settings_store import (
+        from cyrene.platform.settings_service import setting_spec_by_key
+        from cyrene.platform.settings_store import (
             get_enabled_plugin_packs,
             get_enabled_plugins,
             save_enabled_plugin_packs,
@@ -1854,7 +1736,7 @@ class RemoteCommandExecutor:
                     "模型插件不可用。",
                 ),
             }
-        from cyrene.runtime.settings_store import get as get_setting
+        from cyrene.platform.settings_store import get as get_setting
 
         try:
             snapshot = await model_service.oauth_provider().snapshot(
@@ -2640,289 +2522,80 @@ class RemoteCommandExecutor:
             "code": "" if interrupted else "chat_not_running",
         }
 
-    async def _tasks_list(self, project_id: str) -> dict[str, Any]:
-        result = await self.projects.list_tasks(project_id)
-        if result.get("ok") is False:
-            return result
-        return {
-            "ok": True,
-            "tasks": [
-                _task_summary(item)
-                for item in result.get("sessions") or []
-                if isinstance(item, dict) and str(item.get("kind") or "task") == "task"
-            ],
-        }
-
-    async def _tasks_create(
+    async def _conversation_goal(
         self,
         project_id: str,
         payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        result = await self.projects.create_task(project_id, {
-            "title": str(payload.get("title") or "")[:160],
-            "goal": _require_text(payload, "goal", max_length=50_000),
-            "priority": str(payload.get("priority") or "medium"),
-        })
-        if result.get("ok") is False:
-            return result
-        return {"ok": True, "task": _task_summary(dict(result.get("session") or {}))}
-
-    async def _task_for_project(
-        self,
-        project_id: str,
-        payload: dict[str, Any],
-    ) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
-        task_id = _require_text(payload, "task_id", max_length=200)
-        result = await self.tasks.get(task_id)
-        if result.get("ok") is False:
-            return task_id, None, result
-        task = dict(result.get("session") or {})
-        if str(task.get("projectId") or result.get("projectId") or "") != project_id:
-            return task_id, None, {
+    ) -> tuple[str, Any] | tuple[None, dict[str, Any]]:
+        chat_id, chat = await self._chat_for_project(project_id, payload)
+        if chat is None or chat.get("ok") is False:
+            return None, dict(chat or {"ok": False, "error": "chat not found"})
+        service = application_plugin_service("goal")
+        if service is None:
+            return None, {
                 "ok": False,
-                "code": "remote_project_mismatch",
-                "error": "task does not belong to the authorized project",
+                "code": "plugin_host_unavailable",
+                "error": "Conversation Goal service is unavailable",
             }
-        return task_id, task, None
+        return chat_id, service
 
-    async def _tasks_read(
+    async def _goals_read(
         self,
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        _task_id, task, error = await self._task_for_project(project_id, payload)
-        return error or {"ok": True, "task": _task_detail(task or {})}
+        chat_id, service = await self._conversation_goal(project_id, payload)
+        if chat_id is None:
+            return dict(service)
+        goal = await service.get(chat_id)
+        return {"ok": True, "goal": service.public(goal) if goal else None}
 
-    async def _tasks_dispatch(
+    async def _goals_update(
         self,
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        task_id, _task, error = await self._task_for_project(project_id, payload)
-        if error:
-            return error
-        attachments = _store_remote_attachments(payload.get("attachments"))
-        try:
-            result = await self.tasks.dispatch(task_id, {
-                "input": _require_text(payload, "message"),
-                "attachments": attachments,
-                "mode": _permission_mode(
-                    payload,
-                    allowed=frozenset({"auto", "default", "plan", "full_access"}),
-                    default="auto",
-                ),
-                "command": str(payload.get("command") or ""),
-            })
-        except Exception:
-            for attachment in attachments:
-                Path(str(attachment.get("path") or "")).unlink(missing_ok=True)
-            raise
-        if result.get("ok") is False:
-            for attachment in attachments:
-                Path(str(attachment.get("path") or "")).unlink(missing_ok=True)
-            return result
-        return {
-            "ok": True,
-            "task": _task_summary(dict(result.get("session") or {})),
-            "reply_kind": str(result.get("replyKind") or ""),
-        }
-
-    async def _tasks_approve_plan(
-        self,
-        project_id: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        task_id, task, error = await self._task_for_project(project_id, payload)
-        if error:
-            return error
-        revision = int((task or {}).get("planDefinitionRevision") or 0)
-        if not (task or {}).get("plan"):
-            return {
-                "ok": False,
-                "code": "task_plan_empty",
-                "error": "task plan is empty",
-            }
-        result = await self.tasks.update(task_id, {
-            "status": "waiting_for_approval",
-            "approvedPlanDefinitionRevision": revision,
-        })
-        if result.get("ok") is False:
-            return result
-        return {
-            "ok": True,
-            "task": _task_detail(dict(result.get("session") or {})),
-            "approved_plan_definition_revision": revision,
-        }
-
-    async def _tasks_run_step(
-        self,
-        project_id: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        task_id, task, error = await self._task_for_project(project_id, payload)
-        if error:
-            return error
-        step_id = _require_text(payload, "step_id", max_length=200)
-        plan = [
-            dict(item)
-            for item in (task or {}).get("plan") or []
-            if isinstance(item, dict)
-        ]
-        step = next(
-            (item for item in plan if str(item.get("id") or "") == step_id),
-            None,
+        chat_id, service = await self._conversation_goal(project_id, payload)
+        if chat_id is None:
+            return dict(service)
+        goal = await service.update(
+            chat_id,
+            {key: value for key, value in payload.items() if key != "chat_id"},
         )
-        if step is None:
-            return {
-                "ok": False,
-                "code": "step_not_found",
-                "error": "task step not found",
-            }
-        revision = int((task or {}).get("planDefinitionRevision") or 0)
-        approved_revision = (task or {}).get("approvedPlanDefinitionRevision")
-        if (
-            approved_revision is None
-            or int(approved_revision) != revision
-        ):
-            return {
-                "ok": False,
-                "code": "plan_not_approved",
-                "error": "current task plan has not been approved",
-            }
-        for item in plan:
-            if str(item.get("id") or "") == step_id:
-                item["status"] = "running"
-                item["currentAction"] = "Remote controller started this step."
-        prepared = await self.tasks.update(task_id, {"status": "running", "plan": plan})
-        if prepared.get("ok") is False:
-            return prepared
-        result = await self.tasks.create_run(task_id, {
-            "input": _require_text(payload, "message"),
-            "mode": _permission_mode(
-                payload,
-                allowed=frozenset({"auto", "default", "plan", "full_access"}),
-                default="auto",
-            ),
-            "stepId": step_id,
-            "stepTitle": str(step.get("title") or "")[:1000],
-            "action": "spawn_subagent",
-            "meta": {"scope": "plan_step", "continueAll": False},
-            "planDefinitionRevision": revision,
-        })
-        if result.get("ok") is False:
-            return result
-        updated = dict(result.get("session") or {})
-        if str(updated.get("status") or "") == "waiting_for_user":
-            return {"ok": True, "task": _task_detail(updated)}
-        returned_plan = [
-            dict(item)
-            for item in updated.get("plan") or plan
-            if isinstance(item, dict)
-        ]
-        for item in returned_plan:
-            if str(item.get("id") or "") == step_id:
-                item["status"] = "completed"
-                item["currentAction"] = "Remote-controlled step completed."
-        resolved = {"completed", "done", "skipped"}
-        fully_done = bool(returned_plan) and all(
-            str(item.get("status") or "") in resolved
-            for item in returned_plan
-        )
-        finalized = await self.tasks.update(task_id, {
-            "status": "review" if fully_done else "paused",
-            "plan": returned_plan,
-        })
-        if finalized.get("ok") is False:
-            return finalized
-        return {
-            "ok": True,
-            "task": _task_detail(dict(finalized.get("session") or {})),
-            "step_id": step_id,
-            "fully_done": fully_done,
-        }
+        return {"ok": True, "goal": service.public(goal)}
 
-    async def _tasks_control(
+    async def _goals_confirm(
+        self,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        chat_id, service = await self._conversation_goal(project_id, payload)
+        if chat_id is None:
+            return dict(service)
+        goal = await service.confirm(
+            chat_id,
+            {key: value for key, value in payload.items() if key != "chat_id"},
+        )
+        return {"ok": True, "goal": service.public(goal)}
+
+    async def _goals_control(
         self,
         command: str,
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        task_id, task, error = await self._task_for_project(project_id, payload)
-        if error:
-            return error
-        if self.goals is not None:
-            goal_state = await self.goals.get(task_id)
-            goal_loop = goal_state.get("goalLoop")
-            if (
-                isinstance(goal_loop, dict)
-                and str(goal_loop.get("status") or "")
-                not in {"completed", "failed", "cancelled"}
-            ):
-                action = command.removeprefix("tasks.")
-                controlled = await self.goals.control(action, task_id)
-                if controlled.get("ok") is False:
-                    return controlled
-                return {
-                    "ok": True,
-                    "task": _task_detail(
-                        dict(controlled.get("session") or {})
-                    ),
-                    "goal_loop": controlled.get("goalLoop"),
-                }
-        current = str((task or {}).get("status") or "")
-        if command == "tasks.pause" and current not in {
-            "running",
-            "waiting_for_user",
-        }:
-            return {
-                "ok": False,
-                "code": "invalid_status_transition",
-                "error": "only an active task can be paused",
-            }
-        if command == "tasks.resume" and current != "paused":
-            return {
-                "ok": False,
-                "code": "invalid_status_transition",
-                "error": "only a paused task can be resumed",
-            }
-        next_status = {
-            "tasks.pause": "paused",
-            "tasks.resume": "idle",
-            "tasks.cancel": "cancelled",
-        }[command]
-        if command in {"tasks.pause", "tasks.cancel"}:
-            from cyrene.workbench.tasks.task_runs import interrupt_task_run
-
-            interrupt_task_run(self.db_path, task_id)
-        result = await self.tasks.update(task_id, {"status": next_status})
-        if result.get("ok") is False:
-            return result
-        return {"ok": True, "task": _task_summary(dict(result.get("session") or {}))}
+        chat_id, service = await self._conversation_goal(project_id, payload)
+        if chat_id is None:
+            return dict(service)
+        action = command.removeprefix("goals.")
+        goal = await getattr(service, action)(chat_id)
+        return {"ok": True, "goal": service.public(goal)}
 
     async def _approvals_respond(
         self,
         project_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        if str(payload.get("task_id") or "").strip():
-            task_id, _task, error = await self._task_for_project(
-                project_id,
-                payload,
-            )
-            if error:
-                return error
-            result = await self.tasks.answer(task_id, {
-                "question_id": _require_text(payload, "question_id", max_length=500),
-                "answer": _require_text(payload, "answer"),
-                "mode": _permission_mode(payload, allowed=frozenset({"auto", "default"})),
-            })
-            if result.get("ok") is False:
-                return result
-            return {
-                "ok": True,
-                "task": _task_detail(dict(result.get("session") or {})),
-                "awaiting_user": bool(result.get("awaitingUser")),
-            }
         chat_id, chat = await self._chat_for_project(project_id, payload)
         if chat is None or chat.get("ok") is False:
             return dict(chat or {"ok": False, "error": "chat not found"})
@@ -2932,76 +2605,6 @@ class RemoteCommandExecutor:
             "mode": _permission_mode(payload, allowed=frozenset({"auto", "default"})),
         })
         return {"ok": True, **result} if result.get("ok") is not False else result
-
-    async def _artifacts_list(
-        self,
-        project_id: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        task_id, _task, error = await self._task_for_project(project_id, payload)
-        if error:
-            return error
-        result = await self.tasks.artifacts(task_id)
-        if result.get("ok") is False:
-            return result
-        return {
-            "ok": True,
-            "artifacts": [
-                summary
-                for item in result.get("artifacts") or []
-                if (summary := _artifact_summary(item)) is not None
-            ],
-        }
-
-    async def _artifacts_read(
-        self,
-        project_id: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        _task_id, task, error = await self._task_for_project(project_id, payload)
-        if error:
-            return error
-        artifact_id = _require_text(payload, "artifact_id", max_length=200)
-        artifact = next(
-            (
-                item
-                for item in (task or {}).get("artifacts") or []
-                if isinstance(item, dict)
-                and str(item.get("id") or "") == artifact_id
-            ),
-            None,
-        )
-        if artifact is None:
-            return {
-                "ok": False,
-                "code": "artifact_not_found",
-                "error": "artifact not found",
-            }
-        try:
-            download = self.tasks.artifact_download(
-                str((task or {}).get("id") or ""), artifact_id
-            )
-        except (LookupError, ValueError, FileNotFoundError) as exc:
-            logger.info(
-                "Remote artifact is unavailable",
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
-            return {
-                "ok": False,
-                "code": "artifact_unavailable",
-                "error": localized(
-                    "The artifact is unavailable.",
-                    "产物不可用。",
-                ),
-            }
-        file_path = Path(download.path)
-        return {
-            "ok": True,
-            "artifact": _artifact_summary(artifact),
-            "filename": download.filename,
-            "media_type": download.media_type,
-            **_file_chunk(file_path, payload),
-        }
 
     async def _attachments_read(
         self,
@@ -3101,7 +2704,6 @@ class RemoteCommandExecutor:
             **({"height": preview_height} if preview_height is not None else {}),
             **_file_chunk(transfer_path, payload),
         }
-
 
 class RemoteControlRuntime:
     """Own the LAN listener and encrypted gateway lifecycle."""
@@ -3275,7 +2877,6 @@ class RemoteControlRuntime:
             ),
             "port_fallback": self.lan_port != DIRECT_PAIRING_PORT,
         }
-
 
 __all__ = [
     "RemoteCommandExecutor",

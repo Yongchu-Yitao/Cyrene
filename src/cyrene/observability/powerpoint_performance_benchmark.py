@@ -103,7 +103,7 @@ async def _default_caller(method: str, args: dict[str, Any]) -> dict[str, Any]:
         default_plugin_impl_directory,
     )
     from cyrene.plugins.native_tools import seed_builtin_plugin_directory
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     plugin_name = _BENCHMARK_PLUGINS.get(method)
     if plugin_name is None:

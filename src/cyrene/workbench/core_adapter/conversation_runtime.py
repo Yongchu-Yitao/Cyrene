@@ -75,7 +75,7 @@ def _conversation_data_directory(
         return Path(override).expanduser().resolve()
     if str(db_path or "").strip():
         return Path(db_path).expanduser().resolve().parent / "agent-state"
-    from cyrene.runtime.paths import USER_DATA_DIR
+    from cyrene.platform.paths import USER_DATA_DIR
 
     return Path(USER_DATA_DIR).expanduser().resolve() / "agent-state"
 
@@ -180,6 +180,7 @@ class ConversationConfig:
     data_directory: str | Path | None = None
     max_model_calls: int | None = None
     guidance_channel: Any = None
+    read_only: bool = False
 
 
 class ConversationRuntime:
@@ -434,6 +435,7 @@ class ConversationRuntime:
                 if str(item or "").strip()
             ),
             "deep_research": str(config.command or "").strip() == "deep-research",
+            "read_only": bool(config.read_only),
             "attachment_paths": dict(config.attachment_paths),
         }
         if worker_publisher is not None:
@@ -479,6 +481,7 @@ class ConversationRuntime:
                 "memory_write_enabled": bool(config.memory_write_enabled),
                 "memory_trigger_enabled": bool(config.memory_trigger_enabled),
                 "memory_archive_enabled": bool(config.memory_archive_enabled),
+                "read_only": bool(config.read_only),
                 "retry": bool(config.retry),
                 "completed_turn_count": max(0, int(config.completed_turn_count or 0)),
                 "background_submitter": submit_background,

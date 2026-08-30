@@ -9,7 +9,7 @@ from typing import Any
 
 from cyrene.core.plugin import Plugin, PluginContext
 from cyrene.core.plugin.execution import invoke_plugin
-from cyrene.model_runtime.image_generation import (
+from cyrene.model.image_generation import (
     ImageGenerationError,
     generate_image,
 )

@@ -104,7 +104,7 @@
 }
 
 /* Selection belongs to the transcript rather than the whole shell: controls,
-   settings and embedded viewers retain their native/task-specific behavior. */
+   settings and embedded viewers retain their native behavior. */
 .wbc-thread ::selection {
   background: var(--wb-selection-bg);
   color: var(--wb-selection-text);
@@ -4033,6 +4033,814 @@ html :is(
   max-width: 190px;
 }
 
+.wbc-context-ring-anchor {
+  position: relative;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-context-ring-button {
+  position: relative;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  padding: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text);
+  background: transparent;
+  cursor: pointer;
+  transition: background .16s ease, transform .16s ease;
+}
+
+.wbc-context-ring-button::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+}
+
+.wbc-context-ring-button:hover,
+.wbc-context-ring-button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 66%, transparent);
+}
+
+.wbc-context-ring-button:active {
+  transform: scale(.97);
+}
+
+.wbc-context-ring-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 22%, transparent);
+}
+
+.wbc-context-ring-svg {
+  width: 26px;
+  height: 26px;
+  display: block;
+  overflow: visible;
+}
+
+.wbc-context-ring-svg circle {
+  fill: none;
+  transform: rotate(-90deg);
+  transform-origin: 16px 16px;
+}
+
+.wbc-context-ring-track {
+  stroke: color-mix(in srgb, var(--wb-muted) 19%, transparent);
+  stroke-width: 2;
+}
+
+.wbc-context-ring-track.is-inner {
+  stroke-width: 1.8;
+}
+
+.wbc-context-ring-value {
+  stroke-linecap: round;
+  transition: stroke .2s ease, stroke-dashoffset .24s ease;
+}
+
+.wbc-context-ring-value.is-context {
+  stroke-width: 2;
+}
+
+.wbc-context-ring-value.is-cache {
+  stroke-width: 1.8;
+}
+
+.wbc-context-ring-tooltip {
+  position: absolute;
+  right: -72px;
+  bottom: calc(100% + 9px);
+  z-index: 48;
+  box-sizing: border-box;
+  width: 232px;
+  padding: 11px 12px;
+  border: 1px solid var(--wb-flyout-border);
+  border-radius: 12px;
+  color: var(--wb-text);
+  background: var(--wb-flyout-bg);
+  box-shadow: var(--wb-flyout-shadow);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
+}
+
+.wbc-context-ring-anchor:hover .wbc-context-ring-tooltip,
+.wbc-context-ring-anchor:focus-within .wbc-context-ring-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.wbc-context-ring-tooltip::after {
+  content: "";
+  position: absolute;
+  right: 80px;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid var(--wb-flyout-border);
+  border-bottom: 1px solid var(--wb-flyout-border);
+  background: var(--wb-flyout-bg);
+  transform: rotate(45deg);
+}
+
+.wbc-context-ring-tooltip > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-context-ring-tooltip > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-context-ring-tooltip > div span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wb-muted);
+}
+
+.wbc-context-ring-tooltip > div i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wb-accent);
+}
+
+.wbc-context-ring-tooltip > small {
+  display: block;
+  padding: 2px 0 0 13px;
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-context-inspector-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, #020617 52%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  animation: wbc-context-inspector-fade-in .18s ease-out;
+}
+
+.wbc-context-inspector {
+  width: min(900px, 100%);
+  max-height: min(760px, calc(100dvh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--wb-modal-border);
+  border-radius: 18px;
+  background: var(--wb-modal-bg);
+  color: var(--wb-text);
+  box-shadow: var(--wb-modal-shadow);
+  animation: wbc-context-inspector-enter .22s cubic-bezier(.2, .8, .2, 1);
+}
+
+.wbc-context-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 15px;
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wbc-context-inspector-head > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wbc-context-inspector-head strong {
+  font-size: calc(16px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-context-inspector-head small {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-context-inspector-head button {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.wbc-context-inspector-head button:hover {
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+
+.wbc-context-inspector-head button:focus-visible,
+.wbc-context-inspector-state button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 22%, transparent);
+}
+
+.wbc-context-inspector-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wbc-context-inspector-summary > div {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  background: color-mix(in srgb, var(--wb-panel-2) 72%, transparent);
+}
+
+.wbc-context-inspector-summary span {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-context-inspector-summary b {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  font-size: calc(17px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-context-inspector-summary small {
+  overflow: hidden;
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-context-inspector-body {
+  min-height: 260px;
+  padding: 18px 20px 22px;
+  overflow: auto;
+}
+
+.wbc-context-audit {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.wbc-context-audit-section {
+  min-width: 0;
+}
+
+.wbc-context-audit-section > header {
+  min-height: 25px;
+  margin-bottom: 9px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wbc-context-audit-section > header strong {
+  padding-bottom: 8px;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-context-audit-section > header small,
+.wbc-context-timeline-button time {
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-context-audit-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 24px;
+}
+
+.wbc-context-audit-grid > div {
+  min-width: 0;
+  padding: 6px 0;
+  display: grid;
+  grid-template-columns: minmax(105px, .42fr) minmax(0, 1fr);
+  gap: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 65%, transparent);
+}
+
+.wbc-context-audit-grid dt,
+.wbc-context-audit-grid dd {
+  min-width: 0;
+  margin: 0;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wbc-context-audit-grid dt {
+  color: var(--wb-faint);
+}
+
+.wbc-context-audit-grid dd {
+  color: var(--wb-text);
+  text-align: right;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-context-audit-grid dd.is-code {
+  white-space: pre-wrap;
+  font-family: var(--wb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-context-audit-grid > div.is-structured {
+  grid-column: 1 / -1;
+  display: block;
+  padding: 9px 0 11px;
+}
+
+.wbc-context-audit-grid > div.is-wide {
+  grid-column: 1 / -1;
+}
+
+.wbc-context-plugin-grid .wbc-context-audit-grid > div {
+  grid-template-columns: minmax(120px, .24fr) minmax(0, 1fr);
+  min-height: 38px;
+  align-items: center;
+}
+
+.wbc-context-plugin-grid .wbc-context-audit-grid dd {
+  font-weight: 540;
+}
+
+.wbc-context-audit-grid > div.is-structured > dt {
+  margin-bottom: 7px;
+}
+
+.wbc-context-audit-grid dd.is-structured {
+  text-align: left;
+  white-space: normal;
+  font-family: inherit;
+}
+
+.wbc-context-metadata-tree {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wbc-context-metadata-group {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-modal-bg) 70%, transparent);
+  overflow: clip;
+}
+
+.wbc-context-metadata-group > summary {
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  color: var(--wb-text);
+  cursor: pointer;
+  transition: background .16s ease;
+}
+
+.wbc-context-metadata-group > summary:hover {
+  background: var(--wb-control-hover-bg);
+}
+
+.wbc-context-metadata-group > summary:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--wb-accent) 28%, transparent);
+}
+
+.wbc-context-metadata-label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: color-mix(in srgb, var(--wb-text) 86%, var(--wb-muted));
+  overflow-wrap: anywhere;
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.wbc-context-metadata-label code {
+  color: var(--wb-faint);
+  font: 500 calc(8.5px * var(--wb-ui-font-scale, 1)) / 1.35 var(--wb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.wbc-context-metadata-group > summary > span:last-child {
+  color: var(--wb-faint);
+  font-size: calc(9px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wbc-context-metadata-group[open] > summary {
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 72%, transparent);
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 48%, transparent);
+}
+
+.wbc-context-metadata-group > .wbc-context-metadata-tree {
+  margin: 6px 8px 8px 14px;
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--wb-muted) 24%, transparent);
+}
+
+.wbc-context-metadata-field {
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 9px;
+  display: grid;
+  grid-template-columns: minmax(120px, .38fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent);
+}
+
+.wbc-context-metadata-field:last-child {
+  border-bottom: 0;
+}
+
+.wbc-context-metadata-field > :last-child {
+  min-width: 0;
+  color: var(--wb-text);
+  text-align: right;
+  overflow-wrap: anywhere;
+  font: calc(9.5px * var(--wb-ui-font-scale, 1)) / 1.5 var(--wb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-context-metadata-field a {
+  color: var(--wb-accent);
+  text-decoration: none;
+}
+
+.wbc-context-metadata-field a:hover {
+  text-decoration: underline;
+}
+
+.wbc-context-metadata-field .is-null,
+.wbc-context-metadata-empty {
+  color: var(--wb-faint);
+  font-style: italic;
+}
+
+.wbc-context-metadata-field .is-boolean {
+  justify-self: end;
+  padding: 1px 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 999px;
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.wbc-context-metadata-field .is-boolean.is-true {
+  border-color: color-mix(in srgb, var(--wb-green) 28%, var(--wb-line));
+  color: color-mix(in srgb, var(--wb-green) 78%, var(--wb-text));
+}
+
+.wbc-context-metadata-empty {
+  display: block;
+  padding: 8px 10px;
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-context-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wbc-context-timeline > li {
+  padding: 10px 0 11px;
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wbc-context-timeline > li:first-child {
+  padding-top: 2px;
+}
+
+.wbc-context-timeline-button {
+  margin-bottom: 5px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wbc-context-timeline-button b {
+  color: var(--wb-text);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+}
+
+.wbc-context-timeline {
+  padding-left: 0;
+}
+
+.wbc-context-timeline > li {
+  position: relative;
+}
+
+.wbc-context-timeline-button {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background .16s ease;
+}
+
+.wbc-context-timeline-button:hover,
+.wbc-context-timeline-button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--wb-control-hover-bg) 72%, transparent);
+}
+
+.wbc-context-timeline-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 28%, transparent);
+}
+
+.wbc-context-timeline-button > span:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wbc-context-timeline-button > span:first-child small {
+  color: var(--wb-faint);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-family: var(--wb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.wbc-context-timeline-origin {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.wbc-context-timeline-origin small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-context-timeline-origin em {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--wb-green) 28%, var(--wb-line));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--wb-green) 78%, var(--wb-text));
+  background: color-mix(in srgb, var(--wb-green) 8%, transparent);
+  font-size: calc(8.5px * var(--wb-ui-font-scale, 1));
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.wbc-context-timeline-measure {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wbc-context-audit-empty {
+  margin: 0;
+  padding: 10px 0;
+  color: var(--wb-faint);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-context-inspector-state {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--wb-muted);
+  text-align: center;
+}
+
+.wbc-context-inspector-state.is-error {
+  flex-direction: column;
+}
+
+.wbc-context-inspector-state button {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  color: var(--wb-text);
+  background: var(--wb-control-bg);
+  cursor: pointer;
+}
+
+.wbc-context-block-details {
+  margin: 4px 8px 10px 18px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-panel-2) 68%, transparent);
+}
+
+.wbc-context-block-details .wbc-context-audit-grid {
+  grid-template-columns: 1fr;
+}
+
+.wbc-context-prompt-section {
+  margin: 0;
+}
+
+.wbc-context-prompt-section + .wbc-context-audit-grid {
+  margin-top: 10px;
+}
+
+.wbc-context-prompt-section > strong,
+.wbc-context-prompt-editor label > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+}
+
+.wbc-context-prompt-section pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-modal-bg);
+  color: var(--wb-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: calc(10px * var(--wb-ui-font-scale, 1)) / 1.55 var(--wb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.wbc-context-prompt-section pre.is-empty {
+  color: var(--wb-faint);
+  font-family: inherit;
+  font-style: italic;
+}
+
+.wbc-context-prompt-actions,
+.wbc-context-prompt-editor > div {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wbc-context-prompt-actions span {
+  margin-right: auto;
+  color: var(--wb-green);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-context-prompt-actions button,
+.wbc-context-prompt-editor button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  color: var(--wb-text);
+  background: var(--wb-control-bg);
+  cursor: pointer;
+}
+
+.wbc-context-prompt-editor button.is-primary {
+  border-color: color-mix(in srgb, var(--wb-accent) 48%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-accent) 14%, var(--wb-control-bg));
+}
+
+.wbc-context-prompt-actions button:hover,
+.wbc-context-prompt-editor button:hover:not(:disabled) {
+  background: var(--wb-control-hover-bg);
+}
+
+.wbc-context-prompt-actions button:focus-visible,
+.wbc-context-prompt-editor button:focus-visible,
+.wbc-context-prompt-editor textarea:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 28%, transparent);
+}
+
+.wbc-context-prompt-editor {
+  margin-top: 12px;
+}
+
+.wbc-context-prompt-editor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  color: var(--wb-text);
+  background: var(--wb-modal-bg);
+  font: calc(11px * var(--wb-ui-font-scale, 1)) / 1.55 var(--wb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.wbc-context-prompt-editor > small {
+  display: block;
+  margin-top: 6px;
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+}
+
+.wbc-context-prompt-editor > p {
+  margin: 7px 0 0;
+  color: var(--wb-error-text);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-context-prompt-editor button:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
+@keyframes wbc-context-inspector-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wbc-context-inspector-enter {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .wbc-model-button {
   box-sizing: border-box;
   height: 30px;
@@ -4194,6 +5002,17 @@ html[data-theme="dark"] .wbc-model-button.active {
     margin-left: 0;
   }
 
+  .wbc-context-ring-anchor {
+    flex-basis: 30px;
+    width: 30px;
+    height: 30px;
+  }
+
+  .wbc-context-ring-button {
+    width: 30px;
+    height: 30px;
+  }
+
   .wbc-model-button {
     width: 52px;
     gap: 4px;
@@ -4218,6 +5037,74 @@ html[data-theme="dark"] .wbc-model-button.active {
     display: none;
   }
 
+}
+
+@media (max-width: 640px) {
+  .wbc-context-inspector-scrim {
+    place-items: end center;
+    padding: 12px;
+  }
+
+  .wbc-context-inspector {
+    max-height: calc(100dvh - 24px);
+    border-radius: 16px;
+  }
+
+  .wbc-context-inspector-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wbc-context-inspector-summary > div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .wbc-context-inspector-body {
+    padding-inline: 14px;
+  }
+
+  .wbc-context-audit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wbc-context-audit-grid > div {
+    grid-template-columns: minmax(92px, .38fr) minmax(0, 1fr);
+  }
+
+  .wbc-context-metadata-field {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .wbc-context-metadata-field > :last-child,
+  .wbc-context-metadata-field .is-boolean {
+    justify-self: start;
+    text-align: left;
+  }
+
+  .wbc-context-timeline-button {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .wbc-context-timeline-button > span:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .wbc-context-block-details {
+    margin-left: 0;
+    padding-inline: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-context-ring-button,
+  .wbc-context-ring-value,
+  .wbc-context-ring-tooltip,
+  .wbc-context-timeline-button,
+  .wbc-context-inspector-scrim,
+  .wbc-context-inspector {
+    animation: none;
+    transition: none;
+  }
 }
 
 .wbc-pop-anchor {
@@ -4245,7 +5132,6 @@ html[data-theme="dark"] .wbc-model-button.active {
   gap: 2px;
 }
 
-.wb-popmenu::-webkit-scrollbar,
 .wbc-popmenu::-webkit-scrollbar {
   display: none;
   width: 0;

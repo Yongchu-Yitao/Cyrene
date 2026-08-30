@@ -181,74 +181,6 @@ async def test_rejected_r2_delegation_falls_back_to_exact_human_confirmation(mon
     assert payload["kind"] == "self_configuration_confirmation"
 
 
-def test_current_tree_exposes_project_switch_chat_search_and_shared_pip_maximize_handler():
-    root = Path(__file__).resolve().parents[1]
-    workbench = workbench_shell_source()
-    chat = workbench_chat_source()
-    model = (root / "src/cyrene/workbench/webui/frontend/workbench-model.jsx").read_text(encoding="utf-8")
-    welcome = (root / "src/cyrene/workbench/webui/frontend/workbench-welcome.jsx").read_text(encoding="utf-8")
-    onboarding_css = (root / "src/cyrene/workbench/webui/frontend/features/chat/onboarding.css").read_text(encoding="utf-8")
-    ui_surface = (root / "src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx").read_text(encoding="utf-8")
-    electron = (root / "electron/main.js").read_text(encoding="utf-8")
-
-    assert 'node_id: "project_switcher"' in workbench
-    assert 'scope: "project_menu"' in workbench
-    assert 'return onSelectProject && onSelectProject(projectId);' in workbench
-    assert 'node_id: "chat_search_input"' in chat
-    assert 'set_value: function (input) { setQuery(String(input.value || "")); }' in chat
-    assert 'node_id: "new_chat"' in chat
-    registration_block = chat.split('node_id: "new_chat"', 1)[0].rsplit("useWbcEffect(function ()", 1)[-1]
-    assert "if (!collapsed)" not in registration_block
-    assert 'node_id: "chat_list"' in chat
-    assert 'node_id: "chat_composer_submit"' in chat
-    assert 'node_id: "task_composer_submit"' in workbench
-    assert 'get_element: function () { return sendButtonRef.current; }' in workbench
-    assert 'target_scope: "task"' in workbench
-    composer_source = chat.split("function WbcComposer", 1)[1]
-    user_message_source = chat.split("function WbcUserMessage", 1)[1].split("function WbcAssistantMessage", 1)[0]
-    assert "var sendButtonRef = useWbcRef(null);" in composer_source
-    assert "sendButtonRef" not in user_message_source
-    assert 'var submitRisk = submitMode === "interrupt" ? "R1" : "R2";' in chat
-    assert 'get_element: function () { return sendButtonRef.current; }' in chat
-    assert 'submit_exposed: !sendDisabled' in chat
-    assert 'submit_exposed: false' not in chat
-    assert 'wbcViewportChatIds(chatListRef.current)' in chat
-    assert 'filtered.slice(0, 80)' not in chat
-    assert 'action_id: "page_previous"' in chat
-    assert 'action_id: "page_next"' in chat
-    assert 'data-cyrene-node-id="chat_context_menu"' in chat
-    assert 'requires_capability: "cyrene.chat.manage"' not in chat
-    assert 'setRenameChat(menuChat);' in chat
-    assert 'return onDelete && onDelete(menuChatId);' in chat
-    assert 'data-cyrene-risk="R2"' in chat
-    assert '[role="alertdialog"][aria-modal="true"]' in (
-        root / "src/cyrene/workbench/webui/frontend/platform/ui-surface.jsx"
-    ).read_text(encoding="utf-8")
-    assert 'onDoubleClick={effectiveMode === "pip" ? maximizeBrowserWindow : undefined}' in chat
-    assert 'gesture_aliases: ["double_press", "maximize_button"]' in chat
-    assert 'maximize: maximizeBrowserWindow' in chat
-    assert model.count("uiInstanceId: currentUiInstanceId()") == 4
-    assert 'clientRequestId: options.clientRequestId || newClientRequestId("task_dispatch")' in model
-    assert 'data-cyrene-node-id="onboarding"' in welcome
-    assert 'data-cyrene-node-id="onboarding_base_url"' in welcome
-    assert 'data-cyrene-node-id="onboarding_model"' in welcome
-    assert '<select className="wb-ob-input mono" data-cyrene-node-id="onboarding_base_url"' in welcome
-    assert 'onboarding_oauth_source' not in welcome
-    assert 'onboarding_custom_model_source' not in welcome
-    onboarding_topbar_css = onboarding_css.split(".wb-ob-topbar {", 1)[1].split("}", 1)[0]
-    assert "position: fixed;" in onboarding_topbar_css
-    assert "inset: 0 0 auto;" in onboarding_topbar_css
-    assert ".wb-ob-overview" not in onboarding_css
-    assert 'domNodeIds.set(element, explicitNodeId)' in ui_surface
-    assert 'return explicitNodeId;' in ui_surface
-    assert '"disabled", "checked", "pressed", "selected"' in ui_surface
-    assert 'pressed: element.getAttribute("aria-pressed") == null' in ui_surface
-    assert "isDesktopOnboardingTree(candidate)" in electron
-    assert "runDesktopOnboardingSmokeTest(window, uiInstanceId, tree)" in electron
-    assert "'onboarding endpoint selection'" in electron
-    assert "'onboarding should fit without page scrolling'" in electron
-
-
 def test_window_control_schema_requires_argument_bound_idempotency_key():
     from cyrene.plugins.builtin.cyrene_application.window import TOOL_DEF
 
@@ -274,7 +206,7 @@ async def test_settings_describe_reports_its_own_operation_id(monkeypatch):
 
 def test_tool_output_global_cap_is_configurable_and_unlimited_at_zero(monkeypatch):
     from cyrene import config
-    from cyrene.model_runtime.messages import truncate
+    from cyrene.model.messages import truncate
 
     text = "x" * 20_000
     monkeypatch.setattr(config, "MAX_TOOL_OUTPUT_CHARS", 0)
@@ -285,7 +217,7 @@ def test_tool_output_global_cap_is_configurable_and_unlimited_at_zero(monkeypatc
 
 @pytest.mark.asyncio
 async def test_desktop_conversation_source_requires_host_verified_owned_surface(monkeypatch):
-    from cyrene.runtime import host_bridge
+    from cyrene.platform import host_bridge
 
     async def electron_surface(_method, _args, **_kwargs):
         return {"ok": True, "hostKind": "electron", "surfaceAvailable": True}
@@ -302,7 +234,7 @@ async def test_desktop_conversation_source_requires_host_verified_owned_surface(
 
 
 def test_settings_patch_is_atomic_revisioned_and_self_pack_is_protected(monkeypatch, tmp_path):
-    from cyrene.runtime import config_store, settings_service
+    from cyrene.platform import config_store, settings_service
 
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "config.enc")
@@ -359,7 +291,7 @@ def test_settings_patch_is_atomic_revisioned_and_self_pack_is_protected(monkeypa
 
 
 def test_lifecycle_records_revalidation_and_reconciles_only_host_accepted_actions(monkeypatch, tmp_path):
-    from cyrene.runtime import host_actions
+    from cyrene.platform import host_actions
 
     monkeypatch.setattr(host_actions, "_STATE_PATH", tmp_path / "actions.json")
     context = _plugin_context(
@@ -397,7 +329,7 @@ def test_lifecycle_records_revalidation_and_reconciles_only_host_accepted_action
 async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch, tmp_path):
     from unittest.mock import MagicMock
 
-    from cyrene.runtime import host_actions, update_install, updater
+    from cyrene.platform import host_actions, update_install, updater
 
     monkeypatch.setattr(host_actions, "_STATE_PATH", tmp_path / "actions.json")
     monkeypatch.setattr(updater, "get_download_progress", lambda: {
@@ -437,76 +369,6 @@ async def test_update_install_uses_host_prepare_launch_commit_order(monkeypatch,
 
 
 
-
-
-@pytest.mark.asyncio
-async def test_session_message_target_is_bound_to_current_tree(monkeypatch, tmp_path):
-    from cyrene.plugins.builtin.cyrene_application import session_message
-    from cyrene.workbench.application import app_control
-
-    context = _plugin_context()
-    monkeypatch.setattr(app_control, "_AUDIT_PATH", tmp_path / "audit.jsonl")
-    monkeypatch.setattr(app_control, "_IDEMPOTENCY_PATH", tmp_path / "idempotency.json")
-    calls = []
-
-    async def fake_host(method, args):
-        calls.append((method, dict(args)))
-        if method == "ui.snapshot.current":
-            return {
-                "ok": True,
-                "snapshot_id": "tree-current",
-                "revision": 7,
-                "root": {
-                    "node_id": "root",
-                    "children": [{
-                        "node_id": "task_composer_input",
-                        "role": "textbox",
-                        "state": {
-                            "session_id": "target-task",
-                            "session_kind": "task",
-                            "draft_empty": True,
-                            "submit_exposed": False,
-                        },
-                        "actions": [
-                            {"action_id": "set_value", "risk": "R1"},
-                            {"action_id": "clear_value", "risk": "R1"},
-                        ],
-                        "children": [],
-                    }],
-                },
-            }
-        if args["action_id"] == "set_value":
-            return {"ok": True, "revision": 8}
-        return {"ok": True, "revision": 9}
-
-    async def fake_dispatch(kind, session_id, message, *, origin_session_id):
-        assert (kind, session_id, message, origin_session_id) == (
-            "task", "target-task", "hello", "origin",
-        )
-        return {"status": "started", "run_id": "run-target"}
-
-    monkeypatch.setattr(session_message, "call_host", fake_host)
-    monkeypatch.setattr(session_message.app_services, "dispatch_session_message", fake_dispatch)
-    with _bind_plugin_context(context, name="CyreneSessionMessage"):
-        result = json.loads(await session_message.handler({
-            "snapshot_id": "tree-current",
-            "revision": 7,
-            "node_id": "task_composer_input",
-            "message": "hello",
-            "reason": "Send the requested instruction.",
-            "idempotency_key": "send-1",
-        }, context))
-
-    assert result["status"] == "success"
-    assert result["effects"][0] == {
-        "target_session_id": "target-task",
-        "target_session_kind": "task",
-        "run_id": "run-target",
-        "delivery_status": "started",
-        "draft_cleared": True,
-    }
-    assert [item[1].get("action_id") for item in calls[1:]] == ["set_value", "clear_value"]
-    assert calls[-1][1]["revision"] == 8
 
 
 @pytest.mark.asyncio
@@ -977,7 +839,7 @@ async def test_desktop_settings_describe_uses_electron_cas_revision(monkeypatch)
 async def test_lifecycle_finalization_is_scoped_to_origin_request(
     monkeypatch, tmp_path,
 ):
-    from cyrene.runtime import host_actions
+    from cyrene.platform import host_actions
 
     monkeypatch.setattr(host_actions, "_STATE_PATH", tmp_path / "actions.json")
     executed = []

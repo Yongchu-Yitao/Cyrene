@@ -118,7 +118,6 @@ def test_workbench_cross_script_globals_are_registered():
     owned_globals = {
         "CyreneUI": WORKBENCH_ROOT / "platform" / "runtime.jsx",
         "CyrenePageLifecycle": WORKBENCH_ROOT / "index.html",
-        "CyreneTaskPane": WORKBENCH_ROOT / "features" / "task" / "index.jsx",
         "CyreneTerminalSurface": WORKBENCH_ROOT / "features" / "chat" / "page.jsx",
     }
     assert globals_used - BROWSER_AND_VENDOR_GLOBALS == set(owned_globals)
@@ -128,7 +127,6 @@ def test_workbench_cross_script_globals_are_registered():
     }
     assert "root.CyreneUI = {" in owner_sources["CyreneUI"]
     assert "window.CyrenePageLifecycle = Object.freeze({" in owner_sources["CyrenePageLifecycle"]
-    assert "window.CyreneTaskPane = WorkbenchTaskPane" in owner_sources["CyreneTaskPane"]
     assert "window.CyreneTerminalSurface = bridge" in owner_sources["CyreneTerminalSurface"]
     feedback_source = (WORKBENCH_ROOT / "shared" / "feedback" / "service.jsx").read_text(encoding="utf-8")
     model_source = (WORKBENCH_ROOT / "workbench-model.jsx").read_text(encoding="utf-8")

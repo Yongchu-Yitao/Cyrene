@@ -8,8 +8,6 @@ function WbcChatPageContextMenu({
   onClose,
   onRename,
   onDelete,
-  onToTask,
-  toTaskBusy,
   onCompact,
   compactBusy,
   onGenerateMemory,
@@ -32,8 +30,6 @@ function WbcChatPageContextMenu({
           onBeforeAction={onClose}
           onRename={onRename}
           onDelete={onDelete}
-          onToTask={onToTask}
-          toTaskBusy={toTaskBusy}
           onCompact={onCompact}
           compactBusy={compactBusy}
           onGenerateMemory={onGenerateMemory}

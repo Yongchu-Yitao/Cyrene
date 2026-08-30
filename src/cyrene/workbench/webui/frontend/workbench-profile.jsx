@@ -135,7 +135,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
 
     var user = dataStore.state.user || {};
     var usage = (dataStore.state.dashboard && dataStore.state.dashboard.usage) || {};
-    var taskTime = usage.task_time || {};
+    var executionTime = usage.execution_time || {};
     var topTools = usage.top_tools || [];
     var heatmap = (dataStore.state.dashboard && dataStore.state.dashboard.activity_heatmap) || { days: [], rows: [] };
     var hmRows = heatmap.rows || [];
@@ -321,18 +321,18 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
                     />
                     <InsightCard
                       icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 5V3M9 3h6M12 9v4l2.5 2.5"/></svg>}
-                      value={wbpDuration(taskTime.total_ms)}
-                      label={t("profile.taskTotal")}
+                      value={wbpDuration(executionTime.total_ms)}
+                      label={t("profile.executionTotal")}
                     />
                     <InsightCard
                       icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>}
-                      value={wbpDuration(taskTime.longest_ms)}
-                      label={t("profile.taskLongest")}
+                      value={wbpDuration(executionTime.longest_ms)}
+                      label={t("profile.executionLongest")}
                     />
                     <InsightCard
                       icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>}
-                      value={taskTime.runs != null ? taskTime.runs : "—"}
-                      label={t("profile.taskRuns")}
+                      value={executionTime.runs != null ? executionTime.runs : "—"}
+                      label={t("profile.executionRuns")}
                     />
                   </div>
                 </div>

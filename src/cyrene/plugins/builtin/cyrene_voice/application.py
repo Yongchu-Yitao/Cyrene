@@ -40,7 +40,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     register_workbench_voice_routes(context.router, voice_command)
     context.provide("voice", service)
     context.provide("voice_command", voice_command)
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )

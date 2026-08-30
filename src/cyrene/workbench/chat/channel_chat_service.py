@@ -23,7 +23,7 @@ from cyrene.workbench.core_adapter.conversation_runtime import ConversationConfi
 
 from cyrene.config import WORKSPACE_DIR
 from cyrene.localization import app_language, localized
-from cyrene.runtime.attachments import build_public_attachment_payload
+from cyrene.platform.attachments import build_public_attachment_payload
 from cyrene.workbench.projects import project_runtime
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_service import ChatService

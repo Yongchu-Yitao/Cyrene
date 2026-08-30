@@ -133,7 +133,7 @@ populated new database is never overwritten.
 To test the agent without the web server:
 
 ```bash
-python -m cyrene.runtime.host
+python -m cyrene.platform.host
 ```
 
 ## Optional Extras

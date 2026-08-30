@@ -55,7 +55,7 @@
     "remote_transfer_update",
     "session_update",
     "shell_update",
-    "subagent_update", "task_board_changed", "terminal_list_changed",
+    "subagent_update", "terminal_list_changed",
     "tool_call",
     "tool_call_finished",
     "tool_call_started",

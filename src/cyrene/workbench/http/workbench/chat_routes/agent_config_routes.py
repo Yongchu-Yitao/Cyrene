@@ -105,7 +105,7 @@ def _register_agent_options_route(router: APIRouter, context: ChatRouteContext) 
                 "Chat not found.", "未找到对话。", 404, "chat_not_found"
             )
         base_chat = copy.deepcopy(chat)
-        from cyrene.agent_runtime.builtin import normalize_agent_binding
+        from cyrene.agents.builtin import normalize_agent_binding
 
         if normalize_agent_binding(chat.get("agent")).is_builtin:
             return {"configOptions": [], "values": {}}
@@ -117,7 +117,7 @@ def _register_agent_options_route(router: APIRouter, context: ChatRouteContext) 
             )
         try:
             workspace_dir = _resolve_chat_workspace_dir(chat, project, R.resolve_workspace_dir)
-            from cyrene.agent_runtime import discover_external_agent_config_options
+            from cyrene.agents import discover_external_agent_config_options
 
             options = await discover_external_agent_config_options(chat=chat, workspace_path=workspace_dir)
         except Exception as exc:

@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from cyrene.localization import localized
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 
 
 _EDITABLE_ENV_KEYS: dict[str, dict[str, Any]] = {

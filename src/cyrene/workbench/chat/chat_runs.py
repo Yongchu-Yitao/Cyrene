@@ -7,10 +7,8 @@ laptop sleeping, a closed tab, a server restart — the generator's ``finally``
 fired and cancelled the agent before it could persist its reply. The exchange
 was lost, while tool side effects (written files, etc.) were half-applied.
 
-This module decouples the run from the request, mirroring the durability
-pattern of :mod:`cyrene.workbench.goals.goal_loop` (its ``GoalLoopManager.tasks``
-registry, background ``asyncio.Task`` ownership, lifecycle hooks) but scoped to
-the conversation path:
+This module decouples the run from the request through a process-owned
+background ``asyncio.Task`` registry scoped to the conversation path:
 
 * The agent runs as a **background task owned by the registry**, not the
   request. When the HTTP request ends, the task is *not* cancelled.
@@ -44,7 +42,7 @@ from uuid import uuid4
 
 from cyrene.localization import localized
 from cyrene.observability.trace import trace_span
-from cyrene.runtime.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
+from cyrene.platform.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
 from cyrene.workbench.chat.chat_application import (
     merge_chat_messages_chronologically,
     utc_now_iso,
@@ -1009,8 +1007,7 @@ class ChatRunManager:
         self._event_store: ChatRunEventStore | None = None
         self._repository = ChatRepository()
         # Unconfigured managers (mostly isolated tests) get a private control
-        # plane. ``configure`` switches production to the DB-scoped coordinator
-        # also used by task sessions.
+        # plane. ``configure`` switches production to the DB-scoped coordinator.
         self._coordinator = RunCoordinator(f"chat-manager:{id(self)}")
         self._leases: dict[str, RunLease] = {}
         from cyrene.workbench.core_adapter.conversation_runtime import ConversationRuntime
@@ -1411,7 +1408,7 @@ class ChatRunManager:
             # A shell-exit wake may have been queued while this chat was busy.
             if run.termination_reason != "chat_deleted":
                 try:
-                    from cyrene.runtime.shell_wake import get_shell_wake_service
+                    from cyrene.platform.shell_wake import get_shell_wake_service
 
                     await get_shell_wake_service().try_dispatch(run.chat_id)
                 except Exception:

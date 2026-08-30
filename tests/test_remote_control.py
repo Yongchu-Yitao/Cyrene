@@ -57,8 +57,6 @@ def _register_remote_test_routes(router, app, db_path, *, projects=None):
         bot=None,
         chat=SimpleNamespace(),
         projects=SimpleNamespace(list_projects=list_projects),
-        tasks=SimpleNamespace(),
-        goals=SimpleNamespace(),
     )
 
 
@@ -741,7 +739,7 @@ def test_pairing_invitation_signature_rejects_grant_tampering(
     encoded = invitation["invitation"]
     raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
     payload = json.loads(raw.decode("utf-8"))
-    payload["granted_capabilities"] = ["task:dispatch"]
+    payload["granted_capabilities"] = ["admin:dispatch"]
     tampered_raw = json.dumps(
         payload,
         ensure_ascii=False,
@@ -766,7 +764,7 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
         controller_id, "chats.send", "project_2"
     ) == (False, "project_scope_denied")
     assert target.authorize_inbound(
-        controller_id, "tasks.dispatch", "project_1"
+        controller_id, "goals.confirm", "project_1"
     ) == (True, "")
     assert target.authorize_inbound(
         controller_id, "chats.read", ""
@@ -774,14 +772,14 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
 
     updated = target.update_peer_grant(
         controller_id,
-        capabilities=["task:read"],
+        capabilities=["goal:read"],
         project_scopes=["project_2"],
     )
     assert updated["granted_capabilities"] == sorted(
         BASE_REMOTE_CAPABILITIES
     )
     assert target.authorize_inbound(
-        controller_id, "tasks.read", "project_2"
+        controller_id, "goals.read", "project_2"
     ) == (True, "")
     target.update_settings(
         enabled=False,
@@ -789,7 +787,7 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
         device_name="Target Cyrene",
     )
     assert target.authorize_inbound(
-        controller_id, "tasks.read", "project_2"
+        controller_id, "goals.read", "project_2"
     ) == (False, "remote_access_disabled")
     target.update_settings(
         enabled=True,
@@ -798,7 +796,7 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
     )
     assert target.revoke_peer(controller_id) is True
     assert target.authorize_inbound(
-        controller_id, "tasks.read", "project_2"
+        controller_id, "goals.read", "project_2"
     ) == (False, "peer_not_trusted")
 
 
@@ -1005,50 +1003,13 @@ def test_remote_executor_filters_projects_and_public_run_events(
     asyncio.run(scenario())
 
 
-def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
-    paired_stores,
-):
+def test_remote_command_uses_conversations_and_goals(paired_stores, monkeypatch):
     async def scenario():
         target = paired_stores["target"]
         controller = paired_stores["controller"]
-        task = {
-            "id": "task_1",
-            "projectId": "project_1",
-            "title": "Shared task",
-            "status": "idle",
-            "plan": [
-                {
-                    "id": "step_1",
-                    "title": "Safe title",
-                    "status": "pending",
-                    "workspacePath": "/private/workspace",
-                    "debug": {"secret": True},
-                }
-            ],
-            "pendingQuestion": {
-                "id": "question_1",
-                "text": "Allow this operation?",
-                "options": [
-                    {"id": "allow_once", "label": "Allow once"},
-                    {"id": "deny", "label": "Deny"},
-                ],
-                "allowCustom": True,
-                "debug": {"path": "/private/debug"},
-            },
-        }
-        calls = {"chat_send": 0, "task_dispatch": 0}
+        goal = {"id": "goal_1", "chatId": "chat_1", "status": "proposed"}
+        calls = {"chat_send": 0, "goal_confirm": 0}
         modes = {}
-
-        async def list_tasks(_project_id):
-            return {"sessions": [task]}
-
-        async def get_task(_task_id):
-            return {"session": task}
-
-        async def dispatch_task(_task_id, body):
-            calls["task_dispatch"] += 1
-            modes["task"] = body["mode"]
-            return {"session": task}
 
         async def get_chat(_chat_id):
             return {
@@ -1056,7 +1017,6 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
                     "id": "chat_1",
                     "projectId": "project_1",
                     "messages": [],
-                    "pendingQuestion": task["pendingQuestion"],
                 }
             }
 
@@ -1065,6 +1025,26 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
             modes["chat"] = body["mode"]
             return {"run_id": "run_1"}
 
+        class FakeGoalService:
+            async def get(self, _chat_id):
+                return dict(goal)
+
+            async def confirm(self, _chat_id, body):
+                calls["goal_confirm"] += 1
+                goal.update(body)
+                goal["status"] = "active"
+                return dict(goal)
+
+            @staticmethod
+            def public(value):
+                return dict(value)
+
+        goal_service = FakeGoalService()
+        monkeypatch.setattr(
+            "cyrene.plugins.builtin.cyrene_remote.commands.application_plugin_service",
+            lambda name: goal_service if name == "goal" else None,
+        )
+
         executor = RemoteCommandExecutor(
             store=target,
             chat=SimpleNamespace(
@@ -1072,39 +1052,15 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
                 send=send_chat_detached,
                 run_manager=SimpleNamespace(get=lambda _chat_id: None),
             ),
-            projects=SimpleNamespace(list_tasks=list_tasks),
-            tasks=SimpleNamespace(get=get_task, dispatch=dispatch_task),
         )
 
-        listed = await executor(
+        read_goal = await executor(
             controller.identity.device_id,
-            "tasks.list",
-            {},
-            "project_1",
-        )
-        assert listed["tasks"][0]["plan"] == [
-            {
-                "id": "step_1",
-                "title": "Safe title",
-                "status": "pending",
-            }
-        ]
-        assert listed["tasks"][0]["pending_question"] == {
-            "id": "question_1",
-            "text": "Allow this operation?",
-            "options": [
-                {"id": "allow_once", "label": "Allow once"},
-                {"id": "deny", "label": "Deny"},
-            ],
-            "allowCustom": True,
-        }
-        chat_detail = await executor(
-            controller.identity.device_id,
-            "chats.read",
+            "goals.read",
             {"chat_id": "chat_1"},
             "project_1",
         )
-        assert chat_detail["chat"]["pending_question"] == listed["tasks"][0]["pending_question"]
+        assert read_goal["goal"] == goal
 
         await executor(
             controller.identity.device_id,
@@ -1118,39 +1074,16 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
         )
         await executor(
             controller.identity.device_id,
-            "tasks.dispatch",
-            {
-                "task_id": "task_1",
-                "message": "Run everything",
-                "permission_mode": "full_access",
-            },
-            "project_1",
-        )
-        assert calls == {"chat_send": 1, "task_dispatch": 1}
-        assert modes == {"chat": "full_access", "task": "full_access"}
-
-        await executor(
-            controller.identity.device_id,
-            "chats.send",
+            "goals.confirm",
             {
                 "chat_id": "chat_1",
-                "message": "Review permissions automatically",
-                "permission_mode": "auto",
+                "objective": "Ship the conversation-native workflow",
             },
             "project_1",
         )
-        await executor(
-            controller.identity.device_id,
-            "tasks.dispatch",
-            {
-                "task_id": "task_1",
-                "message": "Review permissions automatically",
-                "permission_mode": "auto",
-            },
-            "project_1",
-        )
-        assert calls == {"chat_send": 2, "task_dispatch": 2}
-        assert modes == {"chat": "auto", "task": "auto"}
+        assert calls == {"chat_send": 1, "goal_confirm": 1}
+        assert modes == {"chat": "full_access"}
+        assert goal["status"] == "active"
 
     asyncio.run(scenario())
 
@@ -1438,13 +1371,14 @@ def test_remote_shell_is_direct_project_scoped_and_device_owned(
         )
         assert interrupted["status"] == "running"
         assert observed["interrupt"] == "shell_mobile_1"
-        with pytest.raises(ValueError, match="unavailable"):
-            await executor(
-                "another_phone",
-                "shell.read",
-                {"shell_id": opened["shell_id"]},
-                "project_1",
-            )
+        rejected = await executor(
+            "another_phone",
+            "shell.read",
+            {"shell_id": opened["shell_id"]},
+            "project_1",
+        )
+        assert rejected["ok"] is False
+        assert rejected["code"] == "invalid_status_transition"
 
     asyncio.run(scenario())
 
@@ -1571,7 +1505,7 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
 ):
     async def scenario():
         from cyrene import config as cyrene_config
-        from cyrene.runtime import attachments as managed_attachments
+        from cyrene.platform import attachments as managed_attachments
         from cyrene.plugins.builtin.cyrene_remote import (
             commands as remote_commands_module,
         )
@@ -1759,7 +1693,7 @@ def test_remote_status_assembles_chunks_into_local_attachment(
 ):
     async def scenario():
         from cyrene import config as cyrene_config
-        from cyrene.runtime import attachments as managed_attachments
+        from cyrene.platform import attachments as managed_attachments
         from cyrene.plugins.builtin.cyrene_remote import status as remote_status
 
         data_dir = tmp_path / "data"
@@ -1916,7 +1850,7 @@ def test_encrypted_grant_updates_and_revocation_propagate(paired_stores):
         try:
             target.update_peer_grant(
                 controller.identity.device_id,
-                capabilities=["task:read"],
+                capabilities=["chat:read"],
                 project_scopes=["project_2"],
             )
             await target_gateway.notify_grant_update(

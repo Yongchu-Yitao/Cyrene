@@ -54,7 +54,7 @@ def application_setup(context: PluginApplicationContext) -> None:
     )
     context.expose_frontend("content")
     if install_search_settings(context, canonical_name=web_search.TOOL_NAME):
-        from cyrene.runtime.settings_service import (
+        from cyrene.platform.settings_service import (
             PluginSettingsContribution,
             SettingControlSpec,
             plugin_setting_spec,

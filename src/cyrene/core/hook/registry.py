@@ -37,6 +37,8 @@ from .storage import HookPersistence, validate_hook_config
 
 logger = logging.getLogger(__name__)
 
+_HOOK_WORKER_IDLE_SECONDS = 30.0
+
 HookOverrideProvider = Callable[[str, str], Mapping[str, Any] | None]
 HookActionProvider = Callable[[Hook], HookPlugin | None]
 _hook_override_provider: HookOverrideProvider | None = None
@@ -373,6 +375,26 @@ class HookSet:
             replace=replace,
             requeued=requeued,
         )
+
+    def update_config(
+        self,
+        hook_id: str,
+        config: Mapping[str, Any],
+    ) -> None:
+        """Persist the declarative configuration owned by one Hook binding."""
+
+        normalized_id = str(hook_id)
+        normalized_config = validate_hook_config(config)
+        with self._lock:
+            self._ensure_open()
+            hook = self._hooks.get(normalized_id)
+            if hook is None:
+                raise HookError(
+                    f"Hook id does not exist in tree {self.tree_id}: {normalized_id}"
+                )
+            updated = replace(hook, config=normalized_config)
+            self._persistence.save_hook(updated)
+            self._hooks[normalized_id] = updated
 
     def unregister(self, hook_id: str) -> bool:
         normalized_id = str(hook_id)
@@ -1035,7 +1057,23 @@ class HookSet:
         )
         try:
             while True:
-                item = self._work.get()
+                try:
+                    item = self._work.get(timeout=_HOOK_WORKER_IDLE_SECONDS)
+                except queue.Empty:
+                    with self._lock:
+                        if self._closed:
+                            self._thread = None
+                            return
+                        if not self._work.empty():
+                            continue
+                        if self._persistence.has_work():
+                            if not self._wake_enqueued:
+                                self._wake_enqueued = True
+                                self._work.put("wake")
+                            continue
+                        if self._thread is threading.current_thread():
+                            self._thread = None
+                        return
                 if item == "stop":
                     return
                 if item == "wake":
@@ -1091,6 +1129,9 @@ class HookSet:
             )
             raise
         finally:
+            with self._lock:
+                if self._thread is threading.current_thread():
+                    self._thread = None
             loop.close()
             log_operation(
                 logger,

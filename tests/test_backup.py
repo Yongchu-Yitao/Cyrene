@@ -25,7 +25,7 @@ def _read_db(path: Path) -> str:
 
 @pytest.fixture
 def backup_sandbox(monkeypatch, tmp_path):
-    from cyrene.runtime import backup
+    from cyrene.platform import backup
 
     base = tmp_path / "runtime"
     data = base / "data"

@@ -20,7 +20,7 @@ async def _cleanup_deleted_chat(
     removed_chat_id: str,
     memory_service=None,
 ) -> None:
-    from cyrene.agent_runtime.model_gateway import revoke_model_gateway_scope
+    from cyrene.agents.model_gateway import revoke_model_gateway_scope
 
     revoke_model_gateway_scope(chat_id=removed_chat_id)
     try:
@@ -35,6 +35,24 @@ async def _cleanup_deleted_chat(
             await browser_service.close_session(removed_chat_id)
     except Exception:
         logger.exception("Failed to close Electron browser for chat %s", removed_chat_id)
+    from cyrene.core.plugin import application_plugin_scope
+
+    scope = application_plugin_scope()
+    for extension_service in (
+        dict(scope.active_services).values() if scope is not None else ()
+    ):
+        try:
+            handler = getattr(extension_service, "on_conversation_deleted", None)
+            if not callable(handler):
+                continue
+            result = handler(removed_chat_id)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            logger.exception(
+                "Conversation lifecycle extension cleanup failed for chat %s",
+                removed_chat_id,
+            )
     if memory_service is not None:
         try:
             await memory_service.delete_chat(removed_chat_id)

@@ -5,6 +5,7 @@ import { WBC_ICONS } from "./icons.jsx"
 
 var WBC_SIDE_TAB_ICONS = {
   overview: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v10a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5Z"/><path d="M8 5V3.8M16 5V3.8M8 10.5h8M12 8.5v4"/></svg>,
+  goal: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="m14.5 9.5 5-5M16 4.5h3.5V8"/><circle cx="12" cy="12" r=".8" fill="currentColor" stroke="none"/></svg>,
   plan: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="4.5" width="14" height="16" rx="2.5"/><path d="M9 4.5V3h6v1.5M8.5 10.5l1.4 1.4 2.6-2.8M14.5 11h2M8.5 16h8"/></svg>,
   subagents: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 9.5A4.5 4.5 0 0 1 11.5 5H14a4 4 0 0 1 4 4v.5a4.5 4.5 0 0 1 2 3.7v2.3a3.5 3.5 0 0 1-3.5 3.5h-9A3.5 3.5 0 0 1 4 15.5v-2.3a4.5 4.5 0 0 1 3-4.2Z"/><path d="M9 13h.01M15 13h.01M9.5 16h5M12 5V2.8M10.5 2.8h3"/></svg>,
   context: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="2"/><rect x="14" y="4" width="6" height="6" rx="2"/><rect x="4" y="14" width="6" height="6" rx="2"/><rect x="14" y="14" width="6" height="6" rx="2"/><path d="M10 7h4M7 10v4M17 10v4M10 17h4"/></svg>,
@@ -36,9 +37,9 @@ var WBC_COMMAND_ICONS = {
   "quick-answer": WBC_ICONS.bolt,
   "deep-research": WBC_ICONS.search,
   "deep-reflect": WBC_ICONS.spark,
-  "help-me-decide": WBC_ICONS.task,
+  "help-me-decide": WBC_ICONS.checklist,
   "learning-plan": WBC_ICONS.file,
-  "daily-review": WBC_ICONS.task,
+  "daily-review": WBC_ICONS.checklist,
   "deep-compare": WBC_ICONS.fork,
   terminal: WBC_ICONS.terminal,
 };
@@ -142,7 +143,7 @@ function wbcModeMeta(id) {
 
 // ---- external Agent identity, capability and binding helpers ----------------
 // The built-in Agent installation id mirrors the backend Agent Runtime
-// (cyrene/agent_runtime/builtin.py). The composer treats it as the default.
+// (cyrene/agents/builtin.py). The composer treats it as the default.
 var WBC_BUILTIN_AGENT_INSTALLATION = "agent_cyrene_builtin";
 var WBC_BUILTIN_AGENT_ID = "cyrene";
 var WBC_OPEN_AGENT_DETAIL_EVENT = "cyrene:open-agent-detail";

@@ -9,9 +9,8 @@ from cyrene.workbench.http.control_schemas import ControlCapabilitiesResponse, C
 CONTROL_OPERATIONS = [
     "capabilities.read", "projects.list", "chats.list", "chats.create", "chats.read",
     "chats.send", "runs.read", "runs.events", "runs.guide", "runs.interrupt",
-    "tasks.list", "tasks.create", "tasks.read", "tasks.dispatch", "tasks.approve_plan",
-    "tasks.run_step", "tasks.pause", "tasks.resume", "tasks.cancel", "approvals.respond",
-    "artifacts.list", "artifacts.read", "attachments.read",
+    "goals.read", "goals.update", "goals.confirm", "goals.pause", "goals.resume",
+    "goals.abort", "goals.accept", "approvals.respond", "attachments.read",
 ]
 
 

@@ -13,7 +13,7 @@ uv run python -m cyrene
 ### Interactive local CLI (no web server)
 
 ```bash
-python -m cyrene.runtime.host
+python -m cyrene.platform.host
 ```
 
 ### Via the `cyrene` command-line client
@@ -260,7 +260,7 @@ backend is not started to contend for the database or scheduler.
 ## In-process local CLI (legacy)
 
 ```bash
-python -m cyrene.runtime.host
+python -m cyrene.platform.host
 ```
 
 This starts the agent directly without a web server. Available in-conversation commands:

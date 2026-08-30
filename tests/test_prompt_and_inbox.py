@@ -28,6 +28,7 @@ def _model_registry():
 def test_default_prompt_requires_plugin_discovery_for_external_information():
     from cyrene.plugins.builtin.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
 
+    prompt = " ".join(SYSTEM_PROMPT.split())
     assert "current" in SYSTEM_PROMPT
     assert "external information" in SYSTEM_PROMPT
     assert "do not rely on memory" in SYSTEM_PROMPT
@@ -38,6 +39,25 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
     assert "WebSearch proactively" in SYSTEM_PROMPT
     assert "use it at the beginning" in SYSTEM_PROMPT
     assert "Prefer frequent useful updates" in SYSTEM_PROMPT
+    assert "each part has been satisfied" in prompt
+    assert "first call concerning that file must be Read, Edit, or Write" in prompt
+    assert "Do not inspect it first with Bash" in prompt
+    assert "treat the edit as a successful idempotent no-op" in prompt
+    assert "Still complete the display obligation" in prompt
+    assert "An argument error does not mean the tool is unavailable" in prompt
+
+
+def test_default_prompt_keeps_internal_work_out_of_user_facing_messages():
+    from cyrene.plugins.builtin.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
+
+    prompt = " ".join(SYSTEM_PROMPT.split())
+    assert "Keep communication concise, user-facing, and focused on results" in prompt
+    assert "Do not volunteer internal information" in prompt
+    assert "the names of tools being used" in prompt
+    assert "describe the intended action or result instead" in prompt
+    assert "If the user asks for those details" in prompt
+    assert "provide the relevant information directly" in prompt
+    assert "Never expose secrets" in prompt
 
 
 def test_web_search_and_mid_run_message_are_direct_tools():
@@ -98,7 +118,7 @@ def test_reopened_tree_mounts_system_prompt_from_required_plugin(tmp_path):
 
 
 def test_unread_count_initializes_a_missing_session_inbox(monkeypatch, tmp_path):
-    from cyrene.runtime import inbox
+    from cyrene.platform import inbox
 
     root = tmp_path / "inbox"
     monkeypatch.setattr(inbox, "INBOX_DIR", root)
@@ -109,7 +129,7 @@ def test_unread_count_initializes_a_missing_session_inbox(monkeypatch, tmp_path)
 
 
 def test_peek_messages_is_a_read_only_snapshot(monkeypatch, tmp_path):
-    from cyrene.runtime import inbox
+    from cyrene.platform import inbox
 
     root = tmp_path / "inbox"
     target = root / "chat" / "main"
@@ -141,7 +161,7 @@ def test_peek_messages_uses_numeric_sequence_and_bounds_the_window(
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.runtime import inbox
+    from cyrene.platform import inbox
 
     root = tmp_path / "inbox"
     target = root / "chat" / "main"
@@ -174,7 +194,7 @@ def test_peek_messages_uses_numeric_sequence_and_bounds_the_window(
 
 
 def test_inbox_fifo_order_stays_numeric_after_message_999(monkeypatch, tmp_path):
-    from cyrene.runtime import inbox
+    from cyrene.platform import inbox
 
     root = tmp_path / "inbox"
     target = root / "fifo" / "main"

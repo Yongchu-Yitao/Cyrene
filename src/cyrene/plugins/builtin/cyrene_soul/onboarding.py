@@ -135,7 +135,7 @@ class SoulOnboardingApplication:
             "mode": clean_mode,
             "label": label,
         })
-        from cyrene.runtime.onboarding import get_onboarding_status
+        from cyrene.platform.onboarding import get_onboarding_status
 
         return {
             "ok": True,
@@ -150,7 +150,7 @@ class SoulOnboardingApplication:
         style: str = "",
         language: str = "",
     ) -> str:
-        from cyrene.model_runtime.messages import assistant_text
+        from cyrene.model.messages import assistant_text
 
         lang = app_language(language)
         references = ""

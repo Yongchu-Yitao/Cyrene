@@ -189,7 +189,7 @@ async def _handle_message(
     normalized_attachments: list[dict] = []
     if file_items:
         import mimetypes
-        from cyrene.runtime.attachments import UPLOADS_DIR, attachment_kind_from_meta
+        from cyrene.platform.attachments import UPLOADS_DIR, attachment_kind_from_meta
         for item in file_items:
             result = await client.download_incoming_item(item, UPLOADS_DIR)
             if result:

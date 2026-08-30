@@ -72,8 +72,8 @@ async def _codex_oauth_snapshot(
     include_models: bool = True,
     stale_limits: bool = False,
 ) -> dict[str, Any]:
-    from cyrene.model_runtime.codex_provider import get_codex_provider
-    from cyrene.runtime.settings_store import get as get_setting
+    from cyrene.model.codex_provider import get_codex_provider
+    from cyrene.platform.settings_store import get as get_setting
 
     snapshot = await get_codex_provider().snapshot(
         include_limits=include_limits,
@@ -108,8 +108,8 @@ def register_oauth_routes(router: APIRouter) -> None:
 
     @router.post("/api/settings/openai-oauth/login")
     async def api_start_openai_oauth_login():
-        from cyrene.model_runtime.codex_provider import get_codex_provider
-        from cyrene.runtime.settings_store import set_ as set_setting
+        from cyrene.model.codex_provider import get_codex_provider
+        from cyrene.platform.settings_store import set_ as set_setting
 
         set_setting("codex_budget_enabled", True)
         try:
@@ -125,7 +125,7 @@ def register_oauth_routes(router: APIRouter) -> None:
 
     @router.post("/api/settings/openai-oauth/logout")
     async def api_openai_oauth_logout():
-        from cyrene.model_runtime.codex_provider import get_codex_provider
+        from cyrene.model.codex_provider import get_codex_provider
 
         try:
             await get_codex_provider().logout()
@@ -141,7 +141,7 @@ def register_oauth_routes(router: APIRouter) -> None:
 
     @router.get("/api/settings/openai-oauth/cli")
     async def api_get_codex_cli_status():
-        from cyrene.model_runtime import codex_cli
+        from cyrene.model import codex_cli
 
         return _public_codex_cli_status(codex_cli.status())
 
@@ -155,7 +155,7 @@ def register_oauth_routes(router: APIRouter) -> None:
         runtime: the current install is wiped and the SDK-pinned version —
         the one known to speak the SDK's protocol — is downloaded.
         """
-        from cyrene.model_runtime import codex_cli
+        from cyrene.model import codex_cli
 
         try:
             body = await request.json()

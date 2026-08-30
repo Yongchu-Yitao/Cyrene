@@ -596,10 +596,8 @@ html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-h
   .workbench-add-btn,
   .workbench-nav-button,
   .workbench-project-meta b,
-  .workbench-task-main b,
-  .workbench-task-status,
+  .workbench-conversation-status,
   .workbench-account-name,
-  .wb-task-detail-tab,
   .workbench-side-section h3,
   .workbench-side-section p,
   .settings-overlay-tab,
@@ -643,7 +641,6 @@ html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-h
 .workbench-shell :where(
   .workbench-brand span,
   .workbench-project-meta small,
-  .workbench-task-main small,
   .workbench-account small,
   .workbench-muted,
   .wb-section-title p,
@@ -994,19 +991,15 @@ html[data-density="compact"] .wbc-page {
 }
 
 /* =====================================================================
-   Project task board
-   The board replaces the old task-list column. Detail keeps the project rail,
-   main task workspace, and context panel only.
+   Project conversation board
+   The board and project rail share the conversation workspace.
    ===================================================================== */
-.workbench-grid.is-task-board {
+.workbench-grid.is-conversation-board {
   grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
 }
 
-.workbench-grid.is-task-detail {
-  grid-template-columns: var(--wb-rail-w) minmax(420px, 1fr) var(--wb-right-w, 350px);
-}
 
-.workbench-task-board {
+.workbench-conversation-board {
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -1387,7 +1380,7 @@ html[data-density="compact"] .wbc-page {
   font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
 }
 
-.wb-board-card-meta .workbench-task-status {
+.wb-board-card-meta .workbench-conversation-status {
   padding: 3px 8px;
   font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
 }
@@ -1468,6 +1461,19 @@ html[data-density="compact"] .wbc-page {
   justify-content: center;
   gap: 8px;
   color: var(--wb-muted);
+  text-align: center;
+}
+
+.wb-board-default-empty-hint {
+  flex: 0 0 auto;
+  align-self: center;
+  max-width: 620px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 18%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-card-bg));
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
   text-align: center;
 }
 
@@ -1564,13 +1570,11 @@ html[data-density="compact"] .wbc-page {
 }
 
 @media (max-width: 1320px) {
-  .workbench-grid.is-task-board {
+  .workbench-grid.is-conversation-board {
     grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
   }
 
-  .workbench-grid.is-task-detail {
-    grid-template-columns: var(--wb-rail-w) minmax(360px, 1fr) var(--wb-right-w, 280px);
-  }
+
 
   .wb-board-header {
     flex-direction: column;
@@ -1584,12 +1588,12 @@ html[data-density="compact"] .wbc-page {
 }
 
 @media (max-width: 1040px) {
-  .workbench-grid.is-task-detail,
-  .workbench-grid.is-task-board {
+
+  .workbench-grid.is-conversation-board {
     grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
   }
 
-  .workbench-task-board {
+  .workbench-conversation-board {
     padding: 20px 16px 14px;
   }
 }

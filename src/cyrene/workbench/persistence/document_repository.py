@@ -23,12 +23,8 @@ T = TypeVar("T")
 @dataclass(frozen=True, slots=True)
 class DocumentPorts:
     document_write_lock: Any
-    patch_project_bundle_fields: Any
     read_chat_bundle: Any
-    read_project_bundle: Any
-    summarize_task_session: Any
     write_chat_bundle: Any
-    write_project_bundle: Any
 
 
 class DocumentRepository:
@@ -55,8 +51,6 @@ class DocumentRepository:
         """Read one document from SQLite, creating its current default once."""
         if key == 'chats':
             return self.ports.read_chat_bundle(db_path, default_factory)
-        if key == 'projects':
-            return self.ports.read_project_bundle(db_path, default_factory, self.ports.summarize_task_session)
         conn = _connect(db_path)
         try:
             value = self._load_row(conn, key)
@@ -98,8 +92,6 @@ class DocumentRepository:
         """Merge and commit one document without racing another local writer."""
         if key == 'chats':
             return self.ports.write_chat_bundle(db_path, value, default_factory, base_value=base_value)
-        if key == 'projects':
-            return self.ports.write_project_bundle(db_path, value, default_factory, self.ports.summarize_task_session, base_value=base_value)
         with self.ports.document_write_lock:
             result = self._write_document_locked(db_path, key, value, default_factory, base_value=base_value)
         return result
@@ -113,8 +105,6 @@ class DocumentRepository:
         concurrent document writer is preserved, then patch only the requested
         scalar fields.
         """
-        if key == 'projects':
-            return self.ports.patch_project_bundle_fields(db_path, fields, default_factory, self.ports.summarize_task_session)
         if key == 'chats':
             current = self.ports.read_chat_bundle(db_path, default_factory)
             current.update(_plain(fields))
@@ -147,8 +137,6 @@ class DocumentRepository:
             if key == 'chats':
                 conn.execute('DELETE FROM workbench_chat_messages')
                 conn.execute('DELETE FROM workbench_chats')
-            elif key == 'projects':
-                conn.execute('DELETE FROM workbench_task_sessions')
             elif key == 'chat_changes':
                 conn.execute('DELETE FROM workbench_chat_change_files')
                 conn.execute('DELETE FROM workbench_chat_change_sets')
@@ -176,10 +164,6 @@ class DocumentRepository:
         try:
             if key == 'chats':
                 row = conn.execute('SELECT 1 FROM workbench_chats LIMIT 1').fetchone()
-                if row is not None:
-                    return True
-            elif key == 'projects':
-                row = conn.execute('SELECT 1 FROM workbench_task_sessions LIMIT 1').fetchone()
                 if row is not None:
                     return True
             elif key == 'chat_changes':

@@ -8,15 +8,25 @@ from typing import Any
 
 from cyrene.core.plugin import PluginContext
 from cyrene.plugins.native_runtime import (
+    json_result,
     plugin_localized,
     publish_runtime_event,
     run_context_value,
 )
 
 from .definitions import get_native_tool_def
+from .state import current_plan, persist_plan
 
 TOOL_NAME = "update_plan_progress"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
+
+
+def _dependency_complete(step: Mapping[str, Any]) -> bool:
+    return str(step.get("status") or "pending") in {
+        "done",
+        "completed",
+        "succeeded",
+    }
 
 
 def _decoded(value: Any) -> Any:
@@ -29,6 +39,14 @@ def _decoded(value: Any) -> Any:
 
 
 def _current_plan(context: PluginContext) -> dict[str, Any] | None:
+    durable_plan = current_plan(context)
+    if durable_plan is not None:
+        durable_plan["steps"] = [
+            dict(item)
+            for item in (durable_plan.get("steps") or ())
+            if isinstance(item, Mapping)
+        ]
+        return durable_plan
     if context.tree is None or not context.tree_id or not context.node_id:
         return None
     try:
@@ -93,6 +111,37 @@ async def _tool_update_plan_progress(
             "未找到活动且已批准的计划。",
         )
     target = steps[step - 1]
+    if status == "in_progress":
+        by_id = {
+            str(item.get("id") or ""): item
+            for item in steps
+            if isinstance(item, Mapping) and str(item.get("id") or "")
+        }
+        unmet = [
+            by_id.get(str(dependency))
+            for dependency in target.get("dependsOn") or ()
+            if not _dependency_complete(by_id.get(str(dependency)) or {})
+        ]
+        if unmet:
+            return json_result({
+                "status": "blocked",
+                "step": step,
+                "planPath": str(plan.get("planPath") or ""),
+                "unmetPrerequisites": [
+                    {
+                        "id": str(item.get("id") or ""),
+                        "title": str(item.get("title") or ""),
+                        "status": str(item.get("status") or "pending"),
+                    }
+                    for item in unmet
+                    if isinstance(item, Mapping)
+                ],
+                "error": plugin_localized(
+                    context,
+                    "Complete the prerequisite steps before starting this step.",
+                    "请先完成该步骤的前置步骤。",
+                ),
+            })
     target["status"] = status
     target["note"] = note
     if status == "in_progress":
@@ -108,6 +157,18 @@ async def _tool_update_plan_progress(
         plan["status"] = "completed"
     elif str(plan.get("status") or "") == "proposed":
         plan["status"] = "active"
+    if not persist_plan(context, plan):
+        return json_result({
+            "status": "plan_storage_unavailable",
+            "error": plugin_localized(
+                context,
+                "The latest plan file could not be saved.",
+                "无法保存最新的计划文件。",
+            ),
+        })
+    plan = current_plan(context) or plan
+    latest_steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    latest_target = latest_steps[step - 1] if step <= len(latest_steps) else target
     await publish_runtime_event(context, {
         "type": "plan_progress",
         "plan": plan,
@@ -125,13 +186,20 @@ async def _tool_update_plan_progress(
             "skipped": "已跳过",
         }.get(status, status),
     )
-    return plugin_localized(
-        context,
-        "Plan step {step} was updated to {status}.",
-        "计划步骤 {step} 已更新为{status}。",
-        step=step,
-        status=status_label,
-    )
+    return json_result({
+        "status": "updated",
+        "step": step,
+        "stepStatus": status,
+        "message": plugin_localized(
+            context,
+            "Plan step {step} was updated to {status}.",
+            "计划步骤 {step} 已更新为{status}。",
+            step=step,
+            status=status_label,
+        ),
+        "planPath": str(plan.get("planPath") or ""),
+        "latestStep": latest_target,
+    })
 
 
 handler = _tool_update_plan_progress

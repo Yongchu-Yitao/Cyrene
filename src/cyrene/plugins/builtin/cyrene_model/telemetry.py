@@ -229,7 +229,7 @@ async def _request_provider(
         "Authorization": f"Bearer {api_key}",
     }
     timeout = httpx.Timeout(10.0, connect=5.0)
-    from cyrene.runtime.network_proxy import configured_proxy_url
+    from cyrene.platform.network_proxy import configured_proxy_url
 
     proxy_url = configured_proxy_url(opt_in=connection.get("use_proxy") is True)
     async with httpx.AsyncClient(

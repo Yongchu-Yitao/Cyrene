@@ -53,6 +53,13 @@ async def edit(arguments: dict[str, Any], context: PluginContext) -> str:
         str(arguments["new_string"]),
         bool(arguments.get("replace_all", False)),
     )
+    return plugin_localized(
+        context,
+        "Edited {path}. Replacements: {count}",
+        "已编辑 {path}。替换次数：{count}",
+        path=path,
+        count=replacements,
+    )
 
 
 def edit_permission_boundary(
@@ -65,15 +72,6 @@ def edit_permission_boundary(
         kind="write_permission_request",
         operation="写入/删除操作",
     )
-    return plugin_localized(
-        context,
-        "Edited {path}. Replacements: {count}",
-        "已编辑 {path}。替换次数：{count}",
-        path=path,
-        count=replacements,
-    )
-
-
 plugin = Plugin(
     name="Edit",
     description="Replace an exact string in a text file.",
@@ -92,6 +90,14 @@ plugin = Plugin(
         "additionalProperties": False,
     },
     handler=edit,
+    metadata={
+        "resource_effects": ({
+            "argument_path": ("path",),
+            "kind": "file",
+            "access": "write",
+            "phase": "both",
+        },),
+    },
     permission_boundary=edit_permission_boundary,
     allow_parallel=False,
     timeout_seconds=30.0,

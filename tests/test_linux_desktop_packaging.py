@@ -174,11 +174,11 @@ def test_frozen_build_bundles_and_executes_codex_runtime():
     spec = (ROOT / "build" / "cyrene.spec").read_text(encoding="utf-8")
     entrypoint = (ROOT / "build" / "run_cyrene.py").read_text(encoding="utf-8")
 
-    # The Codex CLI is downloaded on demand by cyrene.model_runtime.codex_cli:
+    # The Codex CLI is downloaded on demand by cyrene.model.codex_cli:
     # the SDK stays bundled, the CLI binary is excluded, and the smoke test
     # verifies the on-demand downloader imports in the frozen build.
     assert '"openai_codex"' in spec
     assert '"codex_cli_bin"' in spec
     assert "bundled_codex_path" not in entrypoint
-    assert "import cyrene.model_runtime.codex_cli as _codex_cli" in entrypoint
+    assert "import cyrene.model.codex_cli as _codex_cli" in entrypoint
     assert "codex_runtime=on-demand" in entrypoint

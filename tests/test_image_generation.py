@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from cyrene.model_runtime import image_generation
-from cyrene.model_runtime.image_generation import (
+from cyrene.model import image_generation
+from cyrene.model.image_generation import (
     GeneratedImage,
     ImageGenerationError,
 )

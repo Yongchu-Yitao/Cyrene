@@ -87,7 +87,7 @@ async def _tool_browser_screenshot(args: dict[str, Any], context: PluginContext)
                     "访问权限：固定浏览器的只读截图；不允许交互。",
                 )
             )
-        from cyrene.runtime.attachments import analyze_image_with_primary_model, primary_model_supports_vision
+        from cyrene.platform.attachments import analyze_image_with_primary_model, primary_model_supports_vision
 
         if path and primary_model_supports_vision():
             try:

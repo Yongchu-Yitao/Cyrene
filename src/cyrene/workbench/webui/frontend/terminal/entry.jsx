@@ -297,7 +297,7 @@ function TerminalPane({ terminalId, onState }) {
   var [restartBusy, setRestartBusy] = React.useState(false);
   var [restartError, setRestartError] = React.useState("");
 
-  React.useEffect(function () {
+  React.useLayoutEffect(function () {
     var host = hostRef.current;
     if (!codeAvailable || !host || !terminalId) return undefined;
     // The ref survives a prop change even though this effect replaces xterm.

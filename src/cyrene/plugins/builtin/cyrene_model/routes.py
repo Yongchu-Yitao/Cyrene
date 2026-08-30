@@ -17,7 +17,7 @@ from cyrene.plugins.model_catalog import (
     resolve_registered_model_plugin,
 )
 from cyrene.localization import app_language, localized
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 from .configuration import (
     get_model_configuration,
     normalize_model_configuration,
@@ -262,7 +262,9 @@ async def _discover(
     adapter = str(connection.get("adapter") or "")
     options = connection.get("options")
     provider_preset = str(
-        options.get("provider_preset") if isinstance(options, dict) else ""
+        (options.get("provider_preset") or "")
+        if isinstance(options, dict)
+        else ""
     ).strip().lower()
     if service is None:
         from cyrene.plugins.model_catalog import resolve_model_plugin

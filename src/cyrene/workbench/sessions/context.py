@@ -155,21 +155,6 @@ def _build_scope_cache() -> dict[str, Any]:
         project_key = _safe_workbench_data_key(project.get("dataKey") or project_id)
         project_keys[project_id] = project_key
         project_ids_by_data_key.setdefault(project_key, project_id)
-        for session in project.get("sessions") or []:
-            if not isinstance(session, dict):
-                continue
-            session_id = str(session.get("id") or "").strip()
-            if session_id:
-                sessions.setdefault(
-                    session_id,
-                    {
-                        "project_id": project_id,
-                        "project_key": project_key,
-                        "session_kind": str(session.get("kind") or "task").strip() or "task",
-                    },
-                )
-    # Chat ownership remains authoritative when a stale task summary happens
-    # to retain the same id.
     for chat in chats:
         if not isinstance(chat, dict):
             continue
@@ -230,17 +215,17 @@ def resolve_workbench_project_id_for_data_key(data_key: str | None) -> str | Non
 
 
 def resolve_workbench_project_data_key_for_session(session_id: str | None) -> str | None:
-    """Resolve a Workbench chat/task session to its project storage key."""
+    """Resolve a Workbench conversation to its project storage key."""
     return resolve_workbench_session_scope(session_id)["project_key"]
 
 
 def resolve_workbench_project_id_for_session(session_id: str | None) -> str | None:
-    """Resolve a Workbench chat/task session to its owning project id."""
+    """Resolve a Workbench conversation to its owning project id."""
     return resolve_workbench_session_scope(session_id)["project_id"]
 
 
 def resolve_workbench_session_kind(session_id: str | None) -> str | None:
-    """Return ``chat`` or a project-session kind for a Workbench session."""
+    """Return the kind of a Workbench conversation."""
     return resolve_workbench_session_scope(session_id)["session_kind"]
 
 

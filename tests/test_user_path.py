@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from cyrene.runtime import user_path
+from cyrene.platform import user_path
 
 
 LOGIN_SHELL = user_path._select_login_shell()

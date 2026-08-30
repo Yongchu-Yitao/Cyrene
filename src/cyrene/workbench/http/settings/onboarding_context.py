@@ -9,12 +9,12 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from cyrene.runtime.onboarding import (
+from cyrene.platform.onboarding import (
     get_onboarding_status,
     save_and_test_llm_setup,
     save_codex_oauth_setup,
 )
-from cyrene.runtime.onboarding_context_service import OnboardingContextApplicationService
+from cyrene.platform.onboarding_context_service import OnboardingContextApplicationService
 from cyrene.workbench.http.errors import localized_error_response
 
 

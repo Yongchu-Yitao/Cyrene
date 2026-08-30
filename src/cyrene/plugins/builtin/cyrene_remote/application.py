@@ -9,9 +9,7 @@ from fastapi import APIRouter, FastAPI
 from cyrene.plugins.context import PluginApplicationContext
 from cyrene.workbench.control.control_ports import (
     WorkbenchChatApplicationPort,
-    WorkbenchGoalLoopApplicationPort,
     WorkbenchProjectApplicationPort,
-    WorkbenchTaskApplicationPort,
 )
 
 from .commands import RemoteCommandExecutor, RemoteControlRuntime
@@ -69,8 +67,6 @@ def build_remote_application(
     bot: Any,
     chat: WorkbenchChatApplicationPort,
     projects: WorkbenchProjectApplicationPort,
-    tasks: WorkbenchTaskApplicationPort,
-    goals: WorkbenchGoalLoopApplicationPort,
 ) -> tuple[
     RemoteControlStore,
     RemoteControlRuntime,
@@ -85,8 +81,6 @@ def build_remote_application(
         db_path=db_path,
         chat=chat,
         projects=projects,
-        tasks=tasks,
-        goals=goals,
     )
     runtime = RemoteControlRuntime(
         db_path=db_path,
@@ -117,8 +111,6 @@ def register_remote_routes(
     bot: Any,
     chat: WorkbenchChatApplicationPort,
     projects: WorkbenchProjectApplicationPort,
-    tasks: WorkbenchTaskApplicationPort,
-    goals: WorkbenchGoalLoopApplicationPort,
 ) -> RemoteControlStore:
     """Test/embedded composition entrypoint kept inside the Plugin boundary."""
 
@@ -127,8 +119,6 @@ def register_remote_routes(
         bot=bot,
         chat=chat,
         projects=projects,
-        tasks=tasks,
-        goals=goals,
     )
     register_remote_route_adapters(router, service)
     app.state.remote_control_runtime = runtime
@@ -140,7 +130,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     register_remote_route_adapters(context.router, proxy)
     context.provide("remote", proxy)
     context.expose_frontend("remote")
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )
@@ -161,8 +151,6 @@ def setup_application(context: PluginApplicationContext) -> None:
                 bot=context.bot,
                 chat=_HostServiceProxy(context.app, "workbench_chat"),
                 projects=_HostServiceProxy(context.app, "workbench_projects"),
-                tasks=_HostServiceProxy(context.app, "workbench_tasks"),
-                goals=_HostServiceProxy(context.app, "workbench_goals"),
             )
             proxy.bind(service=service, store=store, runtime=runtime)
         await proxy.runtime.start()

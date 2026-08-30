@@ -13,12 +13,13 @@ from typing import Any
 from ..hook import HookAwaitingUser
 from ..observability import log_operation, operation
 from .execution import bind_plugin_execution
-from .context import plugin_localized
+from .context import plugin_language, plugin_localized
 from .plugin import Plugin, PluginCall, PluginCallResult, PluginContext
 from .registry import PluginNotFoundError, PluginRegistry, PluginUnavailableError
 from .validation import (
     PluginInputValidationError,
     PluginSchemaError,
+    normalize_plugin_arguments,
     validate_plugin_arguments,
 )
 
@@ -62,19 +63,31 @@ def _context_agent_id(context: PluginContext) -> str:
     return "main"
 
 
+def plugin_context_is_read_only(context: PluginContext) -> bool:
+    """Resolve the execution policy shared by direct and Toolbox calls."""
+
+    if context.data.get("read_only") is True:
+        return True
+    run_context = context.data.get("run_context")
+    return isinstance(run_context, Mapping) and run_context.get("read_only") is True
+
+
 def _validation_error_text(context: PluginContext, exc: Exception) -> str:
     english = str(exc) or "Plugin call validation failed."
     if isinstance(exc, PluginInputValidationError):
-        chinese = "插件参数无效。"
+        chinese = f"插件参数无效：{english}"
     elif isinstance(exc, PluginSchemaError):
-        chinese = "插件输入规则无效。"
+        chinese = f"插件输入规则无效：{english}"
     elif isinstance(exc, PluginNotFoundError):
         chinese = "未找到请求的插件。"
     elif isinstance(exc, PluginUnavailableError):
         chinese = "请求的插件当前不可用。"
     else:
         chinese = "无法验证插件调用。"
-    return plugin_localized(context, english, chinese)
+    # Validation messages can contain literal JSON object representations.
+    # They are already complete strings, so they must not pass through the
+    # localization template formatter where braces are interpreted as fields.
+    return chinese if plugin_language(context) == "zh" else english
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +98,7 @@ class PreparedPluginCall:
     plugin: Plugin
     arguments: dict[str, Any]
     permission_boundary: dict[str, Any] | None = None
+    argument_repairs: tuple[dict[str, str], ...] = ()
 
 
 async def _permission_boundary(
@@ -102,6 +116,26 @@ async def _permission_boundary(
     if not isinstance(raw_permission, Mapping):
         raise TypeError("Plugin permission_boundary must return an object or None")
     return dict(raw_permission)
+
+
+async def _validated_call(
+    registry: PluginRegistry,
+    call: PluginCall,
+    context: PluginContext,
+) -> tuple[Plugin, Any, dict[str, Any], dict[str, Any] | None]:
+    plugin = registry.resolve(call.name, agent_id=_context_agent_id(context))
+    normalization = normalize_plugin_arguments(call.arguments, plugin.input_schema)
+    arguments = normalization.arguments
+    validate_plugin_arguments(plugin.name, arguments, plugin.input_schema)
+    if (
+        plugin_context_is_read_only(context)
+        and not plugin.permits_read_only(arguments)
+    ):
+        raise PluginUnavailableError(
+            f"Plugin is unavailable in a read-only context: {plugin.name}"
+        )
+    permission_request = await _permission_boundary(plugin, arguments, context)
+    return plugin, normalization, arguments, permission_request
 
 
 class PluginRuntime:
@@ -162,21 +196,10 @@ class PluginRuntime:
             review_calls: list[tuple[str, dict[str, Any]]] = []
             review_permissions: list[dict[str, Any] | None] = []
             for call in calls:
+                normalization = None
                 try:
-                    plugin = self.registry.resolve(
-                        call.name,
-                        agent_id=_context_agent_id(context),
-                    )
-                    arguments = dict(call.arguments)
-                    validate_plugin_arguments(
-                        plugin.name,
-                        arguments,
-                        plugin.input_schema,
-                    )
-                    permission_request = await _permission_boundary(
-                        plugin,
-                        arguments,
-                        context,
+                    plugin, normalization, arguments, permission_request = (
+                        await _validated_call(self.registry, call, context)
                     )
                 except Exception as exc:
                     log_operation(
@@ -186,7 +209,17 @@ class PluginRuntime:
                         phase="rejected",
                         call_id=call.id,
                         plugin=call.name,
-                        arguments=dict(call.arguments),
+                        original_arguments=dict(call.arguments),
+                        arguments=(
+                            normalization.arguments
+                            if normalization is not None
+                            else dict(call.arguments)
+                        ),
+                        argument_repairs=(
+                            [repair.as_dict() for repair in normalization.repairs]
+                            if normalization is not None
+                            else []
+                        ),
                         error=exc,
                         **_context_fields(context),
                     )
@@ -209,19 +242,26 @@ class PluginRuntime:
                     call_id=call.id,
                     plugin=call.name,
                     plugin_kind=plugin.kind,
+                    original_arguments=dict(call.arguments),
                     arguments=arguments,
+                    argument_repairs=[
+                        repair.as_dict() for repair in normalization.repairs
+                    ],
                     **_context_fields(context),
                 )
                 item = PreparedPluginCall(
-                    call,
-                    plugin,
-                    arguments,
-                    permission_request,
+                    call=call,
+                    plugin=plugin,
+                    arguments=arguments,
+                    permission_boundary=permission_request,
+                    argument_repairs=tuple(
+                        repair.as_dict() for repair in normalization.repairs
+                    ),
                 )
                 prepared.append(item)
                 if _dispatches_own_tool_hooks(plugin) and context.hooks is not None:
                     review_positions.append(len(prepared) - 1)
-                    review_calls.append((call.name, dict(call.arguments)))
+                    review_calls.append((call.name, dict(arguments)))
                     review_permissions.append(permission_request)
 
             if review_calls:
@@ -268,7 +308,11 @@ class PluginRuntime:
                         )
                     else:
                         try:
-                            reviewed_arguments = dict(decision)
+                            reviewed_normalization = normalize_plugin_arguments(
+                                dict(decision),
+                                item.plugin.input_schema,
+                            )
+                            reviewed_arguments = reviewed_normalization.arguments
                             validate_plugin_arguments(
                                 item.plugin.name,
                                 reviewed_arguments,
@@ -304,13 +348,24 @@ class PluginRuntime:
                                 plugin=item.call.name,
                                 arguments=reviewed_arguments,
                                 modified=reviewed_arguments != item.arguments,
+                                argument_repairs=[
+                                    repair.as_dict()
+                                    for repair in reviewed_normalization.repairs
+                                ],
                                 **_context_fields(context),
                             )
                             prepared[position] = PreparedPluginCall(
-                                item.call,
-                                item.plugin,
-                                reviewed_arguments,
-                                item.permission_boundary,
+                                call=item.call,
+                                plugin=item.plugin,
+                                arguments=reviewed_arguments,
+                                permission_boundary=item.permission_boundary,
+                                argument_repairs=(
+                                    item.argument_repairs
+                                    + tuple(
+                                        repair.as_dict()
+                                        for repair in reviewed_normalization.repairs
+                                    )
+                                ),
                             )
             result = tuple(item for item in prepared if item is not None)
             op.finish(
@@ -339,6 +394,7 @@ class PluginRuntime:
             plugin=call.name,
             plugin_kind=plugin.kind,
             arguments=arguments,
+            argument_repairs=list(prepared.argument_repairs),
             timeout_seconds=plugin.timeout_seconds,
             allow_parallel=plugin.allow_parallel,
             **_context_fields(context),
@@ -426,10 +482,15 @@ class PluginRuntime:
                     error=exc,
                     **_context_fields(context),
                 )
-                error = plugin_localized(
-                    context,
-                    "Plugin execution failed.",
-                    "插件执行失败。",
+                public_error = str(exc).strip()
+                error = (
+                    public_error
+                    if plugin.metadata.get("public_errors") is True and public_error
+                    else plugin_localized(
+                        context,
+                        "Plugin execution failed.",
+                        "插件执行失败。",
+                    )
                 )
                 if _dispatches_own_tool_hooks(plugin):
                     await self._post(context, call.name, arguments, None, False, error)

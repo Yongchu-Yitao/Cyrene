@@ -5,7 +5,6 @@ function wbcWorkspaceDisplayName(path) {
 
 var WBC_RESOURCE_DRAG_MIME = "application/x-cyrene-work-resource+json";
 var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";
-var WBC_TASK_DRAG_MIME = "application/x-cyrene-task+json";
 var WBC_PLUGIN_VIEW_DRAG_MIME = "application/x-cyrene-plugin-view+json";
 var WBC_CHAT_GROUP_DRAG_MIME = "application/x-cyrene-chat-group+json";
 var WBC_AGENT_CHAT_FLOW_EVENT = "cyrene:agent-chat-flow";
@@ -167,42 +166,6 @@ function wbcReadChatDrag(event) {
   }
 }
 
-function wbcSetTaskDrag(event, task, projectId) {
-  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
-  if (!transfer || !task || !task.id) return;
-  try {
-    transfer.effectAllowed = "copyMove";
-    transfer.setData(WBC_TASK_DRAG_MIME, JSON.stringify({
-      kind: "task",
-      id: String(task.id),
-      projectId: String(projectId || task.projectId || ""),
-      title: String(task.title || ""),
-    }));
-    transfer.setData("text/plain", String(task.id));
-  } catch (e) {}
-}
-
-function wbcHasTaskDrag(event) {
-  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
-  if (!transfer) return false;
-  try {
-    return Array.prototype.slice.call(transfer.types || []).indexOf(WBC_TASK_DRAG_MIME) >= 0;
-  } catch (e) {
-    return false;
-  }
-}
-
-function wbcReadTaskDrag(event) {
-  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
-  if (!transfer) return null;
-  try {
-    var payload = JSON.parse(transfer.getData(WBC_TASK_DRAG_MIME) || "null");
-    return payload && payload.kind === "task" && payload.id ? payload : null;
-  } catch (e) {
-    return null;
-  }
-}
-
 function wbcSetPluginViewDrag(event, payload) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
   var pluginView = payload && typeof payload === "object" ? payload : null;
@@ -260,11 +223,7 @@ function wbcChatSideZoneRect() {
   if (!page) return null;
   var pr = page.getBoundingClientRect();
   if (!pr.width) return null;
-  // Task detail and conversation detail are equivalent right-side surfaces.
-  // Prefer the task panel when present so task drags use its real (usually
-  // narrower) track instead of the generic preview-width fallback.
-  var side = page.querySelector(":scope > .wbc-task-context-panel")
-    || page.querySelector(":scope > .wbc-side");
+  var side = page.querySelector(":scope > .wbc-side");
   // A collapsed side panel keeps a narrow off-canvas box during its close
   // transition. Its rect can therefore have a non-zero width even though it
   // is not a usable drop target. Only reuse the real side track while it is
@@ -462,8 +421,6 @@ function wbcPaneCard(kind, payload, options) {
     ? "chat:" + String(payload)
     : normalizedKind === "terminal" && payload
     ? "terminal:" + String(payload)
-    : normalizedKind === "task" && payload
-    ? "task:" + String(payload)
     : wbcPaneIdentity(normalizedKind, payload);
   var stableId = opts.freshInstance
     ? canonicalId + ":instance:" + crypto.randomUUID()
@@ -787,4 +744,4 @@ window.CyreneUI.resources = window.CyreneUI.register("resources", {
 // core events are ignored safely (diagnostics only), and the same eventId is
 // processed at most once per stream so a reconnect cannot duplicate cards.
 
-export { wbcWorkspaceDisplayName, WBC_RESOURCE_DRAG_MIME, WBC_CHAT_DRAG_MIME, WBC_TASK_DRAG_MIME, WBC_PLUGIN_VIEW_DRAG_MIME, WBC_CHAT_GROUP_DRAG_MIME, WBC_AGENT_CHAT_FLOW_EVENT, WBC_AGENT_CHAT_FLOW_TTLS, WBC_AGENT_CHAT_FLOW_STATE, WBC_EMPTY_DRAG_IMAGE, wbcHideNativeDragImage, wbcBuildRailCardDragPreview, wbcAgentChatFlowSnapshot, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcHasChatDrag, wbcSetChatGroupDrag, wbcHasChatGroupDrag, wbcHasChatRailDrag, wbcReadChatDrag, wbcSetTaskDrag, wbcHasTaskDrag, wbcReadTaskDrag, wbcSetPluginViewDrag, wbcHasPluginViewDrag, wbcReadPluginViewDrag, wbcChatSideZoneRect, wbcPinSplitMotionOpen, wbcReleasePinnedSplitMotion, wbcPinPageSplitLayout, wbcReleasePinnedPageSplitLayout, wbcClonePaneWithLiveState, wbcCaptureConversationViewport, wbcRestoreConversationViewport, wbcSplitSideForDraggedConversation, wbcChatSideDropZone, WBC_SPLIT_DRAG_MIME, wbcPaneIdentity, wbcPaneCard, wbcDefaultPaneLayout, wbcNormalizePaneLayout, wbcPaneCardLocation, wbcPlacePaneCard, wbcChatDropReplacesActiveConversation, wbcSetSplitDrag, wbcReadSplitDrag, wbcHasSplitDrag, wbcEscapeHtml, wbcSetResourceDrag, wbcReadResourceDrag, wbcHasResourceDrag, wbcFileDragPayload }
+export { wbcWorkspaceDisplayName, WBC_RESOURCE_DRAG_MIME, WBC_CHAT_DRAG_MIME, WBC_PLUGIN_VIEW_DRAG_MIME, WBC_CHAT_GROUP_DRAG_MIME, WBC_AGENT_CHAT_FLOW_EVENT, WBC_AGENT_CHAT_FLOW_TTLS, WBC_AGENT_CHAT_FLOW_STATE, WBC_EMPTY_DRAG_IMAGE, wbcHideNativeDragImage, wbcBuildRailCardDragPreview, wbcAgentChatFlowSnapshot, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcHasChatDrag, wbcSetChatGroupDrag, wbcHasChatGroupDrag, wbcHasChatRailDrag, wbcReadChatDrag, wbcSetPluginViewDrag, wbcHasPluginViewDrag, wbcReadPluginViewDrag, wbcChatSideZoneRect, wbcPinSplitMotionOpen, wbcReleasePinnedSplitMotion, wbcPinPageSplitLayout, wbcReleasePinnedPageSplitLayout, wbcClonePaneWithLiveState, wbcCaptureConversationViewport, wbcRestoreConversationViewport, wbcSplitSideForDraggedConversation, wbcChatSideDropZone, WBC_SPLIT_DRAG_MIME, wbcPaneIdentity, wbcPaneCard, wbcDefaultPaneLayout, wbcNormalizePaneLayout, wbcPaneCardLocation, wbcPlacePaneCard, wbcChatDropReplacesActiveConversation, wbcSetSplitDrag, wbcReadSplitDrag, wbcHasSplitDrag, wbcEscapeHtml, wbcSetResourceDrag, wbcReadResourceDrag, wbcHasResourceDrag, wbcFileDragPayload }

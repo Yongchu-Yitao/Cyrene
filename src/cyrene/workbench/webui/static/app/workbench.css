@@ -1,4 +1,4 @@
-/* Project / Task Session workbench */
+/* Conversation-native project workbench */
 
 .workbench-shell {
   --wb-topbar-height: 58px;
@@ -23,7 +23,7 @@
   --wb-shell-bg: var(--wb-surface);
   --wb-topbar-bg: var(--wb-surface);
   --wb-rail-bg: var(--wb-surface);
-  --wb-task-rail-bg: var(--wb-surface);
+  --wb-module-rail-bg: var(--wb-surface);
   --wb-main-bg: var(--wb-surface);
   --wb-right-bg: var(--wb-surface);
   --wb-control-bg: var(--control-bg);
@@ -1111,6 +1111,16 @@ html[data-platform="darwin"] .workbench-top-project-menu {
   width: 0;
   height: 0;
   display: none;
+}
+
+.workbench-account-menu.workbench-session-menu.workbench-resource-menu {
+  width: max-content;
+  min-width: min(180px, calc(100vw - 16px));
+  max-width: min(340px, calc(100vw - 16px));
+}
+
+.workbench-resource-menu > button > span:last-child {
+  white-space: nowrap;
 }
 
 .workbench-session-activity-preview,
@@ -3259,7 +3269,6 @@ html[data-theme="dark"] .workbench-top-action-group .workbench-help-anchor.open 
 }
 
 .workbench-project-rail,
-.workbench-task-rail,
 .workbench-main,
 .workbench-right-panel {
   min-height: 0;
@@ -3269,7 +3278,6 @@ html[data-theme="dark"] .workbench-top-action-group .workbench-help-anchor.open 
 }
 
 .workbench-project-rail,
-.workbench-task-rail,
 .workbench-right-panel {
   display: flex;
   flex-direction: column;
@@ -3391,8 +3399,7 @@ html[data-theme="dark"] .workbench-top-action-group .workbench-help-anchor.open 
    hide buttons. Higher specificity (.workbench-rail-head + class) to beat
    the generic .workbench-rail-head button rule. */
 .workbench-rail-head .workbench-rail-collapse-btn,
-.wbc-side .wbc-side-hide-btn,
-.wb-task-detail-card .wb-task-side-hide-btn {
+.wbc-side .wbc-side-hide-btn{
   flex: 0 0 auto;
   width: 32px;
   height: 33px;
@@ -3409,21 +3416,19 @@ html[data-theme="dark"] .workbench-top-action-group .workbench-help-anchor.open 
 }
 
 .workbench-rail-head .workbench-rail-collapse-btn:hover,
-.wbc-side .wbc-side-hide-btn:hover,
-.wb-task-detail-card .wb-task-side-hide-btn:hover {
+.wbc-side .wbc-side-hide-btn:hover{
   border-color: var(--wb-accent);
   background: var(--wb-control-hover-bg);
 }
 
 .workbench-rail-head .workbench-rail-collapse-btn svg,
-.wbc-side .wbc-side-hide-btn svg,
-.wb-task-detail-card .wb-task-side-hide-btn svg {
+.wbc-side .wbc-side-hide-btn svg{
   display: block;
 }
 
 /* ── Resizable right panel ─────────────────────────────────────────────────
-   A thin grab handle pinned to the LEFT edge of the rightmost panel (task
-   context panel + chat viewer/map side). Dragging writes --wb-right-w onto
+   A thin grab handle pinned to the LEFT edge of the conversation side panel.
+   Dragging writes --wb-right-w onto
    .workbench-grid, which both grids consume. Handle lives inside the panel so
    .wbc-side's overflow:hidden never clips it. */
 .workbench-right-panel,
@@ -3525,8 +3530,7 @@ body.wb-col-resizing {
   font-weight: 800;
 }
 
-.workbench-project-list,
-.workbench-task-list {
+.workbench-project-list{
   min-height: 0;
   overflow: auto;
 }
@@ -3559,8 +3563,7 @@ body.wb-col-resizing {
   gap: 7px;
 }
 
-.workbench-project-main,
-.workbench-task-card {
+.workbench-project-main{
   width: 100%;
   border: 1px solid transparent;
   background: transparent;
@@ -3685,16 +3688,14 @@ body.wb-col-resizing {
   color: var(--wb-red);
 }
 
-.workbench-project-meta,
-.workbench-task-main {
+.workbench-project-meta{
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.workbench-project-meta b,
-.workbench-task-main b {
+.workbench-project-meta b{
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3702,7 +3703,6 @@ body.wb-col-resizing {
 }
 
 .workbench-project-meta small,
-.workbench-task-main small,
 .workbench-account small {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3714,7 +3714,9 @@ body.wb-col-resizing {
 .workbench-modal-scrim {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  /* Blocking dialogs cover the complete app chrome, including the fixed
+     titlebar, while remaining below confirmation and toast layers. */
+  z-index: 10090;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -3885,7 +3887,10 @@ body.wb-col-resizing {
 }
 
 .workbench-project-edit-modal {
-  width: min(460px, calc(100vw - 32px));
+  width: min(820px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   border: 1px solid var(--wb-modal-border);
   border-radius: var(--wb-modal-radius);
   background: var(--wb-modal-bg);
@@ -3914,6 +3919,7 @@ body.wb-col-resizing {
   padding: 16px;
   display: grid;
   gap: 9px;
+  overflow: auto;
 }
 
 .workbench-project-edit-body label {
@@ -3945,6 +3951,74 @@ body.wb-col-resizing {
   width: 52px !important;
   height: 36px;
   padding: 3px !important;
+}
+
+.workbench-project-execution-heading {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--wb-line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workbench-project-execution-heading > span {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.workbench-project-execution-heading small,
+.workbench-project-action-empty {
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-project-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.workbench-project-action-row {
+  display: grid;
+  grid-template-columns: 92px minmax(120px, 1fr) 110px minmax(130px, 1.2fr) minmax(130px, 1fr) 86px auto 92px 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-panel) 82%, var(--wb-control-bg));
+}
+
+.workbench-project-action-row input,
+.workbench-project-action-row select {
+  min-width: 0;
+  height: 36px;
+  padding: 6px 8px;
+  border: 1px solid var(--wb-field-border);
+  border-radius: 8px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+}
+
+.workbench-project-action-check {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  font-weight: 600 !important;
+}
+
+.workbench-project-action-check input { width: 16px; height: 16px; }
+.workbench-project-action-add { justify-self: start; }
+
+@media (max-width: 760px) {
+  .workbench-project-action-row { grid-template-columns: 1fr 1fr; }
+  .workbench-project-action-row > :nth-child(2),
+  .workbench-project-action-row > :nth-child(4),
+  .workbench-project-action-row > :nth-child(5) { grid-column: 1 / -1; }
 }
 
 .workbench-project-edit-error {
@@ -4499,67 +4573,8 @@ html[data-theme="dark"] .workbench-project-memory-modal {
   margin: 4px 0;
 }
 
-.workbench-task-rail {
-  background: var(--wb-task-rail-bg);
-}
 
-.workbench-task-list {
-  padding: 0 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.workbench-task-card {
-  border-radius: 10px;
-  padding: 11px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  position: relative;
-}
-
-.workbench-task-card:hover,
-.workbench-task-card.active,
-.workbench-task-card.menu-open {
-  background: var(--wb-active-bg);
-  border-color: var(--wb-active-border);
-}
-
-.workbench-task-top {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-
-.workbench-task-top .workbench-status-dot {
-  flex: 0 0 auto;
-}
-
-.workbench-task-top b {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: calc(14px * var(--wb-ui-font-scale, 1));
-  font-weight: 650;
-  padding-right: 20px;
-}
-
-.workbench-task-bottom {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-left: 18px;
-}
-
-.workbench-task-bottom time {
-  color: var(--wb-muted);
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-}
-
-.workbench-task-status {
+.workbench-conversation-status {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -4571,42 +4586,18 @@ html[data-theme="dark"] .workbench-project-memory-modal {
   color: var(--wb-muted);
 }
 
-.workbench-task-status .wb-status-ico {
+.workbench-conversation-status .wb-status-ico {
   font-style: normal;
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
   opacity: 0.85;
 }
 
-.workbench-task-status.blue { background: color-mix(in srgb, var(--wb-blue) 16%, transparent); color: var(--wb-blue); }
-.workbench-task-status.green { background: color-mix(in srgb, var(--wb-green) 16%, transparent); color: var(--wb-green); }
-.workbench-task-status.amber { background: color-mix(in srgb, var(--wb-amber) 18%, transparent); color: var(--wb-amber); }
-.workbench-task-status.red { background: color-mix(in srgb, var(--wb-red) 16%, transparent); color: var(--wb-red); }
+.workbench-conversation-status.blue { background: color-mix(in srgb, var(--wb-blue) 16%, transparent); color: var(--wb-blue); }
+.workbench-conversation-status.green { background: color-mix(in srgb, var(--wb-green) 16%, transparent); color: var(--wb-green); }
+.workbench-conversation-status.amber { background: color-mix(in srgb, var(--wb-amber) 18%, transparent); color: var(--wb-amber); }
+.workbench-conversation-status.red { background: color-mix(in srgb, var(--wb-red) 16%, transparent); color: var(--wb-red); }
 
-/* ---- Card action menu (task rail + chat rail hover dots) ---- */
-
-/* Task card: absolute overlay in top-right corner.
-   Scoped to the task rail card — a bare `.wb-card-actions` is also the in-card
-   button row (WbActions); leaving this global hid those buttons (opacity:0). */
-.workbench-task-card .wb-card-actions {
-  position: absolute;
-  top: 7px;
-  right: 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .12s ease;
-}
-
-.workbench-task-card:hover .wb-card-actions,
-.workbench-task-card.active .wb-card-actions,
-.workbench-task-card.menu-open .wb-card-actions {
-  opacity: 1;
-  pointer-events: auto;
-  /* The menu is inside this wrapper; lift the wrapper above the outside-click
-     scrim so the delete action receives the click. */
-  z-index: 200;
-}
-
-/* Chat card: inline in card-top, overlays actions on time without layout shift */
+/* Chat card actions overlay the timestamp without shifting layout. */
 .wbc-chat-card-right {
   flex: 0 0 auto;
   display: flex;
@@ -4860,4 +4851,322 @@ html[data-theme="dark"] .workbench-project-memory-modal {
   padding: 18px 18px 12px;
   overflow: hidden;
   background: var(--wb-main-bg);
+}
+
+/* Shared conversation surfaces. */
+.wb-file-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--wb-accent) 10%, rgba(8, 15, 28, 0.38));
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.wb-file-drop-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border: 2px dashed color-mix(in srgb, var(--wb-accent) 70%, #fff);
+  border-radius: 18px;
+}
+
+.wb-file-drop-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  max-width: min(520px, calc(100vw - 72px));
+  padding: 18px 24px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 38%, var(--wb-line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, transparent);
+  color: var(--wb-text);
+  box-shadow: 0 20px 60px rgba(4, 10, 22, 0.28);
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-file-drop-card svg { flex: 0 0 auto; color: var(--wb-accent); }
+
+.workbench-muted {
+  color: var(--wb-muted);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  padding: 10px 12px;
+}
+
+.workbench-empty { margin: auto; color: var(--wb-muted); }
+
+.workbench-fullscreen {
+  height: calc(100vh - 58px);
+  display: flex;
+  flex-direction: column;
+  background: var(--wb-bg);
+}
+
+.workbench-fullscreen-head {
+  height: 50px;
+  border-bottom: 1px solid var(--wb-line);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+}
+
+.workbench-fullscreen-head button {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  cursor: pointer;
+}
+
+.workbench-fullscreen-body { min-height: 0; flex: 1; overflow: hidden; }
+
+.workbench-fullscreen-body > .page,
+.workbench-fullscreen-body > .chat-layout,
+.workbench-fullscreen-body > .memory-page,
+.workbench-fullscreen-body > .knowledge-page { height: 100%; }
+
+.wbc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.wbc-sortable-card-stack { display: flex; flex-direction: column; gap: 10px; }
+
+.wbc-sortable-card {
+  position: relative;
+  border-radius: 8px;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.wbc-sortable-card.dragging { opacity: .2; transform: scale(.985); }
+.wbc-sortable-card.dragging > .workbench-side-section { border-style: dashed; }
+
+.wbc-card-drag-handle {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  right: 0;
+  left: 0;
+  display: flex;
+  height: calc(16px * var(--wb-ui-font-scale, 1));
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--wb-faint);
+  cursor: grab;
+}
+
+.wbc-card-drag-handle > span {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  opacity: .72;
+  transform: translateY(4px);
+}
+
+.wbc-card-drag-handle svg { transform: rotate(90deg); }
+.wbc-card-drag-handle:active { cursor: grabbing; }
+
+.wbc-card-drag-handle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  outline-offset: -2px;
+}
+
+.wbc-card-drag-handle:focus-visible > span { color: var(--wb-text); opacity: 1; }
+.wbc-sortable-card > .workbench-side-section > h3 { padding-right: 28px; }
+.wbc-sortable-card > .wbc-inbox-card .wbc-inbox-head { padding-right: 36px; }
+
+.workbench-side-section {
+  border: 0;
+  padding: 12px;
+  background: var(--wb-card-bg);
+  box-shadow: var(--wbc-control-shadow);
+}
+
+.workbench-side-section h3 {
+  margin: 0 0 10px;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.workbench-side-section p {
+  margin: 0;
+  color: var(--wb-muted);
+  line-height: 1.55;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  overflow-wrap: anywhere;
+}
+
+.workbench-error {
+  border: 1px solid color-mix(in srgb, var(--wb-red) 24%, var(--wb-line));
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--wb-red) 7%, var(--wb-card-bg));
+  color: var(--wb-error-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-error-card {
+  margin: 76px 22px 0;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  min-height: 62px;
+  border-radius: 11px;
+  color: var(--wb-text);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.wbc-error-card.is-agent-error {
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: start;
+  border-color: color-mix(in srgb, var(--wb-red) 34%, var(--wb-line));
+  padding: 14px 15px;
+}
+
+.wbc-error-card.is-agent-error.is-security {
+  background: color-mix(in srgb, var(--wb-red) 8%, var(--wb-card-bg));
+}
+
+.wbc-error-card.is-agent-error.is-network {
+  border-color: color-mix(in srgb, var(--wb-warning, #d89614) 38%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-warning, #d89614) 7%, var(--wb-card-bg));
+}
+
+.wbc-error-card.is-agent-error.is-authentication,
+.wbc-error-card.is-agent-error.is-configuration,
+.wbc-error-card.is-agent-error.is-dependency,
+.wbc-error-card.is-agent-error.is-model,
+.wbc-error-card.is-agent-error.is-protocol,
+.wbc-error-card.is-agent-error.is-capability,
+.wbc-error-card.is-agent-error.is-session,
+.wbc-error-card.is-agent-error.is-request,
+.wbc-error-card.is-agent-error.is-runtime {
+  border-color: color-mix(in srgb, var(--wb-warning, #d89614) 34%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-warning, #d89614) 6%, var(--wb-card-bg));
+}
+
+.wbc-error-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--wb-red) 13%, transparent);
+  color: var(--wb-red);
+}
+
+.wbc-error-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.wbc-error-copy b {
+  color: var(--wb-text);
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+}
+
+.wbc-error-copy small {
+  color: var(--wb-muted);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.wbc-error-summary { color: var(--wb-text) !important; font-weight: 620; }
+.wbc-error-hint { margin-top: 2px; }
+
+.wbc-error-detail {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 240px;
+  margin: 7px 0 0;
+  padding: 9px 10px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--wb-red) 18%, var(--wb-line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-bg) 72%, transparent);
+  color: var(--wb-muted);
+  font: 500 calc(11.5px * var(--wb-ui-font-scale, 1))/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  user-select: text;
+}
+
+.wbc-error-actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wbc-error-copy-button,
+.wbc-error-retry {
+  min-height: 32px;
+  border-radius: 8px;
+  background: var(--wb-card-bg);
+  padding: 0 11px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.wbc-error-copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--wb-line);
+  color: var(--wb-muted);
+}
+
+.wbc-error-copy-button:hover {
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line));
+  color: var(--wb-text);
+}
+
+.wbc-error-retry {
+  border: 1px solid color-mix(in srgb, var(--wb-red) 24%, var(--wb-line));
+  color: var(--wb-red);
+}
+
+.wbc-error-retry:hover {
+  background: color-mix(in srgb, var(--wb-red) 9%, var(--wb-card-bg));
+  border-color: color-mix(in srgb, var(--wb-red) 36%, var(--wb-line));
+}
+
+@media (max-width: 640px) {
+  .wbc-error-card.is-agent-error {
+    margin-inline: 12px;
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .wbc-error-actions { justify-content: stretch; }
+
+  .wbc-error-actions > button {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 40px;
+  }
 }

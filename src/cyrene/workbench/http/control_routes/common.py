@@ -17,8 +17,6 @@ from cyrene.workbench.http.control_schemas import (
     ControlMessage,
     ControlRunEvent,
     ControlRunResponse,
-    ControlTaskDetail,
-    ControlTaskSummary,
 )
 
 
@@ -117,31 +115,6 @@ def run_response(run: Any) -> ControlRunResponse:
     )
 
 
-def task_summary(raw: dict[str, Any]) -> ControlTaskSummary:
-    return ControlTaskSummary(
-        id=str(raw.get("id") or ""), project_id=str(raw.get("projectId") or ""),
-        title=str(raw.get("title") or ""), goal=str(raw.get("goal") or ""),
-        status=str(raw.get("status") or "idle"), priority=str(raw.get("priority") or "medium"),
-        created_at=str(raw.get("createdAt") or ""), updated_at=str(raw.get("updatedAt") or ""),
-        artifact_count=len(raw.get("artifacts") or []),
-    )
-
-
-def task_detail(raw: dict[str, Any]) -> ControlTaskDetail:
-    summary = task_summary(raw)
-    public_types = {"AgentResponseEvent", "ExecutionFailed", "ExecutionFinished", "ExecutionStarted", "PlanApproved", "PlanGenerated", "PlanRevised", "UserMessageEvent"}
-    pending = raw.get("pendingQuestion")
-    goal_loop = raw.get("goalLoop")
-    return ControlTaskDetail(
-        **summary.model_dump(),
-        plan=[{key: item[key] for key in ("id", "title", "description", "status", "dependsOn") if key in item} for item in raw.get("plan") or [] if isinstance(item, dict)],
-        pending_question=({key: pending[key] for key in ("id", "questionId", "kind", "questionKind", "prompt", "question", "title", "options", "choices") if key in pending} if isinstance(pending, dict) else None),
-        events=[{key: item[key] for key in ("id", "type", "createdAt", "body", "stepId") if key in item} for item in raw.get("events") or [] if isinstance(item, dict) and str(item.get("type") or "") in public_types],
-        artifacts=[{key: item[key] for key in ("id", "name", "type", "status", "createdAt", "size") if key in item} for item in raw.get("artifacts") or [] if isinstance(item, dict)],
-        goal_loop=({key: goal_loop[key] for key in ("id", "status", "phase", "currentStepId", "stopReason", "activeSeconds", "maxActiveSeconds", "repairRound", "maxRepairRounds", "updatedAt") if key in goal_loop} if isinstance(goal_loop, dict) else None),
-    )
-
-
 def public_event(raw: dict[str, Any]) -> dict[str, Any] | None:
     if str(raw.get("type") or "") in {"reasoning_delta", "reasoning_done", "reasoning_start"}:
         return None
@@ -159,5 +132,5 @@ def file_response(path: Path, filename: str, media_type: str = "") -> FileRespon
 
 __all__ = [
     "COMMON_ERRORS", "chat_detail", "chat_summary", "control_call", "control_sync",
-    "file_response", "message", "public_event", "run_event", "run_response", "task_detail", "task_summary",
+    "file_response", "message", "public_event", "run_event", "run_response",
 ]

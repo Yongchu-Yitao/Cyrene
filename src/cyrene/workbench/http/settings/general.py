@@ -8,12 +8,12 @@ from typing import Any
 from fastapi import APIRouter
 
 from cyrene.core.plugin import application_plugin_scope
-from cyrene.runtime.data_reset import DataResetApplicationService
-from cyrene.runtime.config_integration_service import (
+from cyrene.platform.data_reset import DataResetApplicationService
+from cyrene.platform.config_integration_service import (
     ConfigIntegrationApplicationService,
 )
-from cyrene.runtime.onboarding_context_service import OnboardingContextApplicationService
-from cyrene.runtime.profile_data_service import ProfileDataApplicationService
+from cyrene.platform.onboarding_context_service import OnboardingContextApplicationService
+from cyrene.platform.profile_data_service import ProfileDataApplicationService
 from cyrene.workbench.artifacts.presentation_service import PresentationQueryService
 from cyrene.workbench.http.settings.config_integrations import (
     register_config_read_routes,

@@ -472,14 +472,10 @@ class WorkbenchSessionPresentation:
             return None
         try:
             from cyrene.workbench.artifacts import artifact_runtime
-            from cyrene.workbench.projects import project_runtime
+            from cyrene.workbench.projects import project_repository
 
-            bundle = store.read_project_bundle(
-                self.db_path,
-                project_runtime._workbench_default_project,
-                store.summarize_task_session,
-                lightweight=True,
-            )
+            project_repository._configure_workbench_store(self.db_path)
+            bundle = project_repository._read_workbench_store_lightweight()
             project = next(
                 (
                     item

@@ -17,7 +17,7 @@ def _resolve_pinned_file_path(body: dict[str, Any]) -> None:
     from pathlib import Path
     from urllib.parse import unquote, urlparse
 
-    from cyrene.runtime.attachments import EXPORTS_DIR, UPLOADS_DIR
+    from cyrene.platform.attachments import EXPORTS_DIR, UPLOADS_DIR
 
     parsed = unquote(urlparse(str(body.get("url") or "")).path)
     roots = (

@@ -9,7 +9,7 @@ from typing import Any
 from cyrene.config import DB_PATH
 from cyrene.localization import app_language, localized
 from .manager import MediaJobManager
-from cyrene.runtime.attachments import build_public_attachment_payload
+from cyrene.platform.attachments import build_public_attachment_payload
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_service import ChatService
 from cyrene.workbench.sessions.context_records import append_context_record

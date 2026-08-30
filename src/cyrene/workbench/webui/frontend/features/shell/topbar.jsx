@@ -13,6 +13,7 @@ import { WorkbenchHelpCenter } from "./support.jsx"
 
 var {
   useEffect: useWorkbenchEffect,
+  useLayoutEffect: useWorkbenchLayoutEffect,
   useRef: useWorkbenchRef,
   useState: useWorkbenchState,
 } = React;
@@ -169,7 +170,7 @@ function WorkbenchSessionActivityPreview({ preview, t }) {
   );
 }
 
-function WorkbenchTopbar({ projects, activeProject, activePage, taskView, activeTaskId, activeChatId, recentSessions, overflowSessions, browserOwners, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onOpenBrowserPage, onPauseSession, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, recentSessions, overflowSessions, browserOwners, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onOpenBrowserPage, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = workbenchServices.i18n().use();
   var dataState = workbenchServices.data().state;
   var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
@@ -196,6 +197,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   var topbarRef = useWorkbenchRef(null);
   var projectMenuRef = useWorkbenchRef(null);
   var browserManagerRef = useWorkbenchRef(null);
+  var resourceMenuRef = useWorkbenchRef(null);
   var sessionMenuSeqRef = useWorkbenchRef(0);
   var previewTimerRef = useWorkbenchRef(0);
   var terminalMorphKey = tabs.map(function (item) {
@@ -205,6 +207,23 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   useWorkbenchEffect(function () {
     return WbVoiceCommand.subscribe(setVoiceCommand);
   }, []);
+
+  useWorkbenchLayoutEffect(function () {
+    if (!resourceMenu || !resourceMenuRef.current) return undefined;
+    var menu = resourceMenuRef.current;
+    function placeResourceMenu() {
+      var bounds = menu.getBoundingClientRect();
+      var left = Math.max(8, Math.min(resourceMenu.anchorX, window.innerWidth - bounds.width - 8));
+      var top = Math.max(8, Math.min(resourceMenu.anchorY, window.innerHeight - bounds.height - 8));
+      setResourceMenu(function (current) {
+        if (!current || (current.left === left && current.top === top)) return current;
+        return Object.assign({}, current, { left: left, top: top });
+      });
+    }
+    placeResourceMenu();
+    window.addEventListener("resize", placeResourceMenu);
+    return function () { window.removeEventListener("resize", placeResourceMenu); };
+  }, [resourceMenu && resourceMenu.anchorX, resourceMenu && resourceMenu.anchorY, resourceMenu && resourceMenu.resource && resourceMenu.resource.kind]);
 
   useWorkbenchEffect(function () {
     if (!browserAvailable) {
@@ -546,8 +565,8 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
   function activeSessionIndex() {
     return tabs.findIndex(function (item) {
       return item.kind === "chat"
-        ? activePage === "chat" && String(activeChatId || "") === String(item.id || "")
-        : !activePage && taskView === "detail" && String(activeTaskId || "") === String(item.id || "");
+        && activePage === "chat"
+        && String(activeChatId || "") === String(item.id || "");
     });
   }
 
@@ -647,7 +666,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     }
     window.addEventListener("keydown", handleSessionShortcut);
     return function () { window.removeEventListener("keydown", handleSessionShortcut); };
-  }, [keyboardEnabled, tabs, activePage, taskView, activeTaskId, activeChatId, onOpenSession, onRemoveSessionTab]);
+  }, [keyboardEnabled, tabs, activePage, activeChatId, onOpenSession, onRemoveSessionTab]);
 
   useWorkbenchEffect(function () {
     function handlePointerShelfDrag(event) {
@@ -810,12 +829,13 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     });
   }
 
-  function portalThemeAt(event, height) {
-    var menuWidth = 224;
+  function portalThemeAt(event) {
     var themeStyle = readTopbarPortalTheme();
     return {
-      left: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-      top: Math.max(8, Math.min(event.clientY, window.innerHeight - (height || 220) - 8)),
+      anchorX: event.clientX,
+      anchorY: event.clientY,
+      left: Math.max(8, event.clientX),
+      top: Math.max(8, event.clientY),
       portalTheme: themeStyle,
     };
   }
@@ -826,7 +846,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
     closeSessionPreview();
     setSessionMenu(null);
     setOverflowMenu(null);
-    setResourceMenu(Object.assign({ resource: resource }, portalThemeAt(event, 210)));
+    setResourceMenu(Object.assign({ resource: resource }, portalThemeAt(event)));
   }
 
   function closeResourceMenu() {
@@ -943,15 +963,6 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
             <div className="workbench-session-menu-loading">{t("workbench.sessionMenu.loading", "Loading resources…")}</div>
           ) : null}
           <div className={"workbench-session-primary-actions" + (sessionMenuCurrentActivity.capabilities && (sessionMenuCurrentActivity.capabilities.canPause || sessionMenuCurrentActivity.capabilities.canStop) ? " has-runtime-control" : "")}>
-            {sessionMenuCurrentActivity.capabilities && sessionMenuCurrentActivity.capabilities.canPause ? (
-              <button type="button" role="menuitem" onClick={function () {
-                var item = sessionMenuCurrentItem;
-                runSessionMenuAction(function () { if (onPauseSession) onPauseSession(item); });
-              }}>
-                <span className="workbench-session-menu-icon" aria-hidden="true"><WorkbenchSessionStatusIcon phase="paused" /></span>
-                <span>{t("workbench.sessionActivity.pause", "Pause")}</span>
-              </button>
-            ) : null}
             {sessionMenuCurrentActivity.capabilities && sessionMenuCurrentActivity.capabilities.canStop ? (
               <button type="button" role="menuitem" className="stop" onClick={function () {
                 var item = sessionMenuCurrentItem;
@@ -1041,6 +1052,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
       <div className="workbench-session-menu-portal" style={resourceMenu.portalTheme}>
         <div className="workbench-session-menu-scrim" onPointerDown={closeResourceMenu} />
         <div
+          ref={resourceMenuRef}
           className="workbench-account-menu workbench-session-menu workbench-session-context-menu workbench-resource-menu"
           role="menu"
           aria-label={resourceMenu.resource.title}
@@ -1347,11 +1359,9 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
       <nav className="workbench-session-tabs" aria-label={t("workbench.recentSessions", "Recent sessions")}>
         {tabs.map(function (item) {
           var isActive = item.kind === "chat"
-            ? activePage === "chat" && String(activeChatId || "") === item.id
-            : !activePage && taskView === "detail" && String(activeTaskId || "") === item.id;
-          var kindLabel = item.kind === "chat"
-            ? t("workbench.page.chat", "Conversation")
-            : t("workbench.page.task", "Task");
+            && activePage === "chat"
+            && String(activeChatId || "") === item.id;
+          var kindLabel = t("workbench.page.chat", "Conversation");
           var activity = item.activity || { phase: "idle" };
           var statusLabel = wbSessionStatusLabel(activity, t);
           var activityCopy = wbSessionActivityCopy(activity, t);
@@ -1633,7 +1643,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, taskView, active
           >
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
           </button>
-          <WorkbenchHelpCenter onNewProject={onNewProject} onNewTask={onNewTask} onOpenPage={onOpenPage} onSettings={onSettings} />
+          <WorkbenchHelpCenter onNewProject={onNewProject} onOpenPage={onOpenPage} onSettings={onSettings} />
         </div>
         <WorkbenchNotificationCenter notifications={notifications} onReload={onReloadNotifications} onOpenNotification={onOpenNotification} onSettings={onSettings} />
         <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={themeTitle}>{themeIcon}</button>
@@ -1789,9 +1799,6 @@ function WorkbenchNotificationItem({ item, onOpen }) {
     } else if (src.indexOf("schedule") === 0 || src.indexOf("scheduled") === 0) {
       iconClass = "schedule";
       icon = <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg>;
-    } else if (src.indexOf("task") === 0) {
-      iconClass = "success";
-      icon = <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.7 2.7L16 9.4"/></svg>;
     } else {
       iconClass = "system";
       icon = <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>;

@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from cyrene.runtime import database as db
+from cyrene.platform import database as db
 from cyrene.workbench.artifacts.presentation_runtime import _search_matches, _search_snippet, _search_workbench_items
 
 

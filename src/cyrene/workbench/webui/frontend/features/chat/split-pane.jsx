@@ -7,6 +7,8 @@ import { WbcMapTab, WbcViewerTab } from "./viewer.jsx"
 import { WbcThreadItem, wbcIsLiveAgentRequest } from "./conversation.jsx"
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages } from "./messages.jsx"
 import { WbcArtifactsTab, WbcContextTab, WbcOverviewTab, useWbcLiveChatMetrics, useWbcLiveContextBlocks, useWbcLiveInbox } from "./context-panel.jsx"
+import { ConversationPlanTimeline } from "../plan/conversation-plan-timeline.jsx"
+import { WbcGoalTab } from "../goal/goal-ui.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserList, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcMapList, WbcMapPaneContent, WbcMapSplitHost, WbcResourceSplitHost, WbcViewerList, useWbcMapData, wbcArtifactFileKey, wbcCanEditProjectTextFile, wbcChatArtifactFiles, wbcChatDeliveredArtifacts, wbcDiscardProjectFileDraft, wbcEditableChatFileResource, wbcMapItemKey, wbcMapItemLabel, wbcProjectFileDraftKey, wbcProjectFileEditUrl, wbcViewerFileFromItems } from "./resource-splits.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
@@ -442,8 +444,6 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
             onViewerViewed={function () {}}
             onRename={function () {}}
             onDelete={function () {}}
-            onToTask={function () {}}
-            toTaskBusy={false}
             onCompact={function () {}}
             compactBusy={false}
             sideAgents={[]}
@@ -533,7 +533,9 @@ function WbcPaneContextTrackDropSurface({ card, dropKey, dropTarget, onDropOver,
   var activeEdge = dropTarget && String(dropTarget.dropKey || "") === String(dropKey || "")
     ? dropTarget.edge
     : "";
-  var activeLabel = activeEdge === "right"
+  var activeLabel = activeEdge === "replace"
+    ? wbcT("workbenchChat.dropConversationReplace", "Release to replace the current conversation")
+    : activeEdge === "right"
     ? wbcT("workbenchChat.dropPaneRight", "Release to open on the right")
     : activeEdge === "top"
     ? wbcT("workbenchChat.dropPaneTop", "Release to open above")
@@ -549,10 +551,10 @@ function WbcPaneContextTrackDropSurface({ card, dropKey, dropTarget, onDropOver,
         onDrop={function (event) { onDrop(event, card.id, "top"); }}
       />
       <div
-        className="wbc-pane-context-drop-sensor left"
-        onDragEnter={function (event) { onDropOver(event, card.id, "left", dropKey); }}
-        onDragOver={function (event) { onDropOver(event, card.id, "left", dropKey); }}
-        onDrop={function (event) { onDrop(event, card.id, "left"); }}
+        className="wbc-pane-context-drop-sensor replace"
+        onDragEnter={function (event) { onDropOver(event, card.id, "replace", dropKey); }}
+        onDragOver={function (event) { onDropOver(event, card.id, "replace", dropKey); }}
+        onDrop={function (event) { onDrop(event, card.id, "replace"); }}
       />
       <div
         className="wbc-pane-context-drop-sensor right"
@@ -566,7 +568,7 @@ function WbcPaneContextTrackDropSurface({ card, dropKey, dropTarget, onDropOver,
         onDragOver={function (event) { onDropOver(event, card.id, "bottom", dropKey); }}
         onDrop={function (event) { onDrop(event, card.id, "bottom"); }}
       />
-      {activeEdge === "top" || activeEdge === "left" || activeEdge === "right" || activeEdge === "bottom" ? (
+      {activeEdge === "top" || activeEdge === "replace" || activeEdge === "right" || activeEdge === "bottom" ? (
         <div className={"wbc-pane-card-drop-zone context-preview " + activeEdge + " active"}>
           <span>{activeLabel}</span>
         </div>
@@ -1007,7 +1009,7 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     if (!drag.moved && Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y) > 4) {
       drag.moved = true;
       // A click should only open the grip menu. Mounting the full-card drag
-      // clone on pointerdown made task controls briefly reflow in the clone.
+      // clone on pointerdown made controls briefly reflow in the clone.
       // Start the shared drag pipeline only after an intentional movement.
       if (onSplitDragStart) onSplitDragStart(event, dragSource);
     }
@@ -1181,11 +1183,36 @@ function WbcSideAgentSplit({ agent, agents, project, onOpenFile, onUpdate, onSel
 function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
   var agentRef = useWbcRef(agent); var scrollRef = useWbcRef(null);
   var mountedRef = useWbcRef(true); var streamAttachedRef = useWbcRef(false);
+  var streamFrameRef = useWbcRef(0); var streamActionsRef = useWbcRef([]);
   var runStartedAtRef = useWbcRef(Date.now());
-  var [running, setRunning] = useWbcState(!!(agent && agent.status === "running")); var [streamText, setStreamText] = useWbcState("");
-  var [streamNotifications, setStreamNotifications] = useWbcState([]);
+  var [running, setRunning] = useWbcState(!!(agent && agent.status === "running"));
   var [streamRuntime, setStreamRuntime] = useWbcState(null);
   var [error, setError] = useWbcState("");
+
+  function flushStreamActions() {
+    streamFrameRef.current = 0;
+    var actions = streamActionsRef.current.splice(0);
+    if (!mountedRef.current || !actions.length) return;
+    setStreamRuntime(function (current) {
+      return actions.reduce(function (runtime, item) {
+        return wbcReduceDetachedRuntime(runtime, item.action, item.value, item.sourceEvent);
+      }, current || wbcCreateDetachedRuntime(runStartedAtRef.current));
+    });
+  }
+
+  function queueStreamAction(action, value, sourceEvent) {
+    streamActionsRef.current.push({ action: action, value: value, sourceEvent: sourceEvent });
+    if (!streamFrameRef.current) {
+      streamFrameRef.current = requestAnimationFrame(flushStreamActions);
+    }
+  }
+
+  function resetStreamRuntime() {
+    if (streamFrameRef.current) cancelAnimationFrame(streamFrameRef.current);
+    streamFrameRef.current = 0;
+    streamActionsRef.current = [];
+    if (mountedRef.current) setStreamRuntime(null);
+  }
 
   useWbcEffect(function () {
     agentRef.current = agent;
@@ -1194,13 +1221,18 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
 
   useWbcEffect(function () {
     mountedRef.current = true;
-    return function () { mountedRef.current = false; };
+    return function () {
+      mountedRef.current = false;
+      if (streamFrameRef.current) cancelAnimationFrame(streamFrameRef.current);
+      streamFrameRef.current = 0;
+      streamActionsRef.current = [];
+    };
   }, []);
 
   useWbcLayoutEffect(function () {
     var el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [agent && agent.messages && agent.messages.length, streamText, running]);
+  }, [agent && agent.messages && agent.messages.length, streamRuntime && streamRuntime.lastEventAt, running]);
 
   function refreshAgent() {
     return WorkbenchChatModel.getChat(agentRef.current.id).then(function (fresh) {
@@ -1214,41 +1246,31 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
   function streamHandlers() {
     return {
       onReplyStart: function () {
-        if (mountedRef.current) setStreamText("");
-        if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_start"); });
+        if (mountedRef.current) queueStreamAction("reply_start");
       },
       onReplyDelta: function (delta) {
-        if (mountedRef.current) setStreamText(function (current) { return current + delta; });
-        if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_delta", delta); });
+        if (mountedRef.current) queueStreamAction("reply_delta", delta);
       },
       onReplyDone: function (text) {
-        if (mountedRef.current) setStreamText(String(text || ""));
-        if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reply_done", text); });
+        if (mountedRef.current) queueStreamAction("reply_done", text);
       },
       onNotification: function (notice) {
         if (!mountedRef.current || !notice || !notice.message) return;
-        setStreamNotifications(function (current) {
-          var key = String(notice.id || (notice.category + "\n" + notice.message));
-          if (current.some(function (item) { return String(item.id || (item.category + "\n" + item.message)) === key; })) return current;
-          return current.concat([notice]);
-        });
-        setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "notification", notice); });
+        queueStreamAction("notification", notice);
       },
-      onReasoningStart: function () { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_start"); }); },
-      onReasoningDelta: function (delta) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_delta", delta); }); },
-      onReasoningDone: function (text) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "reasoning_done", text); }); },
-      onFinalizing: function () { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "finalizing"); }); },
-      onToolStarted: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
-      onToolUpdated: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
-      onToolCompleted: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "tool", event); }); },
-      onArtifactEvent: function (event) { if (mountedRef.current) setStreamRuntime(function (current) { return wbcReduceDetachedRuntime(current, "artifact", null, event); }); },
+      onReasoningStart: function () { if (mountedRef.current) queueStreamAction("reasoning_start"); },
+      onReasoningDelta: function (delta) { if (mountedRef.current) queueStreamAction("reasoning_delta", delta); },
+      onReasoningDone: function (text) { if (mountedRef.current) queueStreamAction("reasoning_done", text); },
+      onFinalizing: function () { if (mountedRef.current) queueStreamAction("finalizing"); },
+      onToolStarted: function (event) { if (mountedRef.current) queueStreamAction("tool", event); },
+      onToolUpdated: function (event) { if (mountedRef.current) queueStreamAction("tool", event); },
+      onToolCompleted: function (event) { if (mountedRef.current) queueStreamAction("tool", event); },
+      onArtifactEvent: function (event) { if (mountedRef.current) queueStreamAction("artifact", null, event); },
       onSaved: function () {
         refreshAgent().finally(function () {
           streamAttachedRef.current = false;
           if (mountedRef.current) {
-            setStreamText("");
-            setStreamNotifications([]);
-            setStreamRuntime(null);
+            resetStreamRuntime();
             setRunning(false);
           }
         });
@@ -1267,9 +1289,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
         refreshAgent().finally(function () {
           streamAttachedRef.current = false;
           if (mountedRef.current) {
-            setStreamText("");
-            setStreamNotifications([]);
-            setStreamRuntime(null);
+            resetStreamRuntime();
             setRunning(false);
           }
         });
@@ -1318,9 +1338,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
       streamAttachedRef.current = false;
       refreshAgent().catch(function () {}).finally(function () {
         if (mountedRef.current) {
-          setStreamText("");
-          setStreamNotifications([]);
-          setStreamRuntime(null);
+          resetStreamRuntime();
           setRunning(false);
         }
       });
@@ -1356,8 +1374,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
     agentRef.current = next;
     onUpdate(next);
     setError("");
-    setStreamText("");
-    setStreamNotifications([]);
+    resetStreamRuntime();
     runStartedAtRef.current = Date.now();
     setStreamRuntime(wbcCreateDetachedRuntime(runStartedAtRef.current));
     setRunning(true);
@@ -1461,7 +1478,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
             </WbcThreadItem>
           );
         })}
-        {running && <WbcRuntimeTranscript runtime={streamRuntime || { ...wbcCreateDetachedRuntime(runStartedAtRef.current), text: streamText, notifications: streamNotifications }} onOpenFile={onOpenFile} />}
+        {running && <WbcRuntimeTranscript runtime={streamRuntime || wbcCreateDetachedRuntime(runStartedAtRef.current)} onOpenFile={onOpenFile} />}
         {agent && agent.pendingQuestion && wbcIsLiveAgentRequest(agent.pendingQuestion) && (
           <WbcThreadItem><WbcQuestionPrompt pending={agent.pendingQuestion} onAnswer={answerPendingQuestion} busy={false} /></WbcThreadItem>
         )}
@@ -1472,7 +1489,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
           key={"side-agent-composer:" + String(agent && agent.id || "")}
           chat={agent}
           project={project}
-          runtime={streamText ? { text: streamText } : null}
+          runtime={streamRuntime && streamRuntime.text ? { text: streamRuntime.text } : null}
           running={running}
           onSend={submit}
           onGuidance={guide}
@@ -1641,8 +1658,6 @@ function WbcSide({
   onViewerViewed,
   onRename,
   onDelete,
-  onToTask,
-  toTaskBusy,
   onCompact,
   compactBusy,
   sideAgents,
@@ -1659,6 +1674,7 @@ function WbcSide({
   browserSuppressed,
   mapAvailable,
   browserAvailable,
+  onGoalChanged,
   onToggleSide,
   floating,
   widthResizable,
@@ -1731,6 +1747,8 @@ function WbcSide({
     return !!wbcBranchLineage(chats, activeChatId);
   }, [chats, activeChatId]);
   var pendingPlan = wbcActivePlan(chat);
+  var activeGoal = chat && chat.activeGoal && typeof chat.activeGoal === "object"
+    ? chat.activeGoal : null;
   var hasSubagents = !!(
     subagentData
     && (
@@ -1741,6 +1759,7 @@ function WbcSide({
   var tabs = [
     { id: "overview", label: wbcT("chat.side.overview", "Overview") },
   ];
+  if (activeGoal) tabs.push({ id: "goal", label: wbcT("goal.tab", "Goal") });
   if (pendingPlan) tabs.push({ id: "plan", label: wbcT("chat.side.plan", "Plan") });
   if (hasSubagents) tabs.push({ id: "subagents", label: wbcT("workbenchChat.subagents", "Subagents") });
   tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
@@ -1775,6 +1794,9 @@ function WbcSide({
   var inboxView = useWbcLiveInbox(chat, !!runtime);
   var flush = false;
   var sideTabMeta = {
+    goal: activeGoal && Number(activeGoal.attempt || 0) > 0
+      ? String(Number(activeGoal.attempt || 0))
+      : "",
     plan: pendingPlan && Array.isArray(pendingPlan.steps) && pendingPlan.steps.length
       ? pendingPlan.steps.filter(function (step) { return step.status === "completed"; }).length + "/" + pendingPlan.steps.length
       : "",
@@ -1790,8 +1812,9 @@ function WbcSide({
   };
   var activeContent = (
     <>
-      {activeTab === "overview" && <WbcOverviewTab chat={chat} loading={chatLoading} detailed={chatDetailed} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
-      {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
+      {activeTab === "overview" && <WbcOverviewTab chat={chat} loading={chatLoading} detailed={chatDetailed} runtime={runtime} onRename={onRename} onDelete={onDelete} onCompact={onCompact} compactBusy={compactBusy} />}
+      {activeTab === "goal" && <WbcGoalTab chat={chat} onGoalChanged={onGoalChanged} />}
+      {activeTab === "plan" && <WbcPlanTab chatId={chat && chat.id || activeChatId} projectId={chat && chat.projectId || ""} plan={pendingPlan} />}
       {activeTab === "context" && <WbcContextTab chat={chat} contextBlocks={contextBlocks} inboxView={inboxView} />}
       {activeTab === "files" && <WbcArtifactsTab chat={chat} onSelectArtifact={onSelectArtifact} />}
       {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} files={artifactItems} emptyKey="workbenchChat.noArtifacts" emptyFallback="This chat has not delivered any artifacts yet." onSelectArtifact={onSelectArtifact} />}
@@ -2302,64 +2325,14 @@ function wbcActivePlan(chat) {
   return (plan.title || plan.summary || hasSteps) ? plan : null;
 }
 
-function wbcPlanStatusText(status) {
-  return {
-    proposed: wbcT("chat.side.planProposed", "Awaiting approval"),
-    active: wbcT("chat.side.planActive", "In progress"),
-    paused: wbcT("chat.side.planPaused", "Paused"),
-  }[status] || "";
-}
-
-function wbcPlanStepStatusText(status) {
-  return {
-    pending: wbcT("chat.side.planStepPending", "Pending"),
-    in_progress: wbcT("chat.side.planStepActive", "Working"),
-    completed: wbcT("chat.side.planStepCompleted", "Completed"),
-    failed: wbcT("chat.side.planStepFailed", "Failed"),
-    skipped: wbcT("chat.side.planStepSkipped", "Skipped"),
-  }[status] || "";
-}
-
 // Right-panel 计划 tab — durable from proposal through execution completion.
-function WbcPlanTab({ plan }) {
-  var p = plan || {};
-  var steps = Array.isArray(p.steps) ? p.steps : (Array.isArray(p.entries) ? p.entries : []);
-  return (
-    <div className="workbench-side-stack">
-      <section className="workbench-side-section wbc-plan">
-        <div className="wbc-plan-head">
-          <h3>{p.title || wbcT("chat.side.planTitle", "Proposed plan")}</h3>
-          {p.status ? <span className={"wbc-plan-state " + p.status}>{wbcPlanStatusText(p.status)}</span> : null}
-        </div>
-        {p.summary ? <p className="workbench-muted">{p.summary}</p> : null}
-        {p.markdownPath ? <p className="wbc-plan-path" title={p.markdownPath}>{p.markdownPath}</p> : null}
-        {steps.length === 0 ? (
-          <p className="workbench-muted">{wbcT("chat.side.planEmpty", "The agent has not detailed any steps yet.")}</p>
-        ) : (
-          <ol className="wbc-plan-steps">
-            {steps.map(function (step, i) {
-              var tasks = Array.isArray(step.tasks) ? step.tasks : [];
-              var status = step.status || "pending";
-              return (
-                <li key={step.id || i} className={"wbc-plan-step " + status}>
-                  <div className="wbc-plan-step-title">
-                    <b>{step.title || step.content || (wbcT("chat.side.planStep", "Step") + " " + (i + 1))}</b>
-                    <span>{wbcPlanStepStatusText(status)}</span>
-                  </div>
-                  {tasks.length > 0 && (
-                    <ul className="wbc-plan-tasks">
-                      {tasks.map(function (t, j) { return <li key={j}>{String(t)}</li>; })}
-                    </ul>
-                  )}
-                  {step.note ? <p className="wbc-plan-note">{step.note}</p> : null}
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </section>
-    </div>
-  );
+function WbcPlanTab({ chatId, projectId, plan }) {
+  return <ConversationPlanTimeline
+    chatId={chatId}
+    projectId={projectId}
+    plan={plan}
+    className="workbench-side-stack wbc-conversation-plan-timeline"
+  />;
 }
 
 function wbcZoomAnchorRestorer(container, oldScale, clientX, clientY) {

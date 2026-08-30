@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from cyrene.agent_runtime.model_gateway import (
+from cyrene.agents.model_gateway import (
     _openai_response,
     authorize_model_gateway,
     call_model_gateway,

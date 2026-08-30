@@ -6,6 +6,7 @@ import { useWbcComposerAttachments } from "./composer-attachments.jsx"
 import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
 import { useWbcComposerAgentCatalog, useWbcComposerAgentConfig, useWbcComposerConfiguredModels } from "./composer-model-state.jsx"
 import { useWbcComposerVoice } from "./composer-voice.jsx"
+import { WbcComposerContextIndicator } from "./context-indicator.jsx"
 
 var WBC_CONTEXT_ACTIVATION_KEYS = ["mcpServers", "skills", "pluginPacks"];
 
@@ -703,6 +704,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         || wbcT("toolName." + declared.activation.id, label);
       desc = wbcAuthoredContextTranslation(declared, "description")
         || wbcT("pluginPackDesc." + declared.activation.id, desc);
+    } else {
+      label = wbcAuthoredContextTranslation(declared, "title") || label;
+      desc = wbcAuthoredContextTranslation(declared, "description") || desc;
     }
     return { ...declared, label: label, desc: desc };
   }).filter(function (item) {
@@ -876,12 +880,13 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     setToolsOpen(false);
     if (
       window.cyrene &&
-      window.cyrene.platform === "linux" &&
       typeof window.cyrene.pickDirectory === "function"
     ) {
       window.cyrene.pickDirectory().then(function (data) {
         if (data && data.path) wbcAddWorkspace(data.path);
-      }).catch(function () {});
+      }).catch(function (err) {
+        workbenchServices.api().toastError(err, wbcT("workbenchChat.pickDirFailed", "Failed to open directory picker: "));
+      });
       return;
     }
     workbenchServices.api().fetch("/api/context/pick-directory", { method: "POST" })
@@ -1328,7 +1333,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               )}
             </span>
           )}
-          <span className="wbc-composer-spacer" />
+          <span className="wbc-composer-spacer" />{!compact && chatId ? <WbcComposerContextIndicator chat={chat} runtime={runtime} running={running} /> : null}
           {!compact && modelName ? (
             <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
               <button

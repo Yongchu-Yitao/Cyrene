@@ -26,7 +26,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     register_agent_model_gateway_routes(context.router)
     context.expose_frontend("extensions")
     context.expose_frontend("agents")
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         plugin_setting_spec,
     )

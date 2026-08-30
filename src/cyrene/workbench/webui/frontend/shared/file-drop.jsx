@@ -4,7 +4,7 @@ function wbT(key, fallback, params) {
   return workbenchServices.i18n().t(key, params, fallback);
 }
 
-// Document-level file drop target used by the task, conversation and knowledge
+// Document-level file drop target used by conversation and knowledge
 // pages. Listening on document makes the whole visible module accept files,
 // including its rail and side panels, while the ref keeps the listener stable
 // across renders and avoids stale upload callbacks.

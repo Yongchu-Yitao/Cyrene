@@ -32,7 +32,7 @@ import httpx
 
 from cyrene.plugins.builtin.cyrene_extensions.extension_catalog import AGENT_MANIFEST_API, RECOMMENDED_AGENTS, RECOMMENDED_AGENT_ORDER
 from cyrene.localization import localized
-from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +291,7 @@ async def fetch_manifest_from_source(source: dict[str, Any], inline_manifest: An
     """
     if source.get("type") == "manifest_url":
         url = str(source.get("url") or "")
-        from cyrene.runtime.network_proxy import scoped_proxy_url
+        from cyrene.platform.network_proxy import scoped_proxy_url
 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(10, read=30),
@@ -764,7 +764,7 @@ def _require_installation(installation_id: str) -> dict[str, Any]:
 
 async def auth_agent(installation_id: str, action: str) -> dict[str, Any]:
     record = _require_installation(installation_id)
-    from cyrene.agent_runtime import AgentRuntimeError, AgentStartRequest, get_acp_runtime_service
+    from cyrene.agents import AgentRuntimeError, AgentStartRequest, get_acp_runtime_service
 
     recovery_record = dict(record)
     # Authentication is the recovery path for expired/failed credentials, so
@@ -816,7 +816,7 @@ async def auth_agent(installation_id: str, action: str) -> dict[str, Any]:
 async def probe_agent(installation_id: str) -> dict[str, Any]:
     record = _require_installation(installation_id)
     try:
-        from cyrene.agent_runtime import AgentStartRequest, get_acp_runtime_service
+        from cyrene.agents import AgentStartRequest, get_acp_runtime_service
 
         connection = await get_acp_runtime_service().driver().connect(AgentStartRequest(
             installation_id=installation_id,
@@ -828,7 +828,7 @@ async def probe_agent(installation_id: str) -> dict[str, Any]:
         finally:
             await connection.close()
     except Exception as exc:
-        from cyrene.agent_runtime.errors import failure_kind
+        from cyrene.agents.errors import failure_kind
 
         kind = failure_kind(getattr(exc, "kind", ""))
         if kind == "unknown":
@@ -858,7 +858,7 @@ async def probe_agent(installation_id: str) -> dict[str, Any]:
             "probe": None,
             "runtimeState": record.get("runtime_state", "unknown"),
         }
-    from cyrene.agent_runtime.capabilities import merge_capabilities
+    from cyrene.agents.capabilities import merge_capabilities
 
     raw_capabilities = handshake.get("agentCapabilities", {})
     session_capabilities = raw_capabilities.get("sessionCapabilities") if isinstance(raw_capabilities, dict) else {}
@@ -894,7 +894,7 @@ async def probe_agent(installation_id: str) -> dict[str, Any]:
 
 async def restart_agent(installation_id: str) -> dict[str, Any]:
     record = _require_installation(installation_id)
-    from cyrene.agent_runtime import get_process_manager
+    from cyrene.agents import get_process_manager
 
     await get_process_manager().release(installation_id)
     record["runtime_state"] = "not_started"

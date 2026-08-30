@@ -374,7 +374,7 @@ function WbcOverviewUsage({ usage, latestUsage }) {
   );
 }
 
-function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy, onGenerateMemory, memoryLearningBusy }) {
+function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, onCompact, compactBusy, onGenerateMemory, memoryLearningBusy }) {
   function run(action) {
     return function () {
       if (onBeforeAction) onBeforeAction();
@@ -385,7 +385,6 @@ function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, o
   return (
     <>
       <button type="button" role={role} onClick={run(onRename)}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
-      <button type="button" role={role} disabled={toTaskBusy} onClick={run(onToTask)}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
       {onCompact && (
         <button type="button" role={role} disabled={compactBusy} onClick={run(onCompact)}>
           {compactBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.compact}
@@ -610,7 +609,6 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
     || liveData && liveData.model
     || ""
   ).trim();
-  var convertedTitle = chat.convertedSessionId ? String(chat.convertedTaskTitle || "").trim() : "";
   // Agent identity block (handoff §9). Legacy chats normalize to the built-in
   // Cyrene Agent; external Agents surface connection, model source and both
   // session ids. Token usage stays hidden for Agents that report none.
@@ -686,11 +684,6 @@ function WbcOverviewTab({ chat, loading, detailed, runtime }) {
       </section>
       {overviewShowUsage ? <WbcOverviewUsage usage={usage} latestUsage={chat.latestUsage} /> : null}
       {detailed && liveData && <WbcContextUsage data={liveData} compact={true} />}
-      {convertedTitle && (
-        <section className="workbench-side-section wbc-overview-converted">
-          <p className="wbc-converted-note">{wbcT("workbenchChat.convertedNote", "Converted to task")}：<b>{convertedTitle}</b></p>
-        </section>
-      )}
     </div>
   );
 }
@@ -1387,14 +1380,6 @@ function WbcDetachedPaneApp() {
         onOpenInMain={function () {}}
       />;
     }
-    if (kind === "task") {
-      var TaskPane = window.CyreneTaskPane;
-      return TaskPane ? <TaskPane
-        taskId={String(context.payload || "")}
-        project={context.project || null}
-        detached={true}
-      /> : <div className="wbc-detached-pane-error">{wbcT("workbenchChat.detachedUnavailable", "This pane cannot be opened in a separate window.")}</div>;
-    }
     if (kind === "file" || kind === "viewer") {
       var files = Array.isArray(context.items) && context.items.length
         ? context.items
@@ -1455,7 +1440,7 @@ function WbcDetachedPaneApp() {
     if (kind === "surface") {
       return <WbcSurfaceHost
         descriptor={context.payload}
-        projectId={String(context.project && context.project.id || context.payload && context.payload.resource && context.payload.resource.projectId || "")}
+        projectId={String(context.project && context.project.id || context.payload && context.payload.resource && context.payload.resource.projectId || "")} chatId={String(context.ownerChatId || context.chatId || "")}
         items={context.items}
         onSelect={function (resource) {
           if (!resource || !context.payload) return;

@@ -155,7 +155,7 @@ Electron 会给 Child Runtime 注入 `CYRENE_AUTH_TOKEN`、
 ## Model Price 与 Budget
 
 Cyrene 按实际返回 Response 的 Model 记录 Token Usage 和估算 Cost。明确保存
-的 Model Price 优先，其次使用 `cyrene.model_runtime.pricing` 内置 Catalog；
+的 Model Price 优先，其次使用 `cyrene.model.pricing` 内置 Catalog；
 未知且未配置的 Model 记录 0。User Price 格式为每百万 Token 的
 `input/output` 或 `input/cache-hit/output`；`$` 前缀表示 USD，`¥` 表示 CNY，
 无前缀默认 CNY。

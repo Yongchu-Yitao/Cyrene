@@ -17,7 +17,7 @@ import soundfile as sf
 
 from cyrene.config import CACHE_DIR
 from cyrene.core.plugin import application_plugin_service
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 from . import minimax as minimax_tts
 
 

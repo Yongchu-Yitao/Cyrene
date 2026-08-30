@@ -19,7 +19,10 @@ from typing import Any, TypeVar
 from cyrene.config import DATA_DIR
 
 from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
-from cyrene.core.plugin.validation import validate_plugin_arguments
+from cyrene.core.plugin.validation import (
+    normalize_plugin_arguments,
+    validate_plugin_arguments,
+)
 
 from .content import (
     build_mcp_observation_content,
@@ -51,7 +54,7 @@ class MCPServerNotFoundError(ValueError):
 
 
 def _load_configs() -> list[dict[str, Any]]:
-    from cyrene.runtime.settings_store import get as get_setting
+    from cyrene.platform.settings_store import get as get_setting
 
     stored = get_setting(_CONFIG_KEY, [])
     if not isinstance(stored, list):
@@ -60,7 +63,7 @@ def _load_configs() -> list[dict[str, Any]]:
 
 
 def _save_configs(configs: list[dict[str, Any]]) -> None:
-    from cyrene.runtime.settings_store import set_ as set_setting
+    from cyrene.platform.settings_store import set_ as set_setting
 
     set_setting(_CONFIG_KEY, configs)
 
@@ -693,7 +696,10 @@ class MCPPluginService:
             raise RuntimeError(
                 f"MCP tool '{tool_name}' does not match its active Plugin identity"
             )
-        normalized_arguments = dict(arguments or {})
+        normalized_arguments = normalize_plugin_arguments(
+            dict(arguments or {}),
+            resolved.input_schema,
+        ).arguments
         validate_plugin_arguments(
             resolved.name,
             normalized_arguments,

@@ -20,7 +20,7 @@ from cyrene.plugins.builtin.cyrene_schedule.workbench_repository import (
 from cyrene.plugins.builtin.cyrene_schedule.workbench_service import (
     ScheduleApplicationService,
 )
-from cyrene.runtime.database import init_db
+from cyrene.platform.database import init_db
 from cyrene.workbench.persistence.store import ensure_schema as ensure_workbench_schema
 
 

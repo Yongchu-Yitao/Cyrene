@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 from cyrene.core.plugin import PluginContext
 
-from cyrene.runtime.config_store import get_settings_revision
-from cyrene.runtime.host_bridge import HostBridgeError, call_host
-from cyrene.runtime.host_actions import list_actions
-from cyrene.runtime.version import get_version
+from cyrene.platform.config_store import get_settings_revision
+from cyrene.platform.host_bridge import HostBridgeError, call_host
+from cyrene.platform.host_actions import list_actions
+from cyrene.platform.version import get_version
 from cyrene.plugins.native_runtime import json_result
 from cyrene.workbench.application.app_control import envelope
 

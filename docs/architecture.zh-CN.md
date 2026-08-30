@@ -99,7 +99,7 @@ Epoch，之后未变化的轮次继续复用。
 ## Runtime 启动与迁移
 
 所有 Host Mode 共享 `RuntimeContext`、`ApplicationLifecycle` 和
-`cyrene.runtime` 中的 Bootstrap：
+`cyrene.platform` 中的 Bootstrap：
 
 ```text
 解析路径 → 创建 Runtime 目录 → 迁移旧数据库
@@ -284,7 +284,7 @@ History、Tool Result 等来源。`--verbose` 写入 `data/debug_*.jsonl`，API 
 
 - `cyrene <command>`：连接 `localhost:4242` 的 HTTP Client，包含
   `start`、`stop`、`do`、`session`、`flow`、`memory`、`status`、`mcp`；
-- `python -m cyrene.runtime.host`：不启动 Web Server 的交互 REPL。
+- `python -m cyrene.platform.host`：不启动 Web Server 的交互 REPL。
 
 ## 安全与本地认证
 
@@ -329,9 +329,9 @@ src/
 │   │   ├── http/           FastAPI/HTTP 组装
 │   │   ├── persistence/    Workbench 持久化
 │   │   └── webui/         App Lifecycle 与唯一 SPA 源码/输出
-│   ├── agent_runtime/       外部 ACP Agent 集成
-│   ├── model_runtime/       Provider Transport/Runtime 支持
-│   ├── runtime/             进程 Bootstrap 与 Lifecycle
+│   ├── agents/              外部 ACP Agent 集成
+│   ├── model/               Provider Transport/Runtime 支持
+│   ├── platform/            进程 Bootstrap、配置、存储与 Lifecycle
 │   └── observability/       Trace、Debug、Telemetry
 tests/
 data/

@@ -209,7 +209,7 @@ class TraceSpan:
             self._buffer.append(event)
             if self._owns_buffer:
                 try:
-                    from cyrene.runtime.database import record_runtime_trace_spans
+                    from cyrene.platform.database import record_runtime_trace_spans
 
                     await record_runtime_trace_spans(self.db_path, self._buffer)
                 except Exception:

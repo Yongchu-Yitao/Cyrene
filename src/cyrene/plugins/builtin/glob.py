@@ -66,6 +66,7 @@ plugin = Plugin(
         "additionalProperties": False,
     },
     handler=glob,
+    metadata={"read_only": True},
     allow_parallel=True,
     timeout_seconds=30.0,
 )

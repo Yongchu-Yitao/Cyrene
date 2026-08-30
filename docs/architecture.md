@@ -116,7 +116,7 @@ fingerprint creates one new stable epoch; unchanged later turns reuse it.
 ## Runtime Startup and Migration
 
 All host modes share `RuntimeContext`, `ApplicationLifecycle`, and the ordered
-bootstrap in `cyrene.runtime`:
+bootstrap in `cyrene.platform`:
 
 ```text
 resolve paths → create runtime directories → migrate legacy database
@@ -327,7 +327,7 @@ no Workbench page.
 Two CLI surfaces exist:
 
 - **`cyrene <command>`** — a thin HTTP client that talks to the daemon at `localhost:4242` (`start`, `stop`, `do`, `session`, `flow`, `memory`, `status`, `mcp`).
-- **`python -m cyrene.runtime.host`** — an interactive, headless REPL that runs the agent directly without starting a web server.
+- **`python -m cyrene.platform.host`** — an interactive, headless REPL that runs the agent directly without starting a web server.
 
 ## Security & Local Auth
 
@@ -375,9 +375,9 @@ src/
 │   │   ├── http/                   # FastAPI/HTTP composition
 │   │   ├── persistence/            # Workbench persistence
 │   │   └── webui/                 # App lifecycle and sole SPA source/output
-│   ├── agent_runtime/               # External ACP agent integration
-│   ├── model_runtime/               # Provider transport/runtime support
-│   ├── runtime/                     # Process bootstrap and lifecycle
+│   ├── agents/                      # External ACP agent integration
+│   ├── model/                       # Provider transport/runtime support
+│   ├── platform/                    # Process bootstrap, config, storage, lifecycle
 │   └── observability/               # Traces, debugging, and telemetry
 tests/                               # Test suite
 data/                                # Source-run state, debug logs, uploads

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from cyrene.runtime.paths import TEMP_DIR
+from cyrene.platform.paths import TEMP_DIR
 from cyrene.core.plugin import PluginContext
 from cyrene.plugins.native_runtime import (
     json_result,

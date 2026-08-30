@@ -6,7 +6,7 @@ import pytest
 def test_managed_attachment_path_rebases_after_portable_restore(
     monkeypatch, tmp_path
 ):
-    from cyrene.runtime import attachments
+    from cyrene.platform import attachments
 
     data = tmp_path / "new-home" / "data"
     uploads = data / "webui_uploads"
@@ -50,7 +50,7 @@ async def test_analyze_attachment_missing_file_returns_terminal_upload_error(tmp
     from cyrene.plugins.builtin.cyrene_content.analyze_attachment import (
         _tool_analyze_attachment,
     )
-    from cyrene.runtime.attachments import UPLOADS_DIR
+    from cyrene.platform.attachments import UPLOADS_DIR
 
     result = await _tool_analyze_attachment(
         {"path": str(UPLOADS_DIR / "missing-test-attachment.png")},

@@ -84,7 +84,7 @@ def editable_model_registry(
     with _LOCK:
         seed_builtin_plugin_directory(root)
         signature = _model_pack_signature(root)
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         enabled_plugins = settings_store.get_enabled_plugins()
         enabled_packs = settings_store.get_enabled_plugin_packs()
@@ -271,7 +271,7 @@ def configured_model_candidates(
     """Resolve one configured model route without the retired Agent client."""
 
     candidates_for_route = _model_configuration_port().candidates_for_route
-    from cyrene.runtime.settings_store import get as get_setting
+    from cyrene.platform.settings_store import get as get_setting
 
     normalized_route = str(route or "primary").strip().lower()
     if normalized_route not in {"primary", "secondary", "vision", "embedding"}:
@@ -442,7 +442,7 @@ def set_session_model_preference(
     normalized_session = str(session_id or "").strip()
     if not normalized_session:
         return
-    from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+    from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
     raw = get_setting(_SESSION_MODEL_PREFERENCE_SETTING, {})
     saved = dict(raw) if isinstance(raw, Mapping) else {}
@@ -476,7 +476,7 @@ def remember_model_success(
     normalized_endpoint = str(endpoint or "").strip()
     if not normalized_session or not normalized_endpoint:
         return
-    from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+    from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
     raw = get_setting(_LAST_SUCCESS_SETTING, {})
     saved = dict(raw) if isinstance(raw, Mapping) else {}

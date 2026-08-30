@@ -27,8 +27,8 @@ from cyrene.core.hook import (
 from cyrene.core.hook.storage import encode_event_payload
 from cyrene.config import DATA_DIR
 from cyrene.plugins.builtin.cyrene_extensions.extension_service import agent_process_environment
-from cyrene.runtime.secret_redaction import redact_text
-from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
+from cyrene.platform.secret_redaction import redact_text
+from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
 logger = logging.getLogger(__name__)
 

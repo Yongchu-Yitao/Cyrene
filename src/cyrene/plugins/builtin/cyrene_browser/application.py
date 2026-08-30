@@ -49,7 +49,7 @@ def setup_application(context: PluginApplicationContext) -> None:
         service=service,
     )
     context.provide("browser", service)
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         plugin_setting_spec,
     )

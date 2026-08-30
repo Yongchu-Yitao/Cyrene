@@ -1,7 +1,7 @@
 """Application RPC contributed by the example PluginPack."""
 
 from cyrene.plugins import PluginApplicationContext
-from cyrene.runtime.database import get_token_usage_stats
+from cyrene.platform.database import get_token_usage_stats
 
 
 def setup_application(context: PluginApplicationContext) -> None:

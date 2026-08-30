@@ -23,7 +23,6 @@ from cyrene.workbench.persistence.document_merge import (
     TrackedDict,
 )
 from cyrene.workbench.persistence.chat_repository import ChatPorts, ChatRepository
-from cyrene.workbench.persistence.project_repository import ProjectPorts, ProjectRepository
 from cyrene.workbench.persistence.document_repository import DocumentPorts, DocumentRepository
 from cyrene.workbench.persistence.schema import ensure_schema as ensure_schema
 
@@ -214,50 +213,6 @@ def write_chat_bundle(db_path: str | Path, value: dict[str, Any], default_factor
 
 
 
-def _project_repository() -> ProjectRepository:
-    return ProjectRepository(ProjectPorts(
-        document_write_lock=_DOCUMENT_WRITE_LOCK,
-        load_row=_load_row,
-        write_row=_write_row,
-    ))
-
-
-def _load_task_session_rows(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    return _project_repository()._load_task_session_rows(conn)
-
-
-def _write_task_session_row(conn: sqlite3.Connection, session: dict[str, Any]) -> None:
-    return _project_repository()._write_task_session_row(conn, session)
-
-
-def summarize_task_session(session: dict[str, Any]) -> dict[str, Any]:
-    return _project_repository().summarize_task_session(session)
-
-
-def _split_project_bundle(payload: dict[str, Any], summarize_session: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    return _project_repository()._split_project_bundle(payload, summarize_session)
-
-
-def _hydrate_project_bundle(shell: dict[str, Any], session_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    return _project_repository()._hydrate_project_bundle(shell, session_rows)
-
-
-def _load_project_bundle_locked(conn: sqlite3.Connection, default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
-    return _project_repository()._load_project_bundle_locked(conn, default_factory, summarize_session)
-
-
-def read_project_bundle(db_path: str | Path, default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, lightweight: bool=False) -> dict[str, Any]:
-    return _project_repository().read_project_bundle(db_path, default_factory, summarize_session, lightweight=lightweight)
-
-
-def write_project_bundle(db_path: str | Path, value: dict[str, Any], default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]], *, base_value: dict[str, Any] | None=None) -> dict[str, Any]:
-    return _project_repository().write_project_bundle(db_path, value, default_factory, summarize_session, base_value=base_value)
-
-
-def patch_project_bundle_fields(db_path: str | Path, fields: dict[str, Any], default_factory: Callable[[], dict[str, Any]], summarize_session: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
-    return _project_repository().patch_project_bundle_fields(db_path, fields, default_factory, summarize_session)
-
-
 
 
 
@@ -271,12 +226,8 @@ def patch_project_bundle_fields(db_path: str | Path, fields: dict[str, Any], def
 def _document_repository() -> DocumentRepository:
     return DocumentRepository(DocumentPorts(
         document_write_lock=_DOCUMENT_WRITE_LOCK,
-        patch_project_bundle_fields=patch_project_bundle_fields,
         read_chat_bundle=read_chat_bundle,
-        read_project_bundle=read_project_bundle,
-        summarize_task_session=summarize_task_session,
         write_chat_bundle=write_chat_bundle,
-        write_project_bundle=write_project_bundle,
     ))
 
 

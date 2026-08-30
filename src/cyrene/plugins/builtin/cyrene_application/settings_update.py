@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 from cyrene.core.plugin import PluginContext
 
-from cyrene.runtime import config_store
-from cyrene.runtime.host_bridge import HostBridgeError, call_host
-from cyrene.runtime.settings_service import (
+from cyrene.platform import config_store
+from cyrene.platform.host_bridge import HostBridgeError, call_host
+from cyrene.platform.settings_service import (
     SettingsServiceError,
     setting_spec_by_key,
     update,
@@ -115,7 +115,7 @@ async def handler(args: dict[str, Any], _context: PluginContext) -> str:
                 "enabled_plugin_packs",
             } & set(changes):
                 from cyrene.core.plugin import application_plugin_scope
-                from cyrene.runtime import settings_store
+                from cyrene.platform import settings_store
 
                 host = application_plugin_scope()
                 if host is None:

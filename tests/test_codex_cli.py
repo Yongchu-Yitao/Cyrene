@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.model_runtime import codex_cli
+from cyrene.model import codex_cli
 
 
 @pytest.fixture(autouse=True)

@@ -6,7 +6,6 @@ var useWorkbenchEffect = React.useEffect;
 function wbVisibleNotificationView(activeView) {
   if (typeof document !== "undefined" && document.hidden) return null;
   if (activeView.page === "chat" && activeView.chatId) return { chatId: activeView.chatId };
-  if (!activeView.page && activeView.sessionId) return { sessionId: activeView.sessionId };
   return null;
 }
 

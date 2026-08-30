@@ -73,7 +73,7 @@ def test_memory_pack_completes_toolbox_list_describe_invoke_chain(tmp_path):
 
 def test_seeded_user_directory_loads_complete_memory_pack(tmp_path):
     from cyrene.plugins.native_tools import seed_builtin_plugin_directory
-    from cyrene.runtime.database import init_db
+    from cyrene.platform.database import init_db
 
     seeded_root = tmp_path / "seeded"
     seed_builtin_plugin_directory(seeded_root)
@@ -631,7 +631,7 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
     from cyrene.plugins.builtin.cyrene_memory import archive
     from cyrene.plugins.builtin.cyrene_soul import plugin_pack as soul_pack
     from cyrene.plugins.builtin.cyrene_soul import store as soul_store
-    from cyrene.runtime.database import init_db
+    from cyrene.platform.database import init_db
     from cyrene.workbench.persistence.store import write_document
 
     database = tmp_path / "runtime.db"

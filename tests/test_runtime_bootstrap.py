@@ -9,7 +9,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
     from cyrene.observability import debug
-    from cyrene.runtime import bootstrap
+    from cyrene.platform import bootstrap
 
     workspace = tmp_path / "workspace"
     store = tmp_path / "store"
@@ -50,7 +50,7 @@ async def test_initialize_runtime_owns_shared_host_setup(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_initialize_runtime_is_idempotent_for_one_context(monkeypatch, tmp_path):
-    from cyrene.runtime import bootstrap
+    from cyrene.platform import bootstrap
 
     context = bootstrap.create_runtime_context(host_mode="test")
     context.paths = type(context.paths)(
@@ -86,9 +86,9 @@ async def test_application_lifecycle_owns_tasks_managers_and_idempotent_shutdown
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.runtime import bootstrap
-    from cyrene.runtime.application import ApplicationLifecycle
-    from cyrene.runtime import lifecycle as runtime_lifecycle
+    from cyrene.platform import bootstrap
+    from cyrene.platform.application import ApplicationLifecycle
+    from cyrene.platform import lifecycle as runtime_lifecycle
 
     context = bootstrap.create_runtime_context(host_mode="test")
     context.paths = type(context.paths)(

@@ -12,6 +12,7 @@ from .services import terminal_service
 
 TOOL_NAME = 'ListShells'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
+TOOL_METADATA = {"read_only": True}
 
 
 async def _tool_list_shells(
@@ -76,4 +77,4 @@ async def _tool_list_shells(
 
 handler = _tool_list_shells
 
-__all__ = ["TOOL_NAME", "TOOL_DEF", "handler", "_tool_list_shells"]
+__all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler", "_tool_list_shells"]

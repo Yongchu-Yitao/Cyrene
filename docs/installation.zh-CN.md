@@ -113,7 +113,7 @@ Runtime 注册的 Electron UI Surface。
 无 Web 运行 Agent：
 
 ```bash
-python -m cyrene.runtime.host
+python -m cyrene.platform.host
 ```
 
 主数据库为 `store/cyrene.runtime.database`。旧 `store/cyrene.db` 会在新库

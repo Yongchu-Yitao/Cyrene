@@ -282,7 +282,7 @@ if _IS_WIN:
 # The openai-codex SDK is required at startup of the model settings page; a
 # build environment missing it must fail the build, not ship a broken app.
 # The Codex CLI binary is deliberately NOT bundled: it is downloaded on
-# demand by cyrene.model_runtime.codex_cli (and excluded below so the SDK's
+# demand by cyrene.model.codex_cli (and excluded below so the SDK's
 # lazy import does not drag the multi-hundred-MB runtime into the package).
 for _critical in ("openai_codex",):
     if not any(

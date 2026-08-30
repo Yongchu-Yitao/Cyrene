@@ -1,6 +1,6 @@
 """Direct source and module entry point.
 
-The implementation lives in :mod:`cyrene.runtime.host`.  This small launcher
+The implementation lives in :mod:`cyrene.platform.host`.  This small launcher
 remains because Electron development builds and existing installations execute
 ``src/cyrene/local_cli.py`` directly.
 """
@@ -57,14 +57,14 @@ def _bootstrap_source_checkout() -> None:
 _bootstrap_source_checkout()
 
 if __name__ == "cyrene.local_cli":
-    from cyrene.runtime.host import main
+    from cyrene.platform.host import main
 else:
     if __name__ == "__main__" and any(
         flag in sys.argv[1:] for flag in ("--help", "-h")
     ):
         from cyrene.cli import main
     else:
-        from cyrene.runtime.host import main
+        from cyrene.platform.host import main
 
     __all__ = ["main"]
 

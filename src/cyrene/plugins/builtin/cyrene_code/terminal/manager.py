@@ -42,6 +42,7 @@ INPUT_AUDIT_RETAINED_EVENTS = 10_000
 DEFAULT_UTF8_LOCALE = "C.UTF-8"
 OUTPUT_FLUSH_INTERVAL_SECONDS = 0.05
 OUTPUT_FLUSH_THRESHOLD = 256 * 1024
+SCREEN_WORK_BATCH_BYTES = 32 * 1024
 PTY_READ_BUDGET = 64 * 1024
 SCREEN_DRAIN_BUDGET = 32 * 1024
 DEFAULT_PERSISTENCE_BACKLOG_LIMIT = 8 * 1024 * 1024
@@ -345,6 +346,8 @@ class _TerminalPersistenceWriter:
         self.segments_deleted = 0
         self.eviction_count = 0
         self.screen_bytes_parsed = 0
+        self.screen_batches = 0
+        self.screen_updates = 0
         self.query_count = 0
         self.worker_queue_wait_max_ms = 0.0
         self.query_queue_wait_max_ms = 0.0
@@ -385,6 +388,8 @@ class _TerminalPersistenceWriter:
                 "segmentsDeleted": self.segments_deleted,
                 "evictions": self.eviction_count,
                 "screenBytesParsed": self.screen_bytes_parsed,
+                "screenBatches": self.screen_batches,
+                "screenUpdates": self.screen_updates,
                 "queries": self.query_count,
                 "terminalWorkPeakBytes": self._terminal_work_peak_bytes,
                 "workerQueueWaitMaxUs": int(self.worker_queue_wait_max_ms * 1000),
@@ -403,6 +408,7 @@ class _TerminalPersistenceWriter:
             pending = self._terminal_work.setdefault(terminal_id, deque())
             pending.append(payload)
             if isinstance(payload, _ScreenUpdate):
+                self.screen_updates += 1
                 self._terminal_work_bytes += len(payload.data)
                 self._terminal_work_peak_bytes = max(
                     self._terminal_work_peak_bytes, self._terminal_work_bytes
@@ -1125,6 +1131,40 @@ class _TerminalPersistenceWriter:
                 self._terminal_work_bytes = max(
                     0, self._terminal_work_bytes - len(item.data)
                 )
+                parts = [item.data]
+                byte_count = len(item.data)
+                next_seq = item.next_seq
+                while pending and byte_count < SCREEN_WORK_BATCH_BYTES:
+                    following = pending[0]
+                    if not (
+                        isinstance(following, _ScreenUpdate)
+                        and following.start_seq == next_seq
+                        and following.cols == item.cols
+                        and following.rows == item.rows
+                        and following.metadata_loop is item.metadata_loop
+                        and following.metadata_callback == item.metadata_callback
+                        and byte_count + len(following.data) <= SCREEN_WORK_BATCH_BYTES
+                    ):
+                        break
+                    pending.popleft()
+                    parts.append(following.data)
+                    byte_count += len(following.data)
+                    next_seq = following.next_seq
+                    self._terminal_work_bytes = max(
+                        0, self._terminal_work_bytes - len(following.data)
+                    )
+                if len(parts) > 1:
+                    item = _ScreenUpdate(
+                        terminal_id=item.terminal_id,
+                        data=b"".join(parts),
+                        cols=item.cols,
+                        rows=item.rows,
+                        start_seq=item.start_seq,
+                        next_seq=next_seq,
+                        metadata_loop=item.metadata_loop,
+                        metadata_callback=item.metadata_callback,
+                        enqueued_at=item.enqueued_at,
+                    )
             return item
 
     def _finish_terminal_work(self, terminal_id: str) -> bool:
@@ -1145,6 +1185,7 @@ class _TerminalPersistenceWriter:
             (time.monotonic() - enqueued_at) * 1000,
         )
         if isinstance(item, _ScreenUpdate):
+            self.screen_batches += 1
             self._feed_worker_screen(item)
             return
         if isinstance(item, _ScreenResize):
@@ -1241,7 +1282,10 @@ class _TerminalPersistenceWriter:
                         self._handle_terminal_work(connection, item)
                     has_more = self._finish_terminal_work(entry.terminal_id)
                     if has_more:
-                        self._put_main(0, entry)
+                        # The first screen batch is latency-sensitive. Remaining
+                        # batches rejoin normal FIFO priority so persistence and
+                        # other terminals cannot be starved by one noisy PTY.
+                        self._put_main(1, entry)
                     continue
                 if isinstance(entry, _WorkerQuery):
                     try:

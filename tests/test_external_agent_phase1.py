@@ -610,7 +610,7 @@ async def test_successful_probe_refreshes_capabilities_and_card(saved_settings, 
         async def close_all(self):
             return None
 
-    monkeypatch.setattr("cyrene.agent_runtime.get_acp_runtime_service", lambda: Runtime())
+    monkeypatch.setattr("cyrene.agents.get_acp_runtime_service", lambda: Runtime())
     result = await agent_runtime.probe_agent(record["installation_id"])
     assert result["ok"] is True
     assert result["runtimeState"] == "not_started"

@@ -1057,8 +1057,8 @@ async function waitForCursorAnimations(root, state, cursorElement, pressMs, resu
 
   function visibleSessionState(entries) {
     var preferredNodeIds = [
-      "chat_composer_input", "task_composer_input",
-      "chat_composer_submit", "task_composer_submit",
+      "chat_composer_input",
+      "chat_composer_submit",
     ];
     var item = null;
     preferredNodeIds.some(function (nodeId) {

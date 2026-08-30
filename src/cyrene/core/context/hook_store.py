@@ -61,6 +61,33 @@ class TreeHookStore:
         )
         return hooks
 
+    def has_enabled_hook(self, event: str) -> bool:
+        """Return whether calculating and queuing an event can reach a Hook."""
+
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM hook_bindings WHERE event = ? AND enabled = 1 LIMIT 1",
+                (str(event),),
+            ).fetchone()
+        return row is not None
+
+    def context_used_node_tokens_required(self) -> bool:
+        """Keep detailed per-node usage only for Hooks that request it."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT config_json FROM hook_bindings "
+                "WHERE event = 'ContextUsed' AND enabled = 1"
+            ).fetchall()
+        for row in rows:
+            try:
+                config = json.loads(str(row["config_json"] or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return True
+            if not isinstance(config, dict) or config.get("include_node_tokens") is not False:
+                return True
+        return False
+
     def recover(self) -> None:
         """Release deliveries left claimed by a previous process."""
 

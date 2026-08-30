@@ -46,6 +46,14 @@ WRITE_PLUGIN = Plugin(
         "additionalProperties": False,
     },
     handler=write,
+    metadata={
+        "resource_effects": ({
+            "argument_path": ("path",),
+            "kind": "file",
+            "access": "write",
+            "phase": "both",
+        },),
+    },
     permission_boundary=write_permission_boundary,
     allow_parallel=False,
     timeout_seconds=30.0,

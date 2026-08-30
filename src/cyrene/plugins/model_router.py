@@ -24,7 +24,7 @@ EXACT_MODEL_UNAVAILABLE = "Requested exact model identity is no longer configure
 
 
 def _normalize_tool_calls(raw_calls: Any) -> list[dict[str, Any]]:
-    from cyrene.model_runtime.messages import parse_tool_arguments
+    from cyrene.model.messages import parse_tool_arguments
 
     iterable = raw_calls if isinstance(raw_calls, Sequence) and not isinstance(raw_calls, (str, bytes, bytearray)) else ()
     calls: list[dict[str, Any]] = []
@@ -70,7 +70,7 @@ def _candidate_context_limit(candidate: Mapping[str, Any]) -> int:
     if explicit > 0:
         return explicit
     try:
-        from cyrene.runtime.config_store import effective_ctx_limit_for_model
+        from cyrene.platform.config_store import effective_ctx_limit_for_model
 
         return max(
             0,
@@ -271,7 +271,7 @@ async def _publish_fallback(
 ) -> None:
     try:
         from cyrene.core.plugin.context import publish_runtime_event
-        from cyrene.model_runtime.status import persist_model_status
+        from cyrene.model.status import persist_model_status
 
         run_context = context.data.get("run_context")
         run_context = run_context if isinstance(run_context, Mapping) else {}
@@ -376,7 +376,7 @@ async def route_model_call(
             raise RuntimeError(f"No model is configured in the {route} route")
         candidate_context = f"{route} model route"
 
-    from cyrene.model_runtime.transcript_policy import require_single_provider_family
+    from cyrene.model.transcript_policy import require_single_provider_family
 
     require_single_provider_family(candidates, context=candidate_context)
     eligible = _eligible_candidates(

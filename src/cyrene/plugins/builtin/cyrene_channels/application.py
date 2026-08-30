@@ -137,7 +137,7 @@ class ChannelsApplicationService:
         import httpx
 
         from cyrene.localization import localized
-        from cyrene.runtime.settings_store import get as get_setting
+        from cyrene.platform.settings_store import get as get_setting
         from .settings import get_env, telegram_owner_id
 
         token = get_env("TELEGRAM_BOT_TOKEN")
@@ -173,7 +173,7 @@ class ChannelsApplicationService:
 
     async def notify_wechat(self, title: str, body: str) -> dict[str, Any]:
         from cyrene.localization import localized
-        from cyrene.runtime.settings_store import get as get_setting
+        from cyrene.platform.settings_store import get as get_setting
         from .settings import get_env
 
         if not get_setting("notify_wechat", True):
@@ -224,7 +224,7 @@ class ChannelsApplicationService:
 
     @staticmethod
     def setting_specs() -> tuple[Any, ...]:
-        from cyrene.runtime.settings_service import SettingSpec
+        from cyrene.platform.settings_service import SettingSpec
 
         return (
             SettingSpec(
@@ -239,7 +239,7 @@ class ChannelsApplicationService:
 
     @staticmethod
     def setting_control_specs() -> tuple[Any, ...]:
-        from cyrene.runtime.settings_service import SettingControlSpec
+        from cyrene.platform.settings_service import SettingControlSpec
 
         return (
             SettingControlSpec(

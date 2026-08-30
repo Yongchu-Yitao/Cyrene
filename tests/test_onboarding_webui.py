@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
     from cyrene.plugins.builtin.cyrene_memory import archive as conversations
 
     soul_path = tmp_path / "workspace" / "SOUL.md"
@@ -52,7 +52,7 @@ def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
 
 
 def test_get_onboarding_status_detects_absolute_fresh_start(monkeypatch, tmp_path):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
@@ -67,7 +67,7 @@ def test_get_onboarding_status_detects_absolute_fresh_start(monkeypatch, tmp_pat
 
 
 def test_get_onboarding_status_infers_existing_setup(monkeypatch, tmp_path):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     custom_soul = "# Sherlock's Soul\n\n## CORE IDENTITY\n- sharp and theatrical\n"
@@ -91,7 +91,7 @@ def test_get_onboarding_status_skips_personality_when_soul_is_unavailable(
     monkeypatch,
     tmp_path,
 ):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
 
     monkeypatch.setattr(onboarding, "DATA_DIR", tmp_path)
     monkeypatch.setattr(onboarding, "_has_existing_data", lambda: False)
@@ -140,7 +140,7 @@ def test_core_onboarding_router_does_not_own_personality_endpoint():
 
 
 async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
@@ -197,7 +197,7 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
 
 
 async def test_onboarding_uses_enabled_provider_endpoints_and_adapter(monkeypatch, tmp_path):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
@@ -257,7 +257,7 @@ async def test_onboarding_uses_enabled_provider_endpoints_and_adapter(monkeypatc
 
 
 async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp_path):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
@@ -335,7 +335,7 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
 
 
 async def test_vision_capability_probe_sends_an_image(monkeypatch):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
     from cyrene.plugins.builtin.cyrene_model import probe as model_probe_service
 
     calls = []
@@ -372,7 +372,7 @@ async def test_text_connection_probe_normalizes_official_provider_endpoint(
     base_url,
     expected,
 ):
-    from cyrene.runtime import onboarding
+    from cyrene.platform import onboarding
     from cyrene.plugins.builtin.cyrene_model import probe as model_probe_service
 
     calls = []

@@ -13,8 +13,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from cyrene.agent_runtime.events import CORE_EVENT_TYPES, event_envelope
-from cyrene.agent_runtime.notices import LeadingOperationalNoticeFilter
+from cyrene.agents.events import CORE_EVENT_TYPES, event_envelope
+from cyrene.agents.notices import LeadingOperationalNoticeFilter
 from cyrene.workbench.chat.chat_runs import ChatRun
 
 

@@ -651,12 +651,164 @@ def test_runtime_validates_the_resolved_plugins_current_schema():
     run(scenario())
 
 
+def test_plugin_runtime_repairs_unambiguous_arguments_for_direct_and_toolbox_calls():
+    async def scenario():
+        reviewed = []
+
+        class CapturingHooks:
+            async def pre_tool_use_batch(self, calls, *, permissions=()):
+                reviewed.extend((name, dict(arguments)) for name, arguments in calls)
+                return tuple(dict(arguments) for _name, arguments in calls)
+
+            async def post_tool_use(self, *_args, **_kwargs):
+                return ()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "tasks": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["title", "tasks"],
+                        "additionalProperties": False,
+                    },
+                },
+                "max_steps": {"type": "integer", "minimum": 1},
+            },
+            "required": ["steps", "max_steps"],
+            "additionalProperties": False,
+        }
+        registry = PluginRegistry()
+        registry.register_plugin(
+            Plugin(
+                "DeferredPlan",
+                "plan",
+                schema,
+                lambda arguments, _context: arguments,
+            ),
+            source="test",
+        )
+        runtime = PluginRuntime(registry)
+        context = PluginContext(hooks=CapturingHooks())
+        malformed = {
+            "steps": {
+                "item": [
+                    {
+                        "title": "Inspect",
+                        "tasks": {"item": ["Read", "Verify"]},
+                    }
+                ]
+            },
+            "Max-Steps": "2",
+        }
+        canonical = {
+            "steps": [
+                {"title": "Inspect", "tasks": ["Read", "Verify"]}
+            ],
+            "max_steps": 2,
+        }
+
+        direct = await runtime.call("DeferredPlan", malformed, context)
+        deferred = await runtime.call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "DeferredPlan",
+                "arguments": malformed,
+            },
+            context,
+        )
+        wrapped = await runtime.call(
+            "DeferredPlan",
+            {"arguments": canonical},
+            context,
+        )
+
+        assert direct.success is True
+        assert direct.value == canonical
+        assert deferred.success is True
+        assert deferred.value["result"] == canonical
+        assert {item["kind"] for item in deferred.value["argument_repairs"]} == {
+            "unwrap_item_array",
+            "coerce_integer_string",
+            "normalize_property_name",
+        }
+        assert wrapped.success is True
+        assert wrapped.value == canonical
+        assert reviewed == [
+            ("DeferredPlan", canonical),
+            ("DeferredPlan", canonical),
+            ("DeferredPlan", canonical),
+        ]
+
+        ambiguous = await runtime.call(
+            "DeferredPlan",
+            {
+                "steps": {"item": canonical["steps"], "extra": []},
+                "max_steps": 2,
+            },
+        )
+        assert ambiguous.success is False
+        assert "arguments.steps" in ambiguous.error
+
+        deferred_invalid = await runtime.call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "DeferredPlan",
+                "arguments": {
+                    "steps": {"item": canonical["steps"], "extra": []},
+                    "max_steps": 2,
+                },
+            },
+        )
+        assert deferred_invalid.success is True
+        assert deferred_invalid.value["error"]["code"] == "invalid_arguments"
+        assert "arguments.steps" in deferred_invalid.value["error"]["message"]
+
+    run(scenario())
+
+
+def test_plugin_runtime_exposes_opted_in_public_handler_errors():
+    async def scenario():
+        registry = PluginRegistry(include_core=False)
+
+        def fail(_arguments, _context):
+            raise RuntimeError("surface_timeout: renderer did not respond")
+
+        registry.register_plugin(
+            Plugin(
+                "PublicFailure",
+                "public failure",
+                {"type": "object", "properties": {}},
+                fail,
+                metadata={"public_errors": True},
+            ),
+            source="test",
+        )
+
+        result = await PluginRuntime(registry).call("PublicFailure", {})
+
+        assert result.success is False
+        assert result.error == "surface_timeout: renderer did not respond"
+
+    run(scenario())
+
+
 def test_runtime_revalidates_arguments_modified_by_hooks():
     async def scenario():
         executed = False
 
         class InvalidatingHooks:
-            async def pre_tool_use_batch(self, _calls):
+            async def pre_tool_use_batch(self, _calls, *, permissions=()):
                 return ({"value": "ok", "unexpected": True},)
 
         def handler(_arguments, _context):
@@ -1347,6 +1499,36 @@ def test_fixed_read_write_and_bash_plugins(tmp_path):
         assert shell.success is True
         assert shell.value["exit_code"] == 0
         assert shell.value["stdout"].strip() == "123"
+
+    run(scenario())
+
+
+def test_read_only_context_filters_and_enforces_tool_execution(tmp_path):
+    async def scenario():
+        registry = PluginRegistry()
+        runtime = PluginRuntime(registry)
+        context = PluginContext(
+            workspace=tmp_path,
+            data={"run_context": {"read_only": True}},
+        )
+        target = tmp_path / "existing.txt"
+        target.write_text("safe to inspect", encoding="utf-8")
+
+        assert {
+            definition["function"]["name"]
+            for definition in registry.direct_tool_definitions(read_only=True)
+        } == {"Read", "toolbox"}
+        read = await runtime.call("Read", {"path": "existing.txt"}, context)
+        write = await runtime.call(
+            "Write",
+            {"path": "blocked.txt", "content": "must not be written"},
+            context,
+        )
+
+        assert read.success is True
+        assert read.value == "safe to inspect"
+        assert write.success is False
+        assert not (tmp_path / "blocked.txt").exists()
 
     run(scenario())
 

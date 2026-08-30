@@ -1,120 +1,74 @@
 import { workbenchServices } from "./shared/runtime/services.jsx"
-// Workbench create-flows + project initialization.
-//
-// These components live in the Workbench shell and talk to `/api/projects` +
-// `/api/task-sessions` endpoints via the registered model service.
-//
-// Registered on `window.CyreneUI.create`:
-//   - WorkbenchNewProjectModal  — multi-step "新建项目" wizard
-//   - WorkbenchNewTaskModal     — "新建任务" dialog
-//   - WorkbenchInitView         — the agent-led "初始化项目" onboarding session
-//   - WorkbenchInitProgress     — the right-panel "初始化进度" tracker
+
 (function () {
-  var useState = React.useState;
-  var useEffect = React.useEffect;
   var useRef = React.useRef;
+  var useState = React.useState;
+
   function T(key, params, fallback) {
     return workbenchServices.i18n().t(key, params, fallback);
   }
-  function createErrorText(err) {
+
+  function errorText(error) {
     try {
       var api = workbenchServices.api();
-      if (api && typeof api.errorText === "function") return api.errorText(err);
-    } catch (e) {}
-    return String((err && err.message) || err || "");
+      if (api && typeof api.errorText === "function") return api.errorText(error);
+    } catch (ignored) {}
+    return String((error && error.message) || error || "");
   }
 
-  function Svg(props) {
-    return React.createElement(
-      "svg",
-      {
-        viewBox: "0 0 24 24",
-        width: props.size || 18,
-        height: props.size || 18,
-        fill: props.fill || "none",
-        stroke: props.fill ? "none" : "currentColor",
-        strokeWidth: props.sw || 1.7,
-        strokeLinecap: "round",
-        strokeLinejoin: "round",
-      },
-      props.children
-    );
-  }
-
-  // ── project icon + color + template metadata ─────────────────────────
-  var PROJECT_ICONS = {
-    spark: <Svg fill="currentColor"><path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z" /></Svg>,
-    briefcase: <Svg><rect x="3" y="7.5" width="18" height="12" rx="2" /><path d="M8.5 7.5V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v1.5M3 12.5h18" /></Svg>,
-    rocket: <Svg><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2M9 11a9 9 0 0 1 9-9c1.5 0 2 .5 2 2a9 9 0 0 1-9 9M9 11l4 4M9 11l-4-1 2.5-2.5M13 15l1 4 2.5-2.5" /></Svg>,
-    doc: <Svg><path d="M6 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20Z" /><path d="M13 3.5V8a1 1 0 0 0 1 1h4M9 13h6M9 16.5h6" /></Svg>,
-    people: <Svg><circle cx="9" cy="8.5" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 6.2a3 3 0 0 1 0 5.6M20.5 19a5.5 5.5 0 0 0-3.5-5.1" /></Svg>,
-    code: <Svg><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 6l-3 12" /></Svg>,
-    more: <Svg fill="currentColor"><circle cx="6" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="18" cy="12" r="1.6" /></Svg>,
-  };
-  var PROJECT_ICON_ORDER = ["spark", "briefcase", "rocket", "doc", "people", "code", "more"];
+  var PROJECT_ICONS = ["spark", "briefcase", "rocket", "doc", "people", "code"];
   var PROJECT_COLORS = ["#7c6cf0", "#3b82f6", "#22c08a", "#f5a623", "#ef4d57", "#a855f7"];
 
-  var TEMPLATES = [
-    { id: "blank", titleKey: "create.template.blank.title", descKey: "create.template.blank.desc",
-      icon: <Svg><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M12 9v6M9 12h6" /></Svg> },
-    { id: "product", titleKey: "create.template.product.title", descKey: "create.template.product.desc",
-      icon: <Svg><path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z" /><path d="M12 3v18M4 7.5l8 4.5 8-4.5" /></Svg> },
-    { id: "pm", titleKey: "create.template.pm.title", descKey: "create.template.pm.desc",
-      icon: <Svg><rect x="4" y="4" width="16" height="16" rx="3" /><path d="m8 12 2.5 2.5L16 9" /></Svg> },
-    { id: "knowledge", titleKey: "create.template.knowledge.title", descKey: "create.template.knowledge.desc",
-      icon: <Svg><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5Z" /><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19" /></Svg> },
-    { id: "ai", titleKey: "create.template.ai.title", descKey: "create.template.ai.desc",
-      icon: <Svg><rect x="5" y="7" width="14" height="12" rx="3" /><path d="M12 3v4M9 12h.01M15 12h.01M9.5 16h5" /></Svg> },
-    { id: "import", titleKey: "create.template.import.title", descKey: "create.template.import.desc",
-      icon: <Svg><path d="M12 3v11m0 0 4-4m-4 4-4-4" /><path d="M5 16.5V18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1.5" /></Svg> },
-  ];
-  function templateLabel(id) {
-    for (var i = 0; i < TEMPLATES.length; i++) if (TEMPLATES[i].id === id) return T(TEMPLATES[i].titleKey);
-    return T("create.template.blank.title");
+  function ProjectIcon({ name }) {
+    var paths = {
+      spark: <path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z" />,
+      briefcase: <><rect x="3" y="7.5" width="18" height="12" rx="2" /><path d="M8.5 7.5V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v1.5M3 12.5h18" /></>,
+      rocket: <><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2M9 11a9 9 0 0 1 9-9c1.5 0 2 .5 2 2a9 9 0 0 1-9 9M9 11l4 4" /></>,
+      doc: <><path d="M6 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20Z" /><path d="M13 3.5V9h5M9 13h6M9 16.5h6" /></>,
+      people: <><circle cx="9" cy="8.5" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 6.2a3 3 0 0 1 0 5.6M20.5 19a5.5 5.5 0 0 0-3.5-5.1" /></>,
+      code: <><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 6l-3 12" /></>,
+    };
+    return <svg viewBox="0 0 24 24" width="18" height="18" fill={name === "spark" ? "currentColor" : "none"} stroke={name === "spark" ? "none" : "currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name] || paths.spark}</svg>;
   }
 
-  var XIcon = <Svg sw={1.9}><path d="m6 6 12 12M18 6 6 18" /></Svg>;
-  var SparkIcon = <Svg fill="currentColor"><path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z" /></Svg>;
-
-  function ModalScrim(props) {
-    return (
-      <div className="wb-create-scrim" onMouseDown={function (e) { if (e.target === e.currentTarget) props.onClose(); }}>
-        {props.children}
-      </div>
-    );
-  }
-
-  // ── New Project wizard ───────────────────────────────────────────────
   function WorkbenchNewProjectModal(props) {
     workbenchServices.i18n().use();
-    var [step, setStep] = useState(0); // 0 = config (basics + template), 1 = finish
+    var [step, setStep] = useState(0);
     var [name, setName] = useState("");
     var [description, setDescription] = useState("");
     var [icon, setIcon] = useState("spark");
     var [color, setColor] = useState(PROJECT_COLORS[0]);
-    var [template, setTemplate] = useState("blank");
     var [workspacePath, setWorkspacePath] = useState(props.defaultWorkspacePath || "");
     var [busy, setBusy] = useState(false);
     var [error, setError] = useState("");
-    var customColorRef = useRef(null);
-
+    var colorRef = useRef(null);
     var trimmedName = name.trim();
-    var stepDots = [
-      { labelKey: "create.project.step.basic" },
-      { labelKey: "create.project.step.template" },
-      { labelKey: "create.project.step.finish" },
-    ];
-    function dotState(index) {
-      if (step === 0) return index < 2 ? "current" : "idle";
-      return index < 2 ? "done" : "current";
+
+    function closeOnScrim(event) {
+      if (event.target === event.currentTarget && !busy) props.onClose();
     }
 
-    function next() {
-      if (!trimmedName) { setError(T("create.project.error.nameRequired")); return; }
+    async function chooseWorkspace() {
       setError("");
-      setStep(1);
+      try {
+        if (window.cyrene && typeof window.cyrene.pickDirectory === "function") {
+          var nativeResult = await window.cyrene.pickDirectory();
+          if (nativeResult && nativeResult.path) setWorkspacePath(nativeResult.path);
+          else if (nativeResult && nativeResult.error) setError(nativeResult.error);
+          return;
+        }
+        var response = await fetch("/api/context/pick-directory", { method: "POST" });
+        var payload = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
+        if (payload.path) setWorkspacePath(payload.path);
+        else if (payload.error) setError(payload.error);
+      } catch (errorValue) {
+        setError(errorText(errorValue));
+      }
     }
-    function create() {
+
+    function createProject() {
+      if (!trimmedName || busy) return;
       setBusy(true);
       setError("");
       Promise.resolve(props.onCreate({
@@ -122,811 +76,53 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
         description: description.trim(),
         icon: icon,
         color: color,
-        template: template,
         workspacePath: workspacePath.trim() || undefined,
-      })).catch(function (e) {
-        setError(createErrorText(e));
+      })).catch(function (errorValue) {
+        setError(errorText(errorValue));
         setBusy(false);
-        setStep(0);
       });
     }
-    async function pickWorkspacePath() {
-      if (busy) return;
-      setError("");
-      try {
-        if (
-          window.cyrene &&
-          window.cyrene.platform === "linux" &&
-          typeof window.cyrene.pickDirectory === "function"
-        ) {
-          var nativeData = await window.cyrene.pickDirectory();
-          if (nativeData && nativeData.path) {
-            setWorkspacePath(nativeData.path);
-          } else if (nativeData && nativeData.error) {
-            setError(nativeData.error);
-          }
-          return;
-        }
-        var r = await fetch("/api/context/pick-directory", { method: "POST" });
-        var data = await r.json().catch(function () { return {}; });
-        if (!r.ok) throw new Error(data.error || data.detail || ("HTTP " + r.status));
-        if (data.path) {
-          setWorkspacePath(data.path);
-        } else if (data.error) {
-          setError(data.error);
-        }
-      } catch (e) {
-        setError(createErrorText(e));
-      }
-    }
 
-    var previewStyle = { background: color || "#7c6cf0" };
-
-    return (
-      <ModalScrim onClose={props.onClose}>
-        <div className="wb-create-modal wb-create-project" role="dialog" aria-modal="true">
-          <div className="wb-create-head">
-            <b>{T("create.project.title")}</b>
-            <button type="button" className="wb-create-x" onClick={props.onClose} title={T("common.close")}>{XIcon}</button>
-          </div>
-          <div className="wb-create-steps">
-            {stepDots.map(function (s, i) {
-              return (
-                <React.Fragment key={i}>
-                  {i > 0 && <span className="wb-create-step-line" />}
-                  <span className={"wb-create-step " + dotState(i)}>
-                    <span className="wb-create-step-dot">{dotState(i) === "done" ? <Svg size={13} sw={2.4}><path d="m5 12.5 4.5 4.5L19 7" /></Svg> : i + 1}</span>
-                    <span className="wb-create-step-label">{T(s.labelKey)}</span>
-                  </span>
-                </React.Fragment>
-              );
-            })}
-          </div>
-
-          <div className="wb-create-body">
-            {step === 0 ? (
-              <div className="wb-cp-cols">
-                <div className="wb-cp-left">
-                  <label className="wb-cp-label">{T("create.project.name")} <i className="wb-cp-req">*</i></label>
-                  <div className="wb-cp-field">
-                    <input
-                      className="wb-cp-input"
-                      value={name}
-                      maxLength={50}
-                      autoFocus
-                      placeholder={T("create.project.namePlaceholder")}
-                      onChange={function (e) { setName(e.target.value); }}
-                    />
-                    <span className="wb-cp-counter">{name.length}/50</span>
-                  </div>
-
-                  <label className="wb-cp-label">{T("create.project.description")}</label>
-                  <div className="wb-cp-field">
-                    <textarea
-                      className="wb-cp-textarea"
-                      value={description}
-                      maxLength={200}
-                      rows={3}
-                      placeholder={T("create.project.descriptionPlaceholder")}
-                      onChange={function (e) { setDescription(e.target.value); }}
-                    />
-                    <span className="wb-cp-counter">{description.length}/200</span>
-                  </div>
-
-                  <label className="wb-cp-label">{T("create.project.icon")}</label>
-                  <div className="wb-cp-icons">
-                    {PROJECT_ICON_ORDER.map(function (id) {
-                      return (
-                        <button
-                          type="button"
-                          key={id}
-                          className={"wb-cp-icon" + (icon === id ? " active" : "")}
-                          onClick={function () { setIcon(id); }}
-                        >{PROJECT_ICONS[id]}</button>
-                      );
-                    })}
-                  </div>
-
-                  <label className="wb-cp-label">{T("create.project.color")}</label>
-                  <div className="wb-cp-colors">
-                    {PROJECT_COLORS.map(function (c) {
-                      return (
-                        <button
-                          type="button"
-                          key={c}
-                          className={"wb-cp-color" + (color === c ? " active" : "")}
-                          style={{ background: c }}
-                          onClick={function () { setColor(c); }}
-                        >{color === c ? <Svg size={13} sw={2.6}><path d="m5 12.5 4.5 4.5L19 7" /></Svg> : null}</button>
-                      );
-                    })}
-                    <button type="button" className="wb-cp-color custom" onClick={function () { if (customColorRef.current) customColorRef.current.click(); }} title={T("create.project.customColor")}>
-                      <Svg size={14} sw={2}><path d="M12 5v14M5 12h14" /></Svg>
-                      <input ref={customColorRef} type="color" value={color} onChange={function (e) { setColor(e.target.value); }} />
-                    </button>
-                  </div>
-
-                  <div className="wb-cp-advanced">
-                    <label className="wb-cp-label">{T("create.project.workspacePath")}</label>
-                    <button type="button" className="wb-cp-path-button" disabled={busy} onClick={pickWorkspacePath}>
-                      <span className={"wb-cp-path-text" + (!workspacePath.trim() ? " empty" : "")}>{workspacePath.trim() || T("create.project.selectWorkspacePath")}</span>
-                      <span className="wb-cp-path-action">{T("create.project.choosePath")}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="wb-cp-right">
-                  <div className="wb-cp-right-title">{T("create.project.step.template")}</div>
-                  <div className="wb-cp-templates">
-                    {TEMPLATES.map(function (t) {
-                      var on = template === t.id;
-                      return (
-                        <button type="button" key={t.id} className={"wb-cp-template" + (on ? " active" : "")} onClick={function () { setTemplate(t.id); }}>
-                          <span className="wb-cp-template-ico">{t.icon}</span>
-                          <span className="wb-cp-template-meta">
-                            <b>{T(t.titleKey)}</b>
-                            <small>{T(t.descKey)}</small>
-                          </span>
-                          <span className={"wb-cp-template-check" + (on ? " on" : "")}>
-                            {on ? <Svg size={14} sw={2.4}><path d="m5 12.5 4.5 4.5L19 7" /></Svg> : null}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="wb-cp-finish">
-                <div className="wb-cp-finish-icon" style={previewStyle}>{PROJECT_ICONS[icon]}</div>
-                <h3>{trimmedName || T("create.project.untitled")}</h3>
-                {description.trim() && <p className="wb-cp-finish-desc">{description.trim()}</p>}
-                <div className="wb-cp-finish-meta">
-                  <span><i>{T("create.project.template")}</i>{templateLabel(template)}</span>
-                  <span><i>{T("create.project.path")}</i>{workspacePath.trim() || T("create.project.defaultWorkspace")}</span>
-                </div>
-                <p className="wb-cp-finish-hint">{T("create.project.finishHint")}</p>
-              </div>
-            )}
-          </div>
-
-          {error && <div className="wb-create-error">{error}</div>}
-
-          <div className="wb-create-foot">
-            {step === 0 ? (
-              <React.Fragment>
-                <button type="button" className="wb-btn ghost" onClick={props.onClose}>{T("common.cancel")}</button>
-                <button type="button" className="wb-btn primary" disabled={!trimmedName} onClick={next}>{T("common.next")}</button>
-              </React.Fragment>
-            ) : (
-              <React.Fragment>
-                <button type="button" className="wb-btn ghost" disabled={busy} onClick={function () { setStep(0); }}>{T("common.previous")}</button>
-                <button type="button" className="wb-btn primary" disabled={busy} onClick={create}>{busy ? T("common.creating") : T("create.project.create")}</button>
-              </React.Fragment>
-            )}
-          </div>
+    return <div className="wb-create-scrim" onMouseDown={closeOnScrim}>
+      <div className="wb-create-modal wb-create-project" role="dialog" aria-modal="true">
+        <div className="wb-create-head">
+          <b>{T("create.project.title")}</b>
+          <button type="button" className="wb-create-x" disabled={busy} onClick={props.onClose} title={T("common.close")} aria-label={T("common.close")}>×</button>
         </div>
-      </ModalScrim>
-    );
-  }
-
-  // ── New Task dialog ──────────────────────────────────────────────────
-  var PRIORITIES = [{ id: "high", labelKey: "priority.high" }, { id: "medium", labelKey: "priority.medium" }, { id: "low", labelKey: "priority.low" }];
-  function WorkbenchNewTaskModal(props) {
-    workbenchServices.i18n().use();
-    var [title, setTitle] = useState("");
-    var [goal, setGoal] = useState("");
-    var [priority, setPriority] = useState("medium");
-    var [busy, setBusy] = useState(false);
-    var [error, setError] = useState("");
-    var trimmed = title.trim();
-
-    function create() {
-      if (!trimmed) { setError(T("create.task.error.nameRequired")); return; }
-      setBusy(true);
-      setError("");
-      Promise.resolve(props.onCreate({ title: trimmed, goal: goal.trim(), priority: priority }))
-        .catch(function (e) { setError(createErrorText(e)); setBusy(false); });
-    }
-
-    return (
-      <ModalScrim onClose={props.onClose}>
-        <div className="wb-create-modal wb-create-task" role="dialog" aria-modal="true">
-          <div className="wb-create-head">
-            <b>{T("create.task.title")}</b>
-            <button type="button" className="wb-create-x" onClick={props.onClose} title={T("common.close")}>{XIcon}</button>
-          </div>
-          <div className="wb-create-body wb-ct-body">
-            <label className="wb-cp-label">{T("create.task.name")} <i className="wb-cp-req">*</i></label>
-            <input
-              className="wb-cp-input"
-              value={title}
-              maxLength={80}
-              autoFocus
-              placeholder={T("create.task.namePlaceholder")}
-              onChange={function (e) { setTitle(e.target.value); }}
-              onKeyDown={function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) create(); }}
-            />
-            <label className="wb-cp-label">{T("create.task.goal")}</label>
-            <textarea
-              className="wb-cp-textarea"
-              value={goal}
-              rows={3}
-              placeholder={T("create.task.goalPlaceholder")}
-              onChange={function (e) { setGoal(e.target.value); }}
-            />
-            <label className="wb-cp-label">{T("create.task.priority")}</label>
-            <div className="wb-cp-seg">
-              {PRIORITIES.map(function (p) {
-                return (
-                  <button type="button" key={p.id} className={"wb-cp-seg-btn" + (priority === p.id ? " on" : "")} onClick={function () { setPriority(p.id); }}>{T(p.labelKey)}</button>
-                );
-              })}
-            </div>
-          </div>
-          {error && <div className="wb-create-error">{error}</div>}
-          <div className="wb-create-foot">
-            <button type="button" className="wb-btn ghost" onClick={props.onClose}>{T("common.cancel")}</button>
-            <button type="button" className="wb-btn primary" disabled={busy || !trimmed} onClick={create}>{busy ? T("common.creating") : T("create.task.create")}</button>
-          </div>
-        </div>
-      </ModalScrim>
-    );
-  }
-
-  // ── "初始化项目" onboarding session ──────────────────────────────────
-  function answeredValue(value) {
-    if (Array.isArray(value)) return value.length > 0;
-    return String(value == null ? "" : value).trim().length > 0;
-  }
-  function sectionComplete(section, answers) {
-    var qs = (section && section.questions) || [];
-    if (!qs.length) return false;
-    return qs.every(function (q) { return answeredValue(answers[q.id]); });
-  }
-
-  function InitQuestion(props) {
-    var q = props.q;
-    var value = props.value;
-    var control;
-    if (q.type === "single") {
-      control = (
-        <div className="wb-init-chips">
-          {(q.options || []).map(function (opt) {
-            return (
-              <button type="button" key={opt} className={"wb-init-chip" + (value === opt ? " on" : "")} onClick={function () { props.onText(q.id, value === opt ? "" : opt); }}>{opt}</button>
-            );
+        <div className="wb-create-steps">
+          {["create.project.step.basic", "create.project.step.finish"].map(function (key, index) {
+            return <React.Fragment key={key}>{index ? <span className="wb-create-step-line" /> : null}<span className={"wb-create-step " + (step === index ? "current" : step > index ? "done" : "idle")}><span className="wb-create-step-dot">{step > index ? "✓" : index + 1}</span><span className="wb-create-step-label">{T(key)}</span></span></React.Fragment>;
           })}
         </div>
-      );
-    } else if (q.type === "multi") {
-      var arr = Array.isArray(value) ? value : [];
-      control = (
-        <div className="wb-init-chips">
-          {(q.options || []).map(function (opt) {
-            return (
-              <button type="button" key={opt} className={"wb-init-chip" + (arr.indexOf(opt) >= 0 ? " on" : "")} onClick={function () { props.onToggle(q.id, opt); }}>{opt}</button>
-            );
-          })}
+        <div className="wb-create-body">
+          {step === 0 ? <div className="wb-cp-form">
+            <label className="wb-cp-label">{T("create.project.name")} <i className="wb-cp-req">*</i></label>
+            <input className="wb-cp-input" value={name} maxLength={50} autoFocus placeholder={T("create.project.namePlaceholder")} onChange={function (event) { setName(event.target.value); }} />
+            <label className="wb-cp-label">{T("create.project.description")}</label>
+            <textarea className="wb-cp-textarea" value={description} maxLength={200} rows={3} placeholder={T("create.project.descriptionPlaceholder")} onChange={function (event) { setDescription(event.target.value); }} />
+            <label className="wb-cp-label">{T("create.project.icon")}</label>
+            <div className="wb-cp-icons">{PROJECT_ICONS.map(function (value) { return <button type="button" key={value} className={"wb-cp-icon" + (icon === value ? " active" : "")} onClick={function () { setIcon(value); }}><ProjectIcon name={value} /></button>; })}</div>
+            <label className="wb-cp-label">{T("create.project.color")}</label>
+            <div className="wb-cp-colors">{PROJECT_COLORS.map(function (value) { return <button type="button" key={value} className={"wb-cp-color" + (color === value ? " active" : "")} style={{ background: value }} onClick={function () { setColor(value); }}>{color === value ? "✓" : null}</button>; })}<button type="button" className="wb-cp-color custom" onClick={function () { colorRef.current && colorRef.current.click(); }}>+<input ref={colorRef} type="color" value={color} onChange={function (event) { setColor(event.target.value); }} /></button></div>
+            <label className="wb-cp-label">{T("create.project.workspacePath")}</label>
+            <button type="button" className="wb-cp-path-button" disabled={busy} onClick={chooseWorkspace}><span className={"wb-cp-path-text" + (workspacePath.trim() ? "" : " empty")}>{workspacePath.trim() || T("create.project.selectWorkspacePath")}</span><span className="wb-cp-path-action">{T("create.project.choosePath")}</span></button>
+          </div> : <div className="wb-cp-finish">
+            <div className="wb-cp-finish-icon" style={{ background: color }}><ProjectIcon name={icon} /></div>
+            <h3>{trimmedName}</h3>
+            {description.trim() ? <p className="wb-cp-finish-desc">{description.trim()}</p> : null}
+            <div className="wb-cp-finish-meta"><span><i>{T("create.project.path")}</i>{workspacePath.trim() || T("create.project.defaultWorkspace")}</span></div>
+            <p className="wb-cp-finish-hint">{T("create.project.finishHint")}</p>
+          </div>}
         </div>
-      );
-    } else if (q.type === "textarea") {
-      control = (
-        <textarea className="wb-init-textarea" rows={2} value={value || ""} placeholder={q.placeholder || ""} onChange={function (e) { props.onText(q.id, e.target.value); }} />
-      );
-    } else {
-      control = (
-        <input className="wb-init-input" value={value || ""} placeholder={q.placeholder || ""} onChange={function (e) { props.onText(q.id, e.target.value); }} />
-      );
-    }
-    return (
-      <div className="wb-init-q">
-        <div className="wb-init-q-label">{q.label}</div>
-        <div className="wb-init-q-row">
-          <div className="wb-init-q-field">{control}</div>
-          <span className={"wb-init-q-num" + (answeredValue(value) ? " done" : "")}>{props.n}</span>
+        {error ? <div className="wb-create-error" role="alert">{error}</div> : null}
+        <div className="wb-create-foot">
+          {step === 0 ? <><button type="button" className="wb-btn ghost" onClick={props.onClose}>{T("common.cancel")}</button><button type="button" className="wb-btn primary" disabled={!trimmedName} onClick={function () { setStep(1); }}>{T("common.next")}</button></> : <><button type="button" className="wb-btn ghost" disabled={busy} onClick={function () { setStep(0); }}>{T("common.previous")}</button><button type="button" className="wb-btn primary" disabled={busy} onClick={createProject}>{busy ? T("common.creating") : T("create.project.create")}</button></>}
         </div>
       </div>
-    );
-  }
-
-  function linesToList(text) {
-    return String(text || "").split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
-  }
-  function listToLines(value) {
-    return Array.isArray(value) ? value.join("\n") : "";
-  }
-
-  var InitChevronIcon = <Svg size={13} sw={1.9}><path d="M5 7l3 3 3-3" /></Svg>;
-  var INIT_PRIORITY_COLOR = { high: "red", medium: "amber", low: "blue" };
-  var INIT_PRIORITY_KEYS  = { high: "priority.high", medium: "priority.medium", low: "priority.low" };
-  var INIT_PRIORITY_LIST  = [{ id: "high", key: "priority.high" }, { id: "medium", key: "priority.medium" }, { id: "low", key: "priority.low" }];
-
-  function InitTaskPlan(props) {
-    var tasks = Array.isArray(props.tasks) ? props.tasks : [];
-    var [expandedId, setExpandedId] = useState(null);
-
-    function updateTask(index, patch) {
-      props.onChange(tasks.map(function (task, i) {
-        return i === index ? Object.assign({}, task, patch) : task;
-      }));
-    }
-    function removeTask(index) {
-      var removed = tasks[index];
-      if (removed && expandedId === removed.id) setExpandedId(null);
-      props.onChange(tasks.filter(function (_, i) { return i !== index; }));
-    }
-    function addTask() {
-      var newId = "draft_" + Date.now();
-      props.onChange(tasks.concat([{
-        id: newId,
-        title: T("init.plan.newStep"),
-        goal: "",
-        priority: "medium",
-        constraints: [],
-        acceptanceCriteria: [],
-      }]));
-      setExpandedId(newId);
-    }
-
-    if (!tasks.length) {
-      return (
-        <div className="wb-init-plan">
-          <div className="wb-init-plan-empty">{T("init.plan.empty")}</div>
-          <button type="button" className="wb-btn ghost" onClick={addTask}>{T("init.plan.addManually")}</button>
-        </div>
-      );
-    }
-    return (
-      <div className="wb-init-plan">
-        <div className="wb-init-plan-head">
-          <div>
-            <b>{T("init.plan.title")}</b>
-            <p>{T("init.plan.desc")}</p>
-          </div>
-          <button type="button" className="wb-btn ghost compact" onClick={addTask}>{T("init.plan.addTask")}</button>
-        </div>
-        <div className="wb-init-plan-list">
-          {tasks.map(function (task, index) {
-            var taskKey = task.id || String(index);
-            var expanded = expandedId === taskKey;
-            var isLast = index === tasks.length - 1;
-            var priorityColor = INIT_PRIORITY_COLOR[task.priority] || "amber";
-            return (
-              <div className={"wb-init-plan-step" + (expanded ? " expanded" : "")} key={taskKey}>
-                <div className="wb-init-plan-rail">
-                  <div className="wb-init-plan-node">{index + 1}</div>
-                  {!isLast && <span className="wb-init-plan-vline" />}
-                </div>
-                <div className="wb-init-plan-body">
-                  <div
-                    className="wb-init-plan-row-head"
-                    role="button"
-                    tabIndex={0}
-                    onClick={function () { setExpandedId(expanded ? null : taskKey); }}
-                    onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedId(expanded ? null : taskKey); } }}
-                  >
-                    <span className="wb-init-plan-title-text">{task.title || T("init.plan.taskTitle")}</span>
-                    <span className={"wb-init-plan-badge " + priorityColor}>{T(INIT_PRIORITY_KEYS[task.priority] || "priority.medium")}</span>
-                    <span className={"wb-init-plan-caret" + (expanded ? " open" : "")}>{InitChevronIcon}</span>
-                  </div>
-                  {expanded && (
-                    <div className="wb-init-plan-detail" onClick={function (e) { e.stopPropagation(); }}>
-                      <div className="wb-init-plan-field">
-                        <label>{T("init.plan.taskTitle")}</label>
-                        <input
-                          className="wb-init-input"
-                          value={task.title || ""}
-                          autoFocus
-                          placeholder={T("init.plan.taskTitle")}
-                          onChange={function (e) { updateTask(index, { title: e.target.value }); }}
-                        />
-                      </div>
-                      <div className="wb-init-plan-field">
-                        <label>{T("create.task.priority")}</label>
-                        <div className="wb-cp-seg">
-                          {INIT_PRIORITY_LIST.map(function (p) {
-                            return (
-                              <button type="button" key={p.id} className={"wb-cp-seg-btn" + ((task.priority || "medium") === p.id ? " on" : "")} onClick={function () { updateTask(index, { priority: p.id }); }}>
-                                {T(p.key)}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div className="wb-init-plan-field">
-                        <label>{T("create.task.goal")}</label>
-                        <textarea
-                          className="wb-init-textarea"
-                          rows={3}
-                          value={task.goal || ""}
-                          placeholder={T("init.plan.goalPlaceholder")}
-                          onChange={function (e) { updateTask(index, { goal: e.target.value }); }}
-                        />
-                      </div>
-                      <div className="wb-init-plan-cols">
-                        <label>
-                          <span>{T("init.plan.constraints")}</span>
-                          <textarea
-                            className="wb-init-textarea"
-                            rows={2}
-                            value={listToLines(task.constraints)}
-                            placeholder={T("init.plan.onePerLine")}
-                            onChange={function (e) { updateTask(index, { constraints: linesToList(e.target.value) }); }}
-                          />
-                        </label>
-                        <label>
-                          <span>{T("init.plan.acceptanceCriteria")}</span>
-                          <textarea
-                            className="wb-init-textarea"
-                            rows={2}
-                            value={listToLines(task.acceptanceCriteria)}
-                            placeholder={T("init.plan.onePerLine")}
-                            onChange={function (e) { updateTask(index, { acceptanceCriteria: linesToList(e.target.value) }); }}
-                          />
-                        </label>
-                      </div>
-                      <div className="wb-init-plan-detail-foot">
-                        <button type="button" className="wb-btn ghost compact" onClick={function () { removeTask(index); }}>
-                          {T("schedule.delete")}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  function InitPlanError(props) {
-    var error = props.error || {};
-    var attempts = Array.isArray(error.attempts) ? error.attempts : [];
-    return (
-      <div className="wb-init-plan-error" role="alert">
-        <div className="wb-init-plan-error-head">
-          <div>
-            <b>{T("init.planError.title")}</b>
-            <p>{T("init.planError.summary", { count: error.attemptCount || attempts.length || 5 })}</p>
-          </div>
-          <button type="button" className="wb-btn primary" disabled={props.busy} onClick={props.onRestart}>
-            {props.busy ? T("init.generatingPlan") : T("init.restart")}
-          </button>
-        </div>
-        <div className="wb-init-plan-error-reason">
-          <span>{T("init.planError.reason")}</span>
-          <strong>{error.summary || T("init.planError.unknown")}</strong>
-        </div>
-        {attempts.length > 0 && (
-          <details>
-            <summary>{T("init.planError.details")}</summary>
-            <ol>
-              {attempts.map(function (attempt) {
-                return (
-                  <li key={attempt.attempt}>
-                    <span>{T("init.planError.attempt", { n: attempt.attempt })}</span>
-                    <code>{attempt.category || "unknown"}</code>
-                    <p>{attempt.message || T("init.planError.unknown")}</p>
-                  </li>
-                );
-              })}
-            </ol>
-          </details>
-        )}
-      </div>
-    );
-  }
-
-  function WorkbenchInitView(props) {
-    var model = workbenchServices.model();
-    var project = props.project;
-    var session = props.session;
-    var sid = session ? session.id : "";
-    var init = (session && session.init) || {};
-    var sections = Array.isArray(init.sections) ? init.sections : [];
-    var completed = !!init.completed;
-
-    var [answers, setAnswers] = useState(init.answers || {});
-    var [taskPlan, setTaskPlan] = useState(Array.isArray(init.taskPlan) ? init.taskPlan : []);
-    var [feedback, setFeedback] = useState("");
-    var [expanded, setExpanded] = useState(sections[0] ? sections[0].id : "");
-    var [busy, setBusy] = useState(false);
-    var [generating, setGenerating] = useState(false);
-    var [planning, setPlanning] = useState(false);
-    var genRef = useRef({});
-    var saveTimer = useRef(null);
-    var answersRef = useRef(init.answers || {});
-
-    // Re-sync answers + expanded section when the session changes or the agent
-    // regenerates the question set. Deliberately NOT keyed on `init.answers`:
-    // answers are edited locally and mirrored into the store optimistically, so
-    // depending on them here would reset the expanded section on every keystroke.
-    useEffect(function () {
-      var nextInit = (session && session.init) || {};
-      var nextAnswers = nextInit.answers || {};
-      answersRef.current = nextAnswers;
-      setAnswers(nextAnswers);
-      var secs = Array.isArray(nextInit.sections) ? nextInit.sections : [];
-      setExpanded(function (prev) {
-        if (prev && secs.some(function (s) { return s.id === prev; })) return prev;
-        return secs[0] ? secs[0].id : "";
-      });
-    }, [sid, init.sections]);
-
-    // Re-sync the editable task plan whenever the server (re)generates it.
-    useEffect(function () {
-      setTaskPlan(Array.isArray(init.taskPlan) ? init.taskPlan : []);
-    }, [sid, init.taskPlan]);
-
-    // Ask the agent to generate questions once per init session.
-    useEffect(function () {
-      if (!project || !session || completed) return;
-      if (init.generated || genRef.current[sid]) return;
-      genRef.current[sid] = true;
-      setGenerating(true);
-      model.generateInitForm(project.id)
-        .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function () {})
-        .finally(function () { setGenerating(false); });
-    }, [sid, init.generated, completed]);
-
-    function persist(nextAnswers) {
-      // Mirror the edit into the shared store immediately so the right-panel
-      // 初始化进度 (a sibling reading session.init.answers) updates live, then
-      // debounce the durable server write.
-      if (props.onInitPatch) props.onInitPatch({ answers: nextAnswers });
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(function () {
-        model.patchSession(sid, { init: { answers: nextAnswers } }).catch(function () {});
-      }, 600);
-    }
-    function setAnswer(qid, value) {
-      var nextAnswers = Object.assign({}, answersRef.current);
-      nextAnswers[qid] = value;
-      answersRef.current = nextAnswers;
-      setAnswers(nextAnswers);
-      persist(nextAnswers);
-    }
-    function toggleMulti(qid, opt) {
-      var prev = answersRef.current;
-      var arr = Array.isArray(prev[qid]) ? prev[qid].slice() : [];
-      var i = arr.indexOf(opt);
-      if (i >= 0) arr.splice(i, 1); else arr.push(opt);
-      var nextAnswers = Object.assign({}, prev);
-      nextAnswers[qid] = arr;
-      answersRef.current = nextAnswers;
-      setAnswers(nextAnswers);
-      persist(nextAnswers);
-    }
-
-    function regenerate() {
-      if (!project || generating) return;
-      setGenerating(true);
-      model.generateInitForm(project.id)
-        .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
-        .finally(function () { setGenerating(false); });
-    }
-    function complete() {
-      if (busy) return;
-      setBusy(true);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      model.submitInit(sid, answersRef.current)
-        .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
-        .finally(function () { setBusy(false); });
-    }
-    function saveCompletedAnswers() {
-      if (busy) return;
-      setBusy(true);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      model.patchSession(sid, { init: { answers: answersRef.current } })
-        .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
-        .finally(function () { setBusy(false); });
-    }
-    function revisePlan() {
-      if (planning || completed) return;
-      setPlanning(true);
-      model.reviseInitPlan(sid, feedback, taskPlan)
-        .then(function (next) { setFeedback(""); props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
-        .finally(function () { setPlanning(false); });
-    }
-    function confirmPlan() {
-      if (busy || completed || !taskPlan.length) return;
-      setBusy(true);
-      model.confirmInitPlan(sid, taskPlan)
-        .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { workbenchServices.feedback().showToast((e && e.message) || String(e), "error"); })
-        .finally(function () { setBusy(false); });
-    }
-
-    var greetingLines = String(init.greeting || "").split("\n");
-    var planReady = !!init.planReady || taskPlan.length > 0;
-    var planError = init.planError && typeof init.planError === "object" ? init.planError : null;
-    var showPlan = planReady && !completed;
-    // Agent's latest message about the plan (生成 / 调整反馈 / 服务不可用), shown
-    // so 让 Agent 调整计划 always surfaces an outcome instead of looking inert.
-    var planNote = String((session && session.agentReply) || "").trim();
-
-    return (
-      <div className="wb-init">
-        <div className="wb-init-head">
-          <div className="wb-init-head-main">
-            <h1>{T("init.title")}</h1>
-            <span className={"workbench-status-pill " + (completed ? "green" : "blue")}>{completed ? T("status.done") : T("status.initializing")}</span>
-            <span className="wb-init-head-project">{project ? project.name : ""}</span>
-          </div>
-          {!completed && !planReady && !planError && (
-            <button type="button" className="wb-btn ghost" disabled={generating} onClick={regenerate}>{generating ? T("init.generating") : T("init.regenerateQuestions")}</button>
-          )}
-        </div>
-
-        <div className="wb-init-scroll">
-          {!init.generated && generating && (
-            <div className="wb-init-generating"><span className="wb-spinner" /> {T("init.agentInitializing")}</div>
-          )}
-
-          {init.generated && (
-            <React.Fragment>
-              <div className="wb-init-greeting">
-                <span className="wb-init-greeting-ico">{SparkIcon}</span>
-                <div className="wb-init-greeting-body">
-                  {greetingLines.map(function (line, i) { return <p key={i}>{line || " "}</p>; })}
-                </div>
-              </div>
-
-              {generating && (
-                <div className="wb-init-generating"><span className="wb-spinner" /> {T("init.regeneratingQuestions")}</div>
-              )}
-
-              {!completed && planError && (
-                <InitPlanError error={planError} busy={busy} onRestart={complete} />
-              )}
-
-              {!showPlan && (
-            <div className="wb-init-sections">
-              {sections.map(function (section, sIdx) {
-                var open = expanded === section.id;
-                var done = sectionComplete(section, answers);
-                return (
-                  <div className={"wb-init-section" + (open ? " open" : "")} key={section.id}>
-                    <button type="button" className="wb-init-section-head" onClick={function () { setExpanded(open ? "" : section.id); }}>
-                      <span className="wb-init-section-n">{sIdx + 1}.</span>
-                      <b>{section.title}</b>
-                      {done && <span className="wb-init-section-done">{T("status.done")}</span>}
-                      <i className="wb-init-chevron">{open ? "⌃" : "⌄"}</i>
-                    </button>
-                    {open && (
-                      <div className="wb-init-section-body">
-                        {(section.questions || []).map(function (q, qi) {
-                          return <InitQuestion key={q.id} q={q} n={qi + 1} value={answers[q.id]} onText={setAnswer} onToggle={toggleMulti} />;
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {showPlan && (
-            <React.Fragment>
-              {planNote && (
-                <div className="wb-init-plan-note">
-                  <span className="wb-init-plan-note-ico">{SparkIcon}</span>
-                  <span>{planNote}</span>
-                </div>
-              )}
-              <InitTaskPlan tasks={taskPlan} onChange={setTaskPlan} />
-              {!completed && (
-                <div className="wb-init-feedback">
-                  <textarea
-                    className="wb-init-textarea"
-                    rows={2}
-                    value={feedback}
-                    placeholder={T("init.feedbackPlaceholder")}
-                    onChange={function (e) { setFeedback(e.target.value); }}
-                  />
-                  <button type="button" className="wb-btn ghost" disabled={planning} onClick={revisePlan}>{planning ? T("init.revising") : T("init.revisePlan")}</button>
-                </div>
-              )}
-            </React.Fragment>
-          )}
-            </React.Fragment>
-          )}
-        </div>
-
-        <div className="wb-init-foot">
-          <div className="wb-init-foot-hint">
-            {completed ? T("init.foot.completed")
-              : planReady ? T("init.foot.planReady")
-                : planError ? T("init.foot.planError")
-                : T("init.foot.questions")}
-          </div>
-          {completed && <button type="button" className="wb-btn primary" disabled={busy} onClick={saveCompletedAnswers}>{busy ? T("settings.saving") : T("init.saveChanges")}</button>}
-          {!completed && !planReady && !planError && <button type="button" className="wb-btn primary" disabled={busy} onClick={complete}>{busy ? T("init.generatingPlan") : T("init.completeQuestions")}</button>}
-          {!completed && planReady && <button type="button" className="wb-btn primary" disabled={busy || !taskPlan.length} onClick={confirmPlan}>{busy ? T("common.creating") : T("init.confirmPlan")}</button>}
-        </div>
-      </div>
-    );
-  }
-
-  // Right-panel "初始化进度" tracker.
-  function WorkbenchInitProgress(props) {
-    var session = props.session;
-    var init = (session && session.init) || {};
-    var sections = Array.isArray(init.sections) ? init.sections : [];
-    var answers = init.answers || {};
-    var planReady = !!init.planReady;
-    var completed = !!init.completed;
-    var firstIncomplete = -1;
-    var rows = sections.map(function (section, i) {
-      var done = sectionComplete(section, answers);
-      if (!done && firstIncomplete === -1) firstIncomplete = i;
-      return { label: section.title, done: done };
-    });
-    // Once the plan stage is reached, stop highlighting an unfinished question —
-    // the user has moved on to confirming the plan.
-    rows.forEach(function (row, i) { row.active = !planReady && i === firstIncomplete; });
-    rows.push({
-      label: planReady ? T("init.confirmPlan") : T("init.progress.generatePlan"),
-      done: completed,
-      active: !completed && (planReady || firstIncomplete === -1),
-    });
-    var completedCount = rows.filter(function (row) { return row.done; }).length;
-    var progressValue = rows.length ? Math.round((completedCount / rows.length) * 100) : 0;
-    return (
-      <div className="wb-init-progress">
-        <div className="wb-init-progress-summary">
-          <div className="wb-init-progress-summary-copy">
-            <span>{completed ? T("status.done") : T("status.initializing")}</span>
-            <strong>{completedCount}<small> / {rows.length}</small></strong>
-          </div>
-          <div
-            className="wb-init-progress-meter"
-            role="progressbar"
-            aria-valuemin="0"
-            aria-valuemax={rows.length}
-            aria-valuenow={completedCount}
-          >
-            <span style={{ width: progressValue + "%" }} />
-          </div>
-        </div>
-        <ol className="wb-init-progress-list">
-          {rows.map(function (row, i) {
-            var stateLabel = row.done ? T("status.done") : row.active ? T("status.running") : T("status.pending");
-            return (
-              <li
-                className={"wb-init-progress-row" + (row.active ? " active" : "") + (row.done ? " done" : "")}
-                aria-current={row.active ? "step" : undefined}
-                key={i}
-              >
-                <span className="wb-init-progress-marker" aria-hidden="true">
-                  {row.done ? (
-                    <svg viewBox="0 0 16 16" fill="none"><path d="m3.5 8.1 2.7 2.7 6.3-6.2" /></svg>
-                  ) : i + 1}
-                </span>
-                <span className="wb-init-progress-copy">
-                  <span>{row.label}</span>
-                  <small>{stateLabel}</small>
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-    );
+    </div>;
   }
 
   window.CyreneUI.create = window.CyreneUI.register("create", {
     NewProjectModal: WorkbenchNewProjectModal,
-    NewTaskModal: WorkbenchNewTaskModal,
-    InitView: WorkbenchInitView,
-    InitProgress: WorkbenchInitProgress,
   });
 })();

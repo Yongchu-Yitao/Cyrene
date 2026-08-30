@@ -8,7 +8,7 @@ from cyrene.core.plugin import PluginContext
 
 from .definitions import get_native_tool_def
 from cyrene.plugins.native_runtime import json_result, plugin_localized, resolve_tool_path
-from cyrene.runtime.attachments import analyze_attachment
+from cyrene.platform.attachments import analyze_attachment
 
 TOOL_NAME = 'AnalyzeAttachment'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)

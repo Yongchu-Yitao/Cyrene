@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cyrene.runtime.paths import CYRENE_DIR_NAME
+from cyrene.platform.paths import CYRENE_DIR_NAME
 from cyrene.workbench.persistence.store import ensure_schema
 
 

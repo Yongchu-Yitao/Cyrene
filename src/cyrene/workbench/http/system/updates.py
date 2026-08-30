@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from cyrene.runtime.update_service import UpdateApplicationError, UpdateApplicationService
+from cyrene.platform.update_service import UpdateApplicationError, UpdateApplicationService
 from cyrene.workbench.http.errors import error_response
 
 

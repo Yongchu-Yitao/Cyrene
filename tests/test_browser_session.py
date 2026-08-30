@@ -942,7 +942,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     import tempfile
 
     from cyrene.plugins.builtin.cyrene_browser import browser_screenshot as _mod
-    from cyrene.runtime import attachments as _attachments
+    from cyrene.platform import attachments as _attachments
 
     # Create a real temp file to simulate what screenshot() returns.
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
@@ -972,7 +972,7 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
     import os
     import tempfile
 
-    from cyrene.runtime import attachments as _attachments
+    from cyrene.platform import attachments as _attachments
     from cyrene.plugins.builtin.cyrene_browser import runtime as _browser
     from cyrene.plugins.builtin.cyrene_browser import browser_screenshot as _mod
 

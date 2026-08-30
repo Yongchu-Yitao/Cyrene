@@ -967,7 +967,7 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
     """Manage the installed state without introducing update/rollback semantics."""
 
     from cyrene.plugins.native_tools import mark_builtin_plugin_deleted
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     host = application_plugin_scope()
     if host is None:

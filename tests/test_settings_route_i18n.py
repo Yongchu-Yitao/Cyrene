@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 
 def _language(monkeypatch, value: str) -> None:
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     monkeypatch.setattr(
         settings_store,
@@ -77,7 +77,7 @@ def test_onboarding_upstream_failure_is_localized_without_detail(monkeypatch):
 
 
 def test_oauth_snapshot_failure_is_localized_without_exception_text(monkeypatch):
-    from cyrene.model_runtime import codex_provider
+    from cyrene.model import codex_provider
     from cyrene.plugins.builtin.cyrene_model.oauth import register_oauth_routes
 
     _language(monkeypatch, "zh")
@@ -120,7 +120,7 @@ def test_oauth_snapshot_sanitizes_nested_provider_errors(monkeypatch):
 
 
 def test_profile_service_error_keeps_safe_revision_only(monkeypatch):
-    from cyrene.runtime.profile_data_service import ProfileDataError
+    from cyrene.platform.profile_data_service import ProfileDataError
     from cyrene.workbench.http.settings import profile_data
 
     _language(monkeypatch, "zh")
@@ -145,7 +145,7 @@ def test_profile_service_error_keeps_safe_revision_only(monkeypatch):
 
 
 def test_config_service_error_drops_raw_payload_detail(monkeypatch):
-    from cyrene.runtime.config_integration_service import ConfigIntegrationError
+    from cyrene.platform.config_integration_service import ConfigIntegrationError
     from cyrene.workbench.http.settings.config_integrations import _error_response
 
     _language(monkeypatch, "zh")

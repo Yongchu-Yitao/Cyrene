@@ -53,7 +53,7 @@ class ModelConfigurationService(ModelConfigurationApplicationService):
     def oauth_provider():
         """Return the managed Codex OAuth adapter for model-owned callers."""
 
-        from cyrene.model_runtime.codex_provider import get_codex_provider
+        from cyrene.model.codex_provider import get_codex_provider
 
         return get_codex_provider()
 
@@ -66,7 +66,7 @@ class ModelConfigurationService(ModelConfigurationApplicationService):
         """Close the OAuth provider before the host clears disposable roots."""
 
         try:
-            from cyrene.model_runtime.codex_provider import get_codex_provider
+            from cyrene.model.codex_provider import get_codex_provider
 
             await get_codex_provider().close()
         except (ImportError, RuntimeError, OSError):
@@ -88,7 +88,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     register_oauth_routes(context.router)
     context.provide("model_configuration", settings)
     context.provide("model_probe", probe)
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
         plugin_setting_spec,

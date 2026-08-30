@@ -160,7 +160,16 @@ def _client_options(
     discovery: bool,
 ) -> dict[str, Any]:
     timeout = httpx.Timeout(20.0, connect=5.0) if discovery else _timeout(context, provider)
-    options: dict[str, Any] = {"timeout": timeout, "follow_redirects": True}
+    # Provider connections must not silently inherit OS or environment proxy
+    # settings.  In particular, macOS system proxy discovery can otherwise
+    # route private/Tailscale endpoints through a local HTTP proxy even when
+    # the connection's ``use_proxy`` switch is off.  An opted-in Cyrene proxy
+    # is applied explicitly below.
+    options: dict[str, Any] = {
+        "timeout": timeout,
+        "follow_redirects": True,
+        "trust_env": False,
+    }
     transport = context.data.get("http_transport")
     if isinstance(transport, httpx.AsyncBaseTransport):
         options["transport"] = transport
@@ -169,7 +178,7 @@ def _client_options(
     candidate = _candidate(context)
     if connection.get("use_proxy") is True or candidate.get("use_proxy") is True:
         try:
-            from cyrene.runtime.network_proxy import configured_proxy_url
+            from cyrene.platform.network_proxy import configured_proxy_url
 
             proxy = configured_proxy_url(opt_in=True)
         except Exception:
@@ -416,7 +425,7 @@ async def discover_models(
     context: PluginContext,
 ) -> dict[str, Any]:
     if provider.adapter == "codex_oauth":
-        from cyrene.model_runtime.codex_provider import get_codex_provider
+        from cyrene.model.codex_provider import get_codex_provider
 
         raw_models = await get_codex_provider().models()
         models = [
@@ -446,7 +455,7 @@ async def discover_models(
             }],
         }
 
-    from cyrene.model_runtime.protocol_adapters import (
+    from cyrene.model.protocol_adapters import (
         discovery_request,
         parse_discovery_response,
     )
@@ -509,7 +518,7 @@ async def _complete_stream_endpoint(
     started: float,
     has_fallback: bool,
 ) -> dict[str, Any]:
-    from cyrene.model_runtime.protocol_adapters import handle_stream
+    from cyrene.model.protocol_adapters import handle_stream
 
     attempt_streamed = False
     attempt_emitted = False
@@ -606,7 +615,7 @@ async def complete_model(
         stream_callback = None
 
     if provider.adapter == "codex_oauth":
-        from cyrene.model_runtime.codex_provider import get_codex_provider
+        from cyrene.model.codex_provider import get_codex_provider
 
         message = await get_codex_provider().complete(
             messages=messages,
@@ -632,7 +641,7 @@ async def complete_model(
     if provider.adapter == "local_onnx":
         raise ValueError("Local ONNX is an embedding model; use the embed operation")
 
-    from cyrene.model_runtime.protocol_adapters import (
+    from cyrene.model.protocol_adapters import (
         NATIVE_PROTOCOL_ADAPTERS,
         PreparedRequest,
         prepare_request,

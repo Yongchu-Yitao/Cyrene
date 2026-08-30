@@ -3,22 +3,30 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from cyrene.core.plugin import ExtensionPoint, PluginPack, PluginScope
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SURFACE_ACTIVITIES = frozenset({
-    "read", "write", "scan", "plan", "goal", "build", "run", "test", "preview",
+    "read", "write", "scan", "execute", "plan", "goal", "build", "run", "test", "preview",
 })
 _RESOURCE_KINDS = frozenset({
     "file", "directory", "plan", "goal", "execution", "endpoint", "artifact",
 })
 _ACTION_KINDS = frozenset({"build", "run", "test", "preview"})
 _ACTION_OUTPUTS = frozenset({"diagnostics", "artifact", "endpoint", "terminal"})
+_EXTENSION_DEPENDENCY = re.compile(
+    r"^(?:toolchain|cli):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+)
+
+WorkspaceProjectDetector: TypeAlias = Callable[
+    [Path, str],
+    Sequence[Mapping[str, Any]] | Awaitable[Sequence[Mapping[str, Any]]],
+]
 
 
 def _identifier(value: Any, label: str) -> str:
@@ -180,6 +188,75 @@ class WorkspaceActionContribution:
         object.__setattr__(self, "default_surface", str(self.default_surface or "").strip())
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceProjectTypeContribution:
+    """Plugin-owned project detection and workspace-action contribution."""
+
+    id: str
+    title: str
+    detect: WorkspaceProjectDetector
+    marker_files: tuple[str, ...] = ()
+    runtime_extensions: tuple[str, ...] = ()
+    priority: int = 100
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _identifier(self.id, "Workspace project type id"))
+        object.__setattr__(self, "title", str(self.title or self.id).strip())
+        if not callable(self.detect):
+            raise TypeError("Workspace project type detect must be callable")
+        if not isinstance(self.marker_files, (list, tuple)):
+            raise TypeError("Workspace project type marker_files must be an array")
+        markers = tuple(dict.fromkeys(str(item or "").strip() for item in self.marker_files))
+        if any(
+            not item
+            or Path(item).is_absolute()
+            or ".." in Path(item.replace("\\", "/")).parts
+            for item in markers
+        ):
+            raise ValueError("Workspace project type marker_files must stay inside the workspace")
+        object.__setattr__(self, "marker_files", markers)
+        if not isinstance(self.runtime_extensions, (list, tuple)):
+            raise TypeError("Workspace project type runtime_extensions must be an array")
+        dependencies = tuple(dict.fromkeys(
+            str(item or "").strip().lower() for item in self.runtime_extensions
+        ))
+        if any(not _EXTENSION_DEPENDENCY.fullmatch(item) for item in dependencies):
+            raise ValueError(
+                "Workspace project type runtime_extensions must use kind:extension-id"
+            )
+        object.__setattr__(self, "runtime_extensions", dependencies)
+        if isinstance(self.priority, bool) or not isinstance(self.priority, int):
+            raise TypeError("Workspace project type priority must be an integer")
+        if self.priority < 0 or self.priority > 1000:
+            raise ValueError("Workspace project type priority must be between 0 and 1000")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkbenchSlashCommandContribution:
+    """One plugin-owned command shown directly in the conversation composer."""
+
+    id: str
+    title: str
+    description: str = ""
+    system_prompt: str = ""
+    workflow_service: str = ""
+    workflow_action: str = ""
+    i18n: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _identifier(self.id, "Workbench slash command id"))
+        object.__setattr__(self, "title", str(self.title or self.id).strip())
+        object.__setattr__(self, "description", str(self.description or "").strip())
+        object.__setattr__(self, "system_prompt", str(self.system_prompt or "").strip())
+        object.__setattr__(self, "workflow_service", str(self.workflow_service or "").strip())
+        object.__setattr__(self, "workflow_action", str(self.workflow_action or "").strip())
+        object.__setattr__(self, "i18n", _i18n(self.i18n, "Workbench slash command"))
+        if bool(self.workflow_service) != bool(self.workflow_action):
+            raise ValueError(
+                "Workbench slash command workflow_service and workflow_action must be declared together"
+            )
+
+
 WORKBENCH_SURFACE = ExtensionPoint[WorkbenchSurfaceContribution](
     "cyrene.workbench.surface",
     PluginScope.APPLICATION,
@@ -194,6 +271,16 @@ WORKSPACE_ACTION = ExtensionPoint[WorkspaceActionContribution](
     "cyrene.workspace.action",
     PluginScope.APPLICATION,
     lambda value: isinstance(value, WorkspaceActionContribution),
+)
+WORKSPACE_PROJECT_TYPE = ExtensionPoint[WorkspaceProjectTypeContribution](
+    "cyrene.workspace.project_type",
+    PluginScope.APPLICATION,
+    lambda value: isinstance(value, WorkspaceProjectTypeContribution),
+)
+WORKBENCH_SLASH_COMMAND = ExtensionPoint[WorkbenchSlashCommandContribution](
+    "cyrene.workbench.slash_command",
+    PluginScope.APPLICATION,
+    lambda value: isinstance(value, WorkbenchSlashCommandContribution),
 )
 
 
@@ -215,6 +302,18 @@ def workspace_file_types(pack: PluginPack) -> tuple[WorkspaceFileTypeContributio
 
 def workspace_actions(pack: PluginPack) -> tuple[WorkspaceActionContribution, ...]:
     return pack.extensions.values(WORKSPACE_ACTION)
+
+
+def workspace_project_types(
+    pack: PluginPack,
+) -> tuple[WorkspaceProjectTypeContribution, ...]:
+    return pack.extensions.values(WORKSPACE_PROJECT_TYPE)
+
+
+def workbench_slash_commands(
+    pack: PluginPack,
+) -> tuple[WorkbenchSlashCommandContribution, ...]:
+    return pack.extensions.values(WORKBENCH_SLASH_COMMAND)
 
 
 def _canonical_id(pack: PluginPack, local_id: str) -> str:
@@ -275,6 +374,49 @@ def serialize_workspace_action(
         },
         "outputs": list(value.outputs),
         "default_surface": value.default_surface,
+    }
+
+
+def serialize_workspace_project_type(
+    pack: PluginPack,
+    value: WorkspaceProjectTypeContribution,
+) -> dict[str, Any]:
+    return {
+        "id": _canonical_id(pack, value.id),
+        "local_id": value.id,
+        "pack_id": pack.id,
+        "title": value.title,
+        "marker_files": list(value.marker_files),
+        "runtime_extensions": list(value.runtime_extensions),
+        "priority": value.priority,
+    }
+
+
+def serialize_workbench_slash_command(
+    pack: PluginPack,
+    value: WorkbenchSlashCommandContribution,
+) -> dict[str, Any]:
+    return {
+        "id": value.id,
+        "pack_id": pack.id,
+        "label": value.title,
+        "description": value.description,
+        "group": "workflow",
+        "source": "plugin_workflow",
+        "system_prompt": value.system_prompt,
+        # A first-class workflow command owns the entry into its pack.  Activating
+        # the pack here keeps the workflow state transition and its model-facing
+        # tools in the same turn instead of exposing a second ``plugin:<pack>``
+        # command that skips workflow initialization.
+        "activation": {
+            "kind": "pluginPacks",
+            "id": pack.id,
+        },
+        "workflow": {
+            "service": value.workflow_service,
+            "action": value.workflow_action,
+        } if value.workflow_service else None,
+        "i18n": dict(value.i18n),
     }
 
 
@@ -346,23 +488,40 @@ def validate_workbench_contributions(pack: PluginPack) -> None:
     action_ids = [item.id for item in action_values]
     if len(action_ids) != len(set(action_ids)):
         raise ValueError(f"Plugin pack contains duplicate Workspace action ids: {pack.id}")
+    project_type_values = workspace_project_types(pack)
+    project_type_ids = [item.id for item in project_type_values]
+    if len(project_type_ids) != len(set(project_type_ids)):
+        raise ValueError(f"Plugin pack contains duplicate Workspace project type ids: {pack.id}")
+    command_values = workbench_slash_commands(pack)
+    command_ids = [item.id for item in command_values]
+    if len(command_ids) != len(set(command_ids)):
+        raise ValueError(f"Plugin pack contains duplicate Workbench command ids: {pack.id}")
 
 
 __all__ = [
     "WORKBENCH_SURFACE",
     "WORKSPACE_ACTION",
     "WORKSPACE_FILE_TYPE",
+    "WORKSPACE_PROJECT_TYPE",
+    "WORKBENCH_SLASH_COMMAND",
     "WorkbenchSurfaceContribution",
     "WorkbenchSurfaceRenderer",
     "WorkspaceActionContribution",
     "WorkspaceFileTypeContribution",
+    "WorkspaceProjectDetector",
+    "WorkspaceProjectTypeContribution",
+    "WorkbenchSlashCommandContribution",
     "frontend_views",
     "project_tools",
     "serialize_workbench_surface",
+    "serialize_workbench_slash_command",
     "serialize_workspace_action",
     "serialize_workspace_file_type",
+    "serialize_workspace_project_type",
     "validate_workbench_contributions",
     "workbench_surfaces",
+    "workbench_slash_commands",
     "workspace_actions",
     "workspace_file_types",
+    "workspace_project_types",
 ]

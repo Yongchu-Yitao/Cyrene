@@ -24,18 +24,6 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
   (Array.isArray(projects) ? projects : []).forEach(function (project) {
     if (!project) return;
     var projectId = String(project.id || "");
-    (Array.isArray(project.sessions) ? project.sessions : []).forEach(function (session) {
-      if (!session || !session.id) return;
-      items.push({
-        id: String(session.id),
-        kind: "task",
-        title: String(session.title || wbT("task.newTask", "New task")),
-        projectId: projectId,
-        projectName: String(project.name || ""),
-        updatedAt: String(session.updatedAt || session.createdAt || ""),
-        source: session,
-      });
-    });
     var chats = chatsByProject && Array.isArray(chatsByProject[projectId])
       ? chatsByProject[projectId]
       : [];
@@ -112,13 +100,8 @@ function wbVisibleSessionTabs(items, activeKey, limit) {
 
 function wbSessionPlanProgress(item) {
   var source = item && item.source || {};
-  var plan = [];
-  if (item && item.kind === "chat") {
-    var activePlan = source.activePlan && typeof source.activePlan === "object" ? source.activePlan : null;
-    plan = activePlan && Array.isArray(activePlan.steps) ? activePlan.steps : [];
-  } else {
-    plan = Array.isArray(source.plan) ? source.plan : [];
-  }
+  var activePlan = source.activePlan && typeof source.activePlan === "object" ? source.activePlan : null;
+  var plan = activePlan && Array.isArray(activePlan.steps) ? activePlan.steps : [];
   var total = plan.length || Math.max(0, Number(source.planStepCount) || 0);
   var resolved = { completed: true, done: true, skipped: true };
   var completed = plan.length
@@ -223,7 +206,7 @@ function wbSessionActivityPhase(item, runtime, live) {
   if (["running", "resumed", "finishing", "answered", "acted"].indexOf(raw) >= 0) return { phase: "running", reason: "running", active: true };
   if (["planning", "initializing", "proposed"].indexOf(raw) >= 0) return { phase: "planning", reason: "planning", active: activeSignal };
   if (["done", "completed", "success"].indexOf(raw) >= 0) return { phase: "completed", reason: "completed", active: false };
-  if (item && item.kind === "chat" && Number(source.messageCount || 0) > 0) return { phase: "completed", reason: "completed", active: false };
+  if (Number(source.messageCount || 0) > 0) return { phase: "completed", reason: "completed", active: false };
   return { phase: "idle", reason: "idle", active: false };
 }
 
@@ -306,7 +289,6 @@ function wbSessionActivitySnapshot(item, runtime, live, browserState) {
     }).length,
     morphUntil: state.phase === "completed" && lastEventAt ? lastEventAt + 8000 : 0,
     capabilities: {
-      canPause: item && item.kind === "task" && state.phase === "running",
       canStop: item && item.kind === "chat" && state.phase === "running",
     },
   };
@@ -677,43 +659,14 @@ function wbMergeLiveEventIntoSession(session, event) {
   return Object.assign({}, session, { events: events, plan: updatedPlan });
 }
 
-// The live activity feed shown inside the "Agent 正在处理" card. Two sources,
-// unified to {id, time, body}: a running plan step accumulates its own
-// progressEvents (step execution); a non-step background op (规划 / 反思 / 验收)
-// has no running step, so we pull the session-level live events that arrived
-// after the op began. Capped to the most recent lines so the feed stays tight.
-function wbLiveActivityLines(session, runningStep, busyOp) {
-  if (runningStep && Array.isArray(runningStep.progressEvents) && runningStep.progressEvents.length) {
-    return runningStep.progressEvents.slice(-14);
-  }
-  var since = busyOp && busyOp.startedAt ? String(busyOp.startedAt) : "";
-  var events = Array.isArray(session.events) ? session.events : [];
-  var out = [];
-  for (var i = 0; i < events.length; i++) {
-    var e = events[i];
-    if (!e || !e.live) continue;
-    if (["ToolCallEvent", "LlmCallEvent", "SubagentStatusEvent"].indexOf(e.type) < 0) continue;
-    if (since && String(e.createdAt || "") < since) continue;
-    out.push({ id: e.id, time: e.createdAt, body: e.body });
-  }
-  return out.slice(-14);
-}
-
-// True when an unread notification points at whatever the user is *currently*
-// looking at (the open conversation, or the active task session) and the window
+// True when an unread notification points at the open conversation and the window
 // is actually visible — i.e. the user has already seen the underlying message,
 // so it should not surface as a brand-new unread item.
 function wbNotificationOnScreen(item, view) {
   if (!item || item.read || !view) return false;
   if (typeof document !== "undefined" && document.hidden) return false;
   var meta = (item && item.meta) || {};
-  if (view.page === "chat") {
-    return !!meta.chatId && meta.chatId === view.chatId;
-  }
-  if (!view.page) { // default task view
-    return !!meta.sessionId && meta.sessionId === view.sessionId;
-  }
-  return false;
+  return view.page === "chat" && !!meta.chatId && meta.chatId === view.chatId;
 }
 
 // Given a freshly-fetched notifications payload, silently mark-as-read any item
@@ -756,7 +709,6 @@ function wbNotificationNavigationTarget(item) {
     notificationId: item.id || "",
   };
   if (meta.chatId) return Object.assign(base, { type: "chat", chatId: meta.chatId });
-  if (meta.sessionId) return Object.assign(base, { type: "task", sessionId: meta.sessionId, runId: meta.runId || "" });
   if (meta.taskId || meta.entityId) {
     return Object.assign(base, {
       type: "schedule",
@@ -774,7 +726,7 @@ function wbNotificationNavigationTarget(item) {
 
 // Right-panel resize plumbing -------------------------------------------------
 // The rightmost column width is stored in --wb-right-w on .workbench-grid and
-// consumed by both the task grid (column 4) and the chat .wbc-page (column 3).
+// consumed by the conversation workspace.
 // Width lives in the DOM + localStorage rather than React state so a streaming
 // re-render never fights an in-progress drag.
 
@@ -787,7 +739,6 @@ export {
   wbCopyBrowserToChat,
   wbDeliverResourceToChat,
   wbLatestRuntimeActivity,
-  wbLiveActivityLines,
   wbLiveEventFromSse,
   wbMergeLiveEventIntoSession,
   wbNotificationNavigationTarget,

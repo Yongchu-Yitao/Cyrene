@@ -14,7 +14,7 @@ def register_search_routes(
 
     @router.get("/api/workbench/search")
     async def api_workbench_search(q: str = "", types: str = "", limit: int = 50):
-        """Global search across Workbench data: projects, tasks, chats, knowledge, memory, schedule.
+        """Global search across Workbench data: projects, chats, knowledge, memory, schedule.
 
         ``types`` is a comma-separated filter (default: all). Per-type limits are
         derived from ``limit`` so a broad query still returns balanced groups.

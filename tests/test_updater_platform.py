@@ -24,13 +24,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import cyrene.runtime.updater as updater
+import cyrene.platform.updater as updater
 
 VERSION = "0.6.0b2"
 
 
 def test_fix_release_label_maps_to_pep440_local_version():
-    from cyrene.runtime.updater import _release_version
+    from cyrene.platform.updater import _release_version
 
     assert str(_release_version("0.6.16-fix")) == "0.6.16+fix"
     assert _release_version("0.6.17") > _release_version("0.6.16-fix")

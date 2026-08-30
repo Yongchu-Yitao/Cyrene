@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from cyrene.runtime import settings_store
+from cyrene.platform import settings_store
 
 
 EXECUTION_MODE = "execution"

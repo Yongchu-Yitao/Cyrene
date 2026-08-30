@@ -285,7 +285,7 @@ async def test_plugin_manager_lists_switches_and_deletes_installed_packs(
     monkeypatch,
 ) -> None:
     from cyrene.plugins.builtin.cyrene_plugin_development import tools
-    from cyrene.runtime import settings_store
+    from cyrene.platform import settings_store
 
     async def run(_arguments, _context):
         return {"ok": True}

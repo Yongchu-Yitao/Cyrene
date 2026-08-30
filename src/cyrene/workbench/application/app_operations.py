@@ -111,7 +111,6 @@ APP_OPERATIONS: tuple[AppOperationSpec, ...] = (
     _op("cyrene.os.permission", "host", "user_ceremony", "", "R3"),
     _op("cyrene.file_picker", "host", "user_ceremony", "", "R2"),
     _op("cyrene.browser", "browser", "existing_capability", "cyrene_browser", "R1", actors=("main",)),
-    _op("cyrene.tasks", "task", "existing_capability", "cyrene_task", "R1"),
     _op("plugin.cyrene_memory", "memory", "existing_capability", "cyrene_memory", "R1"),
     _op("cyrene.knowledge", "knowledge", "existing_capability", "cyrene_knowledge", "R1"),
     _op("cyrene.skills", "skills", "existing_capability", "cyrene_skills", "R2"),

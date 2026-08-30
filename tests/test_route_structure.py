@@ -176,6 +176,7 @@ def test_split_chat_route_contract_is_stable():
         ("get", "/api/workbench/chats/{chat_id}", "api_workbench_get_chat"),
         ("patch", "/api/workbench/chats/{chat_id}", "api_workbench_update_chat"),
         ("patch", "/api/workbench/chats/{chat_id}/trace", "api_workbench_patch_chat_trace"),
+        ("get", "/api/workbench/chats/{chat_id}/plan", "api_workbench_get_chat_plan"),
         ("get", "/api/workbench/chats/{chat_id}/agent-config-options", "api_workbench_agent_config_options"),
         ("get", "/api/workbench/chat-groups", "api_workbench_chat_groups"),
         ("put", "/api/workbench/chat-groups", "api_workbench_replace_chat_groups"),
@@ -183,7 +184,6 @@ def test_split_chat_route_contract_is_stable():
         ("post", "/api/workbench/chat-groups/metadata", "api_workbench_chat_group_metadata"),
         ("delete", "/api/workbench/chats/{chat_id}", "api_workbench_delete_chat"),
         ("post", "/api/workbench/chats/{chat_id}/fork", "api_workbench_chat_fork"),
-        ("post", "/api/workbench/chats/{chat_id}/to-task", "api_workbench_chat_to_task"),
     }
     split_modules = {
         "pinned_routes.py",
@@ -195,7 +195,6 @@ def test_split_chat_route_contract_is_stable():
         "groups_routes.py",
         "delete_routes.py",
         "fork_routes.py",
-        "to_task_routes.py",
     }
     assert _route_contract(route_dir, split_modules) == expected
 

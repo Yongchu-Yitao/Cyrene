@@ -5,7 +5,6 @@ from conftest import (
     workbench_chat_source,
     workbench_i18n_source,
     workbench_settings_source,
-    workbench_shell_source,
 )
 
 from pathlib import Path
@@ -15,7 +14,7 @@ import pytest
 
 @pytest.fixture
 def isolated_model_store(tmp_path, monkeypatch):
-    from cyrene.runtime import config_store
+    from cyrene.platform import config_store
 
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "data" / "config.enc")
@@ -370,6 +369,47 @@ async def test_model_discovery_dispatches_through_provider_plugin(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_model_discovery_uses_adapter_fallback_when_provider_preset_is_missing(
+    monkeypatch,
+):
+    from cyrene.core.plugin import Plugin, PluginRegistry
+    import cyrene.plugins.model_catalog as model_catalog
+    from cyrene.plugins.builtin.cyrene_model.routes import _discover
+
+    captured = {}
+
+    async def discover(_arguments, _context):
+        return {"models": [{"id": "custom-model", "model": "custom-model"}]}
+
+    plugin = Plugin(
+        name="FakeOpenAICompatible",
+        description="Test generic provider fallback.",
+        input_schema={"type": "object", "additionalProperties": True},
+        handler=discover,
+        kind="model",
+    )
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(plugin, source="test")
+
+    def resolve(provider_id, adapter_id):
+        captured.update(provider_id=provider_id, adapter_id=adapter_id)
+        return registry, plugin
+
+    monkeypatch.setattr(model_catalog, "resolve_model_plugin", resolve)
+
+    models = await _discover({
+        "id": "custom",
+        "adapter": "openai",
+        "base_url": "https://custom.test/v1",
+        "api_key": "",
+        "options": {},
+    })
+
+    assert models == [{"id": "custom-model", "model": "custom-model"}]
+    assert captured == {"provider_id": "", "adapter_id": "openai"}
+
+
 
 
 def test_default_provider_connections_include_managed_local_provider(
@@ -515,8 +555,28 @@ def test_default_provider_connections_include_managed_local_provider(
         "api_key": "",
         "options": {"provider_preset": "amd_gpu_cloud"},
     }
-    assert configured["profiles"] == []
-    assert all(not route for route in configured["routes"].values())
+    assert configured["profiles"] == [{
+        "id": "local_onnx:qwen3-embedding-0.6b",
+        "connection_id": "local_onnx",
+        "model": "qwen3-embedding-0.6b",
+        "name": "Qwen3 Embedding 0.6B",
+        "enabled": True,
+        "capabilities": ["embedding"],
+        "context_limit": 0,
+        "ctx": "",
+        "dimensions": 1024,
+        "reasoning_effort": "",
+        "description": "",
+        "price": "",
+        "max_concurrency": 0,
+        "options": {},
+    }]
+    assert configured["routes"] == {
+        "primary": [],
+        "secondary": [],
+        "vision": [],
+        "embedding": ["local_onnx:qwen3-embedding-0.6b"],
+    }
 
     without_minimax = {
         **configured,
@@ -544,6 +604,11 @@ def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
     )
 
     configured = get_model_configuration()
+    removed_profile_ids = {
+        profile["id"]
+        for profile in configured["profiles"]
+        if profile["connection_id"] in {"codex_oauth", "local_onnx"}
+    }
     without_managed = {
         **configured,
         "connections": [
@@ -551,6 +616,19 @@ def test_managed_connections_can_be_deleted_and_readded(isolated_model_store):
             for connection in configured["connections"]
             if connection["adapter"] not in {"codex_oauth", "local_onnx"}
         ],
+        "profiles": [
+            profile
+            for profile in configured["profiles"]
+            if profile["id"] not in removed_profile_ids
+        ],
+        "routes": {
+            route: [
+                profile_id
+                for profile_id in profile_ids
+                if profile_id not in removed_profile_ids
+            ]
+            for route, profile_ids in configured["routes"].items()
+        },
     }
     save_model_configuration(without_managed)
 
@@ -764,7 +842,6 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'WBC_CHAT_MODEL_CHANGED_EVENT = "cyrene:wbc-chat-model-changed"' in chat
     assert 'window.addEventListener("cyrene:model-configuration-changed"' in chat
     assert "payload.selectable_models" in chat
-    assert "payload.selectable_models" in workbench_shell_source()
     assert 'setSelectedId("")' in chat
     assert "persistQueuedConfig();" in settings
     assert "store.save(snapshot, true, {" in settings

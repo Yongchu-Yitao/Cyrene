@@ -9,7 +9,7 @@ from cyrene.core.plugin import (
     PluginPack,
     merge_plugin_pack_metadata,
 )
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 
 from .list_memories import plugin as list_memories_plugin
 from .read_group_sessions import plugin as read_group_sessions_plugin

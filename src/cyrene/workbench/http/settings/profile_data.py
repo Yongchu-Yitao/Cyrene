@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from cyrene.runtime.profile_data_service import (
+from cyrene.platform.profile_data_service import (
     ProfileDataApplicationService,
     ProfileDataError,
 )

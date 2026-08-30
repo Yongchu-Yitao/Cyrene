@@ -18,8 +18,8 @@ def _candidate() -> dict:
 
 
 def test_gateway_binding_is_scoped_to_selected_chat_model_and_revocable(monkeypatch):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     monkeypatch.setattr(
         "cyrene.plugins.model_catalog.resolve_session_model_candidate",
@@ -43,8 +43,8 @@ def test_gateway_binding_is_scoped_to_selected_chat_model_and_revocable(monkeypa
 
 
 def test_gateway_binding_is_reused_across_turns_and_config_probes(monkeypatch):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     model_gateway.revoke_all_model_gateway_scopes()
     monkeypatch.setattr(
@@ -72,8 +72,8 @@ def test_gateway_binding_is_reused_across_turns_and_config_probes(monkeypatch):
 
 
 def test_gateway_binding_rotates_when_selected_model_changes(monkeypatch):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     model_gateway.revoke_all_model_gateway_scopes()
     candidate = _candidate()
@@ -99,7 +99,7 @@ def test_gateway_binding_rotates_when_selected_model_changes(monkeypatch):
 
 
 def test_gateway_session_is_current_only_for_its_chat_and_installation():
-    from cyrene.agent_runtime import model_gateway
+    from cyrene.agents import model_gateway
 
     model_gateway.revoke_all_model_gateway_scopes()
     assert not model_gateway.is_model_gateway_session_current(
@@ -121,8 +121,8 @@ def test_gateway_session_is_current_only_for_its_chat_and_installation():
 
 
 def test_agent_managed_binder_injects_no_cyrene_credentials():
-    from cyrene.agent_runtime.models import ModelAccess
-    from cyrene.agent_runtime.runtime_service import EnvModelBinder
+    from cyrene.agents.models import ModelAccess
+    from cyrene.agents.runtime_service import EnvModelBinder
 
     binding = EnvModelBinder(lambda *_args: {"OPENAI_API_KEY": "must-not-be-used"}).bind(
         ModelAccess(mode="agent_managed"),
@@ -135,7 +135,7 @@ def test_agent_managed_binder_injects_no_cyrene_credentials():
 @pytest.mark.asyncio
 async def test_gateway_calls_exact_scoped_candidate_with_chat_affinity(monkeypatch):
     import cyrene.core.plugin
-    from cyrene.agent_runtime import model_gateway
+    from cyrene.agents import model_gateway
 
     captured = {}
 
@@ -292,8 +292,8 @@ def test_responses_stream_emits_complete_text_and_tool_lifecycles():
 
 
 def test_pi_acp_binding_injects_redirected_config_dir_pointing_at_gateway(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     monkeypatch.setattr(
         "cyrene.plugins.model_catalog.resolve_session_model_candidate",
@@ -320,8 +320,8 @@ def test_pi_acp_binding_injects_redirected_config_dir_pointing_at_gateway(monkey
 
 
 def test_pi_acp_binding_uses_configured_model_name_not_entry_id(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     candidate = dict(_candidate(), id="deepseek-chat", model="deepseek-v4-flash", name="deepseek-v4-flash")
     monkeypatch.setattr(
@@ -345,8 +345,8 @@ def test_pi_acp_binding_uses_configured_model_name_not_entry_id(monkeypatch, tmp
 
 
 def test_pi_acp_binding_falls_back_to_model_when_name_missing(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     candidate = dict(_candidate())
     candidate.pop("name", None)
@@ -366,8 +366,8 @@ def test_pi_acp_binding_falls_back_to_model_when_name_missing(monkeypatch, tmp_p
 
 
 def test_pi_acp_binding_is_idempotent(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     monkeypatch.setattr(
         "cyrene.plugins.model_catalog.resolve_session_model_candidate",
@@ -384,8 +384,8 @@ def test_pi_acp_binding_is_idempotent(monkeypatch, tmp_path):
 
 
 def test_non_pi_agents_do_not_receive_pi_config_dir(monkeypatch, tmp_path):
-    from cyrene.agent_runtime import model_gateway
-    from cyrene.agent_runtime.models import ModelAccess
+    from cyrene.agents import model_gateway
+    from cyrene.agents.models import ModelAccess
 
     monkeypatch.setattr(
         "cyrene.plugins.model_catalog.resolve_session_model_candidate",

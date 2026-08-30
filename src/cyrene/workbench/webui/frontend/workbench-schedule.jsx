@@ -715,7 +715,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           !isTask && React.createElement(
             "div", { className: "wb-sched-detail-grid" },
             React.createElement(KV, { k: T("schedule.type"), v: ev.entity_type || "—" }),
-            React.createElement(KV, { k: T("create.task.priority"), v: ev.priority ? T("priority." + ev.priority, null, ev.priority) : "—" })
+            React.createElement(KV, { k: T("schedule.taskPriority"), v: ev.priority ? T("priority." + ev.priority, null, ev.priority) : "—" })
           ),
           !isTask && ev.content && React.createElement(
             "div", { className: "wb-sched-detail-sec" },
@@ -899,7 +899,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     return React.createElement(
       "div", { className: "wb-create-scrim", onClick: function (e) { if (e.target === e.currentTarget) props.onClose(); } },
       React.createElement(
-        "div", { className: "wb-create-modal wb-create-task wb-sched-create-modal" },
+        "div", { className: "wb-create-modal wb-sched-create-modal" },
         React.createElement(
           "div", { className: "wb-create-head" },
           React.createElement("b", null, props.task ? T("schedule.editTask") : props.entity ? T("schedule.editEvent") : T("schedule.addContent")),
@@ -960,7 +960,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
               ),
               React.createElement(
                 "label", { className: "wb-sched-field" },
-                React.createElement("span", null, T("create.task.priority")),
+                React.createElement("span", null, T("schedule.taskPriority")),
                 React.createElement("select", { value: entityPriority, onChange: function (e) { setEntityPriority(e.target.value); } },
                   React.createElement("option", { value: "high" }, T("priority.high")),
                   React.createElement("option", { value: "medium" }, T("priority.medium")),
@@ -1028,7 +1028,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
           "div", { className: "wb-create-foot" },
           React.createElement("button", { type: "button", className: "wb-btn", onClick: props.onClose }, T("common.cancel")),
           React.createElement("button", { type: "button", className: "wb-btn primary", onClick: submit, disabled: saving || !prompt.trim() },
-            saving ? T("settings.saving") : (props.task || props.entity ? T("common.save") : T("create.task.create")))
+            saving ? T("settings.saving") : (props.task || props.entity ? T("common.save") : T("schedule.createTask")))
         )
       )
     );

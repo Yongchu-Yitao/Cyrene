@@ -17,8 +17,8 @@ from cyrene.core.plugin import application_plugin_service
 from cyrene.workbench.core_adapter import ConversationConfig, ConversationRuntime, WorkbenchChatResult
 from cyrene.config import OWNER_ID, WORKSPACE_DIR
 from cyrene.localization import localized
-from cyrene.runtime.notifications import notify
-from cyrene.runtime.run_coordinator import run_coordinator_for
+from cyrene.platform.notifications import notify
+from cyrene.platform.run_coordinator import run_coordinator_for
 from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.application.notifications import append_notification
 
@@ -140,7 +140,7 @@ def _get_heartbeat_interval() -> int:
     global _HEARTBEAT_INTERVAL_SECONDS
     if not _HEARTBEAT_INTERVAL_SECONDS:
         try:
-            from cyrene.runtime.settings_store import get
+            from cyrene.platform.settings_store import get
             _HEARTBEAT_INTERVAL_SECONDS = int(get("heartbeat_interval", 1800) or 1800)
         except Exception:
             _HEARTBEAT_INTERVAL_SECONDS = 1800
@@ -151,7 +151,7 @@ def _load_lottery_state() -> None:
     """Restore lottery state from the runtime settings store."""
     global _LOTTERY_STATE
     try:
-        from cyrene.runtime.settings_store import get
+        from cyrene.platform.settings_store import get
 
         data = get(_LOTTERY_SETTING_KEY, {})
         if isinstance(data, dict):
@@ -174,7 +174,7 @@ def _load_lottery_state() -> None:
 def _save_lottery_state() -> None:
     """Persist current lottery state through the settings boundary."""
     try:
-        from cyrene.runtime.settings_store import set_
+        from cyrene.platform.settings_store import set_
 
         set_(_LOTTERY_SETTING_KEY, dict(_LOTTERY_STATE))
     except Exception:
@@ -497,7 +497,7 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
 
         # Check whether agent proactive messaging is enabled in settings
         try:
-            from cyrene.runtime.settings_store import get as _get_setting
+            from cyrene.platform.settings_store import get as _get_setting
             if not _get_setting("agent_proactive", True):
                 logger.debug("Agent proactive messaging disabled via settings")
                 return {"status": "disabled"}
@@ -590,7 +590,7 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
         # chat traffic; the scheduler has no HTTP request to read it from, so
         # pull it from settings and pin the proactive reply to it.
         try:
-            from cyrene.runtime.settings_store import get as _get_setting
+            from cyrene.platform.settings_store import get as _get_setting
             proactive_lang = str(_get_setting("app_language", "") or "").strip()
         except Exception:
             proactive_lang = ""

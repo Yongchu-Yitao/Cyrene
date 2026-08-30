@@ -1,23 +1,23 @@
-/* The task board is a single continuous canvas. Its directory rail floats
+/* The conversation board is a single continuous canvas. Its directory rail floats
    above that canvas, so horizontal board content can travel behind the same
    frosted material used by the top bar instead of stopping at a grid lane. */
-.workbench-grid.integrated-sidebars.is-task-board {
-  --wb-task-board-rail-reserve: 300px;
-  --wb-task-board-edge-gap: 12px;
-  --wb-task-board-canvas-gutter: 22px;
+.workbench-grid.integrated-sidebars.is-conversation-board {
+  --wb-conversation-board-rail-reserve: 300px;
+  --wb-conversation-board-edge-gap: 12px;
+  --wb-conversation-board-canvas-gutter: 22px;
   position: relative;
   isolation: isolate;
   grid-template-columns: minmax(0, 1fr);
 }
 
-html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {
+html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-conversation-board {
   /* The coloured board lives below this 65% glass. Counter its warmer canvas
      so the resolved rail colour matches the same glass on neutral modules. */
   --wb-floating-rail-tint: #24323f;
 }
 
-.workbench-grid.integrated-sidebars.rail-collapsed.is-task-board {
-  --wb-task-board-rail-reserve: 64px;
+.workbench-grid.integrated-sidebars.rail-collapsed.is-conversation-board {
+  --wb-conversation-board-rail-reserve: 64px;
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -31,12 +31,12 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {
   box-shadow: var(--wb-floating-rail-shadow);
 }
 
-.workbench-grid.integrated-sidebars.is-task-board .wbc-rail {
+.workbench-grid.integrated-sidebars.is-conversation-board .wbc-rail {
   position: absolute;
   /* An absolutely positioned board rail cannot resolve the shared
      percentage height through the display:contents page wrapper. Anchor both
      vertical edges explicitly so it keeps the same full-height card geometry
-     as the Work rail instead of shrinking to the task rows. */
+     as the Work rail instead of shrinking to its conversation rows. */
   inset: 0 auto var(--wb-floating-card-bottom-gap, 12px) 12px;
   height: auto;
   max-height: none;
@@ -44,55 +44,55 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-task-board {
   z-index: 30;
 }
 
-.workbench-grid.integrated-sidebars.is-task-board .workbench-task-board {
+.workbench-grid.integrated-sidebars.is-conversation-board .workbench-conversation-board {
   position: relative;
   z-index: 0;
   grid-column: 1;
 }
 
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-header,
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-error,
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-loading,
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-empty-overall,
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-completed-strip {
-  margin-left: var(--wb-task-board-rail-reserve);
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-header,
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-error,
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-loading,
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-empty-overall,
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-completed-strip {
+  margin-left: var(--wb-conversation-board-rail-reserve);
   transition: margin-left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
 }
 
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-columns {
   box-sizing: border-box;
-  min-width: calc(1748px + var(--wb-task-board-rail-reserve) + var(--wb-task-board-edge-gap) + var(--wb-task-board-canvas-gutter));
+  min-width: calc(1748px + var(--wb-conversation-board-rail-reserve) + var(--wb-conversation-board-edge-gap) + var(--wb-conversation-board-canvas-gutter));
   grid-template-columns: repeat(5, minmax(340px, 1fr));
-  padding-left: calc(var(--wb-task-board-rail-reserve) + var(--wb-task-board-canvas-gutter));
-  padding-right: var(--wb-task-board-edge-gap);
+  padding-left: calc(var(--wb-conversation-board-rail-reserve) + var(--wb-conversation-board-canvas-gutter));
+  padding-right: var(--wb-conversation-board-edge-gap);
   transition:
     min-width var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
     padding-left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease);
 }
 
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll {
-  margin-inline: calc(0px - var(--wb-task-board-canvas-gutter));
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-scroll {
+  margin-inline: calc(0px - var(--wb-conversation-board-canvas-gutter));
   scrollbar-width: none;
 }
 
-.workbench-grid.integrated-sidebars.is-task-board .wb-board-scroll::-webkit-scrollbar {
+.workbench-grid.integrated-sidebars.is-conversation-board .wb-board-scroll::-webkit-scrollbar {
   display: none;
 }
 
 @media (max-width: 1040px) {
-  .workbench-grid.integrated-sidebars.is-task-board {
-    --wb-task-board-edge-gap: 12px;
-    --wb-task-board-canvas-gutter: 16px;
+  .workbench-grid.integrated-sidebars.is-conversation-board {
+    --wb-conversation-board-edge-gap: 12px;
+    --wb-conversation-board-canvas-gutter: 16px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-header,
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-error,
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-loading,
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-empty-overall,
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-completed-strip,
-  .workbench-grid.integrated-sidebars.is-task-board .wb-board-columns {
+  .workbench-grid.integrated-sidebars.is-conversation-board .wb-board-header,
+  .workbench-grid.integrated-sidebars.is-conversation-board .wb-board-error,
+  .workbench-grid.integrated-sidebars.is-conversation-board .wb-board-loading,
+  .workbench-grid.integrated-sidebars.is-conversation-board .wb-board-empty-overall,
+  .workbench-grid.integrated-sidebars.is-conversation-board .wb-board-completed-strip,
+  .workbench-grid.integrated-sidebars.is-conversation-board .wb-board-columns {
     transition: none;
   }
 }
@@ -177,6 +177,334 @@ html[data-performance-mode="on"] {
   --wbc-control-shadow: none;
   --wb-modal-scrim-filter: none;
   scroll-behavior: auto !important;
+}
+
+/* Conversation-native Goal workflow -------------------------------------- */
+.wbc-goal-confirm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 10120;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--wb-modal-scrim-bg);
+  -webkit-backdrop-filter: var(--wb-modal-scrim-filter);
+  backdrop-filter: var(--wb-modal-scrim-filter);
+}
+.wbc-goal-confirm-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(860px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--wb-modal-border);
+  border-radius: var(--wb-modal-radius);
+  color: var(--wb-text);
+  background: var(--wb-modal-bg);
+  box-shadow: var(--wb-modal-shadow);
+}
+.wbc-goal-confirm-dialog > header,
+.wbc-goal-confirm-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 22px;
+}
+.wbc-goal-confirm-dialog > header { align-items: flex-start; border-bottom: 1px solid var(--wb-line); }
+.wbc-goal-confirm-dialog > header h2 { margin: 3px 0 4px; font-size: 20px; }
+.wbc-goal-confirm-dialog > header p { margin: 0; color: var(--wb-muted); }
+.wbc-goal-confirm-dialog > main { min-height: 0; overflow: auto; padding: 20px 22px; }
+.wbc-goal-confirm-dialog > footer { justify-content: flex-end; border-top: 1px solid var(--wb-line); }
+.wbc-goal-eyebrow { color: var(--wb-accent); font-size: 11px; font-weight: 750; letter-spacing: .1em; }
+.wbc-goal-icon-btn {
+  width: 32px; height: 32px; border: 0; border-radius: 8px;
+  color: var(--wb-muted); background: transparent; font-size: 22px; cursor: pointer;
+}
+.wbc-goal-icon-btn:hover { color: var(--wb-text); background: var(--wb-hover); }
+.wbc-goal-fields { display: grid; gap: 14px; }
+.wbc-goal-fields label { display: grid; gap: 7px; color: var(--wb-muted); font-size: 12px; font-weight: 650; }
+.wbc-goal-fields textarea,
+.wbc-goal-fields input {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--wb-line-2);
+  border-radius: 9px; color: var(--wb-text); background: var(--wb-input-bg, var(--wb-panel));
+  font: inherit; font-weight: 450; outline: 0;
+}
+.wbc-goal-fields textarea { min-height: 64px; padding: 10px 11px; resize: vertical; line-height: 1.45; }
+.wbc-goal-fields input { height: 34px; padding: 0 9px; }
+.wbc-goal-fields textarea:focus,
+.wbc-goal-fields input:focus { border-color: var(--wb-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 15%, transparent); }
+.wbc-goal-fields :disabled { opacity: .62; cursor: not-allowed; }
+.wbc-goal-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.wbc-goal-duration { max-width: 220px; }
+.wbc-goal-duration-input { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
+.wbc-goal-duration-input small { white-space: nowrap; color: var(--wb-faint); font-weight: 500; }
+.wbc-goal-error { padding: 9px 11px; border-radius: 8px; color: var(--wb-danger); background: color-mix(in srgb, var(--wb-danger) 10%, transparent); font-size: 12px; }
+
+.wbc-goal-tab {
+  display: block;
+  overflow: visible;
+  padding: 4px 0 0;
+  background: transparent;
+}
+.wbc-goal-tab > * + * { margin-top: 12px; }
+.wbc-goal-status-card,
+.wbc-goal-review-card,
+.wbc-goal-note {
+  border: 1px solid var(--wb-line); border-radius: 8px; padding: 9px 10px; background: color-mix(in srgb, var(--wb-panel) 92%, transparent);
+}
+.wbc-goal-status-card {
+  min-height: 32px;
+  box-sizing: border-box;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  padding: 4px 2px 10px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wbc-goal-status-card > div { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.wbc-goal-status-card strong { font-size: calc(13px * var(--wb-ui-font-scale, 1)); font-weight: 620; }
+.wbc-goal-status-card small { color: var(--wb-faint); font-size: calc(10.5px * var(--wb-ui-font-scale, 1)); text-align: right; white-space: nowrap; }
+.wbc-goal-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--wb-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--wb-accent) 12%, transparent); }
+.wbc-goal-status-dot.paused,
+.wbc-goal-status-dot.waiting_user,
+.wbc-goal-status-dot.proposed { background: var(--wb-amber); box-shadow: 0 0 0 4px color-mix(in srgb, var(--wb-amber) 12%, transparent); }
+.wbc-goal-review-card strong { font-size: 12px; }
+.wbc-goal-review-card p { margin: 7px 0; color: var(--wb-muted); font-size: 12px; }
+.wbc-goal-review-card ul { margin: 7px 0 0; padding-left: 18px; color: var(--wb-danger); font-size: 12px; }
+.wbc-goal-note { color: var(--wb-muted); font-size: 12px; line-height: 1.5; }
+.wbc-goal-tab .wbc-goal-fields { gap: 10px; }
+.wbc-goal-tab .wbc-goal-fields label {
+  gap: 5px;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+}
+.wbc-goal-tab .wbc-goal-fields textarea,
+.wbc-goal-tab .wbc-goal-fields input {
+  border-color: color-mix(in srgb, var(--wb-line-2) 76%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-control-bg) 88%, transparent);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+.wbc-goal-tab .wbc-goal-fields textarea {
+  overflow-y: auto;
+  resize: none;
+  scrollbar-width: none;
+}
+.wbc-goal-tab .wbc-goal-fields textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.wbc-goal-tab .wbc-goal-fields textarea::placeholder,
+.wbc-goal-tab .wbc-goal-fields input::placeholder {
+  color: var(--wb-faint);
+  opacity: 1;
+}
+.wbc-goal-tab .wbc-goal-fields textarea:hover:not(:disabled),
+.wbc-goal-tab .wbc-goal-fields input:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line-2));
+  background: var(--wb-control-bg);
+}
+.wbc-goal-tab .wbc-goal-fields textarea:focus,
+.wbc-goal-tab .wbc-goal-fields input:focus {
+  border-color: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-line-2));
+  background: var(--wb-control-bg);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+.wbc-goal-tab .wbc-goal-fields textarea { min-height: 56px; height: 56px; padding: 8px 9px; line-height: 1.5; }
+.wbc-goal-tab .wbc-goal-field-objective textarea { min-height: 64px; height: 64px; }
+.wbc-goal-tab .wbc-goal-field-criteria textarea { min-height: 72px; height: 72px; }
+.wbc-goal-tab .wbc-goal-field-grid { gap: 10px; }
+.wbc-goal-tab .wbc-goal-duration { max-width: none; }
+.wbc-goal-tab .wbc-goal-duration-input input { height: 36px; }
+.wbc-goal-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.wbc-goal-actions .wb-btn {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  justify-content: center;
+  padding-inline: 10px;
+  border-radius: 8px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+.wbc-goal-actions .wb-btn:only-child,
+.wbc-goal-actions .wbc-goal-accept { grid-column: 1 / -1; }
+.wbc-goal-actions .wbc-goal-accept {
+  border-color: color-mix(in srgb, var(--wb-accent) 42%, var(--wb-line));
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+.wbc-goal-actions .wbc-goal-accept:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-accent) 62%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-accent) 11%, transparent);
+}
+.wbc-goal-tab .wb-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 64%, transparent);
+  outline-offset: 2px;
+}
+.wbc-goal-unsaved { color: var(--wb-amber); line-height: 1.4; }
+.wbc-goal-stop-bar {
+  padding: 12px 0 0;
+  border-top: 1px solid var(--wb-line);
+  background: transparent;
+  box-shadow: none;
+}
+.wbc-goal-stop-bar .wb-btn {
+  width: 100%;
+  height: 38px;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+@container wbc-side-card (max-width: 320px) {
+  .wbc-goal-tab .wbc-goal-field-grid { grid-template-columns: 1fr; }
+}
+
+@container wbc-side-card (max-width: 260px) {
+  .wbc-goal-actions { grid-template-columns: 1fr; }
+  .wbc-goal-actions .wbc-goal-accept { grid-column: auto; }
+}
+
+@media (pointer: coarse) {
+  .wbc-goal-actions .wb-btn,
+  .wbc-goal-stop-bar .wb-btn { height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-goal-tab .wbc-goal-fields textarea,
+  .wbc-goal-tab .wbc-goal-fields input { transition: none; }
+}
+
+.wbc-goal-milestone {
+  width: min(520px, 100%);
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--wb-text) 4%, transparent);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+.wbc-goal-milestone-mark {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+}
+.wbc-goal-milestone-mark svg { width: 12px; height: 12px; }
+.wbc-goal-milestone-body { min-width: 0; }
+.wbc-goal-milestone header {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 3px;
+}
+.wbc-goal-milestone small {
+  color: var(--wb-muted);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  letter-spacing: .035em;
+}
+.wbc-goal-milestone-attempt {
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  white-space: nowrap;
+}
+.wbc-goal-milestone-copy {
+  color: var(--wb-muted);
+  font-weight: 450;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+.wbc-goal-milestone-action {
+  min-height: 30px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0 -3px 0 1px;
+  padding: 0 7px 0 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+  border-radius: 7px;
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-control-bg));
+  font: inherit;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+.wbc-goal-milestone-action svg {
+  width: 12px;
+  height: 12px;
+  transition: transform .18s ease;
+}
+.wbc-goal-milestone-action:hover {
+  border-color: color-mix(in srgb, var(--wb-accent) 42%, var(--wb-line));
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-control-bg));
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+.wbc-goal-milestone-action:hover svg { transform: translateX(1px); }
+.wbc-goal-milestone-action:active {
+  background: color-mix(in srgb, var(--wb-accent) 17%, var(--wb-control-bg));
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--wb-text) 10%, transparent);
+}
+.wbc-goal-milestone-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 65%, transparent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wbc-goal-milestone-action,
+  .wbc-goal-milestone-action svg { transition: none; }
+  .wbc-goal-milestone-action:hover svg { transform: none; }
+}
+@media (pointer: coarse) {
+  .wbc-goal-milestone-action {
+    min-height: 44px;
+    padding-inline: 12px 10px;
+  }
+}
+.wbc-goal-milestone.review_passed .wbc-goal-milestone-mark,
+.wbc-goal-milestone.accepted_by_user .wbc-goal-milestone-mark {
+  color: var(--wb-green);
+}
+.wbc-goal-milestone.paused .wbc-goal-milestone-mark,
+.wbc-goal-milestone.goal_revised .wbc-goal-milestone-mark {
+  color: var(--wb-amber);
+}
+.wbc-goal-milestone.review_failed .wbc-goal-milestone-mark,
+.wbc-goal-milestone.duration_exhausted .wbc-goal-milestone-mark,
+.wbc-goal-milestone.controller_blocked .wbc-goal-milestone-mark {
+  color: var(--wb-red);
+}
+
+@media (max-width: 680px) {
+  .wbc-goal-confirm-scrim { padding: 8px; }
+  .wbc-goal-confirm-dialog { width: 100%; max-height: calc(100vh - 16px); }
+  .wbc-goal-field-grid { grid-template-columns: 1fr; }
 }
 
 html[data-performance-mode="on"] *,
@@ -463,7 +791,7 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   min-height: 204px;
 }
 
-/* Project tools stay attached to the Task / Chat rail. Files and terminals
+/* Project tools stay attached to the conversation rail. Files and terminals
    both expand in place below their own row. */
 .wbc-project-tools {
   position: relative;
@@ -884,6 +1212,52 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
 }
 
+/* Terminals are project resources in this panel, not conversations. Keep
+   their status and actions while matching the adjacent file rows' density,
+   geometry and interaction surface. */
+.wbc-project-terminal-list .wbc-terminal-card {
+  min-height: 36px;
+  padding: 0 6px;
+  border-radius: 9px;
+}
+
+.wbc-project-terminal-list .wbc-terminal-card:hover,
+.wbc-project-terminal-list .wbc-terminal-card:focus,
+.wbc-project-terminal-list .wbc-terminal-card:focus-visible {
+  transform: none;
+  background: var(--wb-row-hover-bg);
+  box-shadow: none;
+}
+
+.wbc-project-terminal-list .wbc-terminal-card.active,
+.wbc-project-terminal-list .wbc-terminal-card.menu-open,
+.wbc-project-terminal-list .wbc-terminal-card.active:hover,
+.wbc-project-terminal-list .wbc-terminal-card.active:focus,
+.wbc-project-terminal-list .wbc-terminal-card.active:focus-visible {
+  background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-row-hover-bg));
+  box-shadow: none;
+}
+
+.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-card-top {
+  min-height: 36px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 9px;
+}
+
+.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-row-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-card-top b {
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+}
+
+.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-card-right {
+  min-width: 38px;
+}
+
 .wbc-unified-search-results {
   scrollbar-width: none;
 }
@@ -949,7 +1323,7 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 }
 
 /* Expanding a project tool promotes the complete tool surface to the top of
-   the rail's content area. The conversation/task list collapses as one unit,
+   the rail's content area. The conversation list collapses as one unit,
    so the tool does not merely scroll inside its old footer shelf. */
 .wbc-rail > .wbc-chat-list {
   transition:
@@ -998,238 +1372,6 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
     transition: none;
     animation: none;
   }
-}
-
-/* Task panes use the same frame, divider grip, resize and detach mechanics as
-   every other split resource. Only their interior needs to fill the frame. */
-.wbc-task-split,
-.wbc-task-pane,
-.wbc-task-pane > .workbench-main {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-}
-
-.wbc-task-split,
-.wbc-task-pane {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* Match the conversation card: the grip is a floating interaction layer, not
-   a dedicated blank row. Let the task surface paint through the full card so
-   the 34px handle band is also useful visual space. */
-.wbc-pane-card > .wbc-side-agent-split.wbc-task-split {
-  padding-top: 0;
-}
-
-.wbc-task-pane {
-  position: relative;
-}
-
-.wbc-task-pane > .workbench-main {
-  flex: 1 1 auto;
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  /* Restore the task content's established 18px reading gutter while keeping
-     the zero bottom inset that lets it continue behind the floating composer. */
-  padding: 9px 18px 0;
-  /* Conversation panes let the shared pane card own the surface colour.
-     Do the same for tasks so the grip band, header and content area resolve
-     as one continuous card in both light and dark themes. */
-  background: transparent;
-}
-
-/* Do not resolve the task pane to an opaque panel before the title glass is
-   composited. The conversation glass tokens are designed to blend directly
-   with the workbench canvas; an intermediate solid pane made the title card
-   look white/flat even though backdrop-filter was technically active. */
-.wbc-pane-card-task {
-  background: transparent;
-  /* Let the title and composer sample the real Workbench backdrop. Keeping a
-     filter on this transparent outer card creates an intermediate backdrop
-     root, which makes the nested glass layers look like flat translucent
-     fills even though their own blur is enabled. */
-  isolation: auto;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-
-/* Keep the title fixed over the task scroll plane. The stage owns a measured
-   leading spacer, so its first card rests below the title at scrollTop=0 but
-   subsequent content can still pass behind—and visibly feed—the glass blur. */
-.wbc-task-pane .workbench-task-header-sticky {
-  position: absolute;
-  z-index: 26;
-  inset: 10px 10px auto;
-  margin: 0;
-}
-
-/* The shared corner masks predate the task pane's transparent surface. Their
-   former floating-rail colour is itself translucent, so scrolled cards could
-   leak through the two cut-outs and square off the glass header. Cover only
-   those 14px exterior corners with the opaque canvas behind this pane. */
-.wbc-task-pane .workbench-task-header-sticky::before,
-.wbc-task-pane .workbench-task-header-sticky::after {
-  background: var(--wb-main-bg);
-}
-
-.wbc-task-pane .workbench-task-header {
-  /* A subtle reflected highlight keeps the material legible as glass even
-     over a perfectly flat canvas; the translucent base and shared compositor
-     filter still provide real backdrop blur when content scrolls underneath. */
-  --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 58%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, #fff 7%, transparent), transparent 46%),
-    var(--wbc-composer-glass-background);
-  padding: 33px 24px 16px;
-}
-
-.wbc-task-pane .workbench-stage {
-  max-width: none;
-  padding-right: 0;
-  /* The stage begins one pixel above the floating task header. Clip that
-     sliver so overscrolled content cannot paint past the header's top edge. */
-  clip-path: inset(1px 0 0);
-}
-
-/* The negative trailing margin cancels the pseudo-item's automatic list gap.
-   The extra 13px accounts for the header's one-pixel stage offset and leaves
-   the first real task card one full 12px card gap below the glass at the top. */
-.wbc-task-pane > .workbench-main > .workbench-stage::before {
-  content: "";
-  display: block;
-  flex: 0 0 calc(var(--wbc-task-header-reserve-height, 143px) + 13px);
-  width: 1px;
-  margin-bottom: -12px;
-  pointer-events: none;
-}
-
-/* Task and conversation composers share one floating glass component. Keep
-   task content scrollable underneath it, while reserving enough trailing
-   space for the final card to be brought fully above the overlay. */
-:is(
-  .workbench-grid.is-task-detail .workbench-main,
-  .wbc-task-pane > .workbench-main
-) > .workbench-composer.wbc-composer {
-  position: absolute;
-  z-index: 24;
-  inset: auto 0 0;
-  box-sizing: border-box;
-  width: auto;
-  margin: 0;
-  pointer-events: none;
-  padding:
-    var(--wbc-composer-top-inset)
-    var(--wbc-composer-edge-inset)
-    var(--wbc-composer-edge-inset) !important;
-}
-
-/* Only the visible controls participate in hit testing. The transparent
-   wrapper gutter must not block scrolling or interaction with task content
-   underneath the floating composer. */
-:is(
-  .workbench-grid.is-task-detail .workbench-main,
-  .wbc-task-pane > .workbench-main
-) > .workbench-composer.wbc-composer > * {
-  pointer-events: auto;
-}
-
-/* Keep the conversation glass and blur, but remove the task composer's broad
-   outer shadow halo—the halo reads as an opaque blocking ring over the cards
-   scrolling behind it. Inner highlights and the one-pixel edge remain. */
-:is(
-  .workbench-grid.is-task-detail .workbench-main,
-  .wbc-task-pane > .workbench-main
-) > .workbench-composer.wbc-composer > .wbc-composer-box {
-  --wbc-composer-glass-drop-shadow: none;
-}
-
-:is(
-  .workbench-grid.is-task-detail .workbench-main,
-  .wbc-task-pane > .workbench-main
-) > .workbench-stage {
-  scroll-padding-bottom: calc(
-    var(--wbc-composer-reserve-height, calc(164px * var(--wb-ui-font-scale, 1)))
-    + 18px
-  );
-}
-
-/* Extend only the end of the scroll range. Unlike padding-bottom, this flex
-   sentinel sits after the real task content, so it does not consume the
-   visible viewport at rest; at the end it gives the last card enough room to
-   move completely above the floating composer. The stage's existing 12px gap
-   supplies the final separation from the input surface. */
-:is(
-  .workbench-grid.is-task-detail .workbench-main,
-  .wbc-task-pane > .workbench-main
-) > .workbench-stage::after {
-  content: "";
-  display: block;
-  flex: 0 0 var(
-    --wbc-composer-reserve-height,
-    calc(164px * var(--wb-ui-font-scale, 1))
-  );
-  width: 1px;
-  pointer-events: none;
-}
-
-.wb-task-detail-head .wbc-side-hide-btn {
-  flex: 0 0 auto;
-  width: 32px;
-  height: 33px;
-  min-height: 33px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--wb-line);
-  border-radius: 7px;
-  background: var(--wb-control-bg);
-  color: var(--wb-text);
-  cursor: pointer;
-}
-
-.wb-task-detail-head .wbc-side-hide-btn:hover {
-  border-color: var(--wb-accent);
-  background: var(--wb-control-hover-bg);
-}
-
-.wb-task-detail-head .wbc-side-hide-btn svg {
-  display: block;
-}
-
-/* In a split workspace the task inspector follows the split conversation
-   contract: the grip menu opens a floating panel owned by that task card,
-   and clicking outside dismisses it without moving either pane. */
-.wbc-task-pane-floating-panel {
-  position: absolute;
-  z-index: 3200;
-  top: 8px;
-  right: 16px;
-  width: min(var(--wb-right-w, 350px), calc(100% - 32px));
-  max-height: calc(100% - 20px);
-  pointer-events: auto;
-  animation: wbc-floating-side-panel-in 360ms cubic-bezier(.22, 1.16, .36, 1) both;
-}
-
-.wbc-task-pane-floating-panel > .wb-task-detail-shell {
-  width: 100%;
-  height: auto;
-  max-height: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  overflow: visible;
-}
-
-.wbc-task-pane-floating-panel .wb-task-detail-card {
-  width: 100%;
-  max-height: calc(100vh - var(--wbc-card-top-inset) - 58px);
-  background: var(--wbc-panel-surface);
 }
 
 /* Mixed board drag affordances. The placement rail is intentionally subtle:
@@ -1302,6 +1444,329 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   background: var(--wb-surface);
 }
 
+.wbc-dynamic-workspace-file,
+.wbc-dynamic-directory {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.wbc-dynamic-workspace-file > .wbc-viewer {
+  min-height: 0;
+  height: 100%;
+}
+
+.wbc-workspace-surface {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--wb-surface);
+}
+
+.wbc-workspace-toolbar {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--wb-line);
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, var(--wb-control-bg));
+}
+
+.wbc-workspace-toolbar select {
+  min-width: 120px;
+  max-width: min(320px, 42%);
+  height: 36px;
+  flex: 1;
+  border: 1px solid var(--wb-field-border);
+  border-radius: 8px;
+  padding: 0 30px 0 10px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+}
+
+.wbc-workspace-toolbar button,
+.wbc-workspace-files header button {
+  min-width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  font-weight: 700;
+}
+
+.wbc-workspace-toolbar button.is-primary {
+  border-color: color-mix(in srgb, var(--wb-accent) 58%, var(--wb-line));
+  background: var(--wb-accent);
+  color: var(--wb-accent-contrast, white);
+}
+
+.wbc-workspace-toolbar button:disabled { opacity: .48; cursor: default; }
+.wbc-workspace-toolbar button:not(:disabled):hover,
+.wbc-workspace-files header button:not(:disabled):hover { border-color: var(--wb-active-border); }
+
+.wbc-workspace-status {
+  min-width: 62px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--wb-muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.wbc-workspace-status i,
+.wbc-workspace-tabs button > i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.wbc-workspace-status.is-running,
+.wbc-workspace-status.is-starting,
+.wbc-workspace-status.is-ready { color: var(--wb-green); }
+.wbc-workspace-status.is-failed { color: var(--wb-error-text); }
+
+.wbc-workspace-error {
+  min-height: 36px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-error-text) 35%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-error-text) 8%, var(--wb-surface));
+  color: var(--wb-error-text);
+  font-size: 12px;
+}
+.wbc-workspace-error button { margin-left: auto; border: 0; background: transparent; color: inherit; }
+
+.wbc-workspace-tabs {
+  min-width: 0;
+  min-height: 39px;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 7px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--wb-line);
+  background: var(--wb-card-bg);
+}
+
+.wbc-workspace-tabs button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--wb-muted);
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 680;
+}
+.wbc-workspace-tabs button:hover { color: var(--wb-text); }
+.wbc-workspace-tabs button.active { border-bottom-color: var(--wb-accent); color: var(--wb-text); }
+.wbc-workspace-tabs button small {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-error-text) 12%, var(--wb-control-bg));
+  color: var(--wb-error-text);
+  font-size: 10px;
+}
+.wbc-workspace-tabs button > i { color: var(--wb-green); }
+
+.wbc-workspace-content {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.wbc-workspace-content > .wbc-viewer,
+.wbc-workspace-content > .wbc-terminal-pane,
+.wbc-workspace-preview-artifact,
+.wbc-workspace-preview-artifact > .wbc-viewer { min-height: 0; height: 100%; }
+
+.wbc-workspace-empty {
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 24px;
+  color: var(--wb-muted);
+  text-align: center;
+}
+.wbc-workspace-empty strong { color: var(--wb-text); }
+.wbc-workspace-empty span { max-width: 380px; font-size: 12px; line-height: 1.5; }
+
+.wbc-workspace-files,
+.wbc-workspace-problems,
+.wbc-workspace-review,
+.wbc-workspace-preview { min-height: 0; height: 100%; overflow: auto; }
+.wbc-workspace-files { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.wbc-workspace-files > header {
+  min-height: 44px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid var(--wb-line);
+}
+.wbc-workspace-files > header b { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.wbc-workspace-file-list { min-height: 0; overflow: auto; padding: 5px; }
+.wbc-workspace-file-list > button,
+.wbc-workspace-review-files > button,
+.wbc-workspace-problems > button {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+}
+.wbc-workspace-file-list > button:hover,
+.wbc-workspace-review-files > button:hover,
+.wbc-workspace-problems > button:hover { background: var(--wb-active-bg); }
+.wbc-workspace-file-list > button > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.wbc-workspace-problems { padding: 6px; }
+.wbc-workspace-problems > button > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.wbc-workspace-problems b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.wbc-workspace-problems small { color: var(--wb-muted); font: 11px/1.35 var(--wb-mono); }
+.wbc-workspace-problems .is-warning { color: var(--wb-warning, #c58a24); }
+.wbc-workspace-problems .is-error { color: var(--wb-error-text); }
+
+.wbc-workspace-review { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.wbc-workspace-review-switch {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--wb-line);
+}
+.wbc-workspace-review-switch button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted);
+}
+.wbc-workspace-review-switch button.active { border-color: var(--wb-line); background: var(--wb-control-bg); color: var(--wb-text); }
+.wbc-workspace-review-switch button.refresh { margin-left: auto; min-width: 34px; padding: 0; justify-content: center; }
+.wbc-workspace-review-switch small { font-size: 10px; }
+.wbc-workspace-review-files { min-height: 0; overflow: auto; padding: 5px; }
+.wbc-workspace-review-files b { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 var(--wb-mono); }
+.wbc-workspace-review-files small { font: 10px var(--wb-mono); }
+.wbc-workspace-review-files .plus { color: var(--wb-green); }
+.wbc-workspace-review-files .minus { color: var(--wb-error-text); }
+.wbc-workspace-diff { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; padding: 7px; gap: 6px; }
+.wbc-workspace-diff > button { justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.wbc-workspace-diff pre { min-height: 0; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--wb-line); border-radius: 8px; background: var(--wb-control-bg); color: var(--wb-text); font: 11px/1.5 var(--wb-mono); tab-size: 2; }
+
+.wbc-workspace-preview { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.wbc-workspace-preview > header { min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--wb-line); font-size: 11px; }
+.wbc-workspace-preview > header span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbc-workspace-preview > header a { color: var(--wb-text); }
+.wbc-workspace-preview iframe { width: 100%; height: 100%; border: 0; background: white; }
+
+@media (max-width: 620px) {
+  .wbc-workspace-toolbar button span { display: none; }
+  .wbc-workspace-status { display: none; }
+  .wbc-workspace-toolbar select { max-width: none; }
+}
+
+.wbc-editor-external-conflict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-warning, #c58a24) 35%, transparent);
+  background: color-mix(in srgb, var(--wb-warning, #c58a24) 12%, var(--wb-card-bg));
+  font-size: 12px;
+}
+
+.wbc-editor-external-conflict span { flex: 1; }
+.wbc-editor-external-conflict button {
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 7px;
+  background: var(--wb-button-tonal-bg, color-mix(in srgb, currentColor 9%, transparent));
+  color: inherit;
+}
+
+.wbc-dynamic-directory {
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  gap: 8px;
+}
+
+.wbc-dynamic-directory-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  border-bottom: 1px solid var(--wb-border-subtle, rgba(127, 127, 127, .18));
+}
+
+.wbc-dynamic-directory-list {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wbc-dynamic-directory-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.wbc-dynamic-directory-list button:not(:disabled):hover {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.wbc-dynamic-directory-list button:disabled { opacity: .7; }
 .wbc-plugin-view-pane.detached {
   position: absolute;
   inset: 0;

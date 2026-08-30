@@ -41,7 +41,7 @@ def application_setup(context: PluginApplicationContext) -> None:
     service = MCPPluginService(data_directory=context.data_directory)
     service.attach_registry(_registry(context.services), authoritative=True)
     context.provide("mcp", service)
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
     )

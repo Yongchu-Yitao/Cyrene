@@ -349,7 +349,7 @@ def setup_application(context: PluginApplicationContext) -> None:
     setup_plugin_center(context)
     context.provide("skills", service)
     context.expose_frontend("skills")
-    from cyrene.runtime.settings_service import (
+    from cyrene.platform.settings_service import (
         PluginSettingsContribution,
         SettingControlSpec,
         plugin_setting_spec,

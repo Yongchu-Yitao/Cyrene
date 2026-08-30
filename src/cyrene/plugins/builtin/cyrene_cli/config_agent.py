@@ -15,8 +15,8 @@ from typing import Any
 from cyrene.core.plugin import PluginContext, application_plugin_service
 from cyrene.config import DATA_DIR
 from cyrene.localization import localized
-from cyrene.model_runtime.messages import parse_tool_arguments
-from cyrene.runtime.task_lifecycle import track_task
+from cyrene.model.messages import parse_tool_arguments
+from cyrene.platform.task_lifecycle import track_task
 
 from .hooks import CliHookService, hook_process_environment
 

@@ -49,7 +49,9 @@ def _builtin_catalog() -> list[dict[str, Any]]:
     ]
 
 
-def _activation_catalog() -> list[dict[str, Any]]:
+def _activation_catalog(
+    *, excluded_plugin_packs: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     catalog = _composer_context_service().catalog()
     for kind, group in _GROUP_BY_ACTIVATION.items():
@@ -59,6 +61,8 @@ def _activation_catalog() -> list[dict[str, Any]]:
                 continue
             identity = str(item.get("id") or "").strip()
             if not identity:
+                continue
+            if kind == "pluginPacks" and identity in excluded_plugin_packs:
                 continue
             command_id = f"{prefix}:{_encoded(identity)}"
             result.append({
@@ -73,10 +77,47 @@ def _activation_catalog() -> list[dict[str, Any]]:
     return result
 
 
+def _plugin_workflow_catalog() -> list[dict[str, Any]]:
+    """Read first-class workflow commands contributed by operational packs."""
+
+    from cyrene.core.plugin import application_plugin_scope
+
+    host = application_plugin_scope()
+    contributions = (
+        host.workbench_contributions()
+        if host is not None and hasattr(host, "workbench_contributions")
+        else {}
+    )
+    result: list[dict[str, Any]] = []
+    commands = contributions.get("commands", ()) if isinstance(contributions, dict) else ()
+    for raw in commands:
+        if not isinstance(raw, dict):
+            continue
+        command_id = str(raw.get("id") or "").strip()
+        if command_id:
+            result.append(dict(raw))
+    return result
+
+
+def _workflow_owned_pack_ids(commands: list[dict[str, Any]]) -> frozenset[str]:
+    return frozenset(
+        str(item.get("pack_id") or "").strip()
+        for item in commands
+        if isinstance(item.get("workflow"), dict)
+        and str(item.get("pack_id") or "").strip()
+    )
+
+
 def local_slash_command_catalog() -> list[dict[str, Any]]:
     """Return built-in workflows and currently enabled context commands."""
 
-    return [*_builtin_catalog(), *_activation_catalog()]
+    workflows = _plugin_workflow_catalog()
+    workflow_packs = _workflow_owned_pack_ids(workflows)
+    return [
+        *_builtin_catalog(),
+        *workflows,
+        *_activation_catalog(excluded_plugin_packs=workflow_packs),
+    ]
 
 
 async def slash_command_catalog(project_id: str = "") -> list[dict[str, Any]]:
@@ -95,7 +136,12 @@ async def resolve_slash_command(
         target = "deep-reflect"
     if target in BUILTIN_COMMAND_IDS:
         return next(item for item in _builtin_catalog() if item["id"] == target)
-    local = _activation_catalog()
+    workflows = _plugin_workflow_catalog()
+    workflow_packs = _workflow_owned_pack_ids(workflows)
+    local = [
+        *workflows,
+        *_activation_catalog(excluded_plugin_packs=workflow_packs),
+    ]
     return next((item for item in local if item["id"] == target), None)
 
 

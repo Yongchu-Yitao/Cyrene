@@ -17,6 +17,7 @@ from cyrene.core.plugin.activation import (
     PluginActivationState,
     set_active_plugin_activation_state,
 )
+from cyrene.core.plugin.extensions import ExtensionPoint, PluginScope
 from cyrene.core.plugin.customization import (
     PluginCustomizationState,
     set_active_plugin_customization_state,
@@ -28,12 +29,16 @@ from .contributions import (
     frontend_views,
     project_tools as _plugin_project_tools,
     serialize_workbench_surface,
+    serialize_workbench_slash_command,
     serialize_workspace_action,
     serialize_workspace_file_type,
+    serialize_workspace_project_type,
     validate_workbench_contributions,
     workbench_surfaces,
+    workbench_slash_commands,
     workspace_actions,
     workspace_file_types,
+    workspace_project_types,
 )
 from .context import (
     PluginApplicationContext,
@@ -97,6 +102,7 @@ class PluginApplicationHost:
             "model": self.model_gateway,
             "model_context_limit": configured_context_limit,
             "plugin_seed": seed_builtin_plugin_directory,
+            "plugin_application_extensions": self.application_extensions,
         }
         self._service_owners: dict[str, str] = {}
         self._search_providers: dict[str, PluginSearchHandler] = {}
@@ -128,7 +134,7 @@ class PluginApplicationHost:
     ) -> "PluginApplicationHost":
         root = Path(plugin_directory or default_plugin_impl_directory()).expanduser().resolve()
         seed_builtin_plugin_directory(root)
-        from cyrene.runtime import settings_store
+        from cyrene.platform import settings_store
 
         customization_state = PluginCustomizationState(
             settings_store.get("plugin_tool_customizations", {}) or {}
@@ -290,6 +296,23 @@ class PluginApplicationHost:
         )
         return pack is not None and not pack.has_application_contributions
 
+    def application_extensions(
+        self,
+        point: ExtensionPoint[Any],
+    ) -> tuple[tuple[str, Any], ...]:
+        """Return live application contributions with their owning pack ids."""
+
+        if point.scope is not PluginScope.APPLICATION:
+            raise ValueError(
+                f"Application host cannot provide {point.scope.value} extension point {point.id}"
+            )
+        return tuple(
+            (pack.id, value)
+            for pack in self.registry.list_packs()
+            if self.pack_operational(pack.id)
+            for value in pack.extensions.values(point)
+        )
+
     @property
     def frontend_modules(self) -> list[str]:
         """Return only Workbench surfaces whose owning pack is enabled."""
@@ -308,6 +331,8 @@ class PluginApplicationHost:
         surfaces: list[dict[str, Any]] = []
         file_types: list[dict[str, Any]] = []
         actions: list[dict[str, Any]] = []
+        project_types: list[dict[str, Any]] = []
+        commands: list[dict[str, Any]] = []
         for pack in self.registry.list_packs():
             if not self.pack_operational(pack.id):
                 continue
@@ -335,12 +360,22 @@ class PluginApplicationHost:
                 serialize_workspace_action(pack, value)
                 for value in workspace_actions(pack)
             )
+            project_types.extend(
+                serialize_workspace_project_type(pack, value)
+                for value in workspace_project_types(pack)
+            )
+            commands.extend(
+                serialize_workbench_slash_command(pack, value)
+                for value in workbench_slash_commands(pack)
+            )
         return {
             "views": views,
             "project_tools": project_tools,
             "surfaces": surfaces,
             "file_types": file_types,
             "actions": actions,
+            "project_types": project_types,
+            "commands": commands,
         }
 
     def frontend_contributions(self) -> dict[str, list[dict[str, Any]]]:

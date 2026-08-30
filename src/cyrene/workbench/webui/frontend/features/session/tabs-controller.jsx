@@ -19,20 +19,20 @@ function writeSessionKeys(storageKey, values) {
 
 function useWorkbenchSessionTabs(projects, recentChatsByProject) {
   var [recentOpenedSessionKeys, setRecentOpenedSessionKeys] = useState(function () {
-    return readSessionKeys("wb-recent-opened-sessions", /^(task|chat):.+/, 20);
+    return readSessionKeys("wb-recent-opened-sessions", /^chat:.+/, 20);
   });
   var [pinnedSessionKeys, setPinnedSessionKeys] = useState(function () {
-    return readSessionKeys("wb-pinned-sessions", /^(task|chat):.+/, 20);
+    return readSessionKeys("wb-pinned-sessions", /^chat:.+/, 20);
   });
   var [hiddenSessionKeys, setHiddenSessionKeys] = useState(function () {
-    return readSessionKeys("wb-hidden-session-tabs", /^(task|chat):.+/, 100);
+    return readSessionKeys("wb-hidden-session-tabs", /^chat:.+/, 100);
   });
 
   function rememberOpenedSession(kind, sessionId) {
-    var normalizedKind = kind === "chat" ? "chat" : "task";
+    if (kind !== "chat") return;
     var normalizedId = String(sessionId || "");
     if (!normalizedId) return;
-    var key = normalizedKind + ":" + normalizedId;
+    var key = "chat:" + normalizedId;
     setRecentOpenedSessionKeys(function (prev) {
       var visibleKeys = wbRecentSessionTabs(
         projects,

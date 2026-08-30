@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from cyrene.runtime import config_store
+from cyrene.platform import config_store
 
 
 SEARCH_PROXY = config_store.get_env("SEARCH_PROXY", "")

@@ -112,7 +112,7 @@ def test_channels_pack_routes_and_polling_follow_activation(tmp_path, monkeypatc
     set_application_plugin_scope(host)
 
     try:
-        from cyrene.runtime import settings_service
+        from cyrene.platform import settings_service
 
         asyncio.run(host.startup())
         with TestClient(app) as client:
@@ -154,7 +154,7 @@ def test_channels_pack_routes_and_polling_follow_activation(tmp_path, monkeypatc
     enabled_app.include_router(enabled_router)
     set_application_plugin_scope(enabled_host)
     try:
-        from cyrene.runtime import settings_service
+        from cyrene.platform import settings_service
 
         asyncio.run(enabled_host.startup())
         with TestClient(enabled_app) as client:

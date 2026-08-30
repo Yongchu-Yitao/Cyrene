@@ -114,7 +114,7 @@ WORKSPACE_ACTION        cyrene.workspace.action        application scope
 ```json
 {
   "resource_effects": [
-    {"from": "arguments.path", "kind": "file", "access": "write"}
+    {"argument_path": ["path"], "kind": "file", "access": "write"}
   ]
 }
 ```
@@ -299,7 +299,7 @@ VerificationPort    验证步骤与最终验收
 NotificationPort    通知 paused/blocked/completed
 ```
 
-`GoalOwnerPort` 使用 plugin session state，`ExecutionPort` 由 Workbench 注入，Planning/Verification 默认通过正常 Plugin Agent run 实现。`cyrene_goal` 在启动 Goal 时延迟解析 `cyrene_control` 提供的 plan service；服务不可用则将 Goal 标记为 blocked/capability-unavailable，而不是在 pack attach 顺序上形成隐式依赖。`cyrene_task` 在迁移期只保留 legacy adapter 和数据转换工具，不再承载新目标；迁移完成后删除整个 pack。
+`GoalOwnerPort` 使用 plugin session state，`ExecutionPort` 由 Workbench 注入，Planning/Verification 默认通过正常 Plugin Agent run 实现。`cyrene_goal` 在启动 Goal 时延迟解析 `cyrene_control` 提供的 plan service；服务不可用则将 Goal 标记为 blocked/capability-unavailable，而不是在 pack attach 顺序上形成隐式依赖。旧 Task pack、运行时和数据转换层直接删除，不再保留迁移期 adapter。
 
 因为 `cyrene_goal` 有 application lifecycle，它应在 `on_startup` 扫描并恢复 active/paused controller，在 `on_shutdown` 停止调度并持久化稳定边界。pack 启停直接复用 `PluginApplicationHost` 的 operational/running 语义，不另造后台服务管理器。
 
@@ -427,11 +427,11 @@ workspace.execution.completed | failed | stopped
 
 TeX 仍可由 provider 声明 `.tex/.bib/.sty/.cls/.bst` file type、解析编译日志，并通过 `cyrene_extensions` 获取 `pdflatex/xelatex/lualatex`；但它使用与应用开发完全相同的 Action、Execution、artifact、diagnostics 和 Surface 协议。SyncTeX 等格式特有增强可以作为可选 provider capability，不能进入通用执行核心。
 
-## 去除 Task 的迁移策略
+## 去除 Task 的实施策略
 
-### 不能直接删除的部分
+### 先迁入 Conversation 的能力
 
-以下名称虽然带 Task，但能力应先泛化或迁移：
+以下通用能力先落入 Conversation/Plugin，再删除旧实现：
 
 - `workbench/goals/*`：迁入 `cyrene_goal` 的通用 engine；
 - `TaskAgentRuntime` 中的规划、验证、反思逻辑：拆到通用 ports；
@@ -441,9 +441,9 @@ TeX 仍可由 provider 声明 `.tex/.bib/.sty/.cls/.bst` file type、解析编�
 
 迁移后 Workbench 不 import `cyrene_goal` 的实现模块，只通过 application service、runtime events、public snapshot 和 Surface contribution 使用它。反向也一样：`cyrene_goal` 不 import Chat HTTP/UI，实现只依赖注入的 Conversation ports。
 
-### 最终可删除的产品壳
+### 直接删除的旧产品壳
 
-在 Conversation 达到功能对等后，可以删除或下线：
+Conversation 达到功能对等后，直接删除：
 
 - `frontend/features/task/*`；
 - Chat rail 的 task/chat 切换、`rail-tasks.jsx`、Task pane controller；
@@ -453,19 +453,9 @@ TeX 仍可由 provider 声明 `.tex/.bib/.sty/.cls/.bst` file type、解析编�
 - `workbench/tasks/*` 中只负责 Task UI projection 和 workflow 的代码；
 - `workbench_task_sessions` 主写模型。
 
-### 历史数据迁移
+### 数据边界
 
-建议采用一版“读旧写新”的过渡：
-
-1. 新版本只创建 Conversation，不再创建 Task。
-2. 首次打开旧 Task 时生成对应 Chat，记录 `legacyTaskId`。
-3. 映射 `goal → ConversationGoal`，`plan/acceptance → ActivePlan + Goal`，`artifacts/fileChanges → Chat artifacts/change sets`。
-4. Task event timeline 生成一条只读迁移摘要和可展开原始记录；不要伪造为用户/Agent 对话消息。
-5. 原 Task ContextTree 和 session row 保留只读一个兼容周期，确保审计和失败回滚。
-6. Goal Loop 正在运行的旧 Task 不在线迁移；先恢复/暂停到稳定边界，再显式迁移。
-7. 完成迁移验证和备份后，下一主版本才删除旧表与只读 API。
-
-旧 Task 的迁移器可以暂时放在 `cyrene_task` pack 中，并通过 application service 调用 `cyrene_goal` 的导入命令。它不应进入 Conversation 核心，也不应让新 Goal 写回旧 Task 表。
+不保留旧 Task 的只读 API、迁移器或兼容表。新版本只创建 Conversation；Goal、Plan、artifacts 和 file changes 都以 Conversation/Plugin state 为唯一数据源。现有数据库升级仅移除旧表，不在运行时暴露旧模型。
 
 ## 阶段一详细实现方案
 
@@ -696,7 +686,9 @@ outcome = updated | opened | replaced | suppressed | deferred | unavailable
 
 自动关闭也走 Broker：`run-end` 只关闭仍为 Agent 所有、未 pin、未 dirty、未被用户接管的 Surface；`idle` 在第一阶段只定义，不启用 timer；`never` 等同用户保留。
 
-Activity Normalizer 在阶段一只接受两种可信输入：服务端已带 `presentation.locations` 的标准 tool event，或 owning pack 发布且通过 catalog 校验的显式 `surface.intent`。但 `presentation.locations` 只说明工具触及了哪些资源，本身不授予打开分屏的权力。自动产生的 tool event 和 `surface.intent` 都必须携带运行控制层生成的 `presentation.attention`，其中 `reason=explicit-user-resource-request`、`operation=edit`，并且经过工作区校验的 `resource_keys` 精确命中 location，Broker 才允许 `reveal`。没有授权时默认为 `observe`，不改变 Pane；`update` 也只能刷新已存在的同资源 Surface，不能新开卡片。用户在 Workbench 中手动点击打开资源走宿主的直接 intent，不受自动触发门控。语义判断由 Agent/运行控制层结合原始用户请求完成，前端不做关键词正则。`resource_effects` 不能声明 attention。阶段二再接入实际工具 event enrich 和每轮语义授权；第一阶段用 synthetic event 验证 normalizer/broker/host 的组合。
+Activity Normalizer 只接受两种可信输入：服务端已带 `presentation.locations` 的标准 tool event，或 owning pack 发布且通过 catalog 校验的显式 `surface.intent`。但 `presentation.locations` 只说明工具触及了哪些资源，本身不授予打开分屏的权力。
+
+阶段二采用一个刻意简单的主 Agent 语义开关：任何声明了 `resource_effects` 的工具在模型可见 schema 中自动增加宿主持有的可选 `reveal: boolean`；系统 prompt 要求它只在用户明确要求查看/编辑某个确切文件，或检查某个确切目录时设为 true。运行时在插件参数校验和执行前移除该字段，再把结果投影为 `presentation.reveal`。子 Agent 和普通插件执行参数都看不到这个宿主字段。没有 `reveal` 时 activity 只能更新已经打开的同资源 Surface，不能新开；用户手动打开资源不受这个自动触发门控。这样不需要系统级新工具、关键词正则或复杂 grant 对象，`resource_effects` 自身也不会造成分屏弹出。
 
 ### 7. 文件级修改顺序
 
@@ -766,12 +758,12 @@ npm run build
 
 ### 阶段二：动态文件工作区与对话计划
 
-- 为 `core.Write`、`Grep` 和 `cyrene_code` 结构工具补 resource effect metadata。
-- 实现 `workspace.file_changed`、editor 实时刷新和 dirty-buffer 冲突处理。
-- 在每轮运行开始时把“用户明确点名并要求编辑的资源”解析为 workspace-validated attention grant；普通 scan/read/write activity 不自动 reveal。
-- 抽取 Rail/Pane 共用的文件树；只有用户明确要求检查某个目录结构时才为该目录建立独立语义授权。
-- 将 `cyrene_control` plan 迁入 plugin session state，保留 `activePlan` public projection。
-- 注册 `cyrene.control.plan` Surface，支持批准、patch 进度、相关文件和恢复。
+- 为 `Read`、`Write`、`Edit`、`Grep` 和 `cyrene_code` 结构工具补 `resource_effects`，服务端只发布经过工作区 containment 校验的相对路径。
+- 主 Agent 的资源工具 schema 自动增加可选 `reveal`；运行时剥离，子 Agent 不暴露。缺省 activity 只更新已打开 Surface，同一 run 最多自动新开一个文件或目录。
+- `cyrene_code` 注册通用文件编辑器和目录树 native Surface，并通过 file-type contribution 开放源码、Markdown、结构化文本和 `.tex` 等普通文本类型；不做 TeX 专用编辑器。
+- 写工具完成后发布统一的前端 `workspace-file-changed` 通知：干净 buffer 自动重载，dirty buffer 暂停自动保存并提示采用磁盘版本或保留草稿。
+- 将 `cyrene_control` plan 写入 plugin session state，同时保留现有 `activePlan` projection；注册对话 Plan Surface，让提议、批准后的进度和恢复状态进入分屏。
+- Broker 保持同资源去重、不抢焦点、pin/claim/dirty 保护；用户编辑自动 Surface 后立即接管，Agent 不再替换。
 
 完成标准：Agent 编辑文件、浏览结构和执行计划时，分屏实时跟随且不抢焦点、不抖动、不丢状态。
 
@@ -779,11 +771,11 @@ npm run build
 
 - 新建 `cyrene_goal`，提供 Goal tools、状态、application lifecycle、恢复和 Goal Surface。
 - 通过 Conversation execution port 跑通规划、执行、验证、反思、修复、预算和等待用户输入。
-- `cyrene_task` 降级为只读 legacy/migration pack；停止创建新 Task。
-- 迁移旧 Task 为 Conversation + `cyrene_goal`/`cyrene_control` state。
-- 移除 Task rail、Board、页面、创建和转换入口，保留一版只读兼容数据。
+- 删除旧 Task pack、Runtime、HTTP 路由、持久化模型和前端入口。
+- 删除旧 Task 测试，不新增只验证旧能力不存在的墓碑测试。
+- Goal、Plan、通知和动态分屏只走 Conversation + `cyrene_goal`/`cyrene_control` state。
 
-完成标准：用户只使用 Conversation；active Goal 在验收前持续循环，旧 Task 可安全迁移、失败可回滚。
+完成标准：用户只使用 Conversation；active Goal 在验收前持续循环，代码库不再包含旧 Task 产品分支。
 
 ### 阶段四：通用一键构建/启动与最终收尾
 
@@ -792,7 +784,7 @@ npm run build
 - 复用 managed terminal 承载长驻进程，统一发布 progress、ready、diagnostics、artifact 和 endpoint 事件。
 - 实现 `cyrene.code.execution` 通用复合 Surface，根据输出自动组合 Editor/File tree、Browser、PDF.js、Viewer、Terminal 和 Diagnostics。
 - 首批 provider 覆盖 TeX build、Web app run/build、Python run/test，用同一套协议验证通用性。
-- 完成插件启停、权限、取消/重启、崩溃恢复、自动运行策略和旧 Task 数据清理验收。
+- 完成插件启停、权限、取消/重启、崩溃恢复和自动运行策略验收。
 
 完成标准：支持从当前文件或项目一键编译、测试、启动、停止和预览；TeX 与应用开发不存在两套执行或分屏体系。
 
@@ -805,7 +797,7 @@ npm run build
 5. Plan 在分屏中实时更新，刷新应用或进程重启后状态不丢失。
 6. Goal 只有在验收通过时自动 completed；预算、权限、阻塞和用户停止会进入明确的 paused/blocked/cancelled 状态。
 7. 项目可从统一工具栏一键 Build/Run/Test/Preview；长驻进程可停止和重启，有限任务能流式显示 diagnostics/artifacts/endpoints。
-8. 旧 Task 可迁移且历史可追溯，迁移失败不会删除原数据。
+8. 旧 Task 前后端、持久化、路由和测试已删除，不保留兼容入口或墓碑测试。
 9. 所有自动 Surface 都遵守键盘焦点、可见 focus ring、reduced motion 和用户关闭/pin 决策。
 10. 禁用 `cyrene_goal` 后普通 Conversation 不受影响，active Goal 安全暂停；重新启用并重启到 operational 后可以恢复。
 11. 禁用/启动失败的 Surface owning pack 不会继续调用 RPC；已打开 Pane 显示 unavailable，用户可关闭或等待恢复。

@@ -616,7 +616,7 @@ async def _execute_measure_coordinates(
     visual_observation = ""
     vision_model = ""
     try:
-        from cyrene.runtime.attachments import analyze_image_with_primary_model, primary_model_supports_vision
+        from cyrene.platform.attachments import analyze_image_with_primary_model, primary_model_supports_vision
 
         if primary_model_supports_vision():
             analysis = await analyze_image_with_primary_model(
@@ -688,7 +688,7 @@ async def _analyze_capture(
     max_tokens: int | None = None,
 ) -> tuple[str, str]:
     base64.b64decode(image_base64, validate=True)
-    from cyrene.runtime.attachments import run_vision_chat
+    from cyrene.platform.attachments import run_vision_chat
 
     vision = await asyncio.wait_for(
         run_vision_chat(

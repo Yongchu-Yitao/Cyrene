@@ -39,6 +39,15 @@ READ_PLUGIN = Plugin(
         "additionalProperties": False,
     },
     handler=read,
+    metadata={
+        "read_only": True,
+        "resource_effects": ({
+            "argument_path": ("path",),
+            "kind": "file",
+            "access": "read",
+            "phase": "both",
+        },),
+    },
     permission_boundary=read_permission_boundary,
     allow_parallel=True,
     timeout_seconds=30.0,

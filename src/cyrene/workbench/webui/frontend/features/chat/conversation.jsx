@@ -1730,7 +1730,7 @@ function useWbcFloatingBrowserAlignment(mainRef, active, revision) {
   }, [active, revision]);
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, errorKind, onRetry, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
+function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, errorKind, onRetry, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
   // The lightweight list item already contains every Composer preference.
   // Keep using it while the full transcript hydrates so switching chats never
   // paints a temporary "new chat" Composer with global/default settings.
@@ -2310,7 +2310,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
           <div className="wbc-empty-thread">
             <div className="wbc-empty-icon">{WBC_ICONS.chat}</div>
             <b>{wbcT("workbenchChat.emptyTitle", "Start a new chat")}</b>
-            <p>{wbcT("workbenchChat.emptyBody", "Chats are bound to the current workspace. The agent can read project context, and work can be converted into a task when needed.")}</p>
+            <p>{wbcT("workbenchChat.emptyBody", "Conversations are bound to the current workspace, so the agent can read and work with project context.")}</p>
           </div>
         )}
         {renderedHistory}
