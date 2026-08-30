@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from cyrene.plugins.builtin.cyrene_goal import service as goal_service_module
 from cyrene.plugins.builtin.cyrene_goal import plugin_pack
 from cyrene.plugins.builtin.cyrene_goal.service import (
@@ -155,6 +157,48 @@ def test_goal_lifecycle_projects_only_nonterminal_state_to_conversation(tmp_path
             "goal_updated",
             "aborted",
         ]
+
+    asyncio.run(scenario())
+
+
+def test_goal_negotiation_start_rolls_back_every_durable_projection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        db_path = str(tmp_path / "workbench.db")
+        service = ConversationGoalService(db_path=db_path, bot=None)
+        chat_id = "chat-goal-atomic"
+        service.chat.repository.write({"chats": [{
+            "id": chat_id,
+            "projectId": "project-1",
+            "kind": "chat",
+            "title": "Atomic Goal",
+            "status": "running",
+            "messages": [{"id": "msg-goal", "role": "user", "content": "/goal"}],
+        }]})
+        service.chat.public_chat_light = lambda value: {  # type: ignore[method-assign]
+            "id": value.get("id"),
+            "projectId": value.get("projectId"),
+            "activeGoal": value.get("activeGoal"),
+        }
+        before = service.chat.repository.get(chat_id)
+
+        async def fail_milestone(*_args, **_kwargs):
+            raise RuntimeError("milestone persistence failed")
+
+        monkeypatch.setattr(service, "_milestone", fail_milestone)
+
+        with pytest.raises(RuntimeError, match="milestone persistence failed"):
+            await service.begin_negotiation(
+                chat_id,
+                initial_request="Atomic Goal",
+                project_id="project-1",
+            )
+
+        assert await service.repository.get(chat_id) is None
+        assert await service.repository.events(chat_id) == []
+        assert service.chat.repository.get(chat_id) == before
 
     asyncio.run(scenario())
 

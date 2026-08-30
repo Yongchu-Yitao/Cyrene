@@ -170,6 +170,10 @@ function wbcHandleRetryMessage(context, messageId) {
   var selection = wbcRetryTurnSelection(chat, targetMessageId);
   var retryMode = wbcNormalizePermissionMode(chat.permissionMode, "auto");
   context.retryPendingChatIdRef.current = chatId;
+  // A transcript request started before retry still contains the durable old
+  // output. Invalidate it before the clear animation so its late response
+  // cannot restore the reply that the user just removed.
+  context.beginChatHydration(chatId);
   context.setError(""); context.setErrorKind("load");
   context.setRetryClearingMessageIds(selection.outputIds);
   function startRetryAfterClear() {
@@ -179,12 +183,13 @@ function wbcHandleRetryMessage(context, messageId) {
       return !previous || String(previous.id || "") !== chatId
         ? previous : wbcClearModelOutputForRetry(previous, targetMessageId);
     });
-    var suppressed = { chatId: chatId, messageIds: selection.outputIds };
-    context.retrySuppressedTurnRef.current = suppressed;
-    context.setRetrySuppressedTurn(suppressed);
     context.setRetryClearingMessageIds([]);
     context.retryPendingChatIdRef.current = "";
-    context.runtimeEngine.start(chatId, { retry: true, mode: retryMode }, context.model);
+    context.runtimeEngine.start(chatId, {
+      retry: true,
+      mode: retryMode,
+      retryTruncateAfterMessageId: selection.truncateAfterMessageId,
+    }, context.model);
   }
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (!selection.outputIds.length || reduceMotion) { startRetryAfterClear(); return; }

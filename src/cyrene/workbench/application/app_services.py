@@ -191,11 +191,7 @@ def _public_chat_full(chat: Mapping[str, Any]) -> dict[str, Any]:
 def list_projects() -> list[dict[str, Any]]:
     payload = project_repository._read_workbench_store()
     return [
-        {
-            key: deepcopy(value)
-            for key, value in project.items()
-            if key != "sharedArtifacts"
-        }
+        deepcopy(project)
         for project in payload.get("projects", [])
         if isinstance(project, dict)
     ]
@@ -254,7 +250,6 @@ def create_project(name: str, *, description: str = "", workspace_path: str = ""
         },
         "createdAt": now,
         "updatedAt": now,
-        "sharedArtifacts": [],
     }
     payload.setdefault("projects", []).insert(0, project)
     payload["activeProjectId"] = project_id

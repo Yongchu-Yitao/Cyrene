@@ -14,9 +14,9 @@ def detect(workspace: Path, current_path: str):
     cwd = relative_scope(workspace, scope)
     suffix = scope_id(cwd)
     return [
-        workspace_action(f"rust.run.{suffix}", "Run Rust project", "run", "cargo", ["run"], cwd=cwd),
-        workspace_action(f"rust.build.{suffix}", "Build Rust project", "build", "cargo", ["build"], cwd=cwd),
-        workspace_action(f"rust.test.{suffix}", "Test Rust project", "test", "cargo", ["test"], cwd=cwd),
+        workspace_action(f"rust.run.{suffix}", "Run Rust project", "run", "cargo", ["run"], cwd=cwd, i18n={"zh": {"label": "运行 Rust 项目"}}),
+        workspace_action(f"rust.build.{suffix}", "Build Rust project", "build", "cargo", ["build"], cwd=cwd, i18n={"zh": {"label": "构建 Rust 项目"}}),
+        workspace_action(f"rust.test.{suffix}", "Test Rust project", "test", "cargo", ["test"], cwd=cwd, i18n={"zh": {"label": "测试 Rust 项目"}}),
     ]
 
 

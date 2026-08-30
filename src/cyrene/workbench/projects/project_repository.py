@@ -8,7 +8,6 @@ import threading
 from typing import Any
 
 from cyrene.config import DB_PATH, WORKSPACE_DIR
-from cyrene.workbench.artifacts import artifact_runtime
 from cyrene.workbench.persistence.store import patch_document_fields, read_document, write_document
 from cyrene.workbench.projects import project_runtime
 
@@ -45,7 +44,7 @@ def find_workbench_project_lightweight(project_id: str) -> dict[str, Any] | None
     if not isinstance(project, dict):
         return None
     result = dict(project)
-    relocated_root = artifact_runtime._workbench_workspace_root(result)
+    relocated_root = project_runtime._workbench_workspace_root(result)
     if relocated_root is not None:
         result["workspacePath"] = str(relocated_root)
     return result
@@ -53,7 +52,7 @@ def find_workbench_project_lightweight(project_id: str) -> dict[str, Any] | None
 
 def resolve_project_workspace_dir(project: dict[str, Any] | None) -> str:
     """Resolve and create the workspace owned by one Workbench project."""
-    root = artifact_runtime._workbench_workspace_root(project)
+    root = project_runtime._workbench_workspace_root(project)
     if root is None:
         return ""
     try:
@@ -127,7 +126,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
         )
         project.setdefault("createdAt", now)
         project.setdefault("updatedAt", now)
-        relocated_root = artifact_runtime._workbench_workspace_root(project)
+        relocated_root = project_runtime._workbench_workspace_root(project)
         if relocated_root is not None and str(project.get("workspacePath") or "") != str(relocated_root):
             project["workspacePath"] = str(relocated_root)
             changed = True

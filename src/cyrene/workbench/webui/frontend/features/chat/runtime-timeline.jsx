@@ -177,7 +177,7 @@ function wbcRetryTurnSelection(chat, messageId) {
       break;
     }
   }
-  if (userIndex < 0) return { userIndex: -1, endIndex: -1, outputIds: [] };
+  if (userIndex < 0) return { userIndex: -1, endIndex: -1, truncateAfterMessageId: "", outputIds: [] };
   var endIndex = messages.length;
   for (var nextIndex = userIndex + 1; nextIndex < messages.length; nextIndex++) {
     if (messages[nextIndex] && messages[nextIndex].role === "user") {
@@ -188,10 +188,30 @@ function wbcRetryTurnSelection(chat, messageId) {
   return {
     userIndex: userIndex,
     endIndex: endIndex,
+    truncateAfterMessageId: String(messages[userIndex] && messages[userIndex].id || ""),
     outputIds: messages.slice(userIndex + 1, endIndex).map(function (item) {
       return String(item && item.id || "");
     }).filter(Boolean),
   };
+}
+
+function wbcTruncateMessagesAfterUser(messages, truncateAfterMessageId) {
+  var list = Array.isArray(messages) ? messages : [];
+  var afterId = String(truncateAfterMessageId || "");
+  if (!afterId) return list;
+  var userIndex = list.findIndex(function (item) {
+    return String(item && item.id || "") === afterId && item && item.role === "user";
+  });
+  if (userIndex < 0) return list;
+  var endIndex = list.length;
+  for (var index = userIndex + 1; index < list.length; index += 1) {
+    if (list[index] && list[index].role === "user") {
+      endIndex = index;
+      break;
+    }
+  }
+  if (endIndex === userIndex + 1) return list;
+  return list.slice(0, userIndex + 1).concat(list.slice(endIndex));
 }
 
 function wbcClearModelOutputForRetry(chat, messageId) {
@@ -207,11 +227,19 @@ function wbcClearModelOutputForRetry(chat, messageId) {
 
 function wbcPreserveLiveTimelineAnchors(previousChat, hydratedChat, runtime) {
   if (!hydratedChat || !runtime) return hydratedChat;
+  var hydratedMessages = Array.isArray(hydratedChat.messages) ? hydratedChat.messages : [];
+  var messages = wbcTruncateMessagesAfterUser(
+    hydratedMessages,
+    runtime.retryTruncateAfterMessageId
+  );
   var liveUserMessages = Array.isArray(runtime.userMessages) ? runtime.userMessages : [];
-  if (!liveUserMessages.length || !Array.isArray(hydratedChat.messages)) return hydratedChat;
+  if (liveUserMessages.length) {
+    messages = wbcReconcileLiveUserMessages(messages, liveUserMessages);
+  }
+  if (messages === hydratedMessages) return hydratedChat;
   return {
     ...hydratedChat,
-    messages: wbcReconcileLiveUserMessages(hydratedChat.messages, liveUserMessages),
+    messages: messages,
   };
 }
 
@@ -279,6 +307,16 @@ function wbcMergeChronologicalMessages(messages, additions) {
 function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
   if (!chat) return chat;
   var current = Array.isArray(chat.messages) ? chat.messages : [];
+  var renderKeysById = {};
+  (Array.isArray(assistantMessages) ? assistantMessages : []).forEach(function (message) {
+    var id = String(message && message.id || "");
+    var renderKey = String(message && message.replyRenderKey || "");
+    if (id && renderKey) renderKeysById[id] = renderKey;
+  });
+  var currentWithRenderKeys = current.map(function (message) {
+    var renderKey = renderKeysById[String(message && message.id || "")];
+    return renderKey ? { ...message, replyRenderKey: renderKey } : message;
+  });
   var knownIds = new Set(current.map(function (message) {
     return String(message && message.id || "");
   }));
@@ -292,7 +330,7 @@ function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
     ...chat,
     status: "idle",
     liveAgentArtifacts: [],
-    messages: wbcMergeChronologicalMessages(current, additions),
+    messages: wbcMergeChronologicalMessages(currentWithRenderKeys, additions),
   };
 }
 
@@ -598,4 +636,4 @@ function wbcPersistDurableTrace(chatId, payload) {
   } catch (e) {}
 }
 
-export { wbcChatCacheState, wbcLastChatByProject, wbcChatCache, wbcRenderMarkdown, wbcRenderMapMarkdown, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, WbcSplitPickerMenu, wbcFormatTime, wbcFormatProcessingDuration, wbcConfirmOptimisticMessage, wbcReconcileLiveUserMessages, wbcRetryTurnSelection, wbcClearModelOutputForRetry, wbcPreserveLiveTimelineAnchors, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcFinalizeRuntime, wbcCreateDetachedRuntime, wbcReduceDetachedRuntime, wbcMergeToolLifecycleEntry, wbcToolEntryIsTerminal, wbcToolOccurrenceIndex, wbcMergeToolOccurrence, WBC_DURABLE_TRACE_FIELDS, wbcCleanDurableTraceEntry, wbcDurableTracePayload, wbcPersistDurableTrace }
+export { wbcChatCacheState, wbcLastChatByProject, wbcChatCache, wbcRenderMarkdown, wbcRenderMapMarkdown, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, WbcSplitPickerMenu, wbcFormatTime, wbcFormatProcessingDuration, wbcConfirmOptimisticMessage, wbcReconcileLiveUserMessages, wbcRetryTurnSelection, wbcTruncateMessagesAfterUser, wbcClearModelOutputForRetry, wbcPreserveLiveTimelineAnchors, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcFinalizeRuntime, wbcCreateDetachedRuntime, wbcReduceDetachedRuntime, wbcMergeToolLifecycleEntry, wbcToolEntryIsTerminal, wbcToolOccurrenceIndex, wbcMergeToolOccurrence, WBC_DURABLE_TRACE_FIELDS, wbcCleanDurableTraceEntry, wbcDurableTracePayload, wbcPersistDurableTrace }

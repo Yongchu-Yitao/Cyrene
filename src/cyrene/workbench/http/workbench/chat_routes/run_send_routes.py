@@ -23,6 +23,7 @@ from cyrene.workbench.chat.chat_reply_finalization_service import (
     ChatReplyFinalizationDependencies,
     ChatReplyFinalizationRequest,
 )
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.chat.chat_run_lifecycle_service import (
     ChatRunDispatchResult,
     ChatRunLifecycleApplicationService,
@@ -184,7 +185,22 @@ class _SendOperation:
             return error
         error = await self._begin_plugin_workflow()
         if error is not None:
+            try:
+                await self._rollback_persisted_user_turn()
+            except Exception:
+                logger.exception(
+                    "Failed to roll back persisted workflow message for %s",
+                    self.chat_id,
+                )
+                return localized_error_response(
+                    "The workflow failed and its conversation state could not be restored.",
+                    "工作流启动失败，且无法恢复对话状态。",
+                    500,
+                    "workflow_rollback_failed",
+                    language=self.lang,
+                )
             return error
+        await self._finalize_persisted_user_turn()
         self._build_agent_message()
         if self.is_external_agent:
             await self._capture_state_ids()
@@ -709,6 +725,9 @@ class _SendOperation:
             self.chat,
             base_chat=self.base_chat,
         )
+        return None
+
+    async def _finalize_persisted_user_turn(self) -> None:
         if self.normalized and not self.retry:
             await self.routes.register_attachments_kb(self.chat_id, self.normalized)
         if self.should_generate_title:
@@ -718,7 +737,23 @@ class _SendOperation:
                 message=self.public_message,
             )
             track_session_title_task(asyncio.create_task(task))
-        return None
+
+    async def _rollback_persisted_user_turn(self) -> None:
+        snapshot = copy.deepcopy(self.base_chat)
+
+        def restore(chat: dict[str, Any]) -> None:
+            chat.clear()
+            chat.update(copy.deepcopy(snapshot))
+
+        restored = await asyncio.to_thread(
+            self.service.repository.mutate_one,
+            self.chat_id,
+            restore,
+        )
+        if restored is None:
+            raise RuntimeError("Conversation disappeared while rolling back workflow start")
+        self.chat = copy.deepcopy(dict(restored))
+        await self._restore_retry_state_async()
 
     async def _restore_retry_state_async(self) -> None:
         if self.retry_state_backup is None:
@@ -980,6 +1015,7 @@ class _SendOperation:
             question = self.service.pending_question_message(
                 pending,
                 usage=usage,
+                latest_request_usage=self.external.latest_request_usage,
                 files=files,
                 model=model,
             )
@@ -1001,13 +1037,10 @@ class _SendOperation:
         self.service.repository.write_one(chat, base_chat=base_chat)
 
     def _runtime_message_fields(self, result: Any) -> dict[str, Any]:
-        fields: dict[str, Any] = {}
-        usage = dict(getattr(result, "usage", {}) or {})
-        if any(usage.values()):
-            fields["usage"] = usage
-        latest_usage = dict(getattr(result, "latest_request_usage", {}) or {})
-        if any(latest_usage.values()):
-            fields["latestRequestUsage"] = latest_usage
+        fields: dict[str, Any] = runtime_usage_message_fields(
+            getattr(result, "usage", None),
+            getattr(result, "latest_request_usage", None),
+        )
         identity = dict(getattr(result, "model_identity", {}) or {})
         if identity:
             fields["modelIdentity"] = identity
@@ -1051,6 +1084,9 @@ class _SendOperation:
                 question = self.service.pending_question_message(
                     pending,
                     usage=dict(getattr(result, "usage", {}) or {}),
+                    latest_request_usage=dict(
+                        getattr(result, "latest_request_usage", {}) or {}
+                    ),
                     model=model,
                 )
                 additions = [*timeline, question]

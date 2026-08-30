@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from cyrene.config import WORKSPACE_DIR
+from cyrene.config import WORKSPACE_DIR, cyrene_dir
 from cyrene.localization import localized
 
 def _safe_workbench_data_key(value: Any) -> str:
@@ -30,6 +31,22 @@ def _workbench_project_resource_key(project: dict[str, Any] | None) -> str:
     if not project:
         return 'default'
     return _safe_workbench_data_key(project.get('id'))
+
+def _workbench_workspace_root(project: dict[str, Any] | None) -> Path | None:
+    """Resolve the workspace currently owned by a Workbench project."""
+    project_id = str((project or {}).get("id") or "").strip()
+    workspace_source = str(
+        (project or {}).get("workspacePathSource") or ""
+    ).strip().lower()
+    if workspace_source == "generated" and project_id:
+        return (cyrene_dir(WORKSPACE_DIR) / "projects" / project_id).resolve()
+    workspace_path = str((project or {}).get("workspacePath") or "").strip()
+    if not workspace_path:
+        return None
+    try:
+        return Path(workspace_path).expanduser().resolve()
+    except OSError:
+        return None
 
 def _primary_candidate() -> dict[str, Any]:
     from cyrene.core.plugin import application_plugin_service
@@ -123,7 +140,7 @@ def _workbench_default_project() -> dict[str, Any]:
         f'Workspace at {WORKSPACE_DIR}',
         f'工作区位于 {WORKSPACE_DIR}',
     )
-    return {'projects': [{'id': project_id, 'name': workspace_name, 'dataKey': _safe_workbench_data_key(project_id), 'workspacePath': str(WORKSPACE_DIR), 'workspacePathSource': 'user', 'status': 'active', 'model': _get_model(), 'accountTier': 'Pro', 'context': {'summary': workspace_summary, 'stack': [], 'decisions': [], 'knowledgeDocumentIds': []}, 'createdAt': now, 'updatedAt': now, 'sharedArtifacts': []}], 'activeProjectId': project_id}
+    return {'projects': [{'id': project_id, 'name': workspace_name, 'dataKey': _safe_workbench_data_key(project_id), 'workspacePath': str(WORKSPACE_DIR), 'workspacePathSource': 'user', 'status': 'active', 'model': _get_model(), 'accountTier': 'Pro', 'context': {'summary': workspace_summary, 'stack': [], 'decisions': [], 'knowledgeDocumentIds': []}, 'createdAt': now, 'updatedAt': now}], 'activeProjectId': project_id}
 
 workbench_project_data_key = _workbench_project_data_key
 

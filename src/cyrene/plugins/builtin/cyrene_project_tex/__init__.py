@@ -19,6 +19,7 @@ def detect(workspace: Path, current_path: str):
         f"tex.build.{scope_id(relative)}", "Build document", "build",
         "latexmk", ["-pdf", "-interaction=nonstopmode", relative],
         artifacts=[str(Path(relative).with_suffix(".pdf"))],
+        i18n={"zh": {"label": "构建文档"}},
     )]
 
 

@@ -51,6 +51,45 @@ async def test_project_file_service_owns_utf8_read_and_write(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_project_file_write_preserves_existing_final_newline_and_bom(tmp_path):
+    service = _file_service(tmp_path)
+    target = tmp_path / "src" / "example.py"
+    target.parent.mkdir()
+    target.write_bytes(b"\xef\xbb\xbfprint('before')\r\n")
+
+    await service.write_code_file("src/example.py", "print('after')")
+
+    assert target.read_bytes() == b"\xef\xbb\xbfprint('after')\r\n"
+
+
+@pytest.mark.asyncio
+async def test_project_file_write_adds_final_newline_to_new_text_file(tmp_path):
+    service = _file_service(tmp_path)
+
+    await service.write_code_file("src/example.py", "print('ok')")
+
+    assert (tmp_path / "src" / "example.py").read_bytes() == b"print('ok')\n"
+
+
+@pytest.mark.asyncio
+async def test_editable_save_returns_the_normalized_persisted_content(tmp_path):
+    service = _file_service(tmp_path)
+    target = tmp_path / "example.py"
+    target.write_bytes(b"print('before')\n")
+    opened = service.read_editable("project_1", "example.py")
+
+    saved = await service.save_editable(
+        "project_1",
+        "example.py",
+        "print('after')",
+        expected_version=opened["version"],
+    )
+
+    assert saved["content"] == "print('after')\n"
+    assert target.read_bytes() == b"print('after')\n"
+
+
+@pytest.mark.asyncio
 async def test_workspace_diff_synthesizes_untracked_text_file(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     target = tmp_path / "notes.txt"

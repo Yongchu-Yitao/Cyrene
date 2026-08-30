@@ -191,6 +191,7 @@ function wbProjectExecutionAction(value, index) {
   return {
     id: String(item.id || "custom-" + (index + 1)),
     label: String(item.label || ""),
+    i18n: item.i18n && typeof item.i18n === "object" ? item.i18n : {},
     kind: String(item.kind || "run"),
     program: String(item.program || ""),
     argsText: Array.isArray(item.args) ? item.args.join(" ") : String(item.argsText || ""),
@@ -209,6 +210,7 @@ function wbProjectExecutionPayload(actions) {
     return {
       id: String(item.id || "custom-" + (index + 1)).trim(),
       label: String(item.label || item.id || "").trim(),
+      i18n: item.i18n && typeof item.i18n === "object" ? item.i18n : {},
       kind: String(item.kind || "run"),
       program: String(item.program || "").trim(),
       args: args.map(function (value) { return value.replace(/^"|"$/g, ""); }),
@@ -254,20 +256,13 @@ function WorkbenchProjectExecutionEditor({ actions, busy, detecting, onAdd, onDe
   </React.Fragment>;
 }
 
-function WorkbenchEditProjectModal({ project, onClose, onSave }) {
-  var { t } = workbenchServices.i18n().use();
-  var [name, setName] = useWorkbenchState(project.name || "");
-  var [description, setDescription] = useWorkbenchState(project.description || "");
-  var [workspacePath, setWorkspacePath] = useWorkbenchState(project.workspacePath || "");
-  var [color, setColor] = useWorkbenchState(project.color || "#22b07a");
-  var [executionScope, setExecutionScope] = useWorkbenchState(project.executionScope || ".");
-  var [executionActions, setExecutionActions] = useWorkbenchState(function () {
+function useWorkbenchProjectExecutionDraft(project, setError) {
+  var [scope, setScope] = useWorkbenchState(project.executionScope || ".");
+  var [actions, setActions] = useWorkbenchState(function () {
     return (project.executionActions || []).map(wbProjectExecutionAction);
   });
   var [detecting, setDetecting] = useWorkbenchState(false);
-  var [busy, setBusy] = useWorkbenchState(false);
-  var [error, setError] = useWorkbenchState("");
-  function detectActions() {
+  function detect() {
     if (!project.id) return Promise.resolve();
     setDetecting(true);
     setError("");
@@ -275,24 +270,27 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
       "/api/code/workspace-actions?projectId=" + encodeURIComponent(project.id),
       { toast: false }
     ).then(function (payload) {
-      setExecutionActions((payload.actions || []).map(wbProjectExecutionAction));
-      if (payload.executionScope) setExecutionScope(payload.executionScope);
+      setActions((payload.actions || []).map(wbProjectExecutionAction));
+      if (payload.executionScope) setScope(payload.executionScope);
     }).catch(function (err) {
       setError(wbErrorText(err));
     }).finally(function () { setDetecting(false); });
   }
   useWorkbenchEffect(function () {
-    if (!executionActions.length) detectActions();
+    if (!actions.length) detect();
   }, [project.id]);
-  function updateAction(index, field, value) {
-    setExecutionActions(function (current) {
+  function update(index, field, value) {
+    setActions(function (current) {
       return current.map(function (item, itemIndex) {
-        return itemIndex === index ? Object.assign({}, item, { [field]: value }) : item;
+        if (itemIndex !== index) return item;
+        var updates = { [field]: value };
+        if (field === "label") updates.i18n = {};
+        return Object.assign({}, item, updates);
       });
     });
   }
-  function addAction() {
-    setExecutionActions(function (current) {
+  function add() {
+    setActions(function (current) {
       var number = 1;
       while (current.some(function (item) { return item.id === "custom-" + number; })) number += 1;
       return current.concat([wbProjectExecutionAction({
@@ -301,6 +299,23 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
       }, current.length)]);
     });
   }
+  function remove(index) {
+    setActions(function (current) {
+      return current.filter(function (_, itemIndex) { return itemIndex !== index; });
+    });
+  }
+  return { actions: actions, add: add, detect: detect, detecting: detecting, remove: remove, scope: scope, setScope: setScope, update: update };
+}
+
+function WorkbenchEditProjectModal({ project, onClose, onSave }) {
+  var { t } = workbenchServices.i18n().use();
+  var [name, setName] = useWorkbenchState(project.name || "");
+  var [description, setDescription] = useWorkbenchState(project.description || "");
+  var [workspacePath, setWorkspacePath] = useWorkbenchState(project.workspacePath || "");
+  var [color, setColor] = useWorkbenchState(project.color || "#22b07a");
+  var [busy, setBusy] = useWorkbenchState(false);
+  var [error, setError] = useWorkbenchState("");
+  var execution = useWorkbenchProjectExecutionDraft(project, setError);
   function save() {
     var trimmed = name.trim();
     if (!trimmed) { setError(t("create.project.error.nameRequired")); return; }
@@ -311,8 +326,8 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
       description: description.trim(),
       workspacePath: workspacePath.trim(),
       color: color,
-      executionScope: executionScope.trim() || ".",
-      executionActions: wbProjectExecutionPayload(executionActions),
+      executionScope: execution.scope.trim() || ".",
+      executionActions: wbProjectExecutionPayload(execution.actions),
     })).catch(function (err) {
       setBusy(false);
       setError(wbErrorText(err));
@@ -335,10 +350,9 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
           <label>{t("create.project.workspacePath")}</label>
           <input value={workspacePath} onChange={function (e) { setWorkspacePath(e.target.value); }} />
           <WorkbenchProjectExecutionEditor
-            actions={executionActions} busy={busy} detecting={detecting}
-            onAdd={addAction} onDetect={detectActions}
-            onRemove={function (index) { setExecutionActions(function (current) { return current.filter(function (_, itemIndex) { return itemIndex !== index; }); }); }}
-            onUpdate={updateAction} scope={executionScope} setScope={setExecutionScope} t={t}
+            actions={execution.actions} busy={busy} detecting={execution.detecting}
+            onAdd={execution.add} onDetect={execution.detect} onRemove={execution.remove}
+            onUpdate={execution.update} scope={execution.scope} setScope={execution.setScope} t={t}
           />
           <label>{t("create.project.color")}</label>
           <input className="workbench-project-color-input" type="color" value={color || "#22b07a"} onChange={function (e) { setColor(e.target.value); }} />

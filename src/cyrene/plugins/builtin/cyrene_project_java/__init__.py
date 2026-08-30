@@ -16,13 +16,13 @@ def detect(workspace: Path, current_path: str):
     if (scope / "pom.xml").exists():
         program = "./mvnw" if (scope / "mvnw").is_file() else "mvn"
         return [
-            workspace_action(f"java.build.{suffix}", "Build Maven project", "build", program, ["package"], cwd=cwd),
-            workspace_action(f"java.test.{suffix}", "Test Maven project", "test", program, ["test"], cwd=cwd),
+            workspace_action(f"java.build.{suffix}", "Build Maven project", "build", program, ["package"], cwd=cwd, i18n={"zh": {"label": "构建 Maven 项目"}}),
+            workspace_action(f"java.test.{suffix}", "Test Maven project", "test", program, ["test"], cwd=cwd, i18n={"zh": {"label": "测试 Maven 项目"}}),
         ]
     program = "./gradlew" if (scope / "gradlew").is_file() else "gradle"
     return [
-        workspace_action(f"java.build.{suffix}", "Build Gradle project", "build", program, ["build"], cwd=cwd),
-        workspace_action(f"java.test.{suffix}", "Test Gradle project", "test", program, ["test"], cwd=cwd),
+        workspace_action(f"java.build.{suffix}", "Build Gradle project", "build", program, ["build"], cwd=cwd, i18n={"zh": {"label": "构建 Gradle 项目"}}),
+        workspace_action(f"java.test.{suffix}", "Test Gradle project", "test", program, ["test"], cwd=cwd, i18n={"zh": {"label": "测试 Gradle 项目"}}),
     ]
 
 

@@ -1663,11 +1663,45 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
         "function wbcCloseDeletedChatSplits", 1
     )[0]
     assert "paneLayoutRestoreRef.current[card.id] = layout" in opener
-    assert "next.left = [source.card]" in opener
-    assert "next.right = [card]" in opener
+    assert "wbcPromotePaneSourceLayout(layout, source, card)" in opener
     assert "restore: !!floating" in panel
     assert "promoteSourceLeft: true" in panel
     assert "wbcUpdatePaneLayout(context, restore, ownerChatId)" in closer
+
+
+def test_opening_content_from_a_vertical_split_preserves_both_existing_panes():
+    pane_controller = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    helper = "function wbcPromotePaneSourceLayout" + pane_controller.split(
+        "function wbcPromotePaneSourceLayout", 1
+    )[1].split("function wbcOpenPaneContent", 1)[0]
+    script = f"""
+eval({json.dumps(helper)});
+const top = {{ id: "top" }};
+const bottom = {{ id: "bottom" }};
+const existingRight = {{ id: "existing-right" }};
+const opened = {{ id: "opened" }};
+const vertical = wbcPromotePaneSourceLayout(
+  {{ left: [top, bottom], right: [], leftRatio: 0.4, rightRatio: 0.5 }},
+  {{ side: "left", index: 0, card: top }},
+  opened
+);
+const occupied = wbcPromotePaneSourceLayout(
+  {{ left: [top], right: [existingRight], leftRatio: 0.4, rightRatio: 0.5 }},
+  {{ side: "left", index: 0, card: top }},
+  opened
+);
+process.stdout.write(JSON.stringify({{
+  vertical: [vertical.left.map(card => card.id), vertical.right.map(card => card.id)],
+  occupied: [occupied.left.map(card => card.id), occupied.right.map(card => card.id)],
+}}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(result.stdout) == {
+        "vertical": [["top", "bottom"], ["opened"]],
+        "occupied": [["top"], ["opened"]],
+    }
 
 
 def test_workbench_message_viewer_action_opens_the_file_split_directly():
@@ -1750,6 +1784,7 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
 
 def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     source = workbench_chat_source()
+    resource_list = frontend_module_source("features/chat/resource-list.jsx")
     split_controller = frontend_module_source("features/chat/split-selection-controller.jsx")
     styles = workbench_style_source()
 
@@ -1765,7 +1800,8 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
 
     assert 'workbenchChat.filesAndArtifacts' not in artifact_tab
     assert 'className="wbc-artifact-list"' in artifact_tab
-    assert 'className="wbc-artifact-list-row"' in artifact_tab
+    assert "<WbcResourceListRow" in artifact_tab
+    assert 'className={"wbc-artifact-list-row"' in resource_list
     assert "if (onSelectArtifact) onSelectArtifact(file);" in artifact_tab
     assert "context.setArtifactSplitByChat" in select_handler
     assert 'wbcClearOtherSplits(context, chatId, "artifact")' in select_handler
@@ -1813,12 +1849,9 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     source = workbench_chat_source()
     styles = workbench_style_source()
 
-    project_resource = source.split("function wbcProjectFileResource", 1)[1].split(
-        "function WbcRail", 1
-    )[0]
-    project_rows = source.split('id="wbc-project-file-list"', 1)[1].split(
-        'id="wbc-project-terminal-list"', 1
-    )[0]
+    project_resource = frontend_module_source("features/chat/rail-model.jsx")
+    project_rows = frontend_module_source("features/chat/project-files.jsx")
+    project_files = frontend_module_source("features/chat/project-files.jsx")
     project_browser = source.split("function WbcRail", 1)[1].split(
         "function WbcBrowserFloatingSurface", 1
     )[0]
@@ -1857,7 +1890,8 @@ def test_project_file_rows_drag_to_viewer_split_and_topbar_resource_shelf():
     assert 'return { projectId: String(projectId || ""), path: "." };' in project_browser
     assert "fileLocation.projectId === currentFileProjectId" in project_browser
     assert 'setQuery("");' in project_browser
-    assert "setFileEntries([]);" in project_browser
+    assert 'var key = normalizedProjectId + ":" + normalizedPath' in project_files
+    assert 'if (snapshot.key !== key) return { entries: []' in project_files
 
 
 def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
@@ -1887,10 +1921,8 @@ def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
     assert pane_card_renderer.index("if (isActiveConversation && singlePane)") < pane_card_renderer.index(
         '} else if (card.kind === "chat")'
     )
-    split_chat = source.split("function WbcChatSplit({", 1)[1].split(
-        "function WbcSideAgentSplitResizer", 1
-    )[0]
-    empty_id_guard = split_chat.split("function refresh(background)", 1)[1].split(
+    split_pane = frontend_module_source("features/chat/split-pane.jsx")
+    empty_id_guard = split_pane.split("function wbcRefreshSplitChat(options)", 1)[1].split(
         "return WorkbenchChatModel.getChat", 1
     )[0]
     assert "if (!requestedId)" in empty_id_guard
@@ -1926,7 +1958,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/cyrene/workbench/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -1979,9 +2011,7 @@ def test_workbench_changes_panel_is_list_only_and_opens_shared_diff_split():
     assert "display: flex;" in change_diff_styles
     assert "flex-direction: column;" in change_diff_styles
     assert "min-height: 0;" in change_diff_styles
-    diff_content_styles = styles.split(
-        ".wbc-change-diff .diff-viewer-content {", 1
-    )[1].split("}", 1)[0]
+    diff_content_styles = styles.split(".diff-viewer-content {", 1)[1].split("}", 1)[0]
     assert "overflow-y: auto;" in diff_content_styles
 
 
@@ -1997,7 +2027,7 @@ def test_workbench_resource_tabs_use_lists_and_shared_splits_while_branches_expa
     assert 'activeTab === "viewer" && <WbcViewerList' in side
     assert 'activeTab === "map" && mapAvailable !== false && <WbcMapList' in side
     assert '<WbcBrowserList browserState={browserPanelState}' in side
-    assert 'var opensSplit = item.id === "subagents" || item.id === "browser";' in side
+    assert 'var opensSplit = item.id === "subagents" || item.id === "browser" || item.id === "workspace";' in side
     assert 'if (item.id === "subagents" && onOpenSubagents) onOpenSubagents();' in side
     assert 'activeTab === "branches" && <WbcBranchTab' in side
     assert "function WbcMapSplitHost" in source
@@ -2499,7 +2529,8 @@ def test_background_chat_completion_updates_detail_cache_before_runtime_is_clear
     assert 'wbcSettleChatListItem(projected, "completed", terminalEvent)' in saved_hook
     assert "beginChatListRequest(currentProjectId)" in saved_hook
     assert "onSettled: function" not in source
-    assert "context.chatCache.details[chatId] = chat;" in resync_hook
+    assert "context.isCurrentChatHydration(chatId, hydrationSequence)" in resync_hook
+    assert "context.chatCache.details[chatId] = wbcPreserveLiveTimelineAnchors(cachedChat, chat, runtime);" in resync_hook
 
 
 def test_saved_assistant_messages_merge_reasoning_into_stale_background_chat():
@@ -3064,8 +3095,53 @@ def test_workbench_hydration_cannot_remove_the_live_user_turn():
         "function wbcRuntimeResync(context, chatId) {", 1
     )[1].split("function wbcRuntimePageHooks", 1)[0]
     assert "isCurrentChatHydration(activeChatId, hydrationSequence)" in selection_hydration
+    assert "runtimeEngine.get(activeChatId)" in selection_hydration
     assert "var hydrationSequence = context.beginChatHydration(chatId);" in resync_hydration
     assert "if (!context.isCurrentChatHydration(chatId, hydrationSequence)) return;" in resync_hydration
+    assert "wbcPreserveLiveTimelineAnchors" in resync_hydration
+    assert "var runtime = context.runtimeEngine.get(chatId);" in resync_hydration
+
+
+def test_workbench_retry_hydration_cannot_restore_removed_model_output():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const hydrated = {
+    messages: [
+      { id: "user-retry", role: "user", content: "do it" },
+      { id: "old-activity", role: "assistant", content: "" },
+      { id: "old-reply", role: "assistant", content: "old answer" }
+    ]
+  };
+  const runtime = {
+    chatId: "chat-retry",
+    retry: true,
+    retryTruncateAfterMessageId: "user-retry",
+    userMessages: []
+  };
+  const reconciled = wbcPreserveLiveTimelineAnchors(
+    { messages: [{ id: "user-retry", role: "user", content: "do it" }] },
+    hydrated,
+    runtime
+  );
+  return reconciled.messages.map(item => item.id);
+})()
+"""
+    )
+
+    assert result == ["user-retry"]
+
+    source = workbench_chat_source()
+    load_effect = source.split("// Load the full transcript when the selection changes.", 1)[1].split(
+        "// Viewer / content tabs belong to one conversation", 1
+    )[0]
+    cache_adoption = load_effect.split(
+        "var cachedChat = activeChatId ?", 1
+    )[1].split("var hydrationSequence", 1)[0]
+    assert cache_adoption.index("wbcPreserveLiveTimelineAnchors(") < cache_adoption.index(
+        "setActiveChat(cachedChat)"
+    )
+    assert "runtimeEngine.get(activeChatId)" in cache_adoption
 
 
 def test_workbench_timeline_compares_real_instants_not_timestamp_strings():
@@ -3451,12 +3527,91 @@ def test_workbench_runtime_summary_ignores_token_only_updates():
     assert result == {"afterStart": 1, "afterReply": 2, "afterClear": 3}
 
 
+def test_workbench_retry_boundary_survives_page_unmount_and_reconnect_ack():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  let handlers = null;
+  WorkbenchChatRuntimes.start(
+    "chat-retry",
+    { retry: true, retryTruncateAfterMessageId: "user-local" },
+    {
+      sendMessage: (_chatId, _input, nextHandlers) => {
+        handlers = nextHandlers;
+        return new Promise(() => {});
+      }
+    }
+  );
+  const beforeUnmount = WorkbenchChatRuntimes.get("chat-retry").retryTruncateAfterMessageId;
+  WorkbenchChatRuntimes.setHooks(null);
+  const afterUnmount = WorkbenchChatRuntimes.get("chat-retry").retryTruncateAfterMessageId;
+  handlers.onAck({
+    retry: true,
+    truncateAfterMessageId: "user-server"
+  });
+  const afterAck = WorkbenchChatRuntimes.get("chat-retry").retryTruncateAfterMessageId;
+  WorkbenchChatRuntimes.clear("chat-retry");
+  return { beforeUnmount, afterUnmount, afterAck };
+})()
+"""
+    )
+
+    assert result == {
+        "beforeUnmount": "user-local",
+        "afterUnmount": "user-local",
+        "afterAck": "user-server",
+    }
+
+
+def test_workbench_retry_boundary_removes_only_the_retried_model_output():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const messages = [
+    { id: "user-before", role: "user" },
+    { id: "assistant-before", role: "assistant" },
+    { id: "user-retry", role: "user" },
+    { id: "old-rehydrated-reasoning", role: "assistant" },
+    { id: "old-rehydrated-reply", role: "assistant" },
+    { id: "user-later", role: "user" },
+    { id: "assistant-later", role: "assistant" }
+  ];
+  const truncated = wbcTruncateMessagesAfterUser(messages, "user-retry");
+  const alreadyTruncated = [
+    { id: "user-before", role: "user" },
+    { id: "assistant-before", role: "assistant" },
+    { id: "user-retry", role: "user" }
+  ];
+  return {
+    ids: truncated.map(item => item.id),
+    preservesIdentity: wbcTruncateMessagesAfterUser(
+      alreadyTruncated,
+      "user-retry"
+    ) === alreadyTruncated
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "ids": [
+            "user-before",
+            "assistant-before",
+            "user-retry",
+            "user-later",
+            "assistant-later",
+        ],
+        "preservesIdentity": True,
+    }
+
+
 def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
     root = Path(__file__).resolve().parent.parent
     source = workbench_chat_source()
     quick_source = (
         root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
+    runtime_source = frontend_module_source("features/chat/file-resources.jsx")
 
     start_block = source.split("function start(chatId, input, model)", 1)[1].split(
         "function reconnect(chatId, model, preserveRuntime)", 1
@@ -3470,8 +3625,13 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
     assert "attachments: Array.isArray(input.attachments)" in start_block
     assert start_block.index('fire("onUserMessage"') < start_block.index("update(chatId")
     assert "optimisticUserMessageId" in start_block
-    assert 'fire("onUserMessageConfirmed"' in ack_block
-    assert "optimisticId" in ack_block
+    assert "retryTruncateAfterMessageId: retryTruncateAfterMessageId" in start_block
+    assert "retrySuppressedMessageIds" not in start_block
+    assert "wbcHandleRuntimeAck(event" in ack_block
+    assert 'context.fire("onUserMessageConfirmed"' in runtime_source
+    assert "optimisticId" in runtime_source
+    assert 'context.fire("onRetryTruncate", context.chatId, retryTruncateAfterMessageId);' in runtime_source
+    assert "retryReplacedMessageIds" not in ack_block
     assert "onUserMessageConfirmed: function" in source
     assert "onUserMessageConfirmed: function" in quick_source
     assert "quickChatConfirmUserMessage" in quick_source
@@ -4821,7 +4981,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -5365,6 +5525,32 @@ def test_workbench_split_chat_renders_and_answers_pending_question():
     assert "chat.pendingQuestion" in split_chat
     assert "<WbcQuestionPrompt" in split_chat
     assert "onAnswer={answerPendingQuestion}" in split_chat
+
+
+def test_workbench_split_chat_adopts_retry_boundary_as_transcript_state():
+    source = workbench_chat_source()
+    split_pane = frontend_module_source("features/chat/split-pane.jsx")
+    split_chat = source.split("function WbcChatSplit({", 1)[1].split(
+        "function WbcSideAgentSplitResizer", 1
+    )[0]
+    refresh = split_pane.split("function wbcRefreshSplitChat(options)", 1)[1].split(
+        "function WbcChatSplit({", 1
+    )[0]
+    runtime_effect = split_chat.split(
+        "function applyRuntime(snapshot)", 1
+    )[1].split("useWbcLayoutEffect(function ()", 1)[0]
+
+    assert "var requestSequence = ++options.refreshSequenceRef.current;" in refresh
+    assert "options.refreshSequenceRef.current !== requestSequence" in refresh
+    assert "options.runtimeEngine.get(requestedId)" in refresh
+    assert refresh.index("wbcPreserveLiveTimelineAnchors(") < refresh.index("options.setChat(reconciled)")
+    assert "if (next && next.retryTruncateAfterMessageId)" in runtime_effect
+    assert "setChat(function (current)" in runtime_effect
+    assert "wbcPreserveLiveTimelineAnchors(current, current, next)" in runtime_effect
+    projection = split_chat.split("var messages = wbcReconcileLiveUserMessages(", 1)[1].split(
+        "var displayMessages", 1
+    )[0]
+    assert "retryTruncateAfterMessageId" not in projection
 
 
 def test_permission_prompt_localizes_capability_ids_and_hides_internal_fingerprint():
@@ -6801,25 +6987,43 @@ def test_workbench_chat_retry_clears_model_output_before_start_and_reconciles_te
     assert 'messages[i].role === "user"' in selection_helper
     assert 'messages[nextIndex].role === "user"' in selection_helper
     assert "messages.slice(userIndex + 1, endIndex)" in selection_helper
+    assert "truncateAfterMessageId" in selection_helper
     assert "chat.messages.slice(0, selection.userIndex + 1).concat(chat.messages.slice(selection.endIndex))" in clear_helper
     assert "wbcClearModelOutputForRetry(cached, targetMessageId)" in retry_block
     assert "wbcClearModelOutputForRetry(previous, targetMessageId)" in retry_block
+    assert "context.beginChatHydration(chatId);" in retry_block
+    assert retry_block.index("context.beginChatHydration(chatId);") < retry_block.index("setRetryClearingMessageIds")
     assert "setRetryClearingMessageIds(selection.outputIds);" in retry_block
-    assert "context.retrySuppressedTurnRef.current = suppressed;" in retry_block
-    assert "context.setRetrySuppressedTurn(suppressed);" in retry_block
     assert "context.retryClearCommitRef.current = startRetryAfterClear;" in retry_block
     assert "setTimeout(startRetryAfterClear" not in retry_block
     assert 'event.animationName === "wbc-retry-output-clear"' in source
     assert "onRetryClearAnimationEnd();" in source
-    assert 'context.runtimeEngine.start(chatId, { retry: true, mode: retryMode }, context.model);' in retry_block
+    assert "context.runtimeEngine.start(chatId, {" in retry_block
+    assert "retry: true" in retry_block
+    assert "mode: retryMode" in retry_block
+    assert "retryTruncateAfterMessageId: selection.truncateAfterMessageId" in retry_block
+    assert "retrySuppressed" not in retry_block
     assert 'className={retryClearing ? "retry-clearing" : ""}' in source
-    assert "retrySuppressedIds.has(String(message && message.id || \"\"))" in source
-    retry_truncate = runtime_hooks.split("function wbcRuntimeRetryTruncate(context, chatId, truncateInfo) {", 1)[1].split(
+    projection = source.split("function useWbcConversationProjection(", 1)[1].split(
+        "function wbcRenderHistoryMessage", 1
+    )[0]
+    assert "retryTruncateAfterMessageId" not in projection
+    assert "retrySuppressed" not in projection
+    retry_truncate = runtime_hooks.split("function wbcRuntimeRetryTruncate(context, chatId, truncateAfterMessageId) {", 1)[1].split(
         "function wbcRuntimeReplyStream", 1
     )[0]
-    assert "retrySuppressedTurnRef.current" in retry_truncate
-    assert ".concat(locallySuppressedIds)" in retry_truncate
-    assert 'retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };' in retry_truncate
+    assistant_saved = runtime_hooks.split("function wbcRuntimeAssistantSaved(context, chatId, assistantMessages, terminalEvent) {", 1)[1].split(
+        "function wbcRuntimeAgentArtifact", 1
+    )[0]
+    awaiting_user = runtime_hooks.split("function wbcRuntimeAwaitingUser(context, chatId, pendingQuestion) {", 1)[1].split(
+        "function wbcRuntimeInterrupted", 1
+    )[0]
+    assert "wbcTruncateMessagesAfterUser" in retry_truncate
+    assert "context.beginChatHydration(chatId);" in retry_truncate
+    assert "replacedIds" not in retry_truncate
+    assert "retrySuppressed" not in retry_truncate
+    assert "context.beginChatHydration(chatId);" in assistant_saved
+    assert "context.beginChatHydration(chatId);" in awaiting_user
     styles = workbench_style_source()
     clear_animation = styles.split(".wbc-thread-item.retry-clearing {", 1)[1].split("}", 1)[0]
     assert "animation: wbc-retry-output-clear 180ms" in clear_animation
@@ -6997,18 +7201,21 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     live_message = chat.split("function WbcLiveMessage(", 1)[1].split(
         "var WBC_DRAFT_PREFIX", 1
     )[0]
+    assistant_message = chat.split("function WbcAssistantMessage(", 1)[1].split(
+        "var WBC_HEARTBEAT_STALL_MS", 1
+    )[0]
     segment_adapter = chat.split("function wbcRuntimeSegmentMessages(", 1)[1].split(
         "function wbcSubagentStatusText", 1
     )[0]
-    assert "if (!runtime.text && !(runtime.artifacts && runtime.artifacts.length)) return null;" in live_message
-    assert "<WbcLiveAgentArtifacts files={runtime.artifacts}" in live_message
+    assert 'liveRuntime={runtime}' in live_message
+    assert "<WbcLiveAgentArtifacts files={liveRuntime.artifacts}" in assistant_message
     assert "function wbcRuntimeTimelineMessages(runtime, options)" in chat
     assert "function wbcTraceDedupeKey(trace)" in chat
     assert "activityTraceKeys.has(messageTraceKey)" in chat
     assert "runtimeActivity: activity" in chat
     assert "trace: hasLiveActivities ? []" in segment_adapter
     assert "Array.isArray(segment.progress) ? segment.progress" in segment_adapter
-    assert "return { tool: entry.text, preview: entry.preview };" not in live_message
+    assert "return { tool: entry.text, preview: entry.preview };" not in assistant_message
     assert 'wbcT(entry.detailKey, toolKey, entry.detailParams)' in chat
     assert '"update_plan_progress"].indexOf(toolName)' in chat
     assert '"toolName.retire_project_memory": "Retire project memory"' in i18n
@@ -7057,7 +7264,7 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split(
         "var WBC_HEARTBEAT_STALL_MS", 1
     )[0]
-    assert "var activityView = wbcActivityMessageView(msg);" in assistant_message
+    assert "var activityView = live ? null : wbcActivityMessageView(msg);" in assistant_message
     assert "activity={activityView.activity}" in assistant_message
     assert "if (!activityView.visible) return null;" in assistant_message
     history_renderer = chat.split("function wbcRenderHistoryMessage", 1)[1].split(
@@ -7202,9 +7409,9 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
     assert "wbcGroupConsecutiveActivityMessages(messages, runtime)" in chat
     assert "displayMessages.map(function (msg)" in chat
     assert "var renderedHistory = useWbcMemo(function ()" in chat
-    assert "}, [chatMessages, runtimeUserMessages]);" in chat
+    assert "}, [chatMessages, runtimeUserMessages, runtimeReplyRenderKey]);" in chat
     assert "runtimeHasReplyText" in chat
-    assert "{renderedHistory}" in chat
+    assert "{renderedTimeline}" in chat
     assert "if (msg.activityGroup)" in chat
     assert "wbcGroupConsecutiveActivityMessages(messages, streamRuntime)" in split
     assert "displayMessages.map(function (message)" in split
@@ -7795,7 +8002,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.9.0-beta3" in index
+    assert "workbench.css?v=0.9.0-beta4" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -7838,7 +8045,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
 
 
 def test_desktop_uses_cross_platform_native_directory_picker():
@@ -8301,7 +8508,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
 
 
 def test_workbench_api_timeout_covers_response_body_consumption():
@@ -8368,7 +8575,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert 'requestJson("/api/settings/model-config")' in source
     assert "store.setConfig(snapshot);" in source
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -9175,6 +9382,51 @@ def test_code_and_terminal_frontend_stop_when_code_plugin_marker_is_absent():
     assert "if (!codeAvailable || !hostRef.current) return undefined;" in editor
 
 
+def test_shared_diff_viewer_uses_the_review_layout_for_every_consumer():
+    root = Path(__file__).resolve().parent.parent
+    diff = frontend_module_source("shared/diff/viewer.jsx")
+    workspace = frontend_module_source("features/chat/workspace-surface.jsx")
+    resource_splits = frontend_module_source("features/chat/resource-splits.jsx")
+    styles = (
+        root
+        / "src"
+        / "cyrene"
+        / "workbench"
+        / "webui"
+        / "frontend"
+        / "features"
+        / "chat"
+        / "context.css"
+    ).read_text(encoding="utf-8")
+
+    assert "function compactHunkLines" in diff
+    assert 'className: "diff-context-fold"' in diff
+    assert 'className: "diff-viewer-stats"' in diff
+    assert 'setDiffText(props.diff || "");' in diff
+    assert 'line === "\\\\ No newline at end of file"' in diff
+    assert 'diffT("chat.diff.noFinalNewline", "No newline at end of file")' in diff
+    assert "workbenchServices.diff().Panel" in workspace
+    assert "workbenchServices.diff().Panel" in resource_splits
+    assert ".diff-viewer-panel {" in styles
+    assert ".diff-context-fold {" in styles
+    assert ".diff-line-meta {" in styles
+    assert 'React.createElement("span", { className: "diff-ln" }, line.type === "del" ? line.leftNum : line.rightNum)' in diff
+    assert "diff-ln-left" not in diff
+    assert "diff-ln-right" not in diff
+    assert '"--diff-line-number-width": "calc(" + lineNumberDigits + "ch + 14px)"' in diff
+    assert "grid-template-columns: 4px var(--diff-line-number-width, 26px) minmax(max-content, 1fr);" in styles
+    assert "overflow-x: hidden;" in styles
+    assert "overflow-y: auto;" in styles
+    assert "background: var(--wb-green);" in styles
+    assert "background: repeating-linear-gradient(" in styles
+    assert ".diff-line-add .diff-ln {" in styles
+    assert ".diff-line-del .diff-ln {" in styles
+    assert "if (!review.payload) return <WorkspaceEmpty" in workspace
+    assert "if (review.loading || !review.payload)" not in workspace
+    assert "disabled={review.loading}" in workspace
+    assert ".wbc-change-diff .diff-viewer-panel" not in styles
+
+
 def test_chat_agent_picker_is_gated_by_agents_plugin_marker():
     page = frontend_module_source("features/chat/page.jsx")
     composer = frontend_module_source("features/chat/composer.jsx")
@@ -9603,16 +9855,56 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     styles = workbench_style_source()
     contract = (root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_renderer" / "load_contract.py").read_text(encoding="utf-8")
 
-    live_message = chat.split("function WbcLiveMessage", 1)[1].split("// ---------------------------------------------------------------------------", 1)[0]
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("var WBC_HEARTBEAT_STALL_MS", 1)[0]
     assert "WBC_LIVE_MARKDOWN_INTERVAL_MS = 120" in chat
-    assert "wbcUseThrottledLiveText(runtime.text, !!runtime.streamDone)" in live_message
-    assert "wbcRenderMarkdown(renderedText, { interactive: false })" in live_message
-    assert "wbcRenderMarkdown(msg.content)" in assistant_message
+    assert "!live || !!liveRuntime.streamDone" in assistant_message
+    assert "wbcRenderMarkdown(renderedText, { interactive: false })" in assistant_message
+    assert "wbcRenderMarkdown(renderedText)" in assistant_message
+    assert "return flush ? source : renderedText;" in chat
     assert ".wbc-fold > summary:focus-visible" in styles
     assert "@media (prefers-reduced-motion: reduce)" in styles
     assert ":::details Title" in contract
     assert ":::card Title" in contract
+
+
+def test_workbench_live_reply_preserves_message_identity_when_saved():
+    runtime = frontend_module_source("features/chat/file-resources.jsx")
+    conversation = frontend_module_source("features/chat/conversation.jsx")
+    binder = "function wbcBindSavedReplyRenderKey" + runtime.split(
+        "function wbcBindSavedReplyRenderKey", 1
+    )[1].split("// ---------------------------------------------------------------------------", 1)[0]
+    script = f"""
+eval({json.dumps(binder)});
+const source = [
+  {{ id: "activity", role: "assistant", content: "", trace: [{{ kind: "tool" }}] }},
+  {{ id: "intermediate", role: "assistant", content: "progress", intermediate: true }},
+  {{ id: "final", role: "assistant", content: "done" }}
+];
+const bound = wbcBindSavedReplyRenderKey(source, "reply_stream_request-1");
+process.stdout.write(JSON.stringify({{ source, bound }}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    result = json.loads(completed.stdout)
+
+    assert "replyRenderKey" not in result["source"][2]
+    assert result["bound"][0]["id"] == "activity"
+    assert "replyRenderKey" not in result["bound"][1]
+    assert result["bound"][2]["replyRenderKey"] == "reply_stream_request-1"
+    assert 'replyRenderKey: replyRenderKey' in runtime
+    assert 'runtimes[chatId] && runtimes[chatId].replyRenderKey' in runtime
+    assert 'var renderKey = String(msg && (msg.replyRenderKey || msg.id) || "");' in conversation
+    assert '<WbcThreadItem key={String(runtime.replyRenderKey)}>' in conversation
+    live_timeline = conversation.split(
+        "function wbcRenderConversationTimeline(", 1
+    )[1].split("function WbcMain(", 1)[0]
+    assert "<WbcAssistantMessage" in live_timeline
+    assert "<WbcLiveMessage" not in live_timeline
+    assert "{renderedTimeline}" in conversation
+    assert "{renderedHistory}" not in conversation.split(
+        'className="wbc-thread"', 1
+    )[1].split("<WbcConversationNavigator", 1)[0]
 
 
 def test_workbench_agent_transport_notice_has_structured_event_and_durable_bubble():
@@ -10149,7 +10441,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta3">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4">' in index_html
     entry_html = (root / "src/cyrene/workbench/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html

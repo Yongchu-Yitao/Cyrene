@@ -43,8 +43,8 @@ async def _tool_search_project_memory(
             "type": "not_found",
             "message": plugin_localized(
                 context,
-                "Project memory is only available inside a Workbench project task/chat.",
-                "项目记忆仅可在 Workbench 项目任务或对话中使用。",
+                "Project memory is only available inside a Workbench project conversation.",
+                "项目记忆仅可在 Workbench 项目对话中使用。",
             ),
         })
 

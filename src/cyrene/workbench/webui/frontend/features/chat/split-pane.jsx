@@ -1,10 +1,12 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { WBC_ICONS, WBC_SIDE_TAB_ICONS, WbcSplitPickerMenu, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentColor, wbcAgentInitials, wbcAttachmentTypeLabel, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcClampSideSplitWidthForPage, wbcCreateDetachedRuntime, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHighlightMentions, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserLayoutChanged, wbcReconcileLiveUserMessages, wbcReduceDetachedRuntime, wbcRenderMapMarkdown, wbcRenderMarkdown, wbcSubagentStatusClass, wbcSubagentStatusText, wbcT } from "../../workbench-chat.jsx"
+import { WBC_ICONS, WBC_SIDE_TAB_ICONS, WbcSplitPickerMenu, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentColor, wbcAgentInitials, wbcAttachmentTypeLabel, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcClampSideSplitWidthForPage, wbcCreateDetachedRuntime, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHighlightMentions, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserLayoutChanged, wbcPreserveLiveTimelineAnchors, wbcReconcileLiveUserMessages, wbcReduceDetachedRuntime, wbcRenderMapMarkdown, wbcRenderMarkdown, wbcSubagentStatusClass, wbcSubagentStatusText, wbcT } from "../../workbench-chat.jsx"
 import { WbcComposer, wbcBranchConnectors, wbcBranchKindLabel, wbcBranchLineage, wbcBranchRows, wbcBrowserStateForChat } from "./composer.jsx"
 import { wbcProjectFileResource } from "./rail.jsx"
 import { WorkbenchChatRuntimes, wbcCanOpenExternally, wbcChatUsedMap, wbcDownloadLink, wbcStartFileDrag } from "./file-resources.jsx"
 import { WbcMapTab, WbcViewerTab } from "./viewer.jsx"
 import { WbcThreadItem, wbcIsLiveAgentRequest } from "./conversation.jsx"
+import { WbcResourceListRow } from "./resource-list.jsx"
+import { useWbcConversationChanges } from "./conversation-changes.jsx"
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages } from "./messages.jsx"
 import { WbcArtifactsTab, WbcContextTab, WbcOverviewTab, useWbcLiveChatMetrics, useWbcLiveContextBlocks, useWbcLiveInbox } from "./context-panel.jsx"
 import { ConversationPlanTimeline } from "../plan/conversation-plan-timeline.jsx"
@@ -106,6 +108,43 @@ function WbcChatSplitHost({ chatId, width, onOpenContent, browserActiveByChat, o
   );
 }
 
+function wbcRefreshSplitChat(options) {
+  var requestedId = options.chatIdRef.current;
+  if (!requestedId) {
+    options.setLoading(false);
+    return Promise.resolve(null);
+  }
+  var requestSequence = ++options.refreshSequenceRef.current;
+  if (!options.background) options.setLoading(true);
+  function stale() {
+    return options.disposedRef.current
+      || String(options.chatIdRef.current || "") !== requestedId
+      || options.refreshSequenceRef.current !== requestSequence;
+  }
+  return WorkbenchChatModel.getChat(requestedId, { toast: false })
+    .then(function (fresh) {
+      if (stale()) return null;
+      var reconciled = wbcPreserveLiveTimelineAnchors(
+        null,
+        fresh,
+        options.runtimeEngine.get(requestedId)
+      );
+      options.setChat(reconciled);
+      options.setLoading(false);
+      return reconciled;
+    })
+    .catch(function (err) {
+      if (stale()) return null;
+      if (Number(err && err.status) === 404 && options.onDeleted) {
+        options.onDeleted(requestedId);
+        return null;
+      }
+      options.setError(wbcErrorText(err));
+      options.setLoading(false);
+      return null;
+    });
+}
+
 function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserActiveByChat, onClose, onDeleted, onOpenInMain, splitSide, onToggleSide, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled }) {
   runtimeEngine = runtimeEngine || WorkbenchChatRuntimes;
   var [chat, setChat] = useWbcState(null); var [loading, setLoading] = useWbcState(true);
@@ -123,39 +162,25 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
   var scrollRef = useWbcRef(null);
   var chatIdRef = useWbcRef(chatId);
   var disposedRef = useWbcRef(false);
+  var refreshSequenceRef = useWbcRef(0);
   var runStartedAtRef = useWbcRef(Date.now());
   var previousRuntimeRef = useWbcRef(null);
   chatIdRef.current = chatId;
 
   function refresh(background) {
-    var requestedId = chatIdRef.current;
-    if (!requestedId) {
-      setLoading(false);
-      return Promise.resolve(null);
-    }
-    if (!background) setLoading(true);
-    return WorkbenchChatModel.getChat(requestedId, { toast: false })
-      .then(function (fresh) {
-        if (disposedRef.current || String(chatIdRef.current || "") !== requestedId) return null;
-        setChat(fresh);
-        setLoading(false);
-        return fresh;
-      })
-      .catch(function (err) {
-        if (disposedRef.current || String(chatIdRef.current || "") !== requestedId) return null;
-        if (Number(err && err.status) === 404 && onDeleted) {
-          onDeleted(requestedId);
-          return null;
-        }
-        setError(wbcErrorText(err));
-        setLoading(false);
-        return null;
-      });
+    return wbcRefreshSplitChat({
+      background: background, chatIdRef: chatIdRef, disposedRef: disposedRef,
+      onDeleted: onDeleted, refreshSequenceRef: refreshSequenceRef,
+      runtimeEngine: runtimeEngine, setChat: setChat,
+      setError: setError, setLoading: setLoading,
+    });
   }
 
   useWbcEffect(function () {
     var requestedId = String(chatId || "");
     disposedRef.current = false;
+    refreshSequenceRef.current += 1;
+    previousRuntimeRef.current = null;
     setChat(null);
     setError("");
     setStreamNotifications([]);
@@ -184,6 +209,14 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
       var next = snapshot[requestedId] || null;
       var previous = previousRuntimeRef.current;
       previousRuntimeRef.current = next;
+      // Retry is a transcript state transition, not a render-time filter.
+      // Apply it to every owner of chat state as soon as the shared runtime
+      // publishes the boundary (including detached-window renderers).
+      if (next && next.retryTruncateAfterMessageId) {
+        setChat(function (current) {
+          return wbcPreserveLiveTimelineAnchors(current, current, next);
+        });
+      }
       setStreamRuntime(next);
       setStreamText(String(next && next.text || ""));
       setStreamNotifications(next && Array.isArray(next.notifications) ? next.notifications : []);
@@ -1616,25 +1649,23 @@ function WbcConversationTerminalList({ terminals, loading, onSelect }) {
     return <div className="workbench-muted wbc-side-terminal-empty">{wbcT("terminal.loading", "Loading terminals...")}</div>;
   }
   return (
-    <div className="wbc-side-terminal-list" role="list">
+    <div className="wbc-artifact-list wbc-side-terminal-list">
       {items.map(function (terminal) {
         var running = terminal.status === "running" || terminal.status === "starting";
+        var title = terminal.title || wbcT("terminal.title", "Terminal");
+        var statusLabel = running ? wbcT("terminal.running", "Running") : wbcT("terminal.exited", "Process exited");
         return (
-          <button
+          <WbcResourceListRow
             key={terminal.id}
-            type="button"
             className="wbc-side-terminal-row"
-            role="listitem"
+            aria-label={title + " — " + statusLabel}
             onClick={function () { if (onSelect) onSelect(terminal.id); }}
-          >
-            <span className={"wbc-side-terminal-status" + (running ? " running" : " exited")} aria-hidden="true" />
-            <span className="wbc-side-terminal-copy">
-              <b>{terminal.title || wbcT("terminal.title", "Terminal")}</b>
-              <small>{running ? String(terminal.cwd || "") : wbcT("terminal.exited", "Process exited")}</small>
-            </span>
-            <time>{wbcFormatTime(terminal.updatedAt || terminal.createdAt)}</time>
-            <span aria-hidden="true">{WBC_ICONS.chevronRight}</span>
-          </button>
+            icon={WBC_ICONS.slash}
+            iconAdornment={<i className={running ? "running" : "exited"} />}
+            label={title}
+            detail={running ? String(terminal.cwd || "") : statusLabel}
+            detailTitle={running ? String(terminal.cwd || "") : statusLabel}
+          />
         );
       })}
     </div>
@@ -1663,6 +1694,8 @@ function WbcSide({
   onSelectMap,
   onSelectBrowser,
   onOpenSubagents,
+  workspaceAvailable,
+  onOpenWorkspace,
   onViewerViewed,
   onRename,
   onDelete,
@@ -1693,50 +1726,11 @@ function WbcSide({
   var pluginModules = Array.isArray(dataStore.state.pluginModules) ? dataStore.state.pluginModules : [];
   if (mapAvailable === undefined) mapAvailable = pluginModules.indexOf("map") >= 0;
   if (browserAvailable === undefined) browserAvailable = pluginModules.indexOf("browser") >= 0;
-  var [changesAvailability, setChangesAvailability] = useWbcState({ chatId: "", hasChanges: false });
+  var conversationChanges = useWbcConversationChanges(activeChatId);
   var hasWorkspaceChanges = (
-    String(changesAvailability.chatId || "") === String(activeChatId || "")
-    && !!changesAvailability.hasChanges
+    String(conversationChanges.chatId || "") === String(activeChatId || "")
+    && !!conversationChanges.hasChanges
   );
-
-  useWbcEffect(function () {
-    var currentChatId = String(activeChatId || "");
-    var disposed = false;
-    setChangesAvailability({ chatId: currentChatId, hasChanges: false });
-    if (!currentChatId) return undefined;
-
-    function revealFromEvent(event) {
-      var detail = (event && event.detail) || {};
-      var eventChatId = String(detail.chatId || detail.session_id || "");
-      if (eventChatId && eventChatId !== currentChatId) return;
-      if (Number(detail.fileCount || 0) > 0) {
-        setChangesAvailability({ chatId: currentChatId, hasChanges: true });
-      }
-    }
-
-    window.addEventListener("workbench:workspace-changes", revealFromEvent);
-    WorkbenchChatModel.getChanges(currentChatId, { toast: false })
-      .then(function (payload) {
-        if (disposed) return;
-        var sets = Array.isArray(payload && payload.changeSets) ? payload.changeSets : [];
-        setChangesAvailability(function (current) {
-          if (String(current.chatId || "") === currentChatId && current.hasChanges) return current;
-          return { chatId: currentChatId, hasChanges: sets.length > 0 };
-        });
-      })
-      .catch(function () {
-        if (!disposed) {
-          setChangesAvailability(function (current) {
-            if (String(current.chatId || "") === currentChatId && current.hasChanges) return current;
-            return { chatId: currentChatId, hasChanges: false };
-          });
-        }
-      });
-    return function () {
-      disposed = true;
-      window.removeEventListener("workbench:workspace-changes", revealFromEvent);
-    };
-  }, [activeChatId]);
 
   var browserState = wbcBrowserStateForChat(activeChatId);
   var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
@@ -1771,6 +1765,9 @@ function WbcSide({
   if (pendingPlan) tabs.push({ id: "plan", label: wbcT("chat.side.plan", "Plan") });
   if (hasSubagents) tabs.push({ id: "subagents", label: wbcT("workbenchChat.subagents", "Subagents") });
   tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
+  if (workspaceAvailable && onOpenWorkspace) {
+    tabs.push({ id: "workspace", label: wbcT("workbenchChat.workspace", "Workspace") });
+  }
   if (hasFiles) tabs.push({ id: "files", label: wbcT("workbenchChat.files", "Files") });
   if (artifactItems.length) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
   if (hasWorkspaceChanges) {
@@ -1826,7 +1823,7 @@ function WbcSide({
       {activeTab === "context" && <WbcContextTab chat={chat} contextBlocks={contextBlocks} inboxView={inboxView} />}
       {activeTab === "files" && <WbcArtifactsTab chat={chat} onSelectArtifact={onSelectArtifact} />}
       {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} files={artifactItems} emptyKey="workbenchChat.noArtifacts" emptyFallback="This chat has not delivered any artifacts yet." onSelectArtifact={onSelectArtifact} />}
-      {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} onSelectChange={onSelectChange} />}
+      {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} changesState={conversationChanges} onSelectChange={onSelectChange} />}
       {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
       {activeTab === "viewer" && <WbcViewerList files={viewerItems} selectedFile={chatViewerFile} onSelect={onSelectViewer} />}
       {activeTab === "map" && mapAvailable !== false && <WbcMapList chatId={chat ? chat.id : ""} onSelect={onSelectMap} available={mapAvailable} />}
@@ -1879,7 +1876,7 @@ function WbcSide({
         </div>
         <div className="wbc-side-accordion" data-tour="chat_sidebar">
           {tabs.map(function (item) {
-            var opensSplit = item.id === "subagents" || item.id === "browser";
+            var opensSplit = item.id === "subagents" || item.id === "browser" || item.id === "workspace";
             var expanded = !opensSplit && activeTab === item.id;
             var meta = sideTabMeta[item.id] || "";
             return (
@@ -1892,6 +1889,7 @@ function WbcSide({
                     if (opensSplit) {
                       onTabChange("");
                       if (item.id === "subagents" && onOpenSubagents) onOpenSubagents();
+                      if (item.id === "workspace" && onOpenWorkspace) onOpenWorkspace();
                       if (item.id === "browser" && onSelectBrowser) {
                         var currentBrowserTab = browserPanelState && (browserPanelState.activeTabId || browserPanelState.activeTab && browserPanelState.activeTab.id);
                         onSelectBrowser(currentBrowserTab || "__active__");
@@ -1922,66 +1920,23 @@ function wbcChangeTypeLabel(changeType) {
   return wbcT("workbenchChat.changes.modified", "Modified");
 }
 
-function WbcChangesTab({ chatId, onSelectChange }) {
-  var [payload, setPayload] = useWbcState({ changeSets: [], fileCount: 0, additions: 0, deletions: 0 });
-  var [loading, setLoading] = useWbcState(true);
-  var [error, setError] = useWbcState("");
+function WbcChangesTab({ chatId, changesState, onSelectChange }) {
+  var payload = changesState && changesState.payload
+    ? changesState.payload
+    : { changeSets: [], fileCount: 0, additions: 0, deletions: 0 };
+  var loading = !!(changesState && changesState.loading);
+  var error = String(changesState && changesState.error || "");
   var [selectedSetId, setSelectedSetId] = useWbcState("");
-  var refreshTimerRef = useWbcRef(null);
-  var chatIdRef = useWbcRef(chatId);
-  var refreshSeqRef = useWbcRef(0);
-  chatIdRef.current = chatId;
-
-  function refresh(background) {
-    if (!chatId) return Promise.resolve(null);
-    var requestedChatId = String(chatId);
-    var requestSeq = ++refreshSeqRef.current;
-    if (!background) setLoading(true);
-    setError("");
-    return WorkbenchChatModel.getChanges(chatId, { toast: false })
-      .then(function (next) {
-        if (String(chatIdRef.current || "") !== requestedChatId || refreshSeqRef.current !== requestSeq) return null;
-        var sets = Array.isArray(next.changeSets) ? next.changeSets : [];
-        setPayload(next);
-        setSelectedSetId(function (current) {
-          return sets.some(function (item) { return item.id === current; })
-            ? current
-            : (sets[0] ? sets[0].id : "");
-        });
-        return next;
-      })
-      .catch(function (err) {
-        if (String(chatIdRef.current || "") === requestedChatId && refreshSeqRef.current === requestSeq) setError(wbcErrorText(err));
-        return null;
-      })
-      .finally(function () {
-        if (String(chatIdRef.current || "") === requestedChatId && refreshSeqRef.current === requestSeq) setLoading(false);
-      });
-  }
-
-  useWbcEffect(function () {
-    setPayload({ changeSets: [], fileCount: 0, additions: 0, deletions: 0 });
-    setSelectedSetId("");
-    refreshSeqRef.current += 1;
-    refresh(false);
-  }, [chatId]);
-
-  useWbcEffect(function () {
-    function onChanges(event) {
-      var detail = (event && event.detail) || {};
-      var eventChatId = String(detail.chatId || detail.session_id || "");
-      if (eventChatId && eventChatId !== String(chatId || "")) return;
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = setTimeout(function () { refresh(true); }, 80);
-    }
-    window.addEventListener("workbench:workspace-changes", onChanges);
-    return function () {
-      window.removeEventListener("workbench:workspace-changes", onChanges);
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-    };
-  }, [chatId]);
 
   var changeSets = Array.isArray(payload.changeSets) ? payload.changeSets : [];
+  var changeSetIds = changeSets.map(function (item) { return item.id; }).join("|");
+  useWbcEffect(function () {
+    setSelectedSetId(function (current) {
+      return changeSets.some(function (item) { return item.id === current; })
+        ? current
+        : (changeSets[0] ? changeSets[0].id : "");
+    });
+  }, [chatId, changeSetIds]);
   var selectedSet = changeSets.find(function (item) { return item.id === selectedSetId; }) || changeSets[0] || null;
   var files = selectedSet && Array.isArray(selectedSet.files) ? selectedSet.files : [];
   return (
@@ -2003,7 +1958,7 @@ function WbcChangesTab({ chatId, onSelectChange }) {
       {loading && !changeSets.length ? (
         <p className="workbench-muted wbc-changes-state">{wbcT("workbenchChat.changes.loading", "Loading changes...")}</p>
       ) : error ? (
-        <div className="wbc-changes-state"><p className="workbench-muted">{error}</p><button type="button" className="wb-btn ghost" onClick={function () { refresh(false); }}>{wbcT("workbenchChat.error.retry", "Retry")}</button></div>
+        <div className="wbc-changes-state"><p className="workbench-muted">{error}</p><button type="button" className="wb-btn ghost" onClick={function () { changesState.refresh(false); }}>{wbcT("workbenchChat.error.retry", "Retry")}</button></div>
       ) : !changeSets.length ? (
         <div className="wbc-changes-empty">
           <b>{wbcT("workbenchChat.changes.emptyTitle", "No agent changes yet")}</b>

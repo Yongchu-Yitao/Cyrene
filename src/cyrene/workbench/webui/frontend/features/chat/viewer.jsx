@@ -644,6 +644,19 @@ function WbcMarkdownRenderedEditor({ value, onChange, onSave, onLinkClick, conta
   );
 }
 
+function wbcUpdateProjectFileDraft(draftKey, content, baseContent, version, dirty) {
+  if (!draftKey) return;
+  if (!dirty) {
+    delete WBC_PROJECT_FILE_DRAFTS[draftKey];
+    return;
+  }
+  WBC_PROJECT_FILE_DRAFTS[draftKey] = {
+    content: content,
+    baseContent: baseContent,
+    version: version,
+  };
+}
+
 function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode, onHtmlModeChange, markdownMode: controlledMarkdownMode, onMarkdownModeChange, onDirtyChange }) {
   var kind = wbcFileViewKind(file);
   var [pluginSnapshot, setPluginSnapshot] = useWbcState(function () { return PluginFrontendService.snapshot(); });
@@ -862,17 +875,9 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
     setText(next);
     publishEditorDirty(dirty);
     setEditorAutoSavePaused(false);
-    if (draftKey) {
-      if (dirty) {
-        WBC_PROJECT_FILE_DRAFTS[draftKey] = {
-          content: next,
-          baseContent: editorBaseTextRef.current,
-          version: editorVersionRef.current,
-        };
-      } else {
-        delete WBC_PROJECT_FILE_DRAFTS[draftKey];
-      }
-    }
+    wbcUpdateProjectFileDraft(
+      draftKey, next, editorBaseTextRef.current, editorVersionRef.current, dirty
+    );
   }
 
   function saveEditor(force) {
@@ -890,24 +895,22 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
         force: !!force,
       }),
     }).then(readEditorResponse).then(function (payload) {
-      editorBaseTextRef.current = contentToSave;
+      var persistedContent = typeof payload.content === "string" ? payload.content : contentToSave;
       editorVersionRef.current = String(payload.version || "");
       var latestText = editorTextRef.current;
-      var stillDirty = latestText !== contentToSave;
+      if (latestText === contentToSave && latestText !== persistedContent) {
+        latestText = persistedContent;
+        editorTextRef.current = persistedContent;
+        setText(persistedContent);
+      }
+      editorBaseTextRef.current = persistedContent;
+      var stillDirty = latestText !== persistedContent;
       publishEditorDirty(stillDirty);
       setEditorConflict(null);
       setEditorAutoSavePaused(false);
-      if (draftKey) {
-        if (stillDirty) {
-          WBC_PROJECT_FILE_DRAFTS[draftKey] = {
-            content: latestText,
-            baseContent: contentToSave,
-            version: editorVersionRef.current,
-          };
-        } else {
-          delete WBC_PROJECT_FILE_DRAFTS[draftKey];
-        }
-      }
+      wbcUpdateProjectFileDraft(
+        draftKey, latestText, persistedContent, editorVersionRef.current, stillDirty
+      );
       return true;
     }).catch(function (error) {
       setEditorAutoSavePaused(true);

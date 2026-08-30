@@ -112,4 +112,36 @@ def persist_goal_by_id(db_path: str, chat_id: str, goal: Mapping[str, Any]) -> b
         router.close()
 
 
-__all__ = ["PACK_ID", "TERMINAL_STATUSES", "persist_goal", "persist_goal_by_id", "public_goal"]
+def clear_goal_by_id(db_path: str, chat_id: str) -> bool:
+    """Remove the Goal projection after a failed atomic workflow start."""
+
+    from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
+    from cyrene.workbench.core_adapter.chat_runtime import workbench_agent_data_directory
+
+    router = ContextStoreRouter(workbench_agent_data_directory(db_path) / "context")
+    try:
+        try:
+            tree = router.get_tree(str(chat_id))
+            root = router.get_node(tree.id, tree.root_id)
+        except TreeNotFoundError:
+            return False
+        if not isinstance(root.value, Mapping):
+            return False
+        router.update_node(
+            tree.id,
+            root.id,
+            with_plugin_session_state(root.value, PACK_ID, None),
+        )
+        return True
+    finally:
+        router.close()
+
+
+__all__ = [
+    "PACK_ID",
+    "TERMINAL_STATUSES",
+    "clear_goal_by_id",
+    "persist_goal",
+    "persist_goal_by_id",
+    "public_goal",
+]

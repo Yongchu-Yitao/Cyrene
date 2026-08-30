@@ -471,8 +471,7 @@ class WorkbenchSessionPresentation:
         if not project_id:
             return None
         try:
-            from cyrene.workbench.artifacts import artifact_runtime
-            from cyrene.workbench.projects import project_repository
+            from cyrene.workbench.projects import project_repository, project_runtime
 
             project_repository._configure_workbench_store(self.db_path)
             bundle = project_repository._read_workbench_store_lightweight()
@@ -485,7 +484,7 @@ class WorkbenchSessionPresentation:
                 ),
                 None,
             )
-            root = artifact_runtime._workbench_workspace_root(
+            root = project_runtime._workbench_workspace_root(
                 dict(project) if isinstance(project, Mapping) else None
             )
             return str(root) if root is not None else None

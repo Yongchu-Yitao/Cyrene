@@ -41,6 +41,7 @@ class ChatSummaryDTO(TypedDict, total=False):
     usage: dict[str, int]
     latestUsage: dict[str, int]
     activeGoal: dict[str, Any]
+    workspaceSurface: dict[str, Any]
 
 
 class ChatDetailDTO(ChatSummaryDTO, total=False):

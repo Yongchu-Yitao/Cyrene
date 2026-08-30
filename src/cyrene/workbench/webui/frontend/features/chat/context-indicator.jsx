@@ -257,8 +257,8 @@ function wbcUpdateContextNode(chatId, block, content) {
 }
 
 function WbcContextDoubleRing({ metrics }) {
-  var outerRadius = 11.5;
-  var innerRadius = 5.5;
+  var outerRadius = 12;
+  var innerRadius = 8;
   var outerLength = 2 * Math.PI * outerRadius;
   var innerLength = 2 * Math.PI * innerRadius;
   var colors = wbcContextRingColors(metrics);

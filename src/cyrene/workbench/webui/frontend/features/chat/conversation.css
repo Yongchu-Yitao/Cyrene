@@ -2271,7 +2271,9 @@ button.wbc-attach-file:focus-visible {
   .wbc-grid { grid-template-columns: 1fr !important; }
 }
 
-.wbc-caret {
+.wbc-caret,
+.wbc-msg-body.streaming::after {
+  content: "";
   display: inline-block;
   width: 8px;
   height: 15px;
@@ -4086,6 +4088,7 @@ html :is(
   height: 26px;
   display: block;
   overflow: visible;
+  shape-rendering: geometricPrecision;
 }
 
 .wbc-context-ring-svg circle {
@@ -4096,24 +4099,13 @@ html :is(
 
 .wbc-context-ring-track {
   stroke: color-mix(in srgb, var(--wb-muted) 19%, transparent);
-  stroke-width: 2;
-}
-
-.wbc-context-ring-track.is-inner {
-  stroke-width: 1.8;
+  stroke-width: 2.5;
 }
 
 .wbc-context-ring-value {
+  stroke-width: 2.5;
   stroke-linecap: round;
   transition: stroke .2s ease, stroke-dashoffset .24s ease;
-}
-
-.wbc-context-ring-value.is-context {
-  stroke-width: 2;
-}
-
-.wbc-context-ring-value.is-cache {
-  stroke-width: 1.8;
 }
 
 .wbc-context-ring-tooltip {

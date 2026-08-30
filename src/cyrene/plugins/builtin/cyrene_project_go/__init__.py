@@ -14,9 +14,9 @@ def detect(workspace: Path, current_path: str):
     cwd = relative_scope(workspace, scope)
     suffix = scope_id(cwd)
     return [
-        workspace_action(f"go.run.{suffix}", "Run Go project", "run", "go", ["run", "."], cwd=cwd),
-        workspace_action(f"go.build.{suffix}", "Build Go project", "build", "go", ["build", "./..."], cwd=cwd),
-        workspace_action(f"go.test.{suffix}", "Test Go project", "test", "go", ["test", "./..."], cwd=cwd),
+        workspace_action(f"go.run.{suffix}", "Run Go project", "run", "go", ["run", "."], cwd=cwd, i18n={"zh": {"label": "运行 Go 项目"}}),
+        workspace_action(f"go.build.{suffix}", "Build Go project", "build", "go", ["build", "./..."], cwd=cwd, i18n={"zh": {"label": "构建 Go 项目"}}),
+        workspace_action(f"go.test.{suffix}", "Test Go project", "test", "go", ["test", "./..."], cwd=cwd, i18n={"zh": {"label": "测试 Go 项目"}}),
     ]
 
 

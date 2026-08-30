@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from cyrene.localization import localized
+from cyrene.platform.text_files import normalize_text_for_write
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +140,25 @@ class ProjectFileService:
         target = self._resolve_code_path(requested_path, write=True)
 
         def write() -> int:
+            existing_content: str | None = None
+            has_bom = False
+            if target.is_file():
+                try:
+                    existing = target.read_bytes()
+                    has_bom = existing.startswith(b"\xef\xbb\xbf")
+                    existing_content = existing.decode(
+                        "utf-8-sig" if has_bom else "utf-8"
+                    )
+                except UnicodeDecodeError:
+                    existing_content = None
+            normalized = normalize_text_for_write(
+                content,
+                existing_content=existing_content,
+                add_final_newline=not target.exists(),
+            )
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            encoded = normalized.encode("utf-8")
+            target.write_bytes((b"\xef\xbb\xbf" if has_bom else b"") + encoded)
             return target.stat().st_size
 
         try:
@@ -299,6 +317,49 @@ class ProjectFileService:
         target = self._editable_target(project_id, file_path)
         return self._editable_text_payload(target)
 
+    @staticmethod
+    def _atomic_write_editable(
+        target: Path,
+        file_path: str,
+        normalized_content: str,
+        encoded: bytes,
+        expected: str,
+        force: bool,
+    ) -> dict[str, Any]:
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=".cyrene-edit-", dir=target.parent, delete=False
+            ) as handle:
+                temp_path = Path(handle.name)
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if expected and not force:
+                latest = target.read_bytes()
+                latest_version = hashlib.sha256(latest).hexdigest()
+                if latest_version != expected:
+                    latest_stat = target.stat()
+                    return {
+                        "conflict": True,
+                        "version": latest_version,
+                        "modifiedNs": int(latest_stat.st_mtime_ns),
+                    }
+            os.chmod(temp_path, target.stat().st_mode)
+            os.replace(temp_path, target)
+            temp_path = None
+            stat = target.stat()
+            return {
+                "path": str(file_path).replace("\\", "/"),
+                "content": normalized_content,
+                "version": hashlib.sha256(encoded).hexdigest(),
+                "modifiedNs": int(stat.st_mtime_ns),
+                "size": len(encoded),
+            }
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
     async def save_editable(
         self,
         project_id: str,
@@ -325,7 +386,11 @@ class ProjectFileService:
                 },
             )
 
-        encoded = content.encode("utf-8")
+        normalized_content = normalize_text_for_write(
+            content,
+            existing_content=current["content"],
+        )
+        encoded = normalized_content.encode("utf-8")
         if current["bom"]:
             encoded = b"\xef\xbb\xbf" + encoded
         if len(encoded) > self.max_editable_text_bytes:
@@ -339,42 +404,16 @@ class ProjectFileService:
                 {"maxBytes": self.max_editable_text_bytes},
             )
 
-        def atomic_write() -> dict[str, Any]:
-            temp_path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="wb", prefix=".cyrene-edit-", dir=target.parent, delete=False
-                ) as handle:
-                    temp_path = Path(handle.name)
-                    handle.write(encoded)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                if expected and not force:
-                    latest = target.read_bytes()
-                    latest_version = hashlib.sha256(latest).hexdigest()
-                    if latest_version != expected:
-                        latest_stat = target.stat()
-                        return {
-                            "conflict": True,
-                            "version": latest_version,
-                            "modifiedNs": int(latest_stat.st_mtime_ns),
-                        }
-                os.chmod(temp_path, target.stat().st_mode)
-                os.replace(temp_path, target)
-                temp_path = None
-                stat = target.stat()
-                return {
-                    "path": str(file_path).replace("\\", "/"),
-                    "version": hashlib.sha256(encoded).hexdigest(),
-                    "modifiedNs": int(stat.st_mtime_ns),
-                    "size": len(encoded),
-                }
-            finally:
-                if temp_path is not None:
-                    temp_path.unlink(missing_ok=True)
-
         try:
-            result = await asyncio.to_thread(atomic_write)
+            result = await asyncio.to_thread(
+                self._atomic_write_editable,
+                target,
+                file_path,
+                normalized_content,
+                encoded,
+                expected,
+                force,
+            )
         except OSError as exc:
             logger.warning("Editable project file save failed", exc_info=True)
             raise ProjectFileError(

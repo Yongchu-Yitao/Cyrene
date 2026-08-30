@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from cyrene.localization import app_language, localized
 from cyrene.workbench.chat.chat_external_turn_service import ExternalTurnProjection
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.application.notifications import append_notification
 
 
@@ -112,12 +113,12 @@ class ChatReplyFinalizationApplicationService:
         effective_usage = dict(usage)
         if any(request.projection.usage.values()):
             effective_usage.update(request.projection.usage)
-        if any(effective_usage.values()):
-            assistant["usage"] = effective_usage
-        if any(request.projection.latest_request_usage.values()):
-            assistant["latestRequestUsage"] = dict(
-                request.projection.latest_request_usage
+        assistant.update(
+            runtime_usage_message_fields(
+                effective_usage,
+                request.projection.latest_request_usage,
             )
+        )
         if request.projection.model_identity:
             assistant["modelIdentity"] = dict(request.projection.model_identity)
         generation_duration_ms = request.projection.generation_duration_ms

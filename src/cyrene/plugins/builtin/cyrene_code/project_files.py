@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
 
+from cyrene.platform.text_files import normalize_text_for_write
+
 
 class ProjectFileEntryDTO(TypedDict):
     name: str
@@ -118,8 +120,25 @@ class ProjectFileService:
         target = self._resolve_code_path(requested_path, write=True)
 
         def write() -> int:
+            existing_content: str | None = None
+            has_bom = False
+            if target.is_file():
+                try:
+                    existing = target.read_bytes()
+                    has_bom = existing.startswith(b"\xef\xbb\xbf")
+                    existing_content = existing.decode(
+                        "utf-8-sig" if has_bom else "utf-8"
+                    )
+                except UnicodeDecodeError:
+                    existing_content = None
+            normalized = normalize_text_for_write(
+                content,
+                existing_content=existing_content,
+                add_final_newline=not target.exists(),
+            )
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            encoded = normalized.encode("utf-8")
+            target.write_bytes((b"\xef\xbb\xbf" if has_bom else b"") + encoded)
             return target.stat().st_size
 
         try:
@@ -265,7 +284,11 @@ class ProjectFileService:
                 },
             )
 
-        encoded = content.encode("utf-8")
+        normalized_content = normalize_text_for_write(
+            content,
+            existing_content=current["content"],
+        )
+        encoded = normalized_content.encode("utf-8")
         if current["bom"]:
             encoded = b"\xef\xbb\xbf" + encoded
         if len(encoded) > self.max_editable_text_bytes:
@@ -302,6 +325,7 @@ class ProjectFileService:
                 stat = target.stat()
                 return {
                     "path": str(file_path).replace("\\", "/"),
+                    "content": normalized_content,
                     "version": hashlib.sha256(encoded).hexdigest(),
                     "modifiedNs": int(stat.st_mtime_ns),
                     "size": len(encoded),

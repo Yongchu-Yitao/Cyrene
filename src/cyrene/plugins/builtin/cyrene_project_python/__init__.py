@@ -28,6 +28,7 @@ def detect(workspace: Path, current_path: str):
         actions.append(workspace_action(
             f"python.test.{scope_id(cwd)}", "Run Python tests", "test",
             program, [*prefix, "pytest"], cwd=cwd,
+            i18n={"zh": {"label": "运行 Python 测试"}},
         ))
     path = str(current_path or "").replace("\\", "/")
     target = (workspace / path).resolve()
@@ -36,6 +37,7 @@ def detect(workspace: Path, current_path: str):
         actions.append(workspace_action(
             f"python.file.{scope_id(relative)}", "Run current Python file", "run",
             preferred_program("python3", "python", "py"), [relative],
+            i18n={"zh": {"label": "运行当前 Python 文件"}},
         ))
     return actions
 

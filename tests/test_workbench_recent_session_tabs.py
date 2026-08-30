@@ -509,6 +509,39 @@ def test_chat_summary_separates_latest_request_usage_from_lifetime_usage():
     assert summary["latestUsage"]["prompt_cache_miss_tokens"] == 110
 
 
+def test_chat_summary_restores_latest_request_usage_from_lightweight_projection():
+    from cyrene.workbench.chat.chat_application import public_chat_light as _public_chat_light
+
+    summary = _public_chat_light(
+        {
+            "id": "cache-rate-restart-chat",
+            "projectId": "project-1",
+            "_messageProjection": {
+                "messageCount": 3,
+                "usage": {
+                    "prompt_tokens": 15734,
+                    "completion_tokens": 272,
+                    "total_tokens": 16006,
+                    "prompt_cache_hit_tokens": 15059,
+                    "prompt_cache_miss_tokens": 675,
+                },
+                "latestUsage": {
+                    "prompt_tokens": 7986,
+                    "completion_tokens": 89,
+                    "total_tokens": 8075,
+                    "prompt_cache_hit_tokens": 7748,
+                    "prompt_cache_miss_tokens": 238,
+                },
+            },
+        },
+        composer_context=_ComposerContextStub(),
+    )
+
+    assert summary["usage"]["prompt_cache_hit_tokens"] == 15059
+    assert summary["latestUsage"]["prompt_cache_hit_tokens"] == 7748
+    assert summary["latestUsage"]["prompt_cache_miss_tokens"] == 238
+
+
 def test_chat_summary_does_not_treat_legacy_turn_totals_as_latest_request():
     from cyrene.workbench.chat.chat_application import public_chat_light as _public_chat_light
 

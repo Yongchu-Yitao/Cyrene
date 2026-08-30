@@ -2,7 +2,7 @@ import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { pluginLocalizedField } from "../../platform/plugins.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasPluginViewDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetPluginViewDrag, wbcSetResourceDrag, wbcT } from "../../workbench-chat.jsx"
 import { wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue } from "./conversation.jsx"
-import { wbcStartFileDrag } from "./file-resources.jsx"
+import { WbcProjectFileHeader, WbcProjectFileRow, useWbcProjectFiles } from "./project-files.jsx"
 
 import { moveChatOrderBlock } from "./behavior.mjs"
 import { WbcRenameDialog } from "./rename-dialog.jsx"
@@ -100,15 +100,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       path: String(nextPath || "."),
     });
   }
-  var [fileEntries, setFileEntries] = useWbcState([]);
-  var [filesLoading, setFilesLoading] = useWbcState(false);
-  var [filesError, setFilesError] = useWbcState("");
-  var [hasLoadedFiles, setHasLoadedFiles] = useWbcState(false);
   var [globalFileEntries, setGlobalFileEntries] = useWbcState([]);
   var [globalFilesLoading, setGlobalFilesLoading] = useWbcState(false);
   var [globalFilesError, setGlobalFilesError] = useWbcState("");
   var [fileDirection, setFileDirection] = useWbcState("forward");
-  var fileDirectionRef = useWbcRef("forward");
   var [showAllRecent, setShowAllRecent] = useWbcState(false);
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
@@ -158,6 +153,15 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   var [agentFlowByChatId, setAgentFlowByChatId] = useWbcState({});
   var [railMotionPhase, setRailMotionPhase] = useWbcState("");
   var [uiViewportRevision, setUiViewportRevision] = useWbcState(0);
+  var projectFiles = useWbcProjectFiles({
+    enabled: codeAvailable && fileToolsExpanded,
+    path: filePath,
+    projectId: projectId,
+  });
+  var fileEntries = projectFiles.entries;
+  var filesLoading = projectFiles.loading;
+  var filesError = projectFiles.error;
+  var hasLoadedFiles = projectFiles.hasLoaded;
   var normalizedQuery = query.trim().toLowerCase();
   var visibleFiles = normalizedQuery ? fileEntries.filter(function (entry) {
     return String(entry && entry.name || "").toLowerCase().indexOf(normalizedQuery) !== -1
@@ -166,14 +170,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   useWbcEffect(function () {
     setQuery("");
     setProjectToolViewState(wbcReadProjectToolView(projectId));
-    setFileEntries([]);
     setGlobalFileEntries([]);
     setGlobalFilesLoading(false);
     setGlobalFilesError("");
-    setFilesError("");
-    setHasLoadedFiles(false);
     setFileDirection("forward");
-    fileDirectionRef.current = "forward";
   }, [projectId]);
   useWbcEffect(function () {
     setTerminalOrder(terminalDefaultOrder);
@@ -181,19 +181,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       return Boolean(terminal && terminal.pinned);
     }).map(function (terminal) { return String(terminal.id); }));
   }, [projectId, terminalDefaultOrder.join("|")]);
-  useWbcEffect(function () {
-    if (!codeAvailable || !fileToolsExpanded || !projectId) return undefined;
-    var cancelled = false;
-    setFilesLoading(true);
-    setFilesError("");
-    fetch("/api/projects/" + encodeURIComponent(projectId) + "/files?path=" + encodeURIComponent(filePath), { cache: "no-store" })
-      .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error(String(response.status))); })
-      .then(function (payload) { if (!cancelled) { setFileDirection(fileDirectionRef.current); setFileEntries(Array.isArray(payload.entries) ? payload.entries : []); setHasLoadedFiles(true); } })
-      .catch(function () { if (!cancelled) { setFileEntries([]); setFilesError(wbcT("rail.filesUnavailable", "Unable to load project files.")); } })
-      .finally(function () { if (!cancelled) setFilesLoading(false); });
-    return function () { cancelled = true; };
-  }, [codeAvailable, fileToolsExpanded, filePath, projectId]);
-
   useWbcEffect(function () {
     var search = query.trim();
     if (!codeAvailable || !search || !projectId) {
@@ -1983,6 +1970,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       setQuery("");
       setMenuId("");
       setTerminalToolsExpanded(false);
+      setFileDirection("forward");
       setFilePath(entry.path);
       setFileToolsExpanded(true);
       return;
@@ -2255,30 +2243,16 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         >
           <header><span>{wbcT("rail.projectTools", "Tools")}</span></header>
           {fileToolsExpanded ? (
-            <div className="wbc-project-tool-inline-header is-file">
-              {filePath === "." ? (
-                <span className="wbc-project-tool-icon" aria-hidden="true">{WBC_ICONS.folder}</span>
-              ) : (
-                <button
-                  type="button"
-                  className="wbc-project-tool-directory-control"
-                  aria-label={wbcT("common.back", "Back")}
-                  onClick={function () {
-                    fileDirectionRef.current = "back";
-                    setFilePath(filePath.indexOf("/") === -1 ? "." : filePath.split("/").slice(0, -1).join("/"));
-                  }}
-                >{WBC_ICONS.chevronLeft}</button>
-              )}
-              <span className="wbc-project-tool-copy"><b>{wbcT("rail.files", "Files")}</b><small>{filePath === "." ? (projectName || ".") : filePath}</small></span>
-              <button
-                type="button"
-                className="wbc-project-tool-inline-collapse"
-                onClick={function () { setFileToolsExpanded(false); }}
-                aria-label={wbcT("common.collapse", "Collapse")}
-                aria-expanded="true"
-                aria-controls="wbc-project-file-list"
-              >{WBC_ICONS.chevronRight}</button>
-            </div>
+            <WbcProjectFileHeader
+              collapseControls="wbc-project-file-list"
+              path={filePath}
+              rootLabel={projectName || "."}
+              onBack={function () {
+                setFileDirection("back");
+                setFilePath(filePath.indexOf("/") === -1 ? "." : filePath.split("/").slice(0, -1).join("/"));
+              }}
+              onCollapse={function () { setFileToolsExpanded(false); }}
+            />
           ) : (
             <button
               type="button"
@@ -2306,26 +2280,20 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
                 {filesLoading && !hasLoadedFiles && <div className="workbench-muted wbc-rail-loading">{wbcT("rail.loadingFiles", "Loading files...")}</div>}
                 {!filesLoading && filesError && <div className="workbench-error wbc-rail-empty">{filesError}</div>}
                 {visibleFiles.map(function (entry) {
-                  var visual = wbcProjectFileVisual(entry);
-                  var projectFile = wbcProjectFileResource(projectId, entry);
-                  return <button
+                  return <WbcProjectFileRow
                     key={entry.path}
-                    type="button"
-                    className={"workbench-project-file-row is-" + visual.kind + " enter-" + fileDirection}
-                    draggable={projectFile ? "true" : undefined}
-                    onDragStart={projectFile ? function (event) { wbcStartFileDrag(event, projectFile); } : undefined}
-                    onClick={function () {
-                      if (entry.kind === "directory") {
-                        fileDirectionRef.current = "forward";
-                        setFilePath(entry.path);
+                    direction={fileDirection}
+                    entry={entry}
+                    projectId={projectId}
+                    onOpen={function (selected) {
+                      if (selected.kind === "directory") {
+                        setFileDirection("forward");
+                        setFilePath(selected.path);
                       } else if (onOpenFile) {
-                        onOpenFile(entry);
+                        onOpenFile(selected);
                       }
-                    }}>
-                    <span className="workbench-project-file-icon" aria-hidden="true">{visual.icon}</span>
-                    <b title={entry.path}>{entry.name}</b>
-                    {entry.kind === "directory" && <span className="workbench-project-file-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>}
-                  </button>;
+                    }}
+                  />;
                 })}
                 {!filesLoading && !filesError && visibleFiles.length === 0 && <div className="workbench-muted wbc-rail-empty">{query ? wbcT("rail.noMatchingFiles", "No matching files.") : wbcT("rail.noFiles", "This folder is empty.")}</div>}
               </div>

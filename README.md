@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.9.0-beta3-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.0-beta4-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
@@ -24,10 +24,10 @@
   memories across sessions, while keeping every project's context cleanly
   isolated.
 - **Context that flows with the work** — Cyrene composes traceable, shareable
-  context blocks: project goals and outcomes flow across tasks, chat histories
-  stay isolated, and tasks and subagents receive only the plans, memory, and
-  execution state they need. Stable blocks remain reusable, and the full
-  composition stays inspectable.
+  context blocks: each conversation keeps its own goal, plan, workspace,
+  memory, and execution state, while subagents receive only the context they
+  need. Stable blocks remain reusable, and the full composition stays
+  inspectable.
 - **From conversation to verified results** — Cyrene can plan, browse, edit
   files, run shell and Git operations, connect MCP servers, use skills, delegate
   to parallel subagents, verify the result, and resume interrupted work.
@@ -44,9 +44,10 @@
 - **An agent that can manage itself** — through permissioned, auditable tools,
   Cyrene can inspect and operate its own UI, adjust settings, manage projects and
   chats, back up data, and handle updates.
-- **A workspace for long-running thinking** — projects bring chats, tasks,
-  memories, knowledge, entities, schedules, and literature together in one
-  Workbench, available in both the browser and desktop app.
+- **A workspace for long-running thinking** — projects bring conversations,
+  goal loops, plans, editable files, terminals, reviews, memories, knowledge,
+  entities, schedules, and literature together in one Workbench, available in
+  both the browser and desktop app.
 - **Automation that keeps working** — schedule one-shot or recurring tasks and
   receive results through desktop, Telegram, or WeChat notifications.
 
@@ -89,6 +90,20 @@ their user-edited names and Agent-facing descriptions.
 
 See [Architecture](docs/architecture.md) for the full lifecycle and
 [Custom plugins](docs/project-plugins.md) for the contribution formats.
+
+Workbench is conversation-first. `/goal` turns a conversation into a durable
+goal loop with an editable objective, time limit, plan, independent review,
+manual acceptance, and a stop control. When file work is explicit, the same
+conversation can open a dynamic workspace beside the chat with Editor,
+Terminal, Problems, Review, Preview, and Files views. Empty views stay hidden,
+and the workspace survives navigation and restart.
+
+Project support is plugin-provided rather than hard-coded. JavaScript and
+TypeScript (Node.js, Bun, pnpm, Yarn, or Deno), Python and uv, TeX, Go, Rust,
+Java with Maven or Gradle, Make, and GitHub repositories can contribute safe
+one-click Build, Run, Test, and Preview actions. Installing or discovering the
+matching runtime extension enables the corresponding project plugin, and
+project settings let users review or repair detected actions.
 
 The source follows the same boundary: `cyrene.core` is host-neutral,
 `cyrene.plugins` owns Cyrene's product contributions and built-in feature

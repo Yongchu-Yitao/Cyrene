@@ -47,8 +47,8 @@ async def _tool_save_project_memory(
         # Not inside a Workbench project (for example a channel or scheduler run).
         return plugin_localized(
             context,
-            "Not saved: project memory is only available inside a Workbench project task/chat.",
-            "未保存：项目记忆仅可在 Workbench 项目任务或对话中使用。",
+            "Not saved: project memory is only available inside a Workbench project conversation.",
+            "未保存：项目记忆仅可在 Workbench 项目对话中使用。",
         )
 
     # Keep the storage implementation lazy so importing the Plugin declaration
@@ -80,7 +80,6 @@ async def _tool_save_project_memory(
         "habit": "work habit",
         "fact": "fact",
         "conversation": "conversation habit",
-        "task_report": "task report",
         "reflection": "reflection",
     }.get(category, category)
     category_zh = {
@@ -89,7 +88,6 @@ async def _tool_save_project_memory(
         "habit": "工作习惯",
         "fact": "事实信息",
         "conversation": "对话习惯",
-        "task_report": "任务报告",
         "reflection": "反思",
     }.get(category, category)
     cat_label = plugin_localized(context, category_en, category_zh)

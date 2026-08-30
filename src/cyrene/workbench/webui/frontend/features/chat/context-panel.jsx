@@ -3,6 +3,7 @@ import { PluginView } from "../../platform/plugins.jsx"
 import { WBC_CHAT_MODEL_CHANGED_EVENT, WBC_ICONS, WORKBENCH_BUDGET_CODES, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentConnectionLabel, wbcAgentDisplayName, wbcChatAgent, wbcCompactNumber, wbcCurrentModel, wbcErrorText, wbcFormatTime, wbcIsBuiltinAgent, wbcModelAccessLabel, wbcModelContextLimit, wbcOpenAgentDetail, wbcStructuredEventSummary, wbcT, wbcUsageReported } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcBrowserSplit, WbcChangeSplit, WbcChatSplit, WbcMapPaneContent, WbcSideAgentSplit, WbcSubagentsTab, wbcChatArtifactFiles, wbcMapItemLabel, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
+import { WbcResourceListRow } from "./resource-list.jsx"
 import { contextBlockColorIndex } from "./behavior.mjs"
 import { WbcSurfaceHost } from "./dynamic-surfaces.jsx"
 import { wbcSurfaceResourceKey } from "./dynamic-surface-broker.mjs"
@@ -1200,22 +1201,17 @@ function WbcArtifactsTab({ chat, files: providedFiles, emptyKey, emptyFallback, 
         {files.map(function (item, i) {
           var file = item.file;
           return (
-            <button
-              type="button"
-              className="wbc-artifact-list-row"
+            <WbcResourceListRow
               key={(file.id || file.url || i) + "_" + i}
-              draggable="true"
+              draggable={true}
               onDragStart={function (event) { wbcStartFileDrag(event, file); }}
               onClick={function () { if (onSelectArtifact) onSelectArtifact(file); }}
-              title={wbcT("workbenchChat.openFilePreview", "Open file preview")}
-            >
-              <span className="wbc-artifact-list-icon" aria-hidden="true">{WBC_ICONS.file}</span>
-              <span className="wbc-artifact-list-copy">
-                <b>{file.name || "file"}</b>
-                <small title={file.path || ""}>{file.path || (item.role === "user" ? wbcT("workbenchChat.userUpload", "User upload") : wbcT("workbenchChat.agentGenerated", "Agent generated"))}</small>
-              </span>
-              <span className="wbc-artifact-list-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
-            </button>
+              buttonTitle={wbcT("workbenchChat.openFilePreview", "Open file preview")}
+              icon={WBC_ICONS.file}
+              label={file.name || "file"}
+              detail={file.path || (item.role === "user" ? wbcT("workbenchChat.userUpload", "User upload") : wbcT("workbenchChat.agentGenerated", "Agent generated"))}
+              detailTitle={file.path || ""}
+            />
           );
         })}
     </div>

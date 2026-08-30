@@ -54,8 +54,8 @@ async def _tool_retire_project_memory(
             "message": plugin_localized(
                 context,
                 "Retiring project memory is only available inside a Workbench "
-                "project task/chat.",
-                "仅可在 Workbench 项目任务或对话中将项目记忆标记为过时。",
+                "project conversation.",
+                "仅可在 Workbench 项目对话中将项目记忆标记为过时。",
             ),
         })
 

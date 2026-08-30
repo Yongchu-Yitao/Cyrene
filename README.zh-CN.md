@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.9.0-beta3-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.0-beta4-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
@@ -22,9 +22,9 @@
 
 - **一个会与你共同成长的 Agent**：Cyrene 能跨会话延续 Personality 与有价值
   的长期记忆，同时让每个 Project 的上下文保持清晰隔离。
-- **让上下文随工作流动**：Cyrene 将上下文编排为可追踪、可共享的 Block：
-  Project Goal 与成果跨 Task 流转，Chat 历史彼此隔离，Task 与 Subagent 只获取
-  所需的 Plan、Memory 和执行状态；稳定 Block 持续复用，完整构成随时可查。
+- **让上下文随工作流动**：Cyrene 将上下文编排为可追踪、可共享的 Block；每个
+  Conversation 独立保留 Goal、Plan、Workspace、Memory 与执行状态，Subagent
+  只获取所需上下文；稳定 Block 持续复用，完整构成随时可查。
 - **从对话一路做到结果验收**：Cyrene 能规划任务、操作浏览器、编辑文件、执行
   Shell 与 Git、连接 MCP Server、调用 Skill、并行委派 Subagent、验证结果，并
   在中断后继续执行。
@@ -38,9 +38,9 @@
   渲染和验证；用户可以连续看到整套 PPT 的渐进式变化。
 - **一个能管理自己的 Agent**：通过受权限约束且可审计的工具，Cyrene 可以查看
   和操作自己的界面、调整设置、管理 Project 与 Chat、备份数据并处理更新。
-- **承载长期思考的一体化工作空间**：Project 将 Chat、Task、Memory、
-  Knowledge、Entity、Schedule 与 Literature 汇集到同一个 Workbench，并可在
-  浏览器或桌面端使用。
+- **承载长期思考的一体化工作空间**：Project 将 Conversation、Goal Loop、
+  Plan、可编辑文件、Terminal、Review、Memory、Knowledge、Entity、Schedule
+  与 Literature 汇集到同一个 Workbench，并可在浏览器或桌面端使用。
 - **离开之后也会继续工作**：支持一次性与周期性自动任务，并可通过桌面、
   Telegram 或微信接收结果通知。
 
@@ -79,6 +79,19 @@ Center 则统一控制插件包是否存在、每个工具是直接可见还是�
 
 完整生命周期见[架构说明](docs/architecture.zh-CN.md)，插件贡献格式见
 [自定义插件](docs/project-plugins.zh-CN.md)。
+
+Workbench 现在以 Conversation 为唯一工作入口。`/goal` 可以把当前对话变成
+持久 Goal Loop，用户可编辑目标和持续时间、查看 Plan、随时停止或手动验收；
+Agent 完成后由独立 Reviewer 对照目标检查，不通过时继续反思和修复。用户明确
+要求处理文件时，同一对话可在旁边打开 Dynamic Workspace，在 Editor、Terminal、
+Problems、Review、Preview 与 Files 间切换；无内容的视图自动隐藏，导航或重启后
+仍能恢复工作现场。
+
+Project 支持也由插件提供，不再硬编码。JavaScript/TypeScript（Node.js、Bun、
+pnpm、Yarn 或 Deno）、Python 与 uv、TeX、Go、Rust、Java（Maven/Gradle）、
+Make 和 GitHub Repository 都可以贡献安全的一键 Build、Run、Test 与 Preview
+动作。安装或检测到对应 Runtime Extension 后会自动启用 Project Plugin，用户
+也可在 Project Settings 中检查、补充或修复识别结果。
 
 源码也遵循同一边界：`cyrene.core` 与 Host 无关，`cyrene.plugins` 拥有
 Cyrene 产品贡献与内置功能插件，`cyrene.workbench` 将它们适配到 HTTP、

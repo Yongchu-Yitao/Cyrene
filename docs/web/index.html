@@ -82,7 +82,7 @@
         <li class="nav-item" data-page="usage-cli"><a href="#" onclick="navigateTo('usage-cli')" data-i18n="nav.usage-cli">CLI</a></li>
 
         <li class="nav-section-label" data-i18n="nav.core-concepts">核心概念</li>
-        <li class="nav-item" data-page="architecture"><a href="#" onclick="navigateTo('architecture')" data-i18n="nav.architecture">双阶段循环</a></li>
+        <li class="nav-item" data-page="architecture"><a href="#" onclick="navigateTo('architecture')" data-i18n="nav.architecture">插件原生架构</a></li>
         <li class="nav-item" data-page="memory"><a href="#" onclick="navigateTo('memory')" data-i18n="nav.memory">记忆系统</a></li>
         <li class="nav-item" data-page="knowledge"><a href="#" onclick="navigateTo('knowledge')" data-i18n="nav.knowledge">知识库</a></li>
         <li class="nav-item" data-page="subagents"><a href="#" onclick="navigateTo('subagents')" data-i18n="nav.subagents">子代理系统</a></li>
@@ -101,7 +101,7 @@
     </nav>
 
     <div class="sidebar-footer">
-      <div class="sidebar-version">v0.9.0-beta3</div>
+      <div class="sidebar-version">v0.9.0-beta4</div>
     </div>
     </div>
   </aside>
@@ -176,7 +176,7 @@
           <li><strong>Electron 桌面应用</strong>——CI 自动构建 macOS、Windows（x64 + ARM64）和 Linux 包。凭据存在 OS 钥匙串，浏览器工具复用 Electron 内嵌 Chromium，不携带第二套 Playwright 浏览器。</li>
           <li><strong>引导向导</strong>——首次启动自动运行，引导配置 API 密钥、模型和人格，无需手动编辑文件。</li>
           <li><strong>地图引擎</strong>——AMap / Leaflet 交互式地图，支持标注点和路线。</li>
-          <li><strong>Telegram / WeChat Bot</strong>——从聊天软件访问完整代理能力，支持双阶段循环和全部工具。</li>
+          <li><strong>Telegram / WeChat Bot</strong>——从聊天软件访问同一套连续 Agent Runtime 和已启用工具。</li>
         </ul>
       </section>
 
@@ -862,7 +862,7 @@ python -m cyrene --workbench</code></pre></div>
 <div lang="zh">
 <div class="page-header">
         <h1>Workbench UI</h1>
-        <p class="page-subtitle">默认 UI。以项目为中心的桌面风格工作台，提供项目隔离、意图分流和诚实逐步执行。</p>
+        <p class="page-subtitle">默认 UI。以项目和对话为中心，集成 Goal Loop、文件编辑、终端、审查与一键运行。</p>
       </div>
 
       <section data-topic="launching">
@@ -887,8 +887,7 @@ python -m cyrene --workbench</code></pre></div>
             <thead><tr><th>页面</th><th>功能</th></tr></thead>
             <tbody>
               <tr><td><strong>欢迎 / 项目</strong></td><td>创建和切换项目。每个项目拥有独立的工作区、知识库、记忆和聊天历史。</td></tr>
-              <tr><td><strong>仪表盘</strong></td><td>系统概览：活动任务数、最近会话、知识库统计、LLM 状态。</td></tr>
-              <tr><td><strong>聊天</strong></td><td>项目范围的实时聊天。详见下文"意图分流"。</td></tr>
+              <tr><td><strong>聊天</strong></td><td>项目范围的 Conversation、Plan、Goal Loop、Agent Run 与动态 Workspace。</td></tr>
               <tr><td><strong>调度</strong></td><td>查看和管理定时任务、cron 作业和截止日期。</td></tr>
               <tr><td><strong>知识</strong></td><td>上传文档、浏览知识库、运行语义搜索。</td></tr>
               <tr><td><strong>记忆</strong></td><td>查看和管理项目/代理记忆。按工作区隔离。</td></tr>
@@ -899,28 +898,16 @@ python -m cyrene --workbench</code></pre></div>
         </div>
       </section>
 
-      <section data-topic="intent-dispatch">
-        <h2>意图分流（Intent Dispatch）</h2>
-        <p>聊天输入不是简单地全部交给 LLM。系统会自动分类意图：</p>
-        <ul>
-          <li><strong>回答模式</strong>——直接交给 LLM 回答，不会触发工具调用或不必要的规划</li>
-          <li><strong>指令模式</strong>——需要调用工具执行的命令（如搜索、文件操作），交给代理执行</li>
-          <li><strong>任务模式</strong>——需要多步操作的复杂请求，生成执行计划逐步执行</li>
-          <li><strong>收尾</strong>——你说"任务完成"或"可以验收"时，代理汇总成果，状态标记为 <code>review</code></li>
-        </ul>
-        <p>你始终可以自由对话，不会无条件生成计划。</p>
+      <section data-topic="conversation-goals">
+        <h2>Conversation Goal Loop</h2>
+        <p>Cyrene 不再提供独立 Task 页面。新建 Conversation 后输入 <code>/goal</code>，Agent 会先研究和讨论目标，再由用户在仅目标活动时出现的 Goal Tab 中编辑目标、持续时间和验收标准并确认。</p>
+        <p>确认后，Agent 会围绕 Plan 持续执行、测试和修复。独立 Reviewer 只返回“通过/不通过”和关键缺口；未通过时进入下一轮，只有 Reviewer 通过或用户手动接受才完成。用户可以随时停止，外部副作用继续走统一 Permission Review。</p>
       </section>
 
-      <section data-topic="step-by-step-execution">
-        <h2>逐步执行</h2>
-        <p>当代理进入任务模式时：</p>
-        <ol>
-          <li>Agent 规划需要执行的步骤</li>
-          <li><strong>你</strong>决定步骤的执行顺序（不必按计划顺序）</li>
-          <li>每步执行时你可以在聊天中实时看到进度</li>
-          <li>你可以随时发送消息引导、调整或中止当前步</li>
-          <li>任务完成时，Agent 汇总成果，产物（文件、报告等）可在线查看或下载</li>
-        </ol>
+      <section data-topic="dynamic-workspace">
+        <h2>Dynamic Workspace</h2>
+        <p>用户明确要求编辑、显示文件或查看目录结构时，对话旁会打开统一 Workspace。Editor、Terminal、Problems、Review、Preview、Files 仅在有内容时显示，Active Tab 位于底部并有颜色提示，Action 与 Review 信息保留在顶部。</p>
+        <p>Project Editor 可自动检测或手动填写 Action。JavaScript/TypeScript、Python、TeX、Go、Rust、Java、Make 与 GitHub 支持由 Project Plugin 提供；安装对应 Runtime Extension 或检测到系统已有 Runtime 后自动启用。Build、Run、Test、Preview 共用一个运行按钮和同一套 Terminal、Diagnostic、Artifact 与 Preview 体验。</p>
       </section>
 
       <section data-topic="project-isolation">
@@ -945,7 +932,7 @@ python -m cyrene --workbench</code></pre></div>
 <div lang="en">
 <div class="page-header">
         <h1>Workbench UI</h1>
-        <p class="page-subtitle">The default UI. A project-centric desktop workbench with project isolation, intent dispatch, and step-by-step execution.</p>
+        <p class="page-subtitle">The default project- and conversation-centered UI, with goal loops, file editing, terminals, review, and one-click actions.</p>
       </div>
       <section data-topic="launching">
         <h2>Launching</h2>
@@ -963,8 +950,7 @@ python -m cyrene --workbench</code></pre></div>
           <thead><tr><th>Page</th><th>Purpose</th></tr></thead>
           <tbody>
             <tr><td><strong>Welcome / Projects</strong></td><td>Create and switch projects. Each project has its own workspace, knowledge base, memory, and chat history.</td></tr>
-            <tr><td><strong>Dashboard</strong></td><td>System overview: active tasks, recent sessions, knowledge statistics, and LLM status.</td></tr>
-            <tr><td><strong>Chat</strong></td><td>Project-scoped live chat. See Intent Dispatch below.</td></tr>
+            <tr><td><strong>Chat</strong></td><td>Project-scoped conversations, plans, goal loops, Agent runs, and dynamic workspaces.</td></tr>
             <tr><td><strong>Schedule</strong></td><td>View and manage scheduled tasks, cron jobs, and deadlines.</td></tr>
             <tr><td><strong>Knowledge</strong></td><td>Upload documents, browse the knowledge base, and run semantic search.</td></tr>
             <tr><td><strong>Memory</strong></td><td>View and manage project and agent memories, isolated by workspace.</td></tr>
@@ -973,27 +959,15 @@ python -m cyrene --workbench</code></pre></div>
           </tbody>
         </table></div>
       </section>
-      <section data-topic="intent-dispatch">
-        <h2>Intent Dispatch</h2>
-        <p>Chat input is automatically classified into intents:</p>
-        <ul>
-          <li><strong>Answer mode</strong> — direct LLM reply without tool calls or unnecessary planning</li>
-          <li><strong>Command mode</strong> — tool execution such as search or file operations</li>
-          <li><strong>Task mode</strong> — a complex request becomes a multi-step plan</li>
-          <li><strong>Finalize</strong> — when you say the task is done or ready for review, the agent summarizes results and marks it <code>review</code></li>
-        </ul>
-        <p>You can always have a normal conversation; a plan is not generated unconditionally.</p>
+      <section data-topic="conversation-goals">
+        <h2>Conversation Goal Loops</h2>
+        <p>Cyrene no longer has a separate Task page. Start a conversation and enter <code>/goal</code>; the Agent first researches and discusses the outcome, then the Goal tab appears while the goal exists so you can edit its objective, duration, and acceptance criteria before confirming it.</p>
+        <p>After confirmation, the Agent keeps planning, working, testing, and repairing. An independent Reviewer reports pass/fail and critical gaps; a failure starts another repair round, and only a passing review or manual acceptance completes the goal. You can stop at any time, while external side effects continue through the normal permission review.</p>
       </section>
-      <section data-topic="step-by-step-execution">
-        <h2>Step-by-Step Execution</h2>
-        <p>When the agent enters task mode:</p>
-        <ol>
-          <li>The agent plans the required steps</li>
-          <li><strong>You</strong> choose the execution order; it does not have to match the plan order</li>
-          <li>Progress appears live in chat while each step runs</li>
-          <li>You can guide, adjust, or stop the active step at any time</li>
-          <li>At completion, the agent summarizes the outcome and makes artifacts such as files or reports available to view or download</li>
-        </ol>
+      <section data-topic="dynamic-workspace">
+        <h2>Dynamic Workspace</h2>
+        <p>When you explicitly ask to edit or show a file or inspect a directory, a shared workspace opens beside the conversation. Editor, Terminal, Problems, Review, Preview, and Files appear only when they have content. The active tab is highlighted in the bottom bar, while action and review information stays at the top.</p>
+        <p>The project editor can detect actions or let you fill them manually. JavaScript/TypeScript, Python, TeX, Go, Rust, Java, Make, and GitHub support comes from project plugins, enabled when their runtime extension is installed or already available. Build, Run, Test, and Preview share one run button and the same terminal, diagnostics, artifact, and preview experience.</p>
       </section>
       <section data-topic="project-isolation">
         <h2>Project Isolation</h2>
@@ -1249,6 +1223,12 @@ cyrene stop</code></pre></div>
         <p>输入框上下文插件负责 Workspace、MCP、Skills 等会话选择；SOUL 插件启用时把人格挂载在 System Prompt 下方。Context Tree 的稳定 Block 可以复用缓存，长对话继续使用统一压缩机制。Subagent 继承 Main Agent 的初始 Tree，并附加 Main Agent 的任务指令，再通过 Inbox 协作。</p>
       </section>
 
+      <section data-topic="conversation-workspace">
+        <h2>Conversation、Goal 与 Workspace</h2>
+        <p>Conversation 是唯一持久工作单元；旧 Task 产品、页面和独立 Runtime 已删除。<code>cyrene_goal</code> 把目标、时间限制、Review 与循环状态存入 Conversation，<code>cyrene_control</code> 保存 Plan 与 Step Progress。只有独立 Review 通过或用户手动接受才会完成 Goal。</p>
+        <p>File/Directory Tool 只发布经过 Workspace 校验的 Resource Effect。统一 Workspace Surface 根据内容显示 Editor、Terminal、Problems、Review、Preview 与 Files；Project-type Plugin 为 JavaScript/TypeScript、Python、TeX、Go、Rust、Java、Make 与 GitHub 提供 Action Detection，并由匹配 Runtime Extension 自动启用。</p>
+      </section>
+
       <section data-topic="self-control">
         <h2>Cyrene 自控制</h2>
         <p><code>cyrene_tools</code> 是渐进披露的桌面自管理工具包。Agent 先用 <code>cyrene.ui.snapshot</code> 读取当前已渲染、当前视口中的稳定语义组件，再用 <code>cyrene.ui.inspect</code> 查看某个组件此刻可执行的动作，最后通过 <code>click</code>、<code>type</code>、<code>scroll</code> 或 <code>drag</code> 操作。导航、滚动、展开或打开右键菜单后必须重新读取 Snapshot；Inspect 不预测未渲染的下一页。</p>
@@ -1320,6 +1300,11 @@ cyrene stop</code></pre></div>
         </div>
         <h3>Context and subagents</h3>
         <p>The required system-prompt plugin mounts the editable base Agent instructions first, while the kernel creates only an empty system root. The composer-context plugin owns per-chat workspace, MCP, Skills, and capability selections. When enabled, the SOUL plugin mounts personality immediately below the system prompt. Stable context-tree blocks preserve prompt-cache reuse, and long conversations keep the unified compaction behavior. A subagent inherits the main Agent's initial tree plus its assignment and then collaborates through the inbox.</p>
+      </section>
+      <section data-topic="conversation-workspace">
+        <h2>Conversations, Goals, and Workspaces</h2>
+        <p>The conversation is the only durable work unit; the former Task product, page, and separate runtime are removed. <code>cyrene_goal</code> stores the objective, time limit, review, and loop status on the conversation, while <code>cyrene_control</code> stores its plan and step progress. Only a passing independent review or explicit manual acceptance completes a goal.</p>
+        <p>File and directory tools publish only workspace-validated resource effects. One workspace surface reveals Editor, Terminal, Problems, Review, Preview, and Files according to available content. Project-type plugins detect actions for JavaScript/TypeScript, Python, TeX, Go, Rust, Java, Make, and GitHub workspaces and are enabled by matching runtime extensions.</p>
       </section>
       <section data-topic="self-control">
         <h2>Cyrene Self-Control</h2>
@@ -2276,7 +2261,7 @@ curl http://localhost:4242/api/context-debug/events/evt_3b22f9a5c0cb
 cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb</code></pre></div>
 
         <h3>Runtime 与 Workbench 检查</h3>
-        <p><code>cyrene status</code> 显示 Daemon Health 与 Metric。Workbench Chat/Task Detail 显示实时 Agent、Tool、Subagent、Permission 和 Browser 状态；持久 Round Trace 使用 <code>cyrene flow</code> 或 Event API。</p>
+        <p><code>cyrene status</code> 显示 Daemon Health 与 Metric。Workbench Conversation Detail 显示实时 Agent、Tool、Subagent、Permission 和 Browser 状态；持久 Round Trace 使用 <code>cyrene flow</code> 或 Event API。</p>
       </section>
 
       <section>
@@ -2512,7 +2497,7 @@ uv run pytest tests/test_context_trace.py -v</code></pre></div>
 OWNER_ID=你的_telegram_user_id</code></pre></div>
         <p>然后运行：</p>
         <div class="code-block"><pre><code>python -m cyrene</code></pre></div>
-        <p>Telegram Bot 支持与 Web UI 完全相同的双阶段循环、子代理和工具集。你可以从 Telegram 执行搜索、文件操作、生成子代理等所有操作。</p>
+        <p>Telegram Bot 使用与 Web UI 相同的连续 Agent Runtime、Subagent 与已启用工具。你可以从 Telegram 执行搜索、文件操作和 Subagent 协作等操作。</p>
       </section>
 
       <section>

@@ -149,7 +149,7 @@ Short-term Entry 保存情绪、提及次数和 Fact/Pattern/Preference/Emotion 
 托管附件、内容抽取、分块、本地向量、混合检索、Zotero 同步、Workbench HTTP
 Route、全局搜索与 Agent 工具。数据统一保存在
 `data/plugin_data/cyrene_knowledge/`，所有记录按 Workbench Project 隔离。
-Chat Attachment、Generated Export 和完成后的 Task Artifact 都进入同一个
+Chat Attachment 和 Generated Export 都进入同一个
 插件服务；旧 `cyrene.knowledge` 与 Workbench Library Route 不再位于活动调用链。
 Agent 通过 `toolbox.list → describe → invoke` 使用这些工具。
 
@@ -183,6 +183,47 @@ Electron 与 Web 后端仅作为客户端连接，因此关闭视图不会结束
 - Symbol、Caller、Reference、File Summary 分析；
 - Diff、Blame、Log、Branch、Status 等 Git 能力。
 
+### Conversation 拥有的 Goal 与 Dynamic Workspace
+
+Workbench 只有一种持久工作单元：Conversation。旧 Task 产品及其 Runtime Branch、
+Route、Persistence Model 与页面已删除。可选能力把状态挂到 Conversation，而不是
+创建第二种 Session：
+
+```text
+Conversation
+├── ContextTree 与 Continuous Agent Run
+├── cyrene_goal State：目标、限制、Review、Loop Status
+├── cyrene_control State：Plan 与 Step Progress
+├── Conversation Changes：File Snapshot 与 Review Baseline
+└── Workspace Surface：Editor、Terminal、Problems、Review、Preview、Files
+```
+
+`cyrene_goal` Plugin Pack 拥有 `/goal`、目标讨论与确认、可见 Goal Tab、独立
+Review、Repair Loop、手动验收、停止、完成通知和重启恢复。Goal Lease 将每轮与
+普通 Conversation Execution 串行协调。Model Turn 结束不等于 Goal 完成；只有
+Review 通过或用户明确接受才会完成。Permission Request、User Question、安全限制
+与用户停止是明确的 Loop Boundary。
+
+File/Directory Tool 只发布经过验证的 Workspace-relative Resource Effect。
+Conversation Surface Broker 仅在用户明确要求显示文件/结构，或已有 Surface 可更新
+时解释这些 Effect。Plugin 通过统一 Extension Registry 贡献 File Type、Project
+Type、Action 与 Surface，不能直接写 Pane State，也不能显示 Project Workspace
+之外的路径。
+
+`cyrene_code` 提供共享 Workspace Execution Service 与 Native Surface。Editor
+Buffer 使用 Content Version 区分 Clean Reload 与用户拥有的 Unsaved Change。
+Conversation Snapshot 和 Git Working-tree Diff 共用一个 Renderer，但保持不同的
+Baseline。Terminal、Diagnostic、Preview、Files Tab 只有在存在内容时才出现；
+Selected Resource 与 Layout 按 Conversation 持久化。
+
+Project-type Plugin 检测 JavaScript/TypeScript、Python、TeX、Go、Rust、Java、
+Make 与 GitHub Workspace 的安全 Action，并跟随对应 Runtime Extension 激活。
+Action Descriptor 是数据而不是任意 Shell Snippet：Owning Provider 在已验证的
+Workspace 内解析 Executable 与 Argument，统一 Execution Service 管理 Identity、
+Status、Terminal Attachment、Diagnostic、Artifact、Endpoint、Interruption 与
+Restart。因此 TeX PDF 编译和应用开发服务器共用同一条 Build/Run/Test/Preview
+路径。
+
 ### MCP
 
 支持 stdio 与 SSE MCP Server。Schema 通过 `integration_tools` 按需发现，
@@ -197,7 +238,7 @@ Electron 与 Web 后端仅作为客户端连接，因此关闭视图不会结束
 目录中的当前实现。
 
 任务和执行历史持久化在 SQLite。Lease Claim、稳定 Run ID 与按 Revision 的
-Finalize 防止重复执行，也避免旧 Run 覆盖并发 Pause/Edit。Agent Task 直接通过
+Finalize 防止重复执行，也避免旧 Run 覆盖并发 Pause/Edit。Agent Action 直接通过
 Workbench Chat Runtime 执行并把一个最终结果投递回 Workbench。插件包的
 `application_setup` 同时注册 Workbench Route、全局搜索 Provider 和 Schedule
 模块；插件未加载时不会回退到另一套内置定时任务后端。
@@ -235,13 +276,13 @@ Agent 可提供精确用户引用；若省略，则由同一个 Permission Revie
 
 ### Web UI
 
-Cyrene 只提供 Workbench 前端。主要区域是 Task、Chat、Knowledge/Library、
+Cyrene 只提供 Workbench 前端。主要区域是 Chat、Knowledge/Library、
 Schedule 和 Memory；Search、Browser/PDF/Diff、Settings、Onboarding、Help、
 Profile 和 Quick Chat 是 Overlay、Panel 或 Secondary Surface，不是旧 UI
 页面。唯一源码根是 `src/cyrene/workbench/webui/frontend`，唯一生成输出根是
 `src/cyrene/workbench/webui/static/app`。
 
-`WorkbenchTopbar` 明确维护两个独立集合：最多 3 个 Task/Chat Session 的本地
+`WorkbenchTopbar` 明确维护两个独立集合：最多 3 个 Conversation Session 的本地
 MRU/置顶列表，以及持久化的 Pinned Resource Shelf。资源拖动使用内部 MIME
 `application/x-cyrene-work-resource+json`；macOS 原生文字拖动以
 `text/plain` 接收并固化为 Markdown。知识库附件由服务端解析，Renderer Payload
@@ -316,16 +357,13 @@ src/
 │   ├── workbench/           Cyrene Host 适配层
 │   │   ├── application/    应用编排、事件与通知
 │   │   ├── chat/           Chat Service、Repository 与 Run
-│   │   ├── tasks/          Task 执行与 Workflow Service
 │   │   ├── projects/       Project 生命周期、文件与组装
-│   │   ├── goals/          可持久恢复的 Goal Loop
-│   │   ├── planning/       Planning Contract 与 Helper
 │   │   ├── artifacts/      Artifact、Presentation 与 Export
 │   │   ├── sessions/       Session Context 与 Presentation
 │   │   ├── control/        外部 Control Port 与 Projection
 │   │   ├── workspaces/     Workspace Change 与 Diff Service
 │   │   ├── ui/             UI Surface 抽象
-│   │   ├── core_adapter/   Session/Chat/Task 与 Core 的桥接
+│   │   ├── core_adapter/   Conversation 与 Core 的桥接
 │   │   ├── http/           FastAPI/HTTP 组装
 │   │   ├── persistence/    Workbench 持久化
 │   │   └── webui/         App Lifecycle 与唯一 SPA 源码/输出
@@ -342,6 +380,6 @@ store/
 `cyrene.core` 不得导入 `cyrene.plugins` 或 `cyrene.workbench`。产品层通过
 Plugin Scope 提供 Model 和 Application Service，Workbench 在打开 Core Session
 时显式传入该 Application Scope。原顶层 `agent`、`route`、`webui` 包已删除，
-不发布兼容外壳或重复实现。
-Workbench 业务模块按领域组织；包根目录不放业务 Service 实现，也不保留旧路径
-转发模块。
+不发布兼容外壳或重复实现。旧 Task 产品同样不存在：Goal 与 Plan 是 Conversation
+上的 Plugin State，不是另一套 Workbench Runtime。Workbench 业务模块按领域组织；
+包根目录不放业务 Service 实现，也不保留旧路径转发模块。

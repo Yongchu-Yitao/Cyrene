@@ -19,6 +19,7 @@
     "@codemirror/search": "^6.5.10",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.5",
+    "@lezer/highlight": "^1.2.3",
     "@lobehub/icons-static-svg": "1.94.0",
     "@tabler/icons": "3.46.0",
     "@xterm/addon-fit": "^0.10.0",

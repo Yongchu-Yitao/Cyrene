@@ -24,15 +24,16 @@ def detect(workspace: Path, current_path: str):
     cwd = relative_scope(workspace, scope)
     suffix = scope_id(cwd)
     result = []
-    for target, kind, label in (
-        ("build", "build", "Build with Make"),
-        ("test", "test", "Test with Make"),
-        ("run", "run", "Run with Make"),
+    for target, kind, label, zh_label in (
+        ("build", "build", "Build with Make", "使用 Make 构建"),
+        ("test", "test", "Test with Make", "使用 Make 测试"),
+        ("run", "run", "Run with Make", "使用 Make 运行"),
     ):
         if target in targets:
             result.append(workspace_action(
                 f"make.{target}.{suffix}", label, kind, "make", [target],
                 cwd=cwd, long_running=target == "run",
+                i18n={"zh": {"label": zh_label}},
             ))
     return result
 

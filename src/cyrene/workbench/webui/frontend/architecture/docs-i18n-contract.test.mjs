@@ -35,9 +35,9 @@ function topics(block) {
 const CRITICAL_TOPICS = {
   installation: ["prerequisites", "prebuilt-package", "source-installation", "verification", "optional-extensions", "troubleshooting", "related-docs"],
   configuration: ["configuration-architecture", "environment-variables", "runtime-settings", "model-pricing"],
-  "usage-workbench": ["launching", "pages", "intent-dispatch", "step-by-step-execution", "project-isolation", "related-docs"],
+  "usage-workbench": ["launching", "pages", "conversation-goals", "dynamic-workspace", "project-isolation", "related-docs"],
   "usage-cli": ["http-client", "interactive-cli", "chat-slash-commands", "workflow-example"],
-  architecture: ["plugin-runtime", "self-control", "project-structure", "security-model"],
+  architecture: ["plugin-runtime", "conversation-workspace", "self-control", "project-structure", "security-model"],
   memory: ["three-layer-architecture", "memory-flow", "memory-retirement", "soul-personality", "workbench-memory"],
   subagents: ["overview", "lifecycle", "communication", "use-cases", "considerations"],
   browser: ["features", "setup", "workflow", "configuration", "tools"],

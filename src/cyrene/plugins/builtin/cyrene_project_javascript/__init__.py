@@ -32,12 +32,12 @@ def _package_actions(workspace: Path, current_path: str):
         manager = "npm"
     result = []
     run_added = False
-    for name, kind, label, long_running in (
-        ("dev", "run", "Start development server", True),
-        ("start", "run", "Start application", True),
-        ("build", "build", "Build project", False),
-        ("test", "test", "Run tests", False),
-        ("preview", "preview", "Preview build", True),
+    for name, kind, label, zh_label, long_running in (
+        ("dev", "run", "Start development server", "启动开发服务器", True),
+        ("start", "run", "Start application", "启动应用", True),
+        ("build", "build", "Build project", "构建项目", False),
+        ("test", "test", "Run tests", "运行测试", False),
+        ("preview", "preview", "Preview build", "预览构建", True),
     ):
         if name not in scripts or (kind == "run" and run_added):
             continue
@@ -45,6 +45,7 @@ def _package_actions(workspace: Path, current_path: str):
         result.append(workspace_action(
             f"javascript.{name}.{scope_id(cwd)}", label, kind, manager, args,
             cwd=cwd, long_running=long_running,
+            i18n={"zh": {"label": zh_label}},
         ))
         run_added = run_added or kind == "run"
     return result
@@ -63,16 +64,17 @@ def _deno_actions(workspace: Path, current_path: str):
     tasks = tasks if isinstance(tasks, Mapping) else {}
     cwd = relative_scope(workspace, scope)
     result = []
-    for name, kind, label, long_running in (
-        ("dev", "run", "Start Deno development task", True),
-        ("start", "run", "Start Deno application", True),
-        ("build", "build", "Build Deno project", False),
-        ("test", "test", "Test Deno project", False),
+    for name, kind, label, zh_label, long_running in (
+        ("dev", "run", "Start Deno development task", "启动 Deno 开发任务", True),
+        ("start", "run", "Start Deno application", "启动 Deno 应用", True),
+        ("build", "build", "Build Deno project", "构建 Deno 项目", False),
+        ("test", "test", "Test Deno project", "测试 Deno 项目", False),
     ):
         if name in tasks:
             result.append(workspace_action(
                 f"deno.{name}.{scope_id(cwd)}", label, kind,
                 "deno", ["task", name], cwd=cwd, long_running=long_running,
+                i18n={"zh": {"label": zh_label}},
             ))
     return result
 

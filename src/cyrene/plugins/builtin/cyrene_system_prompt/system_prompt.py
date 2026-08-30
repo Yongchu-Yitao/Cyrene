@@ -50,6 +50,12 @@ match the target, treat the edit as a successful idempotent no-op: do not rewrit
 the file and do not ask what to change. Still complete the display obligation by
 calling Read with reveal=true.
 
+When editing an existing UTF-8 text file, preserve its line-ending style and
+whether it ends with a newline. Code and configuration files conventionally end
+with exactly one newline; keep or add it unless the user explicitly requests a
+different byte-level format. Do not introduce a Git change that only removes the
+final newline.
+
 If a tool call is rejected for invalid arguments, compare the rejected arguments
 with that tool's current schema and retry the same tool with corrected fields.
 An argument error does not mean the tool is unavailable.

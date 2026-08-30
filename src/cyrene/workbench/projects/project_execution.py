@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from cyrene.localization import normalize_language
+
 _ACTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _ACTION_KINDS = frozenset({"build", "run", "test", "preview"})
 _MAX_ACTIONS = 40
@@ -22,6 +24,22 @@ def _relative_path(value: Any, *, label: str) -> str:
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{label} must stay inside the project workspace")
     return path.as_posix() or "."
+
+
+def _action_i18n(value: Any) -> dict[str, dict[str, str]]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("workspace action i18n must map locales to objects")
+    result: dict[str, dict[str, str]] = {}
+    for raw_locale, raw_fields in value.items():
+        locale = normalize_language(_text(raw_locale, 24))
+        if not locale or not isinstance(raw_fields, Mapping):
+            raise ValueError("workspace action i18n must map locales to objects")
+        label = _text(raw_fields.get("label"), 160)
+        if label:
+            result[locale] = {"label": label}
+    return result
 
 
 def normalize_execution_action(value: Mapping[str, Any], index: int = 0) -> dict[str, Any]:
@@ -60,6 +78,7 @@ def normalize_execution_action(value: Mapping[str, Any], index: int = 0) -> dict
     return {
         "id": action_id,
         "label": _text(value.get("label"), 160) or action_id,
+        "i18n": _action_i18n(value.get("i18n")),
         "kind": kind,
         "program": program,
         "args": args,

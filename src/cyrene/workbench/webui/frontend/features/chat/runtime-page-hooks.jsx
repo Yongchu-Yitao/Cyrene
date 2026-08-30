@@ -1,4 +1,4 @@
-import { WbcVoice, useWbcEffect, wbcAgentEventPayload, wbcConfirmOptimisticMessage, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcT } from "../../workbench-chat.jsx"
+import { WbcVoice, useWbcEffect, wbcAgentEventPayload, wbcConfirmOptimisticMessage, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcPreserveLiveTimelineAnchors, wbcT, wbcTruncateMessagesAfterUser } from "../../workbench-chat.jsx"
 import { wbcVoiceQuestionText } from "./conversation.jsx"
 import { settleChatListItem as wbcSettleChatListItem } from "./behavior.mjs"
 
@@ -40,34 +40,13 @@ function wbcRuntimeUserMessageConfirmed(context, chatId, confirmation) {
   });
 }
 
-function wbcRuntimeRetryTruncate(context, chatId, truncateInfo) {
-  var suppressedTurn = context.retrySuppressedTurnRef.current || {};
-  var locallySuppressedIds = String(suppressedTurn.chatId || "") === String(chatId || "")
-    ? (Array.isArray(suppressedTurn.messageIds) ? suppressedTurn.messageIds.map(String) : []) : [];
+function wbcRuntimeRetryTruncate(context, chatId, truncateAfterMessageId) {
+  context.beginChatHydration(chatId);
   context.setActiveChat(function (previous) {
     if (!previous || previous.id !== chatId) return previous;
     var list = previous.messages || [];
-    var afterId = typeof truncateInfo === "string"
-      ? truncateInfo : String(truncateInfo && truncateInfo.afterId || "");
-    var hasExplicitIds = !!(truncateInfo && Array.isArray(truncateInfo.replacedIds));
-    var replacedIds = new Set((hasExplicitIds ? truncateInfo.replacedIds.map(String) : []).concat(locallySuppressedIds));
-    if (hasExplicitIds || locallySuppressedIds.length) {
-      return { ...previous, messages: list.filter(function (item) {
-        return !replacedIds.has(String(item && item.id || ""));
-      }) };
-    }
-    var cut = -1;
-    for (var index = 0; index < list.length; index += 1) {
-      if (String(list[index].id) === afterId) { cut = index; break; }
-    }
-    return cut < 0 ? previous : { ...previous, messages: list.slice(0, cut + 1) };
-  });
-  if (String(context.retrySuppressedTurnRef.current && context.retrySuppressedTurnRef.current.chatId || "") === String(chatId || "")) {
-    context.retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };
-  }
-  context.setRetrySuppressedTurn(function (current) {
-    return String(current && current.chatId || "") === String(chatId || "")
-      ? { chatId: "", messageIds: [] } : current;
+    var nextMessages = wbcTruncateMessagesAfterUser(list, truncateAfterMessageId);
+    return nextMessages === list ? previous : { ...previous, messages: nextMessages };
   });
 }
 
@@ -90,6 +69,9 @@ function wbcRuntimeIntermediateMessage(context, chatId, message) {
 }
 
 function wbcRuntimeAssistantSaved(context, chatId, assistantMessages, terminalEvent) {
+  // The terminal stream event is newer than every transcript request started
+  // while the run was active. Reject those responses before applying it.
+  context.beginChatHydration(chatId);
   if (String(context.activeChatIdRef.current || "") === String(chatId || "")) {
     var messages = Array.isArray(assistantMessages) ? assistantMessages : [];
     var terminalMessage = null;
@@ -192,6 +174,8 @@ function wbcRuntimeRequestResolved(context, chatId, event) {
 }
 
 function wbcRuntimeAwaitingUser(context, chatId, pendingQuestion) {
+  // Awaiting-user is also an authoritative transcript transition.
+  context.beginChatHydration(chatId);
   if (String(context.activeChatIdRef.current || "") === String(chatId || "") && pendingQuestion) {
     WbcVoice.autoSpeak(
       wbcVoiceQuestionText(pendingQuestion), "auto-chat:" + String(chatId || ""),
@@ -204,22 +188,11 @@ function wbcRuntimeAwaitingUser(context, chatId, pendingQuestion) {
   });
 }
 
-function wbcClearSuppressedRetry(context, chatId) {
-  if (String(context.retrySuppressedTurnRef.current && context.retrySuppressedTurnRef.current.chatId || "") === String(chatId || "")) {
-    context.retrySuppressedTurnRef.current = { chatId: "", messageIds: [] };
-  }
-  context.setRetrySuppressedTurn(function (current) {
-    return String(current && current.chatId || "") === String(chatId || "")
-      ? { chatId: "", messageIds: [] } : current;
-  });
-}
-
 function wbcRuntimeInterrupted(context, chatId) {
   context.setActiveChat(function (previous) {
     return !previous || previous.id !== chatId ? previous : { ...previous, status: "idle" };
   });
   if (String(context.activeChatIdRef.current || "") === String(chatId || "")) WbcVoice.stop();
-  wbcClearSuppressedRetry(context, chatId);
   context.refreshChats();
 }
 
@@ -250,7 +223,6 @@ function wbcRuntimeError(context, chatId, error, failureState) {
     context.setErrorKind("message");
     context.setError(error || wbcT("workbenchChat.agentError.failed", "Agent run failed"));
     WbcVoice.stop();
-    wbcClearSuppressedRetry(context, chatId);
   }
 }
 
@@ -258,8 +230,14 @@ function wbcRuntimeResync(context, chatId) {
   var hydrationSequence = context.beginChatHydration(chatId);
   context.model.getChat(chatId).then(function (chat) {
     if (!context.isCurrentChatHydration(chatId, hydrationSequence)) return;
-    context.chatCache.details[chatId] = chat;
-    if (context.activeChatIdRef.current === chatId) context.setActiveChat(chat);
+    var runtime = context.runtimeEngine.get(chatId);
+    var cachedChat = context.chatCache.details[chatId] || null;
+    context.chatCache.details[chatId] = wbcPreserveLiveTimelineAnchors(cachedChat, chat, runtime);
+    if (context.activeChatIdRef.current === chatId) {
+      context.setActiveChat(function (previous) {
+        return wbcPreserveLiveTimelineAnchors(previous, chat, runtime);
+      });
+    }
   }).catch(function () {});
   context.refreshChats();
 }

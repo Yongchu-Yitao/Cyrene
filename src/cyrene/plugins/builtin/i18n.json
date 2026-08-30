@@ -2778,11 +2778,11 @@
     "save_project_memory": {
       "en": {
         "name": "Save memory",
-        "description": "Save a durable fact about THIS project into its long-term memory so future runs (in any task/chat of this project) automatically see and reuse it. Use proactively when you learn something worth remembering: a confirmed constraint or decision, a tool/approach that works, a dead-end to avoid, a key file or command, the user's stated preference, a recurring way they work or want you to collaborate (a working `habit` — record these actively; they are easy to miss), or an environment fact. Persistent and visible to the user on the project's Memory page. Do NOT use it for transient chit-chat, one-off task output, or secrets. Duplicates are merged automatically, and if this fact updates/contradicts an older memory (e.g. a changed value or a corrected conclusion) the outdated one is retired automatically — so always record your latest understanding without worrying about stale entries. Prefer writing prose in the user's configured language (Chinese UI/user → Chinese; English UI/user → English), while preserving code, paths, commands, identifiers, and proper nouns exactly."
+        "description": "Save a durable fact about THIS project into its long-term memory so future runs in this project automatically see and reuse it. Use proactively when you learn something worth remembering: a confirmed constraint or decision, a tool/approach that works, a dead-end to avoid, a key file or command, the user's stated preference, a recurring way they work or want you to collaborate (a working `habit` — record these actively; they are easy to miss), or an environment fact. Persistent and visible to the user on the project's Memory page. Do NOT use it for transient chit-chat, one-off run output, or secrets. Duplicates are merged automatically, and if this fact updates/contradicts an older memory (e.g. a changed value or a corrected conclusion) the outdated one is retired automatically — so always record your latest understanding without worrying about stale entries. Prefer writing prose in the user's configured language (Chinese UI/user → Chinese; English UI/user → English), while preserving code, paths, commands, identifiers, and proper nouns exactly."
       },
       "zh": {
         "name": "保存记忆",
-        "description": "保存可跨任务复用的项目事实、约束、决定、偏好或工作方法。"
+        "description": "保存可跨对话复用的项目事实、约束、决定、偏好或工作方法。"
       }
     },
     "schedule.cancel": {

@@ -254,6 +254,9 @@ function showTerminalRecoveryToast(terminal) {
 
 function showTerminalExitToast(terminal, onRestart) {
   if (!terminal || String(terminal.status || "") !== "exited") return;
+  // One-shot terminals are command output consoles: exiting is their expected
+  // lifecycle, and the owning workspace action reports success or failure.
+  if (String(terminal.launchMode || "") === "one_shot") return;
   var key = [
     String(terminal.id || ""),
     String(terminal.updatedAt || ""),

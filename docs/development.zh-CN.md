@@ -55,7 +55,7 @@ curl http://localhost:4242/api/events/list
 curl http://localhost:4242/api/events/evt_3b22f9a5c0cb
 ```
 
-`cyrene status` 显示 Daemon Health 与 Metric。Workbench Chat/Task Detail
+`cyrene status` 显示 Daemon Health 与 Metric。Workbench Conversation Detail
 展示实时 Agent、Tool、Subagent、Permission 和 Browser 状态；持久 Round
 Trace 通过 `cyrene flow` 与 Event API 检查。
 
@@ -96,10 +96,10 @@ git diff --check
 
 真实 LLM、Telegram、WeChat、远程 MCP 等属于带凭据的手工集成测试。
 
-本次 Core 重构后的 Worktree 使用 Locked Environment 中的 Python
-`3.12.11`、FastAPI `0.136.1`、Pydantic `2.13.4`，完整 2,209 项 Python
-测试全部通过；WebUI 27/27、Electron 84/84 通过，Production WebUI 和
-Wheel 构建成功。
+Release Verification 使用精确 Locked Python Environment，以及当前 WebUI 与
+Electron Lockfile。必需检查包括完整 Python Suite、Ruff、Python Bytecode
+Compilation、Production WebUI Build、全部 WebUI Test、全部 Electron Test、
+Generated WebUI Cleanliness 与 Whitespace Check。
 
 文档复核期间 OpenAPI Test 最初失败，是因为其 Hash 由 Ambient Python
 3.13.12、FastAPI 0.115.8、Pydantic 2.12.5 采集，而不是使用 `uv.lock` 中
@@ -131,8 +131,8 @@ Baseline 与 Hash。
 - `cyrene.plugins`：Cyrene Application Host、Model 组装、Workbench Contribution
   SDK 和 `builtin/` 内的标准可编辑功能插件；
 - `cyrene.workbench`：Cyrene Host 适配；业务模块按 `application`、`chat`、
-  `tasks`、`projects`、`goals`、`planning`、`artifacts`、`sessions`、
-  `control`、`workspaces`、`ui` 领域组织，持久化、FastAPI 与 WebUI 各自使用
+  `projects`、`artifacts`、`sessions`、`control`、`workspaces`、`ui` 领域组织，
+  持久化、FastAPI 与 WebUI 各自使用
   独立适配包；
 - `cyrene.agents`：外部 ACP Agent 集成；
 - `cyrene.model`、`cyrene.platform`、`cyrene.observability`：Provider
@@ -141,6 +141,8 @@ Baseline 与 Hash。
 `cyrene.core` 不得依赖产品层或适配层。FastAPI Adapter 位于
 `src/cyrene/workbench/http/`，唯一前端位于 `src/cyrene/workbench/webui/`。
 已删除的顶层 `agent`、`route`、`webui` 包不得以兼容 Shim 形式恢复。
+已退役 Task 产品也不得恢复：Goal 与 Plan 属于 Conversation 的 Plugin Session
+State，Project Action 属于 Project-type Plugin Contribution。
 不要直接在 `cyrene.workbench` 包根目录新增业务模块，应放入所属领域子包。
 
 跨模块通信使用：

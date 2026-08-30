@@ -545,6 +545,65 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     assert config.completed_turn_count == 3
 
 
+def test_failed_plugin_workflow_atomically_restores_the_user_turn(tmp_path):
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
+
+    repository = ChatRepository(str(tmp_path / "workbench.db"))
+    base_chat = {
+        "id": "chat-workflow-atomic",
+        "projectId": "project-1",
+        "kind": "chat",
+        "title": "New chat",
+        "status": "idle",
+        "messages": [],
+    }
+    repository.write({"chats": [base_chat]})
+    before = repository.get(base_chat["id"])
+    operation = object.__new__(_SendOperation)
+    operation.chat_id = base_chat["id"]
+    operation.lang = "en"
+    operation.base_chat = before
+    operation.chat = {
+        **dict(before or {}),
+        "title": "/goal ship it",
+        "status": "running",
+        "messages": [{"id": "msg-goal", "role": "user", "content": "/goal ship it"}],
+    }
+    operation.service = SimpleNamespace(repository=repository)
+    operation.retry_state_backup = None
+    workflow_error = object()
+    finalized: list[bool] = []
+
+    async def ok():
+        return None
+
+    async def persist():
+        repository.write_one(operation.chat, base_chat=operation.base_chat)
+        return None
+
+    async def fail_workflow():
+        return workflow_error
+
+    async def finalize():
+        finalized.append(True)
+
+    operation._parse_request = ok
+    operation._load_chat = lambda _permission_modes: ok()
+    operation._load_project_and_model = ok
+    operation._prepare_user_turn = ok
+    operation._persist_user_turn = persist
+    operation._begin_plugin_workflow = fail_workflow
+    operation._finalize_persisted_user_turn = finalize
+
+    result = run(operation.execute())
+
+    assert result is workflow_error
+    assert repository.get(base_chat["id"]) == before
+    assert operation.chat == before
+    assert finalized == []
+
+
 def test_builtin_runtime_message_fields_preserve_latest_request_usage():
     from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 

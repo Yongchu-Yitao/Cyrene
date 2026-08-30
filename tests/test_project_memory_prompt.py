@@ -775,10 +775,7 @@ def test_all_structured_memories_can_include_internal_categories(monkeypatch):
     complete = structured_memory.build_memory_payload("project-a", include_hidden=True)
     assert [item["id"] for item in visible["memories"]] == ["visible"]
     assert {item["id"] for item in complete["memories"]} == {"visible", "hidden"}
-    assert {item["id"] for item in complete["categories"]} >= {
-        "task_report",
-        "reflection",
-    }
+    assert {item["id"] for item in complete["categories"]} >= {"reflection"}
 
 
 @pytest.mark.asyncio

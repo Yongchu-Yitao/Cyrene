@@ -114,6 +114,54 @@ class ConversationGoalRepository:
             )
             await db.commit()
 
+    async def rollback_creation(
+        self,
+        chat_id: str,
+        goal_id: str,
+        previous_goal: dict[str, Any] | None,
+    ) -> None:
+        """Remove one failed Goal creation without erasing older Goal history."""
+
+        await self.ensure_schema()
+        async with aiosqlite.connect(self.db_path, timeout=15) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "DELETE FROM conversation_goal_events WHERE chat_id = ? AND goal_id = ?",
+                (str(chat_id), str(goal_id)),
+            )
+            if previous_goal is None:
+                await db.execute(
+                    "DELETE FROM conversation_goals WHERE chat_id = ? AND goal_id = ?",
+                    (str(chat_id), str(goal_id)),
+                )
+            else:
+                value = dict(previous_goal)
+                await db.execute(
+                    """
+                    INSERT INTO conversation_goals(
+                        chat_id, goal_id, revision, status, payload_json,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(chat_id) DO UPDATE SET
+                        goal_id = excluded.goal_id,
+                        revision = excluded.revision,
+                        status = excluded.status,
+                        payload_json = excluded.payload_json,
+                        created_at = excluded.created_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        str(value.get("chatId") or chat_id),
+                        str(value.get("id") or ""),
+                        int(value.get("revision") or 1),
+                        str(value.get("status") or "negotiating"),
+                        json.dumps(value, ensure_ascii=False, default=str),
+                        str(value.get("createdAt") or utc_iso()),
+                        str(value.get("updatedAt") or utc_iso()),
+                    ),
+                )
+            await db.commit()
+
     async def active(self) -> list[dict[str, Any]]:
         await self.ensure_schema()
         terminal = ("completed", "aborted")

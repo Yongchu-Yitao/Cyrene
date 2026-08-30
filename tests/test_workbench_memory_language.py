@@ -421,7 +421,7 @@ def test_search_project_memories_bounds_large_results(monkeypatch, tmp_path):
     assert all("citations" not in item for item in results)
 
 
-def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_path):
+def test_workbench_memory_payload_hides_internal_reflections(monkeypatch, tmp_path):
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     entries = [
         {
@@ -435,12 +435,12 @@ def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_p
             "mention_count": 2,
         },
         {
-            "id": "mem_report",
-            "content": "任务：修复记忆页面\n验收：全部通过",
-            "type": "task_report",
-            "category": "task_report",
+            "id": "mem_reflection",
+            "content": "应避免重复使用已经失败的迁移路径。",
+            "type": "reflection",
+            "category": "reflection",
             "source": "agent",
-            "tags": ["任务报告", "自动生成"],
+            "tags": ["reflection", "dead_end"],
             "first_seen": "2026-06-24",
             "last_mentioned": "2026-06-24",
             "mention_count": 1,
@@ -457,8 +457,7 @@ def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_p
     assert payload["overview"]["total"] == 1
     assert payload["overview"]["total_citations"] == 2
     assert sum(source["count"] for source in payload["sources"]) == 1
-    assert all(category["id"] != "task_report" for category in payload["categories"])
-    assert "修复记忆页面" in memory.render_task_reports_for_planning("project-test")
+    assert all(category["id"] != "reflection" for category in payload["categories"])
 
 
 @pytest.mark.asyncio

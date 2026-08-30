@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from cyrene.localization import app_language, localized
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_runs import ChatRun
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.http import schemas as api_models
 from cyrene.workbench.http.errors import localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
@@ -464,10 +465,10 @@ class _AnswerOperation:
         return activities
 
     def _runtime_message_fields(self, result: Any) -> dict[str, Any]:
-        fields: dict[str, Any] = {}
-        usage = dict(result.usage or {})
-        if any(usage.values()):
-            fields["usage"] = usage
+        fields: dict[str, Any] = runtime_usage_message_fields(
+            result.usage,
+            result.latest_request_usage,
+        )
         identity = dict(result.model_identity or {})
         if identity:
             fields["modelIdentity"] = identity
@@ -494,6 +495,7 @@ class _AnswerOperation:
             self.service.pending_question_message(
                 pending,
                 usage=dict(result.usage or {}),
+                latest_request_usage=dict(result.latest_request_usage or {}),
                 model=model,
             )
         )

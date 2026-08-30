@@ -20,12 +20,13 @@ from cyrene.workbench.application.notifications import append_notification
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_runs import ChatRun
 from cyrene.workbench.chat.chat_service import ChatService, get_chat_run_manager
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.core_adapter.bridge import AgentSessionRunError
 from cyrene.workbench.core_adapter.conversation_runtime import ConversationConfig
 from cyrene.workbench.projects import project_repository
 
 from .repository import ConversationGoalRepository, utc_iso
-from .state import persist_goal, persist_goal_by_id, public_goal
+from .state import clear_goal_by_id, persist_goal, persist_goal_by_id, public_goal
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +145,11 @@ class ConversationGoalService:
         initial_request: str = "",
         project_id: str = "",
     ) -> dict[str, Any]:
-        current = await self.repository.get(chat_id)
-        if current and str(current.get("status") or "") not in TERMINAL:
-            await self._project(current)
-            return current
+        previous_goal = await self.repository.get(chat_id)
+        if previous_goal and str(previous_goal.get("status") or "") not in TERMINAL:
+            await self._project(previous_goal)
+            return previous_goal
+        previous_chat = await asyncio.to_thread(self.chat.repository.get, chat_id)
         now = utc_iso()
         goal = {
             "id": "goal_" + uuid4().hex[:12],
@@ -172,16 +174,69 @@ class ConversationGoalService:
             "createdAt": now,
             "updatedAt": now,
         }
-        goal = await self.repository.save(goal)
-        await self.repository.event(goal, "negotiation_started", {
-            "initialRequest": str(initial_request or "").strip(),
-        })
-        await self._project(goal)
-        await self._milestone(goal, "negotiation_started", localized(
-            "Goal discussion started. I will research the request and confirm a measurable target with you.",
-            "目标协商已开始。我会先研究任务，并与你确认一个可衡量的目标。",
-        ))
-        return goal
+        try:
+            goal = await self.repository.save(goal)
+            await self.repository.event(goal, "negotiation_started", {
+                "initialRequest": str(initial_request or "").strip(),
+            })
+            await self._project(goal)
+            await self._milestone(goal, "negotiation_started", localized(
+                "Goal discussion started. I will research the request and confirm a measurable target with you.",
+                "目标协商已开始。我会先研究任务，并与你确认一个可衡量的目标。",
+            ))
+            return goal
+        except Exception:
+            await self._rollback_negotiation_start(
+                chat_id=str(chat_id),
+                goal_id=str(goal["id"]),
+                previous_goal=previous_goal,
+                previous_chat=previous_chat,
+            )
+            raise
+
+    async def _rollback_negotiation_start(
+        self,
+        *,
+        chat_id: str,
+        goal_id: str,
+        previous_goal: Mapping[str, Any] | None,
+        previous_chat: Mapping[str, Any] | None,
+    ) -> None:
+        try:
+            await self.repository.rollback_creation(
+                chat_id,
+                goal_id,
+                dict(previous_goal) if previous_goal is not None else None,
+            )
+        except Exception:
+            logger.exception("Failed to roll back Goal record for %s", chat_id)
+        try:
+            if previous_chat is not None:
+                snapshot = copy.deepcopy(dict(previous_chat))
+
+                def restore(chat: dict[str, Any]) -> None:
+                    chat.clear()
+                    chat.update(copy.deepcopy(snapshot))
+
+                await asyncio.to_thread(
+                    self.chat.repository.mutate_one,
+                    chat_id,
+                    restore,
+                )
+        except Exception:
+            logger.exception("Failed to roll back Goal chat projection for %s", chat_id)
+        try:
+            if previous_goal is None:
+                await asyncio.to_thread(clear_goal_by_id, self.db_path, chat_id)
+            else:
+                await asyncio.to_thread(
+                    persist_goal_by_id,
+                    self.db_path,
+                    chat_id,
+                    previous_goal,
+                )
+        except Exception:
+            logger.exception("Failed to roll back Goal context projection for %s", chat_id)
 
     async def propose_from_context(
         self,
@@ -979,6 +1034,7 @@ class ConversationGoalService:
             additions.append(self.chat.pending_question_message(
                 pending,
                 usage=dict(result.usage or {}),
+                latest_request_usage=dict(result.latest_request_usage or {}),
                 model=str(result.model or chat.get("model") or ""),
             ))
         elif str(result.text or "").strip():
@@ -989,8 +1045,11 @@ class ConversationGoalService:
                 "createdAt": now,
                 "model": str(result.model or chat.get("model") or ""),
                 "processingDurationMs": int(result.generation_duration_ms or 0),
-                "usage": dict(result.usage or {}),
                 "goalAttempt": int(goal.get("attempt") or 0),
+                **runtime_usage_message_fields(
+                    result.usage,
+                    result.latest_request_usage,
+                ),
             })
             chat.pop("pendingQuestion", None)
             chat["completedTurnCount"] = int(chat.get("completedTurnCount") or 0) + 1

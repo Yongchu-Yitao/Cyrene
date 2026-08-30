@@ -48,6 +48,27 @@ function wbcPaneContentCard(context, type, payload, ownerChatId) {
   });
 }
 
+function wbcPromotePaneSourceLayout(layout, source, card) {
+  var sourceColumn = (layout[source.side] || []).slice();
+  var oppositeSide = source.side === "left" ? "right" : "left";
+  // A lone vertical stack still has an unused outer column. Keep both stacked
+  // panes and use that column instead of dropping the source pane's sibling.
+  if (sourceColumn.length === 2 && !(layout[oppositeSide] || []).length) {
+    return {
+      left: sourceColumn,
+      right: [card],
+      leftRatio: source.side === "right" ? layout.rightRatio : layout.leftRatio,
+      rightRatio: layout.rightRatio,
+    };
+  }
+  return {
+    left: [source.card],
+    right: [card],
+    leftRatio: layout.leftRatio,
+    rightRatio: layout.rightRatio,
+  };
+}
+
 function wbcOpenPaneContent(context, type, payload, options) {
   var opts = options || {};
   var ownerChatId = String(opts.ownerChatId || context.activeChatIdRef.current || "");
@@ -79,7 +100,7 @@ function wbcOpenPaneContent(context, type, payload, options) {
       leftRatio: layout.leftRatio, rightRatio: layout.rightRatio,
     };
     if (opts.replaceWorkspace) { next.left = [card]; next.right = []; return next; }
-    if (opts.promoteSourceLeft && source) { next.left = [source.card]; next.right = [card]; return next; }
+    if (opts.promoteSourceLeft && source) return wbcPromotePaneSourceLayout(layout, source, card);
     next[targetSide] = [card];
     return next;
   }, ownerChatId);

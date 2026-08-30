@@ -27,6 +27,7 @@ from cyrene.platform.attachments import build_public_attachment_payload
 from cyrene.workbench.projects import project_runtime
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_service import ChatService
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.sessions.context import configure_store, read_project_state
 
 
@@ -38,6 +39,38 @@ class ChannelTurnResult:
     @property
     def awaiting_user(self) -> bool:
         return self.pending_question is not None
+
+
+def _channel_assistant_message(
+    *,
+    result: Any,
+    chat: Mapping[str, Any],
+    started_at: float,
+    channel: str,
+    service: ChatService,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "id": f"msg_{uuid.uuid4().hex[:12]}",
+        "role": "assistant",
+        "content": str(result.text or ""),
+        "createdAt": service.utc_now_iso(),
+        "model": str(result.model or chat.get("model") or ""),
+        "processingDurationMs": max(
+            0,
+            int(round((time.monotonic() - started_at) * 1000)),
+        ),
+        "channel": channel,
+    }
+    message.update(
+        runtime_usage_message_fields(result.usage, result.latest_request_usage)
+    )
+    if result.model_identity:
+        message["modelIdentity"] = dict(result.model_identity)
+    if result.generation_duration_ms is not None:
+        message["modelGenerationDurationMs"] = round(result.generation_duration_ms, 3)
+    if result.output_tokens_per_second is not None:
+        message["outputTokensPerSecond"] = round(result.output_tokens_per_second, 3)
+    return message
 
 
 def _stable_session_id(channel: str, identity: str) -> str:
@@ -314,36 +347,18 @@ class ChannelChatService:
                     self.service.pending_question_message(
                         pending_payload,
                         usage=result.usage,
+                        latest_request_usage=result.latest_request_usage,
                         model=result.model,
                     )
                 )
             else:
-                assistant: dict[str, Any] = {
-                    "id": f"msg_{uuid.uuid4().hex[:12]}",
-                    "role": "assistant",
-                    "content": str(result.text or ""),
-                    "createdAt": self.service.utc_now_iso(),
-                    "model": str(result.model or chat.get("model") or ""),
-                    "processingDurationMs": max(
-                        0,
-                        int(round((time.monotonic() - started_at) * 1000)),
-                    ),
-                    "channel": self.channel,
-                }
-                if any(result.usage.values()):
-                    assistant["usage"] = dict(result.usage)
-                if result.model_identity:
-                    assistant["modelIdentity"] = dict(result.model_identity)
-                if result.generation_duration_ms is not None:
-                    assistant["modelGenerationDurationMs"] = round(
-                        result.generation_duration_ms,
-                        3,
-                    )
-                if result.output_tokens_per_second is not None:
-                    assistant["outputTokensPerSecond"] = round(
-                        result.output_tokens_per_second,
-                        3,
-                    )
+                assistant = _channel_assistant_message(
+                    result=result,
+                    chat=chat,
+                    started_at=started_at,
+                    channel=self.channel,
+                    service=self.service,
+                )
                 additions.append(assistant)
 
             def finish(current: dict[str, Any]) -> None:

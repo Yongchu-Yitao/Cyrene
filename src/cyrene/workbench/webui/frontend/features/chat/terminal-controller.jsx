@@ -7,7 +7,7 @@ function useWbcTerminalCatalog(projectId, enabled) {
   var [terminalsLoading, setTerminalsLoading] = useWbcState(false);
   var [activeTerminalId, setActiveTerminalId] = useWbcState("");
 
-  function refresh(options, onRestore) {
+  function refresh(options) {
     if (!enabled || !projectId) {
       setTerminals([]);
       setTerminalsLoading(false);
@@ -18,13 +18,12 @@ function useWbcTerminalCatalog(projectId, enabled) {
     return terminalClient.list(projectId).then(function (payload) {
       var items = Array.isArray(payload && payload.terminals) ? payload.terminals : [];
       setTerminals(items);
-      var restoredId = String(payload && payload.activeTerminalId || "");
-      if (
-        !(options && options.skipRestore)
-        && restoredId
-        && items.some(function (item) { return String(item.id) === restoredId; })
-        && onRestore
-      ) onRestore(restoredId);
+      // The daemon's active id is catalog selection state. Opening a terminal
+      // pane remains an explicit user or Agent presentation action.
+      var activeId = String(payload && payload.activeTerminalId || "");
+      setActiveTerminalId(items.some(function (item) {
+        return String(item.id) === activeId;
+      }) ? activeId : "");
       return items;
     }).catch(function (err) {
       if (!(options && options.background)) workbenchServices.feedback().showToast(wbcErrorText(err), "error");

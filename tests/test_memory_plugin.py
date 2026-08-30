@@ -841,7 +841,7 @@ def test_memory_application_search_preserves_visibility_and_project_scope(
             {
                 "id": "memory-hidden",
                 "content": "verified internal report",
-                "category": "task_report",
+                "category": "reflection",
             },
         ],
     )
@@ -874,16 +874,8 @@ def test_memory_application_owns_workbench_learning_policy(tmp_path):
             "promising_directions": ["delegate the complete policy to the Plugin"],
         },
     ) == 2
-    assert application.store_task_report(
-        project,
-        "任务：完成记忆插件迁移\n结果：前后端链路已验证。",
-    ) is True
     stored = structured._load("project_policy")
-    assert {item.get("category") for item in stored} >= {
-        "reflection",
-        "task_report",
-    }
-    assert "完成记忆插件迁移" in application.render_past_task_reports(project)
+    assert {item.get("category") for item in stored} == {"reflection"}
 
 
 def test_memory_application_owns_workbench_lifecycle_operations(monkeypatch, tmp_path):

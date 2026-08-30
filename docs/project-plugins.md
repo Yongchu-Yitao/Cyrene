@@ -228,6 +228,32 @@ pack, and each view `entry` must stay inside that pack. Enabling the pack adds
 its entry to the Workbench sidebar. The view opens as a normal pane and supports
 horizontal or vertical splits, drag and restore, and a separate window.
 
+### Dynamic workspace contributions
+
+Workbench workspace capabilities use the same typed extension system:
+
+| Extension point | Contribution |
+|---|---|
+| `WORKBENCH_SURFACE` | A native or sandboxed pane that can present validated resources inside a conversation split |
+| `WORKSPACE_FILE_TYPE` | File extensions, viewer/editor mode, and language metadata owned by a pack |
+| `WORKSPACE_ACTION` | A fixed Build, Run, Test, or Preview action whose handler is owned by the contributing pack |
+| `WORKSPACE_PROJECT_TYPE` | Marker-based project detection plus action discovery and matching runtime-extension IDs |
+
+Project-type packs should be disabled by default when they require a runtime.
+List that runtime in `runtime_extensions`; the Extensions service installs or
+enables the pack when the runtime is installed or already available on the
+system. Detection must stay read-only and return workspace-relative action
+profiles. A project action must resolve a program and argument vector—it must
+not expose an arbitrary shell string—and all paths must remain inside the
+validated project workspace.
+
+Resource-producing tools can declare `resource_effects` in their `Plugin`
+definition. The runtime converts successful effects into validated presentation
+locations. An effect may update an already-open surface by default; opening a
+new Editor or Files surface should require an explicit user request such as
+showing or editing a named file. This keeps ordinary reads and searches from
+continually changing the user's layout.
+
 ## Backend RPC
 
 ```python

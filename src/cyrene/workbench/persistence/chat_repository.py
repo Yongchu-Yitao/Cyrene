@@ -17,13 +17,9 @@ from cyrene.workbench.persistence.document_merge import (
     three_way_merge as _three_way_merge,
 )
 from cyrene.workbench.persistence.schema import connect as _connect
-
-_CHAT_USAGE_KEYS = (
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-    "prompt_cache_hit_tokens",
-    "prompt_cache_miss_tokens",
+from cyrene.workbench.chat.chat_usage import (
+    USAGE_KEYS as _CHAT_USAGE_KEYS,
+    latest_request_usage,
 )
 
 
@@ -52,6 +48,7 @@ class ChatRepository:
     def _chat_message_summary(self, chat: dict[str, Any]) -> dict[str, Any]:
         messages = [item for item in chat.get('messages') or [] if isinstance(item, dict)]
         usage = {key: 0 for key in _CHAT_USAGE_KEYS}
+        latest_usage = latest_request_usage(messages)
         preview = ''
         first_message = ''
         first_fallback = ''
@@ -81,7 +78,7 @@ class ChatRepository:
         stored_turn_count = chat.get('completedTurnCount')
         if isinstance(stored_turn_count, int) and (not isinstance(stored_turn_count, bool)):
             completed_turn_count = max(0, stored_turn_count)
-        return {'messageCount': len(messages), 'preview': preview, 'firstMessage': first_message or first_fallback, 'completedTurnCount': completed_turn_count, 'usage': usage}
+        return {'messageCount': len(messages), 'preview': preview, 'firstMessage': first_message or first_fallback, 'completedTurnCount': completed_turn_count, 'usage': usage, 'latestUsage': latest_usage}
 
     def _write_chat_row(self, conn: sqlite3.Connection, chat: dict[str, Any], ordinal: int, *, write_messages: bool=True, previous_messages: list[dict[str, Any]] | None=None) -> None:
         chat_id = self._chat_id(chat)
@@ -239,7 +236,7 @@ class ChatRepository:
                     summary = json.loads(str(summary_json or '{}'))
                 except (TypeError, ValueError, json.JSONDecodeError):
                     summary = {}
-                if not isinstance(summary, dict) or 'messageCount' not in summary:
+                if not isinstance(summary, dict) or 'messageCount' not in summary or 'latestUsage' not in summary:
                     full_chat = self._load_chat_row(conn, str(chat_id))
                     summary = self._chat_message_summary(full_chat or chat)
                     missing.append((str(chat_id), summary))

@@ -52,7 +52,7 @@ from .pairing import DirectPairingServer
 from .workspace import RemoteJobManager, RemoteWorkspaceFiles
 from cyrene.platform.settings_store import get_all as get_web_settings
 from cyrene.platform.settings_store import set_ as set_setting
-from cyrene.workbench.artifacts import artifact_runtime
+from cyrene.workbench.projects import project_runtime
 from cyrene.workbench.projects import project_repository
 from cyrene.workbench.workspaces.workspace_changes import (
     get_chat_file_change,
@@ -136,7 +136,7 @@ def _remote_project(project_id: str) -> dict[str, Any] | None:
     return project_repository.find_workbench_project_lightweight(project_id)
 
 def _remote_project_workspace(project: dict[str, Any]) -> str:
-    root = artifact_runtime._workbench_workspace_root(project)
+    root = project_runtime._workbench_workspace_root(project)
     if root is None:
         root = Path(WORKSPACE_DIR).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)

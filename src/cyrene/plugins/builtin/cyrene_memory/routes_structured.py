@@ -32,8 +32,7 @@ class MemoryCreateBody(_Body):
 class MemoryUpdateBody(_Body):
     content: str | None = Field(default=None, min_length=1, max_length=200_000)
     category: Literal[
-        "preference", "project", "habit", "fact", "conversation",
-        "task_report", "reflection",
+        "preference", "project", "habit", "fact", "conversation", "reflection",
     ] | None = None
     source: Literal["conversation", "knowledge", "manual", "agent", "other"] | None = None
     confidence: Literal["", "high", "medium", "low"] | None = None

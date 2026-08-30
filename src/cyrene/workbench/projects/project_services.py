@@ -285,7 +285,6 @@ class ProjectApplicationService:
             },
             "createdAt": now,
             "updatedAt": now,
-            "sharedArtifacts": [],
             "executionActions": normalize_execution_actions(body.get("executionActions")),
             "executionScope": execution_scope_path.as_posix() or ".",
         }

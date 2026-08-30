@@ -46,17 +46,60 @@ Workbench 以项目为中心：
 | 页面 | 功能 |
 |---|---|
 | Welcome / Projects | 创建、编辑、切换和删除 Project；选择 Workspace Directory |
-| Task | 创建、规划、批准、执行、暂停、验收、修复和复核 Task Session |
-| Chat | Project 范围实时 Chat 和 Session History |
+| Chat | Project 范围的对话、计划、Goal Loop、Agent Run 和 Session History |
 | Knowledge / Library | 导入 Document/书目文件、管理 Literature 和 Retrieval |
 | Schedule | 查看和管理 Scheduled Task |
 | Memory | 检查、搜索、创建和 Retire Project Memory |
 | Settings Overlay | 配置 Model、Integration、Capability、Channel、Agent、Data 和 Budget |
 | Help/Profile/Search | Secondary Overlay/Navigation，不是旧 UI 页面 |
 
+### Conversation Goal 与 Plan
+
+Cyrene 不再提供独立 Task 产品或 Task 页面。项目工作直接新建 Conversation；当
+结果必须持续执行直到验收时，在对话中输入 `/goal`。Agent 会先研究需求并与用户
+讨论，再提出具体目标和验收标准。Goal Tab 只在目标存在时显示，用户可在其中编辑
+目标和最长持续时间、确认目标、查看当前 Plan 与 Review 结果、手动接受当前成果，
+或随时停止目标。
+
+确认后，普通 Agent Turn 结束不会静默终止 Goal。Cyrene 会持续规划、执行、测试
+和修复，直到独立 Reviewer 给出“通过”，或用户停止、需要审批/回答、触发明确的
+安全限制。Review 不通过时会显示关键缺口，并把缺口带入下一轮修复。发布、发送、
+部署等外部动作仍统一走 Permission Review，不会因 Goal Loop 被自动重复执行。
+
+### Dynamic File Workspace
+
+当用户明确要求 Agent 编辑或显示某个文件，或处理目录结构时，Cyrene 可在对话
+旁边打开 Workspace。可用 Tab 由实际内容决定：
+
+- **Editor** 显示当前 Text File，并跟随已确认的磁盘变更；
+- **Terminal** 显示正在运行的 Workspace Action 或用户打开的 Terminal；
+- **Problems** 显示 Build/Test Diagnostic，并可跳回对应文件；
+- **Review** 用同一 Diff Viewer 比较 Conversation Snapshot 或 Git Working Tree；
+- **Preview** 显示可用的 Web Endpoint、PDF、Image 或 Generated File；
+- **Files** 浏览 Workspace，且不会一次加载完整的大型目录树。
+
+没有内容的 Tab 自动隐藏。Active Tab 在底部栏高亮，Action 与 Review Control 保持
+在顶部。Surface 会跨导航和重启记住 Current File、Folder、Review Source、
+Execution 与用户接管的布局。Agent Activity 只更新已有 Surface，不会不断打开无关
+文件，也不会替换尚未保存的用户 Buffer。
+
+### Project Action 与 Runtime Plugin
+
+Project Editor 提供可选 Action Profile。Cyrene 可以根据 Workspace 自动填写，用户
+也可主动补充或修复。Workspace Toolbar 对选中的 Build、Run、Test 或 Preview
+Action 只显示一个 Run Button；Long-running Process 活动时可 Stop。有限命令会
+保留 Output 与 Diagnostic，不会被误报成 Terminal Crash；长驻服务使用稳定的
+Terminal Identity，并允许短暂断线后重连。
+
+Project 支持由 Plugin 提供。内置类型覆盖使用 Node.js、Bun、pnpm、Yarn 或 Deno
+的 JavaScript/TypeScript，Python 与 uv、TeX、Go、Rust、使用 Maven/Gradle 的
+Java、Makefile 以及 GitHub Repository。在 Extensions 中安装对应 Runtime，或
+检测到系统已经安装后，会自动安装或启用相应 Project Plugin。TeX 编译与应用启动
+共用同一套 Action、Terminal、Diagnostic、Artifact 与 Preview 体系。
+
 ### 顶栏 Work Tabs 与固定资源
 
-顶栏显示最近主动打开的 3 个 Task/Chat Session。打开、新建或切换 Session 会
+顶栏显示最近主动打开的 3 个 Conversation Session。打开、新建或切换 Session 会
 实时更新 MRU。右键 Session Tab 可置顶/取消置顶、复制标题、从顶栏移除，或查看
 该 Chat 当前关联的 Browser 和 File。移出顶栏不会删除或停止底层 Session。
 
@@ -77,7 +120,7 @@ Tab 只加入该 Chat 的输入草稿，不会自动发送。
 顶栏支持键盘操作：Focus 后用左右方向键、Home/End 遍历 Session 与资源，
 Enter/Space 打开，Delete/Backspace 移除。`Cmd/Ctrl+1…3` 打开三个 Session，
 `Ctrl+Tab` / `Ctrl+Shift+Tab` 前后切换，`Cmd/Ctrl+W` 从顶栏移除当前 Session
-但不停止任务。项目快捷键为 `Cmd/Ctrl+Shift+1`。
+但不停止对话。项目快捷键为 `Cmd/Ctrl+Shift+1`。
 
 固定 File 会作为全局用户资源索引进入后续 Agent Turn。固定 Browser 只有所属
 Session 保留控制权；其他 Session 只能获取 Snapshot/Screenshot，不能导航、
@@ -108,7 +151,7 @@ Double Click 使用独立能力，只有 Inspect 到的 Action 明确声明 `dou
 
 Agent 可以填写当前可见 Composer。发送或发送 Guidance 是 R2，必须由同一真实
 本地用户轮次精确要求，或经过普通本机确认；停止当前运行是 R1。Agent 不能调用
-隐藏后台 Dispatcher。向其他 Task/Chat 发送时，必须在可见 UI 中切换过去、填写
+隐藏后台 Dispatcher。向其他对话发送时，必须在可见 UI 中切换过去、填写
 目标 Composer，再调用其显式 Submit。
 
 Typed Settings 覆盖全部非模型 Settings Tab。直接修改携带 Revision；若用户同时
@@ -208,7 +251,7 @@ CLI 显示文本回复和公开的 Tool/Phase/Plan 状态。Browser 实时画面
 
 Electron Desktop 启动 Backend 后会发布仅当前系统用户可读（Unix 权限
 `0600`）的本地连接凭据。CLI 会自动连接这一个 Backend，因此 Electron 与
-CLI 可以同时运行，并共享相同的 Project、Conversation、Task、Memory 和
+CLI 可以同时运行，并共享相同的 Project、Conversation、Memory 和
 运行状态；不会启动第二份会争用数据库与 Scheduler 的 Backend。
 
 ## 进程内 Local CLI（Legacy）

@@ -198,6 +198,28 @@ Run 则使用 `cyrene.core.plugin` 中与 Host 无关的 Context。
 
 `project_tools[].view` 必须指向同一包的 `frontend_views[].id`。View 的 `entry` 必须位于插件包内部。启用插件包后，入口显示在 Workbench 左侧栏，打开后成为普通 Pane，支持上下/左右分屏、拖动、恢复和独立窗口。
 
+### Dynamic Workspace Contribution
+
+Workbench Workspace Capability 使用同一 Typed Extension 系统：
+
+| Extension Point | Contribution |
+|---|---|
+| `WORKBENCH_SURFACE` | 在 Conversation Split 中呈现已验证资源的 Native 或 Sandboxed Pane |
+| `WORKSPACE_FILE_TYPE` | Plugin Pack 拥有的 File Extension、Viewer/Editor Mode 与 Language Metadata |
+| `WORKSPACE_ACTION` | Handler 归贡献包所有的固定 Build、Run、Test 或 Preview Action |
+| `WORKSPACE_PROJECT_TYPE` | 基于 Marker 的 Project Detection、Action Discovery 与对应 Runtime Extension ID |
+
+依赖 Runtime 的 Project-type Pack 应默认关闭，并在 `runtime_extensions` 中列出
+对应 Runtime。Extensions Service 在 Runtime 被安装或已存在于系统时安装/启用该
+Pack。Detection 必须只读，并返回 Workspace-relative Action Profile。Project
+Action 必须解析为 Program 与 Argument Vector，不能暴露任意 Shell String；全部
+Path 必须留在已验证的 Project Workspace 内。
+
+产生资源的 Tool 可在 `Plugin` 定义中声明 `resource_effects`。Runtime 会把成功的
+Effect 转换为已验证的 Presentation Location。Effect 默认可更新已有 Surface；打开
+新的 Editor 或 Files Surface 应要求用户明确提出显示或编辑某个具名文件，避免普通
+Read/Search 不断改变用户布局。
+
 ## 后端 RPC
 
 ```python

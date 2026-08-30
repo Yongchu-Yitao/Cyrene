@@ -1403,7 +1403,7 @@ function useWbcConversationRuntime(composerChat, runtimeEngine) {
     : null;
 }
 
-function useWbcConversationProjection(chat, runtime, retryClearingMessageIds, retrySuppressedMessageIds) {
+function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
   var chatMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var runtimeUserMessages = runtime && runtime.userMessages;
   var runtimeSegments = runtime && runtime.segments;
@@ -1412,9 +1412,14 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds, re
   var runtimeStartedAt = runtime && runtime.startedAt;
   var runtimeFinalizing = !!(runtime && runtime.finalizing);
   var runtimeHasReplyText = !!(runtime && runtime.text);
+  var runtimeReplyRenderKey = String(runtime && runtime.replyRenderKey || "");
   var durableMessages = useWbcMemo(function () {
-    return wbcReconcileLiveUserMessages(chatMessages, runtimeUserMessages);
-  }, [chatMessages, runtimeUserMessages]);
+    var reconciled = wbcReconcileLiveUserMessages(chatMessages, runtimeUserMessages);
+    if (!runtimeReplyRenderKey) return reconciled;
+    return reconciled.filter(function (message) {
+      return String(message && message.replyRenderKey || "") !== runtimeReplyRenderKey;
+    });
+  }, [chatMessages, runtimeUserMessages, runtimeReplyRenderKey]);
   var reasoningStatus = wbcCapabilityStatus(chat, "output", "reasoning");
   var showReasoningPlaceholder = !wbcHasAgentCapabilitySnapshot(chat)
     || reasoningStatus === "supported"
@@ -1422,21 +1427,13 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds, re
   var runtimeTimeline = useWbcMemo(function () {
     return wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
   }, [runtimeSegments, runtimeActivities, runtimeNotifications, runtimeStartedAt, runtimeFinalizing, runtimeHasReplyText, runtime && runtime.chatId, showReasoningPlaceholder]);
-  var retrySuppressedKey = Array.isArray(retrySuppressedMessageIds) ? retrySuppressedMessageIds.map(String).join("\u0000") : "";
   var retryClearingKey = Array.isArray(retryClearingMessageIds) ? retryClearingMessageIds.map(String).join("\u0000") : "";
-  var retrySuppressedIds = useWbcMemo(function () {
-    return new Set(retrySuppressedKey ? retrySuppressedKey.split("\u0000") : []);
-  }, [retrySuppressedKey]);
   var retryClearingIds = useWbcMemo(function () {
     return new Set(retryClearingKey ? retryClearingKey.split("\u0000") : []);
   }, [retryClearingKey]);
   var messages = useWbcMemo(function () {
-    var merged = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
-    if (!retrySuppressedIds.size) return merged;
-    return merged.filter(function (message) {
-      return !retrySuppressedIds.has(String(message && message.id || ""));
-    });
-  }, [durableMessages, runtimeTimeline, retrySuppressedIds]);
+    return wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
+  }, [durableMessages, runtimeTimeline]);
   var activityTraceKeys = useWbcMemo(function () {
     var keys = new Set();
     messages.forEach(function (message) {
@@ -1491,6 +1488,7 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds, re
 }
 
 function wbcRenderHistoryMessage(msg, context) {
+  var renderKey = String(msg && (msg.replyRenderKey || msg.id) || "");
   var retryClearing = msg && msg.activityGroup
     ? msg.activities.some(function (activityMessage) {
         return context.retryClearingIds.has(String(activityMessage && activityMessage.id || ""));
@@ -1498,7 +1496,7 @@ function wbcRenderHistoryMessage(msg, context) {
     : context.retryClearingIds.has(String(msg && msg.id || ""));
   if (msg.activityGroup) {
     return (
-      <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}>
+      <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}>
         <WbcActivityGroup group={msg} />
       </WbcThreadItem>
     );
@@ -1516,10 +1514,10 @@ function wbcRenderHistoryMessage(msg, context) {
   );
   if (msg.runtimeHeartbeat) return null;
   if (msg.modelStatusCard) {
-    return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcModelStatusMessage msg={msg} /></WbcThreadItem>;
+    return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcModelStatusMessage msg={msg} /></WbcThreadItem>;
   }
   if (msg.runtimeNotification || msg.notificationCard) {
-    return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
+    return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcAgentNotification notice={msg.notification} /></WbcThreadItem>;
   }
   if (wbcIsActivityMessage(msg)) {
     var activity = msg.runtimeActivity || {
@@ -1530,7 +1528,7 @@ function wbcRenderHistoryMessage(msg, context) {
     var activityEntries = Array.isArray(activity.progress) ? activity.progress : [];
     if (!msg.runtimeActivityActive && activityEntries.length === 0 && !String(activity.reasoning || "").trim()) return null;
     return (
-      <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}>
+      <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}>
         <WbcLiveActivityCard
           activity={activity}
           active={!!msg.runtimeActivityActive}
@@ -1541,7 +1539,7 @@ function wbcRenderHistoryMessage(msg, context) {
     );
   }
   if (isActiveQuestion) {
-    return <WbcThreadItem key={msg.id} className={retryClearing ? "retry-clearing" : ""}><WbcQuestionPrompt pending={context.chat.pendingQuestion} onAnswer={context.onAnswer ? context.answerHistoryQuestion : context.onAnswer} busy={context.running} trace={msg.trace} /></WbcThreadItem>;
+    return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcQuestionPrompt pending={context.chat.pendingQuestion} onAnswer={context.onAnswer ? context.answerHistoryQuestion : context.onAnswer} busy={context.running} trace={msg.trace} /></WbcThreadItem>;
   }
   if (
     msg.role !== "user"
@@ -1555,7 +1553,7 @@ function wbcRenderHistoryMessage(msg, context) {
     ? { ...msg, trace: [] }
     : msg;
   return (
-    <WbcThreadItem key={msg.id} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null} className={retryClearing ? "retry-clearing" : ""}>
+    <WbcThreadItem key={renderKey} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null} className={retryClearing ? "retry-clearing" : ""}>
       {msg.role === "user"
         ? <WbcUserMessage msg={visibleMessage} onOpenFile={context.onOpenFile ? context.openHistoryFile : context.onOpenFile} onEditMessage={context.onEditMessage ? context.editHistoryMessage : context.onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser && context.onRetryMessage ? context.retryHistoryMessage : null} />
         : <WbcAssistantMessage msg={visibleMessage} onOpenFile={context.onOpenFile ? context.openHistoryFile : context.onOpenFile} onRetryMessage={canRetryAssistant && context.onRetryMessage ? context.retryHistoryMessage : null} chatId={String(context.chat && context.chat.id || "")} />}
@@ -1730,7 +1728,23 @@ function useWbcFloatingBrowserAlignment(mainRef, active, revision) {
   }, [active, revision]);
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, errorKind, onRetry, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, retrySuppressedMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
+function wbcRenderConversationTimeline(renderedHistory, runtime, onOpenFile, chatId) {
+  if (!runtime || (!runtime.text && !(runtime.artifacts && runtime.artifacts.length))) {
+    return renderedHistory;
+  }
+  return renderedHistory.concat([
+    <WbcThreadItem key={String(runtime.replyRenderKey)}>
+      <WbcAssistantMessage
+        msg={{ role: "assistant" }}
+        liveRuntime={runtime}
+        onOpenFile={onOpenFile}
+        chatId={String(chatId || "")}
+      />
+    </WbcThreadItem>,
+  ]);
+}
+
+function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, errorKind, onRetry, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
   // The lightweight list item already contains every Composer preference.
   // Keep using it while the full transcript hydrates so switching chats never
   // paints a temporary "new chat" Composer with global/default settings.
@@ -1767,7 +1781,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       wbcSyncAgentCursorRunning(false);
     };
   }, []);
-  var projection = useWbcConversationProjection(chat, runtime, retryClearingMessageIds, retrySuppressedMessageIds);
+  var projection = useWbcConversationProjection(chat, runtime, retryClearingMessageIds);
   var messages = projection.messages;
   var retryClearingIds = projection.retryClearingIds;
   var runtimeFinalizing = projection.runtimeFinalizing;
@@ -1815,6 +1829,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       });
     });
   }, [displayMessages, retryClearingIds, running, lastAssistantId, lastUserId, chat, activityTraceKeys, !!onAnswer, !!onEditMessage, !!onOpenFile, !!onRetryMessage, answerHistoryQuestion, editHistoryMessage, openHistoryFile, retryHistoryMessage]);
+  var renderedTimeline = wbcRenderConversationTimeline(renderedHistory, runtime, onOpenFile, chat && chat.id);
   var pendingQuestionId = String(chat && chat.pendingQuestion && chat.pendingQuestion.id || "");
   var pendingQuestionInTimeline = useWbcMemo(function () {
     if (!pendingQuestionId) return false;
@@ -2313,8 +2328,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
             <p>{wbcT("workbenchChat.emptyBody", "Conversations are bound to the current workspace, so the agent can read and work with project context.")}</p>
           </div>
         )}
-        {renderedHistory}
-        {runtime && (runtime.text || (runtime.artifacts && runtime.artifacts.length)) && <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>}
+        {renderedTimeline}
         {chat && chat.pendingQuestion && chat.pendingQuestion.id && (!runtime || wbcIsLiveAgentRequest(chat.pendingQuestion)) && !pendingQuestionInTimeline && (
           <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} /></WbcThreadItem>
         )}

@@ -605,27 +605,6 @@ class MemoryApplication:
         project_id = project.get("id") if isinstance(project, dict) else None
         return _safe_workspace_id(project_id)
 
-    def render_past_task_reports(
-        self,
-        project: dict[str, Any] | None,
-        *,
-        limit: int = 3,
-        max_chars: int = 2500,
-        language: str = "",
-    ) -> str:
-        """Render project completion reports for the planning prompt."""
-
-        if not isinstance(project, dict):
-            return ""
-        from .structured import render_task_reports_for_planning
-
-        return render_task_reports_for_planning(
-            self.project_key(project),
-            limit=limit,
-            max_chars=max_chars,
-            language=language,
-        )
-
     def store_reflection_insights(
         self,
         project: dict[str, Any] | None,
@@ -663,27 +642,6 @@ class MemoryApplication:
                 )
                 stored += 1
         return stored
-
-    def store_task_report(
-        self,
-        project: dict[str, Any] | None,
-        report: str,
-    ) -> bool:
-        """Persist a Task completion report under the Plugin's hidden category."""
-
-        content = str(report or "").strip()
-        if not isinstance(project, dict) or not content:
-            return False
-        from .structured import add_agent_memory
-
-        add_agent_memory(
-            self.project_key(project),
-            content,
-            category="task_report",
-            tags=["task_report", "auto_generated"],
-            source="agent",
-        )
-        return True
 
     async def recent_conversations(self, days: int = 1) -> str:
         from .archive import get_recent_conversations

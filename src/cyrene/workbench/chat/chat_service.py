@@ -21,8 +21,6 @@ from cyrene.workbench.chat.chat_application import (
     chat_soul_active,
     chat_workspace_active,
     clear_fork_metadata,
-    coerce_brief_acceptance,
-    coerce_brief_constraints,
     completed_turn_count,
     disable_button_block,
     extract_exchange_timeline,
@@ -33,6 +31,7 @@ from cyrene.workbench.chat.chat_application import (
     new_chat,
     next_completed_turn_count,
     normalize_workspace_override,
+    normalize_workspace_surface,
     parse_json_object,
     pending_question_message,
     prune_orphaned_fork_metadata,
@@ -55,6 +54,7 @@ from cyrene.workbench.chat.chat_dto import (
     ChatSummaryDTO,
 )
 from cyrene.workbench.chat.chat_repository import ChatRepository
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.chat.chat_runs import (
     ChatRun,
     ChatRunManager,
@@ -88,6 +88,42 @@ async def shutdown_chat_services() -> None:
 
 def settle_chat_running_status(chat_id: str) -> None:
     get_chat_run_manager().settle_chat_running_status(str(chat_id or ""))
+
+
+def _shell_wake_assistant_message(
+    *,
+    result: Any,
+    model: str,
+    started_at: float,
+    agent_originated: bool,
+    media_wake: bool,
+    wake_id: str,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "id": short_id("msg"),
+        "role": "assistant",
+        "content": str(result.text or ""),
+        "createdAt": utc_now_iso(),
+        "model": model,
+        "processingDurationMs": max(
+            0,
+            int(round((time.monotonic() - started_at) * 1000)),
+        ),
+        "shellWake": not agent_originated and not media_wake,
+        "mediaWake": media_wake,
+        "wakeId": wake_id,
+    }
+    message.update(
+        runtime_usage_message_fields(result.usage, result.latest_request_usage)
+    )
+    if result.model_identity:
+        message["modelIdentity"] = dict(result.model_identity)
+    if result.generation_duration_ms:
+        message["modelGenerationDurationMs"] = round(result.generation_duration_ms, 3)
+    if result.output_tokens_per_second:
+        message["outputTokensPerSecond"] = round(result.output_tokens_per_second, 3)
+    return message
+
 
 class ChatService:
     """Application operations consumed by the split Workbench HTTP routes."""
@@ -259,12 +295,6 @@ class ChatService:
     def clear_fork_metadata(self, chat: dict[str, Any]) -> bool:
         return clear_fork_metadata(chat)
 
-    def coerce_brief_acceptance(self, raw: Any) -> list[dict[str, Any]]:
-        return coerce_brief_acceptance(raw)
-
-    def coerce_brief_constraints(self, raw: Any) -> list[str]:
-        return coerce_brief_constraints(raw)
-
     def completed_turn_count(self, chat: Mapping[str, Any]) -> int:
         return completed_turn_count(chat)
 
@@ -289,6 +319,19 @@ class ChatService:
 
     def normalize_workspace_override(self, path: Any) -> str:
         return normalize_workspace_override(path)
+
+    def normalize_workspace_surface(
+        self,
+        value: Any,
+        *,
+        chat_id: str,
+        project_id: str,
+    ) -> dict[str, Any] | None:
+        return normalize_workspace_surface(
+            value,
+            chat_id=chat_id,
+            project_id=project_id,
+        )
 
     def pending_question_message(self, *args: Any, **kwargs: Any):
         return pending_question_message(*args, **kwargs)
@@ -791,6 +834,7 @@ class ChatService:
                         pending_question_message(
                             pending,
                             usage=result.usage,
+                            latest_request_usage=result.latest_request_usage,
                             model=model,
                         )
                     )
@@ -798,38 +842,14 @@ class ChatService:
                     fresh["status"] = "idle"
                     run.outcome = {"kind": "awaiting", "pending": pending}
                 else:
-                    assistant: dict[str, Any] = {
-                        "id": short_id("msg"),
-                        "role": "assistant",
-                        "content": str(result.text or ""),
-                        "createdAt": utc_now_iso(),
-                        "model": model,
-                        "processingDurationMs": max(
-                            0,
-                            int(
-                                round(
-                                    (time.monotonic() - started_at) * 1000
-                                )
-                            ),
-                        ),
-                        "shellWake": not agent_originated and not media_wake,
-                        "mediaWake": media_wake,
-                        "wakeId": wake_id,
-                    }
-                    if any(result.usage.values()):
-                        assistant["usage"] = dict(result.usage)
-                    if result.model_identity:
-                        assistant["modelIdentity"] = dict(result.model_identity)
-                    if result.generation_duration_ms:
-                        assistant["modelGenerationDurationMs"] = round(
-                            result.generation_duration_ms,
-                            3,
-                        )
-                    if result.output_tokens_per_second:
-                        assistant["outputTokensPerSecond"] = round(
-                            result.output_tokens_per_second,
-                            3,
-                        )
+                    assistant = _shell_wake_assistant_message(
+                        result=result,
+                        model=model,
+                        started_at=started_at,
+                        agent_originated=agent_originated,
+                        media_wake=media_wake,
+                        wake_id=wake_id,
+                    )
                     additions.append(assistant)
                     fresh.pop("pendingQuestion", None)
                     fresh["status"] = "idle"

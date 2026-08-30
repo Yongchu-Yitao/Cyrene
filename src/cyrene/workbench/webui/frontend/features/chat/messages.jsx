@@ -1147,27 +1147,71 @@ function wbcFormatOutputTokenSpeed(value) {
   return String(Math.round(value * 10) / 10) + " tok/s";
 }
 
-function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
-  var [copied, setCopied] = useWbcState(false);
-  var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
-  var messageVoiceKey = "message:" + String(msg && msg.id || "");
+function WbcAssistantMessageFooter({ copied, msg, onCopy, onRetryMessage, voiceSnapshot }) {
   var BrowserIcon = workbenchServices.browser().Icon;
+  var messageVoiceKey = "message:" + String(msg && msg.id || "");
+  var messageSpeaking = voiceSnapshot.activeKey === messageVoiceKey;
   var processingDuration = wbcFormatProcessingDuration(msg.processingDurationMs);
   var usageTokenCount = wbcAssistantUsageTokenCount(msg && msg.usage);
   var outputTokenSpeed = wbcFormatOutputTokenSpeed(msg && msg.outputTokensPerSecond);
+  return <div className="wbc-msg-foot">
+    {voiceSnapshot.status.tts_ready && (
+      <button
+        type="button"
+        className={"wbc-msg-action" + (messageSpeaking ? " is-speaking" : "")}
+        onClick={function () { WbcVoice.speak(msg.content, messageVoiceKey); }}
+        title={messageSpeaking
+          ? wbcT("workbenchChat.voicePlaybackStop", "Stop reading")
+          : wbcT("workbenchChat.voicePlayback", "Read aloud")}
+        aria-label={messageSpeaking
+          ? wbcT("workbenchChat.voicePlaybackStop", "Stop reading")
+          : wbcT("workbenchChat.voicePlayback", "Read aloud")}
+      >
+        {BrowserIcon ? <BrowserIcon name={messageSpeaking ? "muted" : "volume"} size={14} /> : null}
+      </button>
+    )}
+    <button type="button" className="wbc-msg-action" onClick={onCopy} title={wbcT("workbenchChat.copy", "Copy")}>
+      {copied ? WBC_ICONS.check : WBC_ICONS.copy}
+    </button>
+    {onRetryMessage && (
+      <button type="button" data-tour="chat_retry" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.regenerate", "Regenerate")}>
+        {WBC_ICONS.retry}
+      </button>
+    )}
+    <time>{wbcFormatTime(msg.createdAt)}</time>
+    {processingDuration ? <small className="wbc-msg-duration" title={wbcT("workbenchChat.processingDuration", "Total processing time")}>{processingDuration}</small> : null}
+    {usageTokenCount !== null ? <small className="wbc-msg-token-usage">{wbcCompactNumber(usageTokenCount)} tokens</small> : null}
+    {outputTokenSpeed ? <small className="wbc-msg-output-speed">{outputTokenSpeed}</small> : null}
+  </div>;
+}
+
+function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
+  msg = msg || {};
+  var live = !!liveRuntime;
+  var sourceText = live ? String(liveRuntime.text || "") : String(msg.content || "");
+  var renderedText = wbcUseThrottledLiveText(
+    sourceText,
+    !live || !!liveRuntime.streamDone
+  );
+  var [copied, setCopied] = useWbcState(false);
+  var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
   var referenceAttachments = Array.isArray(msg.referenceAttachments)
     ? msg.referenceAttachments
     : (Array.isArray(msg.reference_attachments) ? msg.reference_attachments : []);
   // Parse each finalized message's markdown once and reuse it: the whole thread
   // re-renders on every streaming frame, so without this every prior message
   // would be re-parsed + re-sanitized per frame.
-  var bodyHtml = useWbcMemo(function () { return wbcRenderMarkdown(msg.content); }, [msg.content]);
+  var bodyHtml = useWbcMemo(function () {
+    return live
+      ? wbcRenderMarkdown(renderedText, { interactive: false })
+      : wbcRenderMarkdown(renderedText);
+  }, [renderedText, live]);
   var bodyRef = useWbcRef(null);
   useWbcEffect(function () {
     return WbcVoice.subscribe(setVoiceSnapshot);
   }, []);
   useWbcEffect(function () {
-    if (!bodyRef.current) return undefined;
+    if (live || !bodyRef.current) return undefined;
     var chartService = window.CyreneUI && window.CyreneUI.chart;
     if (chartService && typeof chartService.mount === "function") {
       chartService.mount(bodyRef.current, {
@@ -1178,7 +1222,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
     return function () {
       if (chartService && typeof chartService.dispose === "function") chartService.dispose(bodyRef.current);
     };
-  }, [bodyHtml]);
+  }, [bodyHtml, live]);
   async function copyText() {
     try {
       var text = String(msg.content || "");
@@ -1193,16 +1237,12 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
       console.error("Failed to copy workbench message:", e);
     }
   }
-  function toggleSpeech() {
-    WbcVoice.speak(msg.content, messageVoiceKey);
-  }
-  var messageSpeaking = voiceSnapshot.activeKey === messageVoiceKey;
   // Some compact conversation surfaces (split chat, side agents, quick views)
   // reuse this component directly instead of going through the primary
   // timeline renderer. Keep the activity-card compatibility boundary here as
   // well, otherwise a durable reasoning/tool record with empty `content`
   // degrades into a footer-only assistant row on those surfaces.
-  var activityView = wbcActivityMessageView(msg);
+  var activityView = live ? null : wbcActivityMessageView(msg);
   if (activityView) {
     if (!activityView.visible) return null;
     return (
@@ -1214,7 +1254,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
       />
     );
   }
-  if (String(msg && msg.kind || "") === "goal_milestone") {
+  if (!live && String(msg && msg.kind || "") === "goal_milestone") {
     var milestone = msg.goalMilestone && typeof msg.goalMilestone === "object"
       ? msg.goalMilestone : {};
     var terminalGoal = milestone.status === "completed" || milestone.status === "aborted";
@@ -1235,52 +1275,30 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage, chatId }) {
     );
   }
   if (
-    !String(msg && msg.content || "").trim()
-    && !(Array.isArray(msg && msg.attachments) && msg.attachments.length)
+    !sourceText.trim()
+    && !(liveRuntime && Array.isArray(liveRuntime.artifacts) && liveRuntime.artifacts.length)
+    && !(Array.isArray(msg.attachments) && msg.attachments.length)
     && !referenceAttachments.length
   ) return null;
   return (
     <div className="wbc-msg assistant">
-      {msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
-      <div className="wbc-msg-body markdown" ref={bodyRef} dangerouslySetInnerHTML={{ __html: bodyHtml }} />
-      <WbcMediaReferences files={referenceAttachments} onOpenFile={onOpenFile} />
-      <WbcAgentFiles files={msg.attachments} onOpenFile={onOpenFile} />
-      <div className="wbc-msg-foot">
-        {voiceSnapshot.status.tts_ready && (
-          <button
-            type="button"
-            className={"wbc-msg-action" + (messageSpeaking ? " is-speaking" : "")}
-            onClick={toggleSpeech}
-            title={messageSpeaking
-              ? wbcT("workbenchChat.voicePlaybackStop", "Stop reading")
-              : wbcT("workbenchChat.voicePlayback", "Read aloud")}
-            aria-label={messageSpeaking
-              ? wbcT("workbenchChat.voicePlaybackStop", "Stop reading")
-              : wbcT("workbenchChat.voicePlayback", "Read aloud")}
-          >
-            {BrowserIcon ? <BrowserIcon name={messageSpeaking ? "muted" : "volume"} size={14} /> : null}
-          </button>
-        )}
-        <button type="button" className="wbc-msg-action" onClick={copyText} title={wbcT("workbenchChat.copy", "Copy")}>
-          {copied ? WBC_ICONS.check : WBC_ICONS.copy}
-        </button>
-        {onRetryMessage && (
-          <button type="button" data-tour="chat_retry" className="wbc-msg-action" onClick={function () { onRetryMessage(msg.id); }} title={wbcT("workbenchChat.regenerate", "Regenerate")}>
-            {WBC_ICONS.retry}
-          </button>
-        )}
-        <time>{wbcFormatTime(msg.createdAt)}</time>
-        {processingDuration ? (
-          <small
-            className="wbc-msg-duration"
-            title={wbcT("workbenchChat.processingDuration", "Total processing time")}
-          >{processingDuration}</small>
-        ) : null}
-        {usageTokenCount !== null ? (
-          <small className="wbc-msg-token-usage">{wbcCompactNumber(usageTokenCount)} tokens</small>
-        ) : null}
-        {outputTokenSpeed ? <small className="wbc-msg-output-speed">{outputTokenSpeed}</small> : null}
-      </div>
+      {!live && msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
+      {sourceText ? <div
+        key="body"
+        className={"wbc-msg-body markdown" + (live ? " streaming" : "")}
+        ref={bodyRef}
+        dangerouslySetInnerHTML={{ __html: bodyHtml }}
+      /> : null}
+      {live
+        ? <WbcLiveAgentArtifacts files={liveRuntime.artifacts} onOpenFile={onOpenFile} />
+        : <React.Fragment>
+          <WbcMediaReferences files={referenceAttachments} onOpenFile={onOpenFile} />
+          <WbcAgentFiles files={msg.attachments} onOpenFile={onOpenFile} />
+        </React.Fragment>}
+      {!live && <WbcAssistantMessageFooter
+        copied={copied} msg={msg} onCopy={copyText}
+        onRetryMessage={onRetryMessage} voiceSnapshot={voiceSnapshot}
+      />}
     </div>
   );
 }
@@ -1519,29 +1537,14 @@ function wbcUseThrottledLiveText(text, flush) {
       if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
     };
   }, []);
-  return renderedText;
+  // A terminal reply is already authoritative. Return it in the same render
+  // that observes streamDone instead of waiting for the passive effect below;
+  // waiting would paint one stale frame immediately before persistence.
+  return flush ? source : renderedText;
 }
 
 function WbcLiveMessage({ runtime, onOpenFile }) {
-  // Parsing + sanitizing the entire growing reply is linear in its current
-  // length. Throttle that expensive work while keeping the caret and progress
-  // UI live; reply_done always flushes the exact final text immediately.
-  var renderedText = wbcUseThrottledLiveText(runtime.text, !!runtime.streamDone);
-  var liveHtml = useWbcMemo(function () {
-    return renderedText ? wbcRenderMarkdown(renderedText, { interactive: false }) : "";
-  }, [renderedText]);
-  if (!runtime.text && !(runtime.artifacts && runtime.artifacts.length)) return null;
-  return (
-    <React.Fragment>
-      <div className="wbc-msg assistant">
-        {runtime.text ? <div className="wbc-msg-body markdown">
-          <div dangerouslySetInnerHTML={{ __html: liveHtml }} />
-          <span className="wbc-caret" />
-        </div> : null}
-        <WbcLiveAgentArtifacts files={runtime.artifacts} onOpenFile={onOpenFile} />
-      </div>
-    </React.Fragment>
-  );
+  return <WbcAssistantMessage msg={{ role: "assistant" }} liveRuntime={runtime} onOpenFile={onOpenFile} />;
 }
 
 function WbcRuntimeTranscript({ runtime, onOpenFile }) {

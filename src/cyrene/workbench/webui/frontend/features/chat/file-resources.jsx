@@ -316,6 +316,53 @@ function wbcRuntimeToolEvent(event, eventAt) {
   };
 }
 
+function wbcBindSavedReplyRenderKey(messages, renderKey) {
+  var list = Array.isArray(messages) ? messages : [];
+  var key = String(renderKey || "");
+  if (!key) return list;
+  for (var index = list.length - 1; index >= 0; index -= 1) {
+    var message = list[index];
+    var hasVisibleReply = !!String(message && message.content || "").trim()
+      || !!(message && Array.isArray(message.attachments) && message.attachments.length)
+      || !!(message && Array.isArray(message.referenceAttachments) && message.referenceAttachments.length)
+      || !!(message && Array.isArray(message.reference_attachments) && message.reference_attachments.length);
+    if (
+      !message
+      || message.role !== "assistant"
+      || message.intermediate
+      || !hasVisibleReply
+    ) continue;
+    var bound = list.slice();
+    bound[index] = { ...message, replyRenderKey: key };
+    return bound;
+  }
+  return list;
+}
+
+function wbcHandleRuntimeAck(event, context) {
+  if (event.retry) {
+    var retryTruncateAfterMessageId = String(event.truncateAfterMessageId || "");
+    context.update(context.chatId, function (current) {
+      if (!current) return null;
+      return {
+        ...current,
+        retryTruncateAfterMessageId: retryTruncateAfterMessageId
+          || String(current.retryTruncateAfterMessageId || ""),
+      };
+    });
+    context.fire("onRetryTruncate", context.chatId, retryTruncateAfterMessageId);
+    return;
+  }
+  if (!event.userMessage) return;
+  var runtime = context.get(context.chatId);
+  var optimisticId = String(runtime && runtime.optimisticUserMessageId || "");
+  context.recordUserMessage(context.chatId, event.userMessage, optimisticId);
+  context.fire("onUserMessageConfirmed", context.chatId, {
+    optimisticId: optimisticId,
+    userMessage: event.userMessage,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Streaming runtime engine (module-level — survives view switches)
 // ---------------------------------------------------------------------------
@@ -975,16 +1022,10 @@ var WorkbenchChatRuntimes = (function () {
         fire("onAgentSessionUpdated", chatId, wbcAgentSessionPayload(event || {}));
       },
       onAck: function (event) {
-        if (event.retry) return;
-        if (event.userMessage) {
-          var runtime = get(chatId);
-          var optimisticId = String(runtime && runtime.optimisticUserMessageId || "");
-          recordUserMessage(chatId, event.userMessage, optimisticId);
-          fire("onUserMessageConfirmed", chatId, {
-            optimisticId: optimisticId,
-            userMessage: event.userMessage,
-          });
-        }
+        wbcHandleRuntimeAck(event, {
+          chatId: chatId, fire: fire, get: get,
+          recordUserMessage: recordUserMessage, update: update,
+        });
       },
       onReplyStart: function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
@@ -1141,17 +1182,20 @@ var WorkbenchChatRuntimes = (function () {
       },
       onSaved: function (event) {
         if (event.retry) {
-          // The old model output is hidden optimistically when retry starts.
-          // Reconcile again with the server's durable replacement ids so a
-          // background retry or a late hydration reaches the same transcript.
-          fire("onRetryTruncate", chatId, {
-            afterId: String(event.truncateAfterMessageId || ""),
-            replacedIds: Array.isArray(event.retryReplacedMessageIds) ? event.retryReplacedMessageIds : [],
-          });
+          // Apply the authoritative retry boundary before the terminal payload
+          // so the transcript changes as one ordered state transition.
+          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
         }
         var savedMessages = Array.isArray(event.assistantMessages) && event.assistantMessages.length
           ? event.assistantMessages
           : (event.assistantMessage ? [event.assistantMessage] : []);
+        // The live reply and its durable message are one visual entity. Carry
+        // the run-scoped render identity across the persistence boundary so
+        // React updates the existing message instead of replacing its DOM.
+        savedMessages = wbcBindSavedReplyRenderKey(
+          savedMessages,
+          runtimes[chatId] && runtimes[chatId].replyRenderKey
+        );
         // The client-assembled live trace is the authoritative execution
         // history: the backend's transcript extraction can drop mid-run tool
         // calls and drops runtime status fields. Overlay it on the saved cards
@@ -1179,10 +1223,7 @@ var WorkbenchChatRuntimes = (function () {
       onAwaitingUser: function (event) {
         // The run paused for a permission / clarification answer.
         if (event.retry) {
-          fire("onRetryTruncate", chatId, {
-            afterId: String(event.truncateAfterMessageId || ""),
-            replacedIds: Array.isArray(event.retryReplacedMessageIds) ? event.retryReplacedMessageIds : [],
-          });
+          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
         }
         var awaitingMessages = Array.isArray(event.assistantMessages) ? event.assistantMessages : [];
         if (awaitingMessages.length) fire("onAssistantSaved", chatId, awaitingMessages);
@@ -1305,8 +1346,11 @@ var WorkbenchChatRuntimes = (function () {
     var startedAt = Date.now();
     var clientRequestId = String(input.clientRequestId || ("send_" + startedAt + "_" + Math.random().toString(36).slice(2, 9)));
     var generation = "stream_" + clientRequestId;
+    var replyRenderKey = "reply_" + generation;
     streamGenerations[chatId] = generation;
     input = { ...input, clientRequestId: clientRequestId };
+    var retryTruncateAfterMessageId = input.retry
+      ? String(input.retryTruncateAfterMessageId || "") : "";
     var optimisticUserMessage = null;
     if (!input.retry) {
       var optimisticId = "user_pending_" + startedAt + "_" + Math.random().toString(36).slice(2, 9);
@@ -1339,8 +1383,10 @@ var WorkbenchChatRuntimes = (function () {
       replying: false,
       optimisticUserMessageId: optimisticUserMessage ? optimisticUserMessage.id : "",
       userMessages: optimisticUserMessage ? [optimisticUserMessage] : [],
+      retryTruncateAfterMessageId: retryTruncateAfterMessageId,
       clientRequestId: clientRequestId,
       streamGeneration: generation,
+      replyRenderKey: replyRenderKey,
     });
     return ownStream(
       chatId,
@@ -1365,7 +1411,7 @@ var WorkbenchChatRuntimes = (function () {
         return cur ? { ...cur, reconnecting: true, streamGeneration: generation } : null;
       });
     } else {
-      update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true, reconnectAttempts: 0, eventCursor: 0, streamGeneration: generation });
+      update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], notifications: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true, reconnectAttempts: 0, eventCursor: 0, streamGeneration: generation, replyRenderKey: "reply_" + generation });
     }
     var cursor = Number(existing && existing.eventCursor || 0);
     return ownStream(

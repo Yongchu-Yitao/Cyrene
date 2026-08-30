@@ -52,7 +52,6 @@ _TYPE_TO_CATEGORY: dict[str, str] = {
     "chat": "conversation",
     "event": "conversation",
     "emotion": "conversation",
-    "task_report": "task_report",
     "reflection": "reflection",
 }
 
@@ -69,13 +68,13 @@ _INJECT_CATEGORIES = {"preference", "project", "habit", "fact", "conversation", 
 # Internal categories that are stored (and may feed runs) but must NEVER appear
 # on the user-facing memory page — they are excluded from its list, counts,
 # overview, and source chart. This keeps the page to genuine user memories and
-# stops the "fact" bucket from being inflated by agent bookkeeping: task
-# completion reports and reflection dead-end / promising-direction notes.
-_HIDDEN_CATEGORIES = {"task_report", "reflection"}
+# stops the "fact" bucket from being inflated by reflection dead-end /
+# promising-direction notes.
+_HIDDEN_CATEGORIES = {"reflection"}
 
 # Compatibility label fields remain available, but carry stable ids rather
 # than one locale's rendered text.
-_HIDDEN_CATEGORY_LABELS = {"task_report": "task_report", "reflection": "reflection"}
+_HIDDEN_CATEGORY_LABELS = {"reflection": "reflection"}
 
 _CONFIDENCE_LABELS = {"high": "high", "medium": "medium", "low": "low"}
 
@@ -85,7 +84,6 @@ _CATEGORY_PROMPT_LABELS = {
     "habit": ("work habit", "工作习惯"),
     "fact": ("fact", "事实信息"),
     "conversation": ("conversation habit", "对话习惯"),
-    "task_report": ("task report", "任务报告"),
     "reflection": ("reflection", "反思"),
     "reflection_dead_end": ("dead end to avoid", "应避免的失败路径"),
     "reflection_promising_direction": ("promising direction", "有效方向"),
@@ -476,7 +474,7 @@ def _build_payload(workspace_id: str | None, *, include_hidden: bool = False) ->
 
     category_order = [
         *_CATEGORY_ORDER,
-        *(["task_report", "reflection"] if include_hidden else []),
+        *(["reflection"] if include_hidden else []),
     ]
     categories = [{"id": "all", "label": "all", "count": total}]
     categories += [
@@ -1219,7 +1217,7 @@ def add_agent_memory(
     confidence: str = "",
     source: str = "agent",
 ) -> dict | None:
-    """Append one durable memory written by the task agent into the project store.
+    """Append one durable memory written by an agent into the project store.
 
     Reuses the same store + dedup as conversation capture so agent-written items
     show up on the Workbench memory page AND feed back into future runs. Returns
@@ -1651,52 +1649,3 @@ def memory_injection_ids(
         )
     items.sort(key=lambda x: (x[0], x[1]), reverse=True)
     return [eid for _mc, _ts, eid in items]
-
-
-def render_task_reports_for_planning(
-    workspace_id: str | None,
-    *,
-    limit: int = 3,
-    max_chars: int = 2500,
-    language: str = "",
-) -> str:
-    """Render past task completion reports for injection into the plan-generation
-    prompt. Only ``task_report``-category entries are included; stale entries are
-    skipped. Returns "" when no reports exist.
-
-    NOT used in general agent runs — task reports are too verbose for every step.
-    """
-    entries = _load(workspace_id)
-    if not entries:
-        return ""
-    reports: list[tuple[str, str]] = []
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        if e.get("stale"):
-            continue
-        if _entry_category(e) != "task_report":
-            continue
-        content = str(e.get("content") or "").strip()
-        if not content:
-            continue
-        ts = str(e.get("first_seen") or "")
-        reports.append((ts, content))
-    if not reports:
-        return ""
-    reports.sort(key=lambda x: x[0], reverse=True)
-    blocks: list[str] = []
-    used = 0
-    for _ts, content in reports[:limit]:
-        if used + len(content) > max_chars:
-            break
-        blocks.append(content)
-        used += len(content)
-    if not blocks:
-        return ""
-    header = localized(
-        "## Past task reports for this project (reuse successful approaches and avoid known dead ends; ignore anything irrelevant to the current task)",
-        "## 本项目历史任务报告（请参考成功经验，避免重复踩坑；与当前任务无关则忽略）",
-        language=language,
-    )
-    return header + "\n\n" + "\n---\n".join(blocks)

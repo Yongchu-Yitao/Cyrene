@@ -169,6 +169,7 @@ class ChatUpdateBody(APIBody):
     soulActive: bool | None = None
     workspaceActive: bool | None = None
     workspaceOverride: str | None = Field(default=None, max_length=4096)
+    workspaceSurface: dict[str, Any] | None = None
     remoteDeviceIds: list[str] | None = Field(default=None, max_length=50)
     contextActivations: ComposerContextActivationsBody | None = None
     activePlan: dict[str, Any] | None = None

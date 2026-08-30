@@ -26,12 +26,12 @@ import { wbcAnswerQuestionForChat, wbcHandleCreateChat, wbcHandleEditMessage, wb
 import { useWbcLiveEventController } from "./live-event-controller.jsx"
 import { WBC_SURFACE_INTENT_EVENT, WbcSurfaceHost } from "./dynamic-surfaces.jsx"
 import { WbcGoalConfirmationDialog } from "../goal/goal-ui.jsx"
-import { wbcClaimSurfaceCard, wbcPinSurfaceCard, wbcRevealSurface, wbcSurfaceResourceKey } from "./dynamic-surface-broker.mjs"
+import { wbcClaimSurfaceCard, wbcNormalizeSurfaceIntent, wbcPinSurfaceCard, wbcRevealSurface, wbcSurfaceResourceKey } from "./dynamic-surface-broker.mjs"
 
 // Workbench chat feature module with explicit ESM dependencies.
 function wbcSubscribeTerminalRefresh(projectId, refreshTerminals) {
   var timer = null;
-  function refresh() { refreshTerminals({ background: true, skipRestore: true }); }
+  function refresh() { refreshTerminals({ background: true }); }
   function schedule() {
     if (timer) window.clearTimeout(timer);
     timer = window.setTimeout(function () { timer = null; refresh(); }, 80);
@@ -74,6 +74,200 @@ function wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer) {
     (payload && payload.text) || wbcT("browser.takeover.completeLogin", "I completed sign-in")
   );
   return Promise.resolve();
+}
+
+function wbcWorkspaceSurfaceDescriptor(value, catalog, chatId) {
+  var normalized = wbcNormalizeSurfaceIntent(Object.assign({}, value || {}, {
+    chatId: String(chatId || ""),
+  }), catalog);
+  if (!normalized) return null;
+  var surface = (Array.isArray(catalog) ? catalog : []).find(function (item) {
+    return String(item && item.id || "") === normalized.surfaceId
+      && String(item && item.pack_id || "") === normalized.packId;
+  });
+  var renderer = surface && surface.renderer && typeof surface.renderer === "object"
+    ? surface.renderer : {};
+  return renderer.kind === "native" && renderer.id === "workspace-composite"
+    ? normalized : null;
+}
+
+function wbcDurableWorkspaceSurfaceDescriptor(descriptor, chatId) {
+  if (!descriptor) return null;
+  return {
+    schemaVersion: 1,
+    surfaceId: descriptor.surfaceId,
+    packId: descriptor.packId,
+    resource: descriptor.resource,
+    resourceKey: descriptor.resourceKey,
+    activity: descriptor.activity,
+    attention: "reveal",
+    priority: descriptor.priority,
+    lifetime: descriptor.lifetime,
+    preferredSide: descriptor.preferredSide,
+    chatId: String(chatId || ""),
+  };
+}
+
+function useWbcWorkspaceSurfaceState(chats, model, setChats, setActiveChat) {
+  var [descriptors, setDescriptors] = useWbcState({});
+  var [catalog, setCatalog] = useWbcState(function () {
+    var snapshot = PluginFrontendService.snapshot();
+    return Array.isArray(snapshot.workbenchSurfaces) ? snapshot.workbenchSurfaces : [];
+  });
+  var persistedRef = useWbcRef(new Map());
+  useWbcEffect(function () {
+    return PluginFrontendService.subscribe(function (snapshot) {
+      setCatalog(Array.isArray(snapshot.workbenchSurfaces) ? snapshot.workbenchSurfaces : []);
+    });
+  }, []);
+  useWbcEffect(function () {
+    chats.forEach(function (chat) {
+      if (!chat || !chat.id || !chat.workspaceSurface) return;
+      persistedRef.current.set(String(chat.id), JSON.stringify(chat.workspaceSurface));
+    });
+  }, [chats]);
+  function persist(chatId, descriptor) {
+    var durable = wbcDurableWorkspaceSurfaceDescriptor(descriptor, chatId);
+    if (!chatId || !durable) return;
+    var signature = JSON.stringify(durable);
+    if (persistedRef.current.get(chatId) === signature) return;
+    persistedRef.current.set(chatId, signature);
+    model.updateChatPreferences(chatId, { workspaceSurface: durable })
+      .then(function (updated) {
+        var persisted = updated && updated.workspaceSurface ? updated.workspaceSurface : durable;
+        persistedRef.current.set(chatId, JSON.stringify(persisted));
+        setChats(function (current) {
+          return current.map(function (chat) {
+            return String(chat && chat.id || "") === chatId
+              ? Object.assign({}, chat, { workspaceSurface: persisted }) : chat;
+          });
+        });
+        setActiveChat(function (current) {
+          return current && String(current.id || "") === chatId
+            ? Object.assign({}, current, { workspaceSurface: persisted }) : current;
+        });
+      })
+      .catch(function () {
+        if (persistedRef.current.get(chatId) === signature) persistedRef.current.delete(chatId);
+        workbenchServices.feedback().showToast(
+          wbcT("workbenchChat.workspaceStateSaveFailed", "The workspace state could not be saved."),
+          "error"
+        );
+      });
+  }
+  return { catalog: catalog, descriptors: descriptors, persist: persist, setDescriptors: setDescriptors };
+}
+
+function useWbcSurfaceIntentListener(options) {
+  useWbcEffect(function () {
+    function onSurfaceIntent(event) {
+      var intent = event && event.detail && typeof event.detail === "object" ? event.detail : {};
+      var ownerChatId = String(intent.chatId || intent.chat_id || options.activeChatIdRef.current || "");
+      var ownerId = ownerChatId || (options.projectId ? "project:" + String(options.projectId) : "");
+      if (!ownerId) return;
+      var declaredSurfaces = PluginFrontendService.snapshot().workbenchSurfaces;
+      var catalog = Array.isArray(declaredSurfaces) ? declaredSurfaces : [];
+      var workspaceDescriptor = wbcWorkspaceSurfaceDescriptor(
+        wbcNormalizeSurfaceIntent(intent, catalog), catalog, ownerChatId
+      );
+      var result = null;
+      options.setPaneLayoutsByChat(function (current) {
+        var previous = wbcNormalizePaneLayout(current[ownerId], ownerChatId);
+        result = wbcRevealSurface(previous, Object.assign({}, intent, { chatId: ownerChatId }), {
+          catalog: catalog,
+          isSuppressed: function (runId, resourceKey) {
+            return options.surfaceSuppressionRef.current.has(String(runId || "") + "\n" + String(resourceKey || ""));
+          },
+          canReplace: function (card) {
+            var resource = card && card.payload && card.payload.resource || {};
+            if (resource.kind !== "file") return true;
+            var draftKey = wbcProjectFileDraftKey({
+              source: "project",
+              projectId: resource.projectId || resource.project_id || options.projectId,
+              path: resource.path,
+            });
+            return !(draftKey && WBC_PROJECT_FILE_DRAFTS[draftKey]);
+          },
+          canOpen: function (normalizedIntent) {
+            var resourceKind = normalizedIntent && normalizedIntent.resource && normalizedIntent.resource.kind;
+            if (["file", "directory"].indexOf(resourceKind) < 0) return true;
+            var runId = String(normalizedIntent.runId || "");
+            return !runId || !options.surfaceRevealedRunRef.current.has(runId);
+          },
+        });
+        if (result && ["opened", "replaced"].indexOf(result.outcome) >= 0) {
+          var resourceKind = intent && intent.resource && intent.resource.kind;
+          var openedRunId = String(intent.runId || intent.run_id || "");
+          if (openedRunId && ["file", "directory"].indexOf(resourceKind) >= 0) {
+            options.surfaceRevealedRunRef.current.add(openedRunId);
+            if (options.surfaceRevealedRunRef.current.size > 500) {
+              options.surfaceRevealedRunRef.current.delete(options.surfaceRevealedRunRef.current.values().next().value);
+            }
+          }
+        }
+        return !result || result.layout === previous
+          ? current : Object.assign({}, current, { [ownerId]: result.layout });
+      });
+      window.setTimeout(function () {
+        if (workspaceDescriptor && result && ["opened", "replaced", "updated"].indexOf(result.outcome) >= 0) {
+          options.setWorkspaceSurfaceDescriptors(function (current) {
+            return Object.assign({}, current, { [ownerId]: workspaceDescriptor });
+          });
+          options.persistWorkspaceSurface(ownerChatId, workspaceDescriptor);
+        }
+        window.dispatchEvent(new CustomEvent("cyrene:surface-result", {
+          detail: Object.assign({}, result || { outcome: "unavailable" }, {
+            surfaceId: String(intent.surfaceId || intent.surface_id || intent.surface || ""),
+            resourceKey: String(intent.resourceKey || intent.resource_key || ""),
+          }),
+        }));
+      }, 0);
+    }
+    window.addEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent);
+    return function () { window.removeEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent); };
+  }, [options.projectId]);
+}
+
+function wbcOpenStartedWorkspace(options) {
+  if (!options.descriptor) return false;
+  var result = null;
+  options.setPaneLayoutsByChat(function (current) {
+    var previous = wbcNormalizePaneLayout(current[options.ownerId], options.ownerChatId);
+    result = wbcRevealSurface(previous, Object.assign({}, options.descriptor, {
+      attention: "reveal", chatId: options.ownerChatId,
+    }), {
+      catalog: PluginFrontendService.snapshot().workbenchSurfaces,
+      canReplace: function (card) {
+        var resource = card && card.payload && card.payload.resource || {};
+        if (resource.kind !== "file") return true;
+        var draftKey = wbcProjectFileDraftKey({
+          source: "project",
+          projectId: resource.projectId || resource.project_id || options.projectId,
+          path: resource.path,
+        });
+        return !(draftKey && WBC_PROJECT_FILE_DRAFTS[draftKey]);
+      },
+    });
+    if (!result || result.layout === previous) return current;
+    var claimedLayout = Object.assign({}, result.layout);
+    ["left", "right"].forEach(function (side) {
+      claimedLayout[side] = result.layout[side].map(function (card) {
+        return String(card && card.id || "") === String(result.cardId || "")
+          ? wbcClaimSurfaceCard(card) : card;
+      });
+    });
+    return Object.assign({}, current, { [options.ownerId]: claimedLayout });
+  });
+  window.setTimeout(function () {
+    if (result && result.outcome === "deferred") {
+      workbenchServices.feedback().showToast(
+        wbcT("workbenchChat.workspaceOpenDeferred", "No split slot is available. Close or unpin a split and try again."),
+        "warning"
+      );
+    }
+  }, 0);
+  options.setSideTab("");
+  return true;
 }
 
 function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
@@ -212,24 +406,14 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   // adopted id so the selection effect does not clear it and fetch it again.
   var skipNextHydrationChatIdRef = useWbcRef("");
   var handledNewChatRequestIdRef = useWbcRef(0);
-  var pendingTerminalRestoreRef = useWbcRef({ projectId: "", terminalId: "" });
-  var [terminalRestoreRevision, setTerminalRestoreRevision] = useWbcState(0);
-
   function refreshTerminals(options) {
-    return terminalCatalog.refresh(options, function (restoredId) {
-        pendingTerminalRestoreRef.current = {
-          projectId: String(projectId),
-          terminalId: restoredId,
-        };
-        setTerminalRestoreRevision(function (revision) { return revision + 1; });
-    });
+    return terminalCatalog.refresh(options);
   }
 
   useWbcEffect(function () {
     setActiveTerminalId("");
     setRailSelectionSuppressed(false);
     setRailMode("chat");
-    pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
     refreshTerminals();
   }, [projectId, codeAvailable]);
 
@@ -237,21 +421,6 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     if (!codeAvailable || !projectId || !isActive) return undefined;
     return wbcSubscribeTerminalRefresh(projectId, refreshTerminals);
   }, [projectId, isActive, codeAvailable]);
-
-  useWbcEffect(function () {
-    var pending = pendingTerminalRestoreRef.current;
-    if (
-      loading
-      || !pending.terminalId
-      || String(pending.projectId) !== String(projectId)
-    ) return;
-    pendingTerminalRestoreRef.current = { projectId: "", terminalId: "" };
-    setRailMode("chat");
-    replaceWithTerminal(pending.terminalId, {
-      skipPersist: true,
-      ownerChatId: String(activeChatId || ""),
-    });
-  }, [projectId, activeChatId, loading, terminalRestoreRevision]);
 
   function terminalActionContext() {
     return {
@@ -322,8 +491,6 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   var [error, setError] = useWbcState("");
   var [errorKind, setErrorKind] = useWbcState("load");
   var [retryClearingMessageIds, setRetryClearingMessageIds] = useWbcState([]);
-  var [retrySuppressedTurn, setRetrySuppressedTurn] = useWbcState({ chatId: "", messageIds: [] });
-  var retrySuppressedTurnRef = useWbcRef({ chatId: "", messageIds: [] });
   var retryClearCommitRef = useWbcRef(null);
   var retryPendingChatIdRef = useWbcRef("");
   useWbcEffect(function () {
@@ -357,67 +524,18 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     });
   }
   var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState({});
+  var workspaceSurfaces = useWbcWorkspaceSurfaceState(chats, model, setChats, setActiveChat);
+  var workspaceSurfaceDescriptors = workspaceSurfaces.descriptors;
+  var surfaceCatalog = workspaceSurfaces.catalog;
   var surfaceSuppressionRef = useWbcRef(new Map());
   var surfaceRevealedRunRef = useWbcRef(new Set());
 
-  useWbcEffect(function () {
-    function onSurfaceIntent(event) {
-      var intent = event && event.detail && typeof event.detail === "object" ? event.detail : {};
-      var ownerChatId = String(intent.chatId || intent.chat_id || activeChatIdRef.current || "");
-      var ownerId = ownerChatId || (projectId ? "project:" + String(projectId) : "");
-      if (!ownerId) return;
-      var result = null;
-      setPaneLayoutsByChat(function (current) {
-        var previous = wbcNormalizePaneLayout(current[ownerId], ownerChatId);
-        result = wbcRevealSurface(previous, Object.assign({}, intent, {
-          chatId: ownerChatId,
-        }), {
-          catalog: PluginFrontendService.snapshot().workbenchSurfaces,
-          isSuppressed: function (runId, resourceKey) {
-            return surfaceSuppressionRef.current.has(String(runId || "") + "\n" + String(resourceKey || ""));
-          },
-          canReplace: function (card) {
-            var resource = card && card.payload && card.payload.resource || {};
-            if (resource.kind !== "file") return true;
-            var draftKey = wbcProjectFileDraftKey({
-              source: "project",
-              projectId: resource.projectId || resource.project_id || projectId,
-              path: resource.path,
-            });
-            return !(draftKey && WBC_PROJECT_FILE_DRAFTS[draftKey]);
-          },
-          canOpen: function (normalizedIntent) {
-            var resourceKind = normalizedIntent && normalizedIntent.resource && normalizedIntent.resource.kind;
-            if (["file", "directory"].indexOf(resourceKind) < 0) return true;
-            var runId = String(normalizedIntent.runId || "");
-            return !runId || !surfaceRevealedRunRef.current.has(runId);
-          },
-        });
-        if (result && ["opened", "replaced"].indexOf(result.outcome) >= 0) {
-          var resourceKind = intent && intent.resource && intent.resource.kind;
-          var openedRunId = String(intent.runId || intent.run_id || "");
-          if (openedRunId && ["file", "directory"].indexOf(resourceKind) >= 0) {
-            surfaceRevealedRunRef.current.add(openedRunId);
-            if (surfaceRevealedRunRef.current.size > 500) {
-              surfaceRevealedRunRef.current.delete(surfaceRevealedRunRef.current.values().next().value);
-            }
-          }
-        }
-        if (!result || result.layout === previous) return current;
-        return Object.assign({}, current, { [ownerId]: result.layout });
-      });
-      window.setTimeout(function () {
-        window.dispatchEvent(new CustomEvent("cyrene:surface-result", {
-          detail: Object.assign({}, result || { outcome: "unavailable" }, {
-            surfaceId: String(intent.surfaceId || intent.surface_id || intent.surface || ""),
-            resourceKey: String(intent.resourceKey || intent.resource_key || ""),
-          }),
-        }));
-      }, 0);
-    }
-    window.addEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent);
-    return function () { window.removeEventListener(WBC_SURFACE_INTENT_EVENT, onSurfaceIntent); };
-  }, [projectId]);
+  useWbcSurfaceIntentListener({
+    activeChatIdRef: activeChatIdRef, persistWorkspaceSurface: workspaceSurfaces.persist,
+    projectId: projectId, setPaneLayoutsByChat: setPaneLayoutsByChat,
+    setWorkspaceSurfaceDescriptors: workspaceSurfaces.setDescriptors,
+    surfaceRevealedRunRef: surfaceRevealedRunRef, surfaceSuppressionRef: surfaceSuppressionRef,
+  });
 
   useWbcEffect(function () {
     function claimSurface(event) {
@@ -1031,6 +1149,17 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       return;
     }
     var cachedChat = activeChatId ? (chatCache.details[activeChatId] || null) : null;
+    if (cachedChat) {
+      // Cache adoption is another transcript hydration boundary. A retry keeps
+      // its replaced output durable until the new run commits, so never paint
+      // an older cached snapshot without reconciling the live runtime first.
+      cachedChat = wbcPreserveLiveTimelineAnchors(
+        cachedChat,
+        cachedChat,
+        runtimeEngine.get(activeChatId)
+      );
+      chatCache.details[activeChatId] = cachedChat;
+    }
     // Never show a transcript from a different conversation. A cache hit is
     // safe because it is keyed by the exact target id; a miss clears first.
     if (!cachedChat) setActiveChat(null);
@@ -1378,9 +1507,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   useWbcRuntimePageHooks({
     runtimeEngine: runtimeEngine, model: model, chatCache: chatCache,
     activeChatIdRef: activeChatIdRef, projectIdRef: projectIdRef,
-    retrySuppressedTurnRef: retrySuppressedTurnRef,
     setActiveChat: setActiveChat, setChats: setChats,
-    setRetrySuppressedTurn: setRetrySuppressedTurn,
     setError: setError, setErrorKind: setErrorKind,
     beginChatListRequest: beginChatListRequest,
     beginChatHydration: beginChatHydration,
@@ -1919,12 +2046,11 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       model: model, runtimeEngine: runtimeEngine, projectId: projectId,
       activeChat: activeChat, activeChatIdRef: activeChatIdRef, chatsRef: chatsRef,
       chatCache: chatCache, projectIdRef: projectIdRef,
-      retryPendingChatIdRef: retryPendingChatIdRef, retrySuppressedTurnRef: retrySuppressedTurnRef,
+      retryPendingChatIdRef: retryPendingChatIdRef,
       retryClearCommitRef: retryClearCommitRef, skipNextHydrationChatIdRef: skipNextHydrationChatIdRef,
       setActiveChat: setActiveChat, setChats: setChats,
       setError: setError, setErrorKind: setErrorKind,
       setRetryClearingMessageIds: setRetryClearingMessageIds,
-      setRetrySuppressedTurn: setRetrySuppressedTurn,
       beginChatListRequest: beginChatListRequest, beginChatHydration: beginChatHydration,
       isCurrentChatHydration: isCurrentChatHydration, refreshChats: refreshChats,
       selectChat: selectChat, closePageContextMenu: closePageContextMenu,
@@ -2174,6 +2300,12 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   var selectedChatSummary = chats.find(function (item) {
     return String(item.id || "") === String(activeChatId || "");
   }) || null;
+  var activeWorkspaceDescriptor = wbcWorkspaceSurfaceDescriptor(
+    workspaceSurfaceDescriptors[paneOwnerKey(activeChatId)]
+      || ((visibleChat || selectedChatSummary) && (visibleChat || selectedChatSummary).workspaceSurface),
+    surfaceCatalog,
+    activeChatId
+  );
   var activeBrowserState = wbcBrowserStateForChat(activeChatId);
   var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
   var hasActiveBrowser = browserAvailable && !!((activeBrowserState && activeBrowserState.active) || browserMarkedActive);
@@ -2297,6 +2429,18 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     }, sourceChatId, sourceChatSnapshot);
   }
 
+  function openStartedWorkspace() {
+    var ownerChatId = String(activeChatId || "");
+    return wbcOpenStartedWorkspace({
+      descriptor: activeWorkspaceDescriptor,
+      ownerChatId: ownerChatId,
+      ownerId: paneOwnerKey(ownerChatId),
+      projectId: projectId,
+      setPaneLayoutsByChat: setPaneLayoutsByChat,
+      setSideTab: setSideTab,
+    });
+  }
+
   function renderConversationPanel(floating) {
     function openPanelContent(type, payload) {
       if ((type === "map" && !mapAvailable) || (type === "browser" && !browserAvailable)) return;
@@ -2334,6 +2478,10 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
           openPanelContent("browser", tabId);
         }}
         onOpenSubagents={function () { openPanelContent("subagents", true); }}
+        workspaceAvailable={!!activeWorkspaceDescriptor}
+        onOpenWorkspace={function () {
+          if (openStartedWorkspace() && floating) setFloatingConversationPanelOpen(false);
+        }}
         onViewerViewed={markViewerFileRead}
         onRename={openQuickRename}
         onDelete={handleDelete}
@@ -2392,7 +2540,6 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         onRetryMessage={handleRetryMessage}
         onRetryClearAnimationEnd={handleRetryClearAnimationEnd}
         retryClearingMessageIds={retryClearingMessageIds}
-        retrySuppressedMessageIds={String(retrySuppressedTurn.chatId || "") === String(activeChatId || "") ? retrySuppressedTurn.messageIds : []}
         onEditMessage={handleEditMessage}
         onAskSelection={handleAskSelection}
         sideAgentCreating={sideAgentCreating}

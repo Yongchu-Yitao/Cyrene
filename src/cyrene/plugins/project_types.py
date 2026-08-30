@@ -50,10 +50,12 @@ def workspace_action(
     preview_port: int | None = None,
     artifacts: list[str] | None = None,
     ready_pattern: str = "",
+    i18n: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": action_id,
         "label": label,
+        "i18n": dict(i18n or {}),
         "kind": kind,
         "program": program,
         "args": list(args),

@@ -17,6 +17,7 @@ electron/package.json:
     - Windows ARM:  Cyrene-<ver>-win-arm64.exe
     - Linux:        Cyrene-<ver>-x64.AppImage
 """
+import hashlib
 import sys
 from pathlib import Path
 
@@ -197,9 +198,68 @@ def test_portable_windows_restart_script_replaces_original_without_uac(monkeypat
 
     script = updater.get_restart_script(Path(r"C:\Temp\Cyrene-new-portable.exe"))
 
-    assert 'move /Y "C:\\Apps\\Cyrene-portable.exe.new" "C:\\Apps\\Cyrene-portable.exe"' in script
-    assert 'start "" "C:\\Apps\\Cyrene-portable.exe"' in script
+    assert "$appPath = 'C:\\Apps\\Cyrene-portable.exe'" in script
+    assert "Move-Item -LiteralPath $newPath -Destination $appPath -Force" in script
+    assert "Start-Process -FilePath $appPath" in script
+    assert "Start-Sleep -Seconds 3" in script
+    assert "timeout /t" not in script
     assert "-Verb RunAs" not in script
+
+
+def test_installed_windows_restart_script_waits_and_propagates_installer_exit(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.delenv("PORTABLE_EXECUTABLE_FILE", raising=False)
+    monkeypatch.setenv("CYRENE_APP_EXECUTABLE", r"C:\Program Files\Cyrene\Cyrene.exe")
+
+    script = updater.get_restart_script(Path(r"C:\Temp\Cyrene-new.exe"))
+
+    assert "Start-Sleep -Seconds 3" in script
+    assert "timeout /t" not in script
+    assert "@('/S', '--updated')" in script
+    assert "-Wait -PassThru" in script
+    assert "$installerExitCode = $installer.ExitCode" in script
+    assert "if ($installerExitCode -ne 0)" in script
+
+
+def test_windows_update_launcher_uses_bom_encoded_detached_powershell(tmp_path, monkeypatch):
+    from cyrene.platform import update_install
+
+    package = tmp_path / "Cyrene-new.exe"
+    package.write_bytes(b"verified update")
+    checksum = hashlib.sha256(package.read_bytes()).hexdigest()
+    calls = []
+
+    def fake_popen(command, **kwargs):
+        calls.append((command, kwargs))
+
+    monkeypatch.setattr(update_install.sys, "platform", "win32")
+    result = update_install.launch_update_restart(
+        {
+            "done": True,
+            "path": str(package),
+            "total": package.stat().st_size,
+            "expected_sha256": checksum,
+            "actual_sha256": checksum,
+            "verified": True,
+        },
+        get_restart_script_fn=lambda _path: "Write-Output '更新'\n",
+        popen_fn=fake_popen,
+    )
+
+    assert result == (True, "", "", 200)
+    script_path = tmp_path / "update.ps1"
+    assert script_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    command, kwargs = calls[0]
+    assert command == [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script_path),
+    ]
+    assert kwargs["creationflags"] == 0x00000208
 
 
 # --- #47: missing platform assets must never fall back to another package -----

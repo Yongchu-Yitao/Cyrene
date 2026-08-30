@@ -2,6 +2,62 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta4] - 2026-08-31
+
+This release moves project work completely into conversations. It removes the separate Task product and adds persistent goal loops, an on-demand file workspace, plugin-provided project types, and shared one-click build, test, run, and preview actions. The interface, restoration, terminals, diff review, project settings, and notifications have been unified around that workflow.
+
+### Conversations, goals, and plans
+
+- Workbench no longer separates Chat and Task and no longer includes a Task Board, Create Task dialog, or separate Task detail page. Start a conversation for project work; its history, run state, results, and follow-up discussion remain together.
+- Entering `/goal` starts research and discussion before the Agent proposes an editable objective and acceptance criteria. The Goal tab appears only while a goal exists and contains the objective, maximum duration, confirmation, manual acceptance, and stop controls.
+- After confirmation, the Agent continues planning, working, testing, and repairing instead of exiting when one reply ends. A separate Reviewer compares the candidate result with the goal and reports pass/fail plus critical gaps; a failed review automatically starts another reflection and repair round.
+- You can edit an unconfirmed goal, guide an active goal, manually accept the current result, or stop the loop at any time with an always-available control. Waiting for an answer or permission, reaching a safety limit, or becoming genuinely blocked produces a clear state instead of a false completion.
+- Conversation plans and step progress use the same split-pane experience. The current step, completed steps, and restored progress stay synchronized, and a goal completion uses the shared notification experience.
+- Publishing, deployment, sending, and other external actions inside a goal still use the unified permission review and are not repeated automatically simply because the goal loops.
+
+### File, terminal, and review workspace
+
+- When you explicitly ask to edit or show a named file or inspect a directory structure, the conversation opens a shared workspace beside the chat. Ordinary reads, searches, and background activity do not continually take over the split.
+- The workspace provides Editor, Terminal, Problems, Review, Preview, and Files. Tabs with no content are hidden, the active tab uses the shared accent in the bottom bar, run and review controls remain at the top, and the drag handle has stable reserved space.
+- The editor follows Agent changes to the current file while protecting unsaved user work. Repeated edits reuse the same view, and refresh, conversation switching, and application restart restore the correct file and view instead of allowing a stale terminal to take over.
+- Files uses the same background, spacing, and hierarchy as the conversation panel and loads directories on demand. Workspace path selection is fixed and uses the available native path picker on macOS, Windows, and Linux.
+- Terminal lists reuse the file-row design. Finite Build/Test commands preserve output and diagnostics when they finish or fail without being reported as a crashed terminal. A long-running terminal can reconnect after a short interruption and becomes clearly interrupted if it is permanently unavailable instead of polling forever.
+- Review reuses Cyrene's established diff design, including line numbers, unchanged-section folding, add/remove colors, and file navigation. Conversation snapshots and the Git working tree remain distinct review sources but now use consistent file baselines, avoiding mismatched counts and newline-only differences.
+- Empty Preview, Problems, Terminal, and related views disappear from navigation and return only when an endpoint, artifact, diagnostic, or running instance is actually available.
+
+### Shared project actions and project plugins
+
+- The project editor now includes optional project-action information. Cyrene can detect it from the workspace, and users can fill in or repair the result manually. TeX and application development no longer require separate workspace systems.
+- The editor toolbar presents an action selector and one Run button for Build, Run, Test, or Preview. Long-running processes can be stopped, and running again correctly reuses or replaces the current instance without a duplicate Restart button.
+- JavaScript and TypeScript support common development, start, build, test, and preview scripts through Node.js, Bun, npm, pnpm, Yarn, and Deno. Python/uv supports running the current file and tests; TeX builds PDF output; Go, Rust, Java with Maven or Gradle, and Make contribute recognized run, build, and test actions; GitHub repositories can activate their matching project capability.
+- Supported project types are plugins. Installing Python, uv, TeX, Node.js, Bun, Deno, Go, Rust, Java, GitHub CLI, or another matching Extension automatically installs or enables its project plugin. A runtime already installed on the system enables the same plugin without requiring users to find it separately.
+- TeX builds, web development servers, Python programs, and other application projects share one Terminal, Problems, Artifact, and Preview experience. PDFs open in Preview, web endpoints can be viewed directly, and compiler or test failures appear in Problems.
+- Each project action uses a stable project/action/scope identity, so a same-named manual terminal or an orphaned previous instance no longer prevents an action from starting.
+
+### Conversation context and restored work
+
+- Plugins can now contribute controlled conversation split cards, file types, project actions, and project types. A pane that the user edits, pins, or takes over remains user-owned and is not replaced by Agent activity.
+- Conversation file changes form a restorable snapshot for Review and remain available after restarting the app. Paths outside the project workspace are never exposed through this surface.
+- Context, pinned topbar resources, and plugin-provided context remain isolated per conversation. New pinned-topbar and split-context examples show how one plugin can present consistent information in different Workbench locations.
+- Chat groups, recent conversations, and local interface preferences are retained during upgrades. Existing source-development data is copied into a separate development data directory so it no longer overwrites the installed app's state.
+
+### Unified interface and interaction
+
+- Workspace headers, tabs, lists, empty areas, diffs, and conversation panes share the same background and border system instead of separating layers with large blocks of unrelated color. Selection uses one restrained accent treatment.
+- Review keeps source, scope, add/remove totals, and refresh controls at the top, while the selectable file row stays at the bottom, reducing nested cards and repeated headings.
+- The run toolbar has improved widths, wrapping, and status placement in both English and Chinese. Success, failure, idle, and interrupted states now match the real process lifecycle.
+- Project actions, goals, review sources, terminals, problems, previews, files, and new error states have complete English and Chinese labels and guidance.
+- Backend errors, goal completion, and execution interruptions use the shared lower-left toast instead of page-specific top banners or misleading terminal-exit alerts.
+
+### Reliability and fixes
+
+- A failed `/goal` start no longer leaves a half-created running message, and retrying does not create duplicate goals or inconsistent conversation state.
+- Fixed repeated failures to pass the reveal intent when an Agent was asked to edit and split-show a named file, schema calls being rejected because object fields arrived in a different order, and successful tools failing to return a reliable display location.
+- Fixed stale terminals becoming the default view after restart, empty tabs remaining visible, execution polling forever, same-title terminal conflicts, false terminal-exit warnings, and an empty Preview occupying navigation.
+- Fixed conversation snapshots and Git diffs using different text baselines, which caused newline-only changes and inconsistent add/remove counts, and improved single-file navigation for large diffs.
+- Fixed an unclickable project path selector, inconsistent path selection across platforms, manually corrected project actions not saving, and project plugins not enabling when their runtime was already installed by the system.
+- Fixed duplicated or inconsistent transitions during streaming retry, reply completion, and usage restoration so a conversation continues to show one reliable result after reconnect, retry, or restart.
+
 ## [0.9.0-beta3] - 2026-08-29
 
 This update adds a complete automatic-trigger experience, expands the Agent's plugin-management abilities, and improves plugin refresh reliability, run statistics, and interface details.

@@ -168,7 +168,7 @@ SQLite schema, managed attachment files, extraction, chunking, local vectors,
 hybrid retrieval, Zotero synchronization, Workbench HTTP routes, global search,
 and Agent tools. Its data lives under
 `data/plugin_data/cyrene_knowledge/`; every row is keyed by Workbench project.
-Chat attachments, generated exports, and completed task artifacts enter through
+Chat attachments and generated exports enter through
 the same service. The old `cyrene.knowledge`/Workbench-library route stack is
 not part of the active request path. Agent access uses
 `toolbox.list → describe → invoke`.
@@ -204,6 +204,53 @@ Codebase-aware implementations live in the editable
 - **Indexer** — builds a SQLite index of symbols, references, imports, and file hashes
 - **Analysis** — query symbols, callers, references, and file summaries
 - **Git tools** — inspect diffs, blame, log, branches, and status
+
+### Conversation-owned goals and dynamic workspaces
+
+Workbench has one durable work unit: the conversation. The former Task product,
+its runtime branch, routes, persistence model, and page are removed. Optional
+capabilities attach their state to the conversation instead of creating a
+second session type:
+
+```text
+Conversation
+├── ContextTree and continuous Agent run
+├── cyrene_goal state: objective, limits, review, loop status
+├── cyrene_control state: plan and step progress
+├── conversation changes: file snapshots and review baseline
+└── workspace surface: editor, terminal, problems, review, preview, files
+```
+
+The `cyrene_goal` pack owns `/goal`, goal discussion and confirmation, the
+visible Goal tab, independent review, repair loops, manual acceptance, stop,
+completion notification, and restart recovery. A goal lease serializes each
+iteration with normal conversation execution. A model turn ending is not goal
+completion: only a passing review or explicit user acceptance completes it.
+Permission requests, user questions, safety limits, and user stop are explicit
+loop boundaries.
+
+File and directory tools publish validated workspace-relative resource effects.
+The conversation surface broker interprets those effects only when the user has
+explicitly requested a file or structure to be shown, or when an existing
+surface can be updated. Plugins contribute file types, project types, actions,
+and surfaces through the normal extension registry; they cannot write directly
+to pane state or reveal paths outside the project workspace.
+
+`cyrene_code` supplies the shared workspace execution service and native
+surface. Editor buffers use content versions to distinguish clean reloads from
+user-owned unsaved changes. Conversation snapshots and Git working-tree diffs
+share one diff renderer but retain their different baselines. Terminal,
+diagnostic, preview, and file tabs exist only when content is available, and
+the selected resource and layout are persisted per conversation.
+
+Project-type plugins detect safe actions for JavaScript/TypeScript, Python,
+TeX, Go, Rust, Java, Make, and GitHub workspaces. Their activation follows the
+matching runtime extensions. Action descriptors are data, not arbitrary shell
+snippets: the owning provider resolves the executable and arguments inside the
+validated workspace, while one execution service manages identity, status,
+terminal attachment, diagnostics, artifacts, endpoints, interruption, and
+restart. This is why TeX PDF compilation and an application development server
+use the same Build/Run/Test/Preview path.
 
 ### MCP Protocol Support
 
@@ -270,7 +317,7 @@ correlation fingerprints.
 
 ### Web UI
 
-Cyrene ships one Workbench front-end. Its primary areas are Task, Chat,
+Cyrene ships one Workbench front-end. Its primary areas are Chat,
 Knowledge/Library, Schedule, and Memory. Search, Browser/PDF/Diff views,
 settings, onboarding, help, profile, and Quick Chat are overlays, panels, or
 secondary surfaces rather than separate legacy pages. The source lives under
@@ -278,7 +325,7 @@ secondary surfaces rather than separate legacy pages. The source lives under
 `src/cyrene/workbench/webui/static/app`.
 
 `WorkbenchTopbar` keeps two deliberately separate collections: a local
-MRU/pinned list of at most three task/chat session tabs, and a persistent
+MRU/pinned list of at most three conversation tabs, and a persistent
 Pinned Resource Shelf. Resource drag payloads use the internal
 `application/x-cyrene-work-resource+json` MIME; native macOS text drags are
 accepted as `text/plain` and materialized as Markdown. Knowledge attachments
@@ -362,16 +409,13 @@ src/
 │   ├── workbench/                   # Cyrene host adapter
 │   │   ├── application/            # App orchestration, events, notifications
 │   │   ├── chat/                   # Chat services, repositories, and runs
-│   │   ├── tasks/                  # Task execution and workflow services
 │   │   ├── projects/               # Project lifecycle, files, and composition
-│   │   ├── goals/                  # Durable goal-loop runtime
-│   │   ├── planning/               # Planning contracts and helpers
 │   │   ├── artifacts/              # Artifacts, presentation, and exports
 │   │   ├── sessions/               # Session context and presentation
 │   │   ├── control/                # External control ports and projections
 │   │   ├── workspaces/             # Workspace changes and diff services
 │   │   ├── ui/                     # UI surface abstractions
-│   │   ├── core_adapter/           # Session/chat/task bridge to core
+│   │   ├── core_adapter/           # Conversation bridge to core
 │   │   ├── http/                   # FastAPI/HTTP composition
 │   │   ├── persistence/            # Workbench persistence
 │   │   └── webui/                 # App lifecycle and sole SPA source/output
@@ -390,5 +434,7 @@ layer supplies model and application services through plugin scopes, while the
 Workbench explicitly receives that application scope when opening a core
 session. The former top-level `agent`, `route`, and `webui` packages have been
 removed; no compatibility packages or duplicate implementations are shipped.
-Workbench business modules are grouped by domain; its package root contains no
-business-service implementations or legacy forwarding modules.
+The former Task product is likewise absent: goals and plans are plugin state on
+conversations, not another Workbench runtime. Workbench business modules are
+grouped by domain; its package root contains no business-service
+implementations or legacy forwarding modules.

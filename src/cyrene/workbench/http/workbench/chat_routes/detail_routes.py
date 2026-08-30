@@ -100,9 +100,21 @@ def _normalize_active_plan(value: Any, current: Any) -> dict[str, Any]:
         step["dependsOn"] = dependencies
         step["command"] = str(step.get("command") or "")[:50_000]
         step["promptOverride"] = str(step.get("promptOverride") or "")[:50_000]
-        if "tasks" in step:
-            raise ValueError("invalid_plan")
+        step["note"] = str(step.get("note") or "")[:20_000]
         step["contextFiles"] = _normalize_plan_context_files(step.get("contextFiles"))
+        step = {
+            key: step[key]
+            for key in (
+                "id",
+                "title",
+                "description",
+                "dependsOn",
+                "command",
+                "promptOverride",
+                "note",
+                "contextFiles",
+            )
+        }
         previous = current_steps.get(step_id)
         if previous and str(previous.get("status") or "pending") != "pending":
             step = copy.deepcopy(previous)
@@ -426,10 +438,57 @@ def _apply_model_selection(chat: dict[str, Any], selected_key: str) -> None:
     chat.pop("lastModel", None)
 
 
+def _apply_workspace_preferences(
+    chat: dict[str, Any],
+    body: dict[str, Any],
+    *,
+    chat_id: str,
+    service: Any,
+) -> Any | None:
+    if "workspaceOverride" in body:
+        try:
+            override = service.normalize_workspace_override(body.get("workspaceOverride"))
+        except ValueError:
+            logger.warning(
+                "Invalid workspace override for chat %s",
+                chat_id,
+                exc_info=True,
+            )
+            return localized_error_response(
+                "The workspace override is invalid.",
+                "工作区覆盖路径无效。",
+                400,
+                "invalid_workspace_override",
+            )
+        if override:
+            chat["workspaceOverride"] = override
+        else:
+            chat.pop("workspaceOverride", None)
+    if "workspaceSurface" not in body:
+        return None
+    try:
+        workspace_surface = service.normalize_workspace_surface(
+            body.get("workspaceSurface"),
+            chat_id=chat_id,
+            project_id=str(chat.get("projectId") or ""),
+        )
+    except ValueError:
+        return localized_error_response(
+            "The workspace surface is invalid.",
+            "工作区分屏状态无效。",
+            400,
+            "invalid_workspace_surface",
+        )
+    if workspace_surface is None:
+        chat.pop("workspaceSurface", None)
+    else:
+        chat["workspaceSurface"] = workspace_surface
+    return None
+
+
 def _register_update_route(router: APIRouter, context: ChatRouteContext):
     service = context.service
     _routes = context.runtime
-    _normalize_workspace_override = service.normalize_workspace_override
     _public_chat_full = service.public_chat_full
     _get_workbench_chat = service.repository.get
     _utc_now_iso = service.utc_now_iso
@@ -479,25 +538,14 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
             chat["soulActive"] = bool(body.get("soulActive"))
         if "workspaceActive" in body:
             chat["workspaceActive"] = bool(body.get("workspaceActive"))
-        if "workspaceOverride" in body:
-            try:
-                override = _normalize_workspace_override(body.get("workspaceOverride"))
-            except ValueError:
-                logger.warning(
-                    "Invalid workspace override for chat %s",
-                    chat_id,
-                    exc_info=True,
-                )
-                return localized_error_response(
-                    "The workspace override is invalid.",
-                    "工作区覆盖路径无效。",
-                    400,
-                    "invalid_workspace_override",
-                )
-            if override:
-                chat["workspaceOverride"] = override
-            else:
-                chat.pop("workspaceOverride", None)
+        workspace_error = _apply_workspace_preferences(
+            chat,
+            body,
+            chat_id=chat_id,
+            service=service,
+        )
+        if workspace_error is not None:
+            return workspace_error
         if "contextActivations" in body:
             chat["contextActivations"] = _composer_context_service().normalize(
                 body.get("contextActivations")

@@ -14,6 +14,39 @@ from cyrene.platform import updater
 logger = logging.getLogger(__name__)
 
 
+def _spawn_restart_script(
+    dest: Path,
+    script: str,
+    popen_fn: Any,
+) -> None:
+    if sys.platform == "win32":
+        script_path = dest.parent / "update.ps1"
+        # Windows PowerShell 5.1 requires a BOM to decode non-ASCII paths
+        # reliably when the active system code page is not UTF-8.
+        script_path.write_text(script, encoding="utf-8-sig")
+        popen_fn(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+            ],
+            creationflags=(
+                0x00000200  # CREATE_NEW_PROCESS_GROUP
+                | 0x00000008  # DETACHED_PROCESS
+            ),
+        )
+        return
+
+    script_path = dest.parent / "update.sh"
+    script_path.write_text(script, encoding="utf-8")
+    script_path.chmod(0o755)
+    popen_fn(["bash", str(script_path)], start_new_session=True)
+
+
 def launch_update_restart(
     download_progress: dict[str, Any],
     *,
@@ -120,21 +153,7 @@ def launch_update_restart(
                 "无法生成更新器脚本。",
             ), "update_restart_script_empty", 500
 
-        if sys.platform == "win32":
-            script_path = dest.parent / "update.bat"
-            script_path.write_text(script, encoding="utf-8")
-            popen_fn(
-                ["cmd", "/c", str(script_path)],
-                creationflags=(
-                    0x00000200  # CREATE_NEW_PROCESS_GROUP
-                    | 0x00000008  # DETACHED_PROCESS
-                ),
-            )
-        else:
-            script_path = dest.parent / "update.sh"
-            script_path.write_text(script, encoding="utf-8")
-            script_path.chmod(0o755)
-            popen_fn(["bash", str(script_path)], start_new_session=True)
+        _spawn_restart_script(dest, script, popen_fn)
     except Exception:
         logger.warning("Failed to spawn updater script", exc_info=True)
         return False, localized(

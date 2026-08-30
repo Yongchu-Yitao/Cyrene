@@ -8,6 +8,7 @@ from cyrene.workbench.chat.chat_reply_finalization_service import (
     ChatReplyFinalizationDependencies,
     ChatReplyFinalizationRequest,
 )
+from cyrene.workbench.chat.chat_application import pending_question_message
 
 
 def test_builtin_agent_metrics_are_persisted_on_assistant_message():
@@ -74,6 +75,24 @@ def test_builtin_agent_metrics_are_persisted_on_assistant_message():
     assert assistant["modelIdentity"] == projection.model_identity
     assert assistant["modelGenerationDurationMs"] == 750.0
     assert assistant["outputTokensPerSecond"] == 40.0
+
+
+def test_pending_question_persists_the_same_latest_request_usage():
+    latest_usage = {
+        "prompt_tokens": 7986,
+        "completion_tokens": 89,
+        "total_tokens": 8075,
+        "prompt_cache_hit_tokens": 7748,
+        "prompt_cache_miss_tokens": 238,
+    }
+
+    message = pending_question_message(
+        {"id": "question-1", "text": "Continue?"},
+        usage={"prompt_tokens": 15734, "total_tokens": 16006},
+        latest_request_usage=latest_usage,
+    )
+
+    assert message["latestRequestUsage"] == latest_usage
 
 
 def test_builtin_context_tree_activity_is_included_in_saved_timeline():

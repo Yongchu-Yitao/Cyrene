@@ -26,6 +26,12 @@ import httpx
 from cyrene.localization import app_language, localized
 from cyrene.model.constants import NETWORK_RETRY_LIMIT
 from cyrene.workbench.chat.chat_repository import ChatRepository
+from cyrene.workbench.chat.chat_usage import (
+    USAGE_KEYS as _USAGE_KEYS,
+    latest_request_usage,
+    normalized_usage,
+    runtime_usage_message_fields,
+)
 from cyrene.workbench.workspaces.workspace_changes import (
     WorkspaceSnapshot,
     build_change_set,
@@ -47,13 +53,6 @@ def _composer_context_service():
         )
     return service
 
-_USAGE_KEYS = (
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-    "prompt_cache_hit_tokens",
-    "prompt_cache_miss_tokens",
-)
 _VISIBLE_PLAN_STATUSES = {"proposed", "active", "paused"}
 _FORK_METADATA_FIELDS = ("forkedFromChatId", "forkedAtMessageId", "forkMessage")
 _TRACE_FIELDS = (
@@ -269,6 +268,94 @@ def normalize_workspace_override(path: Any) -> str:
     return str(resolved)
 
 
+def normalize_workspace_surface(
+    value: Any,
+    *,
+    chat_id: str,
+    project_id: str,
+) -> dict[str, Any] | None:
+    """Validate the durable descriptor for a conversation workspace surface."""
+
+    if value is None:
+        return None
+    if not chat_id or not project_id or not isinstance(value, Mapping):
+        raise ValueError("invalid_workspace_surface")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        raise ValueError("invalid_workspace_surface") from None
+    if len(encoded) > 50_000 or str(value.get("schemaVersion") or "") != "1":
+        raise ValueError("invalid_workspace_surface")
+
+    surface_id = str(value.get("surfaceId") or "").strip()
+    pack_id = str(value.get("packId") or "").strip()
+    resource_key = str(value.get("resourceKey") or "").strip()
+    resource_value = value.get("resource")
+    if (
+        not surface_id
+        or len(surface_id) > 200
+        or not pack_id
+        or len(pack_id) > 200
+        or not resource_key
+        or len(resource_key) > 5_000
+        or not isinstance(resource_value, Mapping)
+    ):
+        raise ValueError("invalid_workspace_surface")
+
+    resource = copy.deepcopy(dict(resource_value))
+    kind = str(resource.get("kind") or "").strip()
+    resource_project_id = str(
+        resource.get("projectId") or resource.get("project_id") or ""
+    ).strip()
+    if (
+        not kind
+        or len(kind) > 80
+        or not resource_project_id
+        or resource_project_id != str(project_id or "")
+    ):
+        raise ValueError("invalid_workspace_surface")
+    resource["kind"] = kind
+    resource["projectId"] = resource_project_id
+    resource.pop("project_id", None)
+
+    if kind in {"file", "directory"}:
+        path = str(resource.get("path") or "").strip().replace("\\", "/")
+        parts = path.split("/")
+        if (
+            not path
+            or len(path) > 4_096
+            or path.startswith("/")
+            or re.match(r"^[A-Za-z]:/", path)
+            or any(part in {"", ".."} for part in parts)
+            or any(part == "." for part in parts if path != ".")
+            or (path == "." and kind != "directory")
+        ):
+            raise ValueError("invalid_workspace_surface")
+        resource["path"] = path
+        if resource_key != f"{resource_project_id}:{kind}:{path}":
+            raise ValueError("invalid_workspace_surface")
+
+    descriptor: dict[str, Any] = {
+        "schemaVersion": 1,
+        "surfaceId": surface_id,
+        "packId": pack_id,
+        "resource": resource,
+        "resourceKey": resource_key,
+        "activity": str(value.get("activity") or "")[:80],
+        "attention": "reveal",
+        "chatId": str(chat_id or ""),
+    }
+    for key, limit in (
+        ("priority", 80),
+        ("lifetime", 80),
+        ("preferredSide", 20),
+    ):
+        text = str(value.get(key) or "").strip()
+        if text:
+            descriptor[key] = text[:limit]
+    return descriptor
+
+
 def resolve_chat_workspace_dir(
     chat: Mapping[str, Any],
     project: Mapping[str, Any],
@@ -482,34 +569,10 @@ def aggregate_usage(messages: list[Any]) -> dict[str, int]:
     return totals
 
 
-def latest_request_usage(messages: list[Any]) -> dict[str, int]:
-    """Return the newest model request usage without changing lifetime totals."""
-
-    for message in reversed(messages):
-        if not isinstance(message, Mapping):
-            continue
-        usage = message.get("latestRequestUsage")
-        if not isinstance(usage, Mapping):
-            if isinstance(message.get("usage"), Mapping):
-                return {key: 0 for key in _USAGE_KEYS}
-            continue
-        latest = {key: 0 for key in _USAGE_KEYS}
-        for key in _USAGE_KEYS:
-            try:
-                latest[key] = max(0, int(usage.get(key) or 0))
-            except (TypeError, ValueError, OverflowError):
-                pass
-        if not latest["total_tokens"]:
-            latest["total_tokens"] = (
-                latest["prompt_tokens"] + latest["completion_tokens"]
-            )
-        return latest
-    return {key: 0 for key in _USAGE_KEYS}
-
-
 def _public_usage(
     chat: Mapping[str, Any],
     projected_usage: Any,
+    projected_latest_usage: Any,
 ) -> tuple[dict[str, int], dict[str, int]]:
     messages = list(chat.get("messages") or ())
     totals = (
@@ -517,7 +580,25 @@ def _public_usage(
         if isinstance(projected_usage, Mapping)
         else aggregate_usage(messages)
     )
-    return totals, latest_request_usage(messages)
+    latest = (
+        normalized_usage(projected_latest_usage)
+        if isinstance(projected_latest_usage, Mapping)
+        else latest_request_usage(messages)
+    )
+    return totals, latest
+
+
+def _projected_public_usage(
+    chat: Mapping[str, Any],
+    projection: Any,
+) -> tuple[dict[str, int], dict[str, int]]:
+    if not isinstance(projection, Mapping):
+        return _public_usage(chat, None, None)
+    return _public_usage(
+        chat,
+        projection.get("usage"),
+        projection.get("latestUsage"),
+    )
 
 
 def public_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -548,10 +629,7 @@ def public_chat_light(
     ):
         defaults = composer.default_input_context()
     projection = chat.get("_messageProjection")
-    projected_usage = (
-        projection.get("usage") if isinstance(projection, Mapping) else None
-    )
-    usage, latest_usage = _public_usage(chat, projected_usage)
+    usage, latest_usage = _projected_public_usage(chat, projection)
     persisted_status = str(chat.get("status") or "idle")
     last_run = chat.get("lastRun") if isinstance(chat.get("lastRun"), Mapping) else {}
     if active_run is not None:
@@ -636,6 +714,9 @@ def public_chat_light(
     goal = chat.get("activeGoal")
     if isinstance(goal, Mapping):
         payload["activeGoal"] = copy.deepcopy(dict(goal))
+    workspace_surface = chat.get("workspaceSurface")
+    if isinstance(workspace_surface, Mapping):
+        payload["workspaceSurface"] = copy.deepcopy(dict(workspace_surface))
     fields = agent_fields(chat)
     payload.update(fields)
     payload["agentConfigOptions"] = chat.get("agentConfigOptions") or []
@@ -759,6 +840,7 @@ def pending_question_message(
     *,
     trace: list[dict[str, Any]] | None = None,
     usage: Mapping[str, int] | None = None,
+    latest_request_usage: Mapping[str, int] | None = None,
     files: list[dict[str, Any]] | None = None,
     model: str = "",
 ) -> dict[str, Any]:
@@ -775,8 +857,7 @@ def pending_question_message(
     }
     if trace:
         entry["trace"] = trace
-    if usage and any(usage.values()):
-        entry["usage"] = dict(usage)
+    entry.update(runtime_usage_message_fields(usage, latest_request_usage))
     if files:
         entry["attachments"] = files
     return entry
@@ -818,69 +899,6 @@ def mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
             reset()
     except Exception:
         logger.debug("Could not reset proactive lottery", exc_info=True)
-
-
-def coerce_brief_constraints(raw: Any) -> list[str]:
-    result: list[str] = []
-    for item in raw if isinstance(raw, list) else ():
-        text = str(item).strip()
-        if text:
-            result.append(text[:300])
-        if len(result) >= 8:
-            break
-    return result
-
-
-def coerce_brief_acceptance(raw: Any) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for item in raw if isinstance(raw, list) else ():
-        text = str(item).strip()
-        if text:
-            result.append(
-                {"id": short_id("accept"), "text": text[:300], "status": "pending"}
-            )
-        if len(result) >= 8:
-            break
-    return result
-
-
-def chat_transcript_for_brief(
-    chat: Mapping[str, Any],
-    *,
-    max_messages: int = 80,
-    max_chars: int = 50_000,
-) -> str:
-    messages = [
-        item
-        for item in chat.get("messages") or ()
-        if isinstance(item, Mapping)
-        and not is_hidden_protocol_record(item)
-        and str(item.get("role") or "") in {"user", "assistant"}
-        and str(item.get("content") or "").strip()
-    ]
-    blocks: list[str] = []
-    total = 0
-    language = app_language()
-    for message in reversed(messages[-max_messages:]):
-        role = (
-            localized("User", "用户", language=language)
-            if str(message.get("role")) == "user"
-            else localized("Assistant", "助手", language=language)
-        )
-        text = str(message.get("content") or "").strip()
-        if len(text) > 2000:
-            text = text[:2000] + localized(
-                "… (truncated)", "…（内容过长已截断）", language=language
-            )
-        block = localized(
-            "{role}: {text}", "{role}：{text}",
-            language=language, role=role, text=text,
-        )
-        if blocks and total + len(block) > max_chars:
-            break
-        blocks.append(block)
-        total += len(block)
-    return "\n\n".join(reversed(blocks))
 
 
 def parse_json_object(raw: Any) -> dict[str, Any] | None:
@@ -1371,11 +1389,8 @@ __all__ = [
     "chat_preview",
     "chat_run_error_message",
     "chat_soul_active",
-    "chat_transcript_for_brief",
     "chat_workspace_active",
     "clear_fork_metadata",
-    "coerce_brief_acceptance",
-    "coerce_brief_constraints",
     "completed_turn_count",
     "disable_button_block",
     "extract_exchange_timeline",
@@ -1386,6 +1401,7 @@ __all__ = [
     "new_chat",
     "next_completed_turn_count",
     "normalize_workspace_override",
+    "normalize_workspace_surface",
     "parse_json_object",
     "pending_question_message",
     "prune_orphaned_fork_metadata",

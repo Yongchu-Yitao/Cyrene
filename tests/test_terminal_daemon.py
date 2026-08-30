@@ -457,6 +457,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert "workbenchServices.feedback()" in source
     assert 'showTerminalRecoveryToast(message.terminal)' in source
     assert 'showTerminalExitToast(message.terminal, restartTerminal)' in source
+    assert 'String(terminal.launchMode || "") === "one_shot"' in source
     assert 'terminalT("terminal.exitedWithReason"' in source
     assert 'actionLabel: recoverable ? terminalT("terminal.restart", "Restart") : ""' in source
     assert 'else if (connection === "exited") {' not in source
@@ -472,7 +473,6 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'actionLabel = notice.reconnect' in source
     assert '"terminal.restart": "重启"' in zh_catalog
     assert 'var [railMode, setRailMode] = useWbcState("chat")' in chat_source
-    assert 'setRailMode("chat");\n    replaceWithTerminal(pending.terminalId' in chat_source
     assert 'railMode={railMode}' in chat_source
 
 

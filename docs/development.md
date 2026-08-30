@@ -83,7 +83,7 @@ curl http://localhost:4242/api/events/evt_3b22f9a5c0cb
 
 ### Runtime and Workbench inspection
 
-Use `cyrene status` for daemon health and metrics. Workbench chat/task details
+Use `cyrene status` for daemon health and metrics. Workbench conversation details
 show live Agent, Tool, Subagent, permission, and browser execution state;
 `cyrene flow` and the event APIs provide the durable per-round trace.
 
@@ -114,10 +114,10 @@ uv run pytest -q \
 The normal suite uses fakes/local fixtures and must not require a live LLM
 credential. Live provider/channel checks are separate manual integration tests.
 
-The post-core-refactor working-tree run uses Python `3.12.11`, FastAPI
-`0.136.1`, and Pydantic `2.13.4` from the locked environment and passes all
-2,209 Python tests. The WebUI suite passes 27/27 tests, the Electron suite
-passes 84/84 tests, and the production WebUI and wheel builds complete.
+Release verification uses the exact locked Python environment plus the current
+WebUI and Electron lockfiles. The required checks are the complete Python
+suite, Ruff, Python bytecode compilation, a production WebUI build, all WebUI
+tests, all Electron tests, generated-WebUI cleanliness, and whitespace checks.
 
 During the documentation audit, the OpenAPI test initially failed because its
 hash had been captured with an ambient Python 3.13.12 environment using FastAPI
@@ -168,8 +168,8 @@ The canonical layers are:
 - `cyrene.plugins`: Cyrene's application host, model composition, Workbench
   contribution SDK, and canonical editable feature plugins under `builtin/`;
 - `cyrene.workbench`: the Cyrene host adapter, with business modules grouped
-  under `application`, `chat`, `tasks`, `projects`, `goals`, `planning`,
-  `artifacts`, `sessions`, `control`, `workspaces`, and `ui`; persistence,
+  under `application`, `chat`, `projects`, `artifacts`, `sessions`, `control`,
+  `workspaces`, and `ui`; persistence,
   FastAPI composition, and WebUI remain dedicated adapter packages;
 - `cyrene.agents`: external ACP agent integration;
 - `cyrene.model`, `cyrene.platform`, and `cyrene.observability`: provider
@@ -179,6 +179,9 @@ The canonical layers are:
 under `src/cyrene/workbench/http/`, and the sole frontend lives under
 `src/cyrene/workbench/webui/`. The removed `agent`, `route`, and `webui`
 top-level packages must not be recreated as compatibility shims.
+The retired Task product must not be recreated: goals and plans belong to
+plugin session state on conversations, and project actions belong to
+project-type plugin contributions.
 Do not add business modules directly to the `cyrene.workbench` package root;
 place each module in its owning domain package.
 

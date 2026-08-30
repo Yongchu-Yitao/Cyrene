@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import inspect
 import json
 import logging
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
+from cyrene.localization import app_language
+from cyrene.platform.paths import CYRENE_DIR_NAME
 from cyrene.workbench.projects.project_execution import normalize_execution_actions
 from cyrene.plugins import WorkspaceProjectTypeContribution
 from cyrene.plugins.project_types import nearest_scope
@@ -24,6 +27,7 @@ from cyrene.workbench.workspaces.workspace_changes import (
     list_chat_change_sets,
     save_change_set,
 )
+from .terminal.client import TerminalNotFoundError, TerminalRequestError
 
 _ACTIVE = frozenset({"starting", "running", "ready"})
 _DIAGNOSTIC = re.compile(
@@ -33,10 +37,31 @@ _DIAGNOSTIC = re.compile(
 )
 logger = logging.getLogger(__name__)
 _DETECTOR_TIMEOUT_SECONDS = 3.0
+_TERMINAL_UNAVAILABLE_GRACE_SECONDS = 15.0
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _elapsed_seconds(timestamp: Any) -> float:
+    try:
+        started = datetime.fromisoformat(str(timestamp or ""))
+    except (TypeError, ValueError):
+        return 0.0
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+
+
+def _localized_action_label(action: Mapping[str, Any], language: str = "") -> str:
+    locale = app_language(language)
+    translations = action.get("i18n")
+    if isinstance(translations, Mapping):
+        fields = translations.get(locale)
+        if isinstance(fields, Mapping) and str(fields.get("label") or "").strip():
+            return str(fields["label"]).strip()
+    return str(action.get("label") or action.get("id") or "Workspace action").strip()
 
 
 class WorkspaceExecutionError(RuntimeError):
@@ -72,6 +97,12 @@ class WorkspaceExecutionService:
         self._baselines: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._load()
+
+    @staticmethod
+    def _terminal_error(exc: TerminalRequestError) -> WorkspaceExecutionError:
+        code = str(exc.code or "unavailable")
+        status_code = 409 if code == "bad_request" else 503
+        return WorkspaceExecutionError(str(exc), f"terminal_{code}", status_code)
 
     def _load(self) -> None:
         try:
@@ -262,6 +293,134 @@ class WorkspaceExecutionService:
         safe_path = str(current_path or "").replace("\\", "/")
         return [str(item).replace("{file}", safe_path) for item in action.get("args") or []]
 
+    @staticmethod
+    def _terminal_owner_id(key: str) -> str:
+        digest = hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:24]
+        return f"workspace-action:{digest}"
+
+    @staticmethod
+    def _terminal_title(base_title: str, terminals: Sequence[Mapping[str, Any]]) -> str:
+        base = str(base_title or "Workspace action").strip()[:60] or "Workspace action"
+        occupied = {
+            str(item.get("title") or "").strip().casefold()
+            for item in terminals
+            if str(item.get("title") or "").strip()
+        }
+        if base.casefold() not in occupied:
+            return base
+        copy_number = 2
+        while True:
+            suffix = f" ({copy_number})"
+            candidate = base[: 60 - len(suffix)].rstrip() + suffix
+            if candidate.casefold() not in occupied:
+                return candidate
+            copy_number += 1
+
+    async def _replace_action_terminal(
+        self,
+        *,
+        project_id: str,
+        action_id: str,
+        action: Mapping[str, Any],
+        workspace: Path,
+        cwd: Path,
+        current_path: str,
+        chat_id: str,
+        key: str,
+        terminal_owner_id: str,
+    ) -> tuple[dict[str, Any], str, Any]:
+        try:
+            listed = await self.terminal.list(project_id)
+        except TerminalRequestError as exc:
+            raise self._terminal_error(exc) from exc
+        project_terminals = [
+            dict(item)
+            for item in listed.get("terminals") or []
+            if isinstance(item, Mapping)
+        ]
+        previous_terminal_ids = {
+            str(item.get("terminalId") or "")
+            for item in self._records.values()
+            if item.get("key") == key and item.get("terminalId")
+        }
+        previous_terminal_ids.update(
+            str(item.get("id") or "")
+            for item in project_terminals
+            if str(item.get("ownerToolCallId") or "") == terminal_owner_id
+            and item.get("id")
+        )
+        for terminal_id in previous_terminal_ids:
+            try:
+                await self.terminal.remove(terminal_id)
+            except TerminalNotFoundError:
+                pass
+            except TerminalRequestError as exc:
+                raise self._terminal_error(exc) from exc
+        command = shlex.join(
+            [str(action["program"]), *self._expand_args(action, current_path)]
+        )
+        baseline = await asyncio.to_thread(capture_workspace_snapshot, workspace)
+        remaining_terminals = [
+            item
+            for item in project_terminals
+            if str(item.get("id") or "") not in previous_terminal_ids
+        ]
+        try:
+            created = await self.terminal.create_agent_terminal(
+                project_id,
+                owner_chat_id=str(chat_id or "workspace"),
+                title=self._terminal_title(
+                    _localized_action_label(action), remaining_terminals
+                ),
+                cwd=str(cwd),
+                command=command,
+                wake_on_exit=True,
+                wake_note=f"Workspace action {action_id} completed.",
+                owner_tool_call_id=terminal_owner_id,
+            )
+        except TerminalRequestError as exc:
+            raise self._terminal_error(exc) from exc
+        return dict(created.get("terminal") or {}), command, baseline
+
+    @staticmethod
+    def _execution_record(
+        *,
+        execution_id: str,
+        key: str,
+        project_id: str,
+        action_id: str,
+        action: Mapping[str, Any],
+        current_path: str,
+        chat_id: str,
+        goal_id: str,
+        terminal: Mapping[str, Any],
+        terminal_owner_id: str,
+        command: str,
+    ) -> dict[str, Any]:
+        return {
+            "id": execution_id,
+            "key": key,
+            "projectId": project_id,
+            "actionId": action_id,
+            "action": dict(action),
+            "currentPath": current_path,
+            "chatId": chat_id,
+            "goalId": goal_id,
+            "owner": "goal" if goal_id else "user",
+            "terminalId": str(terminal.get("id") or ""),
+            "terminalOwnerId": terminal_owner_id,
+            "status": "running",
+            "startedAt": _now(),
+            "updatedAt": _now(),
+            "finishedAt": "",
+            "exitCode": None,
+            "diagnostics": [],
+            "artifacts": [],
+            "endpoints": [],
+            "changeSet": None,
+            "commandSummary": command,
+        }
+
     async def start(
         self,
         project_id: str,
@@ -274,6 +433,7 @@ class WorkspaceExecutionService:
     ) -> dict[str, Any]:
         action, workspace = await self._resolve_action(project_id, action_id, current_path)
         key = f"{project_id}:{action_id}:{action.get('cwd') or '.'}"
+        terminal_owner_id = self._terminal_owner_id(key)
         async with self._lock:
             existing = next(
                 (item for item in self._records.values() if item.get("key") == key and item.get("status") in _ACTIVE),
@@ -284,43 +444,31 @@ class WorkspaceExecutionService:
             cwd = (workspace / str(action.get("cwd") or ".")).resolve()
             if not cwd.is_dir() or not cwd.is_relative_to(workspace):
                 raise WorkspaceExecutionError("Action working directory is invalid.", "invalid_action_cwd")
-            argv = [str(action["program"]), *self._expand_args(action, current_path)]
-            command = shlex.join(argv)
             execution_id = "execution_" + uuid4().hex[:16]
-            baseline = await asyncio.to_thread(capture_workspace_snapshot, workspace)
-            created = await self.terminal.create_agent_terminal(
-                project_id,
-                owner_chat_id=str(chat_id or "workspace"),
-                title=str(action.get("label") or action_id),
-                cwd=str(cwd),
-                command=command,
-                wake_on_exit=True,
-                wake_note=f"Workspace action {action_id} completed.",
-                owner_tool_call_id=f"workspace-action:{execution_id}",
+            terminal, command, baseline = await self._replace_action_terminal(
+                project_id=project_id,
+                action_id=action_id,
+                action=action,
+                workspace=workspace,
+                cwd=cwd,
+                current_path=current_path,
+                chat_id=chat_id,
+                key=key,
+                terminal_owner_id=terminal_owner_id,
             )
-            terminal = dict(created.get("terminal") or {})
-            record = {
-                "id": execution_id,
-                "key": key,
-                "projectId": project_id,
-                "actionId": action_id,
-                "action": dict(action),
-                "currentPath": current_path,
-                "chatId": chat_id,
-                "goalId": goal_id,
-                "owner": "goal" if goal_id else "user",
-                "terminalId": str(terminal.get("id") or ""),
-                "status": "running",
-                "startedAt": _now(),
-                "updatedAt": _now(),
-                "finishedAt": "",
-                "exitCode": None,
-                "diagnostics": [],
-                "artifacts": [],
-                "endpoints": [],
-                "changeSet": None,
-                "commandSummary": command,
-            }
+            record = self._execution_record(
+                execution_id=execution_id,
+                key=key,
+                project_id=project_id,
+                action_id=action_id,
+                action=action,
+                current_path=current_path,
+                chat_id=chat_id,
+                goal_id=goal_id,
+                terminal=terminal,
+                terminal_owner_id=terminal_owner_id,
+                command=command,
+            )
             self._records[execution_id] = record
             self._baselines[execution_id] = baseline
             self._persist()
@@ -382,10 +530,22 @@ class WorkspaceExecutionService:
         try:
             snapshot = await self.terminal.screen(str(record.get("terminalId") or ""))
         except Exception:
+            unavailable_since = str(record.get("terminalUnavailableSince") or "")
+            if not unavailable_since:
+                unavailable_since = _now()
+                record["terminalUnavailableSince"] = unavailable_since
             record["statusReason"] = "terminal_unavailable"
             record["updatedAt"] = _now()
+            if _elapsed_seconds(unavailable_since) >= _TERMINAL_UNAVAILABLE_GRACE_SECONDS:
+                record["status"] = "interrupted"
+                record["finishedAt"] = record["updatedAt"]
+                record["exitCode"] = None
+                await self._finalize_change_set(record, workspace)
             self._persist()
             return dict(record)
+        record.pop("terminalUnavailableSince", None)
+        if record.get("statusReason") == "terminal_unavailable":
+            record.pop("statusReason", None)
         terminal = dict(snapshot.get("terminal") or snapshot)
         screen_text = str(snapshot.get("screenText") or "")
         terminal_status = str(terminal.get("status") or "")
@@ -428,30 +588,43 @@ class WorkspaceExecutionService:
             "kind": "endpoint", "url": f"http://127.0.0.1:{int(port)}",
             "label": f"localhost:{int(port)}", "primary": True,
         }] if port else [])
-        if record["status"] in {"completed", "failed", "interrupted"} and record.get("changeSet") is None:
-            before = self._baselines.pop(str(record["id"]), None)
-            if before is not None:
-                after = await asyncio.to_thread(capture_workspace_snapshot, workspace)
-                changes = await asyncio.to_thread(
-                    build_change_set,
-                    chat_id=str(record.get("chatId") or ""),
-                    run_id=str(record["id"]),
-                    before=before,
-                    after=after,
-                    status=record["status"],
-                )
-                if record.get("chatId") and changes.get("fileCount"):
-                    await asyncio.to_thread(save_change_set, self.db_path, changes)
-                record["changeSet"] = {
-                    key: value for key, value in changes.items()
-                    if key not in {"files", "workspacePath"}
-                }
-                record["changeSet"]["files"] = [
-                    {key: value for key, value in item.items() if key != "diff"}
-                    for item in changes.get("files") or []
-                ]
+        await self._finalize_change_set(record, workspace)
         self._persist()
         return dict(record)
+
+    async def _finalize_change_set(
+        self,
+        record: dict[str, Any],
+        workspace: Path,
+    ) -> None:
+        if (
+            record.get("status") not in {"completed", "failed", "interrupted"}
+            or record.get("changeSet") is not None
+        ):
+            return
+        before = self._baselines.pop(str(record["id"]), None)
+        if before is None:
+            return
+        after = await asyncio.to_thread(capture_workspace_snapshot, workspace)
+        changes = await asyncio.to_thread(
+            build_change_set,
+            chat_id=str(record.get("chatId") or ""),
+            run_id=str(record["id"]),
+            before=before,
+            after=after,
+            status=str(record["status"]),
+        )
+        if record.get("chatId") and changes.get("fileCount"):
+            await asyncio.to_thread(save_change_set, self.db_path, changes)
+        record["changeSet"] = {
+            key: value
+            for key, value in changes.items()
+            if key not in {"files", "workspacePath"}
+        }
+        record["changeSet"]["files"] = [
+            {key: value for key, value in item.items() if key != "diff"}
+            for item in changes.get("files") or []
+        ]
 
     async def list(self, project_id: str) -> dict[str, Any]:
         records = [
@@ -487,14 +660,19 @@ class WorkspaceExecutionService:
         )
         if inside_code or inside.strip() != "true":
             return {"available": False, "hasChanges": False, "status": "", "diff": ""}
+        review_paths = (".", f":(top,exclude){CYRENE_DIR_NAME}/**")
         _status_code, status = await cls._git_command(
-            workspace, "status", "--short", "--untracked-files=all"
+            workspace, "status", "--short", "--untracked-files=all", "--", *review_paths
         )
         _diff_code, tracked_diff = await cls._git_command(
-            workspace, "diff", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "--"
+            workspace,
+            "diff", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/",
+            "--", *review_paths,
         )
         _staged_code, staged_diff = await cls._git_command(
-            workspace, "diff", "--cached", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "--"
+            workspace,
+            "diff", "--cached", "--no-ext-diff", "--src-prefix=a/",
+            "--dst-prefix=b/", "--", *review_paths,
         )
         untracked_paths = [
             line[3:] for line in status.splitlines()

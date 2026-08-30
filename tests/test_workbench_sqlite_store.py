@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import multiprocessing
 import sqlite3
 from pathlib import Path
@@ -164,6 +165,72 @@ def test_point_chat_mutation_updates_projection_and_only_appends_tail(tmp_path: 
         assert conn.execute(
             "SELECT COUNT(*) FROM workbench_chat_messages WHERE chat_id='chat_2'"
         ).fetchone()[0] == 0
+
+
+def test_chat_summary_persists_and_migrates_exact_latest_request_usage(
+    tmp_path: Path,
+) -> None:
+    db_path = str(tmp_path / "cyrene.runtime.database")
+    latest_usage = {
+        "prompt_tokens": 7986,
+        "completion_tokens": 89,
+        "total_tokens": 8075,
+        "prompt_cache_hit_tokens": 7748,
+        "prompt_cache_miss_tokens": 238,
+    }
+    write_document(
+        db_path,
+        "chats",
+        {
+            "chats": [
+                {
+                    "id": "chat_cache_restart",
+                    "messages": [
+                        {
+                            "id": "msg_final",
+                            "role": "assistant",
+                            "content": "done",
+                            "usage": {
+                                "prompt_tokens": 15734,
+                                "completion_tokens": 272,
+                                "total_tokens": 16006,
+                                "prompt_cache_hit_tokens": 15059,
+                                "prompt_cache_miss_tokens": 675,
+                            },
+                            "latestRequestUsage": latest_usage,
+                        }
+                    ],
+                }
+            ]
+        },
+        lambda: {"chats": []},
+    )
+
+    summaries = read_chat_summaries(db_path, lambda: {"chats": []})
+    assert summaries[0]["_messageProjection"]["latestUsage"] == latest_usage
+
+    with sqlite3.connect(db_path) as conn:
+        raw_summary = conn.execute(
+            "SELECT summary_json FROM workbench_chats WHERE chat_id = ?",
+            ("chat_cache_restart",),
+        ).fetchone()[0]
+        legacy_summary = json.loads(raw_summary)
+        legacy_summary.pop("latestUsage")
+        conn.execute(
+            "UPDATE workbench_chats SET summary_json = ? WHERE chat_id = ?",
+            (json.dumps(legacy_summary), "chat_cache_restart"),
+        )
+
+    migrated = read_chat_summaries(db_path, lambda: {"chats": []})
+    assert migrated[0]["_messageProjection"]["latestUsage"] == latest_usage
+    with sqlite3.connect(db_path) as conn:
+        stored_summary = json.loads(
+            conn.execute(
+                "SELECT summary_json FROM workbench_chats WHERE chat_id = ?",
+                ("chat_cache_restart",),
+            ).fetchone()[0]
+        )
+    assert stored_summary["latestUsage"] == latest_usage
 
 
 def test_notification_append_and_mark_read_do_not_overwrite_each_other(tmp_path: Path) -> None:

@@ -19,7 +19,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                                                                       '(default all). Project '
                                                                       'memory is available only in '
                                                                       'a Workbench project '
-                                                                      'task/chat.'},
+                                                                      'conversation.'},
                                              'type': {'type': 'string',
                                                       'description': 'Optional memory type filter, '
                                                                      'such as fact, preference, '
@@ -158,7 +158,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
  {'type': 'function',
   'function': {'name': 'save_project_memory',
                'description': 'Save a durable fact about THIS project into its long-term memory so '
-                              'future runs (in any task/chat of this project) automatically see '
+                              'future runs in this project automatically see '
                               'and reuse it. Use proactively when you learn something worth '
                               'remembering: a confirmed constraint or decision, a tool/approach '
                               "that works, a dead-end to avoid, a key file or command, the user's "
@@ -166,7 +166,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               'collaborate (a working `habit` — record these actively; they are '
                               'easy to miss), or an environment fact. Persistent and visible to '
                               "the user on the project's Memory page. Do NOT use it for transient "
-                              'chit-chat, one-off task output, or secrets. Duplicates are merged '
+                              'chit-chat, one-off run output, or secrets. Duplicates are merged '
                               'automatically, and if this fact updates/contradicts an older memory '
                               '(e.g. a changed value or a corrected conclusion) the outdated one '
                               'is retired automatically — so always record your latest '

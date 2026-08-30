@@ -21,9 +21,11 @@ import {
   defaultHighlightStyle,
   foldGutter,
   foldKeymap,
+  HighlightStyle,
   indentOnInput,
   syntaxHighlighting,
 } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from "@codemirror/autocomplete";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { python } from "@codemirror/lang-python";
@@ -36,12 +38,84 @@ import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import { workbenchServices } from "../shared/runtime/services.jsx";
 
+var darkHighlightStyle = HighlightStyle.define([
+  { tag: [tags.keyword, tags.controlKeyword, tags.definitionKeyword, tags.moduleKeyword, tags.operatorKeyword], color: "#ff938a" },
+  { tag: [tags.definition(tags.variableName), tags.function(tags.variableName), tags.labelName], color: "#dcb8ff" },
+  { tag: [tags.typeName, tags.className, tags.namespace, tags.macroName], color: "#ffc777" },
+  { tag: [tags.propertyName, tags.attributeName], color: "#82d2ff" },
+  { tag: [tags.string, tags.docString, tags.character, tags.attributeValue], color: "#a8d7ff" },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom, tags.unit], color: "#f3c98b" },
+  { tag: [tags.regexp, tags.escape], color: "#9be9a8" },
+  { tag: [tags.tagName, tags.inserted], color: "#7ee2a8" },
+  { tag: [tags.operator, tags.punctuation, tags.bracket, tags.separator], color: "#d7dde6" },
+  { tag: [tags.comment, tags.docComment], color: "#9aa5b1", fontStyle: "italic" },
+  { tag: [tags.meta, tags.annotation, tags.processingInstruction], color: "#ffbd78" },
+  { tag: tags.heading, color: "#dcb8ff", fontWeight: "700" },
+  { tag: tags.link, color: "#82d2ff", textDecoration: "underline" },
+  { tag: tags.emphasis, color: "#d7dde6", fontStyle: "italic" },
+  { tag: tags.strong, color: "#f0f3f7", fontWeight: "700" },
+  { tag: tags.deleted, color: "#ff938a" },
+  { tag: tags.invalid, color: "#ffd0cc", textDecoration: "underline wavy #ff6b62" },
+]);
+
+function editorTheme(dark) {
+  return EditorView.theme({
+    "&": {
+      height: "100%",
+      color: "var(--wb-text)",
+      backgroundColor: "var(--wb-card-bg)",
+      fontSize: "12px",
+    },
+    ".cm-scroller": {
+      overflow: "auto",
+      fontFamily: 'var(--mono, "IBM Plex Mono", monospace)',
+      lineHeight: "1.62",
+    },
+    ".cm-content": { padding: "10px 0 24px", caretColor: "var(--wb-accent)" },
+    ".cm-line": { padding: "0 12px" },
+    ".cm-focused": { outline: "none" },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--wb-accent)" },
+    ".cm-selectionBackground, ::selection": {
+      backgroundColor: dark ? "rgba(106, 150, 255, .25)" : "rgba(74, 125, 220, .18)",
+    },
+    ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--wb-accent) 6%, transparent)" },
+    ".cm-gutters": {
+      color: "var(--wb-faint)",
+      backgroundColor: "color-mix(in srgb, var(--wb-panel-2) 86%, transparent)",
+      borderRight: "1px solid var(--wb-line)",
+    },
+    ".cm-activeLineGutter": {
+      color: "var(--wb-text)",
+      backgroundColor: "color-mix(in srgb, var(--wb-accent) 8%, transparent)",
+    },
+    ".cm-panels": { color: "var(--wb-text)", backgroundColor: "var(--wb-panel-2)" },
+    ".cm-searchMatch": { backgroundColor: "rgba(245, 190, 65, .28)" },
+    ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "rgba(245, 150, 65, .42)" },
+    ".cm-matchingBracket": {
+      color: dark ? "#f0f3f7" : "var(--wb-text)",
+      backgroundColor: dark ? "rgba(126, 226, 168, .24)" : "color-mix(in srgb, var(--wb-accent) 16%, transparent)",
+      outline: dark ? "1px solid rgba(126, 226, 168, .42)" : "1px solid color-mix(in srgb, var(--wb-accent) 30%, transparent)",
+    },
+    ".cm-tooltip": {
+      color: "var(--wb-text)",
+      backgroundColor: "var(--wb-flyout-bg)",
+      border: "1px solid var(--wb-line)",
+    },
+  }, { dark: dark });
+}
+
+function editorThemeExtensions(dark) {
+  return [
+    editorTheme(dark),
+    syntaxHighlighting(dark ? darkHighlightStyle : defaultHighlightStyle, { fallback: true }),
+  ];
+}
+
 (function (root) {
   "use strict";
 
   var useEffect = React.useEffect;
   var useRef = React.useRef;
-
   function languageName(file) {
     var name = String(file && (file.name || file.path) || "").toLowerCase();
     var ext = name.indexOf(".") >= 0 ? name.split(".").pop() : "";
@@ -68,47 +142,6 @@ import { workbenchServices } from "../shared/runtime/services.jsx";
 
   function isDark() {
     return document.documentElement.dataset.theme === "dark";
-  }
-
-  function editorTheme(dark) {
-    return EditorView.theme({
-      "&": {
-        height: "100%",
-        color: "var(--wb-text)",
-        backgroundColor: "var(--wb-card-bg)",
-        fontSize: "12px",
-      },
-      ".cm-scroller": {
-        overflow: "auto",
-        fontFamily: 'var(--mono, "IBM Plex Mono", monospace)',
-        lineHeight: "1.62",
-      },
-      ".cm-content": { padding: "10px 0 24px", caretColor: "var(--wb-accent)" },
-      ".cm-line": { padding: "0 12px" },
-      ".cm-focused": { outline: "none" },
-      ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--wb-accent)" },
-      ".cm-selectionBackground, ::selection": {
-        backgroundColor: dark ? "rgba(106, 150, 255, .25)" : "rgba(74, 125, 220, .18)",
-      },
-      ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--wb-accent) 6%, transparent)" },
-      ".cm-gutters": {
-        color: "var(--wb-faint)",
-        backgroundColor: "color-mix(in srgb, var(--wb-panel-2) 86%, transparent)",
-        borderRight: "1px solid var(--wb-line)",
-      },
-      ".cm-activeLineGutter": {
-        color: "var(--wb-text)",
-        backgroundColor: "color-mix(in srgb, var(--wb-accent) 8%, transparent)",
-      },
-      ".cm-panels": { color: "var(--wb-text)", backgroundColor: "var(--wb-panel-2)" },
-      ".cm-searchMatch": { backgroundColor: "rgba(245, 190, 65, .28)" },
-      ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "rgba(245, 150, 65, .42)" },
-      ".cm-tooltip": {
-        color: "var(--wb-text)",
-        backgroundColor: "var(--wb-flyout-bg)",
-        border: "1px solid var(--wb-line)",
-      },
-    }, { dark: dark });
   }
 
   function Editor(props) {
@@ -161,7 +194,6 @@ import { workbenchServices } from "../shared/runtime/services.jsx";
           rectangularSelection(),
           highlightActiveLine(),
           highlightSelectionMatches(),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           keymap.of([
             saveBinding,
             indentWithTab,
@@ -172,7 +204,7 @@ import { workbenchServices } from "../shared/runtime/services.jsx";
             ...foldKeymap,
             ...completionKeymap,
           ]),
-          themeCompartment.of(editorTheme(isDark())),
+          themeCompartment.of(editorThemeExtensions(isDark())),
           languageCompartment.of(languageExtension(languageName(props.file))),
           EditorView.updateListener.of(function (update) {
             if (!update.docChanged || applyingExternalRef.current) return;
@@ -187,7 +219,7 @@ import { workbenchServices } from "../shared/runtime/services.jsx";
       function updateTheme() {
         if (!viewRef.current || !themeCompartmentRef.current) return;
         viewRef.current.dispatch({
-          effects: themeCompartmentRef.current.reconfigure(editorTheme(isDark())),
+          effects: themeCompartmentRef.current.reconfigure(editorThemeExtensions(isDark())),
         });
       }
       window.addEventListener("cyrene-tweak-theme-change", updateTheme);

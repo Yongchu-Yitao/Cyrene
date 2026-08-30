@@ -438,6 +438,11 @@ def _current_app_executable() -> Path | None:
     return Path(raw).expanduser() if raw else None
 
 
+def _powershell_literal(value: str | Path) -> str:
+    """Return a single-quoted PowerShell string literal."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _current_macos_app_bundle() -> Path:
     app_exe = _current_app_executable()
     if app_exe:
@@ -497,73 +502,88 @@ def _restart_script_macos(dmg_path: Path) -> str:
 
 
 def _restart_script_windows(exe_path: Path) -> str:
-    """Windows: update a portable executable in place or run the NSIS installer.
+    """Return a detached-safe PowerShell update script for Windows.
 
     Portable builds replace their original single-file executable after the
     wrapper exits and require no elevation. Installed builds use PowerShell's
     Start-Process -Verb RunAs so the NSIS updater can request UAC correctly.
+    Start-Sleep is intentionally used instead of cmd.exe's timeout command:
+    timeout exits immediately when the updater has no attached console input.
     """
-    app_exe = _current_app_executable() or Path(r"%LOCALAPPDATA%\Programs\Cyrene\Cyrene.exe")
+    app_exe = _current_app_executable()
+    update_literal = _powershell_literal(exe_path)
+    app_expression = (
+        _powershell_literal(app_exe)
+        if app_exe
+        else "(Join-Path $env:LOCALAPPDATA 'Programs\\Cyrene\\Cyrene.exe')"
+    )
     if _is_windows_portable_runtime():
-        return f"""@echo off
-setlocal
-:: Cyrene updater — Windows portable
-set LOG="%TEMP%\\cyrene_update.log"
->>%LOG% echo === Cyrene portable update %date% %time% ===
->>%LOG% echo UPDATE: {exe_path}
->>%LOG% echo TARGET: {app_exe}
+        return f"""$ErrorActionPreference = 'Stop'
+$logPath = Join-Path $env:TEMP 'cyrene_update.log'
+$updatePath = {update_literal}
+$appPath = {app_expression}
+$newPath = $appPath + '.new'
 
-:: Wait for the portable wrapper and Electron child to release the original exe.
-timeout /t 3 /nobreak >nul
-copy /Y "{exe_path}" "{app_exe}.new" >>%LOG% 2>&1
-if errorlevel 1 goto failed
-move /Y "{app_exe}.new" "{app_exe}" >>%LOG% 2>&1
-if errorlevel 1 goto failed
-start "" "{app_exe}"
-del "{exe_path}"
->>%LOG% echo Portable update complete.
-exit /b 0
+function Write-UpdateLog {{
+    param([string]$Message)
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
+    Add-Content -LiteralPath $logPath -Value "$timestamp $Message" -Encoding UTF8
+}}
 
-:failed
->>%LOG% echo Portable update failed with code %errorlevel%.
-del "{app_exe}.new" 2>nul
-exit /b 1
+try {{
+    Write-UpdateLog "Starting portable update. Update=$updatePath Target=$appPath"
+    # The updater is detached, so use a timer that does not read console input.
+    Start-Sleep -Seconds 3
+    Copy-Item -LiteralPath $updatePath -Destination $newPath -Force
+    Move-Item -LiteralPath $newPath -Destination $appPath -Force
+    Start-Process -FilePath $appPath
+    Remove-Item -LiteralPath $updatePath -Force -ErrorAction SilentlyContinue
+    Write-UpdateLog 'Portable update complete.'
+    exit 0
+}} catch {{
+    Write-UpdateLog ("Portable update failed: " + $_.Exception.Message)
+    Remove-Item -LiteralPath $newPath -Force -ErrorAction SilentlyContinue
+    exit 1
+}}
 """
-    return f"""@echo off
-setlocal
-:: Cyrene updater — Windows
-set LOG="%TEMP%\\cyrene_update.log"
->>%LOG% echo === Cyrene update %date% %time% ===
->>%LOG% echo EXE: {exe_path}
->>%LOG% echo TARGET: {app_exe}
->>%LOG% echo STARTED: %date% %time%
+    return f"""$ErrorActionPreference = 'Stop'
+$logPath = Join-Path $env:TEMP 'cyrene_update.log'
+$updatePath = {update_literal}
+$appPath = {app_expression}
 
-:: 等待主进程完全退出释放文件锁
-timeout /t 3 /nobreak >nul
+function Write-UpdateLog {{
+    param([string]$Message)
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
+    Add-Content -LiteralPath $logPath -Value "$timestamp $Message" -Encoding UTF8
+}}
 
->>%LOG% echo Launching elevated installer via PowerShell...
-:: PowerShell Start-Process -Verb RunAs 会正确弹出 UAC 提升提示
-:: -Wait 让脚本等待安装完成再继续
-powershell -Command "Start-Process -FilePath '{exe_path}' -ArgumentList '/S' -Verb RunAs -Wait -WindowStyle Hidden"
-set RC=%errorlevel%
->>%LOG% echo PowerShell exit code: %RC%
->>%LOG% echo UPDATED: %date% %time%
+try {{
+    Write-UpdateLog "Starting installed update. Installer=$updatePath Target=$appPath"
+    # Give Electron and the frozen backend time to release installed files.
+    # Start-Sleep remains reliable when this script runs without a console.
+    Start-Sleep -Seconds 3
+    Write-UpdateLog 'Launching elevated installer.'
+    # --updated enables electron-builder's update-specific process shutdown path.
+    $installer = Start-Process -FilePath $updatePath -ArgumentList @('/S', '--updated') -Verb RunAs -Wait -PassThru -WindowStyle Hidden
+    $installerExitCode = $installer.ExitCode
+    Write-UpdateLog "Installer exit code: $installerExitCode"
+    if ($installerExitCode -ne 0) {{
+        exit $installerExitCode
+    }}
 
-if %RC% equ 0 (
-    >>%LOG% echo Update installer completed, verifying...
-    :: 额外等待确保文件写入完成
-    timeout /t 1 /nobreak >nul
-    >>%LOG% echo App start: {app_exe}
-    start "" "{app_exe}"
-    del "{exe_path}"
-) else (
-    >>%LOG% echo Update failed (error %RC%) — possible causes:
-    >>%LOG% echo   - UAC elevation was cancelled by user
-    >>%LOG% echo   - Installer failed to write to target directory
-    >>%LOG% echo   - Antivirus blocked the installer
-    timeout /t 5 /nobreak >nul
-)
-endlocal
+    Start-Sleep -Seconds 1
+    if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {{
+        throw "Updated application executable was not found: $appPath"
+    }}
+    Write-UpdateLog "Restarting application: $appPath"
+    Start-Process -FilePath $appPath
+    Remove-Item -LiteralPath $updatePath -Force -ErrorAction SilentlyContinue
+    Write-UpdateLog 'Installed update complete.'
+    exit 0
+}} catch {{
+    Write-UpdateLog ("Installed update failed: " + $_.Exception.Message)
+    exit 1
+}}
 """
 
 
