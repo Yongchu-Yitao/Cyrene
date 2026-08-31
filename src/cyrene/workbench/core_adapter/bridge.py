@@ -8,7 +8,7 @@ import json
 import logging
 import math
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
@@ -863,6 +863,7 @@ class WorkbenchSessionBridge:
         plugin_services: Mapping[str, Any] | None = None,
         application_scope: ApplicationPluginScope | None = None,
         max_model_calls: int | None = None,
+        extra_direct_tool_names: Sequence[str] = (),
     ) -> WorkbenchSessionBridge:
         return cls(
             AgentSession(
@@ -878,6 +879,7 @@ class WorkbenchSessionBridge:
                 plugin_services=plugin_services,
                 application_scope=application_scope,
                 max_model_calls=max_model_calls,
+                extra_direct_tool_names=extra_direct_tool_names,
             )
         )
 

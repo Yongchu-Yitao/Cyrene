@@ -15,6 +15,10 @@ WORKSPACE_SURFACE = (
 )
 WORKSPACE_STYLES = WORKSPACE_SURFACE.with_name("workspace.css")
 WORKBENCH_STYLES = WORKSPACE_SURFACE.parents[2] / "workbench.css"
+RUNTIME_WORKBENCH_STYLES = (
+    WORKSPACE_SURFACE.parents[3] / "static" / "app" / "workbench.css"
+)
+FEEDBACK_SERVICE = WORKSPACE_SURFACE.parents[2] / "shared" / "feedback" / "service.jsx"
 PROJECT_FILES = WORKSPACE_SURFACE.with_name("project-files.jsx")
 PROJECT_RAIL = WORKSPACE_SURFACE.with_name("rail.jsx")
 
@@ -40,18 +44,23 @@ def test_workspace_toolbar_uses_one_run_action_without_a_restart_button() -> Non
     assert 'executionCommand("restart")' not in source
 
 
-def test_workspace_errors_use_the_shared_bottom_left_toast() -> None:
+def test_workspace_errors_use_the_shared_bottom_right_toast() -> None:
     source = WORKSPACE_SURFACE.read_text(encoding="utf-8")
     workspace_styles = WORKSPACE_STYLES.read_text(encoding="utf-8")
     workbench_styles = WORKBENCH_STYLES.read_text(encoding="utf-8")
+    runtime_workbench_styles = RUNTIME_WORKBENCH_STYLES.read_text(encoding="utf-8")
+    feedback_service = FEEDBACK_SERVICE.read_text(encoding="utf-8")
     toast_host = workbench_styles.split(".workbench-toast-host {", 1)[1].split("}", 1)[0]
 
     assert 'feedback.showToast(message, "error", { key: feedbackKey })' in source
     assert 'className="wbc-workspace-error"' not in source
     assert ".wbc-workspace-error" not in workspace_styles
-    assert "left: 18px" in toast_host
-    assert "bottom: 18px" in toast_host
-    assert "right:" not in toast_host
+    assert runtime_workbench_styles == workbench_styles
+    assert workbench_styles.count(".workbench-toast-host {") == 1
+    assert feedback_service.count('className="workbench-toast-host"') == 1
+    assert "right: max(18px, env(safe-area-inset-right))" in toast_host
+    assert "bottom: max(18px, env(safe-area-inset-bottom))" in toast_host
+    assert "left:" not in toast_host
 
 
 def test_workspace_sections_share_the_pane_background_instead_of_color_bands() -> None:

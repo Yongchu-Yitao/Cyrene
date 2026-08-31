@@ -3732,8 +3732,8 @@ body.wb-col-resizing {
    the workbench tokens so it tracks light/dark automatically. */
 .workbench-toast-host {
   position: fixed;
-  left: 18px;
-  bottom: 18px;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
   z-index: 10120;
   display: flex;
   flex-direction: column;

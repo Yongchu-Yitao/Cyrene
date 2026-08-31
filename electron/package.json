@@ -153,6 +153,7 @@
     "files": [
       "main.js",
       "backend-port-waiters.js",
+      "main-window-lifecycle.js",
       "development-data-migration.js",
       "host-control.js",
       "browser-input.js",

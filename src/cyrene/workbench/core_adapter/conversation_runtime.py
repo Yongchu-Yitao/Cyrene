@@ -156,6 +156,7 @@ class ConversationConfig:
     permission_mode: str = "default"
     command: str = ""
     public_user_message: str = ""
+    model_identity: Mapping[str, Any] = field(default_factory=dict)
     attachment_paths: Mapping[str, str] = field(default_factory=dict)
     remote_device_ids: Sequence[str] = ()
     soul_enabled: bool | None = None
@@ -179,6 +180,7 @@ class ConversationConfig:
     plugin_directory: str | Path | None = None
     data_directory: str | Path | None = None
     max_model_calls: int | None = None
+    extra_direct_tool_names: Sequence[str] = ()
     guidance_channel: Any = None
     read_only: bool = False
 
@@ -443,6 +445,42 @@ class ConversationRuntime:
             run_context["runtime_event_writer"] = worker_publisher
 
         state_root = self._state_root(config)
+        plugin_context_data = {
+            "session_id": str(config.session_id),
+            "context_activations": deepcopy(
+                dict(config.context_activations or {})
+            ),
+            "resolved_context_activations": deepcopy(
+                dict(config.resolved_context_activations or {})
+            ),
+            "project_id": str(config.project_id or ""),
+            "project_memory_snapshot": (
+                deepcopy(dict(config.project_memory_snapshot))
+                if isinstance(config.project_memory_snapshot, Mapping)
+                else None
+            ),
+            "session_title": str(config.session_title or ""),
+            "remote_device_ids": tuple(
+                str(item or "").strip()
+                for item in config.remote_device_ids
+                if str(item or "").strip()
+            ),
+            "soul_enabled": config.soul_enabled,
+            "memory_write_enabled": bool(config.memory_write_enabled),
+            "memory_trigger_enabled": bool(config.memory_trigger_enabled),
+            "memory_archive_enabled": bool(config.memory_archive_enabled),
+            "read_only": bool(config.read_only),
+            "retry": bool(config.retry),
+            "completed_turn_count": max(0, int(config.completed_turn_count or 0)),
+            "background_submitter": submit_background,
+            "owner_call": call_on_owner,
+            "run_context": run_context,
+        }
+        if config.model_identity:
+            plugin_context_data["model_identity"] = deepcopy(
+                dict(config.model_identity)
+            )
+
         return WorkbenchSessionBridge.open(
             state_root,
             config.workspace_dir,
@@ -457,40 +495,11 @@ class ConversationRuntime:
                 "db_path": str(config.db_path or ""),
                 "notify_state": None,
             },
-            plugin_context_data={
-                "session_id": str(config.session_id),
-                "context_activations": deepcopy(
-                    dict(config.context_activations or {})
-                ),
-                "resolved_context_activations": deepcopy(
-                    dict(config.resolved_context_activations or {})
-                ),
-                "project_id": str(config.project_id or ""),
-                "project_memory_snapshot": (
-                    deepcopy(dict(config.project_memory_snapshot))
-                    if isinstance(config.project_memory_snapshot, Mapping)
-                    else None
-                ),
-                "session_title": str(config.session_title or ""),
-                "remote_device_ids": tuple(
-                    str(item or "").strip()
-                    for item in config.remote_device_ids
-                    if str(item or "").strip()
-                ),
-                "soul_enabled": config.soul_enabled,
-                "memory_write_enabled": bool(config.memory_write_enabled),
-                "memory_trigger_enabled": bool(config.memory_trigger_enabled),
-                "memory_archive_enabled": bool(config.memory_archive_enabled),
-                "read_only": bool(config.read_only),
-                "retry": bool(config.retry),
-                "completed_turn_count": max(0, int(config.completed_turn_count or 0)),
-                "background_submitter": submit_background,
-                "owner_call": call_on_owner,
-                "run_context": run_context,
-            },
+            plugin_context_data=plugin_context_data,
             plugin_services=plugin_services,
             application_scope=application_host,
             max_model_calls=config.max_model_calls,
+            extra_direct_tool_names=config.extra_direct_tool_names,
         )
 
     async def _with_bridge(

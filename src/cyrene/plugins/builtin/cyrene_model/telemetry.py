@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .configuration import provider_preset_for_connection
+
 _CACHE_TTL_SECONDS = 60.0
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _REFRESH_TASKS: dict[str, asyncio.Task[dict[str, Any]]] = {}
@@ -49,10 +51,7 @@ _DEFINITIONS = {
 
 
 def _provider_preset(connection: dict[str, Any]) -> str:
-    options = connection.get("options")
-    return str(
-        options.get("provider_preset") if isinstance(options, dict) else ""
-    ).strip().lower()
+    return provider_preset_for_connection(connection)
 
 
 def _official_origin(

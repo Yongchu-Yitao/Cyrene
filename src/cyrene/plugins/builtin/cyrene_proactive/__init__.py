@@ -3,6 +3,7 @@
 from cyrene.plugins.context import PluginApplicationContext
 from cyrene.core.plugin import Plugin, PluginContext, PluginPack
 
+from .outcome import TOOL_NAME as OUTCOME_TOOL_NAME, finish_proactive
 from .service import ProactiveService, heartbeat_interval_seconds
 
 
@@ -15,7 +16,12 @@ async def proactive_heartbeat(
     outcome = await service.tick()
     status = str((outcome or {}).get("status") or "unknown")
     return {
-        "ok": status not in {"error", "generation_timeout", "model_request_failed"},
+        "ok": status not in {
+            "error",
+            "generation_timeout",
+            "invalid_proactive_outcome",
+            "model_request_failed",
+        },
         **dict(outcome or {}),
     }
 
@@ -44,6 +50,34 @@ plugin_pack = PluginPack(
     id="cyrene_proactive",
     description="Run optional proactive Agent work on an editable background policy.",
     plugins=(
+        Plugin(
+            name=OUTCOME_TOOL_NAME,
+            description=(
+                "Required terminal protocol for a scheduler-initiated proactive "
+                "work cycle. Submit exactly one structured decision after all "
+                "work is complete. Use deliver with the exact concise user report, "
+                "or suppress with an empty report when nothing should be shown."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "decision": {
+                        "type": "string",
+                        "enum": ["deliver", "suppress"],
+                    },
+                    "report": {"type": "string"},
+                },
+                "required": ["decision", "report"],
+                "additionalProperties": False,
+            },
+            handler=finish_proactive,
+            metadata={
+                "agent_exposure": "hidden",
+                "main_only": True,
+                "permission_review": False,
+                "read_only": True,
+            },
+        ),
         Plugin(
             name="proactive.heartbeat",
             description="Run one proactive Agent heartbeat. Hidden from models.",

@@ -51,6 +51,19 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert '"workbenchChat.attachmentType.audio": "音频"' in i18n
 
 
+def test_model_picker_commits_only_the_latest_server_confirmed_selection():
+    composer = frontend_module_source("features/chat/composer.jsx")
+
+    assert "var modelSelectionRequestRef = useWbcRef(0);" in composer
+    assert "if (modelSelectionRequestRef.current !== selectionRequest) return;" in composer
+    assert "setSelectedModelId(confirmedId);" in composer
+    assert "setReasoningEffort(confirmedEffort);" in composer
+    persisted_branch = composer.split(
+        "if (chatId) {\n                                model.updateChatPreferences", 1
+    )[1].split("} else {", 1)[0]
+    assert "setSelectedModelId(id);" not in persisted_branch
+
+
 def test_context_panel_has_only_the_new_agent_tree_projection():
     source = workbench_chat_source()
     i18n = workbench_i18n_source()

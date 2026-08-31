@@ -422,20 +422,63 @@ def _apply_agent_config_values(chat: dict[str, Any], values: Any):
     return None
 
 
-def _apply_model_selection(chat: dict[str, Any], selected_key: str) -> None:
+def _apply_model_selection(chat: dict[str, Any], selected_key: str) -> Any | None:
     if not selected_key:
-        return
+        return localized_error_response(
+            "A configured model must be selected.",
+            "必须选择一个已配置的模型。",
+            400,
+            "model_selection_required",
+        )
     from cyrene.core.plugin import application_plugin_service
 
     service = application_plugin_service("model_configuration")
-    candidates = service.selectable_model_candidates() if service is not None else []
-    selected = next(
-        (item for item in candidates if selected_key in {str(item.get("id") or ""), str(item.get("model") or ""), str(item.get("name") or "")}),
-        None,
-    )
-    chat["modelSelectionId"] = selected_key
-    chat["model"] = str((selected or {}).get("model") or (selected or {}).get("name") or selected_key)
+    if service is None:
+        return localized_error_response(
+            "Model configuration is unavailable.",
+            "模型配置服务不可用。",
+            503,
+            "model_configuration_unavailable",
+        )
+    candidates = service.selectable_model_candidates()
+    id_matches = [
+        item
+        for item in candidates
+        if str(item.get("id") or "").strip() == selected_key
+    ]
+    alias_matches = [
+        item
+        for item in candidates
+        if selected_key
+        in {
+            str(item.get("model") or "").strip(),
+            str(item.get("name") or "").strip(),
+        }
+    ]
+    matches = id_matches or alias_matches
+    if len(matches) != 1:
+        return localized_error_response(
+            "The configured model was not found or is ambiguous.",
+            "未找到已配置的模型，或模型标识不唯一。",
+            400,
+            "model_not_found",
+        )
+    selected = matches[0]
+    canonical_id = str(selected.get("id") or "").strip()
+    canonical_model = str(
+        selected.get("model") or selected.get("name") or ""
+    ).strip()
+    if not canonical_id or not canonical_model:
+        return localized_error_response(
+            "The configured model is invalid.",
+            "已配置的模型无效。",
+            400,
+            "invalid_model_configuration",
+        )
+    chat["modelSelectionId"] = canonical_id
+    chat["model"] = canonical_model
     chat.pop("lastModel", None)
+    return None
 
 
 def _apply_workspace_preferences(
@@ -527,7 +570,9 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
                 return error
         if "model" in body:
             selected_key = str(body.get("model") or "").strip()
-            _apply_model_selection(chat, selected_key)
+            error = _apply_model_selection(chat, selected_key)
+            if error is not None:
+                return error
         if "reasoningEffort" in body:
             effort = str(body.get("reasoningEffort") or "").strip().lower()
             if effort:

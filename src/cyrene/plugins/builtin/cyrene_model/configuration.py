@@ -459,6 +459,17 @@ def candidate_for_profile(
     }
 
 
+def provider_preset_for_connection(connection: Any) -> str:
+    """Return the canonical optional Provider Plugin identity for a connection."""
+
+    if not isinstance(connection, dict):
+        return ""
+    options = connection.get("options")
+    if not isinstance(options, dict):
+        return ""
+    return str(options.get("provider_preset") or "").strip().lower()
+
+
 def candidates_for_route(
     route_name: str,
     configuration: dict[str, Any] | None = None,
@@ -601,6 +612,7 @@ __all__ = [
     "connection_with_secret",
     "get_model_configuration",
     "normalize_model_configuration",
+    "provider_preset_for_connection",
     "public_model_configuration",
     "save_model_configuration",
     "selectable_model_candidates",

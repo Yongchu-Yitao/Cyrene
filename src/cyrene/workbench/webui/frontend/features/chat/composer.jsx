@@ -169,6 +169,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
   var draftSaveTimerRef = useWbcRef(0);
   var pendingDraftSaveRef = useWbcRef(null);
+  var modelSelectionRequestRef = useWbcRef(0);
   // Last payload snapshot for optimistic clear with restore on error
   var lastSentRef = useWbcRef(null);
   var prevRunningRef = useWbcRef(running);
@@ -1489,19 +1490,27 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                                 wbcPublishChatModelChanged(chatId, {}, { refresh: true });
                               });
                             } else {
-                              setSelectedModelId(id);
+                              var selectionRequest = modelSelectionRequestRef.current + 1;
+                              modelSelectionRequestRef.current = selectionRequest;
                               var nextEffort = wbcReasoningEffortForModel(item, "");
-                              setReasoningEffort(nextEffort);
-                              wbcPublishChatModelChanged(chatId, item, { refresh: false });
                               if (chatId) {
                                 model.updateChatPreferences(chatId, { model: id, reasoningEffort: nextEffort }).then(function (nextChat) {
+                                  if (modelSelectionRequestRef.current !== selectionRequest) return;
+                                  var confirmedId = String(nextChat && (nextChat.modelSelectionId || nextChat.model) || "").trim();
+                                  var confirmedEffort = String(nextChat && nextChat.reasoningEffort || nextEffort).trim().toLowerCase();
                                   if (chat && nextChat) Object.assign(chat, nextChat);
+                                  setSelectedModelId(confirmedId);
+                                  setReasoningEffort(confirmedEffort);
                                   wbcPublishChatModelChanged(chatId, Object.assign({}, item, {
                                     model: nextChat && nextChat.model || item.model || item.name,
                                   }));
                                 }).catch(function () {
+                                  if (modelSelectionRequestRef.current !== selectionRequest) return;
                                   wbcPublishChatModelChanged(chatId, {}, { refresh: true });
                                 });
+                              } else {
+                                setSelectedModelId(id);
+                                setReasoningEffort(nextEffort);
                               }
                             }
                             setModelPanel("root");

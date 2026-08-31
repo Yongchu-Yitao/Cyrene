@@ -11,6 +11,46 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from cyrene.core.plugin import PluginContext
 
 
+def _structured_proactive_result(
+    decision,
+    *,
+    report="",
+    text="",
+    model="test-model",
+    usage=None,
+    latest_request_usage=None,
+):
+    run_id = "proactive_run_test"
+    return SimpleNamespace(
+        run_id=run_id,
+        text=text,
+        model=model,
+        pending_question=None,
+        usage=usage or {},
+        latest_request_usage=latest_request_usage or {},
+        snapshot={
+            "nodes": [
+                {
+                    "value": {
+                        "role": "tool_results",
+                        "run_id": run_id,
+                        "results": [
+                            {
+                                "name": "finish_proactive",
+                                "success": True,
+                                "value": {
+                                    "decision": decision,
+                                    "report": report,
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+
 def test_core_soul_projection_is_empty_when_plugin_is_unavailable(monkeypatch):
     from cyrene.workbench.artifacts import presentation_runtime
 
@@ -516,6 +556,44 @@ async def test_proactive_chat_projection_persists_exact_latest_request_usage(
     assert message["latestRequestUsage"] == latest_usage
 
 
+async def test_proactive_agent_run_injects_hidden_structured_outcome_tool(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
+
+    captured = {}
+    expected = object()
+
+    class Runtime:
+        def __init__(self, db_path):
+            captured["db_path"] = db_path
+
+        async def send(self, config, prompt, **kwargs):
+            captured["config"] = config
+            captured["prompt"] = prompt
+            captured["metadata"] = kwargs.get("metadata")
+            return expected
+
+    monkeypatch.setattr(scheduler, "ConversationRuntime", Runtime)
+    monkeypatch.setattr(scheduler, "_memory_service", lambda: None)
+
+    result = await scheduler._run_plugin_proactive_turn(
+        "do bounded work",
+        bot=None,
+        owner_id=7,
+        db_path=str(tmp_path / "runtime.sqlite3"),
+        session_id="wbchat_proactive",
+        workspace_dir=str(tmp_path),
+        project_id="project-1",
+    )
+
+    assert result is expected
+    assert captured["config"].extra_direct_tool_names == ("finish_proactive",)
+    assert captured["config"].conversation_source == "scheduler"
+    assert captured["metadata"]["proactive"] is True
+
+
 async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
@@ -538,10 +616,10 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
         seen["prompt"] = prompt
         seen["chat_id"] = owner_id
         seen["db_path"] = db_path
-        return SimpleNamespace(
-            text="user-facing proactive message",
-            model="test-model",
-            pending_question=None,
+        return _structured_proactive_result(
+            "deliver",
+            report="user-facing proactive message",
+            text="this ordinary assistant text must be ignored",
             usage={"prompt_tokens": 16006, "total_tokens": 16006},
             latest_request_usage={
                 "prompt_tokens": 7986,
@@ -555,16 +633,16 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
         "_run_plugin_proactive_turn",
         fake_run_plugin_proactive_turn,
     )
-    monkeypatch.setattr(
-        scheduler,
-        "_deliver_proactive_message",
-        AsyncMock(return_value={"project_id": "default", "chat_id": "chat", "title": "Chat"}),
+    deliver = AsyncMock(
+        return_value={"project_id": "default", "chat_id": "chat", "title": "Chat"}
     )
+    monkeypatch.setattr(scheduler, "_deliver_proactive_message", deliver)
 
     await scheduler._heartbeat_proactive_check(bot=None, db_path="db.sqlite3")
 
     assert seen["chat_id"] == 7
     assert seen["db_path"] == "db.sqlite3"
+    assert deliver.await_args.args[0] == "user-facing proactive message"
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
     assert "Recent memories about the user" not in seen["prompt"]
     assert "autonomous work cycle, not a social check-in" in seen["prompt"]
@@ -594,7 +672,17 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
 
     async def fake_run_plugin_proactive_turn(prompt, **_kwargs):
         seen["prompt"] = prompt
-        return SimpleNamespace(text="", model="", pending_question=None)
+        return SimpleNamespace(
+            run_id="proactive_run_test",
+            text=(
+                "（无可报告的新材料；此前已核验，按指引保持沉默。）"
+            ),
+            model="test-model",
+            pending_question=None,
+            usage={},
+            latest_request_usage={},
+            snapshot={"nodes": []},
+        )
 
     async def fake_notify(*args, **kwargs):
         seen["notified"] = True
@@ -604,18 +692,40 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
         "_run_plugin_proactive_turn",
         fake_run_plugin_proactive_turn,
     )
+    deliver = AsyncMock()
+    monkeypatch.setattr(scheduler, "_deliver_proactive_message", deliver)
     monkeypatch.setattr(scheduler, "notify", fake_notify)
 
-    await scheduler._heartbeat_proactive_check(bot=None, db_path="db.sqlite3")
+    outcome = await scheduler._heartbeat_proactive_check(
+        bot=None,
+        db_path="db.sqlite3",
+    )
 
-    # Agent returned no text -> nothing is delivered and the unanswered streak
-    # does not advance.
+    # Unstructured natural-language explanations fail closed. They cannot
+    # authorize a public conversation even if they are non-empty.
+    deliver.assert_not_awaited()
     assert seen["notified"] is False
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 0
+    assert outcome["status"] == "invalid_proactive_outcome"
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
     # A work cycle with nothing material to do must bow out silently instead
     # of manufacturing a social check-in.
-    assert "If there is no useful safe action or no material result" in seen["prompt"]
+    assert "finish_proactive exactly once" in seen["prompt"]
+
+
+def test_proactive_structured_suppress_ignores_ordinary_assistant_text():
+    from cyrene.plugins.builtin.cyrene_proactive.outcome import outcome_from_result
+
+    result = _structured_proactive_result(
+        "suppress",
+        text="I decided to remain silent, but this prose is not authoritative.",
+    )
+
+    outcome = outcome_from_result(result)
+
+    assert outcome.valid is True
+    assert outcome.decision == "suppress"
+    assert outcome.report == ""
 
 
 async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(monkeypatch):
@@ -642,10 +752,11 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
 
     async def fake_run_plugin_proactive_turn(prompt, **_kwargs):
         calls["n"] += 1
-        return SimpleNamespace(
-            text="hey, how did the launch go?" if calls["n"] == 1 else "",
-            model="test-model",
-            pending_question=None,
+        decision = "deliver" if calls["n"] == 1 else "suppress"
+        report = "hey, how did the launch go?" if calls["n"] == 1 else ""
+        return _structured_proactive_result(
+            decision,
+            report=report,
             usage={"prompt_tokens": 16006, "total_tokens": 16006},
             latest_request_usage={
                 "prompt_tokens": 7986,

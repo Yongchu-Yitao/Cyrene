@@ -23,6 +23,7 @@ from cyrene.platform.run_coordinator import run_coordinator_for
 from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.application.notifications import append_notification
 
+from .outcome import TOOL_NAME as OUTCOME_TOOL_NAME, outcome_from_result
 from .projection import create_proactive_chat
 
 logger = logging.getLogger(__name__)
@@ -47,10 +48,13 @@ def _is_workbench_conversation_running(db_path: str, session_id: str) -> bool:
 def _proactive_language_instruction(lang: str) -> str:
     normalized = str(lang or "").strip().lower()
     if normalized.startswith("zh"):
-        return "Write the final user-visible report in Simplified Chinese."
+        return "Write the finish_proactive report in Simplified Chinese."
     if normalized.startswith("en"):
-        return "Write the final user-visible report in English."
-    return "Use the language the user normally uses in their recent context."
+        return "Write the finish_proactive report in English."
+    return (
+        "Write the finish_proactive report in the language the user normally "
+        "uses in their recent context."
+    )
 
 
 async def _run_plugin_proactive_turn(
@@ -93,6 +97,7 @@ async def _run_plugin_proactive_turn(
         memory_trigger_enabled=False,
         memory_archive_enabled=True,
         conversation_source="scheduler",
+        extra_direct_tool_names=(OUTCOME_TOOL_NAME,),
     )
     run_id = f"proactive_run_{uuid.uuid4().hex}"
     return await runtime.send(
@@ -409,7 +414,7 @@ def _build_proactive_user_prompt(
         unanswered_note = (
             "The user has not replied to the previous proactive report. "
             "Do not repeat it or send a substitute social message. Only report a new, "
-            "material result or risk; otherwise return an empty final response."
+            "material result or risk; otherwise finish with decision suppress."
         )
 
     return f"""## Objective
@@ -418,7 +423,8 @@ def _build_proactive_user_prompt(
 - When an actionable item exists, use tools and complete the work now. Do not merely suggest work, offer to help, or describe what you could do.
 - Prefer bounded work with a verifiable result. Respect the proactive write-safety boundary in the system instructions.
 - Report only a concrete completed result, a newly verified material fact, or a specific blocker/risk that genuinely needs the user's attention. State what changed or was found and why it matters.
-- If there is no useful safe action, or no material result worth reporting, return an empty final response.
+- Finish every cycle by calling finish_proactive exactly once. Use decision=deliver and put only the exact concise user-visible report in report when there is a material result. Use decision=suppress and report="" when nothing should be shown.
+- After finish_proactive succeeds, return an empty assistant response. Ordinary assistant text is not a delivery decision and will be ignored.
 - Do not greet the user, make small talk, ask how they are, send lifestyle reminders, or revive a casual topic merely to have something to say.
 - No new user message triggered this round. Never claim or imply that the user just woke up, came online, returned, became available, finished work, is currently busy, or is currently doing anything.
 - Treat the current time and silence duration only as scheduling/deadline context; they are not evidence of the user's present state.
@@ -606,8 +612,8 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
             "Use tools to inspect the Workbench project, search memory/knowledge, create a new additive note/artifact, track a follow-up, or verify current facts.\n"
             "Any proactive task must be incremental: do not modify, overwrite, move, rename, or delete existing files. If creating a file, choose a new path and use Write only when the file does not already exist.\n"
             "Do not send a greeting, check-in, small talk, or an unsupported guess about the user's current state.\n"
-            "If you produce a material result or find a concrete risk/blocker, the final reply will be shown directly to the user; write only that concise work report.\n"
-            "If there is no useful safe action or no material result, return an empty final response.\n"
+            "At the end, call finish_proactive exactly once. Use decision=deliver and put only the exact concise user-visible report in report when there is a material result or concrete risk/blocker. Use decision=suppress and report=\"\" when nothing should be shown.\n"
+            "After finish_proactive succeeds, return an empty assistant response. Ordinary assistant text is ignored and can never authorize delivery.\n"
             "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
             + _build_proactive_user_prompt(
                 silence_h,
@@ -655,14 +661,29 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
             ),
             timeout=_PROACTIVE_GENERATION_TIMEOUT_SECONDS,
         )
-        text = str(result.text or "").strip()
         if result.pending_question is not None:
             logger.info(
                 "Proactive Plugin Agent requested user input; suppressing "
                 "the unpublished scheduler turn"
             )
             return {"status": "pending_question_suppressed"}
-        if text:
+        outcome = outcome_from_result(result)
+        if not outcome.valid:
+            logger.warning(
+                "Proactive Plugin Agent did not complete the structured outcome "
+                "protocol; suppressing public delivery: %s",
+                outcome.error,
+            )
+            return {
+                "status": "invalid_proactive_outcome",
+                "error": outcome.error,
+            }
+        if outcome.decision == "suppress":
+            logger.info("Proactive round explicitly suppressed public delivery")
+            return {"status": "no_visible_result"}
+
+        text = outcome.report
+        if outcome.decision == "deliver":
             delivered_target = await _deliver_proactive_message(
                 text,
                 bot,
@@ -686,10 +707,6 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
                     "into a Workbench chat"
                 )
                 return {"status": "projection_failed"}
-
-        if not text:
-            logger.info("Proactive round produced no visible reply")
-            return {"status": "no_visible_result"}
 
         # A message was actually delivered. Count it toward the unanswered
         # streak (``reset_lottery`` clears the streak as soon as the user replies

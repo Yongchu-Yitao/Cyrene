@@ -204,6 +204,7 @@ class AgentSession:
         initial_root_value: Any = _DEFAULT_INITIAL_ROOT,
         agent_id: str = "main",
         parent_agent_id: str = "",
+        extra_direct_tool_names: Sequence[str] = (),
         load_plugins: bool = True,
         permission_user_request: str | None = None,
     ) -> None:
@@ -213,6 +214,13 @@ class AgentSession:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.agent_id = str(agent_id or "main").strip() or "main"
         self.parent_agent_id = str(parent_agent_id or "").strip()
+        self._extra_direct_tool_names = tuple(
+            dict.fromkeys(
+                str(name or "").strip()
+                for name in extra_direct_tool_names
+                if str(name or "").strip()
+            )
+        )
         context_values = {
             **dict(host_context or {}),
             **dict(plugin_context_data or {}),
@@ -244,10 +252,7 @@ class AgentSession:
                 ),
             )
         self._initial_plugin_load_failures = failures
-        self._model_tools = self.registry.direct_tool_definitions(
-            agent_id=self.agent_id,
-            read_only=self._read_only,
-        )
+        self._model_tools = self._direct_model_tool_definitions()
         model = self.registry.resolve(model_plugin)
         if model.kind != "model":
             raise ValueError(f"Plugin is not a model component: {model_plugin}")
@@ -3027,13 +3032,48 @@ class AgentSession:
             )
             return 0
 
+    def _direct_model_tool_definitions(self) -> tuple[dict[str, Any], ...]:
+        """Return ordinary direct tools plus explicit session-local tools.
+
+        Session-local tools let a product workflow expose a hidden control
+        protocol without adding it to every Agent conversation or Toolbox.
+        Activation and Agent-scope checks still go through the registry.
+        """
+
+        definitions = list(
+            self.registry.direct_tool_definitions(
+                agent_id=self.agent_id,
+                read_only=self._read_only,
+            )
+        )
+        seen = {
+            str((definition.get("function") or {}).get("name") or "")
+            for definition in definitions
+            if isinstance(definition, Mapping)
+            and isinstance(definition.get("function"), Mapping)
+        }
+        for name in self._extra_direct_tool_names:
+            if name in seen:
+                continue
+            plugin = self.registry.resolve(name, agent_id=self.agent_id)
+            if plugin.kind != "tool":
+                raise ValueError(f"Session direct Plugin is not a tool: {name}")
+            if self._read_only and not plugin.permits_read_only():
+                raise ValueError(
+                    f"Session direct Plugin is unavailable in read-only mode: {name}"
+                )
+            definitions.append(
+                plugin.tool_definition(
+                    allow_resource_reveal=self.agent_id == "main",
+                )
+            )
+            seen.add(name)
+        return tuple(definitions)
+
     def _model_tool_tokens(self) -> int:
         self.reconcile_plugins()
         self._ensure_required_session_packs()
-        self._model_tools = self.registry.direct_tool_definitions(
-            agent_id=self.agent_id,
-            read_only=self._read_only,
-        )
+        self._model_tools = self._direct_model_tool_definitions()
         if not self._model_tools:
             return 0
         return message_token_estimate(
@@ -3055,10 +3095,7 @@ class AgentSession:
         ) as op:
             self.reconcile_plugins()
             self._ensure_required_session_packs()
-            self._model_tools = self.registry.direct_tool_definitions(
-                agent_id=self.agent_id,
-                read_only=self._read_only,
-            )
+            self._model_tools = self._direct_model_tool_definitions()
             tools = deepcopy(list(self._model_tools))
             messages = self._messages(trigger.id)
             message_tokens = messages_token_estimate(messages)

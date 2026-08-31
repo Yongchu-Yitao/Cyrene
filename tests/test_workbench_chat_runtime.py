@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
 from cyrene.plugins import model_router
 from cyrene.workbench.core_adapter import chat_runtime
+from cyrene.workbench.core_adapter import conversation_runtime
 
 
 def run(coroutine):
@@ -429,6 +430,146 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
         "runtime-event",
     ]
     assert opened["closed"] is True
+
+
+def test_conversation_runtime_forwards_exact_model_identity(tmp_path, monkeypatch):
+    opened = {}
+    identity = {
+        "candidateId": "candidate-minimax",
+        "provider": "minimax",
+        "adapter": "openai",
+        "model": "MiniMax-M3",
+        "baseUrl": "https://api.minimax.example",
+        "reasoningEffort": "",
+    }
+
+    monkeypatch.setattr(
+        conversation_runtime,
+        "resolve_plugin_registry",
+        lambda _directory: (PluginRegistry(), True),
+    )
+    monkeypatch.setattr(
+        conversation_runtime,
+        "application_plugin_scope",
+        lambda: None,
+    )
+
+    marker = object()
+
+    def fake_open(*_args, **kwargs):
+        opened.update(kwargs)
+        return marker
+
+    monkeypatch.setattr(
+        conversation_runtime.WorkbenchSessionBridge,
+        "open",
+        fake_open,
+    )
+    runtime = conversation_runtime.ConversationRuntime()
+    config = conversation_runtime.ConversationConfig(
+        session_id="chat-exact-model",
+        workspace_dir=str(tmp_path / "workspace"),
+        db_path=str(tmp_path / "workbench.sqlite3"),
+        model_identity=identity,
+        plugin_directory=tmp_path / "plugins",
+        data_directory=tmp_path / "agent-data",
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        result = runtime._open_bridge(
+            config,
+            owner_loop=loop,
+            raw_publisher=None,
+        )
+    finally:
+        loop.close()
+
+    assert result is marker
+    assert opened["plugin_context_data"]["model_identity"] == identity
+    assert opened["plugin_context_data"]["model_identity"] is not identity
+
+
+def test_send_operation_builds_secret_free_selected_model_identity():
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
+
+    operation = object.__new__(_SendOperation)
+    operation.selected_candidate = {
+        "id": "candidate-minimax",
+        "provider": "openai",
+        "adapter": "openai",
+        "model": "MiniMax-M3",
+        "base_url": "https://api.minimax.example/v1",
+        "api_key": "must-not-leave-selection-layer",
+        "options": {"provider_preset": "minimax"},
+    }
+    operation.chat = {"reasoningEffort": "high"}
+
+    identity = operation._selected_model_identity()
+
+    assert identity["candidateId"] == "candidate-minimax"
+    assert identity["model"] == "MiniMax-M3"
+    assert identity["provider"] == "minimax"
+    assert identity["reasoningEffort"] == "high"
+    assert "api_key" not in identity
+
+
+def test_model_selection_is_validated_and_persisted_canonically(monkeypatch):
+    from cyrene.core import plugin as plugin_module
+    from cyrene.workbench.http.workbench.chat_routes.detail_routes import (
+        _apply_model_selection,
+    )
+
+    candidates = [
+        {
+            "id": "candidate-minimax",
+            "name": "MiniMax M3",
+            "model": "MiniMax-M3",
+        }
+    ]
+    service = SimpleNamespace(selectable_model_candidates=lambda: candidates)
+    monkeypatch.setattr(
+        plugin_module,
+        "application_plugin_service",
+        lambda name: service if name == "model_configuration" else None,
+    )
+    chat = {
+        "modelSelectionId": "candidate-qwen",
+        "model": "qwen",
+        "lastModel": "qwen",
+    }
+
+    error = _apply_model_selection(chat, "MiniMax M3")
+
+    assert error is None
+    assert chat["modelSelectionId"] == "candidate-minimax"
+    assert chat["model"] == "MiniMax-M3"
+    assert "lastModel" not in chat
+
+
+def test_model_selection_rejects_unknown_candidate_without_mutating_chat(monkeypatch):
+    from cyrene.core import plugin as plugin_module
+    from cyrene.workbench.http.workbench.chat_routes.detail_routes import (
+        _apply_model_selection,
+    )
+
+    service = SimpleNamespace(selectable_model_candidates=lambda: [])
+    monkeypatch.setattr(
+        plugin_module,
+        "application_plugin_service",
+        lambda name: service if name == "model_configuration" else None,
+    )
+    chat = {
+        "modelSelectionId": "candidate-qwen",
+        "model": "qwen",
+        "lastModel": "qwen",
+    }
+    before = dict(chat)
+
+    error = _apply_model_selection(chat, "missing-model")
+
+    assert error is not None
+    assert error.status_code == 400
+    assert chat == before
 
 
 def test_builtin_workbench_route_always_uses_new_runtime(

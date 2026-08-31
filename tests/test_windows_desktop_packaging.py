@@ -128,6 +128,8 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert '@("/S", "/D=$installDir")' in smoke
     assert '"resources\\python-bundle\\Cyrene.exe"' in smoke
     assert 'Arguments @("--desktop-smoke-test")' in smoke
+    assert smoke.count("        -TriggerSecondInstance") == 1
+    assert "second instance did not hand off within 30 seconds" in smoke
     assert 'Arguments @("--terminal-smoke-test")' in smoke
     assert smoke.count('Arguments @("--terminal-lifecycle-soak-test")') == 2
     assert 'SuccessMarker "Cyrene smoke test OK:"' in smoke

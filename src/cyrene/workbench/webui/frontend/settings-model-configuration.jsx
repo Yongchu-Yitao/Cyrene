@@ -116,18 +116,20 @@ function renderModelDetailPane(v) {
             disabled: !!(v.discovery && v.discovery.loading),
             onClick: function () { v.discoverConnection({ notify: true, force: true }); },
           }, v.discovery && v.discovery.loading ? h("span", { className: "wb-spinner small" }) : v.browserIcon("reload", 15), v.discovery && v.discovery.loading ? v.label(v.props, "settings.fetchingModels", "Fetching…") : v.label(v.props, "settings.refreshModels", "Refresh models")),
-          h("button", { type: "button", className: "wb-btn", onClick: function () { v.addProfile(); } }, v.browserIcon("plus", 15), v.label(v.props, "settings.addModel", "Add model"))
+          h("button", { type: "button", className: "wb-btn", disabled: !!v.profileDraft, onClick: function () { v.addProfile(); } }, v.browserIcon("plus", 15), v.label(v.props, "settings.addModel", "Add model"))
         )
       ),
-      !v.profiles.length ? h("div", { className: "wb-mcfg-inline-empty" }, v.label(v.props, "settings.noModelProfilesHint", "No model profiles yet. Add one to choose a provider model or enter a model ID manually.")) : null,
-      v.profiles.length ? h("div", { className: "wb-mcfg-profile-list", "aria-label": v.label(v.props, "settings.modelList", "Model list") }, v.profiles.map(function (profile) {
-        return h(v.ProfileEditor, { key: profile.id, profile: profile, t: v.props.t,
-          onChange: function (key, value) { v.updateProfile(profile.id, key, value); },
-          onModelSelect: function (item) { v.applyDiscoveredModel(profile.id, item); },
+      !v.profiles.length && !v.profileDraft ? h("div", { className: "wb-mcfg-inline-empty" }, v.label(v.props, "settings.noModelProfilesHint", "No model profiles yet. Add one to choose a provider model or enter a model ID manually.")) : null,
+      v.profiles.length || v.profileDraft ? h("div", { className: "wb-mcfg-profile-list", "aria-label": v.label(v.props, "settings.modelList", "Model list") }, v.profiles.concat(v.profileDraft ? [v.profileDraft] : []).map(function (profile) {
+        var isDraft = !!v.profileDraft && profile.id === v.profileDraft.id;
+        return h(v.ProfileEditor, { key: profile.id, profile: profile, draft: isDraft, t: v.props.t,
+          onChange: function (key, value) { isDraft ? v.updateProfileDraft(key, value) : v.updateProfile(profile.id, key, value); },
+          onModelSelect: function (item) { isDraft ? v.applyDiscoveredModelToDraft(item) : v.applyDiscoveredModel(profile.id, item); },
           modelOptions: v.discovery && v.discovery.models || [],
           modelsLoading: !!(v.discovery && v.discovery.loading),
           modelsError: v.discovery && v.discovery.error || "",
-          onRemove: function () { v.removeProfile(profile.id); },
+          onRemove: function () { isDraft ? v.cancelProfileDraft() : v.removeProfile(profile.id); },
+          onCommit: isDraft ? v.commitProfileDraft : undefined,
           onTest: function () { v.testProfile(profile); }, testing: v.busy === "test:" + profile.id });
       })) : null
     ) : null
@@ -1111,9 +1113,15 @@ function renderModelDetailPane(v) {
             h("input", { className: "wb-input", type: "number", min: 0, step: "any", inputMode: "decimal", value: pricing.cache, "aria-label": label(props, "settings.modelCachePrice", "Model cache price"), onChange: function (event) { props.onChange("price", updateProfilePriceField(profile.price, "cache", event.target.value)); }, placeholder: "0", title: label(props, "settings.pricePerMillionHint", "Price per million tokens; CNY by default.") })
           )
         ),
-        h("div", { className: "wb-mcfg-profile-details-actions" },
-          h("button", { type: "button", className: "wb-btn", disabled: !!props.testing || !String(profile.model || "").trim(), onClick: props.onTest }, props.testing ? label(props, "settings.testingConnection", "Testing…") : label(props, "settings.testConnection", "Test connection")),
-          h("button", { type: "button", className: "wb-btn danger", onClick: props.onRemove }, label(props, "settings.deleteModel", "Delete model"))
+        h("div", { className: "wb-mcfg-profile-details-actions" }, props.draft
+          ? h(React.Fragment, null,
+              h("button", { type: "button", className: "wb-btn primary", disabled: !String(profile.model || "").trim(), onClick: props.onCommit }, label(props, "common.save", "Save")),
+              h("button", { type: "button", className: "wb-btn", onClick: props.onRemove }, label(props, "common.cancel", "Cancel"))
+            )
+          : h(React.Fragment, null,
+              h("button", { type: "button", className: "wb-btn", disabled: !!props.testing || !String(profile.model || "").trim(), onClick: props.onTest }, props.testing ? label(props, "settings.testingConnection", "Testing…") : label(props, "settings.testConnection", "Test connection")),
+              h("button", { type: "button", className: "wb-btn danger", onClick: props.onRemove }, label(props, "settings.deleteModel", "Delete model"))
+            )
         )
       ) : null
     );
@@ -1151,6 +1159,7 @@ function renderModelDetailPane(v) {
     var [localBusy, setLocalBusy] = useState("");
     var [proxyMasterEnabled, setProxyMasterEnabled] = useState(false);
     var [modelDiscovery, setModelDiscovery] = useState({});
+    var [profileDrafts, setProfileDrafts] = useState({});
     var discoveryRequestVersions = useRef({});
 
     var selected = config && (config.connections || []).find(function (item) { return item.id === selectedId; });
@@ -1447,6 +1456,12 @@ function renderModelDetailPane(v) {
           routes: nextRoutes,
         });
         updateConfig(nextConfig, { immediate: true });
+        setProfileDrafts(function (previous) {
+          if (!previous[target.id]) return previous;
+          var next = Object.assign({}, previous);
+          delete next[target.id];
+          return next;
+        });
         if (selectedId === target.id) {
           var visibleBefore = baseConfig.connections.filter(matchesConnectionQuery);
           var visibleIndex = visibleBefore.findIndex(function (connection) { return connection.id === target.id; });
@@ -1494,6 +1509,7 @@ function renderModelDetailPane(v) {
     }
 
     function addProfile(raw) {
+      if (!selected) return;
       var profile = normalizeProfile(Object.assign({
         id: safeId("profile", selected.id + "-new-" + Date.now()),
         connection_id: selected.id,
@@ -1501,7 +1517,41 @@ function renderModelDetailPane(v) {
         model: "",
         capabilities: ["chat"],
       }, raw || {}), config.profiles.length, selected.id);
-      updateConfig(Object.assign({}, config, { profiles: config.profiles.concat([profile]) }));
+      setProfileDrafts(function (previous) {
+        return Object.assign({}, previous, { [selected.id]: profile });
+      });
+    }
+
+    function updateProfileDraft(key, value) {
+      if (!selected) return;
+      setProfileDrafts(function (previous) {
+        var draft = previous[selected.id];
+        if (!draft) return previous;
+        return Object.assign({}, previous, {
+          [selected.id]: Object.assign({}, draft, { [key]: value }),
+        });
+      });
+    }
+
+    function cancelProfileDraft() {
+      if (!selected) return;
+      setProfileDrafts(function (previous) {
+        if (!previous[selected.id]) return previous;
+        var next = Object.assign({}, previous);
+        delete next[selected.id];
+        return next;
+      });
+    }
+
+    function commitProfileDraft() {
+      if (!selected) return;
+      var draft = profileDrafts[selected.id];
+      if (!draft || !String(draft.model || "").trim()) return;
+      var committed = normalizeProfile(draft, config.profiles.length, selected.id);
+      updateConfig(Object.assign({}, config, {
+        profiles: config.profiles.concat([committed]),
+      }), { immediate: true });
+      cancelProfileDraft();
     }
 
     function updateProfile(profileId, key, value) {
@@ -1536,6 +1586,24 @@ function renderModelDetailPane(v) {
           return next;
         }),
       }));
+    }
+
+    function applyDiscoveredModelToDraft(item) {
+      var modelId = String(item && (item.model || item.id || item.name) || "").trim();
+      if (!selected || !modelId) return;
+      setProfileDrafts(function (previous) {
+        var profile = previous[selected.id];
+        if (!profile) return previous;
+        var next = Object.assign({}, profile, { model: modelId });
+        var discoveredName = String(item.name || item.displayName || item.display_name || modelId).trim();
+        if (!String(profile.name || "").trim() || profile.name === label(props, "settings.newModel", "New model") || profile.name === "\u65b0\u6a21\u578b" || profile.name === profile.model) next.name = discoveredName;
+        var capabilities = normalizedCapabilities(item.capabilities || item.supports || item.modalities);
+        if (capabilities.length) next.capabilities = capabilities;
+        var contextLimit = item.context_limit != null ? item.context_limit : item.ctx_limit;
+        if ((profile.context_limit == null || profile.context_limit === "") && contextLimit != null) next.context_limit = contextLimit;
+        if (!profile.dimensions && item.dimensions) next.dimensions = item.dimensions;
+        return Object.assign({}, previous, { [selected.id]: next });
+      });
     }
 
     function discoverConnection(options) {
@@ -1799,6 +1867,7 @@ function renderModelDetailPane(v) {
 
     var filtered = config.connections.filter(matchesConnectionQuery);
     var profiles = selected ? config.profiles.filter(function (profile) { return profile.connection_id === selected.id; }) : [];
+    var profileDraft = selected ? profileDrafts[selected.id] || null : null;
     var discovery = selected ? (modelDiscovery[selected.id] || { loading: false, loaded: false, error: "", models: [] }) : null;
     var adapters = config.adapters || [];
     var selectableAdapters = selectableConnectionAdapters();
@@ -1858,9 +1927,11 @@ function renderModelDetailPane(v) {
       importOauthModels: importOauthModels, importOauthModel: importOauthModel,
       LocalModelsSection: LocalModelsSection, localRuntime: localRuntime, localError: localError,
       localBusy: localBusy, manageLocalModel: manageLocalModel, profiles: profiles,
+      profileDraft: profileDraft, updateProfileDraft: updateProfileDraft,
+      cancelProfileDraft: cancelProfileDraft, commitProfileDraft: commitProfileDraft,
       proxyMasterEnabled: proxyMasterEnabled,
       addProfile: addProfile, ProfileEditor: ProfileEditor, updateProfile: updateProfile,
-      applyDiscoveredModel: applyDiscoveredModel, discovery: discovery,
+      applyDiscoveredModel: applyDiscoveredModel, applyDiscoveredModelToDraft: applyDiscoveredModelToDraft, discovery: discovery,
       discoverConnection: discoverConnection,
       removeProfile: removeProfile, testProfile: testProfile, busy: busy,
     };

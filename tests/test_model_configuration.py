@@ -269,6 +269,40 @@ def test_configured_user_model_plugin_connection_is_not_duplicated():
     )
 
 
+@pytest.mark.parametrize(
+    "options",
+    [{}, {"provider_preset": None}, {"provider_preset": ""}],
+)
+def test_selectable_models_keep_connections_without_a_provider_preset(options):
+    from cyrene.plugins.builtin.cyrene_model.configuration import normalize_model_configuration
+    from cyrene.plugins.builtin.cyrene_model.routes import _public_configuration_with_plugins
+
+    class CatalogService:
+        @staticmethod
+        def catalog():
+            return [
+                {
+                    "id": "openai_compatible",
+                    "name": "OpenAI Compatible",
+                    "adapter": "openai_compatible",
+                    "plugin_name": "OpenAICompatible",
+                    "pack_id": "cyrene_model",
+                }
+            ]
+
+    raw = _configuration(api_key="")
+    raw["connections"][0]["options"] = options
+
+    payload = _public_configuration_with_plugins(
+        normalize_model_configuration(raw),
+        service=CatalogService(),
+    )
+
+    assert [model["id"] for model in payload["selectable_models"]] == [
+        "qwen-next"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_embedding_profile_test_checks_the_exact_discovered_model(monkeypatch):
     from cyrene.core.plugin import Plugin, PluginRegistry
@@ -1006,3 +1040,32 @@ def test_services_autosave_is_single_flight_retryable_and_current_only():
     assert "return function () { mounted.current = false; };" in hook
     assert "saveQueueMounted.current = false;" in services
     assert "clearTimeout(saveQueueTimer.current)" in services
+
+
+def test_new_model_profile_stays_local_until_explicitly_committed():
+    root = Path(__file__).resolve().parents[1]
+    settings = (
+        root
+        / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx"
+    ).read_text()
+    services = settings.split("function ServicesPage(props) {", 1)[1].split(
+        "var ROUTE_META =", 1
+    )[0]
+
+    add_profile = services.split("function addProfile(raw)", 1)[1].split(
+        "function updateProfileDraft", 1
+    )[0]
+    assert "setProfileDrafts" in add_profile
+    assert "updateConfig(" not in add_profile
+
+    commit_profile = services.split("function commitProfileDraft()", 1)[1].split(
+        "function updateProfile", 1
+    )[0]
+    assert 'if (!draft || !String(draft.model || "").trim()) return;' in commit_profile
+    assert "profiles: config.profiles.concat([committed])" in commit_profile
+    assert "{ immediate: true }" in commit_profile
+
+    assert "disabled: !!v.profileDraft" in settings
+    assert "draft: isDraft" in settings
+    assert 'label(props, "common.save", "Save")' in settings
+    assert 'label(props, "common.cancel", "Cancel")' in settings

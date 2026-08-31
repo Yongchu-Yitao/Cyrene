@@ -43,6 +43,7 @@ const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
 const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
 const { createBackendPortWaiters } = require('./backend-port-waiters');
+const { createSingleFlight, loadWindowUrl } = require('./main-window-lifecycle');
 const { RotatingFileLog } = require('./rotating-log');
 const { migrateLegacyDevelopmentData } = require('./development-data-migration');
 
@@ -286,6 +287,7 @@ let pythonProcess = null;
 let isBackendRestarting = false;
 let backendPort = null;
 const backendPortWaiters = createBackendPortWaiters(() => backendPort);
+const mainWindowCreation = createSingleFlight();
 let isShuttingDown = false;
 let isQuitting = false;
 let quitExtensionCheckInFlight = false;
@@ -5601,6 +5603,7 @@ function restartPythonBackend() {
   }
   isBackendRestarting = true;
   const proc = pythonProcess;
+  mainWindowCreation.invalidate();
   // Recreate renderer surfaces after the backend reports its new port. This
   // also invalidates every old UI tree and ui_instance_id.
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
@@ -6796,14 +6799,19 @@ async function startTerminalLifecycleSoakTest() {
   }
 }
 
-async function createMainWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-    return;
-  }
+function createMainWindow() {
+  return mainWindowCreation.run(async ({ isCurrent }) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      return mainWindow;
+    }
+    return createMainWindowOnce(isCurrent);
+  });
+}
 
+async function createMainWindowOnce(isCurrent) {
   let port;
   try {
     port = await waitForPort(backendStartupTimeoutMs);
@@ -6829,12 +6837,14 @@ async function createMainWindow() {
     // Error already handled in spawnPython (port resolve returned null)
     return;
   }
+  if (!isCurrent()) return;
 
   try {
     await syncBrowserProxyFromBackend(port);
   } catch (error) {
     appendErrorLog(`[electron:browser] Failed to apply browser proxy settings: ${String(error && error.stack || error)}\n`);
   }
+  if (!isCurrent()) return;
 
   // Workbench draws its own top bar and reserves room for the traffic lights.
   // The inset title bar and traffic-light positioning remain macOS-specific.
@@ -6866,49 +6876,56 @@ async function createMainWindow() {
     // topbar so its visible center aligns with the brand mark and wordmark.
     windowOptions.trafficLightPosition = { x: 12, y: 21 };
   }
-  mainWindow = new BrowserWindow(windowOptions);
-  installWindowDiagnostics(mainWindow, 'main');
+  const win = new BrowserWindow(windowOptions);
+  mainWindow = win;
+  installWindowDiagnostics(win, 'main');
 
-  mainWindow.once('ready-to-show', () => {
-    if (!launchHidden) {
-      mainWindow.show();
-    }
-    if (isDev) {
-      mainWindow.webContents.openDevTools();
+  win.once('ready-to-show', () => {
+    if (mainWindow !== win || win.isDestroyed()) return;
+    if (!launchHidden) win.show();
+    if (isDev && !win.webContents.isDestroyed()) {
+      win.webContents.openDevTools();
     }
   });
 
-  mainWindow.on('close', (event) => {
+  win.on('close', (event) => {
     if (!isQuitting && appStaysResident()) {
       // Stay resident (hide) so the global quick-chat shortcut keeps working and
       // the backend keeps running. Do NOT kill Python here — a lingering hidden
       // quick-chat window would otherwise be left pointing at a dead backend.
       event.preventDefault();
-      mainWindow.hide();
+      win.hide();
       return;
     }
     // Nothing keeps us resident — let the window close; teardown happens in
     // window-all-closed (non-mac quit) or before-quit (explicit quit).
   });
 
-  mainWindow.on('closed', () => {
+  win.on('closed', () => {
     hideAllBrowserSessions();
-    mainWindow = null;
+    if (mainWindow === win) mainWindow = null;
   });
 
   // Navigate to the sole Workbench surface.
   const url = `http://127.0.0.1:${port}`;
   // Force clear cache so the app always loads fresh assets
-  installLocalNavigationGuards(mainWindow, port, { allowLocalPopups: true });
-  await mainWindow.webContents.session.clearCache();
+  installLocalNavigationGuards(win, port, { allowLocalPopups: true });
+  await win.webContents.session.clearCache();
+  if (!isCurrent() || win.isDestroyed()) {
+    if (!win.isDestroyed()) win.destroy();
+    if (mainWindow === win) mainWindow = null;
+    return;
+  }
   try {
-    await mainWindow.loadURL(url);
+    await loadWindowUrl(win, url, { timeoutMs: backendStartupTimeoutMs });
+    if (!isCurrent() || win.isDestroyed()) return;
     if (isTerminalLifecycleSoakTest) {
       await startTerminalLifecycleSoakTest();
     } else if (isDesktopSmokeTest) {
-      await runDesktopSmokeTest(mainWindow);
+      await runDesktopSmokeTest(win);
     }
   } catch (err) {
+    if (!isCurrent() || win.isDestroyed()) return;
     // Some headless Linux desktop-portal combinations report ERR_FAILED after
     // Chromium has already received and rendered the full local page. In smoke
     // mode, trust the stronger DOM, screenshot, semantic-tree, and interaction
@@ -6919,7 +6936,7 @@ async function createMainWindow() {
     }
     if (isDesktopSmokeTest) {
       try {
-        await runDesktopSmokeTest(mainWindow);
+        await runDesktopSmokeTest(win);
         return;
       } catch (smokeErr) {
         const loadDetail = err && err.stack ? err.stack : String(err);
@@ -6945,12 +6962,6 @@ async function createMainWindow() {
 
 async function revealMainWindow() {
   launchHidden = false;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (!mainWindow.isVisible()) mainWindow.show();
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-    return;
-  }
   if (!electronRpcPort) {
     try { await startElectronRpcServer(); } catch (err) {
       console.error('[electron] Failed to start RPC server on reveal:', err);

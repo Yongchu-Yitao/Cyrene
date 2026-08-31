@@ -6,6 +6,38 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 
+def _delivered_proactive_result(report):
+    run_id = "proactive_run_test"
+    return SimpleNamespace(
+        run_id=run_id,
+        text="",
+        model="test-model",
+        pending_question=None,
+        usage={},
+        latest_request_usage={},
+        snapshot={
+            "nodes": [
+                {
+                    "value": {
+                        "role": "tool_results",
+                        "run_id": run_id,
+                        "results": [
+                            {
+                                "name": "finish_proactive",
+                                "success": True,
+                                "value": {
+                                    "decision": "deliver",
+                                    "report": report,
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+
+
 def _write_chats(path, chats):
     path.write_text(json.dumps({"chats": chats}, ensure_ascii=False), encoding="utf-8")
 
@@ -167,11 +199,7 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
         captured["session_id"] = session_id
         captured["lang"] = kwargs.get("lang", "")
         captured["workspace_dir"] = kwargs.get("workspace_dir", "")
-        return SimpleNamespace(
-            text="How did the launch go?",
-            model="test-model",
-            pending_question=None,
-        )
+        return _delivered_proactive_result("How did the launch go?")
 
     import cyrene.platform.settings_store as settings_store
     monkeypatch.setattr(

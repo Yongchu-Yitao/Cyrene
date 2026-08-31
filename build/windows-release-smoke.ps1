@@ -78,7 +78,8 @@ function Invoke-DesktopSmokeProcess {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$Label,
         [Parameter(Mandatory = $true)][string]$ResultPath,
-        [int]$TimeoutSeconds = 180
+        [int]$TimeoutSeconds = 180,
+        [switch]$TriggerSecondInstance
     )
 
     $safeLabel = $Label -replace '[^a-zA-Z0-9_-]', '_'
@@ -93,6 +94,26 @@ function Invoke-DesktopSmokeProcess {
         -PassThru `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
+
+    if ($TriggerSecondInstance) {
+        # Exercise the real single-instance wake-up path while the packaged
+        # backend and main window are still starting. This reproduces a rapid
+        # second launch without depending on renderer layout or timing.
+        Start-Sleep -Milliseconds 750
+        $secondInstance = Start-Process `
+            -FilePath $Path `
+            -ArgumentList $Arguments `
+            -PassThru
+        if (-not $secondInstance.WaitForExit(30000)) {
+            & taskkill.exe /pid $secondInstance.Id /f /t 2>$null | Out-Null
+            & taskkill.exe /pid $process.Id /f /t 2>$null | Out-Null
+            throw "$Label second instance did not hand off within 30 seconds"
+        }
+        if ($secondInstance.ExitCode -ne 0) {
+            & taskkill.exe /pid $process.Id /f /t 2>$null | Out-Null
+            throw "$Label second instance exited with code $($secondInstance.ExitCode)"
+        }
+    }
 
     $startedAt = [DateTime]::UtcNow
     $deadline = $startedAt.AddSeconds($TimeoutSeconds)
@@ -346,7 +367,8 @@ Invoke-ReleaseValidation -Label "Installed Electron desktop smoke test" -Action 
         -Path $installedApp `
         -Arguments @("--desktop-smoke-test") `
         -Label "windows-$Arch-installed-desktop" `
-        -ResultPath $installedResultPath
+        -ResultPath $installedResultPath `
+        -TriggerSecondInstance
     Assert-SmokeSucceeded `
         -Result $desktopSmoke `
         -SuccessMarker "DESKTOP_SMOKE_TEST=ok" `

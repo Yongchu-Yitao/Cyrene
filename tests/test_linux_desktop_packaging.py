@@ -52,6 +52,7 @@ def test_electron_package_includes_main_process_modules():
         "browser-target.js",
         "host-control.js",
         "main.js",
+        "main-window-lifecycle.js",
     } <= packaged_files
 
 
@@ -157,9 +158,9 @@ def test_linux_desktop_uses_gpu_by_default_with_explicit_software_fallback():
     assert "Date.now() - startedAt >= ${renderTimeoutMs}" in main
     assert "nonWhitePixels < 100" in main
     assert "Post-load smoke validation failed" in main
-    assert main.count("await runDesktopSmokeTest(mainWindow);") == 2
+    assert main.count("await runDesktopSmokeTest(win);") == 2
     window_options = main.split("const windowOptions = {", 1)[1].split(
-        "mainWindow = new BrowserWindow(windowOptions);", 1
+        "const win = new BrowserWindow(windowOptions);", 1
     )[0]
     assert "if (isLinux)" in window_options
     assert "const iconPath = getNotificationIconPath();" in window_options

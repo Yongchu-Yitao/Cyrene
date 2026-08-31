@@ -21,6 +21,7 @@ from cyrene.platform import config_store
 from .configuration import (
     get_model_configuration,
     normalize_model_configuration,
+    provider_preset_for_connection,
     public_model_configuration,
     save_model_configuration,
     selectable_model_candidates,
@@ -115,10 +116,7 @@ def _append_unconfigured_user_plugin_connections(
         if not isinstance(connection, dict):
             continue
         connection_ids.add(str(connection.get("id") or "").strip())
-        options = connection.get("options")
-        provider_id = str(
-            options.get("provider_preset") if isinstance(options, dict) else ""
-        ).strip().lower()
+        provider_id = provider_preset_for_connection(connection)
         if provider_id:
             configured_provider_ids.add(provider_id)
 
@@ -201,10 +199,7 @@ def _public_configuration_with_plugins(
             and not str(key).startswith("_")
         }
         connection = connections.get(str(candidate.get("connection_id") or ""), {})
-        options = connection.get("options")
-        provider_id = str(
-            options.get("provider_preset") if isinstance(options, dict) else ""
-        ).strip().lower()
+        provider_id = provider_preset_for_connection(connection)
         if provider_id and provider_id not in providers:
             continue
         provider = providers.get(provider_id, {})

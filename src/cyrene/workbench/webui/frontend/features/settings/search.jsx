@@ -100,7 +100,7 @@ function createSearchActions(store) {
     store.setConfig(nextConfig);
     store.setDraftKeys(nextDraftKeys);
     store.setClearKeys(nextClearKeys);
-    scheduleSearchSave(store.saveQueue, 600);
+    scheduleSearchSave(store.saveQueue, 100);
   }
   return {
     updateEnabled: function (enabled) {

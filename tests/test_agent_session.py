@@ -20,6 +20,71 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
+def test_session_extra_direct_tool_exposes_hidden_tool_only_when_selected(tmp_path):
+    captured_tools = []
+
+    async def fake_model(arguments, _context):
+        captured_tools.append(
+            {
+                item["function"]["name"]
+                for item in arguments.get("tools") or []
+            }
+        )
+        return {"content": "done", "tool_calls": []}
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, fake_model, kind="model"),),
+        ),
+        source="test",
+    )
+    registry.register_pack(
+        PluginPack(
+            "hidden-control",
+            "hidden control",
+            (
+                Plugin(
+                    "finish_hidden_workflow",
+                    "hidden",
+                    {"type": "object", "additionalProperties": False},
+                    lambda _arguments, _context: {"ok": True},
+                    metadata={"agent_exposure": "hidden", "read_only": True},
+                ),
+            ),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+
+    ordinary = AgentSession(
+        tmp_path / "ordinary-data",
+        tmp_path / "ordinary-workspace",
+        plugin_directory,
+        registry=registry,
+    )
+    ordinary.submit("ordinary", run_id="ordinary-run")
+    run(ordinary.drain())
+    ordinary.close()
+
+    selected = AgentSession(
+        tmp_path / "selected-data",
+        tmp_path / "selected-workspace",
+        plugin_directory,
+        registry=registry,
+        extra_direct_tool_names=("finish_hidden_workflow",),
+    )
+    selected.submit("selected", run_id="selected-run")
+    run(selected.drain())
+    selected.close()
+
+    assert "finish_hidden_workflow" not in captured_tools[0]
+    assert "finish_hidden_workflow" in captured_tools[1]
+
+
 def test_workspace_file_boundary_matches_v0713_review_scope(tmp_path):
     reviewed_requests = []
 
