@@ -218,6 +218,103 @@ class _ToolboxHandler:
                 )
         return descriptions
 
+    async def _invoke(
+        self,
+        arguments: dict[str, Any],
+        context: PluginContext,
+        failures: tuple[PluginLoadFailure, ...],
+        *,
+        agent_id: str,
+    ) -> dict[str, Any]:
+        name = str(arguments.get("name") or "").strip()
+        if not name:
+            raise ValueError("toolbox invoke requires name")
+        registered = self._deferred(name, failures, agent_id=agent_id)
+        nested_arguments = arguments.get("arguments") or {}
+        if not isinstance(nested_arguments, Mapping):
+            raise TypeError("toolbox invoke arguments must be an object")
+        nested_arguments, reveal = split_resource_reveal(
+            nested_arguments,
+            effects=registered.plugin.resource_effects,
+            allow_reveal=agent_id == "main",
+        )
+        argument_repairs = tuple(
+            dict(repair)
+            for repair in require_plugin_execution().call.argument_repairs
+        )
+        nested_error: dict[str, Any] | None = None
+        try:
+            nested_value = await invoke_plugin(
+                name,
+                dict(nested_arguments),
+                review=True,
+                arguments_normalized=True,
+                nested_arguments_normalized=True,
+                argument_repairs=argument_repairs,
+            )
+        except PluginInvocationError as exc:
+            nested_value = None
+            nested_error = self._nested_error(name, exc)
+        result: dict[str, Any] = {
+            "operation": "invoke",
+            "name": name,
+            # Persist the live discovery identity with historical results.
+            "pack": registered.pack_id,
+            "result": nested_value,
+        }
+        if argument_repairs:
+            result["argument_repairs"] = list(argument_repairs)
+        if nested_error is not None:
+            result["error"] = nested_error
+        project_id = str(context.data.get("project_id") or "")
+        if nested_error is None and registered.plugin.resource_effects and project_id:
+            locations = (
+                workspace_resource_locations(
+                    registered.plugin.resource_effects,
+                    nested_arguments,
+                    workspace=context.workspace,
+                    project_id=project_id,
+                    phase="completed",
+                )
+                if context.workspace is not None
+                else ()
+            )
+            if locations:
+                result["presentation"] = {
+                    "locations": list(locations),
+                    "reveal": reveal,
+                    "phase": "completed",
+                }
+        return result
+
+    @staticmethod
+    def _nested_error(name: str, exc: PluginInvocationError) -> dict[str, Any]:
+        message = str(exc.result.error or exc)
+        error = (
+            exc.result.failure.as_dict()
+            if exc.result.failure is not None
+            else {
+                "error_code": (
+                    "plugin_invalid_arguments"
+                    if "Invalid arguments" in message or "插件参数无效" in message
+                    else "plugin_invocation_failed"
+                ),
+                "message": message,
+                "retryable": False,
+                "retry_scope": "never",
+                "retry_after_ms": None,
+                "circuit_scope": "none",
+                "details": {},
+            }
+        )
+        error["plugin"] = name
+        error["code"] = (
+            "invalid_arguments"
+            if error.get("error_code") == "plugin_invalid_arguments"
+            else str(error.get("error_code") or "plugin_invocation_failed")
+        )
+        return error
+
     async def __call__(
         self,
         arguments: dict[str, Any],
@@ -249,99 +346,12 @@ class _ToolboxHandler:
                 ),
             }
         elif operation == "invoke":
-            name = str(arguments.get("name") or "").strip()
-            if not name:
-                raise ValueError("toolbox invoke requires name")
-            registered = self._deferred(
-                name,
+            result = await self._invoke(
+                arguments,
+                context,
                 failures,
                 agent_id=agent_id,
             )
-            nested_arguments = arguments.get("arguments") or {}
-            if not isinstance(nested_arguments, Mapping):
-                raise TypeError("toolbox invoke arguments must be an object")
-            nested_arguments, reveal = split_resource_reveal(
-                nested_arguments,
-                effects=registered.plugin.resource_effects,
-                allow_reveal=agent_id == "main",
-            )
-            argument_repairs = tuple(
-                dict(repair)
-                for repair in require_plugin_execution().call.argument_repairs
-            )
-
-            nested_error: dict[str, Any] | None = None
-            try:
-                nested_value = await invoke_plugin(
-                    name,
-                    dict(nested_arguments),
-                    review=True,
-                    arguments_normalized=True,
-                    nested_arguments_normalized=True,
-                    argument_repairs=argument_repairs,
-                )
-            except PluginInvocationError as exc:
-                nested_value = None
-                message = str(exc.result.error or exc)
-                nested_error = (
-                    exc.result.failure.as_dict()
-                    if exc.result.failure is not None
-                    else {
-                        "error_code": (
-                            "plugin_invalid_arguments"
-                            if "Invalid arguments" in message
-                            or "插件参数无效" in message
-                            else "plugin_invocation_failed"
-                        ),
-                        "message": message,
-                        "retryable": False,
-                        "retry_scope": "never",
-                        "retry_after_ms": None,
-                        "circuit_scope": "none",
-                        "details": {},
-                    }
-                )
-                nested_error["plugin"] = name
-                # ``error_code`` is the canonical failure protocol. Keep the
-                # historical Toolbox ``code`` field as a presentation alias
-                # for clients that have not migrated yet; runtime decisions
-                # never depend on it.
-                nested_error["code"] = (
-                    "invalid_arguments"
-                    if nested_error.get("error_code") == "plugin_invalid_arguments"
-                    else str(
-                        nested_error.get("error_code")
-                        or "plugin_invocation_failed"
-                    )
-                )
-            result = {
-                "operation": "invoke",
-                "name": name,
-                # Persist the discovery identity with the result. The Plugin
-                # directory is live and user-editable, so historical UI must
-                # not try to reconstruct package ownership from today's files.
-                "pack": registered.pack_id,
-                "result": nested_value,
-            }
-            if argument_repairs:
-                result["argument_repairs"] = list(argument_repairs)
-            if nested_error is not None:
-                result["error"] = nested_error
-            project_id = str(context.data.get("project_id") or "")
-            if nested_error is None and registered.plugin.resource_effects and project_id:
-                locations = workspace_resource_locations(
-                    registered.plugin.resource_effects,
-                    nested_arguments,
-                    workspace=context.workspace,
-                    project_id=project_id,
-                    phase="completed",
-                ) if context.workspace is not None else ()
-                if locations:
-                    result["presentation"] = {
-                        "locations": list(locations),
-                        "reveal": reveal,
-                        "phase": "completed",
-                    }
         else:  # The Runtime schema normally rejects this before execution.
             raise ValueError(f"unsupported toolbox operation: {operation}")
 

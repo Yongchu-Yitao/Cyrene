@@ -9,8 +9,7 @@ async function browserTypeTargetInPage(
   valueArg,
   textValue,
   operationArg,
-  findTarget,
-  resolveElement = null,
+  findTarget, resolveElement = null,
 ) {
   const mode = String(modeArg || 'selector');
   const value = String(valueArg || '');
@@ -34,7 +33,6 @@ async function browserTypeTargetInPage(
       ? String(element.value ?? '')
       : String(element.textContent ?? '')
   );
-
   let info;
   try {
     info = findTarget(mode, value, false, true);
@@ -53,9 +51,8 @@ async function browserTypeTargetInPage(
 
   let element = null;
   try {
-    if (typeof resolveElement === 'function') {
-      element = resolveElement(mode, value);
-    } else if (mode === 'ref') {
+    if (typeof resolveElement === 'function') element = resolveElement(mode, value);
+    else if (mode === 'ref') {
       const ref = value.replace(/^e/i, '').replace(/"/g, '\\"');
       element = document.querySelector('[data-cyrene-ref="' + ref + '"]');
     } else {

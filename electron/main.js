@@ -3539,6 +3539,15 @@ class BrowserTabManager {
     };
   }
 
+  _appendInspectElement(elements, refs, element, frame, framePath) {
+    elements.push(element);
+    refs.set(String(element.ref || '').toLowerCase(), {
+      frame,
+      framePath,
+      nested: true,
+    });
+  }
+
   async inspect({ tabId = '', maxElements = 80, textLimit = 160 } = {}) {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
@@ -3582,12 +3591,9 @@ class BrowserTabManager {
             frameUrl: String(mainFrame.url || wc.getURL()),
             shadowDepth: Number(element.shadowDepth || 1),
           };
-          elements.push(element);
-          refs.set(String(element.ref || '').toLowerCase(), {
-            frame: mainFrame,
-            framePath: mainPath,
-            nested: true,
-          });
+          this._appendInspectElement(
+            elements, refs, element, mainFrame, mainPath,
+          );
         }
         remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
       }
@@ -3612,12 +3618,7 @@ class BrowserTabManager {
             frameUrl: String(frame.url || ''),
             shadowDepth: Number(localElement.shadowDepth || 0),
           };
-          elements.push(element);
-          refs.set(String(element.ref || '').toLowerCase(), {
-            frame,
-            framePath,
-            nested: true,
-          });
+          this._appendInspectElement(elements, refs, element, frame, framePath);
         }
         remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
       }
@@ -4267,6 +4268,30 @@ class BrowserTabManager {
     return this._dispatchClick(tab, { x: px, y: py, box: { x: px, y: py, w: 1, h: 1 } });
   }
 
+  _runTypePageOperation(wc, targetFrame, nestedTarget, { mode, value, text, operation }) {
+    const script = nestedTarget
+      ? buildBrowserDeepTypeTargetScript(
+        BROWSER_FIND_NESTED_TARGET_SCRIPT,
+        BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT,
+        {
+          mode,
+          value,
+          text,
+          operation,
+          includeLightDom: targetFrame !== wc.mainFrame,
+        },
+      )
+      : buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
+        mode,
+        value,
+        text,
+        operation,
+      });
+    return targetFrame === wc.mainFrame
+      ? wc.executeJavaScript(script, true)
+      : targetFrame.executeJavaScript(script, true);
+  }
+
   async _typeIntoTarget({ mode = 'selector', value = '', text = '', submit = false, tabId = '' } = {}) {
     this.invalidateSnapshot();
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
@@ -4280,29 +4305,9 @@ class BrowserTabManager {
     await this.showAgentCursor(tab, pointerInfo.x, pointerInfo.y);
     const targetFrame = pointerInfo._frame || wc.mainFrame;
     const nestedTarget = pointerInfo._nested === true;
-    const runPageOperation = (operation) => {
-      const script = nestedTarget
-        ? buildBrowserDeepTypeTargetScript(
-          BROWSER_FIND_NESTED_TARGET_SCRIPT,
-          BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT,
-          {
-            mode,
-            value,
-            text: desiredText,
-            operation,
-            includeLightDom: targetFrame !== wc.mainFrame,
-          },
-        )
-        : buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
-          mode,
-          value,
-          text: desiredText,
-          operation,
-        });
-      return (targetFrame === wc.mainFrame
-        ? wc.executeJavaScript(script, true)
-        : targetFrame.executeJavaScript(script, true));
-    };
+    const runPageOperation = (operation) => this._runTypePageOperation(
+      wc, targetFrame, nestedTarget, { mode, value, text: desiredText, operation },
+    );
     this._markAgentInput(tab);
     let result = await runPageOperation('set-native');
     if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
@@ -4543,6 +4548,57 @@ class BrowserTabManager {
     return this.state();
   }
 
+  async _prepareScrollProbe(wc, refInfo, { ref, dx, dy, px, py, probeId }) {
+    const frame = refInfo && refInfo._nested ? refInfo._frame : wc.mainFrame;
+    const x = refInfo && refInfo._nested ? Number(refInfo._localX) : px;
+    const y = refInfo && refInfo._nested ? Number(refInfo._localY) : py;
+    const execute = (script) => frame === wc.mainFrame
+      ? wc.executeJavaScript(script, true)
+      : frame.executeJavaScript(script, true);
+    const before = await execute(`(() => {
+      const x = ${JSON.stringify(x)};
+      const y = ${JSON.stringify(y)};
+      const dx = ${JSON.stringify(dx)};
+      const dy = ${JSON.stringify(dy)};
+      const probeId = ${JSON.stringify(probeId)};
+      const root = document.scrollingElement || document.documentElement;
+      const canMove = (el) => {
+        if (!(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        const overflowX = style.overflowX || style.overflow;
+        const overflowY = style.overflowY || style.overflow;
+        const scrollableX = el === root || (/^(auto|scroll|overlay)$/).test(overflowX);
+        const scrollableY = el === root || (/^(auto|scroll|overlay)$/).test(overflowY);
+        const canX = dx > 0
+          ? scrollableX && el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+          : dx < 0 && scrollableX && el.scrollLeft > 1;
+        const canY = dy > 0
+          ? scrollableY && el.scrollTop + el.clientHeight < el.scrollHeight - 1
+          : dy < 0 && scrollableY && el.scrollTop > 1;
+        return canX || canY;
+      };
+      const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+      let target = ${refInfo && refInfo._nested
+        ? `${BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT}('ref', ${JSON.stringify(String(ref || ''))}, ${frame !== wc.mainFrame ? 'true' : 'false'})`
+        : 'document.elementFromPoint(x, y)'};
+      while (target && !canMove(target)) target = parentOf(target);
+      if (!target && canMove(root)) target = root;
+      if (!target) return { found: false, x, y };
+      target.setAttribute('data-cyrene-scroll-probe', probeId);
+      return {
+        found: true,
+        x,
+        y,
+        tag: String(target.tagName || '').toLowerCase(),
+        id: String(target.id || ''),
+        ref: String(target.getAttribute('data-cyrene-ref') || ''),
+        scrollLeft: Number(target.scrollLeft || 0),
+        scrollTop: Number(target.scrollTop || 0),
+      };
+    })()`).catch(() => ({ found: false, x, y }));
+    return { before, execute };
+  }
+
   async scroll({ deltaX = 0, deltaY = 0, x = null, y = null, ref = '', tabId = '' } = {}) {
     this.invalidateSnapshot();
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
@@ -4581,53 +4637,10 @@ class BrowserTabManager {
     // through Chromium's trusted input pipeline, matching a user's mouse/trackpad
     // and allowing nested overflow containers to scroll.
     const probeId = 'scroll_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
-    const probeFrame = refInfo && refInfo._nested ? refInfo._frame : wc.mainFrame;
-    const probeX = refInfo && refInfo._nested ? Number(refInfo._localX) : px;
-    const probeY = refInfo && refInfo._nested ? Number(refInfo._localY) : py;
-    const probeExecute = (script) => probeFrame === wc.mainFrame
-      ? wc.executeJavaScript(script, true)
-      : probeFrame.executeJavaScript(script, true);
-    const before = await probeExecute(`(() => {
-      const x = ${JSON.stringify(probeX)};
-      const y = ${JSON.stringify(probeY)};
-      const dx = ${JSON.stringify(dx)};
-      const dy = ${JSON.stringify(dy)};
-      const probeId = ${JSON.stringify(probeId)};
-      const root = document.scrollingElement || document.documentElement;
-      const canMove = (el) => {
-        if (!(el instanceof Element)) return false;
-        const style = getComputedStyle(el);
-        const overflowX = style.overflowX || style.overflow;
-        const overflowY = style.overflowY || style.overflow;
-        const scrollableX = el === root || (/^(auto|scroll|overlay)$/).test(overflowX);
-        const scrollableY = el === root || (/^(auto|scroll|overlay)$/).test(overflowY);
-        const canX = dx > 0
-          ? scrollableX && el.scrollLeft + el.clientWidth < el.scrollWidth - 1
-          : dx < 0 && scrollableX && el.scrollLeft > 1;
-        const canY = dy > 0
-          ? scrollableY && el.scrollTop + el.clientHeight < el.scrollHeight - 1
-          : dy < 0 && scrollableY && el.scrollTop > 1;
-        return canX || canY;
-      };
-      const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
-      let target = ${refInfo && refInfo._nested
-        ? `${BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT}('ref', ${JSON.stringify(String(ref || ''))}, ${probeFrame !== wc.mainFrame ? 'true' : 'false'})`
-        : 'document.elementFromPoint(x, y)'};
-      while (target && !canMove(target)) target = parentOf(target);
-      if (!target && canMove(root)) target = root;
-      if (!target) return { found: false, x, y };
-      target.setAttribute('data-cyrene-scroll-probe', probeId);
-      return {
-        found: true,
-        x,
-        y,
-        tag: String(target.tagName || '').toLowerCase(),
-        id: String(target.id || ''),
-        ref: String(target.getAttribute('data-cyrene-ref') || ''),
-        scrollLeft: Number(target.scrollLeft || 0),
-        scrollTop: Number(target.scrollTop || 0),
-      };
-    })()`).catch(() => ({ found: false, x: probeX, y: probeY }));
+    const probe = await this._prepareScrollProbe(
+      wc, refInfo, { ref, dx, dy, px, py, probeId },
+    );
+    const before = probe.before;
 
     this._markAgentInput(tab);
     // Probe coordinates above are CSS pixels; input events are delivered in
@@ -4648,7 +4661,7 @@ class BrowserTabManager {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const after = await probeExecute(`(() => {
+    const after = await probe.execute(`(() => {
       const roots = [document];
       let target = null;
       for (let index = 0; index < roots.length && !target; index += 1) {
@@ -7158,16 +7171,15 @@ function createMainWindow() {
   });
 }
 
-async function createMainWindowOnce(isCurrent) {
-  let port;
+async function resolveMainWindowBackendPort() {
   try {
-    port = await waitForPort(backendStartupTimeoutMs);
+    return await waitForPort(backendStartupTimeoutMs);
   } catch (err) {
     if (isTerminalLifecycleSoakTest) {
       terminalLifecycleSoakFailure(err);
       isQuitting = true;
       app.exit(1);
-      return;
+      return null;
     }
     const settings = readDesktopSettings();
     dialog.showErrorBox(
@@ -7177,22 +7189,11 @@ async function createMainWindowOnce(isCurrent) {
     );
     killPython();
     app.quit();
-    return;
+    return null;
   }
+}
 
-  if (!port) {
-    // Error already handled in spawnPython (port resolve returned null)
-    return;
-  }
-  if (!isCurrent()) return;
-
-  try {
-    await syncBrowserProxyFromBackend(port);
-  } catch (error) {
-    appendErrorLog(`[electron:browser] Failed to apply browser proxy settings: ${String(error && error.stack || error)}\n`);
-  }
-  if (!isCurrent()) return;
-
+function buildMainWindowOptions() {
   // Workbench draws its own top bar and reserves room for the traffic lights.
   // The inset title bar and traffic-light positioning remain macOS-specific.
   // Windows and Linux keep their native frame so close/minimize/maximize
@@ -7223,7 +7224,22 @@ async function createMainWindowOnce(isCurrent) {
     // topbar so its visible center aligns with the brand mark and wordmark.
     windowOptions.trafficLightPosition = { x: 12, y: 21 };
   }
-  const win = new BrowserWindow(windowOptions);
+  return windowOptions;
+}
+
+async function createMainWindowOnce(isCurrent) {
+  const port = await resolveMainWindowBackendPort();
+  // A null port is already handled by spawnPython or the timeout path above.
+  if (!port || !isCurrent()) return;
+
+  try {
+    await syncBrowserProxyFromBackend(port);
+  } catch (error) {
+    appendErrorLog(`[electron:browser] Failed to apply browser proxy settings: ${String(error && error.stack || error)}\n`);
+  }
+  if (!isCurrent()) return;
+
+  const win = new BrowserWindow(buildMainWindowOptions());
   mainWindow = win;
   installWindowDiagnostics(win, 'main');
 

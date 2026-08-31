@@ -778,10 +778,7 @@ var WorkbenchChatRuntimes = (function () {
   function applyStreamToolEvent(chatId, event) {
     if (!chatId || !event) return;
     var toolCallId = String(event.toolCallId || event.tool_call_id || "");
-    var toolName = wbcAgentToolDisplayName(
-      event.name || event.tool || event.title || "",
-      event.input || event.args
-    );
+    var toolName = wbcAgentToolDisplayName(event.name || event.tool || event.title || "", event.input || event.args);
     if (!toolCallId && !toolName) return;
     if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
     var status = String(event.status || "running").toLowerCase();

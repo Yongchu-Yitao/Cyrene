@@ -993,6 +993,9 @@ def test_services_autosave_is_single_flight_retryable_and_current_only():
     services = settings.split("function ServicesPage(props) {", 1)[1].split(
         "var ROUTE_META =", 1
     )[0]
+    lifecycle = settings.split(
+        "function useModelConfigurationLifecycle(v) {", 1
+    )[1].split("function useConnectionMenuLifecycle(v) {", 1)[0]
 
     assert "var queuedSnapshot = useRef(null);" in services
     assert "var queuedVersion = useRef(0);" in services
@@ -1038,8 +1041,8 @@ def test_services_autosave_is_single_flight_retryable_and_current_only():
     assert "props.onConfigChange(saved)" in current_completion
     assert 'CustomEvent("cyrene:model-configuration-changed"' in current_completion
     assert "return function () { mounted.current = false; };" in hook
-    assert "saveQueueMounted.current = false;" in services
-    assert "clearTimeout(saveQueueTimer.current)" in services
+    assert "v.saveQueueMounted.current = false;" in lifecycle
+    assert "clearTimeout(v.saveQueueTimer.current)" in lifecycle
 
 
 def test_new_model_profile_stays_local_until_explicitly_committed():

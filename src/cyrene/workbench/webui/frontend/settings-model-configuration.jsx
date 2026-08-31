@@ -140,9 +140,78 @@ function renderModelDetailPane(v) {
   ));
 }
 
+function useModelConfigurationLifecycle(v) {
+  v.useEffect(function () {
+    if (!v.config || !(v.config.connections || []).length) return;
+    if (!(v.config.connections || []).some(function (item) { return item.id === v.selectedId; })) v.setSelectedId(v.config.connections[0].id);
+  }, [v.config && v.config.connections && v.config.connections.length, v.selectedId]);
+  v.useEffect(function () {
+    return function () {
+      if (v.oauthPoll.current) clearInterval(v.oauthPoll.current);
+      if (v.oauthCliPoll.current) clearInterval(v.oauthCliPoll.current);
+    };
+  }, []);
+  v.useEffect(function () {
+    v.saveQueueMounted.current = true;
+    return function () {
+      v.saveQueueMounted.current = false;
+      if (v.saveQueueTimer.current) clearTimeout(v.saveQueueTimer.current);
+      v.saveQueueTimer.current = null;
+    };
+  }, []);
+  v.useEffect(function () {
+    if (!v.config || v.dirtyRef.current) return;
+    v.queuedSnapshot.current = v.config;
+    if (Number.isInteger(v.config.revision)) v.knownRevision.current = v.config.revision;
+  }, [v.config]);
+}
+
+function useConnectionMenuLifecycle(v) {
+  v.useEffect(function () {
+    if (!v.connectionMenu) return;
+    function restoreTriggerFocus() {
+      var trigger = v.connectionMenuReturnFocus.current;
+      if (!trigger || !trigger.isConnected) return;
+      window.requestAnimationFrame(function () {
+        try { trigger.focus({ preventScroll: true }); } catch (error) { trigger.focus(); }
+      });
+    }
+    function closeFromPointer(event) {
+      if (v.connectionMenuRef.current && v.connectionMenuRef.current.contains(event.target)) return;
+      v.setConnectionMenu(null);
+    }
+    function closeFromKey(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      v.setConnectionMenu(null);
+      restoreTriggerFocus();
+    }
+    function closeFromViewport() {
+      v.setConnectionMenu(null);
+      restoreTriggerFocus();
+    }
+    document.addEventListener("pointerdown", closeFromPointer, true);
+    document.addEventListener("keydown", closeFromKey, true);
+    window.addEventListener("scroll", closeFromViewport, true);
+    window.addEventListener("resize", closeFromViewport);
+    window.requestAnimationFrame(function () {
+      var firstItem = v.connectionMenuRef.current && v.connectionMenuRef.current.querySelector('[role="menuitem"]');
+      if (firstItem) {
+        try { firstItem.focus({ preventScroll: true }); } catch (error) { firstItem.focus(); }
+      }
+    });
+    return function () {
+      document.removeEventListener("pointerdown", closeFromPointer, true);
+      document.removeEventListener("keydown", closeFromKey, true);
+      window.removeEventListener("scroll", closeFromViewport, true);
+      window.removeEventListener("resize", closeFromViewport);
+    };
+  }, [v.connectionMenu && v.connectionMenu.connectionId]);
+}
+
 (function () {
   "use strict";
-
   var h = React.createElement;
   var useState = React.useState;
   var useEffect = React.useEffect;
@@ -1161,77 +1230,9 @@ function renderModelDetailPane(v) {
     var [modelDiscovery, setModelDiscovery] = useState({});
     var [profileDrafts, setProfileDrafts] = useState({});
     var discoveryRequestVersions = useRef({});
-
     var selected = config && (config.connections || []).find(function (item) { return item.id === selectedId; });
-    useEffect(function () {
-      if (!config || !(config.connections || []).length) return;
-      if (!(config.connections || []).some(function (item) { return item.id === selectedId; })) setSelectedId(config.connections[0].id);
-    }, [config && config.connections && config.connections.length, selectedId]);
-
-    useEffect(function () {
-      return function () {
-        if (oauthPoll.current) clearInterval(oauthPoll.current);
-        if (oauthCliPoll.current) clearInterval(oauthCliPoll.current);
-      };
-    }, []);
-
-    useEffect(function () {
-      saveQueueMounted.current = true;
-      return function () {
-        saveQueueMounted.current = false;
-        if (saveQueueTimer.current) clearTimeout(saveQueueTimer.current);
-        saveQueueTimer.current = null;
-      };
-    }, []);
-
-    useEffect(function () {
-      if (!config || dirtyRef.current) return;
-      queuedSnapshot.current = config;
-      if (Number.isInteger(config.revision)) knownRevision.current = config.revision;
-    }, [config]);
-
-    useEffect(function () {
-      if (!connectionMenu) return;
-      function restoreTriggerFocus() {
-        var trigger = connectionMenuReturnFocus.current;
-        if (!trigger || !trigger.isConnected) return;
-        window.requestAnimationFrame(function () {
-          try { trigger.focus({ preventScroll: true }); } catch (error) { trigger.focus(); }
-        });
-      }
-      function closeFromPointer(event) {
-        if (connectionMenuRef.current && connectionMenuRef.current.contains(event.target)) return;
-        setConnectionMenu(null);
-      }
-      function closeFromKey(event) {
-        if (event.key !== "Escape") return;
-        event.preventDefault();
-        event.stopPropagation();
-        setConnectionMenu(null);
-        restoreTriggerFocus();
-      }
-      function closeFromViewport() {
-        setConnectionMenu(null);
-        restoreTriggerFocus();
-      }
-      document.addEventListener("pointerdown", closeFromPointer, true);
-      document.addEventListener("keydown", closeFromKey, true);
-      window.addEventListener("scroll", closeFromViewport, true);
-      window.addEventListener("resize", closeFromViewport);
-      window.requestAnimationFrame(function () {
-        var firstItem = connectionMenuRef.current && connectionMenuRef.current.querySelector('[role="menuitem"]');
-        if (firstItem) {
-          try { firstItem.focus({ preventScroll: true }); } catch (error) { firstItem.focus(); }
-        }
-      });
-      return function () {
-        document.removeEventListener("pointerdown", closeFromPointer, true);
-        document.removeEventListener("keydown", closeFromKey, true);
-        window.removeEventListener("scroll", closeFromViewport, true);
-        window.removeEventListener("resize", closeFromViewport);
-      };
-    }, [connectionMenu && connectionMenu.connectionId]);
-
+    useModelConfigurationLifecycle({ useEffect, config, selectedId, setSelectedId, oauthPoll, oauthCliPoll, saveQueueMounted, saveQueueTimer, dirtyRef, queuedSnapshot, knownRevision });
+    useConnectionMenuLifecycle({ useEffect, connectionMenu, connectionMenuRef, connectionMenuReturnFocus, setConnectionMenu });
     function setQueueDirty(value) {
       dirtyRef.current = !!value;
       if (saveQueueMounted.current) setDirty(!!value);

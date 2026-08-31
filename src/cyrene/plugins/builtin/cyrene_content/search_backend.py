@@ -691,6 +691,40 @@ async def _search_brave(topic: str, *, max_results: int = 5) -> str:
 # ---------------------------------------------------------------------------
 
 
+async def _simplexng_preview_result(fetch_targets: list[dict]) -> str:
+    started = time.perf_counter()
+    fetched_results = await _fetch_preview_pages(fetch_targets)
+    fetch_ms = (time.perf_counter() - started) * 1000
+    for index, result_item in enumerate(fetch_targets):
+        result_item["fetched_content"] = fetched_results[index]
+    logger.info(
+        "Preview fetch complete: %d URLs fetched (%.0f ms)",
+        sum(1 for item in fetched_results if item),
+        fetch_ms,
+    )
+    preview_contents = [
+        result.get("fetched_content", "") or result.get("snippet", "")
+        for result in fetch_targets
+    ]
+    if not any(str(content or "").strip() for content in preview_contents):
+        raise SearchBackendUnavailable(
+            "SimpleXNG returned previews without usable content.",
+            error_code="no_results",
+            retryable=True,
+            retry_scope="different_arguments",
+            retry_after_ms=None,
+            affects_health=False,
+            circuit_scope="none",
+        )
+    result = _preview_search_result(fetch_targets, preview_contents)
+    logger.info(
+        "WebSearch preview result generated (%d chars, %d sources)",
+        len(result),
+        len(fetch_targets),
+    )
+    return result
+
+
 async def _deep_search_simplexng(
     topic: str,
     *,
@@ -764,37 +798,7 @@ async def _deep_search_simplexng(
     fetch_targets = deduped[:3] if detail == "preview" else deduped
 
     if detail == "preview":
-        started = time.perf_counter()
-        fetched_results = await _fetch_preview_pages(fetch_targets)
-        fetch_ms = (time.perf_counter() - started) * 1000
-        for index, result_item in enumerate(fetch_targets):
-            result_item["fetched_content"] = fetched_results[index]
-        logger.info(
-            "Preview fetch complete: %d URLs fetched (%.0f ms)",
-            sum(1 for item in fetched_results if item),
-            fetch_ms,
-        )
-        preview_contents = [
-            r.get("fetched_content", "") or r.get("snippet", "")
-            for r in fetch_targets
-        ]
-        if not any(str(content or "").strip() for content in preview_contents):
-            raise SearchBackendUnavailable(
-                "SimpleXNG returned previews without usable content.",
-                error_code="no_results",
-                retryable=True,
-                retry_scope="different_arguments",
-                retry_after_ms=None,
-                affects_health=False,
-                circuit_scope="none",
-            )
-        result = _preview_search_result(fetch_targets, preview_contents)
-        logger.info(
-            "WebSearch preview result generated (%d chars, %d sources)",
-            len(result),
-            len(fetch_targets),
-        )
-        return result
+        return await _simplexng_preview_result(fetch_targets)
 
     # requests.Session is not thread-safe. Each concurrent fetch owns its
     # session instead of sharing one across asyncio.to_thread workers.
@@ -951,6 +955,38 @@ async def _run_search_provider(
         ) from exc
 
 
+def _search_failure_policy(
+    failures: list[SearchBackendUnavailable],
+) -> tuple[str, str, str, int | None]:
+    """Collapse provider failures into one public retry policy."""
+    only_no_results = bool(failures) and all(
+        failure.error_code == "no_results" for failure in failures
+    )
+    retry_after_values = [
+        failure.retry_after_ms
+        for failure in failures
+        if failure.retry_after_ms is not None
+    ]
+    if only_no_results:
+        return "search_no_results", "different_arguments", "none", None
+    if retry_after_values:
+        return (
+            "search_providers_unavailable",
+            "after_delay",
+            "run_plugin",
+            min(retry_after_values),
+        )
+    retry_scope = (
+        "after_config_change"
+        if failures
+        and all(
+            failure.retry_scope == "after_config_change" for failure in failures
+        )
+        else "new_run"
+    )
+    return "search_providers_unavailable", retry_scope, "run_plugin", None
+
+
 async def _deep_search_impl(
     topic: str,
     *,
@@ -1022,38 +1058,10 @@ async def _deep_search_impl(
             classified_failures.append(classified)
             failures.append(f"{provider}: {classified}")
             logger.warning("Search provider %s unavailable: %s", provider, classified)
-    only_no_results = bool(classified_failures) and all(
-        failure.error_code == "no_results" for failure in classified_failures
-    )
     retryable = any(failure.retryable for failure in classified_failures)
-    retry_after_values = [
-        failure.retry_after_ms
-        for failure in classified_failures
-        if failure.retry_after_ms is not None
-    ]
-    if only_no_results:
-        error_code = "search_no_results"
-        retry_scope = "different_arguments"
-        circuit_scope = "none"
-        retry_after_ms = None
-    elif retry_after_values:
-        error_code = "search_providers_unavailable"
-        retry_scope = "after_delay"
-        circuit_scope = "run_plugin"
-        retry_after_ms = min(retry_after_values)
-    else:
-        error_code = "search_providers_unavailable"
-        retry_scope = (
-            "after_config_change"
-            if classified_failures
-            and all(
-                failure.retry_scope == "after_config_change"
-                for failure in classified_failures
-            )
-            else "new_run"
-        )
-        circuit_scope = "run_plugin"
-        retry_after_ms = None
+    error_code, retry_scope, circuit_scope, retry_after_ms = _search_failure_policy(
+        classified_failures
+    )
     raise SearchBackendUnavailable(
         "All enabled search providers failed. " + " | ".join(failures),
         error_code=error_code,

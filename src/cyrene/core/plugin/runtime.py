@@ -593,6 +593,117 @@ class PluginRuntime:
             )
             return result
 
+    async def _validate_prepared_call(
+        self,
+        prepared: PreparedPluginCall,
+        context: PluginContext,
+    ) -> None:
+        plugin = prepared.plugin
+        arguments = dict(prepared.arguments)
+        self.registry.resolve(
+            plugin.name,
+            agent_id=_context_agent_id(context),
+        )
+        validate_plugin_arguments(plugin.name, arguments, plugin.input_schema)
+        current_boundary = await _permission_boundary(plugin, arguments, context)
+        if current_boundary != prepared.permission_boundary:
+            raise PermissionError(
+                "Plugin permission boundary changed after review; retry the exact call."
+            )
+
+    async def _invoke_prepared_handler(
+        self,
+        prepared: PreparedPluginCall,
+        context: PluginContext,
+    ) -> Any:
+        plugin = prepared.plugin
+        arguments = dict(prepared.arguments)
+        with bind_plugin_execution(self, prepared.call, context):
+            if plugin.timeout_seconds is not None and not inspect.iscoroutinefunction(
+                plugin.handler
+            ):
+                value = await asyncio.wait_for(
+                    asyncio.to_thread(plugin.handler, arguments, context),
+                    timeout=plugin.timeout_seconds,
+                )
+            else:
+                value = plugin.handler(arguments, context)
+                if inspect.isawaitable(value):
+                    if plugin.timeout_seconds is None:
+                        value = await value
+                    else:
+                        value = await asyncio.wait_for(
+                            value,
+                            timeout=plugin.timeout_seconds,
+                        )
+            if inspect.isawaitable(value):
+                value = await value
+        return value
+
+    def _handler_failure(
+        self,
+        plugin: Plugin,
+        call: PluginCall,
+        context: PluginContext,
+        exc: Exception,
+    ) -> tuple[str, PluginFailure]:
+        log_operation(
+            logger,
+            "plugin.runtime",
+            "handler",
+            phase="failed",
+            level=logging.ERROR,
+            exc_info=True,
+            call_id=call.id,
+            plugin=call.name,
+            error=exc,
+            **_context_fields(context),
+        )
+        if isinstance(exc, PluginExecutionError):
+            failure = exc.failure
+            error = failure.message
+        else:
+            error = _execution_error_text(context, plugin, exc)
+            failure = PluginFailure(
+                error_code="plugin_execution_failed",
+                message=error,
+                retryable=False,
+                retry_scope="new_run",
+                circuit_scope="run_plugin" if plugin.kind == "tool" else "none",
+            )
+        self._record_failure(plugin, context, failure)
+        return error, failure
+
+    async def _blocked_result(
+        self,
+        prepared: PreparedPluginCall,
+        context: PluginContext,
+    ) -> PluginCallResult | None:
+        plugin = prepared.plugin
+        blocked = self._blocked_failure(plugin, context)
+        if blocked is None:
+            return None
+        arguments = dict(prepared.arguments)
+        if _dispatches_own_tool_hooks(plugin):
+            await self._post(
+                context,
+                prepared.call.name,
+                arguments,
+                None,
+                False,
+                blocked.message,
+                failure=blocked,
+            )
+        return PluginCallResult(
+            prepared.call.id,
+            prepared.call.name,
+            False,
+            None,
+            blocked.message,
+            _utc_now(),
+            blocked,
+        )
+
     async def execute(
         self,
         prepared: PreparedPluginCall,
@@ -618,24 +729,7 @@ class PluginRuntime:
             **_context_fields(context),
         ) as op:
             try:
-                self.registry.resolve(
-                    plugin.name,
-                    agent_id=_context_agent_id(context),
-                )
-                validate_plugin_arguments(
-                    plugin.name,
-                    arguments,
-                    plugin.input_schema,
-                )
-                current_boundary = await _permission_boundary(
-                    plugin,
-                    arguments,
-                    context,
-                )
-                if current_boundary != prepared.permission_boundary:
-                    raise PermissionError(
-                        "Plugin permission boundary changed after review; retry the exact call."
-                    )
+                await self._validate_prepared_call(prepared, context)
             except Exception as exc:
                 failure = _validation_failure(context, exc)
                 op.finish(success=False, rejected=True, error=exc)
@@ -648,53 +742,16 @@ class PluginRuntime:
                     _utc_now(),
                     failure,
                 )
-            blocked = self._blocked_failure(plugin, context)
-            if blocked is not None:
-                if _dispatches_own_tool_hooks(plugin):
-                    await self._post(
-                        context,
-                        call.name,
-                        arguments,
-                        None,
-                        False,
-                        blocked.message,
-                        failure=blocked,
-                    )
+            blocked_result = await self._blocked_result(prepared, context)
+            if blocked_result is not None:
                 op.finish(
                     success=False,
                     circuit_open=True,
-                    error_code=blocked.error_code,
+                    error_code=blocked_result.failure.error_code,
                 )
-                return PluginCallResult(
-                    call.id,
-                    call.name,
-                    False,
-                    None,
-                    blocked.message,
-                    _utc_now(),
-                    blocked,
-                )
+                return blocked_result
             try:
-                with bind_plugin_execution(self, call, context):
-                    if plugin.timeout_seconds is not None and not inspect.iscoroutinefunction(
-                        plugin.handler
-                    ):
-                        value = await asyncio.wait_for(
-                            asyncio.to_thread(plugin.handler, arguments, context),
-                            timeout=plugin.timeout_seconds,
-                        )
-                    else:
-                        value = plugin.handler(arguments, context)
-                        if inspect.isawaitable(value):
-                            if plugin.timeout_seconds is None:
-                                value = await value
-                            else:
-                                value = await asyncio.wait_for(
-                                    value,
-                                    timeout=plugin.timeout_seconds,
-                                )
-                    if inspect.isawaitable(value):
-                        value = await value
+                value = await self._invoke_prepared_handler(prepared, context)
             except asyncio.TimeoutError:
                 error = plugin_localized(
                     context,
@@ -735,33 +792,9 @@ class PluginRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log_operation(
-                    logger,
-                    "plugin.runtime",
-                    "handler",
-                    phase="failed",
-                    level=logging.ERROR,
-                    exc_info=True,
-                    call_id=call.id,
-                    plugin=call.name,
-                    error=exc,
-                    **_context_fields(context),
+                error, failure = self._handler_failure(
+                    plugin, call, context, exc
                 )
-                if isinstance(exc, PluginExecutionError):
-                    failure = exc.failure
-                    error = failure.message
-                else:
-                    error = _execution_error_text(context, plugin, exc)
-                    failure = PluginFailure(
-                        error_code="plugin_execution_failed",
-                        message=error,
-                        retryable=False,
-                        retry_scope="new_run",
-                        circuit_scope=(
-                            "run_plugin" if plugin.kind == "tool" else "none"
-                        ),
-                    )
-                self._record_failure(plugin, context, failure)
                 if _dispatches_own_tool_hooks(plugin):
                     await self._post(
                         context,
