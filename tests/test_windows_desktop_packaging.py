@@ -263,5 +263,8 @@ def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
 
     ocr_spec = (ROOT / "build" / "cyrene_ocr_sidecar.spec").read_text(encoding="utf-8")
     search_spec = (ROOT / "build" / "cyrene_simplexng_sidecar.spec").read_text(encoding="utf-8")
+    search_entry = (ROOT / "build" / "run_simplexng_sidecar.py").read_text(encoding="utf-8")
     assert '"shapely", "yaml", "omegaconf", "tqdm", "colorlog", "requests", "six"' in ocr_spec
     assert '"httpx", "httpcore", "httpx_socks", "anyio", "sniffio", "certifi"' in search_spec
+    assert "from cyrene.simplexng_child import main" in search_entry
+    assert "cyrene.plugins" not in search_entry

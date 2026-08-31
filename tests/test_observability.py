@@ -8,7 +8,13 @@ import logging
 
 from cyrene.core.context import ContextStoreRouter
 from cyrene.core.hook import POST_TOOL_USE
-from cyrene.core.observability import LOG_PREFIX, MAX_STRING_LENGTH, safe_log_value
+from cyrene.core.observability import (
+    LOG_PREFIX,
+    MAX_EVENT_BYTES,
+    MAX_STRING_LENGTH,
+    log_operation,
+    safe_log_value,
+)
 from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry, PluginRuntime
 from cyrene.core.session import AgentSession
 
@@ -23,22 +29,84 @@ def _operations(caplog) -> list[dict]:
 
 
 def test_safe_log_value_redacts_secrets_and_bounds_payloads():
+    private_content = "x" * (MAX_STRING_LENGTH + 25)
+    private_command = "read /Users/alice/private.txt"
+    private_path = r"C:\Users\alice\Documents\report.docx"
     value = safe_log_value(
         {
             "api_key": "do-not-log",
             "nested": {"Authorization": "Bearer private", "tokens": 17},
-            "content": "x" * (MAX_STRING_LENGTH + 25),
+            "content": private_content,
+            "command": private_command,
+            "path": private_path,
+            "diagnostic": r"failed under C:\Users\alice\Documents",
+            "ordinary": "x" * (MAX_STRING_LENGTH + 25),
         }
     )
 
     assert value["api_key"] == "<redacted>"
     assert value["nested"]["Authorization"] == "<redacted>"
     assert value["nested"]["tokens"] == 17
-    assert value["content"].endswith("<truncated 25 chars>")
+    assert value["content"] == f"<redacted:{len(private_content)} chars>"
+    assert value["command"] == f"<redacted:{len(private_command)} chars>"
+    assert value["path"] == f"<redacted:{len(private_path)} chars>"
+    assert value["diagnostic"] == r"failed under C:\Users\<user>\Documents"
+    assert value["ordinary"].endswith("<truncated 25 chars>")
+
+
+def test_operation_log_has_a_hard_size_limit(caplog):
+    caplog.set_level(logging.DEBUG)
+    logger = logging.getLogger("test.operation-size")
+
+    log_operation(
+        logger,
+        "test.component",
+        "large_event",
+        phase="completed",
+        details={f"field_{index}": "x" * MAX_STRING_LENGTH for index in range(100)},
+    )
+
+    message = caplog.records[-1].getMessage()
+    prefix = f"{LOG_PREFIX} "
+    assert message.startswith(prefix)
+    assert len(message[len(prefix):].encode("utf-8")) <= MAX_EVENT_BYTES
+    payload = json.loads(message[len(prefix):])
+    assert payload["component"] == "test.component"
+    assert payload["action"] == "large_event"
+    assert payload["phase"] == "completed"
+    assert payload["log_payload_truncated"] is True
+    assert payload["original_payload_bytes"] > MAX_EVENT_BYTES
+    assert payload["details"] == {
+        "items": 100,
+        "keys": [f"field_{index}" for index in range(20)],
+        "type": "mapping",
+    }
+
+
+def test_routine_operations_are_debug_but_failures_remain_visible(caplog):
+    caplog.set_level(logging.INFO)
+    logger = logging.getLogger("test.operation-level")
+
+    log_operation(logger, "test.component", "routine", phase="completed")
+    log_operation(
+        logger,
+        "test.component",
+        "failure",
+        phase="failed",
+        error=RuntimeError("broken"),
+    )
+
+    records = [record for record in caplog.records if record.name == logger.name]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    payload = json.loads(records[0].getMessage().removeprefix(f"{LOG_PREFIX} "))
+    assert payload["action"] == "failure"
+    assert payload["phase"] == "failed"
+    assert payload["error"] == {"message": "broken", "type": "RuntimeError"}
 
 
 def test_context_hook_and_plugin_actions_are_structurally_logged(tmp_path, caplog):
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.DEBUG)
     observed = []
     store = ContextStoreRouter(tmp_path / "context")
     try:
@@ -129,7 +197,7 @@ def test_context_hook_and_plugin_actions_are_structurally_logged(tmp_path, caplo
 
 
 def test_agent_session_logs_state_transitions_and_output_events(tmp_path, caplog):
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.DEBUG)
 
     async def fake_model(_arguments, _context):
         return {

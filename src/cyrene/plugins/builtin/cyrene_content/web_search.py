@@ -55,7 +55,7 @@ async def _tool_websearch(args: dict[str, Any], context: PluginContext) -> str:
     }
     service = context.services.get("web_search")
     search = getattr(service, "search", None)
-    if not callable(search) or context.services.get("content") is None:
+    if not callable(search):
         raise RuntimeError("cyrene_content application service is unavailable")
     try:
         return str(await search(query, **options))

@@ -57,3 +57,13 @@ test("extension cards use the theme secondary surface instead of white", () => {
 
   assert.match(source, /\.wb-extension-card \{\s*background: var\(--wb-control-bg\);\s*\}/)
 })
+
+test("plugin tool menus escape the package card and stack above following cards", () => {
+  const source = fs.readFileSync(
+    path.join(FRONTEND_ROOT, "features", "settings", "extensions.css"),
+    "utf8",
+  )
+
+  assert.match(source, /\.wb-registry-pack-card \{[\s\S]*?position: relative;[\s\S]*?z-index: 0;[\s\S]*?overflow: visible;/)
+  assert.match(source, /\.wb-registry-pack-card:has\(\.wb-tool-menu\) \{\s*z-index: 1;\s*\}/)
+})

@@ -49,6 +49,38 @@ def test_disabled_content_pack_mounts_no_routes_or_process_services(tmp_path):
     }.intersection(route.path for route in router.routes)
 
 
+def test_search_startup_failure_keeps_content_pack_operational(tmp_path, monkeypatch):
+    from cyrene.plugins.builtin import cyrene_content
+    from cyrene.plugins.builtin.cyrene_content import search_service
+
+    async def fail_startup(*_args, **_kwargs):
+        raise RuntimeError("sidecar unavailable")
+
+    service = search_service.WebSearchService()
+    monkeypatch.setattr(search_service, "start_searxng", fail_startup)
+    monkeypatch.setattr(cyrene_content, "get_search_service", lambda: service)
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(plugin_pack, source="test-content")
+    host = PluginApplicationHost(
+        app=FastAPI(),
+        registry=registry,
+        bot=None,
+        db_path=str(tmp_path / "app.db"),
+        data_directory=tmp_path / "data",
+        plugin_directory=tmp_path / "plugin_impl",
+    )
+    host.attach(APIRouter())
+
+    asyncio.run(host.startup())
+
+    assert host.startup_failures == {}
+    assert host.pack_operational("cyrene_content")
+    assert host.service("web_search") is service
+    assert host.service("tool_results") is not None
+    assert service.startup_error == "RuntimeError: sidecar unavailable"
+
+
 def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch):
     class FakeSearchService:
         async def search(self, topic: str, **options: object) -> str:
@@ -72,7 +104,6 @@ def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch
         tree_id="chat-one",
         data={"session_id": "chat-one", "run_id": "run-one"},
         services={
-            "content": object(),
             "web_search": FakeSearchService(),
             "tool_results": tool_result_store.get_tool_result_store(),
         },
@@ -140,7 +171,6 @@ def test_content_pack_toolbox_search_and_result_read_chain(tmp_path, monkeypatch
     wrong_session = PluginContext(
         data={"session_id": "chat-two"},
         services={
-            "content": object(),
             "tool_results": tool_result_store.get_tool_result_store(),
         },
     )

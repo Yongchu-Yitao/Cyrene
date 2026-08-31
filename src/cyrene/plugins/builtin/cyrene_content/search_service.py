@@ -434,6 +434,7 @@ class WebSearchService:
         from .search_backend import ProviderHealthRegistry
 
         self._provider_health = ProviderHealthRegistry()
+        self._startup_error = ""
 
     @property
     def manager(self) -> SearXNGManager:
@@ -454,6 +455,10 @@ class WebSearchService:
     def reset_provider_health(self) -> None:
         self._provider_health.reset()
 
+    @property
+    def startup_error(self) -> str:
+        return self._startup_error
+
     async def startup(
         self,
         port: int | None = None,
@@ -466,6 +471,21 @@ class WebSearchService:
             str(SEARXNG_HOST if host is None else host),
         )
         self.reset_provider_health()
+        return url
+
+    async def startup_best_effort(self) -> str:
+        """Start local search without disabling unrelated content capabilities."""
+        try:
+            url = await self.startup()
+        except Exception as exc:
+            self._startup_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "SimpleXNG startup failed; continuing without local search: %s",
+                exc,
+                exc_info=True,
+            )
+            return ""
+        self._startup_error = ""
         return url
 
     async def restart(self, port: int, host: str) -> str:

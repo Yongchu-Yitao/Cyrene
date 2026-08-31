@@ -226,7 +226,7 @@ def test_web_search_translates_provider_health_into_core_failure():
     runtime = PluginRuntime(registry)
     context = PluginContext(
         data={"run_id": "run-search", "language": "en"},
-        services={"content": object(), "web_search": FailedSearchService()},
+        services={"web_search": FailedSearchService()},
     )
 
     first = run(runtime.call("WebSearch", {"query": "weather"}, context))

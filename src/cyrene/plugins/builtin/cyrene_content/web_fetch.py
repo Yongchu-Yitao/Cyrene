@@ -133,8 +133,6 @@ def _extract_response_text(
 
 
 async def _tool_webfetch(args: dict[str, Any], context: PluginContext) -> str:
-    if context.services.get("content") is None:
-        raise RuntimeError("cyrene_content application service is unavailable")
     url = str(args["url"])
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
         response = await client.get(url)

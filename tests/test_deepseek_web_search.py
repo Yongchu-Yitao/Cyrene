@@ -350,7 +350,7 @@ async def test_tool_passes_run_context_to_search():
                     "round_id": "round-context",
                 },
             },
-            services={"content": object(), "web_search": SearchService()},
+            services={"web_search": SearchService()},
         ),
     )
 

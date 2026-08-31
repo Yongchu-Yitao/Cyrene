@@ -44,8 +44,15 @@
 }
 
 .wb-registry-pack-card {
+  position: relative;
+  z-index: 0;
+  overflow: visible;
   cursor: pointer;
   transition: border-color 180ms ease;
+}
+
+.wb-registry-pack-card:has(.wb-tool-menu) {
+  z-index: 1;
 }
 
 .wb-registry-pack-card:hover {
