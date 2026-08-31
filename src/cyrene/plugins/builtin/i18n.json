@@ -2625,6 +2625,16 @@
         "description": "进入计划模式，分解任务并让用户审核后再执行。"
       }
     },
+    "finish_proactive": {
+      "en": {
+        "name": "Finish proactive work",
+        "description": "Required terminal protocol for a scheduler-initiated proactive work cycle. Submit exactly one structured decision after all work is complete. Use deliver with the exact concise user report, or suppress with an empty report when nothing should be shown."
+      },
+      "zh": {
+        "name": "完成主动任务",
+        "description": "结束由调度器发起的主动工作周期，并提交唯一的交付或静默决定。"
+      }
+    },
     "entity.delete": {
       "en": {
         "name": "Delete user data",

@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from ..execution import PluginInvocationError, invoke_plugin
+from ..execution import PluginInvocationError, invoke_plugin, require_plugin_execution
 from ..plugin import Plugin, PluginContext
 from ..resource_effects import split_resource_reveal, workspace_resource_locations
-from ..validation import normalize_plugin_arguments
 
 if TYPE_CHECKING:
     from ..registry import PluginLoadFailure, PluginRegistry, RegisteredPlugin
@@ -261,15 +260,14 @@ class _ToolboxHandler:
             nested_arguments = arguments.get("arguments") or {}
             if not isinstance(nested_arguments, Mapping):
                 raise TypeError("toolbox invoke arguments must be an object")
-            normalization = normalize_plugin_arguments(
-                nested_arguments,
-                registered.plugin.input_schema,
-            )
-            nested_arguments = normalization.arguments
             nested_arguments, reveal = split_resource_reveal(
                 nested_arguments,
                 effects=registered.plugin.resource_effects,
                 allow_reveal=agent_id == "main",
+            )
+            argument_repairs = tuple(
+                dict(repair)
+                for repair in require_plugin_execution().call.argument_repairs
             )
 
             nested_error: dict[str, Any] | None = None
@@ -278,19 +276,44 @@ class _ToolboxHandler:
                     name,
                     dict(nested_arguments),
                     review=True,
+                    arguments_normalized=True,
+                    nested_arguments_normalized=True,
+                    argument_repairs=argument_repairs,
                 )
             except PluginInvocationError as exc:
                 nested_value = None
                 message = str(exc.result.error or exc)
-                nested_error = {
-                    "code": (
-                        "invalid_arguments"
-                        if "Invalid arguments" in message or "插件参数无效" in message
-                        else "plugin_invocation_failed"
-                    ),
-                    "plugin": name,
-                    "message": message,
-                }
+                nested_error = (
+                    exc.result.failure.as_dict()
+                    if exc.result.failure is not None
+                    else {
+                        "error_code": (
+                            "plugin_invalid_arguments"
+                            if "Invalid arguments" in message
+                            or "插件参数无效" in message
+                            else "plugin_invocation_failed"
+                        ),
+                        "message": message,
+                        "retryable": False,
+                        "retry_scope": "never",
+                        "retry_after_ms": None,
+                        "circuit_scope": "none",
+                        "details": {},
+                    }
+                )
+                nested_error["plugin"] = name
+                # ``error_code`` is the canonical failure protocol. Keep the
+                # historical Toolbox ``code`` field as a presentation alias
+                # for clients that have not migrated yet; runtime decisions
+                # never depend on it.
+                nested_error["code"] = (
+                    "invalid_arguments"
+                    if nested_error.get("error_code") == "plugin_invalid_arguments"
+                    else str(
+                        nested_error.get("error_code")
+                        or "plugin_invocation_failed"
+                    )
+                )
             result = {
                 "operation": "invoke",
                 "name": name,
@@ -300,10 +323,8 @@ class _ToolboxHandler:
                 "pack": registered.pack_id,
                 "result": nested_value,
             }
-            if normalization.repairs:
-                result["argument_repairs"] = [
-                    repair.as_dict() for repair in normalization.repairs
-                ]
+            if argument_repairs:
+                result["argument_repairs"] = list(argument_repairs)
             if nested_error is not None:
                 result["error"] = nested_error
             project_id = str(context.data.get("project_id") or "")

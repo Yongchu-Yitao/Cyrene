@@ -246,6 +246,33 @@ def test_builtin_catalog_explicitly_covers_every_plugin_description() -> None:
             ), identity
 
 
+def test_workbench_tool_name_catalog_covers_every_registered_builtin() -> None:
+    root = Path(__file__).parents[1]
+    i18n_root = (
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend"
+        / "shared" / "i18n"
+    )
+    key_sets = []
+    for filename in ("catalog-en.jsx", "catalog-zh.jsx"):
+        source = (i18n_root / filename).read_text(encoding="utf-8")
+        key_sets.append(set(re.findall(r'"toolName\.([^"\\]+)"\s*:', source)))
+    assert key_sets[0] == key_sets[1]
+
+    alias_source = (i18n_root / "tool-name-aliases.jsx").read_text(encoding="utf-8")
+    aliases = dict(re.findall(r'^\s*"([^"]+)":\s*"([^"]+)"', alias_source, re.M))
+    assert set(aliases.values()) <= key_sets[0]
+
+    registry = PluginRegistry()
+    assert registry.load_directory(_CATALOG_PATH.parent) == ()
+    missing = {
+        registered.plugin.canonical_name
+        for registered in registry.list_plugins()
+        if registered.plugin.canonical_name not in key_sets[0]
+        and aliases.get(registered.plugin.canonical_name) not in key_sets[0]
+    }
+    assert missing == set()
+
+
 def test_seeded_plugin_english_descriptions_match_english_source(tmp_path) -> None:
     root = tmp_path / "plugin_impl"
     seed_builtin_plugin_directory(root)

@@ -40,6 +40,63 @@ def _isolate_memory_store(monkeypatch, tmp_path, language):
     )
 
 
+def test_sampled_memory_injection_keeps_top_five_and_samples_ten_from_tail(
+    monkeypatch,
+):
+    entries = [
+        {
+            "id": f"mem-{index:02d}",
+            "content": f"memory {index:02d}",
+            "category": "fact",
+            "mention_count": 20 - index,
+            "last_mentioned": "2026-08-31",
+        }
+        for index in range(20)
+    ]
+    sampled = {}
+
+    def choose(population, count):
+        sampled["population"] = list(population)
+        sampled["count"] = count
+        return list(population[-count:])
+
+    monkeypatch.setattr(memory.random, "sample", choose)
+
+    selected = memory.sample_memory_injection_ids("project-test", entries=entries)
+    rendered = memory.render_sampled_memory_for_injection(
+        "project-test",
+        entries=entries,
+        max_chars=10_000,
+        header="memories",
+        language="en",
+    )
+
+    assert selected == [
+        "mem-00",
+        "mem-01",
+        "mem-02",
+        "mem-03",
+        "mem-04",
+        "mem-10",
+        "mem-11",
+        "mem-12",
+        "mem-13",
+        "mem-14",
+        "mem-15",
+        "mem-16",
+        "mem-17",
+        "mem-18",
+        "mem-19",
+    ]
+    assert sampled == {
+        "population": [f"mem-{index:02d}" for index in range(5, 20)],
+        "count": 10,
+    }
+    assert all(f"memory {index:02d}" in rendered for index in range(5))
+    assert all(f"memory {index:02d}" in rendered for index in range(10, 20))
+    assert all(f"memory {index:02d}" not in rendered for index in range(5, 10))
+
+
 @pytest.mark.asyncio
 async def test_agent_memory_is_saved_verbatim_without_llm(monkeypatch, tmp_path):
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
@@ -248,6 +305,57 @@ async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp
     )
     assert stored[0]["source"] == "conversation"
     assert stored[0]["content"] == "远程设备配备16GB内存。"
+
+
+@pytest.mark.asyncio
+async def test_retry_supersedes_and_relearns_structured_memory_by_turn_id(
+    monkeypatch,
+    tmp_path,
+):
+    _isolate_memory_store(monkeypatch, tmp_path, "en")
+
+    async def extract(_user_text, _agent_text, **_kwargs):
+        return [
+            {
+                "content": "You prefer the plugin boundary.",
+                "category": "preference",
+                "confidence": "high",
+                "evidence": "plugin boundary",
+            }
+        ]
+
+    monkeypatch.setattr(memory, "_extract_memories_llm", extract)
+    await memory.capture_from_exchange(
+        "project-retry",
+        "Use the plugin boundary",
+        "done",
+        session_id="chat-1",
+        turn_id="turn-1",
+        run_id="run-1",
+    )
+    assert memory.supersede_conversation_turn(
+        "project-retry",
+        session_id="chat-1",
+        turn_id="turn-1",
+        replacement_run_id="run-2",
+    ) == 1
+    retired = memory._load("project-retry")[0]
+    assert retired["stale"] is True
+    assert retired["citations"] == []
+
+    await memory.capture_from_exchange(
+        "project-retry",
+        "Use the plugin boundary",
+        "corrected",
+        session_id="chat-1",
+        turn_id="turn-1",
+        run_id="run-2",
+    )
+    relearned = memory._load("project-retry")[0]
+    assert "stale" not in relearned
+    assert relearned["mention_count"] == 1
+    assert relearned["citations"][0]["turnId"] == "turn-1"
+    assert relearned["citations"][0]["runId"] == "run-2"
 
 
 @pytest.mark.asyncio

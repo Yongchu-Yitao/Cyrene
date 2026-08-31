@@ -1773,6 +1773,51 @@ def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credentia
     assert "Snapshot credential:" in inspect.getsource(browser_snapshot._tool_browser_snapshot)
 
 
+async def test_nested_ref_lookup_uses_recorded_frame_without_changing_legacy_lookup(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_browser import runtime as browser
+
+    class Frame:
+        def __init__(self, url):
+            self.url = url
+
+        async def evaluate(self, script, args=None):
+            assert browser._BROWSER_NESTED_FIND_JS in script
+            assert args == ["ref", "e9", False, True]
+            return {
+                "ok": True,
+                "x": 20,
+                "y": 30,
+                "box": {"x": 10, "y": 15, "w": 40, "h": 30},
+            }
+
+    main_frame = Frame("https://example.com/")
+    child_frame = Frame("https://widget.example/")
+
+    page = MagicMock()
+    page.url = "https://example.com/"
+    page.main_frame = main_frame
+    page.frames = [main_frame, child_frame]
+
+    session = browser._BrowserSession()
+    session._page = page
+
+    async def fake_offset(frame, page):
+        assert frame is child_frame
+        return (100.0, 200.0, 1.0, 1.0)
+
+    monkeypatch.setattr(session, "_frame_offset", fake_offset)
+    result = await session._find_target(
+        "ref",
+        "e9",
+        frame_hint={"frame": child_frame, "nested": True},
+    )
+
+    assert result["ok"] is True
+    assert (result["x"], result["y"]) == (120, 230)
+    assert result["box"] == {"x": 110, "y": 215, "w": 40, "h": 30}
+    assert result["_frame"] is child_frame
+
+
 async def test_browser_click_ref_reports_popup_as_new_active_tab(monkeypatch):
     from cyrene.plugins.builtin.cyrene_browser import browser_click_ref as tool
 

@@ -24,6 +24,10 @@ def _short_id(prefix: str) -> str:
     return f"{str(prefix or 'id')}_{uuid.uuid4().hex[:12]}"
 
 
+def _proactive_title(lang: str) -> str:
+    return "Proactive work" if str(lang or "").lower() == "en" else "主动工作"
+
+
 async def _ensure_proactive_context(
     db_path: str,
     chat_id: str,
@@ -62,6 +66,15 @@ async def _ensure_proactive_context(
         create_tree=True,
         require_idle=True,
     )
+
+
+async def _project_memory_snapshot(project_id: str) -> dict[str, Any] | None:
+    memory_service = application_plugin_service("memory")
+    snapshot_loader = getattr(memory_service, "current_snapshot", None)
+    if not callable(snapshot_loader):
+        return None
+    loaded = await asyncio.to_thread(snapshot_loader, project_id)
+    return dict(loaded) if isinstance(loaded, dict) else None
 
 
 async def create_proactive_chat(
@@ -112,20 +125,14 @@ async def create_proactive_chat(
             ),
             "title": str(
                 existing.get("title")
-                or ("Proactive work" if str(lang or "").lower() == "en" else "主动工作")
+                or _proactive_title(lang)
             ),
         }
 
-    memory_snapshot = None
-    memory_service = application_plugin_service("memory")
-    snapshot_loader = getattr(memory_service, "current_snapshot", None)
-    if callable(snapshot_loader):
-        loaded = await asyncio.to_thread(snapshot_loader, normalized_project_id)
-        if isinstance(loaded, dict):
-            memory_snapshot = dict(loaded)
+    memory_snapshot = await _project_memory_snapshot(normalized_project_id)
 
     now = _utc_now_iso()
-    title = "Proactive work" if str(lang or "").lower() == "en" else "主动工作"
+    title = _proactive_title(lang)
     message = {
         "id": _short_id("msg"),
         "role": "assistant",

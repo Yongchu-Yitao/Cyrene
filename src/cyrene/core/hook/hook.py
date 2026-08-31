@@ -14,6 +14,7 @@ POST_TOOL_USE = "PostToolUse"
 SESSION_START = "SessionStart"
 TURN_START = "TurnStart"
 SESSION_END = "SessionEnd"
+CONVERSATION_TURN_COMMITTED = "ConversationTurnCommitted"
 STOP = "Stop"
 
 HOOK_EVENTS = frozenset(
@@ -25,6 +26,7 @@ HOOK_EVENTS = frozenset(
         SESSION_START,
         TURN_START,
         SESSION_END,
+        CONVERSATION_TURN_COMMITTED,
         STOP,
     }
 )

@@ -777,6 +777,68 @@ def test_plugin_runtime_repairs_unambiguous_arguments_for_direct_and_toolbox_cal
     run(scenario())
 
 
+def test_toolbox_repairs_plugin_name_supplied_as_operation():
+    async def scenario():
+        registry = PluginRegistry()
+        registry.register_plugin(
+            Plugin(
+                "browser_snapshot",
+                "Capture the browser accessibility tree",
+                {
+                    "type": "object",
+                    "properties": {
+                        "max_elements": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                },
+                lambda arguments, _context: arguments,
+            ),
+            source="test",
+        )
+        runtime = PluginRuntime(registry)
+
+        exact_result = await runtime.call(
+            "toolbox",
+            {
+                "operation": "browser_snapshot",
+                "name": "cyrene_browser",
+            },
+        )
+        result = await runtime.call(
+            "toolbox",
+            {
+                "operation": "browser_snapshot",
+                "name": "cyrene_browser",
+                "max_elements": "50",
+            },
+        )
+
+        assert exact_result.success is True
+        assert exact_result.value["operation"] == "invoke"
+        assert exact_result.value["name"] == "browser_snapshot"
+        assert exact_result.value["result"] == {}
+        assert result.success is True
+        assert result.value["operation"] == "invoke"
+        assert result.value["name"] == "browser_snapshot"
+        assert result.value["result"] == {"max_elements": 50}
+        assert result.value["argument_repairs"] == [
+            {
+                "path": "arguments",
+                "kind": "promote_operation_to_invocation",
+                "detail": (
+                    "operation->browser_snapshot;"
+                    "previous_name=cyrene_browser"
+                ),
+            },
+            {
+                "path": "arguments.max_elements",
+                "kind": "coerce_integer_string",
+            }
+        ]
+
+    run(scenario())
+
+
 def test_plugin_runtime_exposes_opted_in_public_handler_errors():
     async def scenario():
         registry = PluginRegistry(include_core=False)
@@ -1768,8 +1830,11 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         assert result.value["tool_calls"] == [
             {
                 "id": "call-read",
-                "name": "Read",
-                "arguments": {"path": "README.md"},
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "arguments": '{"path":"README.md"}',
+                },
             }
         ]
         assert requests[0]["model"] == "MiniMax-M2.7"

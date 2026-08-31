@@ -4,6 +4,7 @@ from .errors import HookAwaitingUser, HookBlocked, HookError
 from .hook import (
     CONTEXT_CHANGE,
     CONTEXT_USED,
+    CONVERSATION_TURN_COMMITTED,
     HOOK_EVENTS,
     POST_TOOL_USE,
     PRE_TOOL_USE,
@@ -31,6 +32,7 @@ from .registry import (
 __all__ = [
     "CONTEXT_CHANGE",
     "CONTEXT_USED",
+    "CONVERSATION_TURN_COMMITTED",
     "HOOK_EVENTS",
     "POST_TOOL_USE",
     "PRE_TOOL_USE",

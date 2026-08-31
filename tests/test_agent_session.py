@@ -859,3 +859,146 @@ def test_session_restores_tree_and_does_not_repeat_completed_transition(tmp_path
     assert len(second_snapshot["nodes"]) == len(first_snapshot["nodes"])
     assert second_snapshot["status"] == "idle"
     second.close()
+
+
+def test_failed_retry_restores_previous_committed_branch(tmp_path):
+    model_calls = 0
+
+    async def fake_model(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls > 1:
+            raise RuntimeError("retry failed")
+        return {"content": "first answer", "tool_calls": [], "model": "fake"}
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake",
+                    {"type": "object"},
+                    fake_model,
+                    kind="model",
+                ),
+            ),
+        ),
+        source="test",
+    )
+    workspace = tmp_path / "workspace"
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        workspace,
+        plugin_directory,
+        tree_id="retry-session",
+        registry=registry,
+    )
+    session.submit("question", run_id="run-1", metadata={"turn_id": "msg-1"})
+    run(session.drain())
+    committed_leaf = session.snapshot()["leaf_id"]
+    session.commit_result(committed_leaf, "run-1")
+
+    origin = session.prepare_retry()
+    assert origin["previous_run_id"] == "run-1"
+    session.submit(
+        "question",
+        run_id="run-2",
+        metadata={
+            "retry": True,
+            "turn_id": "msg-1",
+            "retry_of_run_id": origin["previous_run_id"],
+        },
+    )
+    run(session.drain())
+    failed_leaf = session.snapshot()["leaf_id"]
+    assert failed_leaf != committed_leaf
+    session.close()
+
+    reopened = AgentSession(
+        tmp_path / "data",
+        workspace,
+        plugin_directory,
+        tree_id="retry-session",
+        registry=registry,
+    )
+    assert reopened.snapshot()["leaf_id"] == committed_leaf
+    assert reopened.snapshot()["run_id"] == "run-1"
+    reopened.close()
+
+
+def test_normal_failure_after_committed_retry_does_not_restore_older_branch(tmp_path):
+    model_calls = 0
+
+    async def fake_model(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 3:
+            raise RuntimeError("ordinary follow-up failed")
+        return {
+            "content": f"answer {model_calls}",
+            "tool_calls": [],
+            "model": "fake",
+        }
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake",
+                    {"type": "object"},
+                    fake_model,
+                    kind="model",
+                ),
+            ),
+        ),
+        source="test",
+    )
+    data = tmp_path / "data"
+    workspace = tmp_path / "workspace"
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        data,
+        workspace,
+        plugin_directory,
+        tree_id="retry-then-follow-up",
+        registry=registry,
+    )
+    session.submit("question", run_id="run-1", metadata={"turn_id": "msg-1"})
+    run(session.drain())
+    session.commit_result(session.snapshot()["leaf_id"], "run-1")
+
+    session.prepare_retry()
+    session.submit(
+        "question",
+        run_id="run-2",
+        metadata={"retry": True, "turn_id": "msg-1"},
+    )
+    run(session.drain())
+    session.commit_result(session.snapshot()["leaf_id"], "run-2")
+
+    session.submit("follow up", run_id="run-3", metadata={"turn_id": "msg-2"})
+    run(session.drain())
+    failed_leaf = session.snapshot()["leaf_id"]
+    assert session.snapshot()["run_id"] == "run-3"
+    session.close()
+
+    reopened = AgentSession(
+        data,
+        workspace,
+        plugin_directory,
+        tree_id="retry-then-follow-up",
+        registry=registry,
+    )
+    assert reopened.snapshot()["leaf_id"] == failed_leaf
+    assert reopened.snapshot()["run_id"] == "run-3"
+    reopened.close()

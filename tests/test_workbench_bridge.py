@@ -746,6 +746,11 @@ def test_bridge_persists_pending_question_and_answers_same_run_after_restart(tmp
         first_bridge.submit_result(
             "ask before continuing",
             run_id="pending-run",
+            metadata={
+                "retry": True,
+                "turn_id": "msg-original",
+                "public_user_message": "ask before continuing",
+            },
             publish=lambda event: published.append(event),
         )
     )
@@ -761,6 +766,9 @@ def test_bridge_persists_pending_question_and_answers_same_run_after_restart(tmp
         "roundId": "pending-run",
         "clientRequestId": "",
         "askedAt": pending.pending_question.asked_at,
+        "retry": True,
+        "turnId": "msg-original",
+        "originalUserMessage": "ask before continuing",
     }
     assert "awaiting_user" in [event["type"] for event in published]
     first_bridge.close()

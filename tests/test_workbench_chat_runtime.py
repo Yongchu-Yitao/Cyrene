@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
-from cyrene.plugins import model_router
+from cyrene.plugins import ensure_model_router, model_router
 from cyrene.workbench.core_adapter import chat_runtime
 from cyrene.workbench.core_adapter import conversation_runtime
 
@@ -31,7 +30,7 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
                 "type": "function",
                 "function": {
                     "name": "Read",
-                    "arguments": json.dumps({"path": "README.md"}),
+                    "arguments": '```json\n{"path":"README.md",}\n```',
                 },
             }],
             "usage": {"prompt_tokens": 12, "completion_tokens": 4},
@@ -83,7 +82,7 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
         ),
         source="test",
     )
-    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+    ensure_model_router(registry)
     runtime = PluginRuntime(registry)
     stored_messages = [
         {"role": "system", "content": "base system"},
@@ -94,7 +93,20 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
             model_router.MODEL_ROUTER_PLUGIN,
             {
                 "messages": stored_messages,
-                "tools": [],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "Read",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                                "required": ["path"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    }
+                ],
             },
             PluginContext(
                 tree_id="chat-selected",
@@ -119,6 +131,7 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
             "id": "call-read",
             "name": "Read",
             "arguments": {"path": "README.md"},
+            "arguments_normalized": True,
         }
     ]
     assert result["reasoning"] == "inspect first"
@@ -127,6 +140,94 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
     assert result["model_identity"]["provider"] == "test_provider"
     assert result["output_tokens_per_second"] == 2.0
     assert captured["remembered"][0:2] == ("chat-selected", "candidate-selected")
+
+
+def test_model_router_selects_codex_oauth_parser_plugin(monkeypatch):
+    from cyrene.plugins.tool_call_parsers import CODEX_OAUTH_TOOL_CALL_PARSER
+
+    async def provider(_arguments, _context):
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-codex",
+                    "name": "toolbox",
+                    "arguments": {
+                        "operation": "browser_snapshot",
+                        "name": "cyrene_browser",
+                    },
+                }
+            ],
+            "model": "codex-test",
+            "usage": {},
+        }
+
+    candidate = {
+        "id": "candidate-codex",
+        "provider": "openai",
+        "adapter": "codex_oauth",
+        "model": "codex-test",
+        "options": {"provider_preset": "codex_provider"},
+    }
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda *_args, **_kwargs: [candidate],
+    )
+    monkeypatch.setattr(
+        model_router,
+        "remember_model_success",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    registry = PluginRegistry()
+    registry.register_plugin(
+        Plugin(
+            name="CodexProvider",
+            description="Codex provider",
+            input_schema={"type": "object"},
+            handler=provider,
+            kind="model",
+            metadata={
+                "provider": {
+                    "id": "codex_provider",
+                    "tool_call_parser": CODEX_OAUTH_TOOL_CALL_PARSER,
+                }
+            },
+        ),
+        source="test",
+    )
+    ensure_model_router(registry)
+    toolbox_definition = registry.resolve("toolbox").tool_definition()
+
+    result = run(
+        PluginRuntime(registry).call(
+            model_router.MODEL_ROUTER_PLUGIN,
+            {
+                "messages": [{"role": "user", "content": "inspect"}],
+                "tools": [toolbox_definition],
+            },
+            PluginContext(data={"session_id": "chat-codex-parser"}),
+        )
+    )
+
+    assert result.success is True
+    assert result.value["tool_calls"] == [
+        {
+            "id": "call-codex",
+            "name": "toolbox",
+            "arguments": {
+                "operation": "invoke",
+                "name": "browser_snapshot",
+                "arguments": {},
+            },
+            "arguments_normalized": True,
+        }
+    ]
 
 
 def test_model_gateway_routes_one_exact_identity_without_route_fallback(monkeypatch):
@@ -259,7 +360,7 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
             ),
             source="test",
         )
-    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+    ensure_model_router(registry)
 
     result = run(
         PluginRuntime(registry).call(
@@ -743,6 +844,165 @@ def test_failed_plugin_workflow_atomically_restores_the_user_turn(tmp_path):
     assert repository.get(base_chat["id"]) == before
     assert operation.chat == before
     assert finalized == []
+
+
+def test_chat_write_and_conversation_commit_outbox_are_atomic(tmp_path):
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+    from cyrene.workbench.chat.conversation_commit import ConversationTurnCommit
+
+    repository = ChatRepository(str(tmp_path / "workbench.db"))
+    repository.write(
+        {
+            "chats": [
+                {
+                    "id": "chat-commit",
+                    "title": "Commit",
+                    "messages": [],
+                    "status": "running",
+                }
+            ]
+        }
+    )
+    chat = repository.get("chat-commit")
+    assert chat is not None
+    base = dict(chat)
+    chat["status"] = "idle"
+    chat["messages"] = [
+        {"id": "msg-1", "role": "user", "content": "question"},
+        {"id": "msg-2", "role": "assistant", "content": "answer"},
+    ]
+    event = ConversationTurnCommit(
+        chat_id="chat-commit",
+        turn_id="msg-1",
+        run_id="run-1",
+        node_id="assistant-1",
+        status="completed",
+        retry=False,
+        user_text="question",
+        assistant_text="answer",
+        completed_turn_count=1,
+    ).as_event()
+
+    repository.write_one(chat, base_chat=base, commit_event=event)
+    assert repository.get("chat-commit")["status"] == "idle"
+    assert repository.pending_commit_events("chat-commit", limit=1) == [event]
+    repository.fail_commit_event(event["event_id"], "try again")
+    assert repository.pending_commit_events("chat-commit", limit=1) == [event]
+    repository.complete_commit_event(event["event_id"])
+    assert repository.pending_commit_events("chat-commit", limit=1) == []
+
+
+def test_invalid_commit_event_rolls_back_the_public_chat_write(tmp_path):
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+
+    repository = ChatRepository(str(tmp_path / "workbench.db"))
+    original = {
+        "id": "chat-invalid-commit",
+        "title": "Commit",
+        "messages": [],
+        "status": "running",
+    }
+    repository.write({"chats": [original]})
+    chat = repository.get(original["id"])
+    assert chat is not None
+    base = dict(chat)
+    chat["status"] = "idle"
+
+    import pytest
+
+    with pytest.raises(ValueError, match="ConversationTurnCommitted"):
+        repository.write_one(
+            chat,
+            base_chat=base,
+            commit_event={
+                "event_id": "bad",
+                "type": "ConversationTurnCommitted",
+                "chat_id": original["id"],
+                "turn_id": "",
+                "run_id": "run-1",
+                "node_id": "assistant-1",
+            },
+        )
+    assert repository.get(original["id"])["status"] == "running"
+
+
+def test_retry_question_identity_survives_resume_without_incrementing_turn_count(
+    tmp_path,
+):
+    from cyrene.workbench.chat.chat_application import next_completed_turn_count
+    from cyrene.workbench.core_adapter.bridge import WorkbenchPendingQuestion
+    from cyrene.workbench.http.workbench.chat_routes.run_answer_routes import (
+        _AnswerOperation,
+    )
+
+    pending = WorkbenchPendingQuestion.from_mapping(
+        {
+            "id": "question-1",
+            "text": "Choose",
+            "round_id": "run-retry",
+            "retry": True,
+            "turn_id": "msg-original",
+            "original_user_message": "original question",
+        }
+    ).as_dict()
+    assert pending["retry"] is True
+    assert pending["turnId"] == "msg-original"
+
+    captured = {}
+
+    async def answer(config, question_id, answer_text, *, publish):
+        captured.update(
+            config=config,
+            question_id=question_id,
+            answer_text=answer_text,
+            publish=publish,
+        )
+        return SimpleNamespace(active_plan=None)
+
+    operation = object.__new__(_AnswerOperation)
+    operation.chat_id = "chat-retry-question"
+    operation.question_id = "question-1"
+    operation.answer_text = "choice"
+    operation.original_request = "original question"
+    operation.pending = {"clientRequestId": "request-1"}
+    operation.mode = "default"
+    operation.workspace_dir = str(tmp_path / "workspace")
+    operation.routes = SimpleNamespace(chat_id="host-chat")
+    operation.context = SimpleNamespace(db_path=str(tmp_path / "workbench.db"), bot=None)
+    operation.chat = {
+        "completedTurnCount": 7,
+        "title": "Retry",
+        "remoteDeviceIds": [],
+    }
+    operation.project_id = "project-1"
+    operation.is_side_agent = False
+    operation.retry = True
+    operation.ui_instance_id = "ui-1"
+    operation.conversation_source = "desktop_local"
+    operation.service = SimpleNamespace(
+        ensure_chat_memory_snapshot=lambda _chat: {},
+        resolve_composer_input_context=lambda *_args, **_kwargs: {
+            "remoteDeviceIds": [],
+            "soulActive": True,
+            "workspaceActive": True,
+            "contextActivations": {},
+            "resolvedContextActivations": {},
+        },
+        next_completed_turn_count=next_completed_turn_count,
+        run_manager=SimpleNamespace(
+            conversation_runtime=SimpleNamespace(answer=answer),
+        ),
+    )
+    workbench_run = SimpleNamespace(
+        publish=lambda _event: None,
+        guidance_channel=None,
+        events=[],
+    )
+
+    run(operation._resume_agent(workbench_run))
+
+    assert captured["config"].retry is True
+    assert captured["config"].completed_turn_count == 7
 
 
 def test_builtin_runtime_message_fields_preserve_latest_request_usage():

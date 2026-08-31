@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import random
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -323,19 +324,32 @@ def _canonicalize_storage_entry(entry: dict[str, Any]) -> None:
             event["detail"] = ""
 
 
-def _append_citation(entry: dict, source: str, snippet: str = "") -> None:
+def _append_citation(
+    entry: dict,
+    source: str,
+    snippet: str = "",
+    *,
+    session_id: str = "",
+    turn_id: str = "",
+    run_id: str = "",
+) -> None:
     """Record one citation event on the entry (capped to _MAX_CITATIONS)."""
     cits = entry.get("citations")
     if not isinstance(cits, list):
         cits = []
         entry["citations"] = cits
-    cits.append(
-        {
-            "at": _today(),
-            "source": source if source in _CITATION_SOURCE_LABELS else "other",
-            "snippet": str(snippet or "").strip()[:200],
-        }
-    )
+    citation = {
+        "at": _today(),
+        "source": source if source in _CITATION_SOURCE_LABELS else "other",
+        "snippet": str(snippet or "").strip()[:200],
+    }
+    if session_id:
+        citation["sessionId"] = str(session_id)
+    if turn_id:
+        citation["turnId"] = str(turn_id)
+    if run_id:
+        citation["runId"] = str(run_id)
+    cits.append(citation)
     if len(cits) > _MAX_CITATIONS:
         del cits[: len(cits) - _MAX_CITATIONS]
 
@@ -1117,6 +1131,8 @@ async def capture_from_exchange(
     verified_evidence: str = "",
     model_gateway: Any = None,
     session_id: str = "",
+    turn_id: str = "",
+    run_id: str = "",
 ) -> int:
     """Distill durable memories from one turn and merge them into the store.
 
@@ -1145,20 +1161,10 @@ async def capture_from_exchange(
     changed = False
     evidence_sources = (user_text, str(verified_evidence or ""))
 
-    def quote_is_supported(value: Any) -> bool:
-        quote = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
-        if not quote:
-            return False
-        return any(
-            quote in re.sub(r"\s+", " ", source).strip().casefold()
-            for source in evidence_sources
-            if source
-        )
-
     for mem in extracted:
         if not isinstance(mem, dict):
             continue
-        if not quote_is_supported(mem.get("evidence")):
+        if not _quote_is_supported(mem.get("evidence"), evidence_sources):
             logger.info(
                 "Discarding unsupported automatic memory candidate",
                 extra={"session_id": session_id},
@@ -1177,28 +1183,38 @@ async def capture_from_exchange(
         dup = _similar_entry(entries, content)
         if dup is not None:
             dup["last_mentioned"] = today
-            dup["mention_count"] = int(dup.get("mention_count") or 1) + 1
-            _append_citation(dup, "conversation", user_text[:200])
+            previous_mentions = (
+                int(dup.get("mention_count") or 0)
+                if "mention_count" in dup
+                else 1
+            )
+            dup["mention_count"] = previous_mentions + 1
+            dup.pop("stale", None)
+            dup.pop("supersededAt", None)
+            dup.pop("supersededByRunId", None)
+            _append_citation(
+                dup,
+                "conversation",
+                user_text[:200],
+                session_id=session_id,
+                turn_id=turn_id,
+                run_id=run_id,
+            )
             _append_history(dup, "reinforced")
             changed = True
             continue
 
-        entry: dict[str, Any] = {
-            "id": "mem_" + uuid.uuid4().hex[:12],
-            "content": content,
-            "type": category,
-            "category": category,
-            "source": "conversation",
-            "tags": _normalize_tags(mem.get("tags")),
-            "first_seen": today,
-            "last_mentioned": today,
-            "mention_count": 1,
-            "emotional_valence": 0,
-        }
-        if confidence in _CONFIDENCE_LABELS:
-            entry["confidence"] = confidence
-        _append_citation(entry, "conversation", user_text[:200])
-        _append_history(entry, "created")
+        entry = _new_conversation_memory(
+            mem,
+            content=content,
+            category=category,
+            confidence=confidence,
+            today=today,
+            user_text=user_text,
+            session_id=session_id,
+            turn_id=turn_id,
+            run_id=run_id,
+        )
         entries.append(entry)
         added += 1
         changed = True
@@ -1206,6 +1222,109 @@ async def capture_from_exchange(
     if changed:
         _save(workspace_id, entries)
     return added
+
+
+def _quote_is_supported(value: Any, sources: tuple[str, str]) -> bool:
+    quote = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+    if not quote:
+        return False
+    return any(
+        quote in re.sub(r"\s+", " ", source).strip().casefold()
+        for source in sources
+        if source
+    )
+
+
+def _new_conversation_memory(
+    memory: dict[str, Any],
+    *,
+    content: str,
+    category: str,
+    confidence: str,
+    today: str,
+    user_text: str,
+    session_id: str,
+    turn_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "id": "mem_" + uuid.uuid4().hex[:12],
+        "content": content,
+        "type": category,
+        "category": category,
+        "source": "conversation",
+        "tags": _normalize_tags(memory.get("tags")),
+        "first_seen": today,
+        "last_mentioned": today,
+        "mention_count": 1,
+        "emotional_valence": 0,
+    }
+    if confidence in _CONFIDENCE_LABELS:
+        entry["confidence"] = confidence
+    _append_citation(
+        entry,
+        "conversation",
+        user_text[:200],
+        session_id=session_id,
+        turn_id=turn_id,
+        run_id=run_id,
+    )
+    _append_history(entry, "created")
+    return entry
+
+
+def supersede_conversation_turn(
+    workspace_id: str | None,
+    *,
+    session_id: str,
+    turn_id: str,
+    replacement_run_id: str = "",
+) -> int:
+    """Retract structured-memory evidence produced by an earlier attempt."""
+
+    normalized_session_id = str(session_id or "").strip()
+    normalized_turn_id = str(turn_id or "").strip()
+    if not normalized_session_id or not normalized_turn_id:
+        return 0
+    entries = _load(workspace_id)
+    changed = 0
+    today = _today()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        citations = entry.get("citations")
+        if not isinstance(citations, list):
+            continue
+        retained = [
+            citation
+            for citation in citations
+            if not (
+                isinstance(citation, dict)
+                and str(citation.get("sessionId") or "") == normalized_session_id
+                and str(citation.get("turnId") or "") == normalized_turn_id
+            )
+        ]
+        removed = len(citations) - len(retained)
+        if not removed:
+            continue
+        entry["citations"] = retained
+        entry["mention_count"] = max(
+            0,
+            int(entry.get("mention_count") or 0) - removed,
+        )
+        entry["last_mentioned"] = today
+        if (
+            str(entry.get("source") or "") == "conversation"
+            and not retained
+        ):
+            entry["stale"] = True
+            entry["supersededAt"] = today
+            entry["supersededByRunId"] = str(replacement_run_id or "")
+            _append_history(entry, "stale", detail_code="turn_superseded")
+        changed += 1
+    if changed:
+        _save(workspace_id, entries)
+    return changed
 
 
 def add_agent_memory(
@@ -1649,3 +1768,58 @@ def memory_injection_ids(
         )
     items.sort(key=lambda x: (x[0], x[1]), reverse=True)
     return [eid for _mc, _ts, eid in items]
+
+
+def sample_memory_injection_ids(
+    workspace_id: str | None,
+    *,
+    fixed_count: int = 5,
+    random_count: int = 10,
+    entries: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Select the strongest memories plus a random sample from the tail.
+
+    The fixed prefix uses the normal reinforcement/recency order. Random
+    candidates are sampled without replacement from everything after that
+    prefix. The caller is expected to freeze the resulting rendered context
+    when stable reuse across later runs is required.
+    """
+    entries = _load(workspace_id) if entries is None else entries
+    ordered_ids = memory_injection_ids(workspace_id, entries=entries)
+    fixed_limit = max(0, int(fixed_count))
+    random_limit = max(0, int(random_count))
+    selected = ordered_ids[:fixed_limit]
+    remaining = ordered_ids[fixed_limit:]
+    if remaining and random_limit:
+        selected.extend(random.sample(remaining, min(random_limit, len(remaining))))
+    return selected
+
+
+def render_sampled_memory_for_injection(
+    workspace_id: str | None,
+    *,
+    fixed_count: int = 5,
+    random_count: int = 10,
+    max_chars: int = 2000,
+    header: str | None = None,
+    entries: list[dict[str, Any]] | None = None,
+    language: str = "",
+) -> str:
+    """Render the fixed-prefix plus random-tail memory selection policy."""
+    entries = _load(workspace_id) if entries is None else entries
+    selected_ids = sample_memory_injection_ids(
+        workspace_id,
+        fixed_count=fixed_count,
+        random_count=random_count,
+        entries=entries,
+    )
+    return render_memory_for_injection(
+        workspace_id,
+        limit=len(selected_ids),
+        max_chars=max_chars,
+        include_ids=selected_ids,
+        preserve_id_order=True,
+        header=header,
+        entries=entries,
+        language=language,
+    )

@@ -74,6 +74,27 @@ History、Upload 和其他页面修改都会在 Browser 执行层被拒绝。顶
 - CDP Screencast 通过 `GET /ws/browser` 发送 Binary JPEG；
 - Agent 开始 Browser 操作时自动显示右侧 Panel。
 
+## 页面操作模型与当前边界
+
+- `browser_snapshot` 只返回当前视口中可见、可命中的元素，并为它们生成短期
+  `e1`、`e2` 等 Ref。页面导航、同页导航、滚动或明显重排后应重新 Snapshot，
+  不应继续使用旧 Ref。
+- Electron Click 会在发送 Chromium Trusted Mouse Input 前重新定位目标、检查
+  点击点是否被遮挡，并在目标移动时最多重试三次；目标持续变化时不会盲目点击。
+- `browser_navigate` 会检查初始 HTTP(S) 目标并阻止 Loopback、Private、
+  Link-local、Cloud Metadata 和 Reserved Network。该检查不是完整的浏览器网络
+  Sandbox：页面子资源、脚本触发的导航和 Electron 中的每个 Redirect 并未全部
+  经过逐请求 IP Policy，因此 Browser 仍只适合单一本地使用者访问可信公网内容。
+- Snapshot、Ref Targeting 和 Wait 的 DOM Projection 主要覆盖当前 Top-level
+  Document。Iframe、跨 Origin Frame、Shadow DOM、Canvas/WebGL 和复杂富文本
+  Editor 没有统一的递归语义支持，必要时应使用 Screenshot 或 User Takeover。
+- `browser_network_log` 来源是页面的 Resource Performance Entry，仅提供 URL、
+  Initiator Type、Duration 和 Transfer Size；它不是完整 DevTools Network Trace，
+  不提供 Request/Response Header、Body、Status 或 WebSocket Message。
+- Navigate、Click、Type 和可选 Enter Submit 属于正常 Browser Tool Action，
+  不会像文件上传一样自动触发 Human-only Confirmation。购买、发布、删除、账号
+  修改等高影响动作仍必须由调用方依据用户请求和 Permission Policy 控制。
+
 ## Login Takeover
 
 Electron Browser 本来就是可见 Native View，用户可直接在同一 Tab 登录。
@@ -146,4 +167,9 @@ File Upload 更严格：
 | `browser_upload_files` | 经一次性用户批准上传确切本地文件 |
 | `browser_wait` | 等待 URL/Text/Selector |
 | `browser_network_log` | 查看 Resource/Fetch/XHR URL |
+| `browser_tab_list` | 列出 Electron Browser Tab 及其状态 |
+| `browser_tab_new` | 按用户要求新建 Tab |
+| `browser_tab_select` | 切换活动 Tab |
+| `browser_tab_close` | 关闭指定或活动 Tab |
+| `browser_scroll` | 以可信 Wheel Input 滚动 Page 或 Nested Scroll Container |
 | `browser_request_takeover` | 打开 Native Window，等待用户登录后继续 |

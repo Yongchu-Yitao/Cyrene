@@ -839,6 +839,10 @@ function wbcTraceActionKind(entry) {
 
 function wbcTraceActionLabel(entry) {
   var raw = String(entry && (entry.text || entry.tool) || "").trim();
+  var normalized = wbcTraceNormalizeName(raw);
+  if (normalized === "toolbox_list") return wbcT("workbenchChat.traceAction.listedTools", "Listed available tools");
+  if (normalized === "toolbox_describe") return wbcT("workbenchChat.traceAction.inspectedTool", "Inspected tool details");
+  if (normalized === "toolbox_invoke") return wbcT("workbenchChat.traceAction.invokedTool", "Invoked a tool");
   var kind = wbcTraceActionKind(entry);
   if (kind === "edit") return wbcT("workbenchChat.traceAction.edited", "Edited files");
   if (kind === "write") return wbcT("workbenchChat.traceAction.wrote", "Wrote files");

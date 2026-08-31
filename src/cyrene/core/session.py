@@ -50,13 +50,13 @@ from .plugin import (
     PluginCall,
     PluginCallResult,
     PluginContext,
+    PluginFailure,
     PluginLoadFailure,
     PluginPack,
     PluginRegistry,
     PluginRuntime,
     PluginSetupContext,
     TOOLBOX_PLUGIN_NAME,
-    normalize_plugin_arguments,
     plugin_session_state,
     split_resource_reveal,
     with_plugin_session_state,
@@ -136,16 +136,25 @@ class _SetupHookTracker:
     def __init__(self, hooks: Any) -> None:
         self._hooks = hooks
         self.touched: set[str] = set()
+        self.created: set[str] = set()
+        self._previous_plugins: dict[str, Any | None] = {}
+        self._previous_configs: dict[str, Mapping[str, Any]] = {}
+        self._previous_failure_policies: dict[str, str] = {}
 
     def register(self, *args: Any, **kwargs: Any) -> Any:
         before = {hook.id for hook in self._hooks.list()}
         unsubscribe = self._hooks.register(*args, **kwargs)
-        self.touched.update(
-            hook.id for hook in self._hooks.list() if hook.id not in before
-        )
+        created = {hook.id for hook in self._hooks.list() if hook.id not in before}
+        self.created.update(created)
+        self.touched.update(created)
         return unsubscribe
 
     def bind_plugin(self, plugin_id: str, *args: Any, **kwargs: Any) -> Any:
+        normalized_id = str(plugin_id)
+        if normalized_id not in self._previous_plugins:
+            self._previous_plugins[normalized_id] = self._hooks._plugins.resolve(
+                normalized_id
+            )
         result = self._hooks.bind_plugin(plugin_id, *args, **kwargs)
         self.touched.update(
             hook.id
@@ -153,6 +162,49 @@ class _SetupHookTracker:
             if hook.plugin_id == str(plugin_id)
         )
         return result
+
+    def update_config(self, hook_id: str, config: Mapping[str, Any]) -> None:
+        normalized_id = str(hook_id)
+        if normalized_id not in self._previous_configs:
+            previous = next(
+                (hook for hook in self._hooks.list() if hook.id == normalized_id),
+                None,
+            )
+            if previous is not None:
+                self._previous_configs[normalized_id] = dict(previous.config)
+        self._hooks.update_config(normalized_id, config)
+        self.touched.add(normalized_id)
+
+    def update_failure_policy(self, hook_id: str, failure_policy: str) -> None:
+        normalized_id = str(hook_id)
+        if normalized_id not in self._previous_failure_policies:
+            previous = next(
+                (hook for hook in self._hooks.list() if hook.id == normalized_id),
+                None,
+            )
+            if previous is not None:
+                self._previous_failure_policies[normalized_id] = (
+                    previous.failure_policy
+                )
+        self._hooks.update_failure_policy(normalized_id, failure_policy)
+        self.touched.add(normalized_id)
+
+    def rollback(self) -> None:
+        """Undo a failed setup without deleting restored durable bindings."""
+
+        for hook_id in self.created:
+            self._hooks.unregister(hook_id)
+        for hook_id, config in self._previous_configs.items():
+            if hook_id not in self.created:
+                self._hooks.update_config(hook_id, config)
+        for hook_id, failure_policy in self._previous_failure_policies.items():
+            if hook_id not in self.created:
+                self._hooks.update_failure_policy(hook_id, failure_policy)
+        for plugin_id, previous in self._previous_plugins.items():
+            if previous is None:
+                self._hooks._plugins.unregister(plugin_id)
+            else:
+                self._hooks.bind_plugin(plugin_id, previous, replace=True)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._hooks, name)
@@ -1318,6 +1370,7 @@ class AgentSession:
             raise ValueError("Plugin service name is reserved: agent_session")
         before = dict(self._plugin_service_values)
         tracker = _SetupHookTracker(self.hooks)
+        driver: Any = None
         self._plugin_service_values["agent_session"] = self
         context = PluginSetupContext(
             data_directory=self.data_directory,
@@ -1353,7 +1406,6 @@ class AgentSession:
                 provided_services=changed,
                 driver=driver,
             )
-            self._plugin_pack_attachments[pack.id] = attachment
             if driver is not None:
                 if self._session_driver is not None:
                     raise ValueError("Plugin session_driver service already exists")
@@ -1362,6 +1414,7 @@ class AgentSession:
                 attach = getattr(driver, "attach", None)
                 if callable(attach) and self._transition_thread.is_alive():
                     attach()
+            self._plugin_pack_attachments[pack.id] = attachment
         except Exception as exc:
             self._plugin_setup_failures[pack.id] = str(exc)
             self._plugin_service_values.pop("agent_session", None)
@@ -1369,8 +1422,18 @@ class AgentSession:
             if attachment is not None:
                 self._detach_session_pack(pack.id, reason="plugin_setup_failed")
             else:
-                for hook_id in tracker.touched:
-                    self.hooks.unregister(hook_id)
+                if driver is not None and self._session_driver is driver:
+                    self._session_driver = None
+                    self._owns_session_driver = False
+                    close = getattr(driver, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            logger.exception(
+                                "Failed to close setup driver for %s", pack.id
+                            )
+                tracker.rollback()
                 for name in tuple(self._plugin_service_values):
                     if name not in before:
                         self._plugin_service_values.pop(name, None)
@@ -2031,6 +2094,32 @@ class AgentSession:
                 break
         return options
 
+    def _turn_user_context(
+        self, run_id: str
+    ) -> tuple[Mapping[str, Any], ContextNode | None]:
+        try:
+            turn_path = self.store.get_path(self.tree.id, self._leaf_id)
+        except Exception:
+            turn_path = []
+        turn_user = next(
+            (
+                node
+                for node in reversed(turn_path)
+                if isinstance(node.value, Mapping)
+                and node.value.get("role") == "user"
+                and node.value.get("runtime_guidance") is not True
+                and str(node.value.get("run_id") or "") == str(run_id)
+            ),
+            None,
+        )
+        if (
+            turn_user is not None
+            and isinstance(turn_user.value, Mapping)
+            and isinstance(turn_user.value.get("metadata"), Mapping)
+        ):
+            return turn_user.value["metadata"], turn_user
+        return {}, turn_user
+
     def _pending_question_from_results(
         self,
         calls: list[Any],
@@ -2038,6 +2127,7 @@ class AgentSession:
         *,
         run_id: str,
     ) -> dict[str, Any] | None:
+        turn_metadata, turn_user = self._turn_user_context(run_id)
         calls_by_id = {
             str(call.get("id") or ""): call
             for call in calls
@@ -2095,6 +2185,18 @@ class AgentSession:
                 "asked_at": result.time.isoformat(),
                 "call_id": str(result.call_id),
                 "tool_name": tool_name,
+                "retry": turn_metadata.get("retry") is True,
+                "turn_id": str(turn_metadata.get("turn_id") or ""),
+                "original_user_message": str(
+                    turn_metadata.get("public_user_message")
+                    or (
+                        turn_user.value.get("content")
+                        if turn_user is not None
+                        and isinstance(turn_user.value, Mapping)
+                        else ""
+                    )
+                    or ""
+                ),
             }
             plan = payload.get("plan")
             if isinstance(plan, (Mapping, list)):
@@ -2343,36 +2445,7 @@ class AgentSession:
             while self._transition_pending:
                 self._transition_condition.wait()
 
-    def _restore(self) -> None:
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "restore",
-            phase="started",
-            tree_id=self.tree.id,
-            root_id=self.tree.root_id,
-        )
-        nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
-        root_value = next(
-            (
-                node.value
-                for node in nodes
-                if node.id == self.tree.root_id and isinstance(node.value, Mapping)
-            ),
-            {},
-        )
-        self._permission_session_grants = {
-            str(item).strip()
-            for item in root_value.get("permission_session_grants") or ()
-            if str(item).strip()
-        }
-        self._cancelled_run_ids = {
-            str(node.value.get("run_id") or "")
-            for node in nodes
-            if isinstance(node.value, Mapping)
-            and node.value.get("cancelled") is True
-            and node.value.get("run_id")
-        }
+    def _select_restore_leaf(self, nodes: Sequence[ContextNode]) -> ContextNode:
         dialogue = [
             node
             for node in nodes
@@ -2389,7 +2462,57 @@ class AgentSession:
             }
         ]
         leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
-        self._leaf_id = leaf.id
+        committed_leaf_id, _committed_run_id = self.store.committed_state(
+            self.tree.id
+        )
+        committed_leaf = next(
+            (node for node in dialogue if node.id == committed_leaf_id),
+            None,
+        )
+        latest_value = leaf.value if isinstance(leaf.value, Mapping) else {}
+        latest_path = self.store.get_path(self.tree.id, leaf.id)
+        latest_run_id = self._node_run_id(leaf)
+        latest_run_user = next(
+            (
+                node
+                for node in reversed(latest_path)
+                if isinstance(node.value, Mapping)
+                and node.value.get("role") == "user"
+                and node.value.get("runtime_guidance") is not True
+                and self._node_run_id(node) == latest_run_id
+            ),
+            None,
+        )
+        latest_user_metadata = (
+            latest_run_user.value.get("metadata")
+            if latest_run_user is not None
+            and isinstance(latest_run_user.value, Mapping)
+            and isinstance(latest_run_user.value.get("metadata"), Mapping)
+            else {}
+        )
+        latest_is_retry = latest_user_metadata.get("retry") is True
+        latest_is_terminal = bool(
+            latest_value.get("cancelled") is True
+            or latest_value.get("error") is True
+            or self._pending_from_node(leaf) is not None
+            or (
+                latest_value.get("role") == "assistant"
+                and latest_value.get("session_end_complete") is True
+            )
+        )
+        if (
+            committed_leaf is not None
+            and committed_leaf.id != leaf.id
+            and latest_is_retry
+            and latest_is_terminal
+        ):
+            # A retry branch only becomes authoritative after Workbench saves
+            # its public projection. A failed save/cancel therefore restores
+            # the previously committed answer; the sibling remains for audit.
+            return committed_leaf
+        return leaf
+
+    def _restore_run_context(self, leaf: ContextNode) -> None:
         path = self.store.get_path(self.tree.id, leaf.id)
         latest_user = next(
             (
@@ -2439,6 +2562,59 @@ class AgentSession:
                 and node.value.get("role") == "assistant"
                 and node.value.get("caused_by")
             )
+        if self._current_run_id:
+            for node in path:
+                node_value = node.value if isinstance(node.value, Mapping) else {}
+                if (
+                    node_value.get("role") != "tool_results"
+                    or str(node_value.get("run_id") or "") != self._current_run_id
+                ):
+                    continue
+                for raw_result in node_value.get("results") or ():
+                    if not isinstance(raw_result, Mapping):
+                        continue
+                    raw_failure = raw_result.get("failure")
+                    if isinstance(raw_failure, Mapping):
+                        self.runtime.restore_circuit(
+                            str(raw_result.get("name") or ""),
+                            self._current_run_id,
+                            raw_failure,
+                            agent_id=self.agent_id,
+                        )
+
+    def _restore(self) -> None:
+        log_operation(
+            logger,
+            "cyrene.core.session",
+            "restore",
+            phase="started",
+            tree_id=self.tree.id,
+            root_id=self.tree.root_id,
+        )
+        nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
+        root_value = next(
+            (
+                node.value
+                for node in nodes
+                if node.id == self.tree.root_id and isinstance(node.value, Mapping)
+            ),
+            {},
+        )
+        self._permission_session_grants = {
+            str(item).strip()
+            for item in root_value.get("permission_session_grants") or ()
+            if str(item).strip()
+        }
+        self._cancelled_run_ids = {
+            str(node.value.get("run_id") or "")
+            for node in nodes
+            if isinstance(node.value, Mapping)
+            and node.value.get("cancelled") is True
+            and node.value.get("run_id")
+        }
+        leaf = self._select_restore_leaf(nodes)
+        self._leaf_id = leaf.id
+        self._restore_run_context(leaf)
         value = leaf.value if isinstance(leaf.value, Mapping) else {}
         if value.get("cancelled") is True:
             self._current_user_request = ""
@@ -3040,12 +3216,39 @@ class AgentSession:
         Activation and Agent-scope checks still go through the registry.
         """
 
+        current_run_id = str(getattr(self, "_current_run_id", "") or "")
+        runtime = getattr(self, "runtime", None)
+
+        def circuit_is_open(name: str) -> bool:
+            return bool(
+                current_run_id
+                and runtime is not None
+                and runtime.circuit_failure(
+                    name,
+                    current_run_id,
+                    agent_id=self.agent_id,
+                )
+                is not None
+            )
+
         definitions = list(
             self.registry.direct_tool_definitions(
                 agent_id=self.agent_id,
                 read_only=self._read_only,
             )
         )
+        if current_run_id:
+            definitions = [
+                definition
+                for definition in definitions
+                if not (
+                    isinstance(definition, Mapping)
+                    and isinstance(definition.get("function"), Mapping)
+                    and circuit_is_open(
+                        str(definition["function"].get("name") or "")
+                    )
+                )
+            ]
         seen = {
             str((definition.get("function") or {}).get("name") or "")
             for definition in definitions
@@ -3053,7 +3256,7 @@ class AgentSession:
             and isinstance(definition.get("function"), Mapping)
         }
         for name in self._extra_direct_tool_names:
-            if name in seen:
+            if name in seen or circuit_is_open(name):
                 continue
             plugin = self.registry.resolve(name, agent_id=self.agent_id)
             if plugin.kind != "tool":
@@ -3445,6 +3648,18 @@ class AgentSession:
                 ))
             previous_run_id = str(latest_user.value.get("run_id") or "")
             parent_id = str(latest_user.parent_id)
+            committed_leaf_id, _ = self.store.committed_state(self.tree.id)
+            if not committed_leaf_id and self._leaf_id != self.tree.root_id:
+                # Trees created before the commit-pointer migration still have
+                # one public branch.  Capture it before creating the first
+                # post-migration retry sibling.
+                current_run_id = self._node_run_id(path[-1])
+                if current_run_id:
+                    self.store.commit_state(
+                        self.tree.id,
+                        self._leaf_id,
+                        current_run_id,
+                    )
             state = self._set_state_locked(
                 "idle",
                 _l("Ready to retry", "已准备重试"),
@@ -3460,6 +3675,11 @@ class AgentSession:
             "parent_node_id": parent_id,
             "previous_run_id": previous_run_id,
         }
+
+    def commit_result(self, leaf_id: str, run_id: str) -> None:
+        """Mark a terminal/pending branch as accepted by the public host."""
+
+        self.store.commit_state(self.tree.id, leaf_id, run_id)
 
     async def _context_changed(self, event: HookEvent) -> None:
         change = event.payload
@@ -3884,10 +4104,16 @@ class AgentSession:
             "value": AgentSession._json_value(result.value),
             "error": result.error,
             "time": result.time.isoformat(),
+            **(
+                {"failure": result.failure.as_dict()}
+                if result.failure is not None
+                else {}
+            ),
         }
 
     @staticmethod
     def _restored_result(raw: Mapping[str, Any]) -> PluginCallResult:
+        raw_failure = raw.get("failure")
         return PluginCallResult(
             str(raw.get("call_id") or ""),
             str(raw.get("name") or ""),
@@ -3895,6 +4121,11 @@ class AgentSession:
             raw.get("value"),
             str(raw.get("error") or ""),
             datetime.fromisoformat(str(raw.get("time"))),
+            (
+                PluginFailure.from_dict(raw_failure)
+                if isinstance(raw_failure, Mapping)
+                else None
+            ),
         )
 
     def _resource_presentation(
@@ -3931,7 +4162,7 @@ class AgentSession:
         }
 
     def _prepare_resource_tool_calls(self, calls: Sequence[Any]) -> list[Any]:
-        """Strip the host-only reveal hint before Plugin validation."""
+        """Persist the Runtime's canonical call and host-only resource metadata."""
 
         prepared: list[Any] = []
         for raw in calls:
@@ -3939,43 +4170,47 @@ class AgentSession:
                 prepared.append(raw)
                 continue
             call = dict(raw)
+            provider_arguments_normalized = bool(
+                call.pop("arguments_normalized", False)
+            )
+            provider_nested_arguments_normalized = bool(
+                call.pop("nested_arguments_normalized", False)
+            )
+            call.pop("_arguments_normalized", None)
+            call.pop("_nested_arguments_normalized", None)
+            call.pop("argument_repairs", None)
             try:
-                plugin = self.registry.resolve(
-                    str(call.get("name") or ""),
-                    agent_id=self.agent_id,
+                normalized = self.runtime.normalize_call(
+                    PluginCall(
+                        name=str(call.get("name") or ""),
+                        arguments=dict(call.get("arguments") or {}),
+                        id=str(call.get("id") or f"call_{uuid4().hex}"),
+                        arguments_normalized=provider_arguments_normalized,
+                        nested_arguments_normalized=(
+                            provider_nested_arguments_normalized
+                        ),
+                    ),
+                    PluginContext(
+                        workspace=self.workspace,
+                        tree=self.store,
+                        tree_id=self.tree.id,
+                        data=self._plugin_data(
+                            model_call_kind="tool_prepare",
+                            user_request=self.current_user_request,
+                        ),
+                        services=self._plugin_services(),
+                    ),
                 )
-                normalization = normalize_plugin_arguments(
-                    dict(call.get("arguments") or {}),
-                    plugin.input_schema,
-                )
-                arguments = normalization.arguments
-                argument_repairs = [
-                    repair.as_dict() for repair in normalization.repairs
-                ]
-                resource_plugin = plugin
-                resource_arguments = arguments
+                arguments = dict(normalized.arguments)
+                argument_repairs = list(normalized.argument_repairs)
+                resource_plugin = normalized.effective_plugin
+                resource_arguments = dict(normalized.effective_arguments)
                 if (
-                    plugin.name == TOOLBOX_PLUGIN_NAME
+                    normalized.plugin.name == TOOLBOX_PLUGIN_NAME
                     and str(arguments.get("operation") or "") == "invoke"
-                    and str(arguments.get("name") or "").strip()
                 ):
-                    resource_plugin = self.registry.resolve(
-                        str(arguments.get("name") or ""),
-                        agent_id=self.agent_id,
-                    )
-                    nested_arguments = arguments.get("arguments") or {}
-                    if not isinstance(nested_arguments, Mapping):
-                        raise TypeError("toolbox invoke arguments must be an object")
-                    nested_normalization = normalize_plugin_arguments(
-                        nested_arguments,
-                        resource_plugin.input_schema,
-                    )
-                    nested_arguments = nested_normalization.arguments
-                    argument_repairs.extend(
-                        repair.as_dict() for repair in nested_normalization.repairs
-                    )
                     resource_arguments, reveal = split_resource_reveal(
-                        nested_arguments,
+                        resource_arguments,
                         effects=resource_plugin.resource_effects,
                         allow_reveal=self.agent_id == "main",
                     )
@@ -3983,7 +4218,7 @@ class AgentSession:
                 else:
                     arguments, reveal = split_resource_reveal(
                         arguments,
-                        effects=plugin.resource_effects,
+                        effects=normalized.plugin.resource_effects,
                         allow_reveal=self.agent_id == "main",
                     )
                     resource_arguments = arguments
@@ -3991,6 +4226,10 @@ class AgentSession:
                 prepared.append(call)
                 continue
             call["arguments"] = arguments
+            call["_arguments_normalized"] = True
+            call["_nested_arguments_normalized"] = (
+                normalized.call.nested_arguments_normalized
+            )
             if argument_repairs:
                 call["argument_repairs"] = argument_repairs
             if resource_plugin.resource_effects:
@@ -4216,6 +4455,15 @@ class AgentSession:
                 name=str(call.get("name") or ""),
                 arguments=dict(call.get("arguments") or {}),
                 id=str(call.get("id") or f"call_{uuid4().hex}"),
+                arguments_normalized=bool(call.get("_arguments_normalized")),
+                nested_arguments_normalized=bool(
+                    call.get("_nested_arguments_normalized")
+                ),
+                argument_repairs=tuple(
+                    dict(repair)
+                    for repair in (call.get("argument_repairs") or ())
+                    if isinstance(repair, Mapping)
+                ),
             )
             for call in calls
             if isinstance(call, Mapping)
@@ -4359,6 +4607,11 @@ class AgentSession:
                 "success": item.success,
                 "value": self._json_value(item.value),
                 "error": item.error,
+                **(
+                    {"failure": item.failure.as_dict()}
+                    if item.failure is not None
+                    else {}
+                ),
             }
             presentation = self._resource_presentation(
                 call_by_id.get(item.call_id),
@@ -4531,6 +4784,11 @@ class AgentSession:
                                     "success": bool(result.get("success")),
                                     "value": result.get("value"),
                                     "error": str(result.get("error") or ""),
+                                    **(
+                                        {"failure": result.get("failure")}
+                                        if isinstance(result.get("failure"), Mapping)
+                                        else {}
+                                    ),
                                 },
                                 ensure_ascii=False,
                                 default=str,

@@ -253,7 +253,7 @@ class ChatRepository:
         finally:
             conn.close()
 
-    def mutate_chat(self, db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]]) -> dict[str, Any] | None:
+    def mutate_chat(self, db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]], *, commit_event: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Mutate one chat atomically without hydrating sibling transcripts."""
         target = str(chat_id or '').strip()
         if not target:
@@ -286,6 +286,59 @@ class ChatRepository:
                     ).fetchall()
                 ]
                 self.ports.write_row(conn, 'chats', self._chat_shell(ids, stored))
+                if isinstance(commit_event, dict):
+                    event_id = str(commit_event.get('event_id') or '').strip()
+                    event_type = str(commit_event.get('type') or '').strip()
+                    event_chat_id = str(commit_event.get('chat_id') or '').strip()
+                    turn_id = str(commit_event.get('turn_id') or '').strip()
+                    run_id = str(commit_event.get('run_id') or '').strip()
+                    node_id = str(commit_event.get('node_id') or '').strip()
+                    if (
+                        not event_id
+                        or event_type != 'ConversationTurnCommitted'
+                        or event_chat_id != target
+                        or not turn_id
+                        or not run_id
+                        or not node_id
+                    ):
+                        raise ValueError(
+                            'invalid ConversationTurnCommitted outbox event'
+                        )
+                    now = datetime.now(timezone.utc).isoformat()
+                    payload_json = json.dumps(commit_event, ensure_ascii=False)
+                    conn.execute(
+                        '''
+                        INSERT OR IGNORE INTO workbench_conversation_commit_outbox(
+                            event_id, chat_id, turn_id, run_id, node_id,
+                            payload_json, status, attempts, last_error,
+                            created_at, completed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, '', ?, '')
+                        ''',
+                        (
+                            event_id,
+                            target,
+                            turn_id,
+                            run_id,
+                            node_id,
+                            payload_json,
+                            now,
+                        ),
+                    )
+                    stored_event = conn.execute(
+                        'SELECT chat_id, turn_id, run_id, node_id, payload_json '
+                        'FROM workbench_conversation_commit_outbox WHERE event_id = ?',
+                        (event_id,),
+                    ).fetchone()
+                    if stored_event != (
+                        target,
+                        turn_id,
+                        run_id,
+                        node_id,
+                        payload_json,
+                    ):
+                        raise ValueError(
+                            'conversation commit event id collides with another payload'
+                        )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -294,7 +347,7 @@ class ChatRepository:
                 conn.close()
         return current
 
-    def write_chat(self, db_path: str | Path, chat: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, base_chat: dict[str, Any] | None=None) -> dict[str, Any] | None:
+    def write_chat(self, db_path: str | Path, chat: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, base_chat: dict[str, Any] | None=None, commit_event: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Three-way merge and persist one chat without loading its siblings."""
         target = self._chat_id(chat)
         if not target:
@@ -308,7 +361,13 @@ class ChatRepository:
                 raise ValueError('Workbench chat merge produced an invalid value')
             current.clear()
             current.update(merged)
-        return self.mutate_chat(db_path, target, merge_into, default_factory)
+        return self.mutate_chat(
+            db_path,
+            target,
+            merge_into,
+            default_factory,
+            commit_event=commit_event,
+        )
 
     def _merge_chat_lists(self, base: list[Any], local: list[Any], remote: list[Any]) -> list[dict[str, Any]]:
         base_by = {self._chat_id(chat): chat for chat in base if self._chat_id(chat)}

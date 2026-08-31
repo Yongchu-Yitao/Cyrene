@@ -48,14 +48,25 @@ function workbenchTranslateForLang(key, lang, params, fallback) {
   var text = dict[key];
   var resolvedKey = key;
   if (text === undefined && String(key).indexOf("toolName.") === 0) {
-    var toolName = String(key).slice("toolName.".length);
+    var originalToolName = String(key).slice("toolName.".length);
+    var toolName = originalToolName;
     toolName = toolName.replace(/\.r[23]$/, "");
     var alias = WORKBENCH_TOOL_NAME_ALIASES[toolName];
     if (alias) {
       resolvedKey = "toolName." + alias;
       text = dict[resolvedKey];
-    } else if (toolName !== String(key).slice("toolName.".length)) {
+    } else if (toolName !== originalToolName) {
       resolvedKey = "toolName." + toolName;
+      text = dict[resolvedKey];
+    }
+    // Durable traces name deferred discovery calls as `toolbox.<operation>`.
+    // Resolve the operation through the same built-in alias catalog so both
+    // valid calls and rejected historical calls keep raw protocol IDs out of
+    // the user-facing activity timeline.
+    if (text === undefined && toolName.indexOf("toolbox.") === 0) {
+      var delegatedName = toolName.slice("toolbox.".length);
+      var delegatedAlias = WORKBENCH_TOOL_NAME_ALIASES[delegatedName] || delegatedName;
+      resolvedKey = "toolName." + delegatedAlias;
       text = dict[resolvedKey];
     }
   }

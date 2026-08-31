@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from cyrene.workbench.chat.chat_dto import ChatDetailDTO, ChatStoreDTO
@@ -16,6 +18,8 @@ from cyrene.workbench.persistence.store import (
     write_chat,
     write_document,
 )
+from cyrene.workbench.persistence.schema import connect
+
 
 def _empty_store() -> dict[str, Any]:
     return {"chats": []}
@@ -95,6 +99,7 @@ class ChatRepository:
         chat: ChatDetailDTO | dict[str, Any],
         *,
         base_chat: ChatDetailDTO | dict[str, Any] | None = None,
+        commit_event: dict[str, Any] | None = None,
     ) -> ChatDetailDTO | None:
         return cast(
             ChatDetailDTO | None,
@@ -107,8 +112,93 @@ class ChatRepository:
                     if base_chat is not None
                     else None
                 ),
+                commit_event=commit_event,
             ),
         )
+
+    def pending_commit_events(
+        self,
+        chat_id: str = "",
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Claim durable public-commit events for idempotent side effects."""
+
+        with self._lock:
+            conn = connect(self._database())
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                params: list[Any] = []
+                where = "status = 'pending'"
+                if str(chat_id or "").strip():
+                    where += " AND chat_id = ?"
+                    params.append(str(chat_id))
+                params.append(max(1, int(limit)))
+                rows = conn.execute(
+                    "SELECT event_id, payload_json "
+                    "FROM workbench_conversation_commit_outbox "
+                    f"WHERE {where} ORDER BY created_at, event_id LIMIT ?",
+                    params,
+                ).fetchall()
+                events: list[dict[str, Any]] = []
+                for event_id, payload_json in rows:
+                    payload = json.loads(str(payload_json))
+                    if not isinstance(payload, dict):
+                        raise ValueError(
+                            f"invalid conversation commit payload: {event_id}"
+                        )
+                    payload.setdefault("event_id", str(event_id))
+                    events.append(payload)
+                event_ids = [str(row[0]) for row in rows]
+                if event_ids:
+                    conn.executemany(
+                        "UPDATE workbench_conversation_commit_outbox "
+                        "SET status = 'running', attempts = attempts + 1 "
+                        "WHERE event_id = ?",
+                        [(event_id,) for event_id in event_ids],
+                    )
+                conn.commit()
+                return events
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def complete_commit_event(self, event_id: str) -> None:
+        with self._lock:
+            conn = connect(self._database())
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE workbench_conversation_commit_outbox "
+                    "SET status = 'completed', completed_at = ?, last_error = '' "
+                    "WHERE event_id = ?",
+                    (datetime.now(timezone.utc).isoformat(), str(event_id)),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def fail_commit_event(self, event_id: str, error: str) -> None:
+        with self._lock:
+            conn = connect(self._database())
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE workbench_conversation_commit_outbox "
+                    "SET status = 'pending', last_error = ? WHERE event_id = ?",
+                    (str(error or "")[:1000], str(event_id)),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
 
     def mutate_one(
         self,

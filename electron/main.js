@@ -33,7 +33,17 @@ const {
   agentCursorRunningCommand,
   agentCursorVisualScaleForZoom,
 } = require('./agent-cursor');
-const { buildBrowserTypeTargetScript } = require('./browser-input');
+const {
+  buildBrowserDeepTypeTargetScript,
+  buildBrowserTypeTargetScript,
+} = require('./browser-input');
+const {
+  BROWSER_CLEAR_DEEP_REFS_SCRIPT,
+  BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT,
+  BROWSER_FIND_NESTED_TARGET_SCRIPT,
+  BROWSER_INSPECT_NESTED_SCRIPT,
+  browserFrameElementGeometryScript,
+} = require('./browser-deep-dom');
 const { buildBrowserContextMenuTemplate } = require('./browser-context-menu');
 const {
   decideBrowserWindowOpen,
@@ -1371,6 +1381,69 @@ class BrowserTabManager {
     this.latestSnapshot = null;
   }
 
+  _framePath(frame, mainFrame) {
+    const path = [];
+    let current = frame;
+    while (current && current !== mainFrame) {
+      const parent = current.parent;
+      if (!parent) return null;
+      const index = Array.from(parent.frames || []).findIndex((candidate) => (
+        candidate === current || candidate.frameTreeNodeId === current.frameTreeNodeId
+      ));
+      if (index < 0) return null;
+      path.unshift(index);
+      current = parent;
+    }
+    return current === mainFrame ? path : null;
+  }
+
+  async _frameTransform(frame, mainFrame) {
+    let offsetX = 0;
+    let offsetY = 0;
+    let scaleX = 1;
+    let scaleY = 1;
+    let current = frame;
+    while (current && current !== mainFrame) {
+      const parent = current.parent;
+      if (!parent || parent.detached || parent.isDestroyed()) return null;
+      const childIndex = Array.from(parent.frames || []).findIndex((candidate) => (
+        candidate === current || candidate.frameTreeNodeId === current.frameTreeNodeId
+      ));
+      if (childIndex < 0) return null;
+      const geometry = await parent.executeJavaScript(
+        browserFrameElementGeometryScript(childIndex), true
+      ).catch(() => null);
+      if (!geometry || geometry.ok !== true) return null;
+      offsetX = Number(geometry.x || 0) + offsetX * Number(geometry.scaleX || 1);
+      offsetY = Number(geometry.y || 0) + offsetY * Number(geometry.scaleY || 1);
+      scaleX *= Number(geometry.scaleX || 1);
+      scaleY *= Number(geometry.scaleY || 1);
+      current = parent;
+    }
+    return current === mainFrame ? { offsetX, offsetY, scaleX, scaleY } : null;
+  }
+
+  _transformFrameInfo(info, transform) {
+    if (!info || !transform) return info;
+    const result = { ...info };
+    if (Number.isFinite(Number(info.x))) result.x = Math.round(transform.offsetX + Number(info.x) * transform.scaleX);
+    if (Number.isFinite(Number(info.y))) result.y = Math.round(transform.offsetY + Number(info.y) * transform.scaleY);
+    if (info.box) {
+      result.box = {
+        x: Math.round(transform.offsetX + Number(info.box.x || 0) * transform.scaleX),
+        y: Math.round(transform.offsetY + Number(info.box.y || 0) * transform.scaleY),
+        w: Math.round(Number(info.box.w || info.box.width || 0) * transform.scaleX),
+        h: Math.round(Number(info.box.h || info.box.height || 0) * transform.scaleY),
+      };
+    }
+    return result;
+  }
+
+  _snapshotRefEntry(ref) {
+    const refs = this.latestSnapshot && this.latestSnapshot.refs;
+    return refs instanceof Map ? refs.get(String(ref || '').toLowerCase()) || null : null;
+  }
+
   async showAgentCursor(tab, x, y, { press = false, moveDurationMs = AGENT_CURSOR_MOVE_MS } = {}) {
     if (
       !tab || tab.id !== this.activeTabId || !this.visible || this.obscured
@@ -1936,6 +2009,23 @@ class BrowserTabManager {
     return frame ? frame.url : '';
   }
 
+  async _frameStateAtPath(tab, framePath = []) {
+    const debug = await this._ensureDebugger(tab);
+    const result = await debug.sendCommand('Page.getFrameTree');
+    let tree = result && result.frameTree;
+    for (const rawIndex of Array.from(framePath || [])) {
+      const index = Number(rawIndex);
+      if (!tree || !Array.isArray(tree.childFrames) || !tree.childFrames[index]) return null;
+      tree = tree.childFrames[index];
+    }
+    if (!tree || !tree.frame) return null;
+    return {
+      id: String(tree.frame.id || ''),
+      url: String(tree.frame.url || ''),
+      loaderId: String(tree.frame.loaderId || ''),
+    };
+  }
+
   async _describeUploadTarget(tab, backendNodeId, { chooserId = '', frameId = '', mode = '' } = {}) {
     const debug = await this._ensureDebugger(tab);
     const described = await debug.sendCommand('DOM.describeNode', {
@@ -2029,6 +2119,37 @@ class BrowserTabManager {
     const normalized = String(ref || '').trim().replace(/^e/i, '');
     if (!/^\d+$/.test(normalized)) throw new Error('Invalid browser element ref.');
     const debug = await this._ensureDebugger(tab);
+    const entry = this._snapshotRefEntry('e' + normalized);
+    if (entry && entry.nested) {
+      let searchId = '';
+      try {
+        const search = await debug.sendCommand('DOM.performSearch', {
+          query: `[data-cyrene-ref="${normalized}"]`,
+          includeUserAgentShadowDOM: true,
+        });
+        searchId = String(search && search.searchId || '');
+        const count = Number(search && search.resultCount || 0);
+        if (!searchId || count !== 1) {
+          throw new Error('Browser file input ref was not found. Take a new browser_snapshot and retry.');
+        }
+        const found = await debug.sendCommand('DOM.getSearchResults', {
+          searchId,
+          fromIndex: 0,
+          toIndex: 1,
+        });
+        const nodeId = Number(found && found.nodeIds && found.nodeIds[0]);
+        if (!Number.isFinite(nodeId) || nodeId <= 0) throw new Error('Unable to resolve browser file input.');
+        const described = await debug.sendCommand('DOM.describeNode', { nodeId, depth: 0, pierce: true });
+        const node = described && described.node;
+        if (!node || !node.backendNodeId) throw new Error('Unable to resolve browser file input.');
+        const frameState = await this._frameStateAtPath(tab, entry.framePath || []);
+        return await this._describeUploadTarget(tab, node.backendNodeId, {
+          frameId: String(frameState && frameState.id || ''),
+        });
+      } finally {
+        if (searchId) debug.sendCommand('DOM.discardSearchResults', { searchId }).catch(() => {});
+      }
+    }
     const expression = `document.querySelector('[data-cyrene-ref="${normalized}"]')`;
     const evaluated = await debug.sendCommand('Runtime.evaluate', {
       expression,
@@ -3423,13 +3544,96 @@ class BrowserTabManager {
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
     const wc = tab.view.webContents;
     try {
+      const mainFrame = wc.mainFrame;
+      const frames = Array.from(mainFrame && mainFrame.framesInSubtree || [mainFrame]).filter((frame) => (
+        frame && !frame.detached && !frame.isDestroyed()
+      ));
+      // Remove stale stamps from every reachable document without changing the
+      // historical top-document collector that runs immediately afterwards.
+      await Promise.all(frames.map((frame) => (
+        frame.executeJavaScript(BROWSER_CLEAR_DEEP_REFS_SCRIPT, true).catch(() => false)
+      )));
       const result = await wc.executeJavaScript(
         `${BROWSER_VISIBLE_ELEMENTS_SCRIPT}(${JSON.stringify(maxElements)}, ${JSON.stringify(textLimit)})`,
         true
       );
+      const elements = Array.isArray(result && result.elements) ? result.elements : [];
+      const refs = new Map();
+      const mainPath = [];
+      for (const element of elements) {
+        refs.set(String(element.ref || '').toLowerCase(), {
+          frame: mainFrame,
+          framePath: mainPath,
+          nested: false,
+        });
+      }
+      let remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
+
+      // Append open-shadow content from the main frame only after the legacy
+      // light-DOM result, preserving every existing ref and ordering decision.
+      if (remaining > 0) {
+        const shadowResult = await mainFrame.executeJavaScript(
+          `${BROWSER_INSPECT_NESTED_SCRIPT}(${JSON.stringify(remaining)}, ${JSON.stringify(textLimit)}, ${JSON.stringify(elements.length)}, false)`,
+          true,
+        ).catch(() => null);
+        for (const element of Array.isArray(shadowResult && shadowResult.elements) ? shadowResult.elements : []) {
+          element.context = {
+            frameDepth: 0,
+            frameUrl: String(mainFrame.url || wc.getURL()),
+            shadowDepth: Number(element.shadowDepth || 1),
+          };
+          elements.push(element);
+          refs.set(String(element.ref || '').toLowerCase(), {
+            frame: mainFrame,
+            framePath: mainPath,
+            nested: true,
+          });
+        }
+        remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
+      }
+
+      // Child WebFrameMain instances are host-owned, so the same script works
+      // for both same-origin and cross-origin frames.
+      for (const frame of frames) {
+        if (remaining <= 0) break;
+        if (frame === mainFrame) continue;
+        const framePath = this._framePath(frame, mainFrame);
+        if (!framePath) continue;
+        const transform = await this._frameTransform(frame, mainFrame);
+        if (!transform) continue;
+        const frameResult = await frame.executeJavaScript(
+          `${BROWSER_INSPECT_NESTED_SCRIPT}(${JSON.stringify(remaining)}, ${JSON.stringify(textLimit)}, ${JSON.stringify(elements.length)}, true)`,
+          true,
+        ).catch(() => null);
+        for (const localElement of Array.isArray(frameResult && frameResult.elements) ? frameResult.elements : []) {
+          const element = this._transformFrameInfo(localElement, transform);
+          element.context = {
+            frameDepth: framePath.length,
+            frameUrl: String(frame.url || ''),
+            shadowDepth: Number(localElement.shadowDepth || 0),
+          };
+          elements.push(element);
+          refs.set(String(element.ref || '').toLowerCase(), {
+            frame,
+            framePath,
+            nested: true,
+          });
+        }
+        remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
+      }
+      if (result && typeof result === 'object') {
+        result.elements = elements;
+        result.text = String(result.text || '');
+      }
       const snapshotToken = crypto.randomBytes(24).toString('base64url');
       const snapshotUrl = String((result && result.url) || wc.getURL());
-      this.latestSnapshot = { token: snapshotToken, tabId: tab.id, url: snapshotUrl, issuedAt: Date.now() };
+      this.latestSnapshot = {
+        token: snapshotToken,
+        tabId: tab.id,
+        url: snapshotUrl,
+        issuedAt: Date.now(),
+        refs,
+      };
       return { ...(result || {}), ok: true, tabId: tab.id, snapshotToken };
     } catch (err) {
       return { ok: false, error: 'Inspect failed: ' + String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
@@ -3479,6 +3683,47 @@ class BrowserTabManager {
         })()`,
         true
       );
+      if (result && typeof result === 'object' && Array.isArray(result.matches) && result.matches.length) {
+        return result;
+      }
+      const deepMatches = [];
+      for (const frame of Array.from(wc.mainFrame && wc.mainFrame.framesInSubtree || [])) {
+        if (!frame || frame.detached || frame.isDestroyed()) continue;
+        const includeLightDom = frame !== wc.mainFrame;
+        const scan = await frame.executeJavaScript(`(() => {
+          const target = ${JSON.stringify(targetUrl)};
+          let normalizedTarget = '';
+          try { normalizedTarget = new URL(target, location.href).href; } catch (_) { return []; }
+          const roots = [document];
+          for (let index = 0; index < roots.length; index += 1) {
+            for (const node of Array.from(roots[index].querySelectorAll ? roots[index].querySelectorAll('*') : [])) {
+              if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+            }
+          }
+          const selected = ${includeLightDom ? 'roots' : 'roots.slice(1)'};
+          const matches = [];
+          for (const root of selected) {
+            for (const el of Array.from(root.querySelectorAll('a[href]'))) {
+              const style = getComputedStyle(el);
+              const rect = el.getBoundingClientRect();
+              if (!style || style.display === 'none' || style.visibility === 'hidden' || !rect || rect.width <= 0 || rect.height <= 0) continue;
+              let href = '';
+              try { href = new URL(el.getAttribute('href') || '', location.href).href; } catch (_) { continue; }
+              if (href !== normalizedTarget) continue;
+              matches.push({
+                ref: el.getAttribute('data-cyrene-ref') ? 'e' + el.getAttribute('data-cyrene-ref') : '',
+                text: String(el.innerText || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().slice(0, 200),
+                url: href,
+              });
+            }
+          }
+          return matches;
+        })()`, true).catch(() => []);
+        deepMatches.push(...(Array.isArray(scan) ? scan : []));
+      }
+      if (deepMatches.length) {
+        return { ok: true, url: wc.getURL(), targetUrl, matches: deepMatches };
+      }
       return result && typeof result === 'object' ? result : { ok: false, error: 'Visible-link scan failed.', matches: [] };
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err), matches: [] };
@@ -3547,19 +3792,57 @@ class BrowserTabManager {
     return { ok: true, allowed: true, targetUrl: normalizedTarget };
   }
 
-  async _findTarget(wc, { mode = 'selector', value = '', exact = false, visibleOnly = true } = {}) {
-    const script = `${BROWSER_FIND_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'})`;
-    try {
-      const first = await wc.executeJavaScript(script, true);
+  async _findTarget(wc, { mode = 'selector', value = '', exact = false, visibleOnly = true, _frame = null, _nested = null } = {}) {
+    const mainFrame = wc.mainFrame;
+    const refEntry = mode === 'ref' ? this._snapshotRefEntry(value) : null;
+    const explicitFrame = _frame || (refEntry && refEntry.frame) || null;
+    const run = async (frame, nested, includeLightDom) => {
+      const script = nested
+        ? `${BROWSER_FIND_NESTED_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'}, ${includeLightDom ? 'true' : 'false'})`
+        : `${BROWSER_FIND_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'})`;
+      const execute = frame === mainFrame
+        ? (code) => wc.executeJavaScript(code, true)
+        : (code) => frame.executeJavaScript(code, true);
+      const first = await execute(script);
       if (!first || !first.ok) return first;
       // scrollIntoView may trigger sticky headers, virtualized lists, or a
       // framework render. Wait two frames and resolve the target again so the
       // returned center belongs to the settled layout.
-      await wc.executeJavaScript(`new Promise((resolve) => {
+      await execute(`new Promise((resolve) => {
         const frame = window.requestAnimationFrame || ((callback) => setTimeout(callback, 16));
         frame(() => frame(resolve));
-      })`, true);
-      return await wc.executeJavaScript(script, true);
+      })`);
+      const local = await execute(script);
+      if (!local || !local.ok) return local;
+      let result = { ...local, _frame: frame, _nested: nested, _localX: local.x, _localY: local.y };
+      if (frame !== mainFrame) {
+        const transform = await this._frameTransform(frame, mainFrame);
+        if (!transform) return { ok: false, code: 'FRAME_DETACHED', error: 'The target frame is no longer available.' };
+        result = { ...this._transformFrameInfo(result, transform), _frame: frame, _nested: nested, _localX: local.x, _localY: local.y };
+      }
+      return result;
+    };
+    try {
+      if (explicitFrame) {
+        return await run(
+          explicitFrame,
+          explicitFrame !== mainFrame || _nested === true || Boolean(refEntry && refEntry.nested),
+          explicitFrame !== mainFrame,
+        );
+      }
+
+      // The old top-document lookup remains authoritative. Supplemental deep
+      // lookup is attempted only after it reports no usable target.
+      const legacy = await run(mainFrame, false, false);
+      if (legacy && legacy.ok) return legacy;
+      const shadow = await run(mainFrame, true, false);
+      if (shadow && shadow.ok) return shadow;
+      for (const frame of Array.from(mainFrame.framesInSubtree || [])) {
+        if (!frame || frame === mainFrame || frame.detached || frame.isDestroyed()) continue;
+        const nested = await run(frame, true, true);
+        if (nested && nested.ok) return nested;
+      }
+      return legacy || shadow || { ok: false, code: 'TARGET_NOT_FOUND' };
     } catch (err) {
       return { ok: false, error: 'js execution failed: ' + String((err && err.message) || err) };
     }
@@ -3953,7 +4236,7 @@ class BrowserTabManager {
     // sendInputEvent dispatches trusted OS-level events.  Chromium's input
     // pipeline generates the full click chain (pointerdown → mousedown →
     // pointerup → mouseup → click) with isTrusted=true.
-    return this._dispatchClick(tab, info, { mode: 'selector', value: String(selector || '') });
+    return this._dispatchClick(tab, info, { mode: 'selector', value: String(selector || ''), _frame: info._frame || null, _nested: info._nested === true });
   }
 
   async clickRef({ ref, tabId = '' } = {}) {
@@ -3962,7 +4245,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'ref', value: String(ref || '') });
     if (!info || !info.ok) return this._targetFailure(tab, info, 'Element not found.');
-    return this._dispatchClick(tab, info, { mode: 'ref', value: String(ref || '') });
+    return this._dispatchClick(tab, info, { mode: 'ref', value: String(ref || ''), _frame: info._frame || null, _nested: info._nested === true });
   }
 
   async clickText({ text, exact = false, tabId = '' } = {}) {
@@ -3971,7 +4254,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'text', value: String(text || ''), exact: exact === true });
     if (!info || !info.ok) return this._targetFailure(tab, info, 'Element not found.');
-    return this._dispatchClick(tab, info, { mode: 'text', value: String(text || ''), exact: exact === true });
+    return this._dispatchClick(tab, info, { mode: 'text', value: String(text || ''), exact: exact === true, _frame: info._frame || null, _nested: info._nested === true });
   }
 
   async clickAt({ x, y, tabId = '' } = {}) {
@@ -3995,15 +4278,31 @@ class BrowserTabManager {
       return { ok: false, error: 'Element ' + ((pointerInfo && pointerInfo.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
     }
     await this.showAgentCursor(tab, pointerInfo.x, pointerInfo.y);
-    const runPageOperation = (operation) => wc.executeJavaScript(
-      buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
-        mode,
-        value,
-        text: desiredText,
-        operation,
-      }),
-      true,
-    );
+    const targetFrame = pointerInfo._frame || wc.mainFrame;
+    const nestedTarget = pointerInfo._nested === true;
+    const runPageOperation = (operation) => {
+      const script = nestedTarget
+        ? buildBrowserDeepTypeTargetScript(
+          BROWSER_FIND_NESTED_TARGET_SCRIPT,
+          BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT,
+          {
+            mode,
+            value,
+            text: desiredText,
+            operation,
+            includeLightDom: targetFrame !== wc.mainFrame,
+          },
+        )
+        : buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
+          mode,
+          value,
+          text: desiredText,
+          operation,
+        });
+      return (targetFrame === wc.mainFrame
+        ? wc.executeJavaScript(script, true)
+        : targetFrame.executeJavaScript(script, true));
+    };
     this._markAgentInput(tab);
     let result = await runPageOperation('set-native');
     if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
@@ -4067,7 +4366,7 @@ class BrowserTabManager {
       }
       await this._waitNav(wc);
     }
-    return {
+    const output = {
       ok: true,
       url: wc.getURL(),
       title: wc.getTitle(),
@@ -4075,6 +4374,11 @@ class BrowserTabManager {
       box: result.box,
       strategy,
     };
+    if (targetFrame !== wc.mainFrame && result.box) {
+      const transform = await this._frameTransform(targetFrame, wc.mainFrame);
+      if (transform) output.box = this._transformFrameInfo({ box: result.box }, transform).box;
+    }
+    return output;
   }
 
   async type({ selector, text = '', submit = false, tabId = '' } = {}) {
@@ -4103,6 +4407,31 @@ class BrowserTabManager {
         })()
       `, true).catch((err) => ({ ok: false, error: String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle() }));
       if (result && result.ok) return { ok: true, url: result.url || wc.getURL(), title: result.title || wc.getTitle(), tabId: tab.id };
+      if (selector || text) {
+        const frames = Array.from(wc.mainFrame && wc.mainFrame.framesInSubtree || []);
+        for (const frame of frames) {
+          if (!frame || frame.detached || frame.isDestroyed()) continue;
+          const includeLightDom = frame !== wc.mainFrame;
+          const nested = await frame.executeJavaScript(`(() => {
+            const selector = ${JSON.stringify(String(selector || ''))};
+            const text = ${JSON.stringify(String(text || ''))};
+            const roots = [document];
+            for (let index = 0; index < roots.length; index += 1) {
+              const root = roots[index];
+              for (const node of Array.from(root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+                if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+              }
+            }
+            const selectedRoots = ${includeLightDom ? 'roots' : 'roots.slice(1)'};
+            const selectorOk = !selector || selectedRoots.some((root) => root.querySelector && root.querySelector(selector));
+            const textOk = !text || selectedRoots.some((root) => String(root.textContent || '').includes(text));
+            return { ok: selectorOk && textOk };
+          })()`, true).catch(() => ({ ok: false }));
+          if (nested && nested.ok) {
+            return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+          }
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     return { ok: false, error: 'Timed out waiting for page condition.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
@@ -4225,11 +4554,13 @@ class BrowserTabManager {
 
     let px = x === null || x === undefined ? NaN : Number(x);
     let py = y === null || y === undefined ? NaN : Number(y);
+    let refInfo = null;
     if (String(ref || '').trim()) {
       const info = await this._findTarget(wc, { mode: 'ref', value: String(ref).trim() });
       if (!info || !info.ok) {
         return { ok: false, error: 'Scroll target ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
       }
+      refInfo = info;
       px = info.x;
       py = info.y;
     }
@@ -4250,9 +4581,15 @@ class BrowserTabManager {
     // through Chromium's trusted input pipeline, matching a user's mouse/trackpad
     // and allowing nested overflow containers to scroll.
     const probeId = 'scroll_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
-    const before = await wc.executeJavaScript(`(() => {
-      const x = ${JSON.stringify(px)};
-      const y = ${JSON.stringify(py)};
+    const probeFrame = refInfo && refInfo._nested ? refInfo._frame : wc.mainFrame;
+    const probeX = refInfo && refInfo._nested ? Number(refInfo._localX) : px;
+    const probeY = refInfo && refInfo._nested ? Number(refInfo._localY) : py;
+    const probeExecute = (script) => probeFrame === wc.mainFrame
+      ? wc.executeJavaScript(script, true)
+      : probeFrame.executeJavaScript(script, true);
+    const before = await probeExecute(`(() => {
+      const x = ${JSON.stringify(probeX)};
+      const y = ${JSON.stringify(probeY)};
       const dx = ${JSON.stringify(dx)};
       const dy = ${JSON.stringify(dy)};
       const probeId = ${JSON.stringify(probeId)};
@@ -4273,7 +4610,9 @@ class BrowserTabManager {
         return canX || canY;
       };
       const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
-      let target = document.elementFromPoint(x, y);
+      let target = ${refInfo && refInfo._nested
+        ? `${BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT}('ref', ${JSON.stringify(String(ref || ''))}, ${probeFrame !== wc.mainFrame ? 'true' : 'false'})`
+        : 'document.elementFromPoint(x, y)'};
       while (target && !canMove(target)) target = parentOf(target);
       if (!target && canMove(root)) target = root;
       if (!target) return { found: false, x, y };
@@ -4288,7 +4627,7 @@ class BrowserTabManager {
         scrollLeft: Number(target.scrollLeft || 0),
         scrollTop: Number(target.scrollTop || 0),
       };
-    })()`, true).catch(() => ({ found: false, x: px, y: py }));
+    })()`).catch(() => ({ found: false, x: probeX, y: probeY }));
 
     this._markAgentInput(tab);
     // Probe coordinates above are CSS pixels; input events are delivered in
@@ -4309,8 +4648,16 @@ class BrowserTabManager {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const after = await wc.executeJavaScript(`(() => {
-      const target = document.querySelector('[data-cyrene-scroll-probe=${JSON.stringify(probeId)}]');
+    const after = await probeExecute(`(() => {
+      const roots = [document];
+      let target = null;
+      for (let index = 0; index < roots.length && !target; index += 1) {
+        const currentRoot = roots[index];
+        target = currentRoot.querySelector('[data-cyrene-scroll-probe=${JSON.stringify(probeId)}]');
+        for (const node of Array.from(currentRoot.querySelectorAll('*'))) {
+          if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+        }
+      }
       if (!target) return { found: false };
       const result = {
         found: true,
@@ -4319,7 +4666,7 @@ class BrowserTabManager {
       };
       target.removeAttribute('data-cyrene-scroll-probe');
       return result;
-    })()`, true).catch(() => ({ found: false }));
+    })()`).catch(() => ({ found: false }));
     const actualDeltaX = before.found && after.found ? after.scrollLeft - before.scrollLeft : 0;
     const actualDeltaY = before.found && after.found ? after.scrollTop - before.scrollTop : 0;
     return {

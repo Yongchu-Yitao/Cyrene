@@ -419,6 +419,19 @@ In chat, the agent discovers project search and Library operations through
 
 When the agent uses browser tools, the chat UI shows a live screencast of the page. If the agent hits a login wall, it can request a **login takeover**: a real headed browser window opens, you log in, and the agent resumes in the now-authenticated session.
 
+On complex pages, take `browser_snapshot` first and prefer its short-lived refs
+over guessed CSS selectors. Take a fresh snapshot after navigation, scrolling,
+or substantial layout changes. If the current top-level DOM projection cannot
+reliably model an iframe, shadow DOM, Canvas/WebGL control, or complex editor,
+use a screenshot or user takeover.
+
+File attachment always uses `browser_upload_files` with single-use human
+approval. Ordinary clicks, typing, and Enter submission do not automatically
+receive that confirmation, so purchases, publishing, deletion, and account
+changes must match the user's request. `browser_network_log` is a Resource
+Performance summary, and browser URL validation is not a network sandbox for
+every subresource and redirect.
+
 See [browser-live-view.md](browser-live-view.md) for setup and configuration.
 
 ---

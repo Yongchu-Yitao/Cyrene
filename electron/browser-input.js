@@ -10,6 +10,7 @@ async function browserTypeTargetInPage(
   textValue,
   operationArg,
   findTarget,
+  resolveElement = null,
 ) {
   const mode = String(modeArg || 'selector');
   const value = String(valueArg || '');
@@ -52,7 +53,9 @@ async function browserTypeTargetInPage(
 
   let element = null;
   try {
-    if (mode === 'ref') {
+    if (typeof resolveElement === 'function') {
+      element = resolveElement(mode, value);
+    } else if (mode === 'ref') {
       const ref = value.replace(/^e/i, '').replace(/"/g, '\\"');
       element = document.querySelector('[data-cyrene-ref="' + ref + '"]');
     } else {
@@ -258,7 +261,30 @@ function buildBrowserTypeTargetScript(
   }, ${String(findTargetScript || '')})`;
 }
 
+function buildBrowserDeepTypeTargetScript(
+  findTargetScript,
+  resolveElementScript,
+  { mode = 'selector', value = '', text = '', operation = 'set-native', includeLightDom = false } = {},
+) {
+  const deepFind = `((modeArg, valueArg, exactArg, visibleOnlyArg) => (${
+    String(findTargetScript || '')
+  })(modeArg, valueArg, exactArg, visibleOnlyArg, ${includeLightDom === true ? 'true' : 'false'}))`;
+  const deepResolve = `((modeArg, valueArg) => (${
+    String(resolveElementScript || '')
+  })(modeArg, valueArg, ${includeLightDom === true ? 'true' : 'false'}))`;
+  return `(${browserTypeTargetInPage.toString()})(${
+    JSON.stringify(String(mode || 'selector'))
+  }, ${
+    JSON.stringify(String(value || ''))
+  }, ${
+    JSON.stringify(String(text ?? ''))
+  }, ${
+    JSON.stringify(String(operation || 'set-native'))
+  }, ${deepFind}, ${deepResolve})`;
+}
+
 module.exports = {
   browserTypeTargetInPage,
+  buildBrowserDeepTypeTargetScript,
   buildBrowserTypeTargetScript,
 };

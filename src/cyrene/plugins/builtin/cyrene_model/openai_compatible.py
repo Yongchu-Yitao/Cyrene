@@ -10,6 +10,7 @@ OPENAI_COMPATIBLE_PROVIDER = ModelProvider(
     default_base_url="https://api.openai.com/v1",
     auth_type="optional",
     capabilities=("chat", "vision", "embedding", "tools", "reasoning"),
+    include_stream_usage=True,
     icon="",
 )
 OPENAI_COMPATIBLE_PLUGIN = create_model_plugin(OPENAI_COMPATIBLE_PROVIDER)

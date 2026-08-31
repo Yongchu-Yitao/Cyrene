@@ -482,6 +482,40 @@ async def _deliver_proactive_message(
     return projected
 
 
+async def _notify_proactive_result(
+    text: str,
+    delivered_target: Mapping[str, str] | None,
+    proactive_lang: str,
+) -> None:
+    try:
+        await notify(title="Cyrene", body=str(text)[:120], channel="auto")
+        append_notification(
+            title=localized(
+                "Cyrene reminder",
+                "Cyrene 提醒",
+                language=proactive_lang,
+            ),
+            body=str(text)[:120],
+            tab="mention",
+            project_ref=str((delivered_target or {}).get("project_id") or "default"),
+            source="proactive_message",
+            source_label=(
+                localized("Chat", "对话", language=proactive_lang)
+                if delivered_target
+                else localized("System", "系统", language=proactive_lang)
+            ),
+            link_label=str((delivered_target or {}).get("title") or "Cyrene"),
+            meta=(
+                {"chatId": str(delivered_target.get("chat_id") or "")}
+                if delivered_target
+                else None
+            ),
+            language=proactive_lang,
+        )
+    except Exception:
+        logger.debug("Proactive notification delivery failed", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Proactive heartbeat  (lottery-driven)
 # ---------------------------------------------------------------------------
@@ -718,34 +752,12 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
 
         logger.info("Proactive message sent via Plugin Agent: %s", str(text)[:100])
 
-        # Desktop / SSE notification so the user is alerted even when the
-        # Web UI tab is in the background.
-        try:
-            await notify(title="Cyrene", body=str(text)[:120], channel="auto")
-            append_notification(
-                title=localized(
-                    "Cyrene reminder",
-                    "Cyrene 提醒",
-                    language=proactive_lang,
-                ),
-                body=str(text)[:120],
-                tab="mention",
-                project_ref=str((delivered_target or {}).get("project_id") or "default"),
-                source="proactive_message",
-                source_label=(
-                    localized("Chat", "对话", language=proactive_lang)
-                    if delivered_target
-                    else localized("System", "系统", language=proactive_lang)
-                ),
-                link_label=str((delivered_target or {}).get("title") or "Cyrene"),
-                meta=(
-                    {"chatId": str(delivered_target.get("chat_id") or "")}
-                    if delivered_target else None
-                ),
-                language=proactive_lang,
-            )
-        except Exception:
-            logger.debug("Proactive notification delivery failed", exc_info=True)
+        # Alert desktop/SSE listeners even while the Web UI is in the background.
+        await _notify_proactive_result(
+            str(text),
+            delivered_target,
+            proactive_lang,
+        )
 
         return {
             "status": "delivered",

@@ -190,12 +190,24 @@ def read_chat_summaries(db_path: str | Path, default_factory: Callable[[], dict[
     return _chat_repository().read_chat_summaries(db_path, default_factory)
 
 
-def mutate_chat(db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]]) -> dict[str, Any] | None:
-    return _chat_repository().mutate_chat(db_path, chat_id, mutation, default_factory)
+def mutate_chat(db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]], *, commit_event: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    return _chat_repository().mutate_chat(
+        db_path,
+        chat_id,
+        mutation,
+        default_factory,
+        commit_event=commit_event,
+    )
 
 
-def write_chat(db_path: str | Path, chat: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, base_chat: dict[str, Any] | None=None) -> dict[str, Any] | None:
-    return _chat_repository().write_chat(db_path, chat, default_factory, base_chat=base_chat)
+def write_chat(db_path: str | Path, chat: dict[str, Any], default_factory: Callable[[], dict[str, Any]], *, base_chat: dict[str, Any] | None=None, commit_event: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    return _chat_repository().write_chat(
+        db_path,
+        chat,
+        default_factory,
+        base_chat=base_chat,
+        commit_event=commit_event,
+    )
 
 
 def _merge_chat_lists(base: list[Any], local: list[Any], remote: list[Any]) -> list[dict[str, Any]]:

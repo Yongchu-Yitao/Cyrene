@@ -37,7 +37,10 @@
 - **A browser the agent can actually operate** — watch Cyrene navigate, click,
   type, upload, and inspect pages in a live view. When login, CAPTCHA, or 2FA
   needs you, take over the same browser and hand it back without losing the
-  session.
+  session. Snapshot refs, verified trusted clicks, and single-use upload approval
+  reduce accidental actions, while DOM projection remains primarily top-level
+  and URL policy is not a complete per-request network sandbox; see
+  [browser capabilities and boundaries](docs/browser-live-view.md#page-interaction-model-and-current-boundaries).
 - **Live PowerPoint composition** — a local Office add-in lets Cyrene inspect,
   batch-create, move, resize, style, render, and verify elements in the open
   presentation while the user watches each slide change progressively.
@@ -53,63 +56,13 @@
 
 ## One Agent, assembled from plugins
 
-Cyrene is not a fixed agent with a separate extension layer. The running Agent
-is assembled from the plugins enabled for that conversation:
+Cyrene's personality, memory, models, tools, and workflows come from plugins
+rather than a fixed, unchangeable agent. Each conversation and project can use a
+different set of capabilities, while Plugin Center lets you manage plugins and
+tool visibility.
 
-```text
-empty ContextTree root
-  + editable system-prompt plugin
-  + SOUL personality plugin (when enabled)
-  + memory, project, runtime, and composer-context plugins
-  + model provider plugin
-  + directly visible tools and discoverable tool plugins
-  + lifecycle, permission, learning, and delivery Hooks
-  = the Agent for this run
-```
-
-At the start of a conversation, tree-local `SessionStart` Hooks freeze the
-stable system prompt, SOUL, memory, and learned-skill prefix. Each `TurnStart`
-then appends only the workspace, MCP servers, attachments, runtime state, and
-other context selected for that turn. Stable bytes always lead the changing
-suffix so provider prompt caches can reuse the longest possible prefix.
-
-The model receives only the fixed kernel tools plus tools marked **directly
-visible**. Every other enabled toolbox or standalone tool remains available
-through `toolbox.list → toolbox.describe → toolbox.invoke`. Before and after a
-call, tree-local Hooks can validate or modify arguments, request permission,
-record learning evidence, and publish results. `SessionEnd` and `Stop` Hooks
-then finalize or cancel plugin-owned work. The ContextTree persists the exact
-messages, mounts, tool results, token usage, compaction checkpoints, and inbox
-state needed for recovery.
-
-Subagents use the same composition model: each starts from the main Agent's
-initial tree plus its assignment, gets capabilities according to its actor
-policy, and communicates through the durable inbox. Plugin Center controls
-which packs exist, whether individual tools are direct or discoverable, and
-their user-edited names and Agent-facing descriptions.
-
-See [Architecture](docs/architecture.md) for the full lifecycle and
-[Custom plugins](docs/project-plugins.md) for the contribution formats.
-
-Workbench is conversation-first. `/goal` turns a conversation into a durable
-goal loop with an editable objective, time limit, plan, independent review,
-manual acceptance, and a stop control. When file work is explicit, the same
-conversation can open a dynamic workspace beside the chat with Editor,
-Terminal, Problems, Review, Preview, and Files views. Empty views stay hidden,
-and the workspace survives navigation and restart.
-
-Project support is plugin-provided rather than hard-coded. JavaScript and
-TypeScript (Node.js, Bun, pnpm, Yarn, or Deno), Python and uv, TeX, Go, Rust,
-Java with Maven or Gradle, Make, and GitHub repositories can contribute safe
-one-click Build, Run, Test, and Preview actions. Installing or discovering the
-matching runtime extension enables the corresponding project plugin, and
-project settings let users review or repair detected actions.
-
-The source follows the same boundary: `cyrene.core` is host-neutral,
-`cyrene.plugins` owns Cyrene's product contributions and built-in feature
-packs, and `cyrene.workbench` adapts them to HTTP, persistence, Electron, and
-the SPA. The former top-level `agent`, `route`, and `webui` packages are removed
-without compatibility shells.
+See [Architecture](docs/architecture.md) for the implementation and
+[Custom plugins](docs/project-plugins.md) for extension points.
 
 ## Quick start
 

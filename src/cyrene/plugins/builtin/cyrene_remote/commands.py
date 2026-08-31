@@ -114,6 +114,15 @@ _REMOTE_ERROR_MESSAGES: dict[str, tuple[str, str]] = {
     "remote_project_mismatch": ("The resource does not belong to the authorized project.", "资源不属于已授权项目。"),
     "remote_project_not_found": ("The authorized project no longer exists.", "已授权项目已不存在。"),
     "remote_target_approval_required": ("This operation requires approval on the target device.", "此操作需要在目标设备上批准。"),
+    "desktop_session_not_found": ("The remote desktop session is unavailable or expired.", "远程桌面会话不可用或已过期。"),
+    "frame_required": ("Read a fresh desktop frame before sending pointer input.", "发送指针输入前请先读取最新桌面画面。"),
+    "frame_unavailable": ("The remote desktop frame is unavailable.", "远程桌面画面不可用。"),
+    "invalid_frame": ("The remote desktop provider returned an invalid frame.", "远程桌面提供器返回了无效画面。"),
+    "invalid_input": ("The remote desktop input event is invalid.", "远程桌面输入事件无效。"),
+    "provider_unavailable": ("The requested remote desktop provider is unavailable.", "请求的远程桌面提供器不可用。"),
+    "login_provider_required": ("System login requires the privileged target provider.", "系统登录需要目标机的特权提供器。"),
+    "login_provider_unavailable": ("The system-login provider is not configured on the target.", "目标机未配置系统登录提供器。"),
+    "credential_input_blocked": ("Credentials cannot be relayed to the system login screen.", "凭据不能被转发到系统登录界面。"),
     "run_not_found": ("Run not found.", "未找到运行记录。"),
     "thumbnail_unavailable": ("The thumbnail is unavailable.", "缩略图不可用。"),
     "thumbnail_unsupported": ("Thumbnail previews are available only for images.", "仅图片支持缩略图预览。"),
@@ -1183,6 +1192,7 @@ class RemoteCommandExecutor:
                     "workspace_files_v1": True,
                     "remote_jobs_v1": True,
                     "remote_authorization_v1": True,
+                    "remote_desktop_v1": True,
                 },
             }
         if command == "projects.list":
@@ -1227,11 +1237,29 @@ class RemoteCommandExecutor:
             return await self._harness_command(
                 peer_device_id, command, project_id, payload
             )
+        if command.startswith("desktop."):
+            return await self._desktop_command(peer_device_id, command, payload)
         return {
             "ok": False,
             "code": "remote_command_unsupported",
             "error": f"unsupported remote command: {command}",
         }
+
+    async def _desktop_command(
+        self,
+        peer_device_id: str,
+        command: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        service = application_plugin_service("remote_desktop")
+        if service is None:
+            return {
+                "ok": False,
+                "code": "remote_plugin_pack_unavailable",
+                "error": "Remote Desktop Plugin is unavailable",
+            }
+        result = service.handle_remote(peer_device_id, command, payload)
+        return await result if asyncio.iscoroutine(result) else result
 
     async def _execute_workbench(
         self, command: str, project_id: str, payload: dict[str, Any]

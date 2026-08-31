@@ -50,7 +50,9 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
             singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
             tree_id TEXT NOT NULL UNIQUE,
             root_id TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            committed_leaf_id TEXT,
+            committed_run_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS context_nodes (
@@ -122,7 +124,27 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
         """
     )
     _ensure_context_token_columns(connection)
+    _ensure_tree_metadata_columns(connection)
     _ensure_closed_hook_failure_policy(connection)
+
+
+def _ensure_tree_metadata_columns(connection: sqlite3.Connection) -> None:
+    """Add the public-branch commit pointer to existing ContextTree stores."""
+
+    columns = {
+        str(row["name"])
+        for row in connection.execute(
+            "PRAGMA table_info(context_tree_metadata)"
+        ).fetchall()
+    }
+    if "committed_leaf_id" not in columns:
+        connection.execute(
+            "ALTER TABLE context_tree_metadata ADD COLUMN committed_leaf_id TEXT"
+        )
+    if "committed_run_id" not in columns:
+        connection.execute(
+            "ALTER TABLE context_tree_metadata ADD COLUMN committed_run_id TEXT"
+        )
 
 
 def _ensure_context_token_columns(connection: sqlite3.Connection) -> None:

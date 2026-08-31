@@ -4,6 +4,7 @@ import asyncio
 import copy
 import logging
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter
@@ -110,6 +111,19 @@ class _AnswerOperation:
         await run.done.wait()
         return self._response(run)
 
+    def _apply_pending_context(
+        self,
+        pending: dict[str, Any],
+        checkpoint: Mapping[str, Any],
+    ) -> None:
+        self.pending = pending
+        self.retry = bool(pending.get("retry"))
+        self.turn_id = str(pending.get("turnId") or "")
+        self.original_request = str(pending.get("originalUserMessage") or "")
+        if not self.turn_id:
+            raise RuntimeError("pending ContextTree question has no turn identity")
+        self.agent_run_id = str(checkpoint.get("run_id") or "")
+
     async def _prepare(self, permission_modes):
         if not self.question_id or not self.answer_text:
             return localized_error_response(
@@ -160,8 +174,7 @@ class _AnswerOperation:
                 "pending_question_not_found",
                 language=self.language,
             )
-        self.pending = pending
-        self.agent_run_id = str((checkpoint or {}).get("run_id") or "")
+        self._apply_pending_context(pending, checkpoint)
         self.routes = self.context.runtime()
         self.project_id = str(self.chat.get("projectId") or "")
         store = await asyncio.to_thread(self.routes.read_store)
@@ -331,16 +344,6 @@ class _AnswerOperation:
     async def _resume_agent(self, run: ChatRun):
         from cyrene.workbench.core_adapter.conversation_runtime import ConversationConfig
 
-        original_request = next(
-            (
-                str(item.get("content") or "")
-                for item in reversed(self.chat.get("messages") or [])
-                if isinstance(item, dict)
-                and item.get("role") == "user"
-                and not item.get("answerToQuestionId")
-            ),
-            "",
-        )
         memory_snapshot = self.service.ensure_chat_memory_snapshot(self.chat)
         input_context = self.service.resolve_composer_input_context(
             self.chat,
@@ -355,7 +358,7 @@ class _AnswerOperation:
             host_chat_id=self.routes.chat_id,
             client_request_id=str(self.pending.get("clientRequestId") or ""),
             permission_mode=self.mode,
-            public_user_message=original_request,
+            public_user_message=self.original_request,
             attachment_paths=self._attachment_path_map(),
             remote_device_ids=tuple(input_context["remoteDeviceIds"]),
             soul_enabled=bool(input_context["soulActive"]),
@@ -370,7 +373,16 @@ class _AnswerOperation:
             memory_write_enabled=not self.is_side_agent,
             memory_trigger_enabled=not self.is_side_agent,
             memory_archive_enabled=True,
-            completed_turn_count=int(self.chat.get("completedTurnCount") or 0) + 1,
+            retry=self.retry,
+            completed_turn_count=self.service.next_completed_turn_count(
+                {
+                    "completedTurnCount": int(
+                        self.chat.get("completedTurnCount") or 0
+                    )
+                },
+                retry=self.retry,
+                is_side_agent=self.is_side_agent,
+            ),
             response_capabilities=("interactive_blocks",),
             ui_instance_id=self.ui_instance_id,
             conversation_source=self.conversation_source,
@@ -489,16 +501,23 @@ class _AnswerOperation:
         if pending_value is None:
             raise RuntimeError("Agent paused without a pending question")
         pending = pending_value.as_dict()
+        if str(pending.get("turnId") or "") != self.turn_id:
+            raise RuntimeError("pending ContextTree question changed turn identity")
         model = str(result.model or self.chat.get("model") or "")
         additions = self._runtime_activities(result, model)
-        additions.append(
-            self.service.pending_question_message(
-                pending,
-                usage=dict(result.usage or {}),
-                latest_request_usage=dict(result.latest_request_usage or {}),
-                model=model,
-            )
+        question = self.service.pending_question_message(
+            pending,
+            usage=dict(result.usage or {}),
+            latest_request_usage=dict(result.latest_request_usage or {}),
+            model=model,
         )
+        question.update(
+            {
+                "runId": str(getattr(result, "run_id", "") or ""),
+                "contextNodeId": str(getattr(result, "node_id", "") or ""),
+            }
+        )
+        additions.append(question)
         fresh_chat = await asyncio.to_thread(self.service.repository.get, self.chat_id)
         if not fresh_chat:
             raise RuntimeError("chat disappeared while saving pending question")
@@ -510,11 +529,19 @@ class _AnswerOperation:
         if isinstance(self.active_plan, dict):
             fresh_chat["activePlan"] = copy.deepcopy(self.active_plan)
         fresh_chat["updatedAt"] = self.service.utc_now_iso()
+        commit_event = self._conversation_commit_event(
+            result,
+            status="awaiting_user",
+            assistant_text="",
+            completed_turn_count=int(fresh_chat.get("completedTurnCount") or 0),
+        )
         await asyncio.to_thread(
             self.service.repository.write_one,
             fresh_chat,
             base_chat=base_chat,
+            commit_event=commit_event,
         )
+        self._kick_commit_outbox()
         public_additions = [self.service.public_message(item) for item in additions]
         return {
             "ok": True,
@@ -541,7 +568,9 @@ class _AnswerOperation:
             fresh_chat,
             saved_messages,
             assistant,
+            result,
         )
+        self._kick_commit_outbox()
         summary = await asyncio.to_thread(self._load_chat_summary)
         # ChatRunManager records lastRun immediately after the runner returns.
         # Keep the terminal stream projection accurate during that tiny gap.
@@ -567,6 +596,8 @@ class _AnswerOperation:
             "content": str(result.text or ""),
             "createdAt": self.service.utc_now_iso(),
             "model": model,
+            "runId": str(getattr(result, "run_id", "") or ""),
+            "contextNodeId": str(getattr(result, "node_id", "") or ""),
             "processingDurationMs": max(
                 0,
                 int(round((time.monotonic() - self.processing_started_at) * 1000)),
@@ -575,16 +606,49 @@ class _AnswerOperation:
         message.update(self._runtime_message_fields(result))
         return message
 
+    def _conversation_commit_event(
+        self,
+        result: Any,
+        *,
+        status: str,
+        assistant_text: str,
+        completed_turn_count: int,
+    ) -> dict[str, Any]:
+        run_id = str(getattr(result, "run_id", "") or "")
+        node_id = str(getattr(result, "node_id", "") or "")
+        from cyrene.workbench.chat.conversation_commit import (
+            ConversationTurnCommit,
+        )
+
+        return ConversationTurnCommit(
+            chat_id=self.chat_id,
+            turn_id=self.turn_id,
+            run_id=run_id,
+            node_id=node_id,
+            status=status,
+            retry=self.retry,
+            user_text=self.original_request,
+            assistant_text=assistant_text,
+            completed_turn_count=completed_turn_count,
+        ).as_event()
+
+    def _kick_commit_outbox(self) -> None:
+        self.service.run_manager.conversation_runtime.kick_commit_outbox(
+            self.chat_id
+        )
+
     async def _persist_completed_reply(
         self,
         chat: dict[str, Any],
         saved_messages: list[dict[str, Any]],
         assistant: dict[str, Any],
+        result: Any,
     ) -> int:
         base_chat = copy.deepcopy(chat)
         self.service.merge_chat_messages_chronologically(chat, saved_messages)
         completed = self.service.next_completed_turn_count(
             chat,
+            retry=self.retry,
             is_side_agent=self.is_side_agent,
         )
         chat["completedTurnCount"] = completed
@@ -594,10 +658,17 @@ class _AnswerOperation:
         if isinstance(self.active_plan, dict):
             chat["activePlan"] = copy.deepcopy(self.active_plan)
         chat["updatedAt"] = assistant["createdAt"]
+        commit_event = self._conversation_commit_event(
+            result,
+            status="completed",
+            assistant_text=str(assistant.get("content") or ""),
+            completed_turn_count=completed,
+        )
         await asyncio.to_thread(
             self.service.repository.write_one,
             chat,
             base_chat=base_chat,
+            commit_event=commit_event,
         )
         from cyrene.platform.host_actions import finalize_origin
 

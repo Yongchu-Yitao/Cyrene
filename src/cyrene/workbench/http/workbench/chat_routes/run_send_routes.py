@@ -847,6 +847,62 @@ class _SendOperation:
             if message_id:
                 self.state_ids_before.add(message_id)
 
+    def _conversation_config(
+        self,
+        run: ChatRun,
+        *,
+        memory_snapshot: Any,
+        turn_system_extras: list[str],
+        source: str,
+    ) -> Any:
+        from cyrene.workbench.chat.chat_application import next_completed_turn_count
+        from cyrene.workbench.core_adapter.conversation_runtime import ConversationConfig
+
+        return ConversationConfig(
+            session_id=self.chat_id,
+            workspace_dir=self.workspace_dir,
+            db_path=self.context.db_path,
+            bot=self.context.bot,
+            host_chat_id=self.routes.chat_id,
+            client_request_id=self.client_request_id,
+            permission_mode=self.mode,
+            command=self.command,
+            public_user_message=self.public_message,
+            model_identity=self._selected_model_identity(),
+            attachment_paths=self._attachment_path_map(),
+            remote_device_ids=tuple(
+                str(item or "").strip()
+                for item in (self.chat.get("remoteDeviceIds") or ())
+                if str(item or "").strip()
+            ),
+            soul_enabled=self.service.chat_soul_active(self.chat),
+            workspace_enabled=self.service.chat_workspace_active(self.chat),
+            context_activations=self.context_activations,
+            resolved_context_activations=self.resolved_context_activations,
+            system_extra="\n\n".join(part for part in turn_system_extras if part),
+            project_id=self.project_id,
+            project_memory_snapshot=memory_snapshot,
+            session_title=str(self.chat.get("title") or ""),
+            memory_write_enabled=not self.is_side_agent,
+            memory_trigger_enabled=not self.is_side_agent,
+            memory_archive_enabled=True,
+            retry=self.retry,
+            completed_turn_count=next_completed_turn_count(
+                {
+                    "completedTurnCount": int(
+                        getattr(self, "completed_turn_count_before", 0) or 0
+                    )
+                },
+                retry=self.retry,
+                command=self.command,
+                is_side_agent=self.is_side_agent,
+            ),
+            response_capabilities=("interactive_blocks",),
+            ui_instance_id=self.ui_instance_id,
+            conversation_source=source,
+            guidance_channel=run.guidance_channel,
+        )
+
     async def _run_turn(self, run: ChatRun) -> Any:
         logger.info(
             "Workbench chat _run entered [chat=%s run=%s]",
@@ -879,46 +935,11 @@ class _SendOperation:
             else self.conversation_source
             or await resolve_conversation_source(self.ui_instance_id)
         )
-        from cyrene.workbench.core_adapter.conversation_runtime import ConversationConfig
-
-        config = ConversationConfig(
-            session_id=self.chat_id,
-            workspace_dir=self.workspace_dir,
-            db_path=self.context.db_path,
-            bot=self.context.bot,
-            host_chat_id=self.routes.chat_id,
-            client_request_id=self.client_request_id,
-            permission_mode=self.mode,
-            command=self.command,
-            public_user_message=self.public_message or None,
-            model_identity=self._selected_model_identity(),
-            attachment_paths=self._attachment_path_map(),
-            remote_device_ids=tuple(
-                str(item or "").strip()
-                for item in (self.chat.get("remoteDeviceIds") or ())
-                if str(item or "").strip()
-            ),
-            soul_enabled=self.service.chat_soul_active(self.chat),
-            workspace_enabled=self.service.chat_workspace_active(self.chat),
-            context_activations=self.context_activations,
-            resolved_context_activations=self.resolved_context_activations,
-            system_extra="\n\n".join(
-                part for part in turn_system_extras if part
-            ),
-            project_id=self.project_id,
-            project_memory_snapshot=memory_snapshot,
-            session_title=str(self.chat.get("title") or ""),
-            memory_write_enabled=not self.is_side_agent,
-            memory_trigger_enabled=not self.is_side_agent,
-            memory_archive_enabled=True,
-            retry=self.retry,
-            completed_turn_count=(
-                int(getattr(self, "completed_turn_count_before", 0) or 0) + 1
-            ),
-            response_capabilities=("interactive_blocks",),
-            ui_instance_id=self.ui_instance_id,
-            conversation_source=source,
-            guidance_channel=run.guidance_channel,
+        config = self._conversation_config(
+            run,
+            memory_snapshot=memory_snapshot,
+            turn_system_extras=turn_system_extras,
+            source=source,
         )
         result = await self.service.run_manager.conversation_runtime.send(
             config,
@@ -934,6 +955,14 @@ class _SendOperation:
                 "public_attachments": [dict(item) for item in self.public_attachments],
                 "command": self.command,
                 "retry": self.retry,
+                "turn_id": str(
+                    (
+                        getattr(self, "user_entry", {})
+                        if isinstance(getattr(self, "user_entry", {}), Mapping)
+                        else {}
+                    ).get("id")
+                    or ""
+                ),
                 "fork_replay": self.fork_replay,
                 "ephemeral_context": "\n\n".join(
                     part for part in turn_system_extras if part
@@ -1068,6 +1097,97 @@ class _SendOperation:
             fields["outputTokensPerSecond"] = round(float(rate), 3)
         return fields
 
+    def _builtin_commit_event(
+        self,
+        *,
+        result: Any,
+        chat: Mapping[str, Any],
+        pending: Mapping[str, Any] | None,
+        turn_id: str,
+        run_id: str,
+        node_id: str,
+    ) -> dict[str, Any]:
+        from cyrene.workbench.chat.conversation_commit import (
+            ConversationTurnCommit,
+        )
+
+        return ConversationTurnCommit(
+            chat_id=self.chat_id,
+            turn_id=turn_id,
+            run_id=run_id,
+            node_id=node_id,
+            status="awaiting_user" if pending is not None else "completed",
+            retry=self.retry,
+            user_text=self.public_message,
+            assistant_text=(
+                ""
+                if pending is not None
+                else str(getattr(result, "text", "") or "")
+            ),
+            completed_turn_count=int(chat.get("completedTurnCount") or 0),
+            metadata={"command": self.command},
+        ).as_event()
+
+    def _builtin_result_payload(
+        self,
+        *,
+        chat: Mapping[str, Any],
+        additions: list[dict[str, Any]],
+        pending: dict[str, Any] | None,
+        assistant: dict[str, Any] | None,
+        run_id: str,
+    ) -> dict[str, Any]:
+        summary = self.service.public_chat_light(chat)
+        summary["runStatus"] = (
+            "awaiting_user" if pending is not None else "completed"
+        )
+        payload: dict[str, Any] = {
+            "ok": True,
+            "awaitingUser": pending is not None,
+            "runId": run_id,
+            "userMessage": self.service.public_message(self.user_entry),
+            "assistantMessages": [
+                self.service.public_message(item) for item in additions
+            ],
+            "chatSummary": summary,
+            "retry": self.retry,
+        }
+        if pending is not None:
+            payload["pendingQuestion"] = pending
+            payload["retryReplacedMessageIds"] = sorted(
+                self.retry_replaced_message_ids
+            )
+        elif assistant is not None:
+            payload["assistantMessage"] = self.service.public_message(assistant)
+        return payload
+
+    def _builtin_pending(self, result: Any, turn_id: str) -> dict[str, Any] | None:
+        value = getattr(result, "pending_question", None)
+        if value is None:
+            return None
+        pending = value.as_dict()
+        if str(pending.get("turnId") or "") != str(turn_id or ""):
+            raise RuntimeError("pending ContextTree question has the wrong turn identity")
+        return pending
+
+    @staticmethod
+    def _builtin_timeline(
+        terminal_timeline: list[dict[str, Any]],
+        *,
+        model: str,
+        now: str,
+    ) -> list[dict[str, Any]]:
+        timeline = [
+            copy.deepcopy(dict(item))
+            for item in terminal_timeline
+            if isinstance(item, dict)
+        ]
+        for item in timeline:
+            item.setdefault("model", model)
+            if not str(item.get("createdAt") or item.get("created_at") or "").strip():
+                item["createdAt"] = now
+        return timeline
+
     def _persist_builtin_result(
         self,
         result: Any,
@@ -1075,27 +1195,25 @@ class _SendOperation:
     ) -> dict[str, Any]:
         """Project one typed ContextTree outcome into the public chat record."""
 
-        pending_value = getattr(result, "pending_question", None)
-        pending = pending_value.as_dict() if pending_value is not None else None
         now = self.service.utc_now_iso()
         model = str(getattr(result, "model", "") or self.chat.get("model") or "")
         run_id = str(getattr(result, "run_id", "") or "")
+        node_id = str(getattr(result, "node_id", "") or "")
+        turn_id = str(self.user_entry.get("id") or "")
+        pending = self._builtin_pending(result, turn_id)
         with self.service.repository.lock:
             chat = self.service.repository.get(self.chat_id)
             if not chat:
                 raise RuntimeError("chat disappeared while persisting Agent outcome")
             base_chat = copy.deepcopy(chat)
             self._commit_retry_cut(chat)
-            timeline = [
-                copy.deepcopy(dict(item))
-                for item in terminal_timeline
-                if isinstance(item, dict)
-            ]
-            for item in timeline:
-                item.setdefault("model", model)
-                if not str(item.get("createdAt") or item.get("created_at") or "").strip():
-                    item["createdAt"] = now
+            timeline = self._builtin_timeline(
+                terminal_timeline,
+                model=model,
+                now=now,
+            )
             additions = timeline
+            assistant: dict[str, Any] | None = None
             if pending is not None:
                 question = self.service.pending_question_message(
                     pending,
@@ -1104,6 +1222,13 @@ class _SendOperation:
                         getattr(result, "latest_request_usage", {}) or {}
                     ),
                     model=model,
+                )
+                question.update(
+                    {
+                        "runId": run_id,
+                        "contextNodeId": node_id,
+                        "turnId": turn_id,
+                    }
                 )
                 additions = [*timeline, question]
                 chat["pendingQuestion"] = pending
@@ -1115,6 +1240,9 @@ class _SendOperation:
                     "content": str(getattr(result, "text", "") or ""),
                     "createdAt": now,
                     "model": model,
+                    "runId": run_id,
+                    "contextNodeId": node_id,
+                    "turnId": turn_id,
                     "processingDurationMs": max(
                         0,
                         int(round((time.monotonic() - self.processing_started_at) * 1000)),
@@ -1136,31 +1264,78 @@ class _SendOperation:
             if isinstance(self.external.plan, dict):
                 chat["activePlan"] = copy.deepcopy(self.external.plan)
             chat["updatedAt"] = now
-            self.service.repository.write_one(chat, base_chat=base_chat)
-        public_additions = [
-            self.service.public_message(item) for item in additions
-        ]
-        summary = self.service.public_chat_light(chat)
-        summary["runStatus"] = (
-            "awaiting_user" if pending is not None else "completed"
-        )
-        payload: dict[str, Any] = {
-            "ok": True,
-            "awaitingUser": pending is not None,
-            "runId": run_id,
-            "userMessage": self.service.public_message(self.user_entry),
-            "assistantMessages": public_additions,
-            "chatSummary": summary,
-            "retry": self.retry,
-        }
-        if pending is not None:
-            payload["pendingQuestion"] = pending
-            payload["retryReplacedMessageIds"] = sorted(
-                self.retry_replaced_message_ids
+            commit_event = self._builtin_commit_event(
+                result=result,
+                chat=chat,
+                pending=pending,
+                turn_id=turn_id,
+                run_id=run_id,
+                node_id=node_id,
             )
-        else:
-            payload["assistantMessage"] = self.service.public_message(assistant)
-        return payload
+            self.service.repository.write_one(
+                chat,
+                base_chat=base_chat,
+                commit_event=commit_event,
+            )
+        return self._builtin_result_payload(
+            chat=chat,
+            additions=additions,
+            pending=pending,
+            assistant=assistant,
+            run_id=run_id,
+        )
+
+    async def _publish_builtin_outcome(
+        self,
+        run: ChatRun,
+        result: Any,
+        payload: dict[str, Any],
+        *,
+        awaiting: bool,
+    ) -> None:
+        if awaiting:
+            pending = payload.get("pendingQuestion")
+            await asyncio.to_thread(self.notify_attention, pending)
+            run.outcome = {
+                "kind": "awaiting",
+                "pending": pending,
+                "assistantMessages": payload.get("assistantMessages") or [],
+                "payload": payload,
+            }
+            await run.publish(
+                {
+                    "type": "awaiting_user",
+                    "pending_question": pending,
+                    "pendingQuestion": pending,
+                    "assistantMessages": payload.get("assistantMessages") or [],
+                    "retry": self.retry,
+                    "retryReplacedMessageIds": sorted(
+                        self.retry_replaced_message_ids
+                    ),
+                    "truncateAfterMessageId": self.truncate_after_id,
+                }
+            )
+            return
+        await run.publish(
+            {"type": "run_finalizing", "chatId": self.chat_id, "runId": result.run_id}
+        )
+        saved = {
+            "type": "saved",
+            **payload,
+            "retryReplacedMessageIds": sorted(self.retry_replaced_message_ids),
+            "truncateAfterMessageId": self.truncate_after_id,
+        }
+        run.outcome = {"kind": "reply", "payload": payload}
+        await run.publish(saved)
+        from cyrene.platform.host_actions import finalize_origin
+
+        asyncio.create_task(
+            finalize_origin(
+                self.chat_id,
+                "",
+                origin_run_id=self.client_request_id,
+            )
+        )
 
     async def _run_builtin(self, run: ChatRun) -> None:
         before = await self.service.capture_workspace_changes_baseline(
@@ -1200,48 +1375,14 @@ class _SendOperation:
                 result,
                 terminal_timeline,
             )
-            if awaiting:
-                pending = payload.get("pendingQuestion")
-                await asyncio.to_thread(self.notify_attention, pending)
-                run.outcome = {
-                    "kind": "awaiting",
-                    "pending": pending,
-                    "assistantMessages": payload.get("assistantMessages") or [],
-                    "payload": payload,
-                }
-                await run.publish(
-                    {
-                        "type": "awaiting_user",
-                        "pending_question": pending,
-                        "pendingQuestion": pending,
-                        "assistantMessages": payload.get("assistantMessages") or [],
-                        "retry": self.retry,
-                        "retryReplacedMessageIds": sorted(
-                            self.retry_replaced_message_ids
-                        ),
-                        "truncateAfterMessageId": self.truncate_after_id,
-                    }
-                )
-                return
-            await run.publish(
-                {"type": "run_finalizing", "chatId": self.chat_id, "runId": result.run_id}
+            self.service.run_manager.conversation_runtime.kick_commit_outbox(
+                self.chat_id
             )
-            saved = {
-                "type": "saved",
-                **payload,
-                "retryReplacedMessageIds": sorted(self.retry_replaced_message_ids),
-                "truncateAfterMessageId": self.truncate_after_id,
-            }
-            run.outcome = {"kind": "reply", "payload": payload}
-            await run.publish(saved)
-            from cyrene.platform.host_actions import finalize_origin
-
-            asyncio.create_task(
-                finalize_origin(
-                    self.chat_id,
-                    "",
-                    origin_run_id=self.client_request_id,
-                )
+            await self._publish_builtin_outcome(
+                run,
+                result,
+                payload,
+                awaiting=awaiting,
             )
         except asyncio.CancelledError:
             await self.service.finalize_workspace_changes(

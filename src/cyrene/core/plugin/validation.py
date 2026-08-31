@@ -18,6 +18,47 @@ class PluginSchemaError(ValueError):
 class PluginInputValidationError(ValueError):
     """Raised when call arguments do not satisfy the current Plugin schema."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        plugin_name: str = "",
+        path: str = "",
+        reason: str = "",
+        validator: str = "",
+        validator_value: Any = None,
+        instance: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.plugin_name = plugin_name
+        self.path = path
+        self.reason = reason
+        self.validator = validator
+        self.validator_value = validator_value
+        self.instance = instance
+
+    def localized_message(self, language: str) -> str:
+        """Return a user-facing validation message without mixed locales."""
+
+        if language != "zh":
+            return str(self)
+        path = self.path.removeprefix("arguments.") or "arguments"
+        if self.validator == "required":
+            match = re.match(r"^'([^']+)' is a required property$", self.reason)
+            field = match.group(1) if match else self.reason
+            return f"缺少必填参数：{field}。"
+        if self.validator == "enum":
+            choices = self.validator_value if isinstance(self.validator_value, list) else []
+            rendered_choices = "、".join(repr(item) for item in choices)
+            return f"参数 {path} 无效：{self.instance!r} 不是允许的选项；可选值：{rendered_choices}。"
+        if self.validator == "additionalProperties":
+            match = re.search(r"\((.+?) (?:was|were) unexpected\)", self.reason)
+            fields = match.group(1) if match else self.reason
+            return f"包含不支持的参数：{fields}。"
+        if self.validator == "type":
+            return f"参数 {path} 的类型无效，应为 {self.validator_value}。"
+        return f"参数 {path} 无效。"
+
 
 @dataclass(frozen=True, slots=True)
 class PluginArgumentRepair:
@@ -177,6 +218,85 @@ def _flatten_call_envelope(
     return flattened
 
 
+def _promote_operation_to_invocation(
+    value: Mapping[str, Any],
+    schema: Mapping[str, Any],
+) -> tuple[dict[str, Any], str] | None:
+    """Repair a dispatcher call whose target name was put in ``operation``.
+
+    Models sometimes collapse a gateway call such as ``toolbox.invoke`` into
+    ``{"operation": "browser_snapshot", "name": "cyrene_browser"}``.  Detect
+    that shape from the gateway schema itself, promote the invalid operation
+    value to the invocation target, and keep strict validation authoritative.
+    """
+
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return None
+    operation_schema = properties.get("operation")
+    name_schema = properties.get("name")
+    arguments_schema = properties.get("arguments")
+    if not all(
+        isinstance(item, Mapping)
+        for item in (operation_schema, name_schema, arguments_schema)
+    ):
+        return None
+
+    operation_enum = operation_schema.get("enum")
+    required = schema.get("required")
+    if (
+        not isinstance(operation_enum, list)
+        or "invoke" not in operation_enum
+        or not isinstance(required, list)
+        or "operation" not in required
+        or schema.get("additionalProperties") is not False
+        or "string" not in _schema_types(name_schema)
+        or "object" not in _schema_types(arguments_schema)
+    ):
+        return None
+
+    target_name = str(value.get("operation") or "").strip()
+    wrapper_name = str(value.get("name") or "").strip()
+    if (
+        not target_name
+        or target_name in operation_enum
+        or not wrapper_name
+        or wrapper_name == target_name
+    ):
+        return None
+
+    raw_nested = value.get("arguments")
+    if raw_nested is None:
+        nested: dict[str, Any] = {}
+    elif isinstance(raw_nested, Mapping):
+        nested = {str(key): deepcopy(item) for key, item in raw_nested.items()}
+    else:
+        return None
+
+    candidate = {
+        str(key): deepcopy(item)
+        for key, item in value.items()
+        if key in properties and key not in {"operation", "name", "arguments"}
+    }
+    for key, item in value.items():
+        if key in properties:
+            continue
+        nested_key = str(key)
+        if nested_key in nested and nested[nested_key] != item:
+            return None
+        nested[nested_key] = deepcopy(item)
+    candidate.update(
+        {
+            "operation": "invoke",
+            "name": target_name,
+            "arguments": nested,
+        }
+    )
+    if not _schema_accepts(candidate, schema):
+        return None
+    return candidate, wrapper_name
+
+
 def _project_unique_schema_fields(
     candidates: list[dict[str, Any]],
     schema: Mapping[str, Any],
@@ -190,6 +310,77 @@ def _project_unique_schema_fields(
         if values and all(value == values[0] for value in values[1:]):
             projected[str(field)] = deepcopy(values[0])
     return projected
+
+
+def _normalize_nested_candidates(
+    value: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    path: str,
+    repairs: list[PluginArgumentRepair],
+) -> dict[str, Any] | None:
+    candidates = _nested_argument_objects(value)
+    if len(candidates) <= 1:
+        return None
+
+    for depth, candidate in reversed(list(enumerate(candidates[1:], start=1))):
+        candidate_repairs: list[PluginArgumentRepair] = []
+        normalized_candidate = _normalize_object_fields(
+            candidate,
+            schema,
+            path,
+            candidate_repairs,
+            allow_wrappers=False,
+        )
+        if _schema_accepts(normalized_candidate, schema):
+            repairs.append(
+                PluginArgumentRepair(
+                    path,
+                    "unwrap_arguments",
+                    detail=f"depth={depth}",
+                )
+            )
+            repairs.extend(candidate_repairs)
+            return normalized_candidate
+
+    for candidate in candidates:
+        flattened = _flatten_call_envelope(candidate, schema)
+        if flattened is None:
+            continue
+        flattened_repairs: list[PluginArgumentRepair] = []
+        normalized_flattened = _normalize_object_fields(
+            flattened,
+            schema,
+            path,
+            flattened_repairs,
+            allow_wrappers=False,
+        )
+        if _schema_accepts(normalized_flattened, schema):
+            repairs.append(PluginArgumentRepair(path, "flatten_call_envelope"))
+            repairs.extend(flattened_repairs)
+            return normalized_flattened
+
+    projected = _project_unique_schema_fields(candidates, schema)
+    if not projected:
+        return None
+    projected_repairs: list[PluginArgumentRepair] = []
+    normalized_projected = _normalize_object_fields(
+        projected,
+        schema,
+        path,
+        projected_repairs,
+        allow_wrappers=False,
+    )
+    if not _schema_accepts(normalized_projected, schema):
+        return None
+    repairs.append(
+        PluginArgumentRepair(
+            path,
+            "project_schema_fields",
+            detail=",".join(sorted(projected)),
+        )
+    )
+    repairs.extend(projected_repairs)
+    return normalized_projected
 
 
 def _normalize_value(
@@ -254,65 +445,25 @@ def _normalize_value(
         repairs.extend(direct_repairs)
         return direct
 
-    candidates = _nested_argument_objects(value)
-    if len(candidates) > 1:
-        for depth, candidate in reversed(list(enumerate(candidates[1:], start=1))):
-            candidate_repairs: list[PluginArgumentRepair] = []
-            normalized_candidate = _normalize_object_fields(
-                candidate,
-                schema,
+    promoted = _promote_operation_to_invocation(direct, schema)
+    if promoted is not None:
+        promoted_arguments, wrapper_name = promoted
+        repairs.extend(direct_repairs)
+        repairs.append(
+            PluginArgumentRepair(
                 path,
-                candidate_repairs,
-                allow_wrappers=False,
+                "promote_operation_to_invocation",
+                detail=(
+                    f"operation->{promoted_arguments['name']};"
+                    f"previous_name={wrapper_name}"
+                ),
             )
-            if _schema_accepts(normalized_candidate, schema):
-                repairs.append(
-                    PluginArgumentRepair(
-                        path,
-                        "unwrap_arguments",
-                        detail=f"depth={depth}",
-                    )
-                )
-                repairs.extend(candidate_repairs)
-                return normalized_candidate
+        )
+        return promoted_arguments
 
-        for candidate in candidates:
-            flattened = _flatten_call_envelope(candidate, schema)
-            if flattened is None:
-                continue
-            flattened_repairs: list[PluginArgumentRepair] = []
-            normalized_flattened = _normalize_object_fields(
-                flattened,
-                schema,
-                path,
-                flattened_repairs,
-                allow_wrappers=False,
-            )
-            if _schema_accepts(normalized_flattened, schema):
-                repairs.append(PluginArgumentRepair(path, "flatten_call_envelope"))
-                repairs.extend(flattened_repairs)
-                return normalized_flattened
-
-        projected = _project_unique_schema_fields(candidates, schema)
-        if projected:
-            projected_repairs: list[PluginArgumentRepair] = []
-            normalized_projected = _normalize_object_fields(
-                projected,
-                schema,
-                path,
-                projected_repairs,
-                allow_wrappers=False,
-            )
-            if _schema_accepts(normalized_projected, schema):
-                repairs.append(
-                    PluginArgumentRepair(
-                        path,
-                        "project_schema_fields",
-                        detail=",".join(sorted(projected)),
-                    )
-                )
-                repairs.extend(projected_repairs)
-                return normalized_projected
+    nested_candidate = _normalize_nested_candidates(value, schema, path, repairs)
+    if nested_candidate is not None:
+        return nested_candidate
 
     flattened = _flatten_call_envelope(value, schema)
     if flattened is not None:
@@ -383,7 +534,13 @@ def validate_plugin_arguments(
     for part in error.absolute_path:
         path += f"[{part}]" if isinstance(part, int) else f".{part}"
     raise PluginInputValidationError(
-        f"Invalid arguments for Plugin {plugin_name!r} at {path}: {error.message}"
+        f"Invalid arguments for Plugin {plugin_name!r} at {path}: {error.message}",
+        plugin_name=plugin_name,
+        path=path,
+        reason=error.message,
+        validator=str(error.validator or ""),
+        validator_value=error.validator_value,
+        instance=error.instance,
     )
 
 

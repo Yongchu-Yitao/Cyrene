@@ -326,7 +326,15 @@ Agent 通过 `knowledge_tools` 使用 Project Search 和 Library Operation。
 
 Agent 使用 Browser Tool 时，Chat 显示 Live View。Electron 直接使用持久
 Chromium Tab；非 Electron Playwright 遇到 Login Wall 时可请求 Login
-Takeover。详见
+Takeover。复杂页面应先调用 `browser_snapshot`，优先使用短期 Ref 而不是猜测
+CSS Selector；页面导航、滚动或明显重排后需要重新 Snapshot。Iframe、Shadow
+DOM、Canvas/WebGL 或复杂 Editor 无法通过当前 Top-level DOM Projection 稳定
+操作时，改用 Screenshot 或 User Takeover。
+
+文件上传始终使用 `browser_upload_files` 的一次性人工批准。普通 Click、Type 和
+Enter Submit 不会自动获得同等级确认，因此购买、发布、删除和账号修改等高影响
+动作必须与用户请求一致。`browser_network_log` 只是 Resource Performance
+摘要，Browser URL 检查也不是覆盖全部子资源与 Redirect 的网络 Sandbox。详见
 [Browser Live View](browser-live-view.zh-CN.md)。
 
 ## 共享持久化终端

@@ -9,19 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
 
 import httpx
 
 from cyrene.core.observability import log_operation
 from cyrene.core.plugin import Plugin, PluginContext
+from cyrene.plugins.tool_call_parsers import GENERIC_TOOL_CALL_PARSER
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +40,8 @@ class ModelProvider:
     supports_discovery: bool = True
     supported_reasoning_efforts: tuple[str, ...] = ()
     default_reasoning_effort: str = ""
+    tool_call_parser: str = GENERIC_TOOL_CALL_PARSER
+    include_stream_usage: bool = False
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -58,6 +59,7 @@ class ModelProvider:
                     self.supported_reasoning_efforts
                 ),
                 "default_reasoning_effort": self.default_reasoning_effort,
+                "tool_call_parser": self.tool_call_parser,
             }
         }
 
@@ -207,33 +209,11 @@ def _tool_choice(value: Any) -> str | dict[str, Any]:
     return {"type": "function", "function": {"name": name}}
 
 
-def _tool_calls(message: Mapping[str, Any], provider: ModelProvider) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
+def _tool_calls(message: Mapping[str, Any]) -> list[Any]:
+    """Preserve Provider wire calls for the model-router Plugin boundary."""
+
     raw_calls = message.get("tool_calls")
-    for raw in raw_calls if isinstance(raw_calls, list) else ():
-        if not isinstance(raw, Mapping):
-            raise ValueError(f"{provider.name} returned an invalid tool call")
-        function = raw.get("function")
-        source = function if isinstance(function, Mapping) else raw
-        name = str(source.get("name") or "").strip()
-        if not name:
-            raise ValueError(f"{provider.name} tool call is missing a name")
-        arguments = source.get("arguments")
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments or "{}")
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"{provider.name} returned invalid arguments for {name}"
-                ) from exc
-        if not isinstance(arguments, Mapping):
-            raise ValueError(f"{provider.name} arguments for {name} must be an object")
-        normalized.append({
-            "id": str(raw.get("id") or f"call_{uuid4().hex}"),
-            "name": name,
-            "arguments": dict(arguments),
-        })
-    return normalized
+    return list(raw_calls) if isinstance(raw_calls, list) else []
 
 
 def _integer(value: Any) -> int:
@@ -400,7 +380,7 @@ def _normalized_result(
         "content": content if isinstance(content, str) else "",
         "reasoning": reasoning,
         "reasoning_details": _reasoning_details(message, reasoning),
-        "tool_calls": _tool_calls(message, provider),
+        "tool_calls": _tool_calls(message),
         "finish_reason": str(message.get("finish_reason") or ""),
         "usage": usage,
         "usage_observation": normalized_usage,
@@ -492,6 +472,8 @@ def _openai_payload(
     }
     if provider.id == "minimax":
         payload["reasoning_split"] = True
+        payload["stream_options"] = {"include_usage": True}
+    elif provider.include_stream_usage:
         payload["stream_options"] = {"include_usage": True}
     if tools:
         payload["tools"] = tools

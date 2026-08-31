@@ -85,9 +85,10 @@ def archive_session_exchange(
     workspace_dir: str | Path | None = None,
     session_title: str = "",
     round_id: str = "",
+    turn_id: str = "",
     language: str = "",
 ) -> Path | None:
-    """Append one user/assistant exchange to ``conversations/<session_id>.md``.
+    """Upsert one public user turn in ``conversations/<session_id>.md``.
 
     Best-effort: returns the file path on success, ``None`` on any failure
     (callers must never let archiving break the live reply).
@@ -103,6 +104,14 @@ def archive_session_exchange(
     round_marker = (
         f"<!-- round_id: {normalized_round_id} -->" if normalized_round_id else ""
     )
+    normalized_turn_id = re.sub(
+        r"[^A-Za-z0-9._:-]+",
+        "_",
+        str(turn_id or "").strip(),
+    ).strip("._")
+    turn_marker = (
+        f"<!-- turn_id: {normalized_turn_id} -->" if normalized_turn_id else ""
+    )
     directory = session_conversations_dir(workspace_dir)
     filepath = directory / f"{_safe_session_filename(sid)}.md"
     now = datetime.now().astimezone()
@@ -112,10 +121,13 @@ def archive_session_exchange(
         "(no text)", "（无文本）", language=language
     )
     assistant_text = str(assistant_response or "").strip()
-    round_block = f"{round_marker}\n\n" if round_marker else ""
+    marker_block = "\n\n".join(
+        marker for marker in (turn_marker, round_marker) if marker
+    )
+    marker_block = f"{marker_block}\n\n" if marker_block else ""
     entry = (
         f"## {timestamp}\n\n"
-        f"{round_block}"
+        f"{marker_block}"
         f"**User**: {user_text}\n\n"
         f"**{ASSISTANT_NAME}**: {assistant_text}\n\n"
         f"---\n\n"
@@ -123,10 +135,24 @@ def archive_session_exchange(
     try:
         directory.mkdir(parents=True, exist_ok=True)
         content = filepath.read_text(encoding="utf-8") if filepath.exists() else ""
-        if round_marker and round_marker in content:
+        if not turn_marker and round_marker and round_marker in content:
             return filepath
         content = _upsert_session_file_header(content, sid, session_title)
-        filepath.write_text(content + entry, encoding="utf-8")
+        if turn_marker and turn_marker in content:
+            marker_index = content.index(turn_marker)
+            entry_start = content.rfind("\n## ", 0, marker_index)
+            entry_start = entry_start + 1 if entry_start >= 0 else marker_index
+            entry_end = content.find("\n---\n", marker_index)
+            if entry_end >= 0:
+                entry_end += len("\n---\n")
+                if content[entry_end:entry_end + 1] == "\n":
+                    entry_end += 1
+                content = content[:entry_start] + entry + content[entry_end:]
+            else:
+                content += entry
+        else:
+            content += entry
+        filepath.write_text(content, encoding="utf-8")
 
         # Keep the profile activity heatmap in sync with Workbench conversations.
         try:

@@ -88,6 +88,12 @@ REMOTE_EXTENSION_CAPABILITIES = frozenset(
         "remote_job:read",
         "remote_job:run",
         "remote_job:control",
+        # Sensitive desktop capabilities are intentionally supported but are
+        # not part of DEFAULT_REMOTE_CAPABILITIES. They must be added to an
+        # individual peer grant and are still gated by a target-side lease.
+        "remote_desktop:view",
+        "remote_desktop:control",
+        "remote_desktop:login",
     }
 )
 REMOTE_CAPABILITIES = BASE_REMOTE_CAPABILITIES | REMOTE_EXTENSION_CAPABILITIES
@@ -229,6 +235,15 @@ _COMMAND_CAPABILITIES = {
     "harness.list": "",
     "harness.describe": "",
     "harness.invoke": "",
+    "desktop.status": "remote_desktop:view",
+    "desktop.targets": "remote_desktop:view",
+    "desktop.session.open_view": "remote_desktop:view",
+    "desktop.session.open_control": "remote_desktop:control",
+    "desktop.session.open_login": "remote_desktop:login",
+    "desktop.frame.read": "remote_desktop:view",
+    "desktop.input.send": "remote_desktop:control",
+    "desktop.login.input": "remote_desktop:login",
+    "desktop.session.close": "remote_desktop:view",
 }
 _REMOTE_SHELL_COMMANDS = frozenset(
     {"shell.open", "shell.read", "shell.write", "shell.interrupt", "shell.close"}
@@ -241,10 +256,20 @@ def _remote_shell_plugin_available() -> bool:
     from cyrene.core.plugin import application_plugin_service
 
     return application_plugin_service("remote_shell") is not None
+
+
+def _remote_desktop_plugin_available() -> bool:
+    """Require the live application contribution for desktop commands."""
+
+    from cyrene.core.plugin import application_plugin_service
+
+    return application_plugin_service("remote_desktop") is not None
+
+
 _PROJECT_SCOPED_COMMANDS = frozenset(
     command
     for command in _COMMAND_CAPABILITIES
-    if command not in {
+    if not command.startswith("desktop.") and command not in {
         "capabilities.read",
         "projects.list",
         "settings.read",
@@ -278,6 +303,12 @@ _SIDE_EFFECT_COMMANDS = frozenset(
         "shell.interrupt",
         "shell.close",
         "harness.invoke",
+        "desktop.session.open_view",
+        "desktop.session.open_control",
+        "desktop.session.open_login",
+        "desktop.input.send",
+        "desktop.login.input",
+        "desktop.session.close",
         "files.upload.begin",
         "files.upload.chunk",
         "files.upload.commit",
@@ -1495,6 +1526,8 @@ class RemoteControlStore:
             return False, "command_not_allowed"
         if command in _REMOTE_SHELL_COMMANDS and not _remote_shell_plugin_available():
             return False, "plugin_pack_unavailable"
+        if command.startswith("desktop.") and not _remote_desktop_plugin_available():
+            return False, "plugin_pack_unavailable"
         if required and required not in peer["granted_capabilities"]:
             return False, "capability_denied"
         if command in _PROJECT_SCOPED_COMMANDS and not project_id:
@@ -1517,6 +1550,8 @@ class RemoteControlStore:
         if required is None:
             return False, "command_not_supported"
         if command in _REMOTE_SHELL_COMMANDS and not _remote_shell_plugin_available():
+            return False, "plugin_pack_unavailable"
+        if command.startswith("desktop.") and not _remote_desktop_plugin_available():
             return False, "plugin_pack_unavailable"
         if required and required not in peer["received_capabilities"]:
             return False, "capability_not_granted_by_peer"

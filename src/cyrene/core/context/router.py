@@ -54,6 +54,10 @@ class _TreeHookPersistence:
         with self._router._lease(self._tree_id, allow_deleting=True) as store:
             store.hooks.save_hook(hook)
 
+    def update_hook(self, hook: Hook) -> None:
+        with self._router._lease(self._tree_id, allow_deleting=True) as store:
+            store.hooks.update_hook(hook)
+
     def delete_hook(self, hook_id: str) -> bool:
         with self._router._lease(self._tree_id, allow_deleting=True) as store:
             return store.hooks.delete_hook(hook_id)
@@ -680,6 +684,14 @@ class ContextStoreRouter:
     def effect_results(self, tree_id: str, assistant_node_id: str) -> dict[str, Any]:
         with self._lease(tree_id) as store:
             return store.effect_results(assistant_node_id)
+
+    def committed_state(self, tree_id: str) -> tuple[str, str]:
+        with self._lease(tree_id) as store:
+            return store.committed_state()
+
+    def commit_state(self, tree_id: str, leaf_id: str, run_id: str) -> None:
+        with self._lease(tree_id) as store:
+            store.commit_state(leaf_id, run_id)
 
     def clear_effect_results(self, tree_id: str, assistant_node_id: str) -> int:
         with self._lease(tree_id) as store:

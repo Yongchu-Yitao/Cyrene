@@ -700,7 +700,7 @@ class MemoryApplication:
 
         from .project_memory import current_snapshot as load_project_snapshot
         from .short_term import get_context
-        from .structured import render_memory_for_injection
+        from .structured import render_sampled_memory_for_injection
 
         frozen = (
             {str(key): str(value or "") for key, value in snapshot.items()}
@@ -723,9 +723,10 @@ class MemoryApplication:
                 frozen["shortTermContext"] = ""
         if "structuredContext" not in frozen:
             try:
-                frozen["structuredContext"] = render_memory_for_injection(
+                frozen["structuredContext"] = render_sampled_memory_for_injection(
                     project_id,
-                    limit=20,
+                    fixed_count=5,
+                    random_count=10,
                     max_chars=2400,
                     header=localized(
                         "Project durable memories:",

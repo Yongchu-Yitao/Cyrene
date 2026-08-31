@@ -21,6 +21,7 @@ from .errors import HookAwaitingUser, HookBlocked, HookError
 from .hook import (
     CONTEXT_CHANGE,
     CONTEXT_USED,
+    CONVERSATION_TURN_COMMITTED,
     HOOK_EVENTS,
     POST_TOOL_USE,
     PRE_TOOL_USE,
@@ -315,8 +316,14 @@ class HookSet:
             self._ensure_open()
             if hook.id in self._hooks:
                 raise HookError(f"Hook id already exists in tree {self.tree_id}: {hook.id}")
+            previous_plugin = self._plugins.resolve(normalized_plugin_id)
             self._plugins.register(normalized_plugin_id, plugin)
-            self._persistence.save_hook(hook)
+            try:
+                self._persistence.save_hook(hook)
+            except Exception:
+                if previous_plugin is None:
+                    self._plugins.unregister(normalized_plugin_id)
+                raise
             self._hooks[hook.id] = hook
             requeued = self._persistence.requeue_blocked(hook.plugin_id)
         if requeued:
@@ -393,7 +400,27 @@ class HookSet:
                     f"Hook id does not exist in tree {self.tree_id}: {normalized_id}"
                 )
             updated = replace(hook, config=normalized_config)
-            self._persistence.save_hook(updated)
+            self._persistence.update_hook(updated)
+            self._hooks[normalized_id] = updated
+
+    def update_failure_policy(self, hook_id: str, failure_policy: str) -> None:
+        """Update a durable Hook policy without replacing queued deliveries."""
+
+        normalized_id = str(hook_id)
+        normalized_policy = str(failure_policy or "").strip()
+        if normalized_policy not in {"open", "block", "closed"}:
+            raise ValueError("failure_policy must be 'open', 'block', or 'closed'")
+        with self._lock:
+            self._ensure_open()
+            hook = self._hooks.get(normalized_id)
+            if hook is None:
+                raise HookError(
+                    f"Hook id does not exist in tree {self.tree_id}: {normalized_id}"
+                )
+            if normalized_policy == "block" and hook.event != PRE_TOOL_USE:
+                raise ValueError("only PreToolUse Hooks may block on failure")
+            updated = replace(hook, failure_policy=normalized_policy)
+            self._persistence.update_hook(updated)
             self._hooks[normalized_id] = updated
 
     def unregister(self, hook_id: str) -> bool:
@@ -1349,6 +1376,7 @@ class HookSet:
         *,
         success: bool,
         error: str = "",
+        failure: Mapping[str, Any] | None = None,
         time: datetime | None = None,
     ) -> tuple[Any, ...]:
         return await self.dispatch(
@@ -1362,6 +1390,11 @@ class HookSet:
                         "success": bool(success),
                         "value": result,
                         "error": str(error or ""),
+                        **(
+                            {"failure": dict(failure)}
+                            if isinstance(failure, Mapping)
+                            else {}
+                        ),
                     },
                 },
             )
@@ -1524,6 +1557,25 @@ class HookSet:
                 time or _utc_now(),
                 payload=dict(details or {}),
                 node_id=self.root_id,
+                is_root=True,
+            )
+        )
+
+    async def conversation_turn_committed(
+        self,
+        details: Mapping[str, Any],
+        *,
+        time: datetime | None = None,
+    ) -> tuple[Any, ...]:
+        """Dispatch host-confirmed turn effects after the public write commits."""
+
+        return await self.dispatch(
+            HookEvent(
+                CONVERSATION_TURN_COMMITTED,
+                self.tree_id,
+                time or _utc_now(),
+                payload=dict(details),
+                node_id=str(details.get("node_id") or self.root_id),
                 is_root=True,
             )
         )

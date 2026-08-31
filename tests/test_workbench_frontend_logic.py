@@ -2814,9 +2814,13 @@ process.stdout.write(JSON.stringify(result));
 
 
 def _run_workbench_runtime_js(expression: str):
+    agent_events = frontend_module_source("features/chat/agent-events.jsx")
     presentation = frontend_module_source("features/chat/presentation.jsx")
     timeline = frontend_module_source("features/chat/runtime-timeline.jsx")
     runtime = frontend_module_source("features/chat/file-resources.jsx")
+    tool_display_name_source = "function wbcAgentToolDisplayName(" + agent_events.split(
+        "function wbcAgentToolDisplayName(", 1
+    )[1].split("function wbcAgentToolPayload", 1)[0]
     args_preview_source = "function wbcFormatToolParameter(" + presentation.split(
         "function wbcFormatToolParameter(", 1
     )[1].split("function wbcThinkingPhrases", 1)[0]
@@ -2839,6 +2843,7 @@ var workbenchServices = {{
 }};
 function wbcT(_key, fallback) {{ return fallback; }}
 function wbcSubagentStatusText(status) {{ return String(status || ""); }}
+eval({json.dumps(tool_display_name_source)});
 eval({json.dumps(args_preview_source)});
 eval({json.dumps(timeline_source)});
 eval({json.dumps(runtime_source)});
@@ -7672,6 +7677,62 @@ def test_workbench_tool_trace_preview_localizes_protocol_values_only():
         "执行应用操作, 查看应用截图",
         "待办 任务 task pending",
     ]
+
+
+def test_workbench_tool_names_localize_toolbox_operations_and_delegated_tools():
+    result = _run_workbench_trace_i18n_js(
+        """
+[
+  window.WorkbenchI18n.toolName("toolbox.list", "zh"),
+  window.WorkbenchI18n.toolName("toolbox.describe", "zh"),
+  window.WorkbenchI18n.toolName("toolbox.browser_snapshot", "zh")
+]
+"""
+    )
+
+    assert result == ["查看可用工具", "查看工具说明", "检查页面"]
+
+
+def test_workbench_live_tool_events_expose_the_deferred_operation_name():
+    source = frontend_module_source("features/chat/agent-events.jsx")
+    helper = "function wbcAgentToolDisplayName(" + source.split(
+        "function wbcAgentToolDisplayName(", 1
+    )[1].split("function wbcAgentToolPayload", 1)[0]
+    script = f"""
+eval({json.dumps(helper)});
+process.stdout.write(JSON.stringify([
+  wbcAgentToolDisplayName("toolbox", {{ operation: "list" }}),
+  wbcAgentToolDisplayName("toolbox", {{ operation: "describe", name: "Read" }}),
+  wbcAgentToolDisplayName("toolbox", {{ operation: "invoke", name: "browser_snapshot" }}),
+  wbcAgentToolDisplayName("Read", {{ path: "README.md" }})
+]));
+"""
+    completed = subprocess.run(
+        ["node", "-"], input=script, check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == [
+        "toolbox.list",
+        "toolbox.describe",
+        "browser_snapshot",
+        "Read",
+    ]
+
+
+def test_workbench_tool_validation_preview_is_fully_localized():
+    result = _run_workbench_trace_i18n_js(
+        """
+wbcToolPreviewText(
+  "插件参数无效： Invalid arguments for Plugin 'toolbox' at arguments.operation: "
+  + "'browser_snapshot' is not one of ['list', 'describe', 'invoke']"
+)
+"""
+    )
+
+    assert result == (
+        "参数 operation 无效：“检查页面” 不是有效选项，"
+        "可选值：“列出可用工具”、“查看能力”、“调用能力”"
+    )
 
 
 def test_workbench_tool_trace_preview_serializes_nested_arguments():

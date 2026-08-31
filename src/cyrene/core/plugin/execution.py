@@ -102,6 +102,9 @@ async def invoke_plugin(
     *,
     review: bool = True,
     call_id: str | None = None,
+    arguments_normalized: bool = False,
+    nested_arguments_normalized: bool = False,
+    argument_repairs: tuple[dict[str, str], ...] = (),
 ) -> Any:
     """Invoke another Plugin through the active Runtime and return its value.
 
@@ -128,6 +131,9 @@ async def invoke_plugin(
             dict(arguments),
             context,
             call_id=(execution.call.id if call_id is None else call_id),
+            arguments_normalized=arguments_normalized,
+            nested_arguments_normalized=nested_arguments_normalized,
+            argument_repairs=argument_repairs,
         )
         if not result.success:
             raise PluginInvocationError(result)

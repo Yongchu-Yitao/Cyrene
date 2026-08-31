@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from cyrene.core.plugin import PluginContext
+from cyrene.core.plugin import (
+    PluginContext,
+    PluginExecutionError,
+    PluginFailure,
+)
 from cyrene.plugins.native_runtime import plugin_localized
 from .definitions import get_native_tool_def
 
@@ -53,7 +57,34 @@ async def _tool_websearch(args: dict[str, Any], context: PluginContext) -> str:
     search = getattr(service, "search", None)
     if not callable(search) or context.services.get("content") is None:
         raise RuntimeError("cyrene_content application service is unavailable")
-    return str(await search(query, **options))
+    try:
+        return str(await search(query, **options))
+    except Exception as exc:
+        from .search_backend import SearchBackendUnavailable
+
+        if not isinstance(exc, SearchBackendUnavailable):
+            raise
+        message = plugin_localized(
+            context,
+            "No configured web-search provider can complete this request right now.",
+            "当前没有可完成此请求的网络搜索提供方。",
+        )
+        raise PluginExecutionError(
+            PluginFailure(
+                error_code=exc.error_code,
+                message=message,
+                retryable=exc.retryable,
+                retry_scope=exc.retry_scope,  # type: ignore[arg-type]
+                retry_after_ms=exc.retry_after_ms,
+                circuit_scope=exc.circuit_scope,  # type: ignore[arg-type]
+                details={
+                    "provider_health": [
+                        dict(item) for item in exc.provider_health
+                    ],
+                    "suggested_actions": ["use_browser", "ask_user"],
+                },
+            )
+        ) from exc
 
 
 handler = _tool_websearch
