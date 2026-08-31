@@ -3624,12 +3624,30 @@ class AgentSession:
             return
         if not result.success or not isinstance(result.value, Mapping):
             logger.error("Model Plugin call failed: %s", result.error)
+            error_details = dict(result.error_details or {})
+            public_message = _l(
+                str(error_details.get("message_en") or "The model call failed."),
+                str(error_details.get("message_zh") or "模型调用失败。"),
+            )
+            failure_metadata = {
+                "failure_kind": str(error_details.get("code") or "model_call_failed"),
+                "detail_key": str(
+                    error_details.get("detail_key")
+                    or "workbenchChat.error.modelCallFailed"
+                ),
+                "detail_params": dict(error_details.get("detail_params") or {}),
+                "retryable": bool(error_details.get("retryable", True)),
+            }
+            status_code = int(error_details.get("status_code") or 0)
+            if status_code:
+                failure_metadata["status_code"] = status_code
             failure = self._mount_assistant(
                 trigger.id,
-                _l("The model call failed.", "模型调用失败。"),
+                public_message,
                 error=True,
                 caused_by=self._transition_key(trigger),
                 run_id=run_id,
+                metadata=failure_metadata,
             )
             if failure is not None:
                 await self._finish_terminal(failure, status="failed")
@@ -4340,6 +4358,7 @@ class AgentSession:
         error: bool,
         caused_by: str = "",
         run_id: str = "",
+        metadata: Mapping[str, Any] | None = None,
     ) -> ContextNode | None:
         node_id = self._stable_id("assistant_error", caused_by) if caused_by else None
         with self._linearized_context_commit():
@@ -4353,16 +4372,19 @@ class AgentSession:
                 except Exception:
                     pass
             if existing is None:
+                value = {
+                    "role": "assistant",
+                    "content": str(content),
+                    "error": bool(error),
+                    "run_id": effective_run_id,
+                    "caused_by": caused_by,
+                }
+                if metadata:
+                    value.update(deepcopy(dict(metadata)))
                 node = self.store.mount(
                     self.tree.id,
                     parent_id,
-                    {
-                        "role": "assistant",
-                        "content": str(content),
-                        "error": bool(error),
-                        "run_id": effective_run_id,
-                        "caused_by": caused_by,
-                    },
+                    value,
                     node_id=node_id,
                 )
             else:

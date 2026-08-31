@@ -7,6 +7,7 @@ import json
 from types import SimpleNamespace
 
 from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
+from cyrene.model.error_details import ModelCallError, classify_model_error
 from cyrene.plugins import model_router
 from cyrene.workbench.core_adapter import chat_runtime
 
@@ -273,6 +274,55 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     assert result.value["provider_plugin"] == "ProviderTwo"
     assert calls == ["failed", "succeeded"]
     assert fallbacks == [("primary", "fallback")]
+
+
+def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
+    async def rejected(_arguments, _context):
+        raise ModelCallError(classify_model_error("HTTP 401 Unauthorized: Invalid API Key"))
+
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda _session, **_kwargs: [{
+            "id": "primary",
+            "provider": "openai",
+            "adapter": "openai",
+            "model": "primary",
+            "options": {"provider_preset": "provider_one"},
+        }],
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            name="ProviderOne",
+            description="provider",
+            input_schema={"type": "object"},
+            handler=rejected,
+            kind="model",
+            metadata={"provider": {"id": "provider_one", "name": "Provider"}},
+        ),
+        source="test",
+    )
+    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+
+    result = run(
+        PluginRuntime(registry).call(
+            model_router.MODEL_ROUTER_PLUGIN,
+            {"messages": [{"role": "user", "content": "hello"}]},
+            PluginContext(data={"session_id": "chat-auth-failure"}),
+        )
+    )
+
+    assert result.success is False
+    assert result.error_details["code"] == "model_authentication_failed"
+    assert result.error_details["detail_key"] == "workbenchChat.error.modelAuthenticationFailed"
+    assert result.error_details["retryable"] is False
+    assert result.error_details["status_code"] == 401
 
 
 def test_permission_model_usage_does_not_report_agent_context():

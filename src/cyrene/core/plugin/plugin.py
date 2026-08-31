@@ -470,6 +470,7 @@ class PluginCallResult:
     value: Any
     error: str
     time: datetime
+    error_details: Mapping[str, Any] = field(default_factory=dict)
 
 
 __all__ = [

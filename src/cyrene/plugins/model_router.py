@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -18,9 +19,17 @@ from .model_catalog import (
     resolve_registered_model_plugin,
 )
 from cyrene.core.plugin.plugin import Plugin, PluginContext
+from cyrene.model.error_details import (
+    ModelCallError,
+    ModelErrorDetails,
+    classify_model_error,
+    details_from_mapping,
+    preferred_model_error,
+)
 
 MODEL_ROUTER_PLUGIN = "CyreneModelRouter"
 EXACT_MODEL_UNAVAILABLE = "Requested exact model identity is no longer configured"
+logger = logging.getLogger(__name__)
 
 
 def _normalize_tool_calls(raw_calls: Any) -> list[dict[str, Any]]:
@@ -364,32 +373,36 @@ async def route_model_call(
             "baseUrl",
         )
         if not any(str(exact_identity.get(key) or "").strip() for key in identity_fields):
-            raise RuntimeError(EXACT_MODEL_UNAVAILABLE)
+            raise ModelCallError(classify_model_error("model not found: " + EXACT_MODEL_UNAVAILABLE))
         exact_candidate = resolve_exact_model_candidate(exact_identity)
         if exact_candidate is None:
-            raise RuntimeError(EXACT_MODEL_UNAVAILABLE)
+            raise ModelCallError(classify_model_error("model not found: " + EXACT_MODEL_UNAVAILABLE))
         candidates = [exact_candidate]
         candidate_context = "requested exact model"
     else:
         candidates = configured_model_candidates(session_id, route=route)
         if not candidates:
-            raise RuntimeError(f"No model is configured in the {route} route")
+            raise ModelCallError(classify_model_error(f"No model is configured in the {route} route"))
         candidate_context = f"{route} model route"
 
     from cyrene.model.transcript_policy import require_single_provider_family
 
     require_single_provider_family(candidates, context=candidate_context)
-    eligible = _eligible_candidates(
-        candidates,
-        model_messages,
-        tools if isinstance(tools, list) else None,
-        arguments.get("max_tokens"),
-        estimated_input_tokens=context.data.get("prepared_request_tokens"),
-    )
+    try:
+        eligible = _eligible_candidates(
+            candidates,
+            model_messages,
+            tools if isinstance(tools, list) else None,
+            arguments.get("max_tokens"),
+            estimated_input_tokens=context.data.get("prepared_request_tokens"),
+        )
+    except ValueError as exc:
+        raise ModelCallError(classify_model_error(exc)) from exc
     execution = require_plugin_execution()
     # Provider Plugins receive the complete explicit PluginContext below. No
     # legacy Agent ContextVar binding is needed (or allowed) on this path.
     failures: list[str] = []
+    public_failures: list[ModelErrorDetails] = []
     for index, candidate in enumerate(eligible):
         provider = resolve_registered_model_plugin(
             execution.runtime.registry,
@@ -399,6 +412,7 @@ async def route_model_call(
         if provider is None or provider.name == MODEL_ROUTER_PLUGIN:
             error = "no matching kind=model Provider Plugin is registered"
             failures.append(f"{candidate.get('model') or candidate.get('id')}: {error}")
+            public_failures.append(classify_model_error("model service unavailable"))
             await _publish_llm_event(
                 context,
                 messages=model_messages,
@@ -432,6 +446,8 @@ async def route_model_call(
         if not result.success or not isinstance(result.value, Mapping):
             error = result.error or "Provider Plugin returned no result"
             failures.append(f"{provider.name}({candidate.get('model')}): {error}")
+            public_failure = details_from_mapping(result.error_details)
+            public_failures.append(public_failure or classify_model_error(error))
             await _publish_llm_event(
                 context,
                 messages=model_messages,
@@ -451,6 +467,7 @@ async def route_model_call(
         except Exception as exc:
             error = f"invalid Provider Plugin result: {exc}"
             failures.append(f"{provider.name}({candidate.get('model')}): {error}")
+            public_failures.append(classify_model_error(error))
             await _publish_llm_event(
                 context,
                 messages=model_messages,
@@ -485,7 +502,11 @@ async def route_model_call(
             pass
         return output
 
-    raise RuntimeError("All configured model Provider Plugins failed: " + "; ".join(failures))
+    logger.warning(
+        "All configured model Provider Plugins failed: %s",
+        "; ".join(failures),
+    )
+    raise ModelCallError(preferred_model_error(public_failures))
 
 
 def create_model_router_plugin() -> Plugin:
