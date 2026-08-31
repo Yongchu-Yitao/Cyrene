@@ -14,6 +14,7 @@ from cyrene.core.hook import (
     with_session_start_cache_fingerprint,
 )
 from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
+from cyrene.model.error_details import ModelCallError, classify_model_error
 
 
 def run(coroutine):
@@ -83,6 +84,42 @@ def test_session_extra_direct_tool_exposes_hidden_tool_only_when_selected(tmp_pa
 
     assert "finish_hidden_workflow" not in captured_tools[0]
     assert "finish_hidden_workflow" in captured_tools[1]
+
+
+def test_model_failure_mounts_structured_public_error_metadata(tmp_path):
+    async def failing_model(_arguments, _context):
+        raise ModelCallError(classify_model_error("HTTP 401 Unauthorized: Invalid API Key"))
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, failing_model, kind="model"),),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+
+    session.submit("hello", run_id="failed-auth")
+    run(session.drain())
+
+    output = session.final_output("failed-auth")
+    assert output is not None
+    assert output["error"] is True
+    assert output["failure_kind"] == "model_authentication_failed"
+    assert output["detail_key"] == "workbenchChat.error.modelAuthenticationFailed"
+    assert output["retryable"] is False
+    assert output["status_code"] == 401
+    assert "API Key" not in output["content"]
+    session.close()
 
 
 def test_workspace_file_boundary_matches_v0713_review_scope(tmp_path):

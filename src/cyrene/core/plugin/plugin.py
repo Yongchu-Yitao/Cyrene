@@ -581,6 +581,7 @@ class PluginCallResult:
     error: str
     time: datetime
     failure: PluginFailure | None = None
+    error_details: Mapping[str, Any] = field(default_factory=dict)
 
 
 __all__ = [

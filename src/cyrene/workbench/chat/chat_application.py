@@ -956,14 +956,31 @@ _ERROR_KEYS = {
     "model_unavailable": "workbenchChat.error.modelUnavailable",
     "model_not_configured": "workbenchChat.error.modelNotConfigured",
     "model_authentication_failed": "workbenchChat.error.modelAuthenticationFailed",
+    "model_quota_exhausted": "workbenchChat.error.modelQuotaExhausted",
+    "model_rate_limited": "workbenchChat.error.modelRateLimited",
+    "model_request_too_large": "workbenchChat.error.modelRequestTooLarge",
+    "model_request_invalid": "workbenchChat.error.modelRequestInvalid",
+    "model_timeout": "workbenchChat.error.modelTimeout",
+    "model_tls_failed": "workbenchChat.error.modelTlsFailed",
+    "model_connection_failed": "workbenchChat.error.modelConnectionFailed",
+    "model_service_unavailable": "workbenchChat.error.modelServiceUnavailable",
+    "model_response_invalid": "workbenchChat.error.modelResponseInvalid",
+    "model_call_failed": "workbenchChat.error.modelCallFailed",
 }
 
 
 def chat_error_metadata(exc: Exception) -> dict[str, str]:
     kind = str(getattr(exc, "kind", "") or getattr(exc, "code", "") or "").strip()
     if kind:
-        key = _ERROR_KEYS.get(kind)
-        return {"code": kind, **({"detail_key": key} if key else {"failureKind": kind})}
+        key = str(getattr(exc, "detail_key", "") or _ERROR_KEYS.get(kind) or "")
+        metadata = {
+            "code": kind,
+            **({"detail_key": key} if key else {"failureKind": kind}),
+        }
+        detail_params = getattr(exc, "detail_params", None)
+        if isinstance(detail_params, Mapping):
+            metadata["detail_params"] = dict(detail_params)
+        return metadata
     http_error = _http_status_error(exc)
     if http_error is not None and int(http_error.response.status_code) in (401, 403):
         return {

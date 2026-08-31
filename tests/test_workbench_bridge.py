@@ -27,6 +27,36 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
+def test_failed_run_projects_model_error_metadata_to_workbench() -> None:
+    event = AgentSessionEvent(
+        sequence=4,
+        type="run.failed",
+        tree_id="chat-1",
+        run_id="run-1",
+        node_id="assistant-error",
+        time=datetime.now(timezone.utc),
+        data={
+            "role": "assistant",
+            "error": True,
+            "content": "The model service rejected the configured credentials.",
+            "failure_kind": "model_authentication_failed",
+            "detail_key": "workbenchChat.error.modelAuthenticationFailed",
+            "retryable": False,
+            "status_code": 401,
+        },
+    )
+
+    projected = workbench_events(event)
+
+    assert len(projected) == 1
+    payload = projected[0]["payload"]
+    assert projected[0]["type"] == "run.failed"
+    assert payload["failureKind"] == "model_authentication_failed"
+    assert payload["detail_key"] == "workbenchChat.error.modelAuthenticationFailed"
+    assert payload["retryable"] is False
+    assert payload["status_code"] == 401
+
+
 def test_usage_normalization_preserves_openai_compatible_cache_details():
     usage = _normalized_usage(
         {

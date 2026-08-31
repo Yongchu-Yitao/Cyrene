@@ -680,7 +680,15 @@ async def complete_model(
         ordered_endpoints.remove(preferred_endpoint)
         ordered_endpoints.insert(0, preferred_endpoint)
 
+    from cyrene.model.error_details import (
+        ModelCallError,
+        ModelErrorDetails,
+        classify_model_error,
+        preferred_model_error,
+    )
+
     failures: list[str] = []
+    public_failures: list[ModelErrorDetails] = []
     async with httpx.AsyncClient(
         **_client_options(context, provider, discovery=False)
     ) as client:
@@ -698,13 +706,17 @@ async def complete_model(
                     has_fallback=endpoint_index + 1 < len(ordered_endpoints),
                 )
             except Exception as exc:
+                public_failures.append(classify_model_error(exc))
                 failures.append(
                     f"{endpoint}: {type(exc).__name__}: {exc!r}"
                 )
 
-    raise RuntimeError(
-        f"{provider.name} failed on every endpoint: " + "; ".join(failures)
+    logger.warning(
+        "%s failed on every endpoint: %s",
+        provider.name,
+        "; ".join(failures),
     )
+    raise ModelCallError(preferred_model_error(public_failures))
 
 
 def _normalize_embedding_vectors(

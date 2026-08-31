@@ -82,6 +82,28 @@ _AGENT_LIFECYCLE_STATE_ID = "agent.lifecycle"
 def _l(en: str, zh: str, **values: Any) -> str:
     return localized(en, zh, **values)
 
+
+def _model_failure_projection(
+    raw_details: Mapping[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    details = dict(raw_details or {})
+    message = _l(
+        str(details.get("message_en") or "The model call failed."),
+        str(details.get("message_zh") or "模型调用失败。"),
+    )
+    metadata: dict[str, Any] = {
+        "failure_kind": str(details.get("code") or "model_call_failed"),
+        "detail_key": str(
+            details.get("detail_key") or "workbenchChat.error.modelCallFailed"
+        ),
+        "detail_params": dict(details.get("detail_params") or {}),
+        "retryable": bool(details.get("retryable", True)),
+    }
+    status_code = int(details.get("status_code") or 0)
+    if status_code:
+        metadata["status_code"] = status_code
+    return message, metadata
+
 AgentEventType = Literal[
     "session.state",
     "input.accepted",
@@ -3728,6 +3750,27 @@ class AgentSession:
             return trigger, prepared, run_id
         return compacted_node, self._prepare_model_input(compacted_node), self._node_run_id(compacted_node)
 
+    async def _finish_model_failure(
+        self,
+        trigger: ContextNode,
+        result: PluginCallResult,
+        run_id: str,
+    ) -> None:
+        logger.error("Model Plugin call failed: %s", result.error)
+        public_message, failure_metadata = _model_failure_projection(
+            result.error_details
+        )
+        failure = self._mount_assistant(
+            trigger.id,
+            public_message,
+            error=True,
+            caused_by=self._transition_key(trigger),
+            run_id=run_id,
+            metadata=failure_metadata,
+        )
+        if failure is not None:
+            await self._finish_terminal(failure, status="failed")
+
     async def _advance(self, trigger: ContextNode) -> None:
         run_id = self._node_run_id(trigger)
         if self._is_cancelled(run_id):
@@ -3880,16 +3923,7 @@ class AgentSession:
         if self._is_cancelled(run_id):
             return
         if not result.success or not isinstance(result.value, Mapping):
-            logger.error("Model Plugin call failed: %s", result.error)
-            failure = self._mount_assistant(
-                trigger.id,
-                _l("The model call failed.", "模型调用失败。"),
-                error=True,
-                caused_by=self._transition_key(trigger),
-                run_id=run_id,
-            )
-            if failure is not None:
-                await self._finish_terminal(failure, status="failed")
+            await self._finish_model_failure(trigger, result, run_id)
             return
         output = dict(result.value)
         calls = output.get("tool_calls")
@@ -4630,6 +4664,7 @@ class AgentSession:
         error: bool,
         caused_by: str = "",
         run_id: str = "",
+        metadata: Mapping[str, Any] | None = None,
     ) -> ContextNode | None:
         node_id = self._stable_id("assistant_error", caused_by) if caused_by else None
         with self._linearized_context_commit():
@@ -4643,16 +4678,19 @@ class AgentSession:
                 except Exception:
                     pass
             if existing is None:
+                value = {
+                    "role": "assistant",
+                    "content": str(content),
+                    "error": bool(error),
+                    "run_id": effective_run_id,
+                    "caused_by": caused_by,
+                }
+                if metadata:
+                    value.update(deepcopy(dict(metadata)))
                 node = self.store.mount(
                     self.tree.id,
                     parent_id,
-                    {
-                        "role": "assistant",
-                        "content": str(content),
-                        "error": bool(error),
-                        "run_id": effective_run_id,
-                        "caused_by": caused_by,
-                    },
+                    value,
                     node_id=node_id,
                 )
             else:

@@ -154,6 +154,19 @@ def _execution_error_text(
     )
 
 
+def _execution_error_details(exc: BaseException) -> dict[str, Any]:
+    """Copy explicitly public structured details without exposing raw exceptions."""
+
+    exporter = getattr(exc, "as_error_details", None)
+    if not callable(exporter):
+        return {}
+    try:
+        details = exporter()
+    except Exception:
+        return {}
+    return dict(details) if isinstance(details, Mapping) else {}
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedPluginCall:
     """A resolved call whose PreToolUse review has completed."""
@@ -814,6 +827,7 @@ class PluginRuntime:
                     error,
                     _utc_now(),
                     failure,
+                    _execution_error_details(exc),
                 )
 
             if _dispatches_own_tool_hooks(plugin):
