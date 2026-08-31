@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 class AgentSessionRunError(RuntimeError):
     """The Agent reached a durable failed terminal node."""
 
+    def __init__(self, message: str, **metadata: Any) -> None:
+        super().__init__(message)
+        for key, value in metadata.items():
+            setattr(self, key, value)
+
 
 class AgentSessionCancelledError(RuntimeError):
     """The Agent reached a durable cancelled terminal node."""
@@ -112,6 +117,25 @@ def _usage_integer(value: Any) -> int:
         return max(0, int(value or 0))
     except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _failed_run_payload(data: Mapping[str, Any]) -> dict[str, Any]:
+    failure_kind = str(
+        data.get("failure_kind") or data.get("code") or "agent_run_failed"
+    )
+    payload: dict[str, Any] = {
+        "failureKind": failure_kind,
+        "code": failure_kind,
+        "message": str(
+            data.get("content") or data.get("error") or "Agent run failed"
+        ),
+        "detail_key": str(data.get("detail_key") or ""),
+        "detail_params": dict(data.get("detail_params") or {}),
+        "retryable": bool(data.get("retryable", True)),
+    }
+    if data.get("status_code"):
+        payload["status_code"] = int(data["status_code"])
+    return payload
 
 
 def _normalized_usage(raw: Any) -> dict[str, int]:
@@ -744,13 +768,12 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
     if event.type == "assistant.completed":
         return _assistant_completed_events(event, data, event_id)
     if event.type == "run.failed":
-        message = str(data.get("content") or data.get("error") or "Agent run failed")
         return (
             _envelope(
                 event,
                 "run.failed",
                 event_id,
-                {"failureKind": "agent_run_failed", "message": message},
+                _failed_run_payload(data),
             ),
         )
     if event.type == "run.cancelled":
@@ -911,7 +934,14 @@ class WorkbenchSessionBridge:
                 str(output.get("cancel_reason") or "Agent run was cancelled")
             )
         if output.get("error") is True:
-            raise AgentSessionRunError(str(output.get("content") or "Agent run failed"))
+            raise AgentSessionRunError(
+                str(output.get("content") or "Agent run failed"),
+                code=str(output.get("failure_kind") or output.get("code") or "agent_run_failed"),
+                detail_key=str(output.get("detail_key") or ""),
+                detail_params=dict(output.get("detail_params") or {}),
+                retryable=bool(output.get("retryable", True)),
+                status_code=int(output.get("status_code") or 0),
+            )
         node_id = str(output.get("node_id") or "")
         snapshot = self.session.snapshot()
         usage, latest_usage, model, identity, generation_duration_ms, rate = _turn_metrics(
