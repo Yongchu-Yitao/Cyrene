@@ -119,6 +119,25 @@ def _usage_integer(value: Any) -> int:
         return 0
 
 
+def _failed_run_payload(data: Mapping[str, Any]) -> dict[str, Any]:
+    failure_kind = str(
+        data.get("failure_kind") or data.get("code") or "agent_run_failed"
+    )
+    payload: dict[str, Any] = {
+        "failureKind": failure_kind,
+        "code": failure_kind,
+        "message": str(
+            data.get("content") or data.get("error") or "Agent run failed"
+        ),
+        "detail_key": str(data.get("detail_key") or ""),
+        "detail_params": dict(data.get("detail_params") or {}),
+        "retryable": bool(data.get("retryable", True)),
+    }
+    if data.get("status_code"):
+        payload["status_code"] = int(data["status_code"])
+    return payload
+
+
 def _normalized_usage(raw: Any) -> dict[str, int]:
     usage = dict(raw) if isinstance(raw, Mapping) else {}
     prompt = _usage_integer(
@@ -749,22 +768,12 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
     if event.type == "assistant.completed":
         return _assistant_completed_events(event, data, event_id)
     if event.type == "run.failed":
-        message = str(data.get("content") or data.get("error") or "Agent run failed")
-        failure_kind = str(data.get("failure_kind") or data.get("code") or "agent_run_failed")
         return (
             _envelope(
                 event,
                 "run.failed",
                 event_id,
-                {
-                    "failureKind": failure_kind,
-                    "code": failure_kind,
-                    "message": message,
-                    "detail_key": str(data.get("detail_key") or ""),
-                    "detail_params": dict(data.get("detail_params") or {}),
-                    "retryable": bool(data.get("retryable", True)),
-                    **({"status_code": int(data.get("status_code"))} if data.get("status_code") else {}),
-                },
+                _failed_run_payload(data),
             ),
         )
     if event.type == "run.cancelled":

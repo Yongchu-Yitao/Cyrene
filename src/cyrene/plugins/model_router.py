@@ -337,6 +337,43 @@ async def _publish_next_fallback(
     await _publish_fallback(context, candidate, eligible[index + 1])
 
 
+def _routed_candidates(
+    session_id: str,
+    route: str,
+    requested_identity: Any,
+) -> tuple[list[dict[str, Any]], str]:
+    if not isinstance(requested_identity, Mapping):
+        candidates = configured_model_candidates(session_id, route=route)
+        if not candidates:
+            raise ModelCallError(
+                classify_model_error(f"No model is configured in the {route} route")
+            )
+        return candidates, f"{route} model route"
+
+    from .model_catalog import resolve_exact_model_candidate
+
+    exact_identity = dict(requested_identity)
+    identity_fields = (
+        "candidateId",
+        "profileId",
+        "profile_id",
+        "provider",
+        "adapter",
+        "model",
+        "baseUrl",
+    )
+    exact_candidate = (
+        resolve_exact_model_candidate(exact_identity)
+        if any(str(exact_identity.get(key) or "").strip() for key in identity_fields)
+        else None
+    )
+    if exact_candidate is None:
+        raise ModelCallError(
+            classify_model_error("model not found: " + EXACT_MODEL_UNAVAILABLE)
+        )
+    return [exact_candidate], "requested exact model"
+
+
 async def route_model_call(
     arguments: dict[str, Any],
     context: PluginContext,
@@ -358,32 +395,11 @@ async def route_model_call(
         raise ValueError(f"Unsupported chat model route: {route}")
     # AgentSession already supplies the cache-friendly transcript projection.
     model_messages = messages if all(isinstance(item, dict) for item in messages) else [dict(item) for item in messages]
-    requested_identity = context.data.get("model_identity")
-    if isinstance(requested_identity, Mapping):
-        from .model_catalog import resolve_exact_model_candidate
-
-        exact_identity = dict(requested_identity)
-        identity_fields = (
-            "candidateId",
-            "profileId",
-            "profile_id",
-            "provider",
-            "adapter",
-            "model",
-            "baseUrl",
-        )
-        if not any(str(exact_identity.get(key) or "").strip() for key in identity_fields):
-            raise ModelCallError(classify_model_error("model not found: " + EXACT_MODEL_UNAVAILABLE))
-        exact_candidate = resolve_exact_model_candidate(exact_identity)
-        if exact_candidate is None:
-            raise ModelCallError(classify_model_error("model not found: " + EXACT_MODEL_UNAVAILABLE))
-        candidates = [exact_candidate]
-        candidate_context = "requested exact model"
-    else:
-        candidates = configured_model_candidates(session_id, route=route)
-        if not candidates:
-            raise ModelCallError(classify_model_error(f"No model is configured in the {route} route"))
-        candidate_context = f"{route} model route"
+    candidates, candidate_context = _routed_candidates(
+        session_id,
+        route,
+        context.data.get("model_identity"),
+    )
 
     from cyrene.model.transcript_policy import require_single_provider_family
 
