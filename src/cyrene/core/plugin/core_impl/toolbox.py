@@ -6,8 +6,18 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..execution import PluginInvocationError, invoke_plugin, require_plugin_execution
-from ..plugin import Plugin, PluginContext
+from ..plugin import (
+    Plugin,
+    PluginContext,
+    PluginExecutionError,
+    PluginFailure,
+)
 from ..resource_effects import split_resource_reveal, workspace_resource_locations
+from ..validation import (
+    PluginInputValidationError,
+    normalize_plugin_arguments,
+    validate_plugin_arguments,
+)
 
 if TYPE_CHECKING:
     from ..registry import PluginLoadFailure, PluginRegistry, RegisteredPlugin
@@ -218,6 +228,99 @@ class _ToolboxHandler:
                 )
         return descriptions
 
+    def _resolve_invoke_target(
+        self,
+        requested_name: str,
+        nested_arguments: Mapping[str, Any],
+        failures: tuple[PluginLoadFailure, ...],
+        *,
+        agent_id: str,
+    ) -> tuple[RegisteredPlugin, dict[str, Any], tuple[dict[str, str], ...]]:
+        direct = next(
+            (
+                item
+                for item in self._registry.list_plugins()
+                if item.plugin.name == requested_name
+            ),
+            None,
+        )
+        if direct is not None:
+            return (
+                self._deferred(requested_name, failures, agent_id=agent_id),
+                dict(nested_arguments),
+                (),
+            )
+
+        pack_plugins = self._pack_plugins(requested_name, agent_id=agent_id)
+        if not pack_plugins:
+            return (
+                self._deferred(requested_name, failures, agent_id=agent_id),
+                dict(nested_arguments),
+                (),
+            )
+
+        matches: list[
+            tuple[RegisteredPlugin, dict[str, Any], tuple[dict[str, str], ...]]
+        ] = []
+        for plugin in pack_plugins:
+            registered = self._deferred(
+                plugin.name,
+                failures,
+                agent_id=agent_id,
+            )
+            schema = registered.plugin.model_input_schema(
+                allow_resource_reveal=agent_id == "main"
+            )
+            normalization = normalize_plugin_arguments(nested_arguments, schema)
+            try:
+                validate_plugin_arguments(
+                    registered.plugin.name,
+                    normalization.arguments,
+                    schema,
+                )
+            except PluginInputValidationError:
+                continue
+            repairs = (
+                {
+                    "path": "arguments.name",
+                    "kind": "resolve_pack_by_unique_schema",
+                    "detail": f"{requested_name}->{registered.plugin.name}",
+                },
+                *(repair.as_dict() for repair in normalization.repairs),
+            )
+            matches.append(
+                (registered, normalization.arguments, tuple(repairs))
+            )
+
+        if len(matches) == 1:
+            return matches[0]
+
+        candidate_names = [plugin.name for plugin in pack_plugins]
+        matched_names = [registered.plugin.name for registered, _args, _repairs in matches]
+        error_code = (
+            "plugin_pack_target_not_found"
+            if not matches
+            else "plugin_pack_target_ambiguous"
+        )
+        message = (
+            f"Toolbox could not uniquely resolve pack {requested_name!r} from "
+            "the supplied arguments. Invoke an exact Plugin name."
+        )
+        raise PluginExecutionError(
+            PluginFailure(
+                error_code=error_code,
+                message=message,
+                retryable=True,
+                retry_scope="different_arguments",
+                circuit_scope="none",
+                details={
+                    "pack": requested_name,
+                    "candidates": candidate_names,
+                    "matches": matched_names,
+                },
+            )
+        )
+
     async def _invoke(
         self,
         arguments: dict[str, Any],
@@ -229,10 +332,18 @@ class _ToolboxHandler:
         name = str(arguments.get("name") or "").strip()
         if not name:
             raise ValueError("toolbox invoke requires name")
-        registered = self._deferred(name, failures, agent_id=agent_id)
         nested_arguments = arguments.get("arguments") or {}
         if not isinstance(nested_arguments, Mapping):
             raise TypeError("toolbox invoke arguments must be an object")
+        registered, nested_arguments, resolution_repairs = (
+            self._resolve_invoke_target(
+                name,
+                nested_arguments,
+                failures,
+                agent_id=agent_id,
+            )
+        )
+        name = registered.plugin.name
         nested_arguments, reveal = split_resource_reveal(
             nested_arguments,
             effects=registered.plugin.resource_effects,
@@ -241,7 +352,7 @@ class _ToolboxHandler:
         argument_repairs = tuple(
             dict(repair)
             for repair in require_plugin_execution().call.argument_repairs
-        )
+        ) + resolution_repairs
         nested_error: dict[str, Any] | None = None
         try:
             nested_value = await invoke_plugin(

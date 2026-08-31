@@ -839,6 +839,157 @@ def test_toolbox_repairs_plugin_name_supplied_as_operation():
     run(scenario())
 
 
+def test_toolbox_resolves_pack_name_by_unique_plugin_schema_before_review():
+    async def scenario():
+        reviewed = []
+
+        class CapturingHooks:
+            async def pre_tool_use_batch(self, calls, *, permissions=()):
+                reviewed.extend(
+                    (name, dict(arguments)) for name, arguments in calls
+                )
+                return tuple(dict(arguments) for _name, arguments in calls)
+
+            async def post_tool_use(self, *_args, **_kwargs):
+                return ()
+
+        registry = PluginRegistry()
+        registry.register_pack(
+            PluginPack(
+                "cyrene_content",
+                "Content tools",
+                (
+                    Plugin(
+                        "read_tool_result",
+                        "Read a previous result",
+                        {
+                            "type": "object",
+                            "properties": {"content_ref": {"type": "string"}},
+                            "required": ["content_ref"],
+                            "additionalProperties": False,
+                        },
+                        lambda arguments, _context: arguments,
+                    ),
+                    Plugin(
+                        "AnalyzeAttachment",
+                        "Analyze an attachment",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "prompt": {"type": "string"},
+                            },
+                            "required": ["path"],
+                            "additionalProperties": False,
+                        },
+                        lambda arguments, _context: arguments,
+                    ),
+                    Plugin(
+                        "WebFetch",
+                        "Fetch a URL",
+                        {
+                            "type": "object",
+                            "properties": {"url": {"type": "string"}},
+                            "required": ["url"],
+                            "additionalProperties": False,
+                        },
+                        lambda arguments, _context: arguments,
+                    ),
+                ),
+            ),
+            source="test",
+        )
+        runtime = PluginRuntime(registry)
+        result = await runtime.call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "cyrene_content",
+                "arguments": {
+                    "path": "/tmp/upload.docx",
+                    "prompt": "Find Shao's assignments",
+                },
+            },
+            PluginContext(hooks=CapturingHooks()),
+        )
+
+        assert result.success is True
+        assert result.value["name"] == "AnalyzeAttachment"
+        assert result.value["pack"] == "cyrene_content"
+        assert result.value["result"] == {
+            "path": "/tmp/upload.docx",
+            "prompt": "Find Shao's assignments",
+        }
+        assert result.value["argument_repairs"] == [
+            {
+                "path": "arguments.name",
+                "kind": "resolve_pack_by_unique_schema",
+                "detail": "cyrene_content->AnalyzeAttachment",
+            }
+        ]
+        assert reviewed == [
+            (
+                "AnalyzeAttachment",
+                {
+                    "path": "/tmp/upload.docx",
+                    "prompt": "Find Shao's assignments",
+                },
+            )
+        ]
+
+    run(scenario())
+
+
+def test_toolbox_rejects_ambiguous_pack_schema_without_invoking_a_plugin():
+    async def scenario():
+        calls = []
+        shared_schema = {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+
+        def handler(arguments, _context):
+            calls.append(dict(arguments))
+            return arguments
+
+        registry = PluginRegistry()
+        registry.register_pack(
+            PluginPack(
+                "ambiguous",
+                "Ambiguous tools",
+                (
+                    Plugin("FirstMatch", "first", shared_schema, handler),
+                    Plugin("SecondMatch", "second", shared_schema, handler),
+                ),
+            ),
+            source="test",
+        )
+        result = await PluginRuntime(registry).call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "ambiguous",
+                "arguments": {"value": "same"},
+            },
+        )
+
+        assert result.success is False
+        assert result.failure is not None
+        assert result.failure.error_code == "plugin_pack_target_ambiguous"
+        assert result.failure.retry_scope == "different_arguments"
+        assert result.failure.circuit_scope == "none"
+        assert result.failure.details == {
+            "pack": "ambiguous",
+            "candidates": ["FirstMatch", "SecondMatch"],
+            "matches": ["FirstMatch", "SecondMatch"],
+        }
+        assert calls == []
+
+    run(scenario())
+
+
 def test_plugin_runtime_exposes_opted_in_public_handler_errors():
     async def scenario():
         registry = PluginRegistry(include_core=False)
