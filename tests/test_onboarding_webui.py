@@ -256,6 +256,22 @@ async def test_onboarding_uses_enabled_provider_endpoints_and_adapter(monkeypatc
     assert saved["graph"]["connections"][0]["options"] == {"provider_preset": "anthropic"}
 
 
+def test_onboarding_endpoint_is_selectable_and_editable():
+    root = Path(__file__).resolve().parent.parent
+    welcome_source = (
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-welcome.jsx"
+    ).read_text(encoding="utf-8")
+
+    endpoint_field = welcome_source.split(
+        'data-cyrene-node-id="onboarding_base_url"', 1
+    )[1].split("</label>", 1)[0]
+    assert 'list="onboarding_endpoint_options"' in endpoint_field
+    assert '<datalist id="onboarding_endpoint_options">' in endpoint_field
+    assert 'setProviderId(selected.providerId || "")' in endpoint_field
+    assert "disabled={!endpointOptions.length}" not in endpoint_field
+    assert "!baseUrl.trim() || !providerId" not in welcome_source
+
+
 async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp_path):
     from cyrene.platform import onboarding
 

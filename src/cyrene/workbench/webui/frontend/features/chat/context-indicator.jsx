@@ -534,8 +534,8 @@ function WbcContextTimeline({ data, chatId, onReload }) {
   var [selectedKey, setSelectedKey] = useWbcState("");
   return (
     <WbcContextAuditSection
-      title={wbcT("workbenchChat.contextAuditTimeline", "Chronological context path")}
-      hint={wbcT("workbenchChat.contextAuditOldestFirst", "Oldest to newest")}
+      title={wbcT("workbenchChat.contextAuditTimeline", "Effective model context")}
+      hint={wbcT("workbenchChat.contextAuditOldestFirst", "Model input order")}
     >
       {timeline.length ? <ol className="wbc-context-timeline">{timeline.map(function (item, index) {
         var toolPresentation = wbcToolResultPresentation(item);

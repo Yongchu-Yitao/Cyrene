@@ -54,6 +54,7 @@ function wbcPluginToolOpenOptions(tool) {
   return {
     replaceWorkspace: clickBehavior === "replace_workspace" || !clickBehavior,
     restore: tool.restore_layout !== false,
+    ownerScope: String(tool.pane_owner_scope || "chat"),
   };
 }
 
@@ -161,6 +162,11 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   }
   function pluginToolView(tool) { return "plugin:" + pluginToolKey(tool); }
   function pluginToolExpanded(tool) { return projectToolView === pluginToolView(tool); }
+  function pluginToolGlyph(tool) {
+    var iconName = String(tool && (tool.icon_name || tool.iconName) || "").trim();
+    if (iconName && WBC_ICONS[iconName]) return WBC_ICONS[iconName];
+    return String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "◇";
+  }
   function loadPluginCollection(tool) {
     var packId = String(tool && tool.pack_id || "");
     var method = String(tool && tool.items_method || "");
@@ -198,6 +204,16 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       return String(tool && tool.presentation || "") === "collection" && pluginToolExpanded(tool);
     }).forEach(loadPluginCollection);
   }, [pluginTools, projectId, projectToolView]);
+  var projectSectionPluginTools = pluginTools.filter(function (tool) {
+    return String(tool && (tool.rail_section || tool.railSection) || "") === "project_tools";
+  });
+  var pluginSectionTools = pluginTools.filter(function (tool) {
+    return String(tool && (tool.rail_section || tool.railSection) || "") !== "project_tools";
+  });
+  var projectSectionPluginExpanded = projectSectionPluginTools.some(function (tool) {
+    return String(tool && tool.presentation || "") === "collection" && pluginToolExpanded(tool);
+  });
+  var anyProjectToolExpanded = fileToolsExpanded || terminalToolsExpanded || projectSectionPluginExpanded;
   var [fileLocation, setFileLocation] = useWbcState(function () {
     return { projectId: String(projectId || ""), path: "." };
   });
@@ -335,8 +351,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
 
   useWbcEffect(function () {
     if (!query.trim()) return;
-    setFileToolsExpanded(false);
-    setTerminalToolsExpanded(false);
+    setProjectToolView("");
   }, [query]);
 
   useWbcEffect(function () {
@@ -411,6 +426,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     if (!projectTools) return null;
     if (fileToolsExpanded) return projectTools.querySelector(".wbc-project-file-list");
     if (terminalToolsExpanded) return projectTools.querySelector(".wbc-project-terminal-list");
+    if (projectSectionPluginExpanded) return projectTools.querySelector(".wbc-plugin-tool-collection-items");
     return null;
   }
 
@@ -428,6 +444,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     setMenuId("");
     if (fileToolsExpanded) setFileToolsExpanded(false);
     if (terminalToolsExpanded) setTerminalToolsExpanded(false);
+    if (projectSectionPluginExpanded) setProjectToolView("");
   }
 
   function openHoveredProjectToolFromPull(tool) {
@@ -439,13 +456,18 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     } else if (tool === "terminal") {
       setFileToolsExpanded(false);
       setTerminalToolsExpanded(true);
+    } else {
+      var pluginTool = projectSectionPluginTools.find(function (candidate) {
+        return pluginToolView(candidate) === tool;
+      });
+      if (pluginTool) setPluginToolExpanded(pluginTool, true);
     }
   }
 
   function handleProjectToolWheel(event) {
     var pull = projectToolPullRef.current;
     var delta = Number(event.deltaY || 0);
-    if (!fileToolsExpanded && !terminalToolsExpanded) {
+    if (!anyProjectToolExpanded) {
       var eventTarget = event.target && event.target.closest
         ? event.target.closest("[data-project-tool]")
         : null;
@@ -2013,7 +2035,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       draggable="true"
       data-terminal-id={id}
       data-cyrene-context-menu="true"
-      className={"wbc-chat-card wbc-terminal-card"
+      className={"wbc-chat-card wbc-terminal-card wbc-project-resource-card"
         + (String(activeTerminalId || "") === id ? " active" : "")
         + (isMenuOpen ? " menu-open" : "")
         + (terminalDragId === id ? " dragging" : "")
@@ -2108,6 +2130,223 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     </section>;
   }
 
+  function pluginToolRenderContext(tool) {
+    var packId = String(tool && tool.pack_id || "");
+    var viewId = String(tool && tool.view || "");
+    var title = pluginLocalizedField(tool, "title") || tool.id || packId;
+    var subtitle = pluginLocalizedField(tool, "subtitle") || packId;
+    var toolKey = pluginToolKey(tool);
+    return {
+      packId: packId,
+      viewId: viewId,
+      title: title,
+      subtitle: subtitle,
+      glyph: pluginToolGlyph(tool),
+      toolKey: toolKey,
+      disabled: !packId || !viewId || !onOpenPluginView,
+      openOptions: wbcPluginToolOpenOptions(tool),
+      payload: {
+        packId: packId,
+        viewId: viewId,
+        instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
+        projectId: String(projectId || ""),
+        paneOwnerScope: String(tool && tool.pane_owner_scope || "chat"),
+        title: title,
+        subtitle: subtitle,
+        state: !tool || tool.state == null ? null : tool.state,
+      },
+    };
+  }
+
+  function renderPluginCollectionItems(tool, context) {
+    var cards = pluginCollections[context.toolKey] || [];
+    return <>
+      {pluginCollectionLoading[context.toolKey] && !cards.length ? <div className="workbench-muted wbc-rail-loading">{wbcT("common.loading", "Loading…")}</div> : null}
+      {pluginCollectionErrors[context.toolKey] ? <div className="workbench-error wbc-rail-empty">{pluginCollectionErrors[context.toolKey]}</div> : null}
+      {!pluginCollectionLoading[context.toolKey] && !pluginCollectionErrors[context.toolKey] && !cards.length ? <div className="workbench-muted wbc-rail-empty">{wbcT("rail.pluginCollectionEmpty", "No available devices.")}</div> : null}
+      {cards.map(function (item) {
+        var instanceId = String(item && (item.instance_id || item.instanceId || item.id) || "");
+        var itemKey = context.toolKey + ":" + instanceId;
+        var itemTitle = pluginLocalizedField(item, "title") || instanceId;
+        var itemSubtitle = pluginLocalizedField(item, "subtitle") || String(item && item.state || "");
+        var itemDisabled = context.disabled || !instanceId || Boolean(item && item.eligible === false);
+        var itemIconName = String(item && (item.icon_name || item.iconName) || "").trim();
+        var itemGlyph = itemIconName && WBC_ICONS[itemIconName]
+          ? WBC_ICONS[itemIconName]
+          : String(item && (item.icon_text || item.iconText) || "").trim();
+        var payload = Object.assign({}, context.payload, {
+          instanceId: instanceId,
+          title: itemTitle,
+          subtitle: itemSubtitle,
+          state: Object.assign({}, item || {}, {
+            collectionToolId: String(tool && tool.id || ""),
+            closeMethod: String(tool && tool.close_method || ""),
+            paneMenu: Array.isArray(tool && tool.pane_menu) ? tool.pane_menu : [],
+          }),
+        });
+        return <div
+          key={itemKey}
+          role="button"
+          tabIndex={itemDisabled ? -1 : 0}
+          draggable={itemDisabled ? undefined : "true"}
+          aria-disabled={itemDisabled || undefined}
+          className={"wbc-chat-card wbc-project-plugin-tool wbc-plugin-collection-card wbc-project-resource-card" + (pluginDragId === itemKey ? " dragging" : "") + (item && item.online ? " is-online" : "")}
+          onClick={function () {
+            if (itemDisabled || pluginSuppressClickRef.current === itemKey) return;
+            onOpenPluginView(payload, context.openOptions);
+          }}
+          onKeyDown={function (event) {
+            if (itemDisabled || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            onOpenPluginView(payload, context.openOptions);
+          }}
+          onDragStart={function (event) {
+            if (itemDisabled) { event.preventDefault(); return; }
+            pluginSuppressClickRef.current = itemKey;
+            setPluginDragId(itemKey);
+            wbcSetPluginViewDrag(event, payload);
+            if (event.dataTransfer) prepareRailDragImage(event.currentTarget, event.dataTransfer, event.clientX, event.clientY);
+          }}
+          onDragEnd={function () {
+            clearRailDragImage();
+            setPluginDragId("");
+            window.setTimeout(function () { if (pluginSuppressClickRef.current === itemKey) pluginSuppressClickRef.current = ""; }, 0);
+          }}
+        >
+          <span className="wbc-chat-card-top">
+            <span className="wbc-chat-row-icon" aria-hidden="true">{itemGlyph || context.glyph}</span>
+            <span className="wbc-chat-card-title"><b><WbcHoverMarquee text={itemTitle} /></b></span>
+            <span className="wbc-chat-card-right"><span className="wbc-plugin-collection-status" aria-hidden="true"></span></span>
+          </span>
+          <span className="wbc-chat-card-preview"><WbcHoverMarquee text={itemSubtitle} /></span>
+        </div>;
+      })}
+    </>;
+  }
+
+  function renderIntegratedPluginTool(tool) {
+    var context = pluginToolRenderContext(tool);
+    var expanded = pluginToolExpanded(tool);
+    var collection = String(tool && tool.presentation || "") === "collection";
+    var collectionId = "wbc-plugin-collection-" + context.toolKey.replace(/[^A-Za-z0-9_-]/g, "-");
+    if (!collection) {
+      return <button
+        key={context.toolKey}
+        type="button"
+        disabled={context.disabled}
+        onClick={function () { if (!context.disabled) onOpenPluginView(context.payload, context.openOptions); }}
+      >
+        <span className="wbc-project-tool-icon" aria-hidden="true">{context.glyph}</span>
+        <span className="wbc-project-tool-copy"><b>{context.title}</b><small>{context.subtitle}</small></span>
+        <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+      </button>;
+    }
+    return <React.Fragment key={context.toolKey}>
+      {expanded ? (
+        <div className="wbc-project-tool-inline-header is-plugin">
+          <span className="wbc-project-tool-icon" aria-hidden="true">{context.glyph}</span>
+          <span className="wbc-project-tool-copy"><b>{context.title}</b><small>{context.subtitle}</small></span>
+          <button
+            type="button"
+            className="wbc-project-tool-inline-collapse"
+            onClick={function () { setPluginToolExpanded(tool, false); }}
+            aria-label={wbcT("common.collapse", "Collapse")}
+            aria-expanded="true"
+            aria-controls={collectionId}
+          >{WBC_ICONS.chevronRight}</button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          data-project-tool={pluginToolView(tool)}
+          onClick={function () { setMenuId(""); setPluginToolExpanded(tool, true); }}
+          aria-expanded="false"
+          aria-controls={collectionId}
+        >
+          <span className="wbc-project-tool-icon" aria-hidden="true">{context.glyph}</span>
+          <span className="wbc-project-tool-copy"><b>{context.title}</b><small>{context.subtitle}</small></span>
+          <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+        </button>
+      )}
+      <div
+        id={collectionId}
+        className={"wbc-project-tool-expand wbc-plugin-tool-collection-expand" + (expanded ? " is-expanded" : "")}
+        aria-hidden={!expanded}
+      >
+        <div className="wbc-project-tool-expand-inner">
+          <div className="wbc-plugin-tool-collection-items wbc-project-resource-list">
+            {renderPluginCollectionItems(tool, context)}
+          </div>
+        </div>
+      </div>
+    </React.Fragment>;
+  }
+
+  function renderAuxiliaryPluginTool(tool) {
+    var context = pluginToolRenderContext(tool);
+    if (String(tool && tool.presentation || "") === "collection") {
+      var expanded = pluginToolExpanded(tool);
+      var collectionId = "wbc-plugin-collection-" + context.toolKey.replace(/[^A-Za-z0-9_-]/g, "-");
+      return <div key={context.toolKey} className={"wbc-plugin-tool-collection" + (expanded ? " is-expanded" : "")}>
+        <button
+          type="button"
+          className="wbc-plugin-tool-collection-toggle"
+          aria-expanded={expanded ? "true" : "false"}
+          aria-controls={collectionId}
+          onClick={function () { setPluginToolExpanded(tool, !expanded); }}
+        >
+          <span className="wbc-project-tool-icon" aria-hidden="true">{context.glyph}</span>
+          <span className="wbc-project-tool-copy"><b>{context.title}</b><small>{context.subtitle}</small></span>
+          <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+        </button>
+        <div id={collectionId} className="wbc-plugin-tool-collection-items wbc-project-resource-list" hidden={!expanded}>
+          {renderPluginCollectionItems(tool, context)}
+        </div>
+      </div>;
+    }
+    return <div
+      key={context.toolKey}
+      data-plugin-tool-id={context.toolKey}
+      role="button"
+      tabIndex={context.disabled ? -1 : 0}
+      draggable={context.disabled ? undefined : "true"}
+      aria-disabled={context.disabled || undefined}
+      aria-label={context.title}
+      title={wbcT("workbenchChat.dragPluginView", "Drag to open {title} in a split view.", { title: context.title })}
+      className={"wbc-chat-card wbc-project-plugin-tool" + (pluginDragId === context.toolKey ? " dragging" : "")}
+      onClick={function () {
+        if (context.disabled || pluginSuppressClickRef.current === context.toolKey) return;
+        onOpenPluginView(context.payload, context.openOptions);
+      }}
+      onKeyDown={function (event) {
+        if (context.disabled || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onOpenPluginView(context.payload, context.openOptions);
+      }}
+      onDragStart={function (event) {
+        if (context.disabled) { event.preventDefault(); return; }
+        pluginSuppressClickRef.current = context.toolKey;
+        setPluginDragId(context.toolKey);
+        wbcSetPluginViewDrag(event, context.payload);
+        if (event.dataTransfer) prepareRailDragImage(event.currentTarget, event.dataTransfer, event.clientX, event.clientY);
+      }}
+      onDragEnd={function () {
+        clearRailDragImage();
+        setPluginDragId("");
+        window.setTimeout(function () { if (pluginSuppressClickRef.current === context.toolKey) pluginSuppressClickRef.current = ""; }, 0);
+      }}
+    >
+      <span className="wbc-chat-card-top">
+        <span className="wbc-chat-row-icon wbc-project-plugin-tool-icon" aria-hidden="true">{context.glyph}</span>
+        <span className="wbc-chat-card-title">
+          <b><WbcHoverMarquee text={context.title} /></b>
+          <small className="wbc-project-plugin-tool-subtitle">{context.subtitle}</small>
+        </span>
+        <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+      </span>
+    </div>;
+  }
+
   function openUnifiedFileResult(entry) {
     if (!entry) return;
     if (entry.kind === "directory") {
@@ -2146,7 +2385,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   return (
     <aside ref={railRef} className={"wbc-rail workbench-integrated-rail"
       + (collapsed ? " is-collapsed" : "")
-      + (fileToolsExpanded || terminalToolsExpanded ? " has-expanded-project-tool" : "")
+      + (anyProjectToolExpanded ? " has-expanded-project-tool" : "")
       + (renderedRailMotionPhase ? (" is-status-" + renderedRailMotionPhase) : "")}>
       <div className="wbc-rail-glass">
         <div className="wbc-nav-card">
@@ -2370,13 +2609,14 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
           );
         })}
       </div>}
-      {codeAvailable && railMode === "chat" && !collapsed ? (
+      {(codeAvailable || projectSectionPluginTools.length) && railMode === "chat" && !collapsed ? (
         <section
           ref={projectToolsRef}
           className={"wbc-project-tools"
-            + (fileToolsExpanded || terminalToolsExpanded ? " has-expanded-tool" : "")
+            + (anyProjectToolExpanded ? " has-expanded-tool" : "")
             + (fileToolsExpanded ? " expanded-file" : "")
             + (terminalToolsExpanded ? " expanded-terminal" : "")
+            + (projectSectionPluginExpanded ? " expanded-plugin" : "")
             + (terminalToolsExpanded && String(menuId).indexOf("terminal:") === 0 ? " menu-active" : "")}
           aria-label={wbcT("rail.projectTools", "Tools")}
           onWheel={handleProjectToolWheel}
@@ -2384,8 +2624,19 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
           onTouchMove={handleProjectToolTouchMove}
           onTouchEnd={resetProjectToolPull}
           onTouchCancel={resetProjectToolPull}
+          onDragOver={function (event) {
+            if (!pluginDragId || !wbcHasPluginViewDrag(event)) return;
+            event.preventDefault();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={function (event) {
+            if (!pluginDragId || !wbcHasPluginViewDrag(event)) return;
+            event.preventDefault();
+            setPluginDragId("");
+          }}
         >
           <header><span>{wbcT("rail.projectTools", "Tools")}</span></header>
+          {codeAvailable ? <>
           {fileToolsExpanded ? (
             <WbcProjectFileHeader
               collapseControls="wbc-project-file-list"
@@ -2486,7 +2737,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             aria-hidden={!terminalToolsExpanded}
           >
             <div className="wbc-project-tool-expand-inner wbc-project-terminal-expand-inner">
-              <div className={"wbc-project-terminal-list" + (terminalsLoading ? " is-loading" : "") + (menuId ? " menu-active" : "")}>
+              <div className={"wbc-project-terminal-list wbc-project-resource-list" + (terminalsLoading ? " is-loading" : "") + (menuId ? " menu-active" : "")}>
                 {terminalsLoading && !orderedTerminals.length ? <div className="workbench-muted wbc-rail-loading" role="status">{wbcT("terminal.loading", "Loading terminals...")}</div> : null}
                 {!terminalsLoading && !orderedTerminals.length ? <div className="workbench-muted wbc-rail-empty">{query ? wbcT("terminal.noMatches", "No matching terminals.") : wbcT("terminal.empty", "No terminals yet.")}</div> : null}
                 {renderTerminalSection("pinned", wbcT("workbenchChat.pinnedSection", "Pinned"), pinnedTerminals)}
@@ -2494,9 +2745,11 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
               </div>
             </div>
           </div>
+          </> : null}
+          {projectSectionPluginTools.map(renderIntegratedPluginTool)}
         </section>
       ) : null}
-      {pluginTools.length && railMode === "chat" && !collapsed ? (
+      {pluginSectionTools.length && railMode === "chat" && !collapsed ? (
         <section
           className="wbc-project-tools wbc-plugin-project-tools"
           aria-label={wbcT("rail.projectTools", "Tools")}
@@ -2515,147 +2768,8 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             setPluginDragId("");
           }}
         >
-          {!codeAvailable ? <header><span>{wbcT("rail.projectTools", "Tools")}</span></header> : null}
-          {pluginTools.map(function (tool) {
-            var packId = String(tool && tool.pack_id || "");
-            var viewId = String(tool && tool.view || "");
-            var title = pluginLocalizedField(tool, "title") || tool.id || packId;
-            var subtitle = pluginLocalizedField(tool, "subtitle") || packId;
-            var glyph = String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "◇";
-            var toolKey = packId + ":" + String(tool && tool.id || viewId);
-            var disabled = !packId || !viewId || !onOpenPluginView;
-            var openOptions = wbcPluginToolOpenOptions(tool);
-            var basePayload = {
-              packId: packId,
-              viewId: viewId,
-              instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
-              projectId: String(projectId || ""),
-              title: title,
-              subtitle: subtitle,
-              state: !tool || tool.state == null ? null : tool.state,
-            };
-            if (String(tool && tool.presentation || "") === "collection") {
-              var expanded = pluginToolExpanded(tool);
-              var cards = pluginCollections[toolKey] || [];
-              var collectionId = "wbc-plugin-collection-" + toolKey.replace(/[^A-Za-z0-9_-]/g, "-");
-              return <div key={toolKey} className={"wbc-plugin-tool-collection" + (expanded ? " is-expanded" : "")}>
-                <button
-                  type="button"
-                  className="wbc-plugin-tool-collection-toggle"
-                  aria-expanded={expanded ? "true" : "false"}
-                  aria-controls={collectionId}
-                  onClick={function () { setPluginToolExpanded(tool, !expanded); }}
-                >
-                  <span className="wbc-project-tool-icon" aria-hidden="true">{glyph}</span>
-                  <span className="wbc-project-tool-copy"><b>{title}</b><small>{subtitle}</small></span>
-                  <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
-                </button>
-                <div id={collectionId} className="wbc-plugin-tool-collection-items" hidden={!expanded}>
-                  {pluginCollectionLoading[toolKey] && !cards.length ? <div className="workbench-muted wbc-rail-loading">{wbcT("common.loading", "Loading…")}</div> : null}
-                  {pluginCollectionErrors[toolKey] ? <div className="workbench-error wbc-rail-empty">{pluginCollectionErrors[toolKey]}</div> : null}
-                  {!pluginCollectionLoading[toolKey] && !pluginCollectionErrors[toolKey] && !cards.length ? <div className="workbench-muted wbc-rail-empty">{wbcT("rail.pluginCollectionEmpty", "No available devices.")}</div> : null}
-                  {cards.map(function (item) {
-                    var instanceId = String(item && (item.instance_id || item.instanceId || item.id) || "");
-                    var itemKey = toolKey + ":" + instanceId;
-                    var itemTitle = pluginLocalizedField(item, "title") || instanceId;
-                    var itemSubtitle = pluginLocalizedField(item, "subtitle") || String(item && item.state || "");
-                    var itemDisabled = disabled || !instanceId || item && item.eligible === false;
-                    var payload = Object.assign({}, basePayload, {
-                      instanceId: instanceId,
-                      title: itemTitle,
-                      subtitle: itemSubtitle,
-                      state: Object.assign({}, item || {}, {
-                        collectionToolId: String(tool && tool.id || ""),
-                        closeMethod: String(tool && tool.close_method || ""),
-                        paneMenu: Array.isArray(tool && tool.pane_menu) ? tool.pane_menu : [],
-                      }),
-                    });
-                    return <div
-                      key={itemKey}
-                      role="button"
-                      tabIndex={itemDisabled ? -1 : 0}
-                      draggable={itemDisabled ? undefined : "true"}
-                      aria-disabled={itemDisabled || undefined}
-                      className={"wbc-chat-card wbc-project-plugin-tool wbc-plugin-collection-card" + (pluginDragId === itemKey ? " dragging" : "") + (item && item.online ? " is-online" : "")}
-                      onClick={function () {
-                        if (itemDisabled || pluginSuppressClickRef.current === itemKey) return;
-                        onOpenPluginView(payload, openOptions);
-                      }}
-                      onKeyDown={function (event) {
-                        if (itemDisabled || (event.key !== "Enter" && event.key !== " ")) return;
-                        event.preventDefault();
-                        onOpenPluginView(payload, openOptions);
-                      }}
-                      onDragStart={function (event) {
-                        if (itemDisabled) { event.preventDefault(); return; }
-                        pluginSuppressClickRef.current = itemKey;
-                        setPluginDragId(itemKey);
-                        wbcSetPluginViewDrag(event, payload);
-                        if (event.dataTransfer) prepareRailDragImage(event.currentTarget, event.dataTransfer, event.clientX, event.clientY);
-                      }}
-                      onDragEnd={function () {
-                        clearRailDragImage();
-                        setPluginDragId("");
-                        window.setTimeout(function () { if (pluginSuppressClickRef.current === itemKey) pluginSuppressClickRef.current = ""; }, 0);
-                      }}
-                    >
-                      <span className="wbc-chat-card-top">
-                        <span className="wbc-chat-row-icon wbc-project-plugin-tool-icon" aria-hidden="true">{String(item && item.icon_text || glyph)}</span>
-                        <span className="wbc-chat-card-title"><b><WbcHoverMarquee text={itemTitle} /></b><small className="wbc-project-plugin-tool-subtitle">{itemSubtitle}</small></span>
-                        <span className="wbc-plugin-collection-status" aria-hidden="true"></span>
-                      </span>
-                    </div>;
-                  })}
-                </div>
-              </div>;
-            }
-            var payload = basePayload;
-            return <div
-              key={toolKey}
-              data-plugin-tool-id={toolKey}
-              role="button"
-              tabIndex={disabled ? -1 : 0}
-              draggable={disabled ? undefined : "true"}
-              aria-disabled={disabled || undefined}
-              aria-label={title}
-              title={wbcT("workbenchChat.dragPluginView", "Drag to open {title} in a split view.", { title: title })}
-              className={"wbc-chat-card wbc-project-plugin-tool" + (pluginDragId === toolKey ? " dragging" : "")}
-              onClick={function () {
-                if (disabled || pluginSuppressClickRef.current === toolKey) return;
-                onOpenPluginView(payload, openOptions);
-              }}
-              onKeyDown={function (event) {
-                if (disabled || (event.key !== "Enter" && event.key !== " ")) return;
-                event.preventDefault();
-                onOpenPluginView(payload, openOptions);
-              }}
-              onDragStart={function (event) {
-                if (disabled) { event.preventDefault(); return; }
-                pluginSuppressClickRef.current = toolKey;
-                setPluginDragId(toolKey);
-                wbcSetPluginViewDrag(event, payload);
-                if (event.dataTransfer) {
-                  prepareRailDragImage(event.currentTarget, event.dataTransfer, event.clientX, event.clientY);
-                }
-              }}
-              onDragEnd={function () {
-                clearRailDragImage();
-                setPluginDragId("");
-                window.setTimeout(function () {
-                  if (pluginSuppressClickRef.current === toolKey) pluginSuppressClickRef.current = "";
-                }, 0);
-              }}
-            >
-              <span className="wbc-chat-card-top">
-                <span className="wbc-chat-row-icon wbc-project-plugin-tool-icon" aria-hidden="true">{glyph}</span>
-                <span className="wbc-chat-card-title">
-                  <b><WbcHoverMarquee text={title} /></b>
-                  <small className="wbc-project-plugin-tool-subtitle">{subtitle}</small>
-                </span>
-                <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
-              </span>
-            </div>;
-          })}
+          {!codeAvailable && !projectSectionPluginTools.length ? <header><span>{wbcT("rail.projectTools", "Tools")}</span></header> : null}
+          {pluginSectionTools.map(renderAuxiliaryPluginTool)}
         </section>
       ) : null}
       {moduleDock}

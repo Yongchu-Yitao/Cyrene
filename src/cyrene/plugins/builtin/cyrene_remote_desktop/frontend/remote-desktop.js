@@ -25,6 +25,7 @@
   let targetPlatform = '';
   let language = 'en';
   let authorizedModes = null;
+  let autoConnectStarted = false;
   let reconnectInProgress = false;
   let secureSurface = false;
   let sessionPermissions = {};
@@ -110,6 +111,12 @@
     });
   }
 
+  function applyTheme(value) {
+    const theme = String(value || '').toLowerCase() === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+  }
+
   const app = document.getElementById('app');
   const stage = document.getElementById('stage');
   const imeInput = document.getElementById('ime-input');
@@ -117,7 +124,6 @@
   const audio = document.getElementById('remote-audio');
   const empty = document.getElementById('empty-state');
   const busy = document.getElementById('busy-state');
-  const connectButton = document.getElementById('connect-button');
   const retryButton = document.getElementById('retry-button');
   const disconnectButton = document.getElementById('disconnect-button');
   const microphoneButton = document.getElementById('microphone-button');
@@ -129,8 +135,16 @@
   const fileInput = document.getElementById('file-input');
   const folderInput = document.getElementById('folder-input');
 
+  function callTimeoutMs(method) {
+    if (method === 'remoteDesktop.session.connect' || method === 'remoteDesktop.session.reconnect') return 90_000;
+    if (method.indexOf('remoteDesktop.clipboard.files.') === 0) return 180_000;
+    if (method.indexOf('remoteDesktop.clipboard.image.') === 0) return 90_000;
+    return 25_000;
+  }
+
   function call(method, args) {
     const requestId = `desktop-${Date.now()}-${++requestSequence}`;
+    const timeoutMs = callTimeoutMs(method);
     return new Promise(function (resolve, reject) {
       pending.set(requestId, { resolve, reject });
       window.parent.postMessage({
@@ -139,15 +153,14 @@
         requestId,
         method,
         args: args || {},
+        timeoutMs,
       }, '*');
       window.setTimeout(function () {
         const request = pending.get(requestId);
         if (!request) return;
         pending.delete(requestId);
         request.reject(new Error(t('hostTimeout')));
-      }, (method === 'remoteDesktop.session.connect' || method === 'remoteDesktop.session.reconnect') ? 90_000
-        : method.indexOf('remoteDesktop.clipboard.files.') === 0 ? 180_000
-        : method.indexOf('remoteDesktop.clipboard.image.') === 0 ? 90_000 : 25_000);
+      }, timeoutMs);
     });
   }
 
@@ -191,7 +204,6 @@
     video.hidden = name !== 'connected';
     disconnectButton.hidden = name !== 'connected';
     retryButton.hidden = name !== 'failed';
-    connectButton.hidden = name === 'failed';
     const connected = name === 'connected';
     fileButton.disabled = !connected || sessionPermissions.clipboard_file !== true;
     displayButton.disabled = !connected || sessionPermissions.display_select !== true;
@@ -227,11 +239,6 @@
 
   function selectMode(nextMode) {
     mode = String(nextMode || 'current_desktop');
-    document.querySelectorAll('.mode').forEach(function (candidate) {
-      const active = String(candidate.dataset.mode || '') === mode;
-      candidate.classList.toggle('active', active);
-      candidate.setAttribute('aria-checked', active ? 'true' : 'false');
-    });
   }
 
   function applyProviderProbe(probe) {
@@ -252,10 +259,6 @@
     });
     const usable = available.filter(function (candidate) {
       return authorizedModes === null || authorizedModes.indexOf(candidate) >= 0;
-    });
-    document.querySelectorAll('.mode').forEach(function (button) {
-      const supported = usable.indexOf(String(button.dataset.mode || '')) >= 0;
-      button.hidden = providers.length > 0 && !supported;
     });
     if (!providers.length) return [];
     if (usable.length) return usable;
@@ -529,7 +532,13 @@
       }
       const probe = prepared && prepared.remote_probe || {};
       const usableModes = applyProviderProbe(probe);
-      if (usableModes.indexOf(requestedMode) < 0) throw unsupportedModeError(probe, requestedMode);
+      if (usableModes.indexOf(requestedMode) < 0) {
+        const fallbackMode = usableModes.indexOf('current_desktop') >= 0
+          ? 'current_desktop'
+          : String(usableModes[0] || '');
+        if (!fallbackMode) throw unsupportedModeError(probe, requestedMode);
+        selectMode(fallbackMode);
+      }
       qualityMode = String(prepared && prepared.preference && prepared.preference.quality_mode || 'auto');
       setText('quality-copy', t(`quality${qualityMode[0].toUpperCase()}${qualityMode.slice(1)}`));
       const offer = await preparePeer(prepared && prepared.ice_servers || []);
@@ -559,6 +568,16 @@
       publishState(Object.assign({}, result.session || {}, {
         resource_kind: 'remote_desktop',
         resource_id: sessionId,
+        preferred_mode: mode,
+        clipboard_file_available: sessionPermissions.clipboard_file === true,
+        display_select_available: sessionPermissions.display_select === true,
+        microphone_available: (providerCapabilitiesByMode[mode] || []).indexOf('microphone') >= 0
+          && sessionPermissions.microphone === true,
+        network_status: prepared && prepared.network && prepared.network.turn_configured
+          ? 'relay_ready' : 'direct_only',
+        clipboard_status: sessionPermissions.clipboard_text === true
+          || sessionPermissions.clipboard_file === true
+          || sessionPermissions.clipboard_image === true ? 'ready' : 'unavailable',
       }));
       await peer.setRemoteDescription(result.answer);
       setText('device-name', String(result.session && result.session.device_name || context.state && context.state.title || t('remoteDesktop')));
@@ -583,7 +602,8 @@
     closePeer();
     if (current) await call('remoteDesktop.session.disconnect', { session_id: current }).catch(function () {});
     setText('transport-copy', t('notConnected'));
-    state('idle', t('connectTitle'), t('connectDetail'));
+    publishState({ session_id: '', state: 'ready', microphone_enabled: false });
+    state('failed', t('notConnected'), t('connectDetail'));
   }
 
   function videoPoint(event) {
@@ -965,12 +985,6 @@
     securityTimer = window.setInterval(refreshSecurityState, 1200);
   }
 
-  document.querySelectorAll('.mode').forEach(function (button) {
-    button.addEventListener('click', function () {
-      selectMode(button.dataset.mode || 'current_desktop');
-    });
-  });
-  connectButton.addEventListener('click', connect);
   retryButton.addEventListener('click', connect);
   disconnectButton.addEventListener('click', disconnect);
   microphoneButton.addEventListener('click', setMicrophone);
@@ -991,6 +1005,7 @@
     sendClipboardFiles(event.dataTransfer.files);
   });
   document.addEventListener('pointerdown', function (event) {
+    window.parent.postMessage({ source: 'cyrene-plugin', type: 'interaction' }, '*');
     if (!displayMenu.hidden && !displayMenu.contains(event.target) && event.target !== displayButton) displayMenu.hidden = true;
     if (!fileMenu.hidden && !fileMenu.contains(event.target) && event.target !== fileButton) fileMenu.hidden = true;
   });
@@ -999,6 +1014,10 @@
     if (event.source !== window.parent) return;
     const message = event.data && typeof event.data === 'object' ? event.data : {};
     if (message.source !== 'cyrene-host') return;
+    if (message.type === 'theme') {
+      applyTheme(message.theme);
+      return;
+    }
     if (message.type === 'response' || message.type === 'host-response') {
       const request = pending.get(String(message.requestId || ''));
       if (!request) return;
@@ -1007,18 +1026,40 @@
       else request.resolve(message.result);
       return;
     }
+    if (message.type === 'command') {
+      const command = message.command && typeof message.command === 'object' ? message.command : {};
+      const action = String(command.action || '');
+      if (action === 'file_transfer') {
+        fileMenu.hidden = !fileMenu.hidden;
+        displayMenu.hidden = true;
+      } else if (action === 'switch_display') {
+        showDisplays();
+      } else if (action === 'toggle_microphone') {
+        setMicrophone();
+      } else if (action === 'disconnect') {
+        disconnect();
+      }
+      return;
+    }
     if (message.type === 'init') {
       context = message.context || {};
+      applyTheme(context.theme);
       applyLanguage(context.language || 'en');
       deviceId = String(context.instanceId || context.state && context.state.device_id || '');
       const cardState = context.state && typeof context.state === 'object' ? context.state : {};
       authorizedModes = Array.isArray(cardState.modes) ? cardState.modes.map(String) : null;
       targetPlatform = String(cardState.platform || cardState.subtitle || '');
       setText('device-name', String(cardState.title || context.instanceId || t('remoteDesktop')));
-      if (Array.isArray(cardState.modes) && cardState.modes.indexOf('remote_login') < 0) document.getElementById('mode-login').hidden = true;
-      if (Array.isArray(cardState.modes) && cardState.modes.indexOf('current_desktop') < 0) {
-        document.getElementById('mode-current').hidden = true;
-        selectMode('remote_login');
+      const preferredMode = String(cardState.preferred_mode || 'current_desktop');
+      const initialMode = authorizedModes === null || authorizedModes.indexOf(preferredMode) >= 0
+        ? preferredMode
+        : authorizedModes.indexOf('current_desktop') >= 0
+          ? 'current_desktop'
+          : String(authorizedModes[0] || 'current_desktop');
+      selectMode(initialMode);
+      if (!autoConnectStarted) {
+        autoConnectStarted = true;
+        window.setTimeout(connect, 0);
       }
     }
   });

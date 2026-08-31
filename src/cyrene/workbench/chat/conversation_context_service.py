@@ -657,6 +657,70 @@ def _agent_path_timeline(
     return records
 
 
+def _agent_effective_timeline(
+    timeline: Sequence[Mapping[str, Any]],
+    context_mounts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Present context nodes in the same structural order as model messages.
+
+    Session-scoped mounts are durable snapshots under every user turn, but the
+    model projection selects only the current turn's stable snapshot and merges
+    it into the leading system message.  Keep that current snapshot in mount
+    order immediately after the system marker, while leaving turn-scoped mounts
+    beside their original user messages.  This changes presentation only; the
+    model projection remains owned by ``_agent_path_messages``.
+    """
+
+    records = [copy.deepcopy(dict(item)) for item in timeline]
+    stable_mount_ids = [
+        str(mount.get("id") or "")
+        for mount in context_mounts
+        if str(mount.get("id") or "")
+        and not context_is_turn({
+            "context_lifecycle": mount.get("lifecycle"),
+            "context_kind": mount.get("kind"),
+            "context_source": mount.get("source"),
+        })
+    ]
+    stable_id_set = set(stable_mount_ids)
+    stable_by_id = {
+        str(item.get("id") or ""): item
+        for item in records
+        if str(item.get("id") or "") in stable_id_set
+    }
+    stable_records = [
+        stable_by_id[item_id]
+        for item_id in stable_mount_ids
+        if item_id in stable_by_id
+    ]
+    remaining = [
+        item
+        for item in records
+        if not (
+            str(item.get("role") or "") == "context"
+            and not context_is_turn({
+                "context_lifecycle": item.get("lifecycle"),
+                "context_kind": item.get("contextKind"),
+                "context_source": item.get("source"),
+            })
+        )
+    ]
+    system_index = next(
+        (
+            index
+            for index, item in enumerate(remaining)
+            if str(item.get("role") or "") == "system"
+        ),
+        -1,
+    )
+    insertion_index = system_index + 1 if system_index >= 0 else 0
+    return [
+        *remaining[:insertion_index],
+        *stable_records,
+        *remaining[insertion_index:],
+    ]
+
+
 def _agent_context_limit_key(state: Mapping[str, Any], fallback: str) -> str:
     identity = state.get("modelIdentity")
     identity = identity if isinstance(identity, Mapping) else {}
@@ -1724,7 +1788,7 @@ class ConversationContextQueryService:
             ),
             "contextMounts": self._context_mounts_payload(state),
             "timeline": self._timeline_payload(state),
-            "chronology": "ascending",
+            "chronology": "model_input",
         })
         return payload
 
@@ -1822,7 +1886,10 @@ class ConversationContextQueryService:
                 if isinstance(result, Mapping)
             ]
             records.append(record)
-        return sorted(records, key=lambda item: (item["createdAt"], item["order"]))
+        ordered = _agent_effective_timeline(records, mounts)
+        for order, record in enumerate(ordered):
+            record["order"] = order
+        return ordered
 
     @staticmethod
     def _blocks_payload(

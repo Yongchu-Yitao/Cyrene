@@ -1606,111 +1606,7 @@ class TerminalManager:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA busy_timeout=5000")
-        self._db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS terminal_sessions (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                shell TEXT NOT NULL,
-                argv_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                exit_code INTEGER,
-                pid INTEGER,
-                cols INTEGER NOT NULL,
-                rows INTEGER NOT NULL,
-                next_seq INTEGER NOT NULL DEFAULT 0,
-                output_start_seq INTEGER NOT NULL DEFAULT 0,
-                order_index INTEGER NOT NULL DEFAULT 0,
-                pinned INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS terminal_projects (
-                project_id TEXT PRIMARY KEY,
-                active_terminal_id TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS terminal_wakes (
-                wake_id TEXT PRIMARY KEY,
-                terminal_id TEXT NOT NULL UNIQUE,
-                project_id TEXT NOT NULL,
-                chat_id TEXT NOT NULL,
-                note TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL,
-                exit_status TEXT NOT NULL DEFAULT '',
-                exit_code INTEGER,
-                final_screen TEXT NOT NULL DEFAULT '',
-                prompt TEXT NOT NULL DEFAULT '',
-                lease_token TEXT NOT NULL DEFAULT '',
-                lease_until REAL NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                ready_at TEXT NOT NULL DEFAULT '',
-                delivered_at TEXT NOT NULL DEFAULT '',
-                cancelled_at TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS terminal_input_events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                terminal_id TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                input_kind TEXT NOT NULL,
-                byte_count INTEGER NOT NULL,
-                accepted INTEGER NOT NULL,
-                reason TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_input_events_terminal
-                ON terminal_input_events(terminal_id, event_id);
-            CREATE TABLE IF NOT EXISTS terminal_output_events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                terminal_id TEXT NOT NULL,
-                start_seq INTEGER NOT NULL,
-                end_seq INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_output_events_terminal
-                ON terminal_output_events(terminal_id, start_seq);
-            CREATE TABLE IF NOT EXISTS terminal_text_chunks (
-                chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                terminal_id TEXT NOT NULL,
-                line_number INTEGER NOT NULL,
-                start_seq INTEGER NOT NULL,
-                end_seq INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                search_text TEXT NOT NULL,
-                complete INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_text_chunks_terminal
-                ON terminal_text_chunks(terminal_id, start_seq);
-            CREATE TABLE IF NOT EXISTS terminal_commands (
-                terminal_id TEXT NOT NULL,
-                command_id TEXT NOT NULL,
-                command_start_seq INTEGER NOT NULL,
-                command_text TEXT NOT NULL,
-                output_start_seq INTEGER NOT NULL,
-                output_end_seq INTEGER NOT NULL,
-                exit_code INTEGER,
-                started_at TEXT NOT NULL DEFAULT '',
-                finished_at TEXT NOT NULL DEFAULT '',
-                running INTEGER NOT NULL DEFAULT 1,
-                PRIMARY KEY (terminal_id, command_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_commands_terminal
-                ON terminal_commands(terminal_id, output_start_seq);
-            CREATE TABLE IF NOT EXISTS terminal_index_state (
-                terminal_id TEXT PRIMARY KEY,
-                indexed_next_seq INTEGER NOT NULL DEFAULT 0,
-                command_capture_start_seq INTEGER,
-                command_capture BLOB NOT NULL DEFAULT X'',
-                running_output_start_seq INTEGER,
-                running_command_text TEXT NOT NULL DEFAULT '',
-                text_state_json TEXT NOT NULL DEFAULT ''
-            );
-            """
-        )
+        self._db.executescript(_TERMINAL_SCHEMA)
         text_columns = {
             str(row[1])
             for row in self._db.execute("PRAGMA table_info(terminal_text_chunks)")
@@ -4334,3 +4230,106 @@ _MANAGER = TerminalManager()
 
 def get_terminal_manager() -> TerminalManager:
     return _MANAGER
+_TERMINAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS terminal_sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    shell TEXT NOT NULL,
+    argv_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code INTEGER,
+    pid INTEGER,
+    cols INTEGER NOT NULL,
+    rows INTEGER NOT NULL,
+    next_seq INTEGER NOT NULL DEFAULT 0,
+    output_start_seq INTEGER NOT NULL DEFAULT 0,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    pinned INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS terminal_projects (
+    project_id TEXT PRIMARY KEY,
+    active_terminal_id TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS terminal_wakes (
+    wake_id TEXT PRIMARY KEY,
+    terminal_id TEXT NOT NULL UNIQUE,
+    project_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    exit_status TEXT NOT NULL DEFAULT '',
+    exit_code INTEGER,
+    final_screen TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL DEFAULT '',
+    lease_token TEXT NOT NULL DEFAULT '',
+    lease_until REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    ready_at TEXT NOT NULL DEFAULT '',
+    delivered_at TEXT NOT NULL DEFAULT '',
+    cancelled_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS terminal_input_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terminal_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    input_kind TEXT NOT NULL,
+    byte_count INTEGER NOT NULL,
+    accepted INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_input_events_terminal
+    ON terminal_input_events(terminal_id, event_id);
+CREATE TABLE IF NOT EXISTS terminal_output_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terminal_id TEXT NOT NULL,
+    start_seq INTEGER NOT NULL,
+    end_seq INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_output_events_terminal
+    ON terminal_output_events(terminal_id, start_seq);
+CREATE TABLE IF NOT EXISTS terminal_text_chunks (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terminal_id TEXT NOT NULL,
+    line_number INTEGER NOT NULL,
+    start_seq INTEGER NOT NULL,
+    end_seq INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    search_text TEXT NOT NULL,
+    complete INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_text_chunks_terminal
+    ON terminal_text_chunks(terminal_id, start_seq);
+CREATE TABLE IF NOT EXISTS terminal_commands (
+    terminal_id TEXT NOT NULL,
+    command_id TEXT NOT NULL,
+    command_start_seq INTEGER NOT NULL,
+    command_text TEXT NOT NULL,
+    output_start_seq INTEGER NOT NULL,
+    output_end_seq INTEGER NOT NULL,
+    exit_code INTEGER,
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT '',
+    running INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (terminal_id, command_id)
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_commands_terminal
+    ON terminal_commands(terminal_id, output_start_seq);
+CREATE TABLE IF NOT EXISTS terminal_index_state (
+    terminal_id TEXT PRIMARY KEY,
+    indexed_next_seq INTEGER NOT NULL DEFAULT 0,
+    command_capture_start_seq INTEGER,
+    command_capture BLOB NOT NULL DEFAULT X'',
+    running_output_start_seq INTEGER,
+    running_command_text TEXT NOT NULL DEFAULT '',
+    text_state_json TEXT NOT NULL DEFAULT ''
+);
+"""

@@ -15,19 +15,7 @@ def _object(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def setup_application(context: PluginApplicationContext) -> None:
-    remote = context.services.get("remote")
-    if remote is None:
-        raise RuntimeError("cyrene_remote_desktop requires the cyrene_remote PluginPack")
-    service = RemoteDesktopService(
-        context.db_path,
-        context.data_directory,
-        remote_service=remote,
-    )
-    context.provide("remote_desktop", service)
-    context.expose_frontend("remote_desktop")
-    register_routes(context.router, service)
-
+def _session_frontend_methods(service: RemoteDesktopService) -> dict[str, Any]:
     async def cards_list(arguments: Any, _metadata: Any) -> dict[str, Any]:
         return await service.cards()
 
@@ -58,6 +46,13 @@ def setup_application(context: PluginApplicationContext) -> None:
         values = _object(arguments)
         return await service.set_quality(str(values.get("session_id") or ""), str(values.get("quality_mode") or ""))
 
+    async def mode_set(arguments: Any, _metadata: Any) -> dict[str, Any]:
+        values = _object(arguments)
+        return await service.set_mode(
+            str(values.get("session_id") or ""),
+            str(values.get("mode") or ""),
+        )
+
     async def microphone_set(arguments: Any, _metadata: Any) -> dict[str, Any]:
         values = _object(arguments)
         return await service.set_microphone(str(values.get("session_id") or ""), bool(values.get("enabled")))
@@ -69,6 +64,25 @@ def setup_application(context: PluginApplicationContext) -> None:
 
     async def credentials_request(arguments: Any, _metadata: Any) -> dict[str, Any]:
         return await service.request_credentials(str(_object(arguments).get("session_id") or ""))
+
+    return {
+        "remoteDesktop.cards.list": cards_list,
+        "remoteDesktop.session.prepare": prepare,
+        "remoteDesktop.session.connect": connect,
+        "remoteDesktop.session.reconnect": reconnect,
+        "remoteDesktop.session.disconnect": disconnect,
+        "remoteDesktop.session.get": session_get,
+        "remoteDesktop.display.list": displays,
+        "remoteDesktop.display.select": display_select,
+        "remoteDesktop.mode.set": mode_set,
+        "remoteDesktop.quality.set": quality_set,
+        "remoteDesktop.microphone.set": microphone_set,
+        "remoteDesktop.security.get": security_get,
+        "remoteDesktop.credentials.request": credentials_request,
+    }
+
+
+def _clipboard_image_frontend_methods(service: RemoteDesktopService) -> dict[str, Any]:
 
     async def clipboard_image_send(arguments: Any, _metadata: Any) -> dict[str, Any]:
         values = _object(arguments)
@@ -92,6 +106,14 @@ def setup_application(context: PluginApplicationContext) -> None:
             expected_size=max(0, int(values.get("size") or 0)),
             expected_sha256=str(values.get("sha256") or ""),
         )
+
+    return {
+        "remoteDesktop.clipboard.image.send": clipboard_image_send,
+        "remoteDesktop.clipboard.image.receive": clipboard_image_receive,
+    }
+
+
+def _clipboard_file_frontend_methods(service: RemoteDesktopService) -> dict[str, Any]:
 
     async def clipboard_files_send(arguments: Any, _metadata: Any) -> dict[str, Any]:
         values = _object(arguments)
@@ -163,6 +185,18 @@ def setup_application(context: PluginApplicationContext) -> None:
             str(values.get("offer_id") or ""),
         )
 
+    return {
+        "remoteDesktop.clipboard.files.send": clipboard_files_send,
+        "remoteDesktop.clipboard.files.upload.begin": clipboard_files_upload_begin,
+        "remoteDesktop.clipboard.files.upload.chunk": clipboard_files_upload_chunk,
+        "remoteDesktop.clipboard.files.upload.commit": clipboard_files_upload_commit,
+        "remoteDesktop.clipboard.files.upload.abort": clipboard_files_upload_abort,
+        "remoteDesktop.clipboard.files.receive": clipboard_files_receive,
+    }
+
+
+def _observation_frontend_methods(service: RemoteDesktopService) -> dict[str, Any]:
+
     async def observations(arguments: Any, _metadata: Any) -> dict[str, Any]:
         return await service.pending_observations(str(_object(arguments).get("session_id") or ""))
 
@@ -186,32 +220,33 @@ def setup_application(context: PluginApplicationContext) -> None:
     async def diagnostics(arguments: Any, _metadata: Any) -> dict[str, Any]:
         return await service.diagnostics(str(_object(arguments).get("device_id") or ""))
 
-    for name, handler in {
-        "remoteDesktop.cards.list": cards_list,
-        "remoteDesktop.session.prepare": prepare,
-        "remoteDesktop.session.connect": connect,
-        "remoteDesktop.session.reconnect": reconnect,
-        "remoteDesktop.session.disconnect": disconnect,
-        "remoteDesktop.session.get": session_get,
-        "remoteDesktop.display.list": displays,
-        "remoteDesktop.display.select": display_select,
-        "remoteDesktop.quality.set": quality_set,
-        "remoteDesktop.microphone.set": microphone_set,
-        "remoteDesktop.security.get": security_get,
-        "remoteDesktop.credentials.request": credentials_request,
-        "remoteDesktop.clipboard.image.send": clipboard_image_send,
-        "remoteDesktop.clipboard.image.receive": clipboard_image_receive,
-        "remoteDesktop.clipboard.files.send": clipboard_files_send,
-        "remoteDesktop.clipboard.files.upload.begin": clipboard_files_upload_begin,
-        "remoteDesktop.clipboard.files.upload.chunk": clipboard_files_upload_chunk,
-        "remoteDesktop.clipboard.files.upload.commit": clipboard_files_upload_commit,
-        "remoteDesktop.clipboard.files.upload.abort": clipboard_files_upload_abort,
-        "remoteDesktop.clipboard.files.receive": clipboard_files_receive,
+    return {
         "remoteDesktop.observations.list": observations,
         "remoteDesktop.observation.submit": observation_submit,
         "remoteDesktop.layout.project": layout_project,
         "remoteDesktop.diagnostics": diagnostics,
-    }.items():
+    }
+
+
+def setup_application(context: PluginApplicationContext) -> None:
+    remote = context.services.get("remote")
+    if remote is None:
+        raise RuntimeError("cyrene_remote_desktop requires the cyrene_remote PluginPack")
+    service = RemoteDesktopService(
+        context.db_path,
+        context.data_directory,
+        remote_service=remote,
+    )
+    context.provide("remote_desktop", service)
+    context.expose_frontend("remote_desktop")
+    register_routes(context.router, service)
+    methods = {
+        **_session_frontend_methods(service),
+        **_clipboard_image_frontend_methods(service),
+        **_clipboard_file_frontend_methods(service),
+        **_observation_frontend_methods(service),
+    }
+    for name, handler in methods.items():
         context.provide_frontend_method(name, handler)
 
     context.on_startup(service.start)

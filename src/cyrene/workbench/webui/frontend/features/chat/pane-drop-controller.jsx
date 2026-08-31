@@ -44,10 +44,13 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
   } else if (wbcHasPluginViewDrag(event)) {
     var pluginPayload = wbcReadPluginViewDrag(event);
     if (pluginPayload) {
+      var pluginOwnerChatId = String(pluginPayload.paneOwnerScope || "chat") === "project"
+        ? context.projectPaneOwnerKey()
+        : context.activeChatIdRef.current;
       var pluginCard = context.paneContentCard(
         "plugin-view",
         Object.assign({ projectId: context.projectId }, pluginPayload),
-        context.activeChatIdRef.current
+        pluginOwnerChatId
       );
       var existingPlugin = wbcPaneCardLocation(layout, pluginCard.id);
       var replacingPlugin = existingPlugin
@@ -102,6 +105,9 @@ function wbcHandlePaneDrop(context, event, targetCardId, edge) {
   // last rendered preview, so the visible replace/split action owns the result.
   var committedEdge = wbcCommittedPaneDropEdge(context, targetCardId, edge);
   var effectiveEdge = (layout[target.side] || []).length >= 2 ? "replace" : committedEdge;
+  var pluginPayload = wbcHasPluginViewDrag(event) ? wbcReadPluginViewDrag(event) : null;
+  var projectOwnedPlugin = String(pluginPayload && pluginPayload.paneOwnerScope || "chat") === "project";
+  var destinationOwnerId = projectOwnedPlugin ? context.projectPaneOwnerKey() : "";
   var dropped = wbcDroppedPaneCard(context, event, layout, target, targetCardId, effectiveEdge);
   if (!dropped.card) return;
   if (context.paneCardDragImageCleanupRef.current) context.paneCardDragImageCleanupRef.current();
@@ -114,10 +120,12 @@ function wbcHandlePaneDrop(context, event, targetCardId, edge) {
     return;
   }
   context.updatePaneLayout(function (current) {
+    var placementLayout = projectOwnedPlugin ? layout : current;
     return wbcPlacePaneCard(
-      current, dropped.card, target.side, effectiveEdge, dropped.sourceCardId, targetCardId
+      placementLayout, dropped.card, target.side, effectiveEdge, dropped.sourceCardId, targetCardId
     );
-  });
+  }, destinationOwnerId || undefined);
+  if (projectOwnedPlugin) context.activateProjectPaneWorkspace();
   context.setPaneCardDragId("");
   context.setResourceDragSession(false);
   context.setChatDragKind("");

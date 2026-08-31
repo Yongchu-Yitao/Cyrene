@@ -7,13 +7,12 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main id="app" class="desktop-app" data-state="idle">
+  <main id="app" class="desktop-app" data-state="connecting">
     <header class="toolbar">
       <div class="identity">
-        <span class="device-dot" aria-hidden="true"></span>
-        <span><strong id="device-name">Remote Desktop</strong><small id="status-copy" data-i18n="ready" aria-live="polite">Ready</small></span>
+        <strong id="device-name">Remote Desktop</strong>
       </div>
-      <div class="toolbar-actions">
+      <div class="toolbar-actions" hidden aria-hidden="true">
         <button id="file-button" class="icon-button" type="button" title="Send files" aria-label="Send files" data-i18n-title="sendFiles" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg></button>
         <button id="display-button" class="icon-button" type="button" title="Switch display" aria-label="Switch display" data-i18n-title="switchDisplay" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg></button>
         <button id="microphone-button" class="icon-button microphone" type="button" title="Share microphone" aria-label="Share microphone" data-i18n-title="shareMicrophone" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0m-7 7v3m-4 0h8"/></svg></button>
@@ -25,30 +24,15 @@
       <video id="remote-video" autoplay playsinline></video>
       <audio id="remote-audio" autoplay></audio>
       <textarea id="ime-input" class="ime-input" aria-label="Remote keyboard input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
-      <div id="empty-state" class="empty-state">
+      <div id="empty-state" class="empty-state" hidden>
         <div class="empty-glyph" aria-hidden="true"><svg viewBox="0 0 32 32"><rect x="3" y="5" width="26" height="18" rx="3"/><path d="M10 28h12m-6-5v5"/></svg></div>
-        <h1 id="empty-title" data-i18n="connectTitle">Connect to this desktop</h1>
-        <p id="empty-detail" data-i18n="connectDetail">The picture, audio and controls stay inside the encrypted remote session.</p>
-        <div class="mode-picker" role="radiogroup" aria-label="Connection mode" data-i18n-aria="connectionMode">
-          <button id="mode-current" class="mode active" type="button" role="radio" aria-checked="true" data-mode="current_desktop">
-            <b data-i18n="currentDesktop">Current desktop</b><span data-i18n="currentDesktopDetail">Share the signed-in session</span>
-          </button>
-          <button id="mode-login" class="mode" type="button" role="radio" aria-checked="false" data-mode="remote_login">
-            <b data-i18n="systemLogin">System login</b><span data-i18n="systemLoginDetail">Windows / Linux RDP session</span>
-          </button>
-        </div>
-        <button id="connect-button" class="primary" type="button" data-i18n="connect">Connect</button>
+        <h1 id="empty-title" data-i18n="couldNotConnect">Could not connect</h1>
+        <p id="empty-detail" data-i18n="connectionFailed">Connection failed.</p>
         <button id="retry-button" class="secondary" type="button" data-i18n="retry" hidden>Try again</button>
       </div>
-      <div id="busy-state" class="busy-state" role="status" aria-live="polite" hidden><span class="spinner" aria-hidden="true"></span><b id="busy-title" data-i18n="connecting">Connecting…</b><small id="busy-detail" data-i18n="negotiating">Negotiating a direct encrypted connection</small></div>
+      <div id="busy-state" class="busy-state" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><b id="busy-title" data-i18n="connecting">Connecting…</b><small id="busy-detail" data-i18n="negotiating">Negotiating a direct encrypted connection</small></div>
       <div id="permission-banner" class="permission-banner" role="alert" hidden></div>
     </section>
-
-    <footer class="statusbar">
-      <span id="transport-copy" data-i18n="notConnected">Not connected</span>
-      <span id="quality-copy" data-i18n="qualityAuto">Auto quality</span>
-      <span id="clipboard-copy" data-i18n="clipboardReady">Clipboard ready</span>
-    </footer>
 
     <div id="display-menu" class="popover" hidden>
       <header data-i18n="displays">Displays</header>

@@ -25,14 +25,20 @@ function wbTopbarTabKey(item) {
   return String(item && item.kind || "") + ":" + String(item && item.id || "");
 }
 
-function WorkbenchTabKindIcon({ kind }) {
-  if (kind === "terminal") {
+function WorkbenchTabKindIcon({ item }) {
+  var resolvedKind = String(item && item.kind || "");
+  var payload = item && item.payload && typeof item.payload === "object" ? item.payload : {};
+  var pluginPackId = String(payload.packId || payload.pack_id || "");
+  if (resolvedKind === "terminal") {
     return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1.8" y="2.3" width="12.4" height="11.4" rx="2"/><path d="m4.5 5.4 2 1.8-2 1.8M8.3 10h3"/></svg>;
   }
-  if (kind === "file") {
+  if (resolvedKind === "file") {
     return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M3 1.8h6l4 4v8.4H3Z"/><path d="M9 1.8v4h4"/></svg>;
   }
-  if (kind === "plugin-view") {
+  if (resolvedKind === "plugin-view" && pluginPackId === "cyrene_remote_desktop") {
+    return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.1" width="13" height="9.2" rx="1.8"/><path d="M5 14h6M8 11.3V14"/></svg>;
+  }
+  if (resolvedKind === "plugin-view") {
     return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6.2 2.2v2.1H4.1v2.1H2v3.2h2.1v2.1h2.1v2.1h3.6v-2.1h2.1V9.6H14V6.4h-2.1V4.3H9.8V2.2Z"/><circle cx="8" cy="8" r="1.7"/></svg>;
   }
   return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13.8 9.7a2.7 2.7 0 0 1-2.7 2.7H6L2.2 14V4.9a2.7 2.7 0 0 1 2.7-2.7h6.2a2.7 2.7 0 0 1 2.7 2.7Z"/><path d="M5.1 6.1h5.8M5.1 8.7h3.7"/></svg>;
@@ -765,7 +771,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
       >
         <span className={"workbench-session-overflow-icon " + String(item.activity.phase || "idle")}>{item.kind === "chat"
           ? <WorkbenchSessionStatusIcon phase={item.activity.phase} active={item.activity.isLive} />
-          : <WorkbenchTabKindIcon kind={item.kind} />}</span>
+          : <WorkbenchTabKindIcon item={item} />}</span>
         <span><b>{item.title}</b><small>{item.kind === "chat"
           ? (detail && detail !== status ? status + " · " + detail : status)
           : [kindLabel, item.projectName].filter(Boolean).join(" · ")}</small></span>
@@ -1113,7 +1119,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
             <span className={"workbench-session-activity-menu-state " + String(sessionMenuCurrentActivity.phase || "idle")}>
               {sessionMenuCurrentItem.kind === "chat"
                 ? <WorkbenchSessionStatusIcon phase={sessionMenuCurrentActivity.phase} active={sessionMenuCurrentActivity.isLive} />
-                : <WorkbenchTabKindIcon kind={sessionMenuCurrentItem.kind} />}
+                : <WorkbenchTabKindIcon item={sessionMenuCurrentItem} />}
             </span>
             <div>
               <b>{sessionMenuCurrentItem.title}</b>
@@ -1690,7 +1696,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
                 >
                   {item.kind === "chat"
                     ? <WorkbenchSessionStatusIcon phase={activity.phase} active={activity.isLive} />
-                    : <WorkbenchTabKindIcon kind={item.kind} />}
+                    : <WorkbenchTabKindIcon item={item} />}
                 </span>
                 <span className="workbench-session-tab-copy">
                   {visibleStatusText ? (

@@ -259,6 +259,61 @@ def _normalize_rdp_connect_error(result: dict[str, Any], port: int) -> dict[str,
     return result
 
 
+def _electron_display_descriptors(result: dict[str, Any]) -> tuple[DisplayDescriptor, ...]:
+    return tuple(
+        DisplayDescriptor(
+            id=str(item.get("id") or ""),
+            name=str(item.get("name") or item.get("id") or "Display"),
+            width=max(1, int(item.get("width") or 1)),
+            height=max(1, int(item.get("height") or 1)),
+            scale=max(0.1, float(item.get("scale") or 1)),
+            rotation=int(item.get("rotation") or 0),
+            primary=bool(item.get("primary")),
+            kind=str(item.get("kind") or "physical"),
+        )
+        for item in result.get("displays") or ()
+        if isinstance(item, dict) and str(item.get("id") or "")
+    )
+
+
+def _electron_probe_diagnostics(
+    result: dict[str, Any], required_denied: list[str]
+) -> list[dict[str, Any]]:
+    diagnostics = [
+        {
+            "code": f"permission_{key}_required",
+            "severity": "warning",
+            "message": f"The {key} permission is required for full remote desktop control.",
+        }
+        for key in required_denied
+    ]
+    if str(result.get("display_server") or "").lower() == "wayland" and "accessibility" in required_denied:
+        diagnostics.append(
+            {
+                "code": "wayland_input_bridge_unavailable",
+                "severity": "warning",
+                "message": "Wayland screen sharing is available, but input control requires the desktop RemoteDesktop/libei bridge or an RDP login session.",
+            }
+        )
+    if not result.get("system_audio"):
+        diagnostics.append(
+            {
+                "code": "system_audio_backend_unavailable",
+                "severity": "warning",
+                "message": "System audio capture is unavailable; install or enable the platform PipeWire/PulseAudio capture backend.",
+            }
+        )
+    if not result.get("microphone_injection"):
+        diagnostics.append(
+            {
+                "code": "microphone_injection_unavailable",
+                "severity": "info",
+                "message": "Current-desktop microphone return requires a configured virtual-audio input; ordinary speaker playback is not advertised as a microphone.",
+            }
+        )
+    return diagnostics
+
+
 class ElectronCurrentDesktopProvider:
     id = "electron-current-desktop"
 
@@ -292,58 +347,14 @@ class ElectronCurrentDesktopProvider:
                     },
                 ),
             )
-        displays = tuple(
-            DisplayDescriptor(
-                id=str(item.get("id") or ""),
-                name=str(item.get("name") or item.get("id") or "Display"),
-                width=max(1, int(item.get("width") or 1)),
-                height=max(1, int(item.get("height") or 1)),
-                scale=max(0.1, float(item.get("scale") or 1)),
-                rotation=int(item.get("rotation") or 0),
-                primary=bool(item.get("primary")),
-                kind=str(item.get("kind") or "physical"),
-            )
-            for item in result.get("displays") or ()
-            if isinstance(item, dict) and str(item.get("id") or "")
-        )
+        displays = _electron_display_descriptors(result)
         permissions = result.get("permissions") if isinstance(result.get("permissions"), dict) else {}
         required_denied = [
             key
             for key in ("screen", "accessibility")
             if str(permissions.get(key) or "granted") not in {"granted", "not_required"}
         ]
-        diagnostics = [
-            {
-                "code": f"permission_{key}_required",
-                "severity": "warning",
-                "message": f"The {key} permission is required for full remote desktop control.",
-            }
-            for key in required_denied
-        ]
-        if str(result.get("display_server") or "").lower() == "wayland" and "accessibility" in required_denied:
-            diagnostics.append(
-                {
-                    "code": "wayland_input_bridge_unavailable",
-                    "severity": "warning",
-                    "message": "Wayland screen sharing is available, but input control requires the desktop RemoteDesktop/libei bridge or an RDP login session.",
-                }
-            )
-        if not result.get("system_audio"):
-            diagnostics.append(
-                {
-                    "code": "system_audio_backend_unavailable",
-                    "severity": "warning",
-                    "message": "System audio capture is unavailable; install or enable the platform PipeWire/PulseAudio capture backend.",
-                }
-            )
-        if not result.get("microphone_injection"):
-            diagnostics.append(
-                {
-                    "code": "microphone_injection_unavailable",
-                    "severity": "info",
-                    "message": "Current-desktop microphone return requires a configured virtual-audio input; ordinary speaker playback is not advertised as a microphone.",
-                }
-            )
+        diagnostics = _electron_probe_diagnostics(result, required_denied)
         capabilities = [
             "video", "multi_monitor", "clipboard_text",
             "clipboard_image", "clipboard_file", "webrtc",
@@ -502,6 +513,87 @@ class ElectronCurrentDesktopProvider:
             "ack_clipboard_files",
             {"session_id": session_id, "offer_id": offer_id},
         )
+
+
+async def _select_rdp_target(
+    system: str,
+) -> tuple[tuple[str, int, str, str] | None, dict[str, Any] | None]:
+    try:
+        targets = await _probe_rdp_targets(system)
+    except ValueError:
+        return None, {
+            "ok": False,
+            "code": "rdp_port_invalid",
+            "error": "CYRENE_RDP_PORT must be a decimal TCP port between 1 and 65535.",
+        }
+    selected = next((item for item in targets if item[3] == "rdp"), None)
+    if selected is None:
+        selected = next(
+            (item for item in targets if item[3] == "non_rdp"),
+            targets[0] if targets else None,
+        )
+    if selected is None:
+        return None, {
+            "ok": False,
+            "code": "rdp_service_missing",
+            "error": "No supported local RDP service is installed.",
+        }
+    _backend, port, source, listener_state = selected
+    if listener_state == "non_rdp":
+        return None, {
+            "ok": False,
+            "code": "rdp_port_occupied_by_other_service",
+            "error": f"Port {port} is occupied, but the listener is not a usable RDP service.",
+            "rdp_port": port,
+            "rdp_port_source": source,
+        }
+    if listener_state != "rdp":
+        return None, {
+            "ok": False,
+            "code": "rdp_service_not_listening",
+            "error": f"No local RDP service is listening on port {port}.",
+            "rdp_port": port,
+            "rdp_port_source": source,
+        }
+    return selected, None
+
+
+def _freerdp_connection_arguments(
+    *,
+    session_id: str,
+    rdp_port: int,
+    rdp_port_source: str,
+    offer: dict[str, Any],
+    display_id: str,
+    quality_mode: QualityMode,
+    ice_servers: list[dict[str, Any]],
+    permissions: dict[str, bool] | None,
+    credentials: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "target": {"host": "127.0.0.1", "port": rdp_port, "source": rdp_port_source},
+        "local_bind": {"host": "127.0.0.1", "port": 0},
+        "offer": offer,
+        "display_id": display_id,
+        "quality_mode": quality_mode,
+        "ice_servers": ice_servers,
+        "permissions": dict(permissions or {}),
+        "credentials": {
+            "username": str(credentials.get("username") or ""),
+            "domain": str(credentials.get("domain") or ""),
+            "password": str(credentials.get("password") or ""),
+        },
+        "rdp": {
+            "tls": True,
+            "nla": True,
+            "verify_certificate": True,
+            "audio_output": True,
+            "audio_input": True,
+            "dynamic_resolution": True,
+            "drive_redirection": False,
+        },
+    }
 
 
 class FreeRdpProvider:
@@ -691,41 +783,11 @@ class FreeRdpProvider:
                 "error": "Remote login requires one-time credentials from the secure host dialog.",
                 "credential_request": True,
             }
-        system = platform.system().lower()
-        try:
-            targets = await _probe_rdp_targets(system)
-        except ValueError:
-            return {
-                "ok": False,
-                "code": "rdp_port_invalid",
-                "error": "CYRENE_RDP_PORT must be a decimal TCP port between 1 and 65535.",
-            }
-        selected = next((item for item in targets if item[3] == "rdp"), None)
-        if selected is None:
-            selected = next((item for item in targets if item[3] == "non_rdp"), targets[0] if targets else None)
-        if selected is None:
-            return {
-                "ok": False,
-                "code": "rdp_service_missing",
-                "error": "No supported local RDP service is installed.",
-            }
-        rdp_backend, rdp_port, rdp_port_source, listener_state = selected
-        if listener_state == "non_rdp":
-            return {
-                "ok": False,
-                "code": "rdp_port_occupied_by_other_service",
-                "error": f"Port {rdp_port} is occupied, but the listener is not a usable RDP service.",
-                "rdp_port": rdp_port,
-                "rdp_port_source": rdp_port_source,
-            }
-        if listener_state != "rdp":
-            return {
-                "ok": False,
-                "code": "rdp_service_not_listening",
-                "error": f"No local RDP service is listening on port {rdp_port}.",
-                "rdp_port": rdp_port,
-                "rdp_port_source": rdp_port_source,
-            }
+        selected, target_error = await _select_rdp_target(platform.system().lower())
+        if target_error is not None:
+            return target_error
+        assert selected is not None
+        _rdp_backend, rdp_port, rdp_port_source, _listener_state = selected
         process = await asyncio.create_subprocess_exec(
             self.binary,
             "--stdio-json",
@@ -740,39 +802,17 @@ class FreeRdpProvider:
             result = await self._request(
                 session_id,
                 "connect",
-                {
-                    "session_id": session_id,
-                    "target": {
-                        "host": "127.0.0.1",
-                        "port": rdp_port,
-                        "source": rdp_port_source,
-                    },
-                    # Any helper listener owned by the Sidecar must stay on
-                    # loopback and ask the OS for an ephemeral port.  It must
-                    # never compete with the system RDP service on 3389.
-                    "local_bind": {"host": "127.0.0.1", "port": 0},
-                    "offer": offer,
-                    "display_id": display_id,
-                    "quality_mode": quality_mode,
-                    "ice_servers": ice_servers,
-                    "permissions": dict(permissions or {}),
-                    # Sent through the inherited pipe only. It is never placed
-                    # in argv, the environment, a file, or an application log.
-                    "credentials": {
-                        "username": str(credentials.get("username") or ""),
-                        "domain": str(credentials.get("domain") or ""),
-                        "password": str(credentials.get("password") or ""),
-                    },
-                    "rdp": {
-                        "tls": True,
-                        "nla": True,
-                        "verify_certificate": True,
-                        "audio_output": True,
-                        "audio_input": True,
-                        "dynamic_resolution": True,
-                        "drive_redirection": False,
-                    },
-                },
+                _freerdp_connection_arguments(
+                    session_id=session_id,
+                    rdp_port=rdp_port,
+                    rdp_port_source=rdp_port_source,
+                    offer=offer,
+                    display_id=display_id,
+                    quality_mode=quality_mode,
+                    ice_servers=ice_servers,
+                    permissions=permissions,
+                    credentials=credentials,
+                ),
                 timeout=75,
             )
         finally:

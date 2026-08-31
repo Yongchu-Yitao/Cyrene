@@ -13,6 +13,7 @@ from cyrene.core.plugin import (
     PluginRegistry,
 )
 from cyrene.plugins.native_tools import seed_builtin_plugin_directory
+from cyrene.plugins.model_gateway import ensure_model_router
 
 
 _HAN_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
@@ -214,6 +215,7 @@ def test_builtin_catalog_explicitly_covers_every_plugin_description() -> None:
     catalog = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
     registry = PluginRegistry()
     assert registry.load_directory(_CATALOG_PATH.parent) == ()
+    ensure_model_router(registry)
 
     # Keep historical/compatibility translations in the catalog even after a
     # Plugin is removed; the currently registered identities must nevertheless
@@ -264,6 +266,7 @@ def test_workbench_tool_name_catalog_covers_every_registered_builtin() -> None:
 
     registry = PluginRegistry()
     assert registry.load_directory(_CATALOG_PATH.parent) == ()
+    ensure_model_router(registry)
     missing = {
         registered.plugin.canonical_name
         for registered in registry.list_plugins()

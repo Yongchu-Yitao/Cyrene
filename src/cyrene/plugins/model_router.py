@@ -423,11 +423,9 @@ def _routed_candidates(
     return [exact_candidate], "requested exact model"
 
 
-async def route_model_call(
-    arguments: dict[str, Any],
-    context: PluginContext,
-) -> dict[str, Any]:
-    """Try configured candidates by invoking their actual Provider Plugins."""
+def _route_call_inputs(
+    arguments: dict[str, Any], context: PluginContext
+) -> tuple[list[Any], list[Any] | None, str, str, list[dict[str, Any]]]:
     messages = arguments.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ValueError("messages must be a non-empty array")
@@ -441,8 +439,17 @@ async def route_model_call(
     route = str(arguments.get("route") or context.data.get("model_route") or "primary").strip().lower()
     if route not in {"primary", "secondary", "vision"}:
         raise ValueError(f"Unsupported chat model route: {route}")
-    # AgentSession already supplies the cache-friendly transcript projection.
     model_messages = messages if all(isinstance(item, dict) for item in messages) else [dict(item) for item in messages]
+    return messages, tools, session_id, route, model_messages
+
+
+async def route_model_call(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
+    """Try configured candidates by invoking their actual Provider Plugins."""
+
+    _messages, tools, session_id, route, model_messages = _route_call_inputs(arguments, context)
     candidates, candidate_context = _routed_candidates(
         session_id,
         route,

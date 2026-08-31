@@ -249,12 +249,24 @@ function PluginView(props) {
       var frame = iframeRef.current
       if (frame && frame.contentWindow) frame.contentWindow.postMessage(message, "*")
     }
+    function currentTheme() {
+      return document.documentElement.dataset.theme === "light" ? "light" : "dark"
+    }
+    function postTheme() {
+      post({ source: "cyrene-host", type: "theme", theme: currentTheme() })
+    }
     function onMessage(event) {
       var frame = iframeRef.current
       if (!frame || event.source !== frame.contentWindow) return
       if (event.origin !== window.location.origin && event.origin !== "null") return
       var message = event.data && typeof event.data === "object" ? event.data : {}
       if (message.source !== "cyrene-plugin") return
+      if (message.type === "interaction") {
+        window.dispatchEvent(new CustomEvent("cyrene:plugin-view-interaction", {
+          detail: { packId: packId, viewId: viewId, instanceId: instanceId },
+        }))
+        return
+      }
       if (message.type === "state") {
         if (typeof props.onStateChange === "function") props.onStateChange(message.state)
         return
@@ -284,6 +296,10 @@ function PluginView(props) {
       }
       if (message.type !== "call") return
       var requestId = String(message.requestId || "")
+      var requestedTimeout = Number(message.timeoutMs)
+      var requestTimeout = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+        ? Math.max(1000, Math.min(300000, Math.round(requestedTimeout)))
+        : undefined
       workbenchServices.api().json(
         "/api/plugins/packs/" + encodeURIComponent(packId) + "/call",
         {
@@ -295,6 +311,7 @@ function PluginView(props) {
             project_id: projectId,
           }),
           toast: false,
+          timeout: requestTimeout,
         }
       ).then(function (response) {
         post({ source: "cyrene-host", type: "response", requestId: requestId, ok: true, result: response && response.result })
@@ -303,8 +320,27 @@ function PluginView(props) {
       })
     }
     window.addEventListener("message", onMessage)
-    return function () { window.removeEventListener("message", onMessage) }
+    var themeObserver = new MutationObserver(postTheme)
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+    return function () {
+      window.removeEventListener("message", onMessage)
+      themeObserver.disconnect()
+    }
   }, [packId, projectId, instanceId, props.onStateChange, view])
+
+  var pluginViewCommand = payload.state && payload.state.pluginViewCommand
+  var pluginViewCommandId = String(pluginViewCommand && pluginViewCommand.id || "")
+  useEffect(function () {
+    if (!pluginViewCommandId || !iframeRef.current || !iframeRef.current.contentWindow) return
+    iframeRef.current.contentWindow.postMessage({
+      source: "cyrene-host",
+      type: "command",
+      command: pluginViewCommand,
+    }, "*")
+    if (typeof props.onStateChange === "function") {
+      window.setTimeout(function () { props.onStateChange({ pluginViewCommand: null }) }, 0)
+    }
+  }, [pluginViewCommandId])
 
   if (registry.loading && !registry.loaded) {
     return <div className="wbc-plugin-view-state" role="status">{pluginLocalizedField({ title: "Loading Plugin…", i18n: { zh: { title: "正在加载插件…" } } }, "title")}</div>
@@ -338,6 +374,7 @@ function PluginView(props) {
           viewId: viewId,
           instanceId: instanceId,
           language: String(document.documentElement.lang || navigator.language || "en"),
+          theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
           state: payload.state == null ? null : payload.state,
         },
       }, "*")

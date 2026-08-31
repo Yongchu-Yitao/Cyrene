@@ -2821,6 +2821,10 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   background: var(--wb-flyout-bg);
   box-shadow: var(--wb-flyout-shadow);
 }
+.wbc-side-split-grip-menu.has-contributions {
+  width: 260px;
+  max-width: calc(100vw - 24px);
+}
 .wbc-side-split-grip-menu button {
   display: flex;
   align-items: center;
@@ -2838,6 +2842,111 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-side-split-grip-menu button:hover {
   background: var(--wb-row-hover-bg);
 }
+.wbc-side-split-grip-menu button:disabled {
+  opacity: .44;
+  cursor: default;
+}
+.wbc-side-split-grip-menu button:disabled:hover {
+  background: transparent;
+}
+.wbc-side-split-grip-settings {
+  margin: 0 4px 6px;
+  padding: 3px 8px 7px;
+}
+.wbc-side-split-grip-information {
+  margin: 0 4px 7px;
+  padding: 3px 8px 5px;
+}
+.wbc-side-split-grip-information-details,
+.wbc-side-split-grip-information-facts {
+  margin: 0;
+}
+.wbc-side-split-grip-information-details {
+  display: grid;
+  gap: 1px;
+}
+.wbc-side-split-grip-information-details > div {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 25px;
+  align-items: center;
+}
+.wbc-side-split-grip-information-details dt,
+.wbc-side-split-grip-information-details dd,
+.wbc-side-split-grip-information-facts dt,
+.wbc-side-split-grip-information-facts dd {
+  margin: 0;
+}
+.wbc-side-split-grip-information-details dt {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+}
+.wbc-side-split-grip-information-details dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 590;
+  text-align: right;
+}
+.wbc-side-split-grip-information-details dd.is-success {
+  color: var(--wb-green);
+}
+.wbc-side-split-grip-information-details dd.is-danger {
+  color: var(--wb-danger, #d85d5d);
+}
+.wbc-side-split-grip-information-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 7px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 46%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 48%, transparent);
+}
+.wbc-side-split-grip-information-facts > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 7px;
+}
+.wbc-side-split-grip-information-facts dt {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-information-facts dd {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-setting + .wbc-side-split-grip-setting {
+  margin-top: 10px;
+}
+.wbc-side-split-grip-setting-label {
+  display: block;
+  padding: 3px 1px 5px;
+  color: var(--wb-faint);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+}
+.wbc-side-split-grip-setting > [role="group"] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+.wbc-side-split-grip-setting button.is-selected {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-row-hover-bg));
+}
 .wbc-side-split-grip-menu button > span:first-child {
   display: inline-flex;
   flex: 0 0 32px;
@@ -2852,6 +2961,18 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-side-split-grip-menu button > span:first-child svg {
   display: block;
   flex: 0 0 auto;
+}
+.wbc-side-split-grip-setting button {
+  min-width: 0;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 6px;
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 56%, transparent);
+}
+.wbc-side-split-grip-setting button > span:first-child {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 16px;
 }
 
 /* Mirror grip on the conversation column's top edge: reposition the split

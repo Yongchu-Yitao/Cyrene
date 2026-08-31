@@ -338,42 +338,40 @@ async def _test_connection(
     return {"connected": True, "adapter": adapter, "model_count": len(models)}
 
 
+def _test_profile_context(
+    connection: dict[str, Any], profile: Any
+) -> tuple[dict[str, Any], str, set[str], str, str]:
+    if not isinstance(profile, dict):
+        raise ValueError("model profile is required")
+    normalized = normalize_model_configuration({
+        "connections": [connection],
+        "profiles": [profile],
+        "routes": {"primary": [], "secondary": [], "vision": [], "embedding": []},
+    })
+    normalized_profile = normalized["profiles"][0]
+    model = str(normalized_profile.get("model") or "").strip()
+    if not model:
+        raise ValueError("model id is required")
+    capabilities = {
+        str(item or "").strip().lower()
+        for item in (normalized_profile.get("capabilities") or [])
+        if str(item or "").strip()
+    }
+    adapter = str(connection.get("adapter") or "").strip().lower()
+    options = connection.get("options") if isinstance(connection.get("options"), dict) else {}
+    provider_preset = str(options.get("provider_preset") or "").strip().lower()
+    return normalized_profile, model, capabilities, adapter, provider_preset
+
+
 async def _test_model(
     connection: dict[str, Any],
     profile: Any,
     *,
     service: ModelConfigurationApplicationService | None = None,
 ) -> dict[str, Any]:
-    if not isinstance(profile, dict):
-        raise ValueError("model profile is required")
-    normalized = normalize_model_configuration({
-        "connections": [connection],
-        "profiles": [profile],
-        "routes": {
-            "primary": [],
-            "secondary": [],
-            "vision": [],
-            "embedding": [],
-        },
-    })
-    profile = normalized["profiles"][0]
-    model = str(profile.get("model") or "").strip()
-    if not model:
-        raise ValueError("model id is required")
-    capabilities = {
-        str(item or "").strip().lower()
-        for item in (profile.get("capabilities") or [])
-        if str(item or "").strip()
-    }
-    adapter = str(connection.get("adapter") or "").strip().lower()
-    connection_options = (
-        connection.get("options")
-        if isinstance(connection.get("options"), dict)
-        else {}
+    profile, model, capabilities, adapter, provider_preset = _test_profile_context(
+        connection, profile
     )
-    provider_preset = str(
-        connection_options.get("provider_preset") or ""
-    ).strip().lower()
     if service is None:
         from cyrene.plugins.model_catalog import resolve_model_plugin
 
@@ -609,6 +607,17 @@ def register_model_configuration_routes(
             )
         return {"ok": True, **result}
 
+    _register_model_discovery_route(router, service)
+
+
+__all__ = [
+    "ModelConfigurationApplicationService",
+    "register_model_configuration_routes",
+]
+def _register_model_discovery_route(
+    router: APIRouter,
+    service: ModelConfigurationApplicationService | None,
+) -> None:
     @router.post("/api/settings/model-config/connections/{connection_id}/discover")
     async def api_discover_connection_models(connection_id: str, request: Request):
         try:
@@ -676,9 +685,3 @@ def register_model_configuration_routes(
                 code="invalid_model_connection",
             )
         return {"ok": True, "models": models}
-
-
-__all__ = [
-    "ModelConfigurationApplicationService",
-    "register_model_configuration_routes",
-]

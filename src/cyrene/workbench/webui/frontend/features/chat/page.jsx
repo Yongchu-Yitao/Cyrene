@@ -290,6 +290,10 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   var isCurrentChatListRequest = requestSequencer.isCurrentList;
   var [activeChatId, setActiveChatId] = useWbcState("");
   var activeChatIdRef = useWbcRef("");
+  // Project-owned panes (for example Remote Desktop) are a workspace mode,
+  // not a synthetic conversation. Keep that intent across background chat
+  // list refreshes while the active chat id is deliberately empty.
+  var projectPaneActiveRef = useWbcRef(false);
   var [selectedWorkspaceTabKey, setSelectedWorkspaceTabKey] = useWbcState("");
   var workspaceTabRefreshRequestRef = useWbcRef(0);
   // The active conversation card is keyed by chat id and remounts after a
@@ -363,6 +367,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   function selectChat(chatId) {
     var nextId = String(chatId || "");
     var previousId = String(activeChatIdRef.current || "");
+    projectPaneActiveRef.current = false;
     setRailSelectionSuppressed(false);
     setRailMode("chat");
     restoreTerminalReplacement(previousId);
@@ -372,6 +377,15 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     activeChatIdRef.current = nextId;
     setSelectedWorkspaceTabKey("");
     setActiveChatId(nextId);
+  }
+  function activateProjectPaneWorkspace() {
+    var previousId = String(activeChatIdRef.current || "");
+    projectPaneActiveRef.current = true;
+    activeChatIdRef.current = "";
+    setRailSelectionSuppressed(true);
+    setSelectedWorkspaceTabKey("");
+    setActiveChatId("");
+    if (previousId) restoreTerminalReplacement(previousId);
   }
   var [activeChat, setActiveChat] = useWbcState(null);
   var [loading, setLoading] = useWbcState(true);
@@ -1055,6 +1069,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         selectionAtRequest,
         activeChatIdRef.current
       );
+      if (!selectId && projectPaneActiveRef.current) targetId = null;
       if (targetId !== null) selectChat(targetId);
       return list;
     }).finally(function () {
@@ -2051,6 +2066,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       setActiveTerminalId: setActiveTerminalId, setPaneCardDragId: setPaneCardDragId,
       setResourceDragSession: setResourceDragSession, setChatDragKind: setChatDragKind,
       setPaneDropTarget: setPaneDropTarget, selectChat: selectChat,
+      activateProjectPaneWorkspace: activateProjectPaneWorkspace,
     };
   }
   function handlePaneDrop(event, targetCardId, edge) {
@@ -2073,7 +2089,20 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     if (wbcHasPluginViewDrag(event)) {
       var pluginPayload = wbcReadPluginViewDrag(event);
       if (pluginPayload) {
-        openPaneContent("plugin-view", Object.assign({ projectId: projectId }, pluginPayload), { side: "right" });
+        var projectOwned = String(pluginPayload.paneOwnerScope || "chat") === "project";
+        var projectOwnerId = projectOwned ? projectPaneOwnerKey() : "";
+        if (projectOwned && activeChatIdRef.current) {
+          updatePaneLayout(paneLayoutFor(activeChatIdRef.current), projectOwnerId);
+        }
+        if (projectOwned) activateProjectPaneWorkspace();
+        var openedCard = openPaneContent(
+          "plugin-view",
+          Object.assign({ projectId: projectId }, pluginPayload),
+          { side: "right", ownerChatId: projectOwnerId || undefined }
+        );
+        if (projectOwned && openedCard) {
+          setSelectedWorkspaceTabKey("plugin-view:" + String(openedCard.id || ""));
+        }
       }
       return;
     }
@@ -2852,6 +2881,12 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     }
     if (request.action === "open") {
       var ownerChatId = String(location.ownerChatId || "");
+      if (!ownerChatId) {
+        if (!projectPaneActiveRef.current) activateProjectPaneWorkspace();
+        setSelectedWorkspaceTabKey(String(item.kind || "") + ":" + String(item.id || ""));
+        complete();
+        return;
+      }
       if (ownerChatId !== String(activeChatId || "")) {
         selectChat(ownerChatId);
         return;
@@ -2998,14 +3033,37 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     } else if (card.kind === "plugin-view") {
       var pluginPaneState = card.payload && card.payload.state && typeof card.payload.state === "object"
         ? card.payload.state : {};
-      var pluginPaneMenu = (Array.isArray(pluginPaneState.paneMenu) ? pluginPaneState.paneMenu : []).filter(function (contribution) {
-        if (!contribution || contribution.requires_session !== true) return true;
+      var pluginPaneMenu = (Array.isArray(pluginPaneState.paneMenu) ? pluginPaneState.paneMenu : []).filter(Boolean).map(function (contribution) {
+        var requiredState = String(contribution && contribution.requires_state || "");
         var sessionKey = String(contribution.session_key || "session_id");
-        return Boolean(pluginPaneState[sessionKey]);
-      }).map(function (contribution) {
+        var disabled = Boolean(
+          (requiredState && !pluginPaneState[requiredState])
+          || (contribution.requires_session === true && !pluginPaneState[sessionKey])
+        );
+        var availableKey = String(contribution && contribution.available_values_state_key || "");
+        var availableValues = availableKey && Array.isArray(pluginPaneState[availableKey])
+          ? pluginPaneState[availableKey].map(String) : null;
         return Object.assign({}, contribution, {
+          disabled: disabled,
           label: pluginLocalizedField(contribution, "label") || String(contribution && contribution.id || "Settings"),
-          options: (Array.isArray(contribution && contribution.options) ? contribution.options : []).map(function (option) {
+          fields: (Array.isArray(contribution && contribution.fields) ? contribution.fields : []).map(function (field) {
+            var rawValue = pluginPaneState[String(field && field.state_key || "")];
+            var valueLabel = (Array.isArray(field && field.value_labels) ? field.value_labels : []).find(function (candidate) {
+              return String(candidate && candidate.value || "") === String(rawValue == null ? "" : rawValue);
+            });
+            return Object.assign({}, field, {
+              label: pluginLocalizedField(field, "label") || String(field && field.state_key || ""),
+              tone: String(valueLabel && valueLabel.tone || ""),
+              value: valueLabel
+                ? pluginLocalizedField(valueLabel, "label")
+                : String(rawValue == null || rawValue === ""
+                  ? pluginLocalizedField(field, "empty_label") || "—"
+                  : rawValue),
+            });
+          }),
+          options: (Array.isArray(contribution && contribution.options) ? contribution.options : []).filter(function (option) {
+            return !availableValues || availableValues.indexOf(String(option && option.value || "")) >= 0;
+          }).map(function (option) {
             return Object.assign({}, option, { label: pluginLocalizedField(option, "label") || String(option && option.value || "") });
           }),
         });
@@ -3021,6 +3079,17 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         });
       }
       function invokePluginPaneMenu(contribution, value) {
+        var frontendAction = String(contribution && contribution.frontend_action || "");
+        if (frontendAction) {
+          updatePluginPaneState({
+            pluginViewCommand: {
+              id: String(Date.now()) + "-" + Math.random().toString(36).slice(2),
+              action: frontendAction,
+              value: value,
+            },
+          });
+          return Promise.resolve({ ok: true });
+        }
         var currentState = card.payload && card.payload.state || {};
         var sessionKey = String(contribution && contribution.session_key || "session_id");
         var argumentKey = String(contribution && contribution.argument_key || contribution && contribution.state_key || "value");
@@ -3032,8 +3101,12 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
           args,
           projectId
         ).then(function (result) {
-          if (result && result.session) updatePluginPaneState(result.session);
-          else updatePluginPaneState({ [String(contribution.state_key || argumentKey)]: value });
+          var stateKey = String(contribution.state_key || argumentKey);
+          var nextState = Object.assign({}, result && result.session || {}, { [stateKey]: value });
+          if (contribution && contribution.reload_view === true) {
+            nextState.pluginViewRevision = Date.now();
+          }
+          updatePluginPaneState(nextState);
           return result;
         });
       }
@@ -3054,7 +3127,12 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       content = <section className="wbc-side-agent-split wbc-plugin-view-pane" aria-label={String(card.payload && card.payload.title || "Plugin")}>
         <div className="wbc-plugin-view-host-strip" aria-hidden="true" />
         <div className="wbc-plugin-view-content">
-          <PluginView projectId={projectId} payload={card.payload} onStateChange={updatePluginPaneState} />
+          <PluginView
+            key={String(pluginPaneState.pluginViewRevision || "initial")}
+            projectId={projectId}
+            payload={card.payload}
+            onStateChange={updatePluginPaneState}
+          />
         </div>
       </section>;
     } else {
@@ -3300,9 +3378,39 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         onDeleteTerminal={deleteTerminal}
         onUpdateTerminalLayout={updateTerminalLayout}
         onOpenPluginView={function (payload, options) {
-          activateWorkspace();
+          var ownerScope = String(options && options.ownerScope || payload && payload.paneOwnerScope || "chat");
+          var projectOwned = ownerScope === "project";
+          var projectOwnerId = projectOwned ? projectPaneOwnerKey() : "";
+          var requestedOptions = Object.assign({}, options || {}, projectOwned ? {
+            ownerChatId: projectOwnerId,
+          } : {});
+          var payloadPackId = String(payload && (payload.packId || payload.pack_id) || "");
+          var payloadViewId = String(payload && (payload.viewId || payload.view_id) || "");
+          var payloadInstanceId = String(payload && (payload.instanceId || payload.instance_id) || "");
+          function matchesRequestedPlugin(card) {
+            var candidate = card && card.kind === "plugin-view" ? card.payload || {} : {};
+            return card && card.kind === "plugin-view"
+              && String(candidate.packId || candidate.pack_id || "") === payloadPackId
+              && String(candidate.viewId || candidate.view_id || "") === payloadViewId
+              && String(candidate.instanceId || candidate.instance_id || "") === payloadInstanceId;
+          }
           if (options && options.replaceWorkspace) {
-            paneLayoutFor(activeChatId).left.concat(paneLayoutFor(activeChatId).right).forEach(function (existingCard) {
+            var replacementLayout = paneLayoutFor(projectOwned ? projectOwnerId : activeChatId);
+            var replacedCards = replacementLayout.left.concat(replacementLayout.right);
+            if (projectOwned) {
+              Object.keys(paneLayoutsByChat).forEach(function (ownerId) {
+                if (ownerId === projectOwnerId) return;
+                var layout = paneLayoutsByChat[ownerId] || {};
+                replacedCards = replacedCards.concat(
+                  (layout.left || []).concat(layout.right || []).filter(matchesRequestedPlugin)
+                );
+              });
+            }
+            var closedCardIds = {};
+            replacedCards.forEach(function (existingCard) {
+              var existingCardId = String(existingCard && existingCard.id || "");
+              if (existingCardId && closedCardIds[existingCardId]) return;
+              if (existingCardId) closedCardIds[existingCardId] = true;
               var existingState = existingCard && existingCard.kind === "plugin-view"
                 && existingCard.payload && existingCard.payload.state || {};
               var closeMethod = String(existingState && existingState.closeMethod || "");
@@ -3315,12 +3423,34 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
                 projectId
               ).catch(function () {});
             });
+            if (projectOwned) {
+              setPaneLayoutsByChat(function (current) {
+                var next = {};
+                Object.keys(current).forEach(function (ownerId) {
+                  var layout = current[ownerId] || {};
+                  next[ownerId] = Object.assign({}, layout, {
+                    left: (layout.left || []).filter(function (card) {
+                      return ownerId === projectOwnerId || !matchesRequestedPlugin(card);
+                    }),
+                    right: (layout.right || []).filter(function (card) {
+                      return ownerId === projectOwnerId || !matchesRequestedPlugin(card);
+                    }),
+                  });
+                });
+                return next;
+              });
+            }
           }
-          return openPaneContent(
-            "plugin-view",
+          activateWorkspace();
+          if (projectOwned) activateProjectPaneWorkspace();
+          var openedCard = openPaneContent("plugin-view",
             Object.assign({ projectId: projectId }, payload || {}),
-            options || {}
+            requestedOptions
           );
+          if (projectOwned && openedCard) {
+            setSelectedWorkspaceTabKey("plugin-view:" + String(openedCard.id || ""));
+          }
+          return openedCard;
         }}
         onOpenSplit={function (chatId, options) {
           activateWorkspace();

@@ -2,7 +2,6 @@ const {
   BrowserWindow,
   clipboard,
   desktopCapturer,
-  dialog,
   ipcMain,
   nativeImage,
   powerMonitor,
@@ -931,46 +930,6 @@ class RemoteDesktopManager {
     finally { this.sessions.delete('__local__'); }
   }
 
-  async requestApproval(args) {
-    const language = String(this.getLanguage() || 'en').toLowerCase();
-    const zh = language.startsWith('zh');
-    const controllerName = String(args.controller_name || '').trim().slice(0, 160)
-      || (zh ? '已配对设备' : 'Paired device');
-    const mode = String(args.mode || 'current_desktop');
-    const canControl = args.can_control === true;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 55_000);
-    let result;
-    try {
-      const options = {
-        type: 'question',
-        title: zh ? '远程桌面连接请求' : 'Remote Desktop request',
-        message: zh
-          ? `${controllerName} 请求${mode === 'remote_login' ? '打开系统登录会话' : canControl ? '查看并控制当前桌面' : '查看当前桌面'}。`
-          : `${controllerName} wants to ${mode === 'remote_login' ? 'open a system login session' : canControl ? 'view and control this desktop' : 'view this desktop'}.`,
-        detail: zh
-          ? '仅在你确认后建立连接。连接期间会持续显示状态窗口，可随时紧急断开。'
-          : 'The connection starts only after you approve it. A persistent status window lets you disconnect at any time.',
-        buttons: [zh ? '拒绝' : 'Deny', zh ? '允许' : 'Allow'],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-        signal: controller.signal,
-      };
-      const owner = this.getMainWindow();
-      result = owner && !owner.isDestroyed()
-        ? await dialog.showMessageBox(owner, options)
-        : await dialog.showMessageBox(options);
-    } catch (_) {
-      return { ok: false, code: 'desktop_target_approval_timeout' };
-    } finally {
-      clearTimeout(timeout);
-    }
-    return result && result.response === 1
-      ? { ok: true, approved: true }
-      : { ok: false, approved: false, code: 'desktop_target_denied' };
-  }
-
   async showIndicator(args) {
     const sessionId = String(args.session_id || '');
     if (!/^rdh_[0-9a-f]{32}$/.test(sessionId)) {
@@ -1180,7 +1139,6 @@ class RemoteDesktopManager {
       case 'write_clipboard_files': return this.writeClipboardFiles(args);
       case 'write_local_clipboard_files': return this.writeLocalClipboardFiles(args);
       case 'request_credentials': return this.requestCredentials(args);
-      case 'request_approval': return this.requestApproval(args);
       case 'show_indicator': return this.showIndicator(args);
       case 'hide_indicator': return this.hideIndicator(args);
       case 'consume_forced_disconnects': return this.consumeForcedDisconnects();

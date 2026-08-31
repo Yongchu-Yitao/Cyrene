@@ -22,13 +22,9 @@ from PIL import Image
 
 from cyrene.core.plugin import application_plugin_service
 from cyrene.observability import debug
-from cyrene.plugins.builtin.cyrene_remote.control import get_remote_gateway
-
 from .contracts import (
     QUALITY_MODES,
     REMOTE_DESKTOP_PROTOCOL_VERSION,
-    DesktopMode,
-    QualityMode,
     SnapshotRegion,
 )
 from .electron_bridge import electron_desktop_rpc
@@ -146,6 +142,7 @@ class RemoteDesktopService:
             / "cyrene_remote_desktop"
             / "snapshots"
         )
+
         self.snapshot_directory.mkdir(parents=True, exist_ok=True)
         self.clipboard_directory = (
             Path(data_directory).expanduser().resolve()
@@ -163,7 +160,14 @@ class RemoteDesktopService:
         # closes media and credentials instead of reviving a stale controller.
         self._host_sessions: dict[str, dict[str, Any]] = {}
         self._forced_disconnect_cooldowns: dict[str, float] = {}
-        self._reconnect_approval_grace: dict[str, float] = {}
+
+    def _peer_transport(self) -> Any | None:
+        """Resolve Remote's live transport through the application service.
+
+        The service boundary remains valid when Plugin packs are loaded or
+        refreshed under separate isolated module generations.
+        """
+        return getattr(self.remote_service, "peer_transport", None)
 
     async def start(self) -> None:
         self._cleanup_snapshot_directory()
@@ -365,7 +369,7 @@ class RemoteDesktopService:
     async def cards(self) -> dict[str, Any]:
         remote_store = getattr(self.remote_service, "store", None)
         peers = await asyncio.to_thread(remote_store.list_peers) if remote_store is not None else []
-        gateway = get_remote_gateway(self.db_path)
+        gateway = self._peer_transport()
         cards: list[dict[str, Any]] = []
         now = time.time()
         for peer in peers:
@@ -409,9 +413,10 @@ class RemoteDesktopService:
                         )
                         if capability in capabilities
                     ],
+                    "preferred_mode": preference["preferred_mode"],
                     "quality_mode": preference["quality_mode"],
                     "session_id": str(current.get("session_id") or "") if current else "",
-                    "icon_text": "▣",
+                    "icon_name": "remoteDevice",
                 }
             )
         return {"revision": int(time.time() * 1000), "cards": cards}
@@ -496,7 +501,7 @@ class RemoteDesktopService:
     async def prepare(self, device_id: str) -> dict[str, Any]:
         self._require_peer_capability(device_id, "desktop:session_connect")
         remote_probe: dict[str, Any] = {}
-        gateway = get_remote_gateway(self.db_path)
+        gateway = self._peer_transport()
         if gateway is not None:
             try:
                 response = await gateway.request(
@@ -522,6 +527,93 @@ class RemoteDesktopService:
             "network": network,
             "preference": self.store.preference(device_id),
             "remote_probe": remote_probe,
+        }
+
+    async def _negotiate_connection(
+        self,
+        *,
+        values: dict[str, Any],
+        device_id: str,
+        mode: str,
+        quality: str,
+        session_id: str,
+        session: dict[str, Any],
+        preference: dict[str, Any],
+        credential_handle: str,
+    ) -> dict[str, Any]:
+        self.store.audit("session_requested", session_id=session_id, device_id=device_id, outcome="pending", detail={"mode": mode})
+        await self._publish_session(session)
+        gateway = self._peer_transport()
+        if gateway is None:
+            self.store.update_session(session_id, state="failed", last_error_code="remote_transport_unavailable")
+            raise RemoteDesktopError("remote_transport_unavailable", "The Remote transport is unavailable.", 503)
+        payload = {
+            "protocol_version": REMOTE_DESKTOP_PROTOCOL_VERSION,
+            "controller_session_id": session_id,
+            "mode": mode,
+            "offer": values["offer"],
+            "display_id": str(values.get("display_id") or preference["preferred_display_id"] or ""),
+            "quality_mode": quality,
+            "ice_servers": self._ice_servers(session_id),
+        }
+        credentials: dict[str, str] | None = None
+        if mode == "remote_login":
+            if not credential_handle:
+                updated = self.store.update_session(session_id, state="waiting_credentials", last_error_code="desktop_credentials_required")
+                await self._publish_session(updated)
+                return {
+                    "ok": False,
+                    "code": "desktop_credentials_required",
+                    "error": "Remote login requires credentials from the secure desktop dialog.",
+                    "session": self._session_public(updated),
+                }
+            credentials = self.credentials.take(credential_handle)
+            payload["credentials"] = credentials
+        try:
+            response = await gateway.request(device_id, command="desktop.negotiate", payload=payload, idempotency_key=session_id, timeout=75)
+        except Exception as exc:
+            logger.info("Remote desktop negotiation failed", exc_info=True)
+            self.store.update_session(session_id, state="failed", last_error_code="desktop_negotiation_failed", disconnected_at=utc_iso())
+            await self._publish_session(self.store.get_session(session_id) or session)
+            raise RemoteDesktopError("desktop_negotiation_failed", "Could not establish the remote desktop media session.", 409) from exc
+        finally:
+            if credentials is not None:
+                for key in tuple(credentials):
+                    credentials[key] = ""
+                credentials.clear()
+        if response.get("ok") is False:
+            code = str(response.get("code") or "desktop_negotiation_failed")
+            next_state = "waiting_credentials" if code == "desktop_credentials_required" else "failed"
+            updated = self.store.update_session(session_id, state=next_state, last_error_code=code)
+            await self._publish_session(updated)
+            return {"ok": False, "code": code, "error": str(response.get("error") or "Connection failed"), "session": self._session_public(updated)}
+        return await self._finish_connection(device_id, mode, quality, session_id, response)
+
+    async def _finish_connection(
+        self, device_id: str, mode: str, quality: str, session_id: str, response: dict[str, Any]
+    ) -> dict[str, Any]:
+        display = response.get("display") if isinstance(response.get("display"), dict) else {}
+        updated = self.store.update_session(
+            session_id,
+            remote_session_id=str(response.get("remote_session_id") or ""),
+            provider_id=str(response.get("provider_id") or ""),
+            state="connected",
+            selected_display_id=str(display.get("id") or ""),
+            display=display,
+            transport_kind=str(response.get("transport_kind") or "p2p"),
+            secure_surface=bool(response.get("secure_surface")),
+            connected_at=utc_iso(),
+            last_error_code="",
+        )
+        self.store.update_preference(device_id, preferred_mode=mode, quality_mode=quality, preferred_display_id=str(display.get("id") or ""))
+        self.store.audit("session_connected", session_id=session_id, device_id=device_id, outcome="ok", detail={"provider_id": updated["provider_id"], "transport_kind": updated["transport_kind"]})
+        await self._publish_session(updated)
+        return {
+            "ok": True,
+            "session": self._session_public(updated),
+            "answer": response.get("answer"),
+            "permissions": dict(response.get("permissions") or {}) if isinstance(response.get("permissions"), dict) else {},
+            "ice_servers": self._ice_servers(session_id),
         }
 
     async def connect(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -601,104 +693,22 @@ class RemoteDesktopService:
                     "clipboard_enabled": preference["clipboard_enabled"],
                 }
             )
-        self.store.audit("session_requested", session_id=session_id, device_id=device_id, outcome="pending", detail={"mode": mode})
-        await self._publish_session(session)
-        gateway = get_remote_gateway(self.db_path)
-        if gateway is None:
-            self.store.update_session(session_id, state="failed", last_error_code="remote_transport_unavailable")
-            raise RemoteDesktopError(
-                "remote_transport_unavailable", "The Remote transport is unavailable.", 503
-            )
-        payload = {
-            "protocol_version": REMOTE_DESKTOP_PROTOCOL_VERSION,
-            "controller_session_id": session_id,
-            "mode": mode,
-            "offer": offer,
-            "display_id": str(values.get("display_id") or preference["preferred_display_id"] or ""),
-            "quality_mode": quality,
-            "ice_servers": self._ice_servers(session_id),
-        }
-        credentials: dict[str, str] | None = None
-        if mode == "remote_login":
-            if not credential_handle:
-                updated = self.store.update_session(
-                    session_id,
-                    state="waiting_credentials",
-                    last_error_code="desktop_credentials_required",
-                )
-                await self._publish_session(updated)
-                return {
-                    "ok": False,
-                    "code": "desktop_credentials_required",
-                    "error": "Remote login requires credentials from the secure desktop dialog.",
-                    "session": self._session_public(updated),
-                }
-            credentials = self.credentials.take(credential_handle)
-            payload["credentials"] = credentials
-        try:
-            response = await gateway.request(
-                device_id,
-                command="desktop.negotiate",
-                payload=payload,
-                idempotency_key=session_id,
-                timeout=75,
-            )
-        except Exception as exc:
-            logger.info("Remote desktop negotiation failed", exc_info=True)
-            self.store.update_session(
-                session_id,
-                state="failed",
-                last_error_code="desktop_negotiation_failed",
-                disconnected_at=utc_iso(),
-            )
-            await self._publish_session(self.store.get_session(session_id) or session)
-            raise RemoteDesktopError(
-                "desktop_negotiation_failed", "Could not establish the remote desktop media session.", 409
-            ) from exc
-        finally:
-            if credentials is not None:
-                for key in tuple(credentials):
-                    credentials[key] = ""
-                credentials.clear()
-        if response.get("ok") is False:
-            code = str(response.get("code") or "desktop_negotiation_failed")
-            next_state = "waiting_credentials" if code == "desktop_credentials_required" else "failed"
-            updated = self.store.update_session(session_id, state=next_state, last_error_code=code)
-            await self._publish_session(updated)
-            return {"ok": False, "code": code, "error": str(response.get("error") or "Connection failed"), "session": self._session_public(updated)}
-        display = response.get("display") if isinstance(response.get("display"), dict) else {}
-        updated = self.store.update_session(
-            session_id,
-            remote_session_id=str(response.get("remote_session_id") or ""),
-            provider_id=str(response.get("provider_id") or ""),
-            state="connected",
-            selected_display_id=str(display.get("id") or ""),
-            display=display,
-            transport_kind=str(response.get("transport_kind") or "p2p"),
-            secure_surface=bool(response.get("secure_surface")),
-            connected_at=utc_iso(),
-            last_error_code="",
+        return await self._negotiate_connection(
+            values=values,
+            device_id=device_id,
+            mode=mode,
+            quality=quality,
+            session_id=session_id,
+            session=session,
+            preference=preference,
+            credential_handle=credential_handle,
         )
-        self.store.update_preference(device_id, preferred_mode=mode, quality_mode=quality, preferred_display_id=str(display.get("id") or ""))
-        self.store.audit("session_connected", session_id=session_id, device_id=device_id, outcome="ok", detail={"provider_id": updated["provider_id"], "transport_kind": updated["transport_kind"]})
-        await self._publish_session(updated)
-        return {
-            "ok": True,
-            "session": self._session_public(updated),
-            "answer": response.get("answer"),
-            "permissions": (
-                dict(response.get("permissions") or {})
-                if isinstance(response.get("permissions"), dict)
-                else {}
-            ),
-            "ice_servers": self._ice_servers(session_id),
-        }
 
     async def reconnect(self, session_id: str, offer: dict[str, Any]) -> dict[str, Any]:
         previous = self.store.get_session(session_id)
         if previous is None:
             raise RemoteDesktopError("desktop_session_not_found", "Remote desktop session not found", 404)
-        await self.disconnect(session_id, notify_remote=True, reconnecting=True)
+        await self.disconnect(session_id, notify_remote=True)
         return await self.connect(
             {
                 "device_id": previous["device_id"],
@@ -722,7 +732,7 @@ class RemoteDesktopService:
         if session is None:
             return {"ok": True, "disconnected": False, "session_id": session_id}
         if notify_remote and session.get("remote_session_id"):
-            gateway = get_remote_gateway(self.db_path)
+            gateway = self._peer_transport()
             if gateway is not None:
                 try:
                     await gateway.request(
@@ -767,6 +777,39 @@ class RemoteDesktopService:
         await self._publish("remote_desktop_displays_changed", session=updated)
         return {"ok": True, "session": self._session_public(updated), "display": display}
 
+    async def set_mode(self, session_id: str, mode: str) -> dict[str, Any]:
+        if mode not in {"current_desktop", "remote_login"}:
+            raise RemoteDesktopError("desktop_mode_invalid", "Unsupported desktop mode")
+        session = self._connected_session(session_id)
+        device_id = str(session["device_id"])
+        capability = (
+            "desktop:current_session"
+            if mode == "current_desktop"
+            else "desktop:remote_login"
+        )
+        self._require_peer_capability(device_id, capability)
+        self.store.update_preference(device_id, preferred_mode=mode)
+        await self.disconnect(session_id, notify_remote=True, reconnecting=True)
+        self.store.audit(
+            "mode_changed",
+            session_id=session_id,
+            device_id=device_id,
+            outcome="ok",
+            detail={"mode": mode},
+        )
+        # Pane-menu settings merge this partial session into the existing card.
+        # Clearing the id hides controls for the closed session while the
+        # reloaded Plugin view establishes the replacement automatically.
+        return {
+            "ok": True,
+            "session": {
+                "session_id": "",
+                "state": "ready",
+                "mode": mode,
+                "preferred_mode": mode,
+            },
+        }
+
     async def set_quality(self, session_id: str, quality_mode: str) -> dict[str, Any]:
         if quality_mode not in QUALITY_MODES:
             raise RemoteDesktopError("desktop_quality_invalid", "Unsupported quality mode")
@@ -806,11 +849,8 @@ class RemoteDesktopService:
             "session": self._session_public(updated),
         }
 
-    async def send_clipboard_image(self, session_id: str, raw: bytes) -> dict[str, Any]:
-        session = self._connected_session(session_id)
-        self._require_peer_capability(str(session["device_id"]), "desktop:clipboard_image_user")
-        if not bool(session.get("clipboard_enabled")):
-            raise RemoteDesktopError("desktop_clipboard_disabled", "Clipboard sync is disabled", 409)
+    @staticmethod
+    def _normalize_clipboard_image(raw: bytes) -> tuple[bytes, int, int]:
         if not raw or len(raw) > _MAX_CLIPBOARD_IMAGE_BYTES:
             raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image size is invalid", 413)
         try:
@@ -827,7 +867,15 @@ class RemoteDesktopService:
             raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image is invalid") from exc
         if len(data) > _MAX_CLIPBOARD_IMAGE_BYTES:
             raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image exceeds the transfer limit", 413)
-        gateway = get_remote_gateway(self.db_path)
+        return data, width, height
+
+    async def send_clipboard_image(self, session_id: str, raw: bytes) -> dict[str, Any]:
+        session = self._connected_session(session_id)
+        self._require_peer_capability(str(session["device_id"]), "desktop:clipboard_image_user")
+        if not bool(session.get("clipboard_enabled")):
+            raise RemoteDesktopError("desktop_clipboard_disabled", "Clipboard sync is disabled", 409)
+        data, width, height = self._normalize_clipboard_image(raw)
+        gateway = self._peer_transport()
         if gateway is None:
             raise RemoteDesktopError("remote_transport_unavailable", "Remote transport is unavailable", 503)
         transfer_id = "desktop_clip_" + uuid4().hex
@@ -908,25 +956,15 @@ class RemoteDesktopService:
         )
         return {"ok": True, "bytes": len(data), "width": width, "height": height}
 
-    async def receive_clipboard_image(
+    async def _download_clipboard_image(
         self,
-        session_id: str,
-        offer_id: str,
         *,
-        expected_size: int = 0,
-        expected_sha256: str = "",
-    ) -> dict[str, Any]:
-        session = self._connected_session(session_id)
-        self._require_peer_capability(str(session["device_id"]), "desktop:clipboard_image_user")
-        if not bool(session.get("clipboard_enabled")):
-            raise RemoteDesktopError("desktop_clipboard_disabled", "Clipboard sync is disabled", 409)
-        if not str(offer_id).startswith("clipboard_image_") or len(str(offer_id)) != 48:
-            raise RemoteDesktopError("desktop_clipboard_offer_not_found", "Clipboard image offer was not found", 404)
-        if expected_size < 0 or expected_size > _MAX_CLIPBOARD_IMAGE_BYTES:
-            raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image exceeds the transfer limit", 413)
-        gateway = get_remote_gateway(self.db_path)
-        if gateway is None:
-            raise RemoteDesktopError("remote_transport_unavailable", "Remote transport is unavailable", 503)
+        gateway: Any,
+        session: dict[str, Any],
+        offer_id: str,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> bytes:
         remote_session_id = str(session.get("remote_session_id") or "")
         data = bytearray()
         offset = 0
@@ -936,11 +974,7 @@ class RemoteDesktopService:
             response = await gateway.request(
                 str(session["device_id"]),
                 command="desktop.clipboard.image.download",
-                payload={
-                    "session_id": remote_session_id,
-                    "offer_id": str(offer_id),
-                    "offset": offset,
-                },
+                payload={"session_id": remote_session_id, "offer_id": offer_id, "offset": offset},
                 idempotency_key=f"{offer_id}_download_{offset}",
                 timeout=30,
             )
@@ -950,7 +984,7 @@ class RemoteDesktopService:
                 total = int(response.get("size") or 0)
                 if total <= 0 or total > _MAX_CLIPBOARD_IMAGE_BYTES:
                     raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image size is invalid", 413)
-                if expected_size and total != int(expected_size):
+                if expected_size and total != expected_size:
                     raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image offer changed", 409)
                 remote_sha = str(response.get("sha256") or "")
             try:
@@ -978,6 +1012,35 @@ class RemoteDesktopService:
         expected = str(expected_sha256 or remote_sha).lower()
         if expected and digest != expected:
             raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image checksum failed", 409)
+        return bytes(data)
+
+    async def receive_clipboard_image(
+        self,
+        session_id: str,
+        offer_id: str,
+        *,
+        expected_size: int = 0,
+        expected_sha256: str = "",
+    ) -> dict[str, Any]:
+        session = self._connected_session(session_id)
+        self._require_peer_capability(str(session["device_id"]), "desktop:clipboard_image_user")
+        if not bool(session.get("clipboard_enabled")):
+            raise RemoteDesktopError("desktop_clipboard_disabled", "Clipboard sync is disabled", 409)
+        if not str(offer_id).startswith("clipboard_image_") or len(str(offer_id)) != 48:
+            raise RemoteDesktopError("desktop_clipboard_offer_not_found", "Clipboard image offer was not found", 404)
+        if expected_size < 0 or expected_size > _MAX_CLIPBOARD_IMAGE_BYTES:
+            raise RemoteDesktopError("desktop_clipboard_image_invalid", "Clipboard image exceeds the transfer limit", 413)
+        gateway = self._peer_transport()
+        if gateway is None:
+            raise RemoteDesktopError("remote_transport_unavailable", "Remote transport is unavailable", 503)
+        remote_session_id = str(session.get("remote_session_id") or "")
+        data = await self._download_clipboard_image(
+            gateway=gateway,
+            session=session,
+            offer_id=str(offer_id),
+            expected_size=int(expected_size),
+            expected_sha256=expected_sha256,
+        )
         try:
             with Image.open(io.BytesIO(data)) as image:
                 image.load()
@@ -1065,100 +1128,105 @@ class RemoteDesktopService:
             handle.seek(offset)
             return handle.read(_CLIPBOARD_CHUNK_BYTES)
 
+    async def _upload_clipboard_file_source(
+        self,
+        *,
+        gateway: Any,
+        session: dict[str, Any],
+        remote_session_id: str,
+        group_id: str,
+        relative: str,
+        size: int,
+        digest: str,
+        source: bytes | Path,
+    ) -> None:
+        transfer_id = "desktop_file_" + uuid4().hex
+        begin = await gateway.request(
+            str(session["device_id"]),
+            command="desktop.clipboard.file.upload.begin",
+            payload={
+                "session_id": remote_session_id,
+                "group_id": group_id,
+                "transfer_id": transfer_id,
+                "relative_path": relative,
+                "size": size,
+                "sha256": digest,
+            },
+            idempotency_key=transfer_id + "_begin",
+            timeout=20,
+        )
+        if begin.get("ok") is False:
+            raise RemoteDesktopError(str(begin.get("code") or "desktop_clipboard_transfer_failed"), str(begin.get("error") or "Clipboard transfer failed"), 409)
+        offset = max(0, min(size, int(begin.get("offset") or 0)))
+        try:
+            while offset < size:
+                chunk = await asyncio.to_thread(self._source_chunk, source, offset)
+                if not chunk:
+                    raise RemoteDesktopError("desktop_clipboard_transfer_failed", "Clipboard file upload made no progress", 409)
+                response = await gateway.request(
+                    str(session["device_id"]),
+                    command="desktop.clipboard.file.upload.chunk",
+                    payload={
+                        "session_id": remote_session_id,
+                        "group_id": group_id,
+                        "transfer_id": transfer_id,
+                        "offset": offset,
+                        "content_base64": base64.b64encode(chunk).decode("ascii"),
+                        "chunk_sha256": hashlib.sha256(chunk).hexdigest(),
+                    },
+                    idempotency_key=f"{transfer_id}_chunk_{offset}",
+                    timeout=30,
+                )
+                if response.get("ok") is False:
+                    raise RemoteDesktopError(str(response.get("code") or "desktop_clipboard_transfer_failed"), str(response.get("error") or "Clipboard transfer failed"), 409)
+                next_offset = int(response.get("next_offset") or (offset + len(chunk)))
+                if next_offset != offset + len(chunk):
+                    raise RemoteDesktopError("desktop_clipboard_transfer_invalid", "Clipboard file upload offsets are invalid", 409)
+                offset = next_offset
+            committed = await gateway.request(
+                str(session["device_id"]),
+                command="desktop.clipboard.file.upload.commit",
+                payload={"session_id": remote_session_id, "group_id": group_id, "transfer_id": transfer_id},
+                idempotency_key=transfer_id + "_commit",
+                timeout=30,
+            )
+            if committed.get("ok") is False:
+                raise RemoteDesktopError(str(committed.get("code") or "desktop_clipboard_transfer_failed"), str(committed.get("error") or "Clipboard transfer failed"), 409)
+        except Exception:
+            try:
+                await gateway.request(
+                    str(session["device_id"]),
+                    command="desktop.clipboard.file.upload.abort",
+                    payload={"session_id": remote_session_id, "group_id": group_id, "transfer_id": transfer_id},
+                    idempotency_key=transfer_id + "_abort",
+                    timeout=10,
+                )
+            except Exception:
+                pass
+            raise
+
     async def _send_clipboard_file_sources(
         self,
         session: dict[str, Any],
         sources: list[tuple[str, int, str, bytes | Path]],
     ) -> dict[str, Any]:
-        gateway = get_remote_gateway(self.db_path)
+        gateway = self._peer_transport()
         if gateway is None:
             raise RemoteDesktopError("remote_transport_unavailable", "Remote transport is unavailable", 503)
         group_id = "clipboard_files_" + uuid4().hex
         remote_session_id = str(session.get("remote_session_id") or "")
         total = sum(size for _relative, size, _digest, _source in sources)
         for relative, size, digest, source in sources:
-            transfer_id = "desktop_file_" + uuid4().hex
-            begin = await gateway.request(
-                str(session["device_id"]),
-                command="desktop.clipboard.file.upload.begin",
-                payload={
-                    "session_id": remote_session_id,
-                    "group_id": group_id,
-                    "transfer_id": transfer_id,
-                    "relative_path": relative,
-                    "size": size,
-                    "sha256": digest,
-                },
-                idempotency_key=transfer_id + "_begin",
-                timeout=20,
+            await self._upload_clipboard_file_source(
+                gateway=gateway,
+                session=session,
+                remote_session_id=remote_session_id,
+                group_id=group_id,
+                relative=relative,
+                size=size,
+                digest=digest,
+                source=source,
             )
-            if begin.get("ok") is False:
-                raise RemoteDesktopError(str(begin.get("code") or "desktop_clipboard_transfer_failed"), str(begin.get("error") or "Clipboard transfer failed"), 409)
-            offset = max(0, min(size, int(begin.get("offset") or 0)))
-            try:
-                while offset < size:
-                    chunk = await asyncio.to_thread(
-                        self._source_chunk, source, offset
-                    )
-                    if not chunk:
-                        raise RemoteDesktopError(
-                            "desktop_clipboard_transfer_failed",
-                            "Clipboard file upload made no progress",
-                            409,
-                        )
-                    response = await gateway.request(
-                        str(session["device_id"]),
-                        command="desktop.clipboard.file.upload.chunk",
-                        payload={
-                            "session_id": remote_session_id,
-                            "group_id": group_id,
-                            "transfer_id": transfer_id,
-                            "offset": offset,
-                            "content_base64": base64.b64encode(chunk).decode("ascii"),
-                            "chunk_sha256": hashlib.sha256(chunk).hexdigest(),
-                        },
-                        idempotency_key=f"{transfer_id}_chunk_{offset}",
-                        timeout=30,
-                    )
-                    if response.get("ok") is False:
-                        raise RemoteDesktopError(str(response.get("code") or "desktop_clipboard_transfer_failed"), str(response.get("error") or "Clipboard transfer failed"), 409)
-                    next_offset = int(response.get("next_offset") or (offset + len(chunk)))
-                    if next_offset != offset + len(chunk):
-                        raise RemoteDesktopError(
-                            "desktop_clipboard_transfer_invalid",
-                            "Clipboard file upload offsets are invalid",
-                            409,
-                        )
-                    offset = next_offset
-                committed = await gateway.request(
-                    str(session["device_id"]),
-                    command="desktop.clipboard.file.upload.commit",
-                    payload={
-                        "session_id": remote_session_id,
-                        "group_id": group_id,
-                        "transfer_id": transfer_id,
-                    },
-                    idempotency_key=transfer_id + "_commit",
-                    timeout=30,
-                )
-                if committed.get("ok") is False:
-                    raise RemoteDesktopError(str(committed.get("code") or "desktop_clipboard_transfer_failed"), str(committed.get("error") or "Clipboard transfer failed"), 409)
-            except Exception:
-                try:
-                    await gateway.request(
-                        str(session["device_id"]),
-                        command="desktop.clipboard.file.upload.abort",
-                        payload={
-                            "session_id": remote_session_id,
-                            "group_id": group_id,
-                            "transfer_id": transfer_id,
-                        },
-                        idempotency_key=transfer_id + "_abort",
-                        timeout=10,
-                    )
-                except Exception:
-                    pass
-                raise
         applied = await gateway.request(
             str(session["device_id"]),
             command="desktop.clipboard.file.apply",
@@ -1341,6 +1409,70 @@ class RemoteDesktopService:
         shutil.rmtree(upload.root, ignore_errors=True)
         return {"ok": True, "aborted": True}
 
+    async def _receive_clipboard_file_entry(
+        self,
+        *,
+        gateway: Any,
+        device_id: str,
+        remote_session_id: str,
+        offer_id: str,
+        remote_root: str,
+        local_root: Path,
+        item: Any,
+    ) -> str:
+        if not isinstance(item, dict):
+            raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file manifest is invalid")
+        remote_path = str(item.get("path") or "").replace("\\", "/")
+        if not remote_path.startswith(remote_root + "/"):
+            raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file path is invalid")
+        relative = remote_path[len(remote_root) + 1 :]
+        pure = PurePosixPath(relative)
+        if not relative or pure.is_absolute() or ".." in pure.parts or any(not part or ":" in part for part in pure.parts):
+            raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file path is invalid")
+        target = (local_root / Path(*pure.parts)).resolve()
+        target.relative_to(local_root.resolve())
+        if str(item.get("kind") or "") == "directory":
+            target.mkdir(parents=True, exist_ok=True)
+            return pure.parts[0]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        expected_size = max(0, int(item.get("size") or 0))
+        expected_sha = str(item.get("sha256") or "")
+        offset = 0
+        digest = hashlib.sha256()
+        with target.open("wb") as handle:
+            while offset < expected_size or (expected_size == 0 and offset == 0):
+                response = await gateway.request(
+                    device_id,
+                    command="desktop.clipboard.file.download",
+                    payload={"session_id": remote_session_id, "offer_id": offer_id, "path": remote_path, "offset": offset},
+                    idempotency_key=f"{offer_id}_{hashlib.sha256(remote_path.encode()).hexdigest()[:16]}_{offset}",
+                    timeout=30,
+                )
+                if response.get("ok") is False:
+                    raise RemoteDesktopError(str(response.get("code") or "desktop_clipboard_transfer_failed"), str(response.get("error") or "Clipboard transfer failed"), 409)
+                try:
+                    chunk = base64.b64decode(str(response.get("content_base64") or ""), validate=True)
+                except Exception as exc:
+                    raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file chunk is invalid") from exc
+                if hashlib.sha256(chunk).hexdigest() != str(response.get("chunk_sha256") or ""):
+                    raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file checksum failed", 409)
+                if int(response.get("offset") or 0) != offset:
+                    raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file offsets are invalid", 409)
+                handle.write(chunk)
+                digest.update(chunk)
+                next_offset = int(response.get("next_offset") or (offset + len(chunk)))
+                if next_offset != offset + len(chunk):
+                    raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file offsets are invalid", 409)
+                offset = next_offset
+                if response.get("eof"):
+                    break
+                if not chunk:
+                    raise RemoteDesktopError("desktop_clipboard_transfer_failed", "Clipboard transfer made no progress", 409)
+        target.chmod(0o600)
+        if offset != expected_size or (expected_sha and digest.hexdigest() != expected_sha):
+            raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file checksum failed", 409)
+        return pure.parts[0]
+
     async def receive_clipboard_files(
         self,
         session_id: str,
@@ -1352,7 +1484,7 @@ class RemoteDesktopService:
             raise RemoteDesktopError("desktop_clipboard_disabled", "Clipboard sync is disabled", 409)
         if not str(offer_id).startswith("clipboard_files_") or len(str(offer_id)) != 48:
             raise RemoteDesktopError("desktop_clipboard_offer_not_found", "Clipboard file offer was not found", 404)
-        gateway = get_remote_gateway(self.db_path)
+        gateway = self._peer_transport()
         if gateway is None:
             raise RemoteDesktopError("remote_transport_unavailable", "Remote transport is unavailable", 503)
         device_id = str(session["device_id"])
@@ -1379,63 +1511,17 @@ class RemoteDesktopService:
         local_root.mkdir(parents=True, exist_ok=True)
         top_level: set[str] = set()
         for item in entries:
-            if not isinstance(item, dict):
-                raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file manifest is invalid")
-            remote_path = str(item.get("path") or "").replace("\\", "/")
-            if not remote_path.startswith(remote_root + "/"):
-                raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file path is invalid")
-            relative = remote_path[len(remote_root) + 1 :]
-            pure = PurePosixPath(relative)
-            if not relative or pure.is_absolute() or ".." in pure.parts or any(not part or ":" in part for part in pure.parts):
-                raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file path is invalid")
-            top_level.add(pure.parts[0])
-            target = (local_root / Path(*pure.parts)).resolve()
-            target.relative_to(local_root.resolve())
-            if str(item.get("kind") or "") == "directory":
-                target.mkdir(parents=True, exist_ok=True)
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            expected_size = max(0, int(item.get("size") or 0))
-            expected_sha = str(item.get("sha256") or "")
-            offset = 0
-            digest = hashlib.sha256()
-            with target.open("wb") as handle:
-                while offset < expected_size or (expected_size == 0 and offset == 0):
-                    response = await gateway.request(
-                        device_id,
-                        command="desktop.clipboard.file.download",
-                        payload={
-                            "session_id": remote_session_id,
-                            "offer_id": str(offer_id),
-                            "path": remote_path,
-                            "offset": offset,
-                        },
-                        idempotency_key=f"{offer_id}_{hashlib.sha256(remote_path.encode()).hexdigest()[:16]}_{offset}",
-                        timeout=30,
-                    )
-                    if response.get("ok") is False:
-                        raise RemoteDesktopError(str(response.get("code") or "desktop_clipboard_transfer_failed"), str(response.get("error") or "Clipboard transfer failed"), 409)
-                    try:
-                        chunk = base64.b64decode(str(response.get("content_base64") or ""), validate=True)
-                    except Exception as exc:
-                        raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file chunk is invalid") from exc
-                    if hashlib.sha256(chunk).hexdigest() != str(response.get("chunk_sha256") or ""):
-                        raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file checksum failed", 409)
-                    if int(response.get("offset") or 0) != offset:
-                        raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file offsets are invalid", 409)
-                    handle.write(chunk)
-                    digest.update(chunk)
-                    next_offset = int(response.get("next_offset") or (offset + len(chunk)))
-                    if next_offset != offset + len(chunk):
-                        raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file offsets are invalid", 409)
-                    offset = next_offset
-                    if response.get("eof"):
-                        break
-                    if not chunk:
-                        raise RemoteDesktopError("desktop_clipboard_transfer_failed", "Clipboard transfer made no progress", 409)
-            target.chmod(0o600)
-            if offset != expected_size or (expected_sha and digest.hexdigest() != expected_sha):
-                raise RemoteDesktopError("desktop_clipboard_file_invalid", "Clipboard file checksum failed", 409)
+            top_level.add(
+                await self._receive_clipboard_file_entry(
+                    gateway=gateway,
+                    device_id=device_id,
+                    remote_session_id=remote_session_id,
+                    offer_id=str(offer_id),
+                    remote_root=remote_root,
+                    local_root=local_root,
+                    item=item,
+                )
+            )
         local_paths = [str((local_root / name).resolve()) for name in sorted(top_level)]
         applied = await electron_desktop_rpc(
             "write_local_clipboard_files",
@@ -1469,7 +1555,7 @@ class RemoteDesktopService:
         return session
 
     async def _remote_request(self, session: dict[str, Any], command: str, payload: dict[str, Any]) -> dict[str, Any]:
-        gateway = get_remote_gateway(self.db_path)
+        gateway = self._peer_transport()
         if gateway is None:
             raise RemoteDesktopError("remote_transport_unavailable", "Remote transport is unavailable", 503)
         result = await gateway.request(
@@ -1516,7 +1602,7 @@ class RemoteDesktopService:
             )
             if capability not in capabilities
         )
-        gateway = get_remote_gateway(self.db_path)
+        gateway = self._peer_transport()
         remote: dict[str, Any] = {}
         if gateway is not None and "desktop:session_connect" in capabilities:
             try:
@@ -1537,11 +1623,434 @@ class RemoteDesktopService:
             "remote": remote,
         }
 
+    def _host_negotiation_inputs(
+        self, peer_device_id: str, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any], str, dict[str, Any], set[str]]:
+        if int(payload.get("protocol_version") or 0) != REMOTE_DESKTOP_PROTOCOL_VERSION:
+            return {"ok": False, "code": "desktop_protocol_incompatible", "error": "Remote Desktop protocol versions are incompatible."}, "", {}, "", {}, set()
+        mode = str(payload.get("mode") or "current_desktop")
+        if mode not in {"current_desktop", "remote_login"}:
+            return {"ok": False, "code": "desktop_mode_invalid", "error": "Unsupported desktop mode."}, "", {}, "", {}, set()
+        offer = payload.get("offer")
+        if not isinstance(offer, dict) or str(offer.get("type") or "") != "offer" or not str(offer.get("sdp") or ""):
+            return {"ok": False, "code": "desktop_offer_invalid", "error": "A valid WebRTC offer is required."}, "", {}, "", {}, set()
+        quality = str(payload.get("quality_mode") or "auto")
+        if quality not in QUALITY_MODES:
+            return {"ok": False, "code": "desktop_quality_invalid", "error": "Unsupported quality mode."}, "", {}, "", {}, set()
+        peer = self._peer(peer_device_id)
+        granted = {str(item) for item in peer.get("granted_capabilities") or ()}
+        required = "desktop:current_session" if mode == "current_desktop" else "desktop:remote_login"
+        if not {"desktop:session_connect", "desktop:screen_view_user", required}.issubset(granted):
+            return {"ok": False, "code": "desktop_capability_denied", "error": "The selected Remote Desktop mode was not granted to this device."}, "", {}, "", {}, set()
+        if self._forced_disconnect_cooldowns.get(str(peer_device_id), 0.0) > time.monotonic():
+            return {"ok": False, "code": "desktop_target_emergency_disconnected", "error": "The controlled device ended the previous session. Wait before requesting another connection."}, "", {}, "", {}, set()
+        self._forced_disconnect_cooldowns.pop(str(peer_device_id), None)
+        if self._host_sessions:
+            return {"ok": False, "code": "desktop_controller_busy", "error": "This device already has an active desktop controller."}, "", {}, "", {}, set()
+        return None, mode, offer, quality, peer, granted
+
+    @staticmethod
+    def _host_session_permissions(granted: set[str], descriptor: Any) -> dict[str, bool]:
+        mapping = {
+            "input": ("desktop:input_user", "input"),
+            "display_select": ("desktop:display_select_user", "multi_monitor"),
+            "system_audio": ("desktop:audio_output_user", "system_audio"),
+            "microphone": ("desktop:audio_input_user", "microphone"),
+            "clipboard_text": ("desktop:clipboard_text_user", "clipboard_text"),
+            "clipboard_image": ("desktop:clipboard_image_user", "clipboard_image"),
+            "clipboard_file": ("desktop:clipboard_file_user", "clipboard_file"),
+        }
+        provider_capabilities = None if descriptor is None else {str(item) for item in descriptor.capabilities}
+        return {
+            name: capability in granted and (provider_capabilities is None or provider_capability in provider_capabilities)
+            for name, (capability, provider_capability) in mapping.items()
+        }
+
+    async def _negotiate_host_provider(
+        self, *, provider: Any, remote_session_id: str, mode: str, offer: dict[str, Any], quality: str, payload: dict[str, Any], permissions: dict[str, bool]
+    ) -> dict[str, Any]:
+        raw_credentials = payload.get("credentials")
+        credentials = ({key: str(raw_credentials.get(key) or "") for key in ("username", "domain", "password")} if isinstance(raw_credentials, dict) else None)
+        try:
+            return await provider.negotiate(
+                remote_session_id,
+                mode=mode,
+                offer=dict(offer),
+                display_id=str(payload.get("display_id") or ""),
+                quality_mode=quality,
+                ice_servers=[dict(item) for item in payload.get("ice_servers") or () if isinstance(item, dict)],
+                credentials=credentials,
+                permissions=permissions,
+            )
+        except Exception as exc:
+            logger.info("Remote desktop Provider negotiation failed", exc_info=True)
+            try:
+                await provider.disconnect(remote_session_id)
+            except Exception:
+                pass
+            self._host_sessions.pop(remote_session_id, None)
+            return {"ok": False, "code": str(exc) or "desktop_provider_failed", "error": "The Remote Desktop Provider could not start the session."}
+        finally:
+            if credentials is not None:
+                for key in tuple(credentials):
+                    credentials[key] = ""
+                credentials.clear()
+
+    async def _show_host_indicator(
+        self, *, provider: Any, remote_session_id: str, peer: dict[str, Any], peer_device_id: str, mode: str, permissions: dict[str, bool]
+    ) -> dict[str, Any] | None:
+        if provider.id not in {"electron-current-desktop", "freerdp-sidecar"}:
+            return None
+        indicator = await electron_desktop_rpc(
+            "show_indicator",
+            {
+                "session_id": remote_session_id,
+                "controller_name": str(peer.get("display_name") or peer.get("device_name") or peer_device_id),
+                "mode": mode,
+                "can_control": permissions["input"],
+            },
+            timeout=10,
+        )
+        if indicator.get("ok") is not False:
+            return None
+        await provider.disconnect(remote_session_id)
+        self._host_sessions.pop(remote_session_id, None)
+        return {"ok": False, "code": str(indicator.get("code") or "desktop_target_indicator_unavailable"), "error": "The controlled device could not display the required active-session indicator."}
+
+    async def _handle_host_negotiate(self, peer_device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        error, mode, offer, quality, peer, granted = self._host_negotiation_inputs(peer_device_id, payload)
+        if error is not None:
+            return error
+        remote_session_id = "rdh_" + uuid4().hex
+        self._host_sessions[remote_session_id] = {"provider_id": "", "peer_device_id": str(peer_device_id), "pending": True}
+        try:
+            selector = getattr(self.providers, "select_with_descriptor", None)
+            if callable(selector):
+                provider, descriptor = await selector(mode)
+            else:
+                provider, descriptor = await self.providers.select(mode), None
+        except RuntimeError as exc:
+            self._host_sessions.pop(remote_session_id, None)
+            return {"ok": False, "code": str(exc) or "desktop_provider_unavailable", "error": "A compatible Remote Desktop Provider is unavailable."}
+        permissions = self._host_session_permissions(granted, descriptor)
+        answer = await self._negotiate_host_provider(provider=provider, remote_session_id=remote_session_id, mode=mode, offer=offer, quality=quality, payload=payload, permissions=permissions)
+        if answer.get("ok") is False:
+            self._host_sessions.pop(remote_session_id, None)
+            return answer
+        permissions["system_audio"] = bool(permissions["system_audio"] and answer.get("system_audio") is True)
+        try:
+            displays = await provider.list_displays(remote_session_id)
+        except Exception:
+            await provider.disconnect(remote_session_id)
+            self._host_sessions.pop(remote_session_id, None)
+            return {"ok": False, "code": "desktop_display_probe_failed", "error": "The desktop display could not be inspected."}
+        selected = next((item for item in displays if item.id == str(payload.get("display_id") or "")), displays[0] if displays else None)
+        indicator_error = await self._show_host_indicator(provider=provider, remote_session_id=remote_session_id, peer=peer, peer_device_id=peer_device_id, mode=mode, permissions=permissions)
+        if indicator_error is not None:
+            return indicator_error
+        self.store.audit("host_session_connected", session_id=remote_session_id, device_id=peer_device_id, outcome="ok", detail={"provider_id": provider.id, "mode": mode})
+        self._host_sessions[remote_session_id] = {"provider_id": provider.id, "peer_device_id": str(peer_device_id), "mode": mode, "permissions": dict(permissions)}
+        return {"ok": True, "remote_session_id": remote_session_id, "provider_id": provider.id, "answer": answer.get("answer"), "display": selected.public() if selected else {}, "transport_kind": str(answer.get("transport_kind") or "p2p"), "secure_surface": bool(answer.get("secure_surface")), "permissions": permissions}
+
+    async def _host_command_context(
+        self, *, peer_device_id: str, command: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | tuple[str, dict[str, Any], Any, set[str], dict[str, Any]]:
+        session_id = str(payload.get("session_id") or "")
+        not_found = {"ok": False, "code": "desktop_session_not_found", "error": "Remote desktop host session not found."}
+        if not session_id.startswith("rdh_"):
+            return not_found
+        host_session = self._host_sessions.get(session_id)
+        if host_session is None or host_session.get("peer_device_id") != str(peer_device_id):
+            return not_found
+        try:
+            provider = self.providers.by_id(str(host_session.get("provider_id") or ""))
+        except KeyError:
+            return {"ok": False, "code": "desktop_provider_unavailable", "error": "Remote desktop Provider is unavailable."}
+        try:
+            current_granted = {str(item) for item in self._peer(peer_device_id).get("granted_capabilities") or ()}
+        except RemoteDesktopError:
+            current_granted = set()
+        required = "desktop:remote_login" if str(host_session.get("mode") or "") == "remote_login" else "desktop:current_session"
+        if command != "desktop.disconnect" and not {"desktop:session_connect", "desktop:screen_view_user", required}.issubset(current_granted):
+            await provider.disconnect(session_id)
+            await electron_desktop_rpc("hide_indicator", {"session_id": session_id}, timeout=5)
+            self._host_sessions.pop(session_id, None)
+            return {"ok": False, "code": "desktop_capability_denied", "error": "Remote Desktop authorization was revoked."}
+        permissions = host_session.get("permissions") if isinstance(host_session.get("permissions"), dict) else {}
+        return session_id, host_session, provider, current_granted, permissions
+
+    @staticmethod
+    def _host_permission_allowed(
+        permissions: dict[str, Any], granted: set[str], name: str, capability: str
+    ) -> bool:
+        return bool(permissions.get(name) is True and capability in granted)
+
+    async def _handle_host_clipboard_image_download(
+        self, *, peer_device_id: str, command: str, payload: dict[str, Any],
+        session_id: str, provider: Any, permissions: dict[str, Any],
+        granted: set[str],
+    ) -> dict[str, Any]:
+        def permission_allowed(name: str, capability: str) -> bool:
+            return self._host_permission_allowed(permissions, granted, name, capability)
+        if not permission_allowed("clipboard_image", "desktop:clipboard_image_user"):
+            return {"ok": False, "code": "desktop_capability_denied", "error": "Image clipboard access is not authorized."}
+        offer_id = str(payload.get("offer_id") or "")
+        if not offer_id.startswith("clipboard_image_") or len(offer_id) != 48:
+            return {"ok": False, "code": "desktop_clipboard_offer_not_found", "error": "Clipboard image offer was not found."}
+        root = self._clipboard_scope_root(session_id)
+        relative = f"outgoing/{offer_id}.png"
+        target = (root / relative).resolve()
+        target.relative_to(root.resolve())
+        try:
+            if command.endswith(".ack"):
+                target.unlink(missing_ok=True)
+                await provider.acknowledge_clipboard_image(session_id, offer_id)
+                return {"ok": True, "acknowledged": True}
+            if not target.is_file():
+                await provider.export_clipboard_image(session_id, offer_id, str(target))
+            result = await self.remote_service.execute_scoped_file(
+                str(peer_device_id),
+                "files.download",
+                f"remote_desktop_clipboard/{session_id}",
+                root,
+                {
+                    "path": relative,
+                    "offset": max(0, int(payload.get("offset") or 0)),
+                    "limit": _CLIPBOARD_CHUNK_BYTES,
+                    "include_hash": int(payload.get("offset") or 0) == 0,
+                },
+            )
+            return {**result, "offer_id": offer_id}
+        except (OSError, RuntimeError, ValueError, PermissionError) as exc:
+            return {
+                "ok": False,
+                "code": str(exc) or "desktop_clipboard_transfer_failed",
+                "error": "The clipboard image transfer failed.",
+            }
+
+    async def _handle_host_clipboard_file_download(
+        self, *, peer_device_id: str, command: str, payload: dict[str, Any],
+        session_id: str, provider: Any, permissions: dict[str, Any],
+        granted: set[str],
+    ) -> dict[str, Any]:
+        def permission_allowed(name: str, capability: str) -> bool:
+            return self._host_permission_allowed(permissions, granted, name, capability)
+        if not permission_allowed("clipboard_file", "desktop:clipboard_file_user"):
+            return {"ok": False, "code": "desktop_capability_denied", "error": "File clipboard access is not authorized."}
+        offer_id = str(payload.get("offer_id") or "")
+        if not offer_id.startswith("clipboard_files_") or len(offer_id) != 48:
+            return {"ok": False, "code": "desktop_clipboard_offer_not_found", "error": "Clipboard file offer was not found."}
+        root = self._clipboard_scope_root(session_id)
+        relative_root = f"outgoing-files/{offer_id}"
+        target_root = (root / relative_root).resolve()
+        target_root.relative_to(root.resolve())
+        try:
+            if command.endswith(".ack"):
+                await asyncio.to_thread(shutil.rmtree, target_root, True)
+                await provider.acknowledge_clipboard_files(session_id, offer_id)
+                return {"ok": True, "acknowledged": True}
+            if not target_root.is_dir():
+                await provider.export_clipboard_files(session_id, offer_id, str(target_root))
+            if command.endswith(".prepare"):
+                result = await self.remote_service.execute_scoped_file(
+                    str(peer_device_id),
+                    "files.manifest",
+                    f"remote_desktop_clipboard/{session_id}",
+                    root,
+                    {"path": relative_root, "include_hash": True},
+                )
+                return {**result, "offer_id": offer_id, "root": relative_root}
+            relative = str(payload.get("path") or "").replace("\\", "/")
+            if not relative.startswith(relative_root + "/"):
+                raise ValueError("desktop clipboard download path is invalid")
+            result = await self.remote_service.execute_scoped_file(
+                str(peer_device_id),
+                "files.download",
+                f"remote_desktop_clipboard/{session_id}",
+                root,
+                {
+                    "path": relative,
+                    "offset": max(0, int(payload.get("offset") or 0)),
+                    "limit": _CLIPBOARD_CHUNK_BYTES,
+                },
+            )
+            return {**result, "offer_id": offer_id}
+        except (OSError, RuntimeError, ValueError, PermissionError) as exc:
+            return {
+                "ok": False,
+                "code": str(exc) or "desktop_clipboard_transfer_failed",
+                "error": "The clipboard file transfer failed.",
+            }
+
+    async def _handle_host_clipboard_file_upload(self, *, peer_device_id: str, command: str, payload: dict[str, Any], session_id: str,
+        host_session: dict[str, Any], provider: Any, permissions: dict[str, Any], granted: set[str],
+    ) -> dict[str, Any]:
+        if not self._host_permission_allowed(permissions, granted, "clipboard_file", "desktop:clipboard_file_user"):
+            return {"ok": False, "code": "desktop_capability_denied", "error": "File clipboard access is not authorized."}
+        group_id = str(payload.get("group_id") or "")
+        if not group_id.startswith("clipboard_files_") or len(group_id) != 48:
+            return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard file group is invalid."}
+        operation = command.removeprefix("desktop.clipboard.file.")
+        root = self._clipboard_scope_root(session_id)
+        groups = host_session.setdefault("clipboard_file_groups", {})
+        reservations = host_session.setdefault("clipboard_file_reservations", {})
+        if operation == "apply":
+            paths = [str(item) for item in groups.get(group_id, [])]
+            if not paths:
+                return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard file group is empty."}
+            try:
+                await provider.apply_clipboard_files(session_id, paths)
+            except (OSError, RuntimeError, ValueError) as exc:
+                return {"ok": False, "code": str(exc) or "desktop_clipboard_file_failed", "error": "The native file clipboard rejected the files."}
+            groups.pop(group_id, None)
+            for reserved_id, reserved in tuple(reservations.items()):
+                if str(reserved.get("group_id") or "") == group_id:
+                    reservations.pop(reserved_id, None)
+            self.store.audit(
+                "host_clipboard_files_applied",
+                session_id=session_id,
+                device_id=peer_device_id,
+                outcome="ok",
+                detail={"count": len(paths)},
+            )
+            return {"ok": True, "count": len(paths)}
+        if operation not in {"upload.begin", "upload.chunk", "upload.commit", "upload.abort"}:
+            return {"ok": False, "code": "remote_command_unsupported", "error": "Unsupported clipboard file transfer operation."}
+        transfer_id = str(payload.get("transfer_id") or "")
+        if not transfer_id.startswith("desktop_file_") or len(transfer_id) != 45:
+            return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard file transfer id is invalid."}
+        file_command = "files." + operation
+        scoped_payload = dict(payload)
+        scoped_payload.pop("session_id", None)
+        scoped_payload.pop("group_id", None)
+        if operation == "upload.begin":
+            try:
+                relative = self._normalize_clipboard_relative(
+                    payload.get("relative_path")
+                )
+                size = int(payload.get("size") or 0)
+            except (RemoteDesktopError, TypeError, ValueError):
+                return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard file manifest is invalid."}
+            if size < 0 or size > _MAX_CLIPBOARD_FILES_BYTES:
+                return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard file exceeds the transfer limit."}
+            existing_reservation = reservations.get(transfer_id)
+            reservation = {
+                "group_id": group_id,
+                "relative_path": relative,
+                "size": size,
+            }
+            if existing_reservation is not None and existing_reservation != reservation:
+                return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard transfer id was reused with different metadata."}
+            group_total = sum(
+                int(item.get("size") or 0)
+                for key, item in reservations.items()
+                if key != transfer_id and str(item.get("group_id") or "") == group_id
+            )
+            if group_total + size > _MAX_CLIPBOARD_FILES_BYTES:
+                return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard files exceed the transfer limit."}
+            reservations[transfer_id] = reservation
+            scoped_payload["path"] = f"incoming-files/{group_id}/{relative}"
+            scoped_payload["conflict_policy"] = "fail"
+            scoped_payload.pop("relative_path", None)
+        else:
+            reservation = reservations.get(transfer_id)
+            if reservation is None or str(reservation.get("group_id") or "") != group_id:
+                return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard file transfer was not initialized."}
+        try:
+            result = await self.remote_service.execute_scoped_file(
+                str(peer_device_id),
+                file_command,
+                f"remote_desktop_clipboard/{session_id}",
+                root,
+                scoped_payload,
+            )
+            if operation == "upload.commit" and result.get("ok") is not False:
+                target = (root / str(result.get("path") or "")).resolve()
+                target.relative_to(root.resolve())
+                values = groups.setdefault(group_id, [])
+                if str(target) not in values:
+                    if len(values) >= 512:
+                        raise ValueError("desktop clipboard file count exceeds the limit")
+                    values.append(str(target))
+            if operation == "upload.abort" and result.get("ok") is not False:
+                reservations.pop(transfer_id, None)
+            return result
+        except (OSError, RuntimeError, ValueError, PermissionError) as exc:
+            return {
+                "ok": False,
+                "code": str(exc) or "desktop_clipboard_transfer_failed",
+                "error": "The clipboard file transfer failed.",
+            }
+
+    async def _handle_host_clipboard_image_upload(
+        self, *, peer_device_id: str, command: str, payload: dict[str, Any],
+        session_id: str, host_session: dict[str, Any], provider: Any,
+        permissions: dict[str, Any], granted: set[str],
+    ) -> dict[str, Any]:
+        def permission_allowed(name: str, capability: str) -> bool:
+            return self._host_permission_allowed(permissions, granted, name, capability)
+        if not permission_allowed("clipboard_image", "desktop:clipboard_image_user"):
+            return {"ok": False, "code": "desktop_capability_denied", "error": "Image clipboard access is not authorized."}
+        transfer_id = str(payload.get("transfer_id") or "")
+        if not transfer_id.startswith("desktop_clip_") or len(transfer_id) != 45:
+            return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard transfer id is invalid."}
+        operation = command.removeprefix("desktop.clipboard.image.")
+        if operation not in {"upload.begin", "upload.chunk", "upload.commit", "upload.abort"}:
+            return {"ok": False, "code": "remote_command_unsupported", "error": "Unsupported clipboard image transfer operation."}
+        image_transfers = host_session.setdefault("clipboard_image_transfers", {})
+        if operation == "upload.begin":
+            try:
+                image_size = int(payload.get("size") or 0)
+            except (TypeError, ValueError):
+                image_size = -1
+            if image_size < 1 or image_size > _MAX_CLIPBOARD_IMAGE_BYTES:
+                return {"ok": False, "code": "desktop_clipboard_image_invalid", "error": "Clipboard image exceeds the transfer limit."}
+            existing_size = image_transfers.get(transfer_id)
+            if existing_size is not None and int(existing_size) != image_size:
+                return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard transfer id was reused with a different size."}
+            image_transfers[transfer_id] = image_size
+        elif transfer_id not in image_transfers:
+            return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard image transfer was not initialized."}
+        file_command = "files." + operation
+        scoped_payload = dict(payload)
+        scoped_payload.pop("session_id", None)
+        if operation == "upload.begin":
+            scoped_payload["path"] = f"incoming/{transfer_id}.png"
+            scoped_payload["conflict_policy"] = "fail"
+        root = self._clipboard_scope_root(session_id)
+        try:
+            result = await self.remote_service.execute_scoped_file(
+                str(peer_device_id),
+                file_command,
+                f"remote_desktop_clipboard/{session_id}",
+                root,
+                scoped_payload,
+            )
+            if operation == "upload.commit" and result.get("ok") is not False:
+                target = (root / str(result.get("path") or "")).resolve()
+                target.relative_to(root.resolve())
+                await provider.apply_clipboard_image(session_id, str(target))
+                target.unlink(missing_ok=True)
+                self.store.audit(
+                    "host_clipboard_image_applied",
+                    session_id=session_id,
+                    device_id=peer_device_id,
+                    outcome="ok",
+                    detail={"bytes": int(result.get("size") or 0)},
+                )
+                image_transfers.pop(transfer_id, None)
+            elif operation == "upload.abort" and result.get("ok") is not False:
+                image_transfers.pop(transfer_id, None)
+            return result
+        except (OSError, RuntimeError, ValueError, PermissionError) as exc:
+            return {
+                "ok": False,
+                "code": str(exc) or "desktop_clipboard_transfer_failed",
+                "error": "The clipboard image transfer failed.",
+            }
+
     async def handle_remote_command(
-        self,
-        peer_device_id: str,
-        command: str,
-        payload: dict[str, Any],
+        self, peer_device_id: str, command: str, payload: dict[str, Any],
     ) -> dict[str, Any]:
         command = str(command)
         if command == "desktop.probe":
@@ -1552,515 +2061,43 @@ class RemoteDesktopService:
                 "providers": [item.public() for item in descriptors],
             }
         if command == "desktop.negotiate":
-            protocol = int(payload.get("protocol_version") or 0)
-            if protocol != REMOTE_DESKTOP_PROTOCOL_VERSION:
-                return {"ok": False, "code": "desktop_protocol_incompatible", "error": "Remote Desktop protocol versions are incompatible."}
-            mode = str(payload.get("mode") or "current_desktop")
-            if mode not in {"current_desktop", "remote_login"}:
-                return {"ok": False, "code": "desktop_mode_invalid", "error": "Unsupported desktop mode."}
-            offer = payload.get("offer")
-            if not isinstance(offer, dict) or str(offer.get("type") or "") != "offer" or not str(offer.get("sdp") or ""):
-                return {"ok": False, "code": "desktop_offer_invalid", "error": "A valid WebRTC offer is required."}
-            quality = str(payload.get("quality_mode") or "auto")
-            if quality not in QUALITY_MODES:
-                return {"ok": False, "code": "desktop_quality_invalid", "error": "Unsupported quality mode."}
-            peer = self._peer(peer_device_id)
-            granted = {str(item) for item in peer.get("granted_capabilities") or ()}
-            required_mode_capability = (
-                "desktop:current_session"
-                if mode == "current_desktop"
-                else "desktop:remote_login"
-            )
-            if (
-                "desktop:session_connect" not in granted
-                or "desktop:screen_view_user" not in granted
-                or required_mode_capability not in granted
-            ):
-                return {
-                    "ok": False,
-                    "code": "desktop_capability_denied",
-                    "error": "The selected Remote Desktop mode was not granted to this device.",
-                }
-            cooldown = self._forced_disconnect_cooldowns.get(str(peer_device_id), 0.0)
-            if cooldown > time.monotonic():
-                return {
-                    "ok": False,
-                    "code": "desktop_target_emergency_disconnected",
-                    "error": "The controlled device ended the previous session. Wait before requesting another connection.",
-                }
-            self._forced_disconnect_cooldowns.pop(str(peer_device_id), None)
-            if self._host_sessions:
-                return {
-                    "ok": False,
-                    "code": "desktop_controller_busy",
-                    "error": "This device already has an active desktop controller.",
-                }
-            remote_session_id = "rdh_" + uuid4().hex
-            # Reserve the single-controller slot before the first await so two
-            # simultaneous negotiations cannot both pass the empty-map check.
-            self._host_sessions[remote_session_id] = {
-                "provider_id": "",
-                "peer_device_id": str(peer_device_id),
-                "pending": True,
-            }
-            try:
-                selector = getattr(self.providers, "select_with_descriptor", None)
-                if callable(selector):
-                    provider, provider_descriptor = await selector(mode)  # type: ignore[arg-type]
-                else:
-                    provider = await self.providers.select(mode)  # type: ignore[arg-type]
-                    provider_descriptor = None
-            except RuntimeError as exc:
-                self._host_sessions.pop(remote_session_id, None)
-                code = str(exc) or "desktop_provider_unavailable"
-                return {"ok": False, "code": code, "error": "A compatible Remote Desktop Provider is unavailable."}
-            permissions = {
-                "input": "desktop:input_user" in granted,
-                "display_select": "desktop:display_select_user" in granted,
-                "system_audio": "desktop:audio_output_user" in granted,
-                "microphone": "desktop:audio_input_user" in granted,
-                "clipboard_text": "desktop:clipboard_text_user" in granted,
-                "clipboard_image": "desktop:clipboard_image_user" in granted,
-                "clipboard_file": "desktop:clipboard_file_user" in granted,
-            }
-            if provider_descriptor is not None:
-                provider_capabilities = {
-                    str(item) for item in provider_descriptor.capabilities
-                }
-                for permission, capability in {
-                    "input": "input",
-                    "display_select": "multi_monitor",
-                    "system_audio": "system_audio",
-                    "microphone": "microphone",
-                    "clipboard_text": "clipboard_text",
-                    "clipboard_image": "clipboard_image",
-                    "clipboard_file": "clipboard_file",
-                }.items():
-                    permissions[permission] = bool(
-                        permissions[permission]
-                        and capability in provider_capabilities
-                    )
-            approval_grace = self._reconnect_approval_grace.pop(
-                str(peer_device_id), 0.0
-            )
-            if (
-                provider.id in {"electron-current-desktop", "freerdp-sidecar"}
-                and approval_grace <= time.monotonic()
-            ):
-                approval = await electron_desktop_rpc(
-                    "request_approval",
-                    {
-                        "session_id": remote_session_id,
-                        "controller_name": str(
-                            peer.get("display_name")
-                            or peer.get("device_name")
-                            or peer_device_id
-                        ),
-                        "mode": mode,
-                        "can_control": permissions["input"],
-                    },
-                    timeout=60,
-                )
-                if approval.get("ok") is False:
-                    self._host_sessions.pop(remote_session_id, None)
-                    code = str(approval.get("code") or "desktop_target_denied")
-                    return {
-                        "ok": False,
-                        "code": code,
-                        "error": "The controlled device did not approve the Remote Desktop request.",
-                    }
-            raw_credentials = payload.get("credentials")
-            credentials = (
-                {
-                    key: str(raw_credentials.get(key) or "")
-                    for key in ("username", "domain", "password")
-                }
-                if isinstance(raw_credentials, dict)
-                else None
-            )
-            try:
-                answer = await provider.negotiate(
-                    remote_session_id,
-                    mode=mode,  # type: ignore[arg-type]
-                    offer=dict(offer),
-                    display_id=str(payload.get("display_id") or ""),
-                    quality_mode=quality,  # type: ignore[arg-type]
-                    ice_servers=[dict(item) for item in payload.get("ice_servers") or () if isinstance(item, dict)],
-                    credentials=credentials,
-                    permissions=permissions,
-                )
-            except Exception as exc:
-                logger.info("Remote desktop Provider negotiation failed", exc_info=True)
-                try:
-                    await provider.disconnect(remote_session_id)
-                except Exception:
-                    pass
-                self._host_sessions.pop(remote_session_id, None)
-                return {
-                    "ok": False,
-                    "code": str(exc) or "desktop_provider_failed",
-                    "error": "The Remote Desktop Provider could not start the session.",
-                }
-            finally:
-                if credentials is not None:
-                    for key in tuple(credentials):
-                        credentials[key] = ""
-                    credentials.clear()
-            if answer.get("ok") is False:
-                self._host_sessions.pop(remote_session_id, None)
-                return answer
-            permissions["system_audio"] = bool(
-                permissions["system_audio"]
-                and answer.get("system_audio") is True
-            )
-            try:
-                displays = await provider.list_displays(remote_session_id)
-            except Exception:
-                await provider.disconnect(remote_session_id)
-                self._host_sessions.pop(remote_session_id, None)
-                return {"ok": False, "code": "desktop_display_probe_failed", "error": "The desktop display could not be inspected."}
-            selected = next((item for item in displays if item.id == str(payload.get("display_id") or "")), displays[0] if displays else None)
-            if provider.id in {"electron-current-desktop", "freerdp-sidecar"}:
-                indicator = await electron_desktop_rpc(
-                    "show_indicator",
-                    {
-                        "session_id": remote_session_id,
-                        "controller_name": str(
-                            peer.get("display_name")
-                            or peer.get("device_name")
-                            or peer_device_id
-                        ),
-                        "mode": mode,
-                        "can_control": permissions["input"],
-                    },
-                    timeout=10,
-                )
-                if indicator.get("ok") is False:
-                    await provider.disconnect(remote_session_id)
-                    self._host_sessions.pop(remote_session_id, None)
-                    return {
-                        "ok": False,
-                        "code": str(indicator.get("code") or "desktop_target_indicator_unavailable"),
-                        "error": "The controlled device could not display the required active-session indicator.",
-                    }
-            self.store.audit("host_session_connected", session_id=remote_session_id, device_id=peer_device_id, outcome="ok", detail={"provider_id": provider.id, "mode": mode})
-            self._host_sessions[remote_session_id] = {
-                "provider_id": provider.id,
-                "peer_device_id": str(peer_device_id),
-                "mode": mode,
-                "permissions": dict(permissions),
-            }
-            return {
-                "ok": True,
-                "remote_session_id": remote_session_id,
-                "provider_id": provider.id,
-                "answer": answer.get("answer"),
-                "display": selected.public() if selected else {},
-                "transport_kind": str(answer.get("transport_kind") or "p2p"),
-                "secure_surface": bool(answer.get("secure_surface")),
-                "permissions": permissions,
-            }
-        session_id = str(payload.get("session_id") or "")
-        # Controlled sessions are owned by Electron/sidecar and addressed by
-        # their unguessable id. Provider RPC rejects unknown ids again.
-        if not session_id.startswith("rdh_"):
-            return {"ok": False, "code": "desktop_session_not_found", "error": "Remote desktop host session not found."}
-        host_session = self._host_sessions.get(session_id)
-        if host_session is None or host_session.get("peer_device_id") != str(peer_device_id):
-            return {"ok": False, "code": "desktop_session_not_found", "error": "Remote desktop host session not found."}
-        provider_id = str(host_session.get("provider_id") or "")
-        try:
-            provider = self.providers.by_id(provider_id)
-        except KeyError:
-            return {"ok": False, "code": "desktop_provider_unavailable", "error": "Remote desktop Provider is unavailable."}
-        try:
-            current_granted = {
-                str(item)
-                for item in self._peer(peer_device_id).get("granted_capabilities") or ()
-            }
-        except RemoteDesktopError:
-            current_granted = set()
-        required_mode_capability = (
-            "desktop:remote_login"
-            if str(host_session.get("mode") or "") == "remote_login"
-            else "desktop:current_session"
+            return await self._handle_host_negotiate(peer_device_id, payload)
+        context = await self._host_command_context(
+            peer_device_id=peer_device_id, command=command, payload=payload
         )
-        if command != "desktop.disconnect" and not {
-            "desktop:session_connect",
-            "desktop:screen_view_user",
-            required_mode_capability,
-        }.issubset(current_granted):
-            await provider.disconnect(session_id)
-            await electron_desktop_rpc(
-                "hide_indicator", {"session_id": session_id}, timeout=5
-            )
-            self._host_sessions.pop(session_id, None)
-            return {
-                "ok": False,
-                "code": "desktop_capability_denied",
-                "error": "Remote Desktop authorization was revoked.",
-            }
-        session_permissions = (
-            host_session.get("permissions")
-            if isinstance(host_session.get("permissions"), dict)
-            else {}
-        )
-
-        def permission_allowed(name: str, capability: str) -> bool:
-            return bool(
-                session_permissions.get(name) is True
-                and capability in current_granted
-            )
+        if isinstance(context, dict):
+            return context
+        session_id, host_session, provider, current_granted, session_permissions = context
 
         if command in {"desktop.clipboard.image.download", "desktop.clipboard.image.ack"}:
-            if not permission_allowed("clipboard_image", "desktop:clipboard_image_user"):
-                return {"ok": False, "code": "desktop_capability_denied", "error": "Image clipboard access is not authorized."}
-            offer_id = str(payload.get("offer_id") or "")
-            if not offer_id.startswith("clipboard_image_") or len(offer_id) != 48:
-                return {"ok": False, "code": "desktop_clipboard_offer_not_found", "error": "Clipboard image offer was not found."}
-            root = self._clipboard_scope_root(session_id)
-            relative = f"outgoing/{offer_id}.png"
-            target = (root / relative).resolve()
-            target.relative_to(root.resolve())
-            try:
-                if command.endswith(".ack"):
-                    target.unlink(missing_ok=True)
-                    await provider.acknowledge_clipboard_image(session_id, offer_id)
-                    return {"ok": True, "acknowledged": True}
-                if not target.is_file():
-                    await provider.export_clipboard_image(session_id, offer_id, str(target))
-                result = await self.remote_service.execute_scoped_file(
-                    str(peer_device_id),
-                    "files.download",
-                    f"remote_desktop_clipboard/{session_id}",
-                    root,
-                    {
-                        "path": relative,
-                        "offset": max(0, int(payload.get("offset") or 0)),
-                        "limit": _CLIPBOARD_CHUNK_BYTES,
-                        "include_hash": int(payload.get("offset") or 0) == 0,
-                    },
-                )
-                return {**result, "offer_id": offer_id}
-            except (OSError, RuntimeError, ValueError, PermissionError) as exc:
-                return {
-                    "ok": False,
-                    "code": str(exc) or "desktop_clipboard_transfer_failed",
-                    "error": "The clipboard image transfer failed.",
-                }
+            return await self._handle_host_clipboard_image_download(
+                peer_device_id=peer_device_id, command=command, payload=payload,
+                session_id=session_id, provider=provider,
+                permissions=session_permissions, granted=current_granted,
+            )
         if command in {
             "desktop.clipboard.file.download.prepare",
             "desktop.clipboard.file.download",
             "desktop.clipboard.file.ack",
         }:
-            if not permission_allowed("clipboard_file", "desktop:clipboard_file_user"):
-                return {"ok": False, "code": "desktop_capability_denied", "error": "File clipboard access is not authorized."}
-            offer_id = str(payload.get("offer_id") or "")
-            if not offer_id.startswith("clipboard_files_") or len(offer_id) != 48:
-                return {"ok": False, "code": "desktop_clipboard_offer_not_found", "error": "Clipboard file offer was not found."}
-            root = self._clipboard_scope_root(session_id)
-            relative_root = f"outgoing-files/{offer_id}"
-            target_root = (root / relative_root).resolve()
-            target_root.relative_to(root.resolve())
-            try:
-                if command.endswith(".ack"):
-                    await asyncio.to_thread(shutil.rmtree, target_root, True)
-                    await provider.acknowledge_clipboard_files(session_id, offer_id)
-                    return {"ok": True, "acknowledged": True}
-                if not target_root.is_dir():
-                    await provider.export_clipboard_files(session_id, offer_id, str(target_root))
-                if command.endswith(".prepare"):
-                    result = await self.remote_service.execute_scoped_file(
-                        str(peer_device_id),
-                        "files.manifest",
-                        f"remote_desktop_clipboard/{session_id}",
-                        root,
-                        {"path": relative_root, "include_hash": True},
-                    )
-                    return {**result, "offer_id": offer_id, "root": relative_root}
-                relative = str(payload.get("path") or "").replace("\\", "/")
-                if not relative.startswith(relative_root + "/"):
-                    raise ValueError("desktop clipboard download path is invalid")
-                result = await self.remote_service.execute_scoped_file(
-                    str(peer_device_id),
-                    "files.download",
-                    f"remote_desktop_clipboard/{session_id}",
-                    root,
-                    {
-                        "path": relative,
-                        "offset": max(0, int(payload.get("offset") or 0)),
-                        "limit": _CLIPBOARD_CHUNK_BYTES,
-                    },
-                )
-                return {**result, "offer_id": offer_id}
-            except (OSError, RuntimeError, ValueError, PermissionError) as exc:
-                return {
-                    "ok": False,
-                    "code": str(exc) or "desktop_clipboard_transfer_failed",
-                    "error": "The clipboard file transfer failed.",
-                }
+            return await self._handle_host_clipboard_file_download(
+                peer_device_id=peer_device_id, command=command, payload=payload,
+                session_id=session_id, provider=provider,
+                permissions=session_permissions, granted=current_granted,
+            )
         if command.startswith("desktop.clipboard.file."):
-            if not permission_allowed("clipboard_file", "desktop:clipboard_file_user"):
-                return {"ok": False, "code": "desktop_capability_denied", "error": "File clipboard access is not authorized."}
-            group_id = str(payload.get("group_id") or "")
-            if not group_id.startswith("clipboard_files_") or len(group_id) != 48:
-                return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard file group is invalid."}
-            operation = command.removeprefix("desktop.clipboard.file.")
-            root = self._clipboard_scope_root(session_id)
-            groups = host_session.setdefault("clipboard_file_groups", {})
-            reservations = host_session.setdefault("clipboard_file_reservations", {})
-            if operation == "apply":
-                paths = [str(item) for item in groups.get(group_id, [])]
-                if not paths:
-                    return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard file group is empty."}
-                try:
-                    await provider.apply_clipboard_files(session_id, paths)
-                except (OSError, RuntimeError, ValueError) as exc:
-                    return {"ok": False, "code": str(exc) or "desktop_clipboard_file_failed", "error": "The native file clipboard rejected the files."}
-                groups.pop(group_id, None)
-                for reserved_id, reserved in tuple(reservations.items()):
-                    if str(reserved.get("group_id") or "") == group_id:
-                        reservations.pop(reserved_id, None)
-                self.store.audit(
-                    "host_clipboard_files_applied",
-                    session_id=session_id,
-                    device_id=peer_device_id,
-                    outcome="ok",
-                    detail={"count": len(paths)},
-                )
-                return {"ok": True, "count": len(paths)}
-            if operation not in {"upload.begin", "upload.chunk", "upload.commit", "upload.abort"}:
-                return {"ok": False, "code": "remote_command_unsupported", "error": "Unsupported clipboard file transfer operation."}
-            transfer_id = str(payload.get("transfer_id") or "")
-            if not transfer_id.startswith("desktop_file_") or len(transfer_id) != 45:
-                return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard file transfer id is invalid."}
-            file_command = "files." + operation
-            scoped_payload = dict(payload)
-            scoped_payload.pop("session_id", None)
-            scoped_payload.pop("group_id", None)
-            if operation == "upload.begin":
-                try:
-                    relative = self._normalize_clipboard_relative(
-                        payload.get("relative_path")
-                    )
-                    size = int(payload.get("size") or 0)
-                except (RemoteDesktopError, TypeError, ValueError):
-                    return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard file manifest is invalid."}
-                if size < 0 or size > _MAX_CLIPBOARD_FILES_BYTES:
-                    return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard file exceeds the transfer limit."}
-                existing_reservation = reservations.get(transfer_id)
-                reservation = {
-                    "group_id": group_id,
-                    "relative_path": relative,
-                    "size": size,
-                }
-                if existing_reservation is not None and existing_reservation != reservation:
-                    return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard transfer id was reused with different metadata."}
-                group_total = sum(
-                    int(item.get("size") or 0)
-                    for key, item in reservations.items()
-                    if key != transfer_id and str(item.get("group_id") or "") == group_id
-                )
-                if group_total + size > _MAX_CLIPBOARD_FILES_BYTES:
-                    return {"ok": False, "code": "desktop_clipboard_file_invalid", "error": "Clipboard files exceed the transfer limit."}
-                reservations[transfer_id] = reservation
-                scoped_payload["path"] = f"incoming-files/{group_id}/{relative}"
-                scoped_payload["conflict_policy"] = "fail"
-                scoped_payload.pop("relative_path", None)
-            else:
-                reservation = reservations.get(transfer_id)
-                if reservation is None or str(reservation.get("group_id") or "") != group_id:
-                    return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard file transfer was not initialized."}
-            try:
-                result = await self.remote_service.execute_scoped_file(
-                    str(peer_device_id),
-                    file_command,
-                    f"remote_desktop_clipboard/{session_id}",
-                    root,
-                    scoped_payload,
-                )
-                if operation == "upload.commit" and result.get("ok") is not False:
-                    target = (root / str(result.get("path") or "")).resolve()
-                    target.relative_to(root.resolve())
-                    values = groups.setdefault(group_id, [])
-                    if str(target) not in values:
-                        if len(values) >= 512:
-                            raise ValueError("desktop clipboard file count exceeds the limit")
-                        values.append(str(target))
-                if operation == "upload.abort" and result.get("ok") is not False:
-                    reservations.pop(transfer_id, None)
-                return result
-            except (OSError, RuntimeError, ValueError, PermissionError) as exc:
-                return {
-                    "ok": False,
-                    "code": str(exc) or "desktop_clipboard_transfer_failed",
-                    "error": "The clipboard file transfer failed.",
-                }
+            return await self._handle_host_clipboard_file_upload(
+                peer_device_id=peer_device_id, command=command, payload=payload,
+                session_id=session_id, host_session=host_session, provider=provider,
+                permissions=session_permissions, granted=current_granted,
+            )
         if command.startswith("desktop.clipboard.image.upload."):
-            if not permission_allowed("clipboard_image", "desktop:clipboard_image_user"):
-                return {"ok": False, "code": "desktop_capability_denied", "error": "Image clipboard access is not authorized."}
-            transfer_id = str(payload.get("transfer_id") or "")
-            if not transfer_id.startswith("desktop_clip_") or len(transfer_id) != 45:
-                return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard transfer id is invalid."}
-            operation = command.removeprefix("desktop.clipboard.image.")
-            if operation not in {"upload.begin", "upload.chunk", "upload.commit", "upload.abort"}:
-                return {"ok": False, "code": "remote_command_unsupported", "error": "Unsupported clipboard image transfer operation."}
-            image_transfers = host_session.setdefault("clipboard_image_transfers", {})
-            if operation == "upload.begin":
-                try:
-                    image_size = int(payload.get("size") or 0)
-                except (TypeError, ValueError):
-                    image_size = -1
-                if image_size < 1 or image_size > _MAX_CLIPBOARD_IMAGE_BYTES:
-                    return {"ok": False, "code": "desktop_clipboard_image_invalid", "error": "Clipboard image exceeds the transfer limit."}
-                existing_size = image_transfers.get(transfer_id)
-                if existing_size is not None and int(existing_size) != image_size:
-                    return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard transfer id was reused with a different size."}
-                image_transfers[transfer_id] = image_size
-            elif transfer_id not in image_transfers:
-                return {"ok": False, "code": "desktop_clipboard_transfer_invalid", "error": "Clipboard image transfer was not initialized."}
-            file_command = "files." + operation
-            scoped_payload = dict(payload)
-            scoped_payload.pop("session_id", None)
-            if operation == "upload.begin":
-                scoped_payload["path"] = f"incoming/{transfer_id}.png"
-                scoped_payload["conflict_policy"] = "fail"
-            root = self._clipboard_scope_root(session_id)
-            try:
-                result = await self.remote_service.execute_scoped_file(
-                    str(peer_device_id),
-                    file_command,
-                    f"remote_desktop_clipboard/{session_id}",
-                    root,
-                    scoped_payload,
-                )
-                if operation == "upload.commit" and result.get("ok") is not False:
-                    target = (root / str(result.get("path") or "")).resolve()
-                    target.relative_to(root.resolve())
-                    await provider.apply_clipboard_image(session_id, str(target))
-                    target.unlink(missing_ok=True)
-                    self.store.audit(
-                        "host_clipboard_image_applied",
-                        session_id=session_id,
-                        device_id=peer_device_id,
-                        outcome="ok",
-                        detail={"bytes": int(result.get("size") or 0)},
-                    )
-                    image_transfers.pop(transfer_id, None)
-                elif operation == "upload.abort" and result.get("ok") is not False:
-                    image_transfers.pop(transfer_id, None)
-                return result
-            except (OSError, RuntimeError, ValueError, PermissionError) as exc:
-                return {
-                    "ok": False,
-                    "code": str(exc) or "desktop_clipboard_transfer_failed",
-                    "error": "The clipboard image transfer failed.",
-                }
+            return await self._handle_host_clipboard_image_upload(
+                peer_device_id=peer_device_id, command=command, payload=payload,
+                session_id=session_id, host_session=host_session, provider=provider,
+                permissions=session_permissions, granted=current_granted,
+            )
         if command == "desktop.disconnect":
-            if str(payload.get("reason") or "") == "reconnect":
-                self._reconnect_approval_grace[str(peer_device_id)] = (
-                    time.monotonic() + 30
-                )
             await provider.disconnect(session_id)
             await electron_desktop_rpc(
                 "hide_indicator",
@@ -2072,7 +2109,7 @@ class RemoteDesktopService:
         if command == "desktop.display.list":
             return {"ok": True, "displays": [item.public() for item in await provider.list_displays(session_id)]}
         if command == "desktop.display.select":
-            if not permission_allowed("display_select", "desktop:display_select_user"):
+            if not self._host_permission_allowed(session_permissions, current_granted, "display_select", "desktop:display_select_user"):
                 return {"ok": False, "code": "desktop_capability_denied", "error": "Display switching is not authorized."}
             display_id = str(payload.get("display_id") or "")
             await provider.select_display(session_id, display_id)
@@ -2086,7 +2123,7 @@ class RemoteDesktopService:
             await provider.set_quality(session_id, quality)  # type: ignore[arg-type]
             return {"ok": True, "quality_mode": quality}
         if command == "desktop.microphone.set":
-            if not permission_allowed("microphone", "desktop:audio_input_user"):
+            if not self._host_permission_allowed(session_permissions, current_granted, "microphone", "desktop:audio_input_user"):
                 return {"ok": False, "code": "desktop_capability_denied", "error": "Microphone sharing is not authorized."}
             await provider.set_microphone(session_id, bool(payload.get("enabled")))
             return {"ok": True, "enabled": bool(payload.get("enabled"))}
@@ -2182,6 +2219,96 @@ class RemoteDesktopService:
             result.append(self._session_public(session))
         return result
 
+    async def _begin_agent_observation(
+        self,
+        *,
+        session_id: str,
+        chat_id: str,
+        reason: str,
+        region: SnapshotRegion | None,
+    ) -> tuple[str, asyncio.Future[dict[str, Any]]]:
+        observation_id = "observation_" + uuid4().hex
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        observation = _Observation(
+            observation_id=observation_id,
+            session_id=session_id,
+            chat_id=chat_id,
+            reason=str(reason)[:300],
+            region=region,
+            created_at=time.monotonic(),
+            future=future,
+        )
+        async with self._observation_lock:
+            if any(item.session_id == session_id and item.chat_id == chat_id for item in self._observations.values()):
+                raise RemoteDesktopError("desktop_snapshot_rate_limited", "A desktop snapshot is already in progress.", 429)
+            self._observations[observation_id] = observation
+        return observation_id, future
+
+    async def _deliver_agent_snapshot(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        session_id: str,
+        chat_id: str,
+        initial_security_epoch: int,
+    ) -> dict[str, Any]:
+        path = Path(str(snapshot.get("path") or ""))
+        if not self.store.is_authorized(chat_id, session_id):
+            path.unlink(missing_ok=True)
+            raise RemoteDesktopError("desktop_view_permission_revoked", "Desktop view permission was revoked before delivery.", 403)
+        current_session = self._connected_session(session_id)
+        self._require_peer_capability(str(current_session["device_id"]), "desktop:screen_view_agent")
+        try:
+            final_security = await self.security_state(session_id)
+        except Exception as exc:
+            path.unlink(missing_ok=True)
+            raise RemoteDesktopError("desktop_security_state_unavailable", "The protected-surface state could not be verified before delivering the desktop frame.", 503) from exc
+        final_security_epoch = max(0, int(final_security.get("security_epoch") or 0))
+        if bool(final_security.get("secure_surface")) or final_security_epoch != initial_security_epoch:
+            path.unlink(missing_ok=True)
+            raise RemoteDesktopError("desktop_secure_surface_masked", "The desktop entered or left a protected surface while the frame was being captured.", 403)
+        snapshot_id = "snapshot_" + uuid4().hex
+        self._snapshots[snapshot_id] = snapshot
+        return {
+            "_cyrene_remote_desktop_snapshot": "v1",
+            "snapshot_id": snapshot_id,
+            "session_id": session_id,
+            "captured_at": snapshot["captured_at"],
+            "width": snapshot["width"],
+            "height": snapshot["height"],
+            "display_id": str(current_session.get("selected_display_id") or ""),
+            "quality_mode": str(current_session.get("quality_mode") or "auto"),
+            "masked": False,
+            "audio_available_to_agent": False,
+        }
+
+    async def _end_agent_observation(
+        self,
+        *,
+        observation_id: str,
+        session: dict[str, Any],
+        session_id: str,
+        chat_id: str,
+        tool_call_id: str,
+        outcome: str,
+    ) -> None:
+        async with self._observation_lock:
+            self._observations.pop(observation_id, None)
+        await debug.publish_event(
+            {
+                "type": "resource_observation.ended",
+                "resource_kind": "remote_desktop",
+                "resource_id": session_id,
+                "pane_card_id": str(session.get("pane_card_id") or ""),
+                "chat_id": chat_id,
+                "tool_call_id": str(tool_call_id),
+                "device_id": str(session["device_id"]),
+                "observation_id": observation_id,
+                "outcome": outcome,
+            }
+        )
+        self.store.audit("agent_view_ended", session_id=session_id, device_id=str(session["device_id"]), chat_id=chat_id, outcome=outcome, detail={"observation_id": observation_id})
+
     async def request_agent_snapshot(
         self,
         session_id: str,
@@ -2218,22 +2345,12 @@ class RemoteDesktopService:
         initial_security_epoch = max(
             0, int(initial_security.get("security_epoch") or 0)
         )
-        observation_id = "observation_" + uuid4().hex
-        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        observation = _Observation(
-            observation_id=observation_id,
+        observation_id, future = await self._begin_agent_observation(
             session_id=session_id,
             chat_id=chat_id,
-            reason=str(reason)[:300],
+            reason=reason,
             region=region,
-            created_at=time.monotonic(),
-            future=future,
         )
-        async with self._observation_lock:
-            # A chat/session pair may take at most one fresh snapshot at once.
-            if any(item.session_id == session_id and item.chat_id == chat_id for item in self._observations.values()):
-                raise RemoteDesktopError("desktop_snapshot_rate_limited", "A desktop snapshot is already in progress.", 429)
-            self._observations[observation_id] = observation
         event = {
             "type": "resource_observation.started",
             "resource_kind": "remote_desktop",
@@ -2249,69 +2366,25 @@ class RemoteDesktopService:
         outcome = "failed"
         try:
             snapshot = await asyncio.wait_for(future, timeout=10)
-            if not self.store.is_authorized(chat_id, session_id):
-                Path(str(snapshot.get("path") or "")).unlink(missing_ok=True)
-                raise RemoteDesktopError("desktop_view_permission_revoked", "Desktop view permission was revoked before delivery.", 403)
-            current_session = self._connected_session(session_id)
-            self._require_peer_capability(
-                str(current_session["device_id"]), "desktop:screen_view_agent"
+            result = await self._deliver_agent_snapshot(
+                snapshot=snapshot,
+                session_id=session_id,
+                chat_id=chat_id,
+                initial_security_epoch=initial_security_epoch,
             )
-            try:
-                final_security = await self.security_state(session_id)
-            except Exception as exc:
-                Path(str(snapshot.get("path") or "")).unlink(missing_ok=True)
-                raise RemoteDesktopError(
-                    "desktop_security_state_unavailable",
-                    "The protected-surface state could not be verified before delivering the desktop frame.",
-                    503,
-                ) from exc
-            final_security_epoch = max(
-                0, int(final_security.get("security_epoch") or 0)
-            )
-            if (
-                bool(final_security.get("secure_surface"))
-                or final_security_epoch != initial_security_epoch
-            ):
-                Path(str(snapshot.get("path") or "")).unlink(missing_ok=True)
-                raise RemoteDesktopError(
-                    "desktop_secure_surface_masked",
-                    "The desktop entered or left a protected surface while the frame was being captured.",
-                    403,
-                )
             outcome = "success"
-            snapshot_id = "snapshot_" + uuid4().hex
-            self._snapshots[snapshot_id] = snapshot
-            return {
-                "_cyrene_remote_desktop_snapshot": "v1",
-                "snapshot_id": snapshot_id,
-                "session_id": session_id,
-                "captured_at": snapshot["captured_at"],
-                "width": snapshot["width"],
-                "height": snapshot["height"],
-                "display_id": str(current_session.get("selected_display_id") or ""),
-                "quality_mode": str(current_session.get("quality_mode") or "auto"),
-                "masked": False,
-                "audio_available_to_agent": False,
-            }
+            return result
         except asyncio.TimeoutError as exc:
             raise RemoteDesktopError("desktop_snapshot_failed", "The visible Remote Desktop Pane did not provide a fresh frame.", 504) from exc
         finally:
-            async with self._observation_lock:
-                self._observations.pop(observation_id, None)
-            await debug.publish_event(
-                {
-                    "type": "resource_observation.ended",
-                    "resource_kind": "remote_desktop",
-                    "resource_id": session_id,
-                    "pane_card_id": str(session.get("pane_card_id") or ""),
-                    "chat_id": chat_id,
-                    "tool_call_id": str(tool_call_id),
-                    "device_id": str(session["device_id"]),
-                    "observation_id": observation_id,
-                    "outcome": outcome,
-                }
+            await self._end_agent_observation(
+                observation_id=observation_id,
+                session=session,
+                session_id=session_id,
+                chat_id=chat_id,
+                tool_call_id=tool_call_id,
+                outcome=outcome,
             )
-            self.store.audit("agent_view_ended", session_id=session_id, device_id=str(session["device_id"]), chat_id=chat_id, outcome=outcome, detail={"observation_id": observation_id})
 
     async def pending_observations(self, session_id: str) -> dict[str, Any]:
         async with self._observation_lock:

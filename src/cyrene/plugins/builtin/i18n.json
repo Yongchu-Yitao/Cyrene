@@ -535,6 +535,16 @@
         "description": "运行静态检查、格式检查与结构分析，生成包含问题和建议的代码审查报告。"
       }
     },
+    "CodexOAuthToolCallParser": {
+      "en": {
+        "name": "Codex OAuth tool-call parser",
+        "description": "Parse the canonical structured-action output from Codex OAuth."
+      },
+      "zh": {
+        "name": "Codex OAuth 工具调用解析器",
+        "description": "解析 Codex OAuth 返回的规范化结构化动作。"
+      }
+    },
     "CodexOAuth": {
       "en": {
         "name": "Codex OAuth",
@@ -543,6 +553,16 @@
       "zh": {
         "name": "Codex OAuth",
         "description": "调用已配置的 OpenAI Codex OAuth 连接，并发现该连接可用的模型。"
+      }
+    },
+    "CyreneModelRouter": {
+      "en": {
+        "name": "Cyrene model router",
+        "description": "Route one Agent model call through the configured editable Provider Plugins."
+      },
+      "zh": {
+        "name": "Cyrene 模型路由器",
+        "description": "通过当前配置的可编辑 Provider 插件路由单次 Agent 模型调用。"
       }
     },
     "CyreneAppStatus": {
@@ -805,6 +825,16 @@
         "description": "调用已配置的 GLM 连接，并发现该连接可用的模型。"
       }
     },
+    "GenericToolCallParser": {
+      "en": {
+        "name": "Generic tool-call parser",
+        "description": "Parse standard and OpenAI-compatible Provider Plugin tool calls."
+      },
+      "zh": {
+        "name": "通用工具调用解析器",
+        "description": "解析标准格式及 OpenAI 兼容的 Provider 插件工具调用。"
+      }
+    },
     "Gemini": {
       "en": {
         "name": "Gemini",
@@ -928,7 +958,7 @@
     "InspectRemoteDesktop": {
       "en": {
         "name": "View remote desktop",
-        "description": "Get one fresh frame from a user-authorized Remote Desktop Pane; view-only, without audio or clipboard access."
+        "description": "Get one fresh image of the display currently selected by the user in an authorized Remote Desktop Pane. This V1 tool is view-only and never returns audio or clipboard data."
       },
       "zh": {
         "name": "查看远程桌面",
@@ -1078,7 +1108,7 @@
     "ListRemoteDesktopSessions": {
       "en": {
         "name": "List remote desktop sessions",
-        "description": "List connected Remote Desktop sessions that the current main conversation is authorized to view."
+        "description": "List connected Remote Desktop sessions that the user has authorized this main conversation to view by placing both cards in the same Pane workspace."
       },
       "zh": {
         "name": "列出可查看的远程桌面",

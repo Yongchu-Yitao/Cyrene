@@ -104,10 +104,40 @@ def _capabilities(raw: dict[str, Any], adapter_id: str) -> list[str]:
     return sorted(result)
 
 
+def _migrate_bailian_connection(
+    raw_connections: list[Any], version: Any
+) -> list[Any]:
+    if not isinstance(version, int) or version >= 11:
+        return raw_connections
+    has_bailian = any(
+        isinstance(item, dict)
+        and (
+            str(item.get("id") or "").strip() == "aliyun_bailian"
+            or str(
+                (item.get("options") if isinstance(item.get("options"), dict) else {}).get("provider_preset") or ""
+            ).strip().lower() == "aliyun_bailian"
+        )
+        for item in raw_connections
+    )
+    if has_bailian or len(raw_connections) >= 100:
+        return raw_connections
+    return [
+        *raw_connections,
+        {
+            "id": "aliyun_bailian",
+            "name": "Alibaba Cloud Model Studio",
+            "adapter": "openai",
+            "enabled": True,
+            "use_proxy": False,
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "",
+            "options": {"provider_preset": "aliyun_bailian"},
+        },
+    ]
+
+
 def normalize_model_configuration(
-    raw: Any,
-    *,
-    previous: dict[str, Any] | None = None,
+    raw: Any, *, previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate and detach a complete model configuration document."""
 
@@ -137,41 +167,7 @@ def normalize_model_configuration(
         raise ValueError("profiles must be an array")
     if not isinstance(raw_routes, dict):
         raise ValueError("routes must be an object")
-    if isinstance(version, int) and version < 11:
-        has_bailian = any(
-            isinstance(item, dict)
-            and (
-                str(item.get("id") or "").strip() == "aliyun_bailian"
-                or str(
-                    (
-                        item.get("options")
-                        if isinstance(item.get("options"), dict)
-                        else {}
-                    ).get("provider_preset")
-                    or ""
-                ).strip().lower()
-                == "aliyun_bailian"
-            )
-            for item in raw_connections
-        )
-        # Preserve a previously valid document at the connection-count limit;
-        # users can still replace a connection with the new preset manually.
-        if not has_bailian and len(raw_connections) < 100:
-            raw_connections = [
-                *raw_connections,
-                {
-                    "id": "aliyun_bailian",
-                    "name": "Alibaba Cloud Model Studio",
-                    "adapter": "openai",
-                    "enabled": True,
-                    "use_proxy": False,
-                    "base_url": (
-                        "https://dashscope.aliyuncs.com/compatible-mode/v1"
-                    ),
-                    "api_key": "",
-                    "options": {"provider_preset": "aliyun_bailian"},
-                },
-            ]
+    raw_connections = _migrate_bailian_connection(raw_connections, version)
     if len(raw_connections) > 100 or len(raw_profiles) > 1000:
         raise ValueError("model configuration is too large")
 
@@ -658,17 +654,7 @@ def model_configuration_hash(configuration: dict[str, Any] | None = None) -> str
     return hashlib.sha256(payload).hexdigest()
 
 
-def patch_model_configuration(
-    raw: Any,
-) -> tuple[dict[str, Any], int, str, bool]:
-    """Atomically apply idempotent entity/field operations to the latest graph.
-
-    ``base_hash`` only reports whether the request was rebased over a newer
-    graph.  It deliberately never rejects the write: operations touch only the
-    named connection, profile, or route and therefore preserve unrelated
-    concurrent changes.
-    """
-
+def _validated_configuration_patch(raw: Any) -> tuple[str, list[Any]]:
     if not isinstance(raw, dict):
         raise ValueError("model configuration patch must be an object")
     unknown = set(raw) - {"base_hash", "operations"}
@@ -685,140 +671,162 @@ def patch_model_configuration(
         raise ValueError("model configuration patch operations must be a non-empty array")
     if len(operations) > 2000:
         raise ValueError("model configuration patch has too many operations")
+    return base_hash, operations
+
+
+def _entity_index(working: dict[str, Any], collection: str, entity_id: str) -> int:
+    return next(
+        (
+            index
+            for index, item in enumerate(working[collection])
+            if str(item.get("id") or "") == entity_id
+        ),
+        -1,
+    )
+
+
+def _apply_connection_patch(
+    working: dict[str, Any], operation: dict[str, Any], kind: str, entity_id: str
+) -> None:
+    entity_id = _identifier(entity_id, kind="connection")
+    index = _entity_index(working, "connections", entity_id)
+    if kind == "remove_connection":
+        if index >= 0:
+            working["connections"].pop(index)
+        removed_profiles = {
+            str(profile.get("id") or "")
+            for profile in working["profiles"]
+            if str(profile.get("connection_id") or "") == entity_id
+        }
+        working["profiles"] = [
+            profile
+            for profile in working["profiles"]
+            if str(profile.get("connection_id") or "") != entity_id
+        ]
+        for route_name in ROUTE_NAMES:
+            working["routes"][route_name] = [
+                profile_id
+                for profile_id in working["routes"][route_name]
+                if profile_id not in removed_profiles
+            ]
+        return
+    if kind == "upsert_connection":
+        value = operation.get("value")
+        if not isinstance(value, dict):
+            raise ValueError("upsert_connection value must be an object")
+        replacement = {**deepcopy(value), "id": entity_id}
+        if index >= 0:
+            working["connections"][index] = replacement
+        else:
+            working["connections"].append(replacement)
+        return
+    changes = operation.get("changes")
+    if not isinstance(changes, dict) or not changes:
+        raise ValueError("patch_connection changes must be a non-empty object")
+    unsupported = set(changes) - _CONNECTION_PATCH_FIELDS
+    if unsupported:
+        raise ValueError(
+            "unsupported connection patch fields: " + ", ".join(sorted(unsupported))
+        )
+    if index < 0:
+        raise ValueError(f"model connection not found: {entity_id}")
+    working["connections"][index] = {
+        **working["connections"][index],
+        **deepcopy(changes),
+        "id": entity_id,
+    }
+
+
+def _apply_profile_patch(
+    working: dict[str, Any], operation: dict[str, Any], kind: str, entity_id: str
+) -> None:
+    entity_id = _identifier(entity_id, kind="profile")
+    index = _entity_index(working, "profiles", entity_id)
+    if kind == "remove_profile":
+        if index >= 0:
+            working["profiles"].pop(index)
+        for route_name in ROUTE_NAMES:
+            working["routes"][route_name] = [
+                profile_id
+                for profile_id in working["routes"][route_name]
+                if profile_id != entity_id
+            ]
+        return
+    if kind == "upsert_profile":
+        value = operation.get("value")
+        if not isinstance(value, dict):
+            raise ValueError("upsert_profile value must be an object")
+        replacement = {**deepcopy(value), "id": entity_id}
+        if index >= 0:
+            working["profiles"][index] = replacement
+        else:
+            working["profiles"].append(replacement)
+        return
+    changes = operation.get("changes")
+    if not isinstance(changes, dict) or not changes:
+        raise ValueError("patch_profile changes must be a non-empty object")
+    unsupported = set(changes) - _PROFILE_PATCH_FIELDS
+    if unsupported:
+        raise ValueError(
+            "unsupported profile patch fields: " + ", ".join(sorted(unsupported))
+        )
+    if index < 0:
+        raise ValueError(f"model profile not found: {entity_id}")
+    working["profiles"][index] = {
+        **working["profiles"][index],
+        **deepcopy(changes),
+        "id": entity_id,
+    }
+
+
+def _apply_configuration_patch_operation(
+    working: dict[str, Any], operation: Any, position: int
+) -> None:
+    if not isinstance(operation, dict):
+        raise ValueError(f"patch operation {position} must be an object")
+    kind = str(operation.get("op") or "").strip().lower()
+    entity_id = str(operation.get("id") or "").strip()
+    if kind in {"upsert_connection", "patch_connection", "remove_connection"}:
+        _apply_connection_patch(working, operation, kind, entity_id)
+        return
+    if kind in {"upsert_profile", "patch_profile", "remove_profile"}:
+        _apply_profile_patch(working, operation, kind, entity_id)
+        return
+    if kind == "set_route":
+        route_name = str(operation.get("route") or "").strip().lower()
+        if route_name not in ROUTE_NAMES:
+            raise ValueError(f"unknown model route: {route_name}")
+        value = operation.get("value")
+        if not isinstance(value, list):
+            raise ValueError("set_route value must be an array")
+        working["routes"][route_name] = deepcopy(value)
+        return
+    raise ValueError(f"unknown model configuration patch operation: {kind}")
+
+
+def patch_model_configuration(
+    raw: Any,
+) -> tuple[dict[str, Any], int, str, bool]:
+    """Atomically apply idempotent entity/field operations to the latest graph."""
+
+    base_hash, operations = _validated_configuration_patch(raw)
 
     # Ensure the optional Plugin seed exists before entering the atomic
     # mutation.  Subsequent reads and the complete patch run under one lock.
     get_model_configuration()
-    observed_hash = ""
-    rebased = False
+    patch_state = {"observed_hash": "", "rebased": False}
 
     def mutate(previous_raw: Any) -> dict[str, Any]:
-        nonlocal observed_hash, rebased
         if not isinstance(previous_raw, dict):
             raise ValueError("stored model configuration must be an object")
         current = normalize_model_configuration(previous_raw, previous=previous_raw)
-        observed_hash = model_configuration_hash(current)
-        rebased = bool(base_hash and base_hash != observed_hash)
+        patch_state["observed_hash"] = model_configuration_hash(current)
+        patch_state["rebased"] = bool(
+            base_hash and base_hash != patch_state["observed_hash"]
+        )
         working = deepcopy(current)
-
-        def entity_index(collection: str, entity_id: str) -> int:
-            return next(
-                (
-                    index
-                    for index, item in enumerate(working[collection])
-                    if str(item.get("id") or "") == entity_id
-                ),
-                -1,
-            )
-
         for position, operation in enumerate(operations):
-            if not isinstance(operation, dict):
-                raise ValueError(f"patch operation {position} must be an object")
-            kind = str(operation.get("op") or "").strip().lower()
-            entity_id = str(operation.get("id") or "").strip()
-            if kind in {"upsert_connection", "patch_connection", "remove_connection"}:
-                entity_id = _identifier(entity_id, kind="connection")
-                index = entity_index("connections", entity_id)
-                if kind == "remove_connection":
-                    if index >= 0:
-                        working["connections"].pop(index)
-                    removed_profiles = {
-                        str(profile.get("id") or "")
-                        for profile in working["profiles"]
-                        if str(profile.get("connection_id") or "") == entity_id
-                    }
-                    working["profiles"] = [
-                        profile
-                        for profile in working["profiles"]
-                        if str(profile.get("connection_id") or "") != entity_id
-                    ]
-                    for route_name in ROUTE_NAMES:
-                        working["routes"][route_name] = [
-                            profile_id
-                            for profile_id in working["routes"][route_name]
-                            if profile_id not in removed_profiles
-                        ]
-                    continue
-                if kind == "upsert_connection":
-                    value = operation.get("value")
-                    if not isinstance(value, dict):
-                        raise ValueError("upsert_connection value must be an object")
-                    replacement = {**deepcopy(value), "id": entity_id}
-                    if index >= 0:
-                        working["connections"][index] = replacement
-                    else:
-                        working["connections"].append(replacement)
-                    continue
-                changes = operation.get("changes")
-                if not isinstance(changes, dict) or not changes:
-                    raise ValueError("patch_connection changes must be a non-empty object")
-                unsupported = set(changes) - _CONNECTION_PATCH_FIELDS
-                if unsupported:
-                    raise ValueError(
-                        "unsupported connection patch fields: "
-                        + ", ".join(sorted(unsupported))
-                    )
-                if index < 0:
-                    raise ValueError(f"model connection not found: {entity_id}")
-                working["connections"][index] = {
-                    **working["connections"][index],
-                    **deepcopy(changes),
-                    "id": entity_id,
-                }
-                continue
-
-            if kind in {"upsert_profile", "patch_profile", "remove_profile"}:
-                entity_id = _identifier(entity_id, kind="profile")
-                index = entity_index("profiles", entity_id)
-                if kind == "remove_profile":
-                    if index >= 0:
-                        working["profiles"].pop(index)
-                    for route_name in ROUTE_NAMES:
-                        working["routes"][route_name] = [
-                            profile_id
-                            for profile_id in working["routes"][route_name]
-                            if profile_id != entity_id
-                        ]
-                    continue
-                if kind == "upsert_profile":
-                    value = operation.get("value")
-                    if not isinstance(value, dict):
-                        raise ValueError("upsert_profile value must be an object")
-                    replacement = {**deepcopy(value), "id": entity_id}
-                    if index >= 0:
-                        working["profiles"][index] = replacement
-                    else:
-                        working["profiles"].append(replacement)
-                    continue
-                changes = operation.get("changes")
-                if not isinstance(changes, dict) or not changes:
-                    raise ValueError("patch_profile changes must be a non-empty object")
-                unsupported = set(changes) - _PROFILE_PATCH_FIELDS
-                if unsupported:
-                    raise ValueError(
-                        "unsupported profile patch fields: "
-                        + ", ".join(sorted(unsupported))
-                    )
-                if index < 0:
-                    raise ValueError(f"model profile not found: {entity_id}")
-                working["profiles"][index] = {
-                    **working["profiles"][index],
-                    **deepcopy(changes),
-                    "id": entity_id,
-                }
-                continue
-
-            if kind == "set_route":
-                route_name = str(operation.get("route") or "").strip().lower()
-                if route_name not in ROUTE_NAMES:
-                    raise ValueError(f"unknown model route: {route_name}")
-                value = operation.get("value")
-                if not isinstance(value, list):
-                    raise ValueError("set_route value must be an array")
-                working["routes"][route_name] = deepcopy(value)
-                continue
-            raise ValueError(f"unknown model configuration patch operation: {kind}")
-
+            _apply_configuration_patch_operation(working, operation, position)
         normalized = normalize_model_configuration(working, previous=current)
         validate_active_route_provider_families(normalized)
         return normalized
@@ -841,7 +849,7 @@ def patch_model_configuration(
         raise RuntimeError("model configuration patch returned an invalid graph")
     saved = normalize_model_configuration(saved_raw, previous=saved_raw)
     invalidate_model_runtime_caches()
-    return saved, revision, model_configuration_hash(saved), rebased
+    return saved, revision, model_configuration_hash(saved), bool(patch_state["rebased"])
 
 
 def public_model_configuration(configuration: dict[str, Any] | None = None) -> dict[str, Any]:

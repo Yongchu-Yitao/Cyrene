@@ -119,6 +119,18 @@ class RemoteControlApplicationService:
         self.projection = projection
         self.runtime = runtime
 
+    @property
+    def peer_transport(self) -> Any | None:
+        """Return the live peer transport owned by this Plugin generation.
+
+        Application plugins are loaded under isolated module names. Consumers
+        must obtain process state through the injected application service,
+        rather than importing another Plugin's module-level registry.
+        """
+        if self.runtime is None:
+            return None
+        return getattr(self.runtime, "gateway", None)
+
     async def execute_scoped_file(
         self,
         peer_device_id: str,

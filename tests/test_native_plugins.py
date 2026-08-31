@@ -405,6 +405,37 @@ def test_unmanaged_pack_and_standalone_collisions_are_never_merged(
     assert manifest == {"version": 1, "files": {}}
 
 
+def test_bytecode_only_pack_shell_is_repaired_from_canonical_sources(
+    tmp_path,
+    monkeypatch,
+):
+    plugin_directory = tmp_path / "plugin_impl"
+    canonical = MappingProxyType(
+        {
+            "cyrene_remote_desktop/__init__.py": b"canonical-pack\n",
+            "cyrene_remote_desktop/frontend/index.html": b"desktop-view\n",
+            "edit.py": b"canonical-edit\n",
+        }
+    )
+    monkeypatch.setattr(native_tools, "_collect_canonical_files", lambda: canonical)
+
+    pack = plugin_directory / "cyrene_remote_desktop"
+    cache = pack / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "__init__.cpython-312.pyc").write_bytes(b"generated-bytecode")
+
+    seeded = seed_builtin_plugin_directory(plugin_directory)
+
+    assert (pack / "__init__.py").read_bytes() == b"canonical-pack\n"
+    assert (pack / "frontend" / "index.html").read_bytes() == b"desktop-view\n"
+    assert not cache.exists()
+    assert any("repaired bytecode-only" in item for item in seeded.diagnostics)
+    manifest = json.loads(seeded.manifest.read_text(encoding="utf-8"))
+    assert manifest["files"]["cyrene_remote_desktop/__init__.py"] == _sha(
+        b"canonical-pack\n"
+    )
+
+
 def test_explicit_canonical_pack_tombstone_prevents_reseed(tmp_path, monkeypatch):
     plugin_directory = tmp_path / "plugin_impl"
     canonical = MappingProxyType(

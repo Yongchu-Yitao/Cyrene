@@ -57,7 +57,6 @@ SessionState = Literal[
     "needs_component",
     "needs_permission",
     "ready",
-    "waiting_target_approval",
     "waiting_credentials",
     "gathering_ice",
     "connecting_direct",

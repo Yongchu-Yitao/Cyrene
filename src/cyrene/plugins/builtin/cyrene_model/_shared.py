@@ -558,6 +558,58 @@ def _openai_payload(
     return payload
 
 
+def _log_completed_stream(
+    *,
+    provider: ModelProvider,
+    model: str,
+    endpoint: str,
+    timing: Mapping[str, float],
+    started: float,
+) -> None:
+    log_operation(
+        logger,
+        "model.provider",
+        "stream",
+        phase="completed",
+        provider=provider.id,
+        model=model,
+        endpoint=endpoint,
+        response_headers_ms=round(float(timing.get("response_headers_ms") or 0.0), 3),
+        ttft_ms=round(float(timing.get("ttft_ms") or 0.0), 3),
+        duration_ms=round((time.perf_counter() - started) * 1000, 3),
+    )
+
+
+def _finalize_stream_result(
+    message: Mapping[str, Any],
+    *,
+    provider: ModelProvider,
+    context: PluginContext,
+    model: str,
+    endpoint: str,
+    timing: Mapping[str, float],
+    started: float,
+) -> dict[str, Any]:
+    response_id = str(message.get("response_id") or "")
+    returned_model = str(message.get("model") or model)
+    _log_completed_stream(
+        provider=provider,
+        model=returned_model,
+        endpoint=endpoint,
+        timing=timing,
+        started=started,
+    )
+    return _normalized_result(
+        dict(message),
+        provider,
+        context,
+        response_id=response_id,
+        model=returned_model,
+        latency_ms=(time.perf_counter() - started) * 1000,
+        endpoint=endpoint,
+    )
+
+
 async def _complete_stream_endpoint(
     *,
     adapter: str,
@@ -642,28 +694,14 @@ async def _complete_stream_endpoint(
             status="recovered",
             model=model,
         )
-    response_id = str(message.get("response_id") or "")
-    returned_model = str(message.get("model") or model)
-    log_operation(
-        logger,
-        "model.provider",
-        "stream",
-        phase="completed",
-        provider=provider.id,
-        model=returned_model,
-        endpoint=endpoint,
-        response_headers_ms=round(float(timing.get("response_headers_ms") or 0.0), 3),
-        ttft_ms=round(float(timing.get("ttft_ms") or 0.0), 3),
-        duration_ms=round((time.perf_counter() - started) * 1000, 3),
-    )
-    return _normalized_result(
+    return _finalize_stream_result(
         message,
-        provider,
-        context,
-        response_id=response_id,
-        model=returned_model,
-        latency_ms=(time.perf_counter() - started) * 1000,
+        provider=provider,
+        context=context,
+        model=model,
         endpoint=endpoint,
+        timing=timing,
+        started=started,
     )
 
 

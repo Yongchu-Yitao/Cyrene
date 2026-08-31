@@ -721,6 +721,56 @@ def test_overflowing_chat_card_and_topbar_tab_text_scrolls_on_hover():
     assert "prefers-reduced-motion: reduce" in styles
 
 
+def test_remote_desktop_topbar_tab_uses_a_dedicated_monitor_icon():
+    source = frontend_module_source("features/shell/topbar.jsx")
+
+    icon = source.split("function WorkbenchTabKindIcon", 1)[1].split(
+        "function WorkbenchSessionMenuFileName", 1
+    )[0]
+    assert "payload.packId || payload.pack_id" in icon
+    assert 'pluginPackId === "cyrene_remote_desktop"' in icon
+    assert '<rect x="1.5" y="2.1" width="13" height="9.2" rx="1.8"/>' in icon
+    assert '<path d="M5 14h6M8 11.3V14"/>' in icon
+    assert source.count("<WorkbenchTabKindIcon item={item} />") == 2
+    assert "<WorkbenchTabKindIcon item={sessionMenuCurrentItem} />" in source
+
+
+def test_remote_desktop_rail_uses_dedicated_vector_icons():
+    icons = frontend_module_source("features/chat/icons.jsx")
+    rail = frontend_module_source("features/chat/rail.jsx")
+
+    assert "remoteDesktop: <svg" in icons
+    assert 'd="m9 7.5 6.2 5.3-3 .6-1.4 2.7Z"' in icons
+    assert "remoteDevice: <svg" in icons
+    assert 'd="M8 20.5h8M12 16.5v4"' in icons
+    assert 'M11.95 13.2' not in icons
+    assert "item.icon_name || item.iconName" in rail
+    assert "itemIconName && WBC_ICONS[itemIconName]" in rail
+
+
+def test_remote_desktop_cards_reuse_the_terminal_resource_card_style():
+    rail = frontend_module_source("features/chat/rail.jsx")
+    styles = workbench_style_source()
+
+    terminal_card = rail.split("function renderTerminalCard(terminal)", 1)[1].split(
+        "function renderTerminalSection", 1
+    )[0]
+    plugin_cards = rail.split("function renderPluginCollectionItems", 1)[1].split(
+        "function renderIntegratedPluginTool", 1
+    )[0]
+    assert "wbc-project-resource-card" in terminal_card
+    assert "wbc-project-resource-card" in plugin_cards
+    assert rail.count("wbc-plugin-tool-collection-items wbc-project-resource-list") == 2
+    assert "wbc-project-terminal-list wbc-project-resource-list" in rail
+    assert '<span className="wbc-chat-card-preview"><WbcHoverMarquee text={itemSubtitle} /></span>' in plugin_cards
+    assert ".wbc-project-resource-list .wbc-project-resource-card {" in styles
+    assert ".wbc-project-terminal-list .wbc-terminal-card {" not in styles
+    online = styles.split(
+        ".wbc-plugin-collection-card.is-online .wbc-plugin-collection-status {", 1
+    )[1].split("}", 1)[0]
+    assert "var(--wb-green)" in online
+
+
 def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
     source = workbench_chat_source()
     styles = workbench_style_source()
@@ -4941,12 +4991,13 @@ def test_plugin_tools_share_conversation_cards_and_split_drop_pipeline():
     assert "function wbcReadPluginViewDrag(event)" in drag_layout
     assert 'kind: "plugin-view"' in drag_layout
     assert 'className={"wbc-chat-card wbc-project-plugin-tool"' in rail
-    assert 'draggable={disabled ? undefined : "true"}' in rail
+    assert 'draggable={context.disabled ? undefined : "true"}' in rail
+    assert 'draggable={itemDisabled ? undefined : "true"}' in rail
     assert "wbcSetPluginViewDrag(event, payload);" in rail
     assert "prepareRailDragImage(event.currentTarget, event.dataTransfer" in rail
     assert 'host.classList.add("wbc-plugin-tool-drag-image")' in rail
-    assert "pluginSuppressClickRef.current === toolKey" in rail
-    plugin_section = rail.split('className="wbc-project-tools wbc-plugin-project-tools"', 1)[1].split("{pluginTools.map", 1)[0]
+    assert "pluginSuppressClickRef.current === context.toolKey" in rail
+    plugin_section = rail.split('className="wbc-project-tools wbc-plugin-project-tools"', 1)[1].split("</section>", 1)[0]
     assert "wbcHasPluginViewDrag(event)" in plugin_section
     assert "event.preventDefault();" in plugin_section
     assert 'event.dataTransfer.dropEffect = "move";' in plugin_section
@@ -4956,16 +5007,29 @@ def test_plugin_tools_share_conversation_cards_and_split_drop_pipeline():
     assert 'var clickBehavior = String(tool.click_behavior || "");' in rail
     assert 'replaceWorkspace: clickBehavior === "replace_workspace" || !clickBehavior' in rail
     assert 'restore: tool.restore_layout !== false' in rail
-    assert 'var openOptions = wbcPluginToolOpenOptions(tool);' in rail
-    assert rail.count("onOpenPluginView(payload, openOptions);") == 4
+    assert 'ownerScope: String(tool.pane_owner_scope || "chat")' in rail
+    assert 'paneOwnerScope: String(tool && tool.pane_owner_scope || "chat")' in rail
+    assert 'openOptions: wbcPluginToolOpenOptions(tool)' in rail
+    assert "onOpenPluginView(payload, context.openOptions);" in rail
+    assert "onOpenPluginView(context.payload, context.openOptions);" in rail
+    assert 'var projectSectionPluginTools = pluginTools.filter(function (tool)' in rail
+    assert '=== "project_tools"' in rail
+    assert "{projectSectionPluginTools.map(renderIntegratedPluginTool)}" in rail
+    assert "{pluginSectionTools.map(renderAuxiliaryPluginTool)}" in rail
+    assert 'className="wbc-project-tool-inline-header is-plugin"' in rail
+    assert 'className={"wbc-project-tool-expand wbc-plugin-tool-collection-expand"' in rail
     assert 'setChatDragKind("plugin-view")' in page
     assert "wbcHasPluginViewDrag(event)" in page
+    assert "activateProjectPaneWorkspace" in page
+    assert "projectOwnedPlugin" in pane_drop
     assert 'openPaneContent("plugin-view"' in page
     assert 'context.paneContentCard(\n        "plugin-view"' in pane_drop
     assert "var existingPlugin = wbcPaneCardLocation(layout, pluginCard.id);" in pane_drop
     assert 'normalizedType === "plugin-view" ? baseCard.id : ""' in pane_layout
     assert "freshInstance: true" in pane_layout
     assert ".wbc-plugin-project-tools > .wbc-project-plugin-tool" in styles
+    assert ".wbc-plugin-tool-collection-items > .wbc-project-plugin-tool" in styles
+    assert ".wbc-project-tools.has-expanded-tool > .wbc-project-tool-expand:not(.is-expanded)" in styles
     assert ".wbc-native-chat-drag-image.wbc-plugin-tool-drag-image" in styles
     assert ".wbc-project-plugin-tool.dragging" not in styles
     assert i18n.count('"workbenchChat.dragPluginView"') == 2
@@ -9511,7 +9575,8 @@ def test_code_and_terminal_frontend_stop_when_code_plugin_marker_is_absent():
     assert "if (!codeAvailable || !projectId || !isActive) return undefined;" in page
     assert "codeAvailable={codeAvailable}" in page
     assert "if (!codeAvailable || !projectId)" in rail
-    assert 'codeAvailable && railMode === "chat" && !collapsed' in rail
+    assert '{codeAvailable ? <>' in rail
+    assert '(codeAvailable || projectSectionPluginTools.length) && railMode === "chat" && !collapsed' in rail
     assert 'var codeAvailable = pluginModules.indexOf("code") >= 0;' in terminal
     assert "if (!codeAvailable || !host || !terminalId) return undefined;" in terminal
     assert "}, [terminalId, codeAvailable]);" in terminal

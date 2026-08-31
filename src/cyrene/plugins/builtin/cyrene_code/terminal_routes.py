@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -253,6 +254,13 @@ def register_terminal_routes(router: APIRouter) -> None:
         except Exception as exc:
             raise _http_error(exc) from exc
 
+    _register_terminal_socket_route(router, client)
+
+
+__all__ = ["register_terminal_routes"]
+
+
+def _register_terminal_socket_route(router: APIRouter, client: Any) -> None:
     @router.websocket("/ws/terminals/{terminal_id}")
     async def terminal_socket(websocket: WebSocket, terminal_id: str):
         await websocket.accept()
@@ -301,6 +309,3 @@ def register_terminal_routes(router: APIRouter) -> None:
                     await websocket.close(
                         code=1013, reason="terminal daemon disconnected"
                     )
-
-
-__all__ = ["register_terminal_routes"]

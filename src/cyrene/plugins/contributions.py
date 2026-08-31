@@ -424,15 +424,9 @@ def serialize_workbench_slash_command(
     }
 
 
-def validate_workbench_contributions(pack: PluginPack) -> None:
-    """Validate metadata interpreted by the Workbench application adapter."""
-
-    views = pack.metadata.get("frontend_views", ())
-    tools = pack.metadata.get("project_tools", ())
+def _validate_frontend_views(views: Any) -> set[str]:
     if not isinstance(views, (list, tuple)):
         raise TypeError("Plugin pack metadata.frontend_views must be an array")
-    if not isinstance(tools, (list, tuple)):
-        raise TypeError("Plugin pack metadata.project_tools must be an array")
     view_ids: set[str] = set()
     for raw in views:
         if not isinstance(raw, Mapping):
@@ -466,6 +460,12 @@ def validate_workbench_contributions(pack: PluginPack) -> None:
                 _PLUGIN_HOST_CAPABILITIES,
                 "Plugin frontend view host_capabilities",
             )
+    return view_ids
+
+
+def _validate_project_tools(tools: Any, view_ids: set[str]) -> None:
+    if not isinstance(tools, (list, tuple)):
+        raise TypeError("Plugin pack metadata.project_tools must be an array")
     tool_ids: set[str] = set()
     for raw in tools:
         if not isinstance(raw, Mapping):
@@ -480,6 +480,11 @@ def validate_workbench_contributions(pack: PluginPack) -> None:
         if view_id not in view_ids:
             raise ValueError(
                 f"Plugin project tool {tool_id} references missing view: {view_id}"
+            )
+        pane_owner_scope = str(raw.get("pane_owner_scope") or "chat").strip()
+        if pane_owner_scope not in {"chat", "project"}:
+            raise ValueError(
+                "Plugin project tool pane_owner_scope must be chat or project"
             )
         item_i18n = raw.get("i18n", {})
         if not isinstance(item_i18n, Mapping) or any(
@@ -504,38 +509,46 @@ def validate_workbench_contributions(pack: PluginPack) -> None:
                 )
             menu_ids.add(contribution_id)
             method = str(contribution.get("method") or "").strip()
-            if not _IDENTIFIER.fullmatch(method):
+            frontend_action = str(contribution.get("frontend_action") or "").strip()
+            kind = str(contribution.get("kind") or "").strip()
+            if method and not _IDENTIFIER.fullmatch(method):
                 raise ValueError(f"invalid Plugin Pane menu method: {method!r}")
+            if frontend_action and not _IDENTIFIER.fullmatch(frontend_action):
+                raise ValueError(
+                    f"invalid Plugin Pane menu frontend action: {frontend_action!r}"
+                )
+            if not method and not frontend_action and kind != "information":
+                raise ValueError(
+                    "Plugin Pane menu contribution requires a method or frontend_action"
+                )
             if not isinstance(contribution.get("requires_session", False), bool):
                 raise TypeError(
                     "Plugin Pane menu requires_session must be a boolean"
                 )
 
+
+def _require_unique_ids(values: Any, *, kind: str, pack_id: str) -> None:
+    ids = [item.id for item in values]
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"Plugin pack contains duplicate {kind} ids: {pack_id}")
+
+
+def validate_workbench_contributions(pack: PluginPack) -> None:
+    """Validate metadata interpreted by the Workbench application adapter."""
+
+    view_ids = _validate_frontend_views(pack.metadata.get("frontend_views", ()))
+    _validate_project_tools(pack.metadata.get("project_tools", ()), view_ids)
     surface_values = workbench_surfaces(pack)
-    surface_ids = [item.id for item in surface_values]
-    if len(surface_ids) != len(set(surface_ids)):
-        raise ValueError(f"Plugin pack contains duplicate Workbench surface ids: {pack.id}")
+    _require_unique_ids(surface_values, kind="Workbench surface", pack_id=pack.id)
     for surface in surface_values:
         if surface.renderer.kind == "plugin_view" and surface.renderer.id not in view_ids:
             raise ValueError(
                 f"Workbench surface {surface.id} references missing view: {surface.renderer.id}"
             )
-    file_type_values = workspace_file_types(pack)
-    file_type_ids = [item.id for item in file_type_values]
-    if len(file_type_ids) != len(set(file_type_ids)):
-        raise ValueError(f"Plugin pack contains duplicate Workspace file type ids: {pack.id}")
-    action_values = workspace_actions(pack)
-    action_ids = [item.id for item in action_values]
-    if len(action_ids) != len(set(action_ids)):
-        raise ValueError(f"Plugin pack contains duplicate Workspace action ids: {pack.id}")
-    project_type_values = workspace_project_types(pack)
-    project_type_ids = [item.id for item in project_type_values]
-    if len(project_type_ids) != len(set(project_type_ids)):
-        raise ValueError(f"Plugin pack contains duplicate Workspace project type ids: {pack.id}")
-    command_values = workbench_slash_commands(pack)
-    command_ids = [item.id for item in command_values]
-    if len(command_ids) != len(set(command_ids)):
-        raise ValueError(f"Plugin pack contains duplicate Workbench command ids: {pack.id}")
+    _require_unique_ids(workspace_file_types(pack), kind="Workspace file type", pack_id=pack.id)
+    _require_unique_ids(workspace_actions(pack), kind="Workspace action", pack_id=pack.id)
+    _require_unique_ids(workspace_project_types(pack), kind="Workspace project type", pack_id=pack.id)
+    _require_unique_ids(workbench_slash_commands(pack), kind="Workbench command", pack_id=pack.id)
 
 
 __all__ = [

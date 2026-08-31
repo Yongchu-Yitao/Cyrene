@@ -982,9 +982,17 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
 // internal grip while the shared card frame supplies it for all other kinds.
 function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled, menuContributions, menuState, onInvokeContribution }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
-  var [settingsOpen, setSettingsOpen] = useWbcState(false);
+  var [expandedTab, setExpandedTab] = useWbcState("");
+  var settingsOpen = expandedTab === "settings";
+  var informationOpen = expandedTab !== "settings" ? expandedTab : "";
   var rootRef = useWbcRef(null);
   var pointerDragRef = useWbcRef(null);
+  var rootMenuContributions = (Array.isArray(menuContributions) ? menuContributions : []).filter(function (contribution) {
+    return String(contribution && contribution.placement || "settings") === "root";
+  });
+  var settingsMenuContributions = (Array.isArray(menuContributions) ? menuContributions : []).filter(function (contribution) {
+    return String(contribution && contribution.placement || "settings") !== "root";
+  });
 
   // Electron's native browser surface is composited above renderer DOM, so a
   // CSS z-index alone cannot keep this menu visible. Reuse the shared overlay
@@ -996,8 +1004,8 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
   }, [menuDisabled, menuOpen]);
 
   useWbcEffect(function () {
-    if (!menuOpen && settingsOpen) setSettingsOpen(false);
-  }, [menuOpen, settingsOpen]);
+    if (!menuOpen && expandedTab) setExpandedTab("");
+  }, [menuOpen, expandedTab]);
 
   useWbcEffect(function () {
     if (!menuOpen) return undefined;
@@ -1013,8 +1021,21 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     function closeOutside(event) {
       if (rootRef.current && !rootRef.current.contains(event.target)) setMenuOpen(false);
     }
+    function closeFromPlugin() { setMenuOpen(false); }
+    function closeOnWindowBlur() { setMenuOpen(false); }
+    function closeOnEscape(event) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
     document.addEventListener("pointerdown", closeOutside);
-    return function () { document.removeEventListener("pointerdown", closeOutside); };
+    window.addEventListener("cyrene:plugin-view-interaction", closeFromPlugin);
+    window.addEventListener("blur", closeOnWindowBlur);
+    document.addEventListener("keydown", closeOnEscape);
+    return function () {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("cyrene:plugin-view-interaction", closeFromPlugin);
+      window.removeEventListener("blur", closeOnWindowBlur);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
   }, [menuOpen]);
 
   function handleKey(event) {
@@ -1100,7 +1121,7 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
         <span className="wbc-side-split-grip-bar-visual" aria-hidden="true" />
       </div>
       {menuOpen && !menuDisabled && (
-        <div className="wbc-side-split-grip-menu" role="menu">
+        <div className={"wbc-side-split-grip-menu" + (Array.isArray(menuContributions) && menuContributions.length ? " has-contributions" : "")} role="menu">
           {menuType === "content" ? (
             onNewConversation ? <button
               type="button"
@@ -1141,19 +1162,76 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
                 : wbcT("workbenchChat.surfacePin", "Pin automatic surface")}</span>
             </button>
           ) : null}
-          {Array.isArray(menuContributions) && menuContributions.length ? (
+          {rootMenuContributions.map(function (contribution) {
+            var contributionId = String(contribution && contribution.id || "");
+            var contributionKind = String(contribution && contribution.kind || "action");
+            var contributionIcon = WBC_ICONS[String(contribution && contribution.icon_name || "tool")] || WBC_ICONS.tool;
+            var active = Boolean(menuState && contribution.state_key && menuState[contribution.state_key]);
+            var informationFields = Array.isArray(contribution && contribution.fields) ? contribution.fields : [];
+            var informationDetails = informationFields.filter(function (field) { return String(field && field.group || "") !== "facts"; });
+            var informationFacts = informationFields.filter(function (field) { return String(field && field.group || "") === "facts"; });
+            if (contributionKind === "information") return <React.Fragment key={contributionId}>
+              <button
+                type="button"
+                role="menuitem"
+                aria-expanded={informationOpen === contributionId ? "true" : "false"}
+                onClick={function () {
+                  setExpandedTab(function (open) { return open === contributionId ? "" : contributionId; });
+                }}
+              >
+                <span aria-hidden="true">{contributionIcon}</span>
+                <span>{String(contribution.label || contributionId)}</span>
+              </button>
+              {informationOpen === contributionId ? <div className="wbc-side-split-grip-information">
+                <dl className="wbc-side-split-grip-information-details">
+                  {informationDetails.map(function (field) {
+                    return <div key={String(field && field.state_key || field && field.label || "field")}>
+                      <dt>{String(field && field.label || "")}</dt>
+                      <dd className={field && field.tone ? "is-" + String(field.tone) : ""}>{String(field && field.value || "—")}</dd>
+                    </div>;
+                  })}
+                </dl>
+                {informationFacts.length ? <dl className="wbc-side-split-grip-information-facts">
+                  {informationFacts.map(function (field) {
+                    return <div key={String(field && field.state_key || field && field.label || "field")}>
+                      <dt>{String(field && field.label || "")}</dt>
+                      <dd>{String(field && field.value || "—")}</dd>
+                    </div>;
+                  })}
+                </dl> : null}
+              </div> : null}
+            </React.Fragment>;
+            return <button
+              type="button"
+              role={contributionKind === "toggle" ? "menuitemcheckbox" : "menuitem"}
+              aria-checked={contributionKind === "toggle" ? (active ? "true" : "false") : undefined}
+              disabled={contribution.disabled === true}
+              className={active ? "is-selected" : ""}
+              key={contributionId}
+              onClick={function () {
+                setMenuOpen(false);
+                if (onInvokeContribution) Promise.resolve(onInvokeContribution(contribution, !active)).catch(function () {});
+              }}
+            >
+              <span aria-hidden="true">{contributionIcon}</span>
+              <span>{String(contribution.label || contributionId)}</span>
+            </button>;
+          })}
+          {settingsMenuContributions.length ? (
             <React.Fragment>
               <button
                 type="button"
                 role="menuitem"
                 aria-expanded={settingsOpen ? "true" : "false"}
-                onClick={function () { setSettingsOpen(function (open) { return !open; }); }}
+                onClick={function () {
+                  setExpandedTab(function (open) { return open === "settings" ? "" : "settings"; });
+                }}
               >
                 <span aria-hidden="true">{WBC_ICONS.settings}</span>
-                <span>{wbcT("common.settings", "Settings")}</span>
+                <span>{wbcT("workbenchChat.detailPanel.settings", "Settings")}</span>
               </button>
-              {settingsOpen ? <div className="wbc-side-split-grip-settings" role="group" aria-label={wbcT("common.settings", "Settings")}>
-                {menuContributions.map(function (contribution) {
+              {settingsOpen ? <div className="wbc-side-split-grip-settings" role="group" aria-label={wbcT("workbenchChat.detailPanel.settings", "Settings")}>
+                {settingsMenuContributions.map(function (contribution) {
                   var stateKey = String(contribution && contribution.state_key || "");
                   var selected = menuState && menuState[stateKey];
                   return <div className="wbc-side-split-grip-setting" key={String(contribution && contribution.id || stateKey)}>
@@ -1165,9 +1243,11 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
                           type="button"
                           role="menuitemradio"
                           aria-checked={active ? "true" : "false"}
+                          disabled={contribution.disabled === true}
                           className={active ? "is-selected" : ""}
                           key={String(option && option.value || "")}
                           onClick={function () {
+                            if (active) return;
                             if (onInvokeContribution) Promise.resolve(onInvokeContribution(contribution, option.value)).catch(function () {});
                           }}
                         >

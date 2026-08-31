@@ -1,35 +1,57 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   font: 13px/1.45 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --bg: #101316;
+  /* The pane host owns the Cyrene card surface. Keep the Plugin canvas
+     transparent so light, dark, and custom card colours stay identical. */
+  --bg: transparent;
   --panel: rgba(25, 29, 34, .94);
   --line: rgba(255, 255, 255, .1);
   --muted: rgba(255, 255, 255, .58);
+  --text: #f4f7f8;
   --accent: #78e6c2;
   --accent-2: #5ac8fa;
+  --accent-soft: rgba(120, 230, 194, .1);
+  --accent-glow: rgba(120, 230, 194, .32);
   --danger: #ff6969;
+  --danger-soft: rgba(255, 105, 105, .18);
+  --danger-border: rgba(255, 105, 105, .65);
+  --control-bg: rgba(255, 255, 255, .045);
+  --control-hover: rgba(255, 255, 255, .1);
+  --spinner-track: rgba(255, 255, 255, .14);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --panel: rgba(255, 255, 255, .98);
+  --line: rgba(31, 35, 43, .14);
+  --muted: #656872;
+  --text: #24252b;
+  --accent: #087d67;
+  --accent-2: #176fa3;
+  --accent-soft: rgba(8, 125, 103, .1);
+  --accent-glow: rgba(8, 125, 103, .18);
+  --danger: #b9363d;
+  --danger-soft: rgba(185, 54, 61, .1);
+  --danger-border: rgba(185, 54, 61, .4);
+  --control-bg: rgba(31, 35, 43, .045);
+  --control-hover: rgba(31, 35, 43, .09);
+  --spinner-track: rgba(31, 35, 43, .15);
 }
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body { background: var(--bg); color: #f4f7f8; user-select: none; }
+body { background: var(--bg); color: var(--text); user-select: none; }
 button { color: inherit; font: inherit; }
 button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 button:disabled { opacity: .42; cursor: not-allowed; }
-.desktop-app { display: grid; grid-template-rows: 48px minmax(0, 1fr) 28px; background: radial-gradient(circle at 50% 20%, #202830, #0f1215 58%); }
-.toolbar, .statusbar { display: flex; align-items: center; justify-content: space-between; padding: 0 12px; background: rgba(13, 16, 19, .9); border-bottom: 1px solid var(--line); backdrop-filter: blur(16px); }
-.statusbar { border: 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; gap: 12px; justify-content: flex-start; }
-.statusbar span:last-child { margin-left: auto; }
-.identity { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.identity > span:last-child { display: grid; min-width: 0; }
+.desktop-app { display: grid; grid-template-rows: 48px minmax(0, 1fr); background: var(--bg); }
+.toolbar { display: flex; align-items: center; justify-content: center; padding: 0 12px; background: var(--bg); border: 0; }
+.identity { display: flex; align-items: center; justify-content: center; min-width: 0; text-align: center; }
 .identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.identity small { color: var(--muted); font-size: 10px; }
-.device-dot { width: 8px; height: 8px; border-radius: 50%; background: #79828a; box-shadow: 0 0 0 3px rgba(121,130,138,.12); }
-[data-state="connected"] .device-dot { background: var(--accent); box-shadow: 0 0 0 3px rgba(120,230,194,.14), 0 0 14px rgba(120,230,194,.55); }
 .toolbar-actions { display: flex; gap: 6px; }
-.icon-button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.045); cursor: pointer; transition: background-color 180ms ease-out, border-color 180ms ease-out, opacity 180ms ease-out; }
+.icon-button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--control-bg); cursor: pointer; transition: background-color 180ms ease-out, border-color 180ms ease-out, opacity 180ms ease-out; }
 .icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.icon-button:hover:not(:disabled) { background: rgba(255,255,255,.1); }
-.icon-button[aria-pressed="true"] { color: #fff; border-color: rgba(255,105,105,.65); background: rgba(255,105,105,.18); box-shadow: 0 0 0 1px rgba(255,105,105,.12); }
+.icon-button:hover:not(:disabled) { background: var(--control-hover); }
+.icon-button[aria-pressed="true"] { color: var(--danger); border-color: var(--danger-border); background: var(--danger-soft); box-shadow: 0 0 0 1px var(--danger-soft); }
 .icon-button.danger { color: var(--danger); }
 .stage { position: relative; min-height: 0; overflow: hidden; outline: none; }
 .stage:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-2); }
@@ -39,36 +61,31 @@ video { width: 100%; height: 100%; display: none; object-fit: contain; backgroun
 .empty-state, .busy-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 28px; }
 .empty-state h1 { margin: 10px 0 4px; font-size: clamp(18px, 3vw, 25px); }
 .empty-state p { max-width: 520px; margin: 0 0 20px; color: var(--muted); }
-.empty-glyph { width: 48px; height: 48px; color: var(--accent); filter: drop-shadow(0 0 18px rgba(120,230,194,.32)); }
+.empty-glyph { width: 48px; height: 48px; color: var(--accent); filter: drop-shadow(0 0 18px var(--accent-glow)); }
 .empty-glyph svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.mode-picker { display: grid; grid-template-columns: repeat(2, minmax(130px, 220px)); gap: 9px; width: min(100%, 450px); margin-bottom: 15px; }
-.mode { min-height: 48px; display: grid; gap: 2px; padding: 11px 13px; text-align: left; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.035); cursor: pointer; transition: background-color 180ms ease-out, border-color 180ms ease-out; }
-.mode span { color: var(--muted); font-size: 11px; }
-.mode.active { border-color: rgba(120,230,194,.65); background: rgba(120,230,194,.1); box-shadow: 0 0 0 1px rgba(120,230,194,.1); }
 .primary, .secondary { min-width: 126px; border-radius: 9px; padding: 9px 18px; cursor: pointer; }
 .primary { border: 0; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #061715; font-weight: 700; }
-.secondary { margin-top: 8px; border: 1px solid var(--line); background: rgba(255,255,255,.06); }
+.secondary { margin-top: 8px; border: 1px solid var(--line); background: var(--control-bg); }
 .busy-state { gap: 6px; }
 .busy-state small { color: var(--muted); }
-.spinner { width: 28px; height: 28px; border: 2px solid rgba(255,255,255,.14); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 8px; }
+.spinner { width: 28px; height: 28px; border: 2px solid var(--spinner-track); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .permission-banner { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 9px 12px; border: 1px solid rgba(255,193,87,.45); border-radius: 8px; background: rgba(72,50,13,.93); color: #ffe4af; }
 .popover { position: absolute; z-index: 5; right: 10px; top: 44px; width: min(300px, calc(100% - 20px)); padding: 8px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); box-shadow: 0 16px 50px rgba(0,0,0,.4); }
 .popover header { padding: 5px 7px 8px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
 .popover button { width: 100%; min-height: 44px; display: flex; justify-content: space-between; gap: 10px; padding: 9px; border: 0; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; }
-.popover button:hover, .popover button.active { background: rgba(120,230,194,.1); }
+.popover button:hover, .popover button.active { background: var(--accent-soft); }
 .file-popover { right: 80px; }
 .file-popover button { align-items: center; }
 .file-popover button span { font-weight: 650; }
 .file-popover button small { color: var(--muted); text-align: right; }
 [hidden] { display: none !important; }
 @media (max-width: 520px), (max-height: 430px) {
-  .mode-picker { grid-template-columns: 1fr; }
   .empty-state { justify-content: flex-start; overflow: auto; padding-top: 18px; }
   .empty-glyph { width: 32px; height: 32px; }
   .empty-state h1 { margin-top: 5px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; border-color: var(--accent); }
-  .icon-button, .mode { transition: none; }
+  .icon-button { transition: none; }
 }
