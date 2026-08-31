@@ -457,6 +457,65 @@ async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_
 
 
 
+async def test_proactive_chat_projection_persists_exact_latest_request_usage(
+    tmp_path,
+    monkeypatch,
+):
+    from cyrene.observability import debug
+    from cyrene.plugins.builtin.cyrene_proactive import projection
+    from cyrene.workbench.chat import chat_application
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+
+    class ComposerContext:
+        @staticmethod
+        def default_input_context():
+            return {"soulActive": True, "workspaceActive": True}
+
+        @staticmethod
+        def normalize(value):
+            return value if isinstance(value, dict) else {}
+
+    monkeypatch.setattr(
+        chat_application,
+        "_composer_context_service",
+        lambda: ComposerContext(),
+    )
+    monkeypatch.setattr(projection, "application_plugin_service", lambda _name: None)
+    monkeypatch.setattr(projection, "_ensure_proactive_context", AsyncMock())
+    monkeypatch.setattr(projection, "publish_chat_changed", AsyncMock())
+    monkeypatch.setattr(debug, "publish_event", AsyncMock())
+
+    db_path = tmp_path / "cyrene.runtime.database"
+    latest_usage = {
+        "prompt_tokens": 7986,
+        "completion_tokens": 89,
+        "total_tokens": 8075,
+        "prompt_cache_hit_tokens": 7748,
+        "prompt_cache_miss_tokens": 238,
+    }
+    projected = await projection.create_proactive_chat(
+        str(db_path),
+        "project-1",
+        "proactive result",
+        chat_id="wbchat_proactive_usage",
+        model="MiniMax-M3",
+        usage={
+            "prompt_tokens": 15734,
+            "completion_tokens": 272,
+            "total_tokens": 16006,
+            "prompt_cache_hit_tokens": 15059,
+            "prompt_cache_miss_tokens": 675,
+        },
+        latest_request_usage=latest_usage,
+    )
+
+    assert projected is not None
+    chat = ChatRepository(str(db_path)).get("wbchat_proactive_usage")
+    assert chat is not None
+    message = chat["messages"][0]
+    assert message["latestRequestUsage"] == latest_usage
+
+
 async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
@@ -483,6 +542,12 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
             text="user-facing proactive message",
             model="test-model",
             pending_question=None,
+            usage={"prompt_tokens": 16006, "total_tokens": 16006},
+            latest_request_usage={
+                "prompt_tokens": 7986,
+                "prompt_cache_hit_tokens": 7748,
+                "prompt_cache_miss_tokens": 238,
+            },
         )
 
     monkeypatch.setattr(
@@ -581,6 +646,12 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
             text="hey, how did the launch go?" if calls["n"] == 1 else "",
             model="test-model",
             pending_question=None,
+            usage={"prompt_tokens": 16006, "total_tokens": 16006},
+            latest_request_usage={
+                "prompt_tokens": 7986,
+                "prompt_cache_hit_tokens": 7748,
+                "prompt_cache_miss_tokens": 238,
+            },
         )
 
     monkeypatch.setattr(

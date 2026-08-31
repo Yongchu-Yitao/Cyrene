@@ -7,6 +7,7 @@ import logging
 import random
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -445,6 +446,8 @@ async def _deliver_proactive_message(
     project_id: str,
     session_id: str,
     model: str = "",
+    usage: Mapping[str, Any] | None = None,
+    latest_request_usage: Mapping[str, Any] | None = None,
     source_chat_id: str = "",
     lang: str = "",
 ) -> dict[str, str] | None:
@@ -456,6 +459,8 @@ async def _deliver_proactive_message(
         text,
         chat_id=session_id,
         model=model,
+        usage=usage,
+        latest_request_usage=latest_request_usage,
         source_chat_id=source_chat_id,
         lang=lang,
     )
@@ -670,6 +675,8 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
                     or (workbench_target or {}).get("model")
                     or ""
                 ),
+                usage=result.usage,
+                latest_request_usage=result.latest_request_usage,
                 source_chat_id=target_session_id,
                 lang=proactive_lang,
             )

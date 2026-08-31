@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,6 +12,7 @@ from cyrene.core.plugin import application_plugin_service
 
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_service import ChatService
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.sessions.context_records import append_context_record
 
 
@@ -69,6 +71,8 @@ async def create_proactive_chat(
     *,
     chat_id: str,
     model: str = "",
+    usage: Mapping[str, Any] | None = None,
+    latest_request_usage: Mapping[str, Any] | None = None,
     source_chat_id: str = "",
     lang: str = "",
 ) -> dict[str, str] | None:
@@ -130,6 +134,7 @@ async def create_proactive_chat(
         "model": str(model or ""),
         "proactive": True,
         "systemInitiated": True,
+        **runtime_usage_message_fields(usage, latest_request_usage),
     }
     chat: dict[str, Any] = service.create_chat(
         normalized_project_id,
