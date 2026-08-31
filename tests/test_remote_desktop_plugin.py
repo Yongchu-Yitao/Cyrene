@@ -1,0 +1,812 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import hmac
+import io
+import json
+import socket
+import sys
+import threading
+from pathlib import Path
+from typing import Any
+
+import pytest
+from PIL import Image
+
+from cyrene.plugins.contributions import validate_workbench_contributions
+from cyrene.plugins.builtin.cyrene_remote_desktop import plugin_pack
+from cyrene.plugins.builtin.cyrene_remote_desktop.contracts import (
+    DEFAULT_DESKTOP_CAPABILITIES,
+    REMOTE_DESKTOP_PROTOCOL_VERSION,
+    DisplayDescriptor,
+)
+from cyrene.plugins.builtin.cyrene_remote_desktop.providers import (
+    FreeRdpProvider,
+    _configured_rdp_port,
+    _normalize_rdp_connect_error,
+    _parse_rdp_port,
+    _rdp_listener_state,
+)
+from cyrene.plugins.builtin.cyrene_remote_desktop.service import (
+    CredentialBroker,
+    RemoteDesktopError,
+    RemoteDesktopService,
+)
+
+
+def run(awaitable):
+    return asyncio.run(awaitable)
+
+
+class _PeerStore:
+    def __init__(
+        self,
+        *,
+        received: tuple[str, ...] = (),
+        granted: tuple[str, ...] = (),
+    ) -> None:
+        self.peer = {
+            "device_id": "device-one",
+            "display_name": "Desk One",
+            "received_capabilities": list(received),
+            "granted_capabilities": list(granted),
+            "revoked_at": "",
+        }
+
+    def get_peer(self, device_id: str) -> dict[str, Any] | None:
+        return dict(self.peer) if device_id == "device-one" else None
+
+    def list_peers(self) -> list[dict[str, Any]]:
+        return [dict(self.peer)]
+
+
+class _RemoteService:
+    def __init__(self, store: _PeerStore) -> None:
+        self.store = store
+
+
+def _service(
+    tmp_path: Path,
+    *,
+    received: tuple[str, ...] = (),
+    granted: tuple[str, ...] = (),
+) -> RemoteDesktopService:
+    remote = _RemoteService(_PeerStore(received=received, granted=granted))
+    return RemoteDesktopService(
+        str(tmp_path / "remote-desktop.sqlite3"),
+        tmp_path / "data",
+        remote_service=remote,
+    )
+
+
+def _connected_session(service: RemoteDesktopService, *, secure: bool = False) -> str:
+    session_id = "rds_" + "1" * 32
+    service.store.create_session(
+        {
+            "session_id": session_id,
+            "device_id": "device-one",
+            "device_name": "Desk One",
+            "mode": "current_desktop",
+            "state": "connected",
+            "remote_session_id": "rdh_" + "2" * 32,
+            "secure_surface": secure,
+        }
+    )
+    return session_id
+
+
+def _offer_payload(*, mode: str = "current_desktop") -> dict[str, Any]:
+    return {
+        "protocol_version": REMOTE_DESKTOP_PROTOCOL_VERSION,
+        "mode": mode,
+        "offer": {"type": "offer", "sdp": "v=0\r\n"},
+        "quality_mode": "auto",
+    }
+
+
+def test_remote_desktop_pack_declares_only_v1_view_tools_and_valid_contributions():
+    validate_workbench_contributions(plugin_pack)
+
+    assert plugin_pack.metadata["requires_plugin_packs"] == ("cyrene_remote",)
+    assert {plugin.name for plugin in plugin_pack.plugins} == {
+        "ListRemoteDesktopSessions",
+        "InspectRemoteDesktop",
+    }
+    assert all(plugin.metadata["main_only"] is True for plugin in plugin_pack.plugins)
+    assert "desktop:screen_view_agent" in DEFAULT_DESKTOP_CAPABILITIES
+    assert "desktop:input_agent" not in DEFAULT_DESKTOP_CAPABILITIES
+    assert "desktop:audio_agent" not in DEFAULT_DESKTOP_CAPABILITIES
+    assert "desktop:clipboard_agent" not in DEFAULT_DESKTOP_CAPABILITIES
+
+    tool = plugin_pack.metadata["project_tools"][0]
+    quality = tool["pane_menu"][0]
+    assert tool["click_behavior"] == "replace_workspace"
+    assert tool["restore_layout"] is True
+    assert quality["requires_session"] is True
+    assert [item["value"] for item in quality["options"]] == [
+        "auto",
+        "smooth",
+        "balanced",
+        "clear",
+    ]
+
+
+def test_remote_desktop_frontend_and_electron_host_are_packaged():
+    root = Path(__file__).resolve().parent.parent
+    rail = (
+        root
+        / "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx"
+    ).read_text(encoding="utf-8")
+    pane = (
+        root
+        / "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        root
+        / "src/cyrene/workbench/webui/frontend/features/chat/chat.css"
+    ).read_text(encoding="utf-8")
+    plugin_ui = (
+        root
+        / "src/cyrene/plugins/builtin/cyrene_remote_desktop/frontend/remote-desktop.js"
+    ).read_text(encoding="utf-8")
+    providers = (
+        root
+        / "src/cyrene/plugins/builtin/cyrene_remote_desktop/providers.py"
+    ).read_text(encoding="utf-8")
+    electron_host = (root / "electron/remote-desktop.js").read_text(encoding="utf-8")
+    media_host = (root / "electron/remote-desktop-host.js").read_text(encoding="utf-8")
+    app_use = (root / "electron/app-use.js").read_text(encoding="utf-8")
+    app_use_macos = (root / "electron/app-use-macos.jxa").read_text(encoding="utf-8")
+    app_use_windows = (root / "electron/app-use-windows.ps1").read_text(encoding="utf-8-sig")
+    package = json.loads((root / "electron/package.json").read_text(encoding="utf-8"))
+    packaged_files = set(package["build"]["files"])
+
+    assert 'var clickBehavior = String(tool.click_behavior || "")' in rail
+    assert 'replaceWorkspace: clickBehavior === "replace_workspace" || !clickBehavior' in rail
+    assert "paneMenu: Array.isArray(tool && tool.pane_menu)" in rail
+    assert 'role="menuitemradio"' in pane
+    assert "wbc-resource-observation-dot" in pane
+    assert ".wbc-pane-card.is-resource-observed::before" in styles
+    assert "animation: wbc-agent-chat-flow" in styles
+    assert "wbc-resource-observation-shimmer" not in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+    assert "new RTCPeerConnection" in plugin_ui
+    assert "remote-audio" in plugin_ui
+    assert "getUserMedia({ audio: true" in plugin_ui
+    assert "remoteDesktop.display.select" in plugin_ui
+    assert "remoteDesktop.clipboard.files.upload.begin" in plugin_ui
+    assert "remoteDesktop.clipboard.files.upload.chunk" in plugin_ui
+    assert "remoteDesktop.session.reconnect" in plugin_ui
+    assert "remoteDesktop.security.get" in plugin_ui
+    assert '"local_bind": {"host": "127.0.0.1", "port": 0}' in providers
+    assert "rdp_port_occupied_by_other_service" in providers
+    assert "requestApproval(args)" in electron_host
+    assert "showIndicator(args)" in electron_host
+    assert "consumeForcedDisconnects()" in electron_host
+    assert "desktop_wayland_input_bridge_unavailable" in electron_host
+    assert "securityEpoch" in electron_host
+    assert "remoteDesktopInput(appSession, capability, parameters)" in electron_host
+    assert "focus_policy: 'never'" in electron_host
+    assert "activePointerId !== event.pointerId" in plugin_ui
+    assert "async remoteDesktopInput(" in app_use
+    assert "{ name: 'pointer_event'" not in app_use
+    assert "'pointer_event'" in app_use_macos
+    assert "'pointer_event'" in app_use_windows
+    assert "microphoneEnabled" in media_host
+    assert "transceiver.direction" in media_host
+    assert "xdotool" in package["build"]["deb"]["depends"]
+    assert "xdotool" in package["build"]["rpm"]["depends"]
+    assert {
+        "remote-desktop.js",
+        "remote-desktop-preload.js",
+        "remote-desktop-host.html",
+        "remote-desktop-host.js",
+        "remote-desktop-indicator-preload.js",
+        "remote-desktop-indicator.html",
+        "remote-desktop-indicator.css",
+        "remote-desktop-indicator.js",
+        "remote-desktop-credential-preload.js",
+        "remote-desktop-credential.html",
+        "remote-desktop-credential.js",
+    } <= packaged_files
+
+
+def test_rdp_listener_probe_distinguishes_protocol_from_an_occupied_port():
+    def probe(response: bytes) -> str:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = int(listener.getsockname()[1])
+
+        def serve() -> None:
+            try:
+                connection, _address = listener.accept()
+                with connection:
+                    connection.recv(64)
+                    connection.sendall(response)
+            finally:
+                listener.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            return _rdp_listener_state(port)
+        finally:
+            thread.join(timeout=2)
+
+    assert probe(bytes.fromhex("030000130ed000001234000200080003000000")) == "rdp"
+    assert probe(b"HTTP/1.1 400 Bad Request\r\n\r\n") == "non_rdp"
+
+
+def test_rdp_probe_selects_the_backend_that_is_actually_listening(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def targets(_system: str) -> list[tuple[str, int, str, str]]:
+        return [
+            ("gnome-remote-desktop", 3389, "gnome_settings", "closed"),
+            ("xrdp", 3391, "xrdp_config", "rdp"),
+        ]
+
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.providers.platform.system",
+        lambda: "Linux",
+    )
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.providers._rdp_backend_candidates",
+        lambda _system: ("gnome-remote-desktop", "xrdp"),
+    )
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.providers._probe_rdp_targets",
+        targets,
+    )
+    provider = FreeRdpProvider()
+    provider.binary = sys.executable
+
+    descriptor = run(provider.probe())
+
+    assert descriptor.status == "supported"
+    assert descriptor.modes == ("remote_login",)
+    assert descriptor.display_server == "xrdp"
+    assert {"clipboard_text", "clipboard_image", "clipboard_file"}.issubset(
+        descriptor.capabilities
+    )
+
+
+def test_turn_shared_secret_issues_time_limited_credentials(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CYRENE_TURN_URL", "turns:turn.example.test:5349")
+    monkeypatch.setenv("CYRENE_TURN_SHARED_SECRET", "turn-secret")
+    monkeypatch.setenv("CYRENE_TURN_TTL_SECONDS", "300")
+    monkeypatch.delenv("CYRENE_TURN_USERNAME", raising=False)
+    monkeypatch.delenv("CYRENE_TURN_CREDENTIAL", raising=False)
+
+    server = RemoteDesktopService._ice_servers("session-one")[-1]
+    username = str(server["username"])
+    expected = base64.b64encode(
+        hmac.new(b"turn-secret", username.encode(), hashlib.sha1).digest()
+    ).decode("ascii")
+
+    assert server["urls"] == ["turns:turn.example.test:5349"]
+    assert username.split(":", 1)[0].isdecimal()
+    assert server["credential"] == expected
+
+
+def test_network_status_reports_when_turn_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    for name in (
+        "CYRENE_STUN_URL",
+        "CYRENE_TURN_URL",
+        "CYRENE_TURN_SHARED_SECRET",
+        "CYRENE_TURN_USERNAME",
+        "CYRENE_TURN_CREDENTIAL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    status = RemoteDesktopService._network_status("session-one")
+
+    assert status["ice_servers"] == []
+    assert status["relay_ready"] is False
+    assert {item["code"] for item in status["diagnostics"]} == {
+        "turn_not_configured",
+        "ice_discovery_not_configured",
+    }
+
+
+def test_rdp_port_resolution_uses_system_configuration_and_validates_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    config = tmp_path / "xrdp.ini"
+    config.write_text(
+        "[Globals]\nport=tcp://.:3391 127.0.0.1:3392\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CYRENE_XRDP_CONFIG", str(config))
+    monkeypatch.delenv("CYRENE_RDP_PORT", raising=False)
+
+    assert _parse_rdp_port("tcp://.:3391") == 3391
+    assert _configured_rdp_port("linux") == (3391, "xrdp_config")
+
+    monkeypatch.setenv("CYRENE_RDP_PORT", "3395")
+    assert _configured_rdp_port("linux") == (3395, "environment")
+
+    monkeypatch.setenv("CYRENE_RDP_PORT", "not-a-port")
+    with pytest.raises(ValueError, match="rdp_port_invalid"):
+        _configured_rdp_port("linux")
+
+    occupied = _normalize_rdp_connect_error(
+        {"ok": False, "code": "rdp_protocol_mismatch"},
+        3395,
+    )
+    assert occupied["code"] == "rdp_port_occupied_by_other_service"
+    assert occupied["rdp_port"] == 3395
+
+    dynamic_bind = _normalize_rdp_connect_error(
+        {"ok": False, "code": "address_in_use"},
+        3395,
+    )
+    assert dynamic_bind["code"] == "rdp_local_port_allocation_failed"
+    assert dynamic_bind["retryable"] is True
+
+
+def test_credential_broker_is_one_shot_and_zeroes_discarded_values():
+    broker = CredentialBroker()
+    handle = broker.put(
+        {"username": "alice", "domain": "LAB", "password": "secret"}
+    )
+    assert broker.take(handle) == {
+        "username": "alice",
+        "domain": "LAB",
+        "password": "secret",
+    }
+    with pytest.raises(RemoteDesktopError) as reused:
+        broker.take(handle)
+    assert reused.value.code == "desktop_credential_handle_expired"
+
+    discarded = broker.put({"username": "bob", "password": "erase-me"})
+    raw_password = broker._values[discarded][1]["password"]
+    broker.discard(discarded)
+    assert raw_password == bytearray(len(raw_password))
+
+
+def test_layout_grants_reject_agent_self_authorization_and_stale_revisions(tmp_path: Path):
+    service = _service(
+        tmp_path,
+        received=("desktop:screen_view_agent",),
+    )
+    session_id = _connected_session(service)
+    desktop_card = {
+        "card_id": "desktop-card",
+        "kind": "plugin-view",
+        "pack_id": "cyrene_remote_desktop",
+        "session_id": session_id,
+    }
+
+    denied = run(
+        service.project_layout(
+            {
+                "pane_layout_id": "layout-one",
+                "projection_scope_id": "project-one",
+                "revision": 1,
+                "origin": "agent_ui_action",
+                "cards": [
+                    {
+                        "card_id": "chat-card",
+                        "kind": "chat",
+                        "chat_id": "chat-one",
+                        "meta": {"origin": "agent"},
+                    },
+                    desktop_card,
+                ],
+            }
+        )
+    )
+    assert denied["grant_count"] == 0
+    assert service.store.is_authorized("chat-one", session_id) is False
+
+    granted = run(
+        service.project_layout(
+            {
+                "pane_layout_id": "layout-one",
+                "projection_scope_id": "project-one",
+                "revision": 2,
+                "origin": "user_pointer",
+                "cards": [
+                    {
+                        "card_id": "chat-card",
+                        "kind": "chat",
+                        "chat_id": "chat-one",
+                        "meta": {"origin": "agent", "claimedByUser": True},
+                    },
+                    desktop_card,
+                ],
+            }
+        )
+    )
+    assert granted["grant_count"] == 1
+    assert [item["session_id"] for item in service.authorized_sessions("chat-one")] == [
+        session_id
+    ]
+
+    switched = run(
+        service.project_layout(
+            {
+                "pane_layout_id": "layout-two",
+                "projection_scope_id": "project-one",
+                "revision": 3,
+                "origin": "user_pointer",
+                "cards": [],
+            }
+        )
+    )
+    assert switched["grant_count"] == 0
+    assert service.authorized_sessions("chat-one") == []
+
+    with pytest.raises(RemoteDesktopError) as stale:
+        run(
+            service.project_layout(
+                {
+                    "pane_layout_id": "layout-one",
+                    "projection_scope_id": "project-one",
+                    "revision": 1,
+                    "origin": "system_restore",
+                    "cards": [],
+                }
+            )
+        )
+    assert stale.value.code == "desktop_layout_revision_stale"
+
+    service.store.update_session(session_id, state="disconnected")
+    assert service.authorized_sessions("chat-one") == []
+
+
+def test_secure_surface_blocks_agent_snapshot_before_frame_request(tmp_path: Path):
+    service = _service(
+        tmp_path,
+        received=("desktop:screen_view_agent",),
+    )
+    session_id = _connected_session(service, secure=True)
+    service.store.replace_layout_grants(
+        "layout-secure",
+        1,
+        [
+            {
+                "session_id": session_id,
+                "chat_id": "chat-one",
+                "origin": "user_pointer",
+                "granted": True,
+            }
+        ],
+    )
+
+    with pytest.raises(RemoteDesktopError) as blocked:
+        run(
+            service.request_agent_snapshot(
+                session_id,
+                "chat-one",
+                reason="Inspect the visible error",
+                region=None,
+            )
+        )
+    assert blocked.value.code == "desktop_secure_surface_masked"
+    assert service._observations == {}
+
+
+def test_agent_snapshot_is_discarded_when_security_epoch_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    service = _service(
+        tmp_path,
+        received=("desktop:screen_view_agent",),
+    )
+    session_id = _connected_session(service)
+    service.store.replace_layout_grants(
+        "layout-secure-race",
+        1,
+        [
+            {
+                "session_id": session_id,
+                "chat_id": "chat-one",
+                "origin": "user_pointer",
+                "granted": True,
+            }
+        ],
+    )
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.epochs = iter((7, 8))
+
+        async def request(self, *_args: Any, **values: Any) -> dict[str, Any]:
+            assert values["command"] == "desktop.security.get"
+            return {
+                "ok": True,
+                "secure_surface": False,
+                "security_epoch": next(self.epochs),
+            }
+
+    gateway_instance = Gateway()
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.service.get_remote_gateway",
+        lambda _db_path: gateway_instance,
+    )
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            service.request_agent_snapshot(
+                session_id,
+                "chat-one",
+                reason="Inspect the visible error",
+                region=None,
+            )
+        )
+        for _attempt in range(100):
+            if service._observations:
+                break
+            await asyncio.sleep(0)
+        assert service._observations
+        observation_id = next(iter(service._observations))
+        image = Image.new("RGB", (2, 2), "white")
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        await service.submit_observation_frame(observation_id, output.getvalue())
+        with pytest.raises(RemoteDesktopError) as blocked:
+            await task
+        assert blocked.value.code == "desktop_secure_surface_masked"
+
+    run(scenario())
+    assert service._snapshots == {}
+    assert list(service.snapshot_directory.glob("*.png")) == []
+
+
+def test_local_clipboard_files_are_staged_and_forwarded_in_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    service = _service(
+        tmp_path,
+        received=("desktop:clipboard_file_user",),
+    )
+    session_id = _connected_session(service)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Gateway:
+        async def request(self, *_args: Any, **values: Any) -> dict[str, Any]:
+            command = str(values["command"])
+            payload = dict(values["payload"])
+            calls.append((command, payload))
+            if command == "desktop.clipboard.file.upload.begin":
+                return {"ok": True, "offset": 0}
+            if command == "desktop.clipboard.file.upload.chunk":
+                raw = base64.b64decode(payload["content_base64"], validate=True)
+                assert hashlib.sha256(raw).hexdigest() == payload["chunk_sha256"]
+                return {"ok": True, "next_offset": payload["offset"] + len(raw)}
+            return {"ok": True}
+
+    gateway = Gateway()
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.service.get_remote_gateway",
+        lambda _db_path: gateway,
+    )
+    begun = service.begin_local_clipboard_files(
+        session_id,
+        [{"relative_path": "folder/report.txt", "size": 6}],
+    )
+    upload_id = str(begun["upload_id"])
+    first = b"abc"
+    second = b"123"
+    assert service.append_local_clipboard_file(
+        upload_id,
+        "folder/report.txt",
+        0,
+        first,
+        hashlib.sha256(first).hexdigest(),
+    )["next_offset"] == 3
+    assert service.append_local_clipboard_file(
+        upload_id,
+        "folder/report.txt",
+        3,
+        second,
+        hashlib.sha256(second).hexdigest(),
+    )["next_offset"] == 6
+
+    result = run(service.commit_local_clipboard_files(upload_id))
+
+    assert result == {"ok": True, "count": 1, "bytes": 6}
+    assert upload_id not in service._local_clipboard_uploads
+    assert any(command == "desktop.clipboard.file.apply" for command, _ in calls)
+
+
+def test_host_rechecks_mode_capability_before_selecting_provider(tmp_path: Path):
+    service = _service(
+        tmp_path,
+        granted=(
+            "desktop:session_connect",
+            "desktop:screen_view_user",
+            "desktop:current_session",
+        ),
+    )
+
+    result = run(
+        service.handle_remote_command(
+            "device-one",
+            "desktop.negotiate",
+            _offer_payload(mode="remote_login"),
+        )
+    )
+    assert result["ok"] is False
+    assert result["code"] == "desktop_capability_denied"
+    assert service._host_sessions == {}
+
+
+def test_builtin_host_requires_approval_and_persistent_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    class Provider:
+        id = "electron-current-desktop"
+
+        def __init__(self) -> None:
+            self.negotiations = 0
+            self.disconnections: list[str] = []
+
+        async def negotiate(self, _session_id: str, **_values: Any) -> dict[str, Any]:
+            self.negotiations += 1
+            return {
+                "ok": True,
+                "answer": {"type": "answer", "sdp": "v=0\r\n"},
+                "transport_kind": "p2p",
+            }
+
+        async def list_displays(self, _session_id: str) -> list[DisplayDescriptor]:
+            return [DisplayDescriptor("display-one", "Primary", 1920, 1080, primary=True)]
+
+        async def disconnect(self, session_id: str) -> None:
+            self.disconnections.append(session_id)
+
+    class Providers:
+        def __init__(self, provider: Provider) -> None:
+            self.provider = provider
+
+        async def select(self, _mode: str) -> Provider:
+            return self.provider
+
+        def by_id(self, provider_id: str) -> Provider:
+            if provider_id != self.provider.id:
+                raise KeyError(provider_id)
+            return self.provider
+
+    service = _service(
+        tmp_path,
+        granted=(
+            "desktop:session_connect",
+            "desktop:screen_view_user",
+            "desktop:current_session",
+        ),
+    )
+    provider = Provider()
+    service.providers = Providers(provider)  # type: ignore[assignment]
+    approvals = iter((False, True))
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def electron_rpc(
+        method: str,
+        arguments: dict[str, Any] | None = None,
+        **_values: Any,
+    ) -> dict[str, Any]:
+        calls.append((method, dict(arguments or {})))
+        if method == "request_approval":
+            allowed = next(approvals)
+            return {"ok": allowed, "code": "desktop_target_denied" if not allowed else ""}
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.service.electron_desktop_rpc",
+        electron_rpc,
+    )
+
+    denied = run(
+        service.handle_remote_command(
+            "device-one", "desktop.negotiate", _offer_payload()
+        )
+    )
+    assert denied["code"] == "desktop_target_denied"
+    assert provider.negotiations == 0
+    assert service._host_sessions == {}
+
+    connected = run(
+        service.handle_remote_command(
+            "device-one", "desktop.negotiate", _offer_payload()
+        )
+    )
+    assert connected["ok"] is True
+    assert connected["permissions"]["input"] is False
+    assert provider.negotiations == 1
+    assert [method for method, _args in calls].count("request_approval") == 2
+    assert any(method == "show_indicator" for method, _args in calls)
+    assert all(
+        args.get("can_control") is False
+        for method, args in calls
+        if method in {"request_approval", "show_indicator"}
+    )
+
+    unauthorized_display = run(
+        service.handle_remote_command(
+            "device-one",
+            "desktop.display.select",
+            {
+                "session_id": connected["remote_session_id"],
+                "display_id": "display-one",
+            },
+        )
+    )
+    assert unauthorized_display["code"] == "desktop_capability_denied"
+
+
+def test_host_reserves_single_controller_slot_before_provider_await(tmp_path: Path):
+    class BlockingProvider:
+        id = "blocking-provider"
+
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def negotiate(self, session_id: str, **_values: Any) -> dict[str, Any]:
+            self.entered.set()
+            await self.release.wait()
+            return {
+                "ok": True,
+                "answer": {"type": "answer", "sdp": "v=0\r\n"},
+                "transport_kind": "p2p",
+            }
+
+        async def list_displays(self, _session_id: str) -> list[DisplayDescriptor]:
+            return [
+                DisplayDescriptor(
+                    "display-one", "Primary display", 1920, 1080, primary=True
+                )
+            ]
+
+        async def disconnect(self, _session_id: str) -> None:
+            return None
+
+    class ProviderManager:
+        def __init__(self, provider: BlockingProvider) -> None:
+            self.provider = provider
+
+        async def select(self, _mode: str) -> BlockingProvider:
+            return self.provider
+
+        def by_id(self, provider_id: str) -> BlockingProvider:
+            if provider_id != self.provider.id:
+                raise KeyError(provider_id)
+            return self.provider
+
+    async def scenario() -> None:
+        service = _service(
+            tmp_path,
+            granted=(
+                "desktop:session_connect",
+                "desktop:screen_view_user",
+                "desktop:current_session",
+            ),
+        )
+        provider = BlockingProvider()
+        service.providers = ProviderManager(provider)  # type: ignore[assignment]
+        first_task = asyncio.create_task(
+            service.handle_remote_command(
+                "device-one", "desktop.negotiate", _offer_payload()
+            )
+        )
+        await asyncio.wait_for(provider.entered.wait(), timeout=1)
+        second = await service.handle_remote_command(
+            "device-one", "desktop.negotiate", _offer_payload()
+        )
+        assert second["ok"] is False
+        assert second["code"] == "desktop_controller_busy"
+        provider.release.set()
+        first = await asyncio.wait_for(first_task, timeout=1)
+        assert first["ok"] is True
+        assert len(service._host_sessions) == 1
+
+    run(scenario())

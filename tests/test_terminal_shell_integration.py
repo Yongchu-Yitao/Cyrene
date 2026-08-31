@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
@@ -88,6 +90,8 @@ def test_prepare_zsh_and_fish_preserve_user_startup(tmp_path) -> None:
     assert zsh.env["CYRENE_SHELL_INTEGRATION_SCRIPT"].endswith(
         "cyrene.zsh.integration"
     )
+    zsh_integration = Path(zsh.env["CYRENE_SHELL_INTEGRATION_SCRIPT"]).read_text()
+    assert 'command claude --plugin-dir "${CYRENE_CLAUDE_PLUGIN_DIR}" "$@"' in zsh_integration
 
     fish = prepare_shell_integration(
         shell="fish", argv=["/usr/bin/fish", "-i"], env={}, runtime_dir=tmp_path,
@@ -101,6 +105,28 @@ def test_prepare_zsh_and_fish_preserve_user_startup(tmp_path) -> None:
     assert (
         tmp_path / "shell-integration" / "xdg" / "fish" / "conf.d" / "cyrene.fish"
     ).is_file()
+
+
+def test_prepare_installs_session_scoped_claude_lifecycle_hooks(tmp_path) -> None:
+    launch = prepare_shell_integration(
+        shell="zsh",
+        argv=["/bin/zsh", "-i"],
+        env={"HOME": "/home/user"},
+        runtime_dir=tmp_path,
+    )
+
+    plugin = Path(launch.env["CYRENE_CLAUDE_PLUGIN_DIR"])
+    manifest = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text())
+    hooks = json.loads((plugin / "hooks" / "hooks.json").read_text())["hooks"]
+
+    assert manifest["name"] == "cyrene-agent-status"
+    assert set(hooks) == {
+        "SessionStart", "UserPromptSubmit", "PermissionRequest", "PreToolUse",
+        "Notification", "Stop", "SessionEnd",
+    }
+    assert hooks["PreToolUse"][0]["matcher"] == "AskUserQuestion"
+    assert "--event waiting" in hooks["PermissionRequest"][0]["hooks"][0]["command"]
+    assert "--event completed" in hooks["Stop"][0]["hooks"][0]["command"]
 
 
 def test_prepare_powershell_and_cmd_report_capability(tmp_path) -> None:

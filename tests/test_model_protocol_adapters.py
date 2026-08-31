@@ -9,6 +9,7 @@ from cyrene.model.protocol_adapters import (
     PreparedRequest,
     discovery_request,
     handle_stream,
+    next_discovery_page,
     parse_discovery_response,
     parse_response,
     prepare_request,
@@ -171,6 +172,107 @@ def test_minimax_openai_discovery_uses_models_endpoint_and_bearer_auth() -> None
         "name": "MiniMax-M2.7",
         "capabilities": ["chat"],
     }]
+
+
+def test_aliyun_bailian_discovery_uses_catalog_api_and_normalizes_models() -> None:
+    endpoint, headers = discovery_request(
+        "openai",
+        "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "bailian-key",
+        provider_preset="aliyun_bailian",
+    )
+
+    assert endpoint == (
+        "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/models"
+        "?page_no=1&page_size=100"
+    )
+    assert headers == {"Authorization": "Bearer bailian-key"}
+
+    payload = {
+        "output": {
+            "total": 101,
+            "page_no": 1,
+            "page_size": 100,
+            "models": [
+                {
+                    "model": "qwen3-max",
+                    "name": "Qwen3 Max",
+                    "description": "General-purpose reasoning model",
+                    "capabilities": ["TG", "Reasoning"],
+                    "features": ["function-calling", "structured-outputs"],
+                    "inference_metadata": {
+                        "request_modality": ["Text"],
+                        "response_modality": ["Text"],
+                    },
+                    "model_info": {"context_window": 131_072},
+                },
+                {
+                    "model": "qwen-vl-plus",
+                    "name": "Qwen VL Plus",
+                    "capabilities": ["VU"],
+                    "features": ["function-calling"],
+                    "inference_metadata": {
+                        "request_modality": ["Text", "Image"],
+                        "response_modality": ["Text"],
+                    },
+                    "model_info": {"context_window": 32_768},
+                },
+                {
+                    "model": "qwen-image-max",
+                    "name": "Qwen Image Max",
+                    "capabilities": ["IG"],
+                    "inference_metadata": {
+                        "request_modality": ["Text"],
+                        "response_modality": ["Image"],
+                    },
+                },
+            ],
+        }
+    }
+
+    assert parse_discovery_response(
+        "openai",
+        payload,
+        provider_preset="aliyun_bailian",
+    ) == [
+        {
+            "id": "qwen3-max",
+            "model": "qwen3-max",
+            "name": "Qwen3 Max",
+            "capabilities": ["chat", "tools", "reasoning"],
+            "description": "General-purpose reasoning model",
+            "context_limit": 131_072,
+        },
+        {
+            "id": "qwen-vl-plus",
+            "model": "qwen-vl-plus",
+            "name": "Qwen VL Plus",
+            "capabilities": ["chat", "vision", "tools"],
+            "context_limit": 32_768,
+        },
+    ]
+    assert next_discovery_page(
+        endpoint,
+        payload,
+        provider_preset="aliyun_bailian",
+    ) == (
+        "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/models"
+        "?page_no=2&page_size=100"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Alibaba Cloud Model Studio model discovery failed: InvalidApiKey",
+    ):
+        parse_discovery_response(
+            "openai",
+            {
+                "success": False,
+                "code": "InvalidApiKey",
+                "message": "InvalidApiKey",
+            },
+            provider_preset="aliyun_bailian",
+        )
 
 
 def test_openrouter_discovery_uses_catalog_metadata() -> None:

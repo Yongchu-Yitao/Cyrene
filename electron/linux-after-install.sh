@@ -13,3 +13,10 @@ fi
 if ! command -v at-spi-bus-launch >/dev/null 2>&1; then
   echo "Cyrene semantic App Use requires AT-SPI2 (install at-spi2-core)." >&2
 fi
+
+# X11 current-desktop control uses xdotool for real pointer down/up and key
+# injection. Wayland deliberately does not fall back to xdotool because native
+# compositors reject or isolate those synthetic events.
+if [ "${XDG_SESSION_TYPE:-x11}" != "wayland" ] && ! command -v xdotool >/dev/null 2>&1; then
+  echo "Cyrene Remote Desktop input on X11 requires xdotool." >&2
+fi

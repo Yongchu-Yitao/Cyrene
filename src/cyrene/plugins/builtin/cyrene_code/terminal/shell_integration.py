@@ -7,6 +7,7 @@ same bytes remain authoritative for the renderer and durable scrollback.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -78,6 +79,11 @@ if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
   export PROMPT_COMMAND PS0 PS1
   export __cyrene_integration_level __cyrene_original_prompt_command
   export -f __cyrene_emit_osc __cyrene_restore_status __cyrene_prompt_command
+  if [[ -n "${CYRENE_CLAUDE_PLUGIN_DIR:-}" ]]; then
+    claude() {
+      command claude --plugin-dir "${CYRENE_CLAUDE_PLUGIN_DIR}" "$@"
+    }
+  fi
 fi
 '''
 
@@ -133,6 +139,11 @@ if [[ -z "${__CYRENE_SHELL_INTEGRATION_LOADED:-}" ]]; then
   precmd_functions=(__cyrene_zsh_precmd ${precmd_functions:#__cyrene_zsh_precmd})
   preexec_functions=(__cyrene_zsh_preexec ${preexec_functions:#__cyrene_zsh_preexec})
   PROMPT="${PROMPT}"$'%{'"${__cyrene_prompt_marker_b}"$'%}'
+  if [[ -n "${CYRENE_CLAUDE_PLUGIN_DIR:-}" ]]; then
+    claude() {
+      command claude --plugin-dir "${CYRENE_CLAUDE_PLUGIN_DIR}" "$@"
+    }
+  fi
 fi
 '''
 
@@ -174,6 +185,11 @@ if not set -q __CYRENE_SHELL_INTEGRATION_LOADED
         end
         __cyrene_emit_osc '133;B'
     end
+    if set -q CYRENE_CLAUDE_PLUGIN_DIR
+        function claude
+            command claude --plugin-dir "$CYRENE_CLAUDE_PLUGIN_DIR" $argv
+        end
+    end
 end
 '''
 
@@ -201,6 +217,12 @@ function global:prompt {
     return $cyrenePrompt
 }
 Import-Module PSReadLine -ErrorAction SilentlyContinue
+if ($env:CYRENE_CLAUDE_PLUGIN_DIR) {
+    function global:claude {
+        $cyreneClaude = Get-Command claude -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        & $cyreneClaude.Source --plugin-dir $env:CYRENE_CLAUDE_PLUGIN_DIR @args
+    }
+}
 if ("Microsoft.PowerShell.PSConsoleReadLine" -as [type]) {
     function global:PSConsoleHostReadLine {
         $cyreneLine = [Microsoft.PowerShell.PSConsoleReadLine]::ReadLine($host.Runspace, $ExecutionContext)
@@ -250,6 +272,56 @@ def _write_script(path: Path, content: str) -> Path:
     return path
 
 
+def _prepare_claude_hook_plugin(root: Path) -> Path:
+    """Create a session-scoped Claude plugin without touching user settings."""
+    plugin = root / "agent-hooks" / "claude"
+    command = (
+        '"${CYRENE_AGENT_HOOK_PYTHON}" -m "${CYRENE_AGENT_HOOK_MODULE}" '
+        "--agent claude"
+    )
+
+    def command_hook(state: str) -> dict[str, str | int]:
+        return {
+            "type": "command",
+            "command": f"{command} --event {state}",
+            "timeout": 2,
+        }
+
+    hooks = {
+        "description": "Report Claude Code lifecycle state to Cyrene.",
+        "hooks": {
+            "SessionStart": [{"hooks": [command_hook("idle")]}],
+            "UserPromptSubmit": [{"hooks": [command_hook("working")]}],
+            "PermissionRequest": [{"hooks": [command_hook("waiting")]}],
+            "PreToolUse": [{
+                "matcher": "AskUserQuestion",
+                "hooks": [command_hook("waiting")],
+            }],
+            "Notification": [{
+                "matcher": "permission_prompt|elicitation_dialog",
+                "hooks": [command_hook("waiting")],
+            }],
+            "Stop": [{"hooks": [command_hook("completed")]}],
+            "SessionEnd": [{"hooks": [command_hook("interrupted")]}],
+        },
+    }
+    manifest = {
+        "name": "cyrene-agent-status",
+        "version": "1.0.0",
+        "description": "Session-local lifecycle bridge for Cyrene terminals.",
+        "author": {"name": "Cyrene"},
+    }
+    _write_script(
+        plugin / ".claude-plugin" / "plugin.json",
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    )
+    _write_script(
+        plugin / "hooks" / "hooks.json",
+        json.dumps(hooks, ensure_ascii=False, indent=2) + "\n",
+    )
+    return plugin
+
+
 def prepare_shell_integration(
     *,
     shell: str,
@@ -270,6 +342,9 @@ def prepare_shell_integration(
         return ShellIntegrationLaunch(original_argv, prepared_env, "none", kind)
 
     scripts = Path(runtime_dir) / "shell-integration"
+    prepared_env["CYRENE_CLAUDE_PLUGIN_DIR"] = str(
+        _prepare_claude_hook_plugin(scripts)
+    )
     executable = original_argv[0]
     if kind == "bash":
         integration = _write_script(

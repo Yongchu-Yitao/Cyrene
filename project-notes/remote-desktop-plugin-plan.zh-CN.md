@@ -1,12 +1,42 @@
 # Cyrene 远程桌面插件完整设计与实施计划
 
-> 状态：产品方案已确认，尚未开始实现。
+> 状态：产品方案已确认；Cyrene PluginPack、Workbench/Electron 宿主适配和自动化测试已实现。平台原生 FreeRDP Sidecar 作为独立发布制品按下述契约探测和装载，不属于本次 Plugin 源码实现范围。
 >
 > 归属：Project Notes；作为后续设计、实现和验收的基线记录。
 >
 > 目标读者：后续负责 Cyrene Plugin、Workbench、远程连接、Electron、原生 Sidecar、平台 Agent、测试与发布的开发者。
 >
 > 范围：通过可选 PluginPack 为已经配对的 Cyrene 远程设备提供桌面画面、用户键鼠控制、系统登录、双向音频、多显示器切换、剪贴板和文件传输；Agent 第一阶段只能查看画面。
+
+## 0. 当前实施快照
+
+本文件仍是完整产品与架构基线；以下记录当前仓库已经落地的 Plugin 范围，避免后续把设计目标和已签名发布制品混为一谈。
+
+| 范围 | 当前状态 |
+|---|---|
+| `cyrene_remote_desktop` PluginPack、依赖声明、Frontend View、Agent 工具 | 已实现 |
+| 动态设备集合、点击替换全部 Pane、拖动分屏、关闭恢复布局 | 已实现 |
+| 通用 Pane 设置贡献、四档画质、会话态显示约束 | 已实现 |
+| 布局 scope/revision/origin 授权、切换撤销、Agent 自授权拒绝、主 Agent 只读取帧 | 已实现 |
+| 统一资源观察流光、引用计数和 reduced-motion | 已实现 |
+| Electron 当前桌面 WebRTC、键鼠、系统音频、显示器切换 | 已实现并按平台能力与设备授权降级；Wayland 未配置原生输入桥时明确为只读 |
+| 当前桌面麦克风回传 | WebRTC 上行与启停清理已实现；仅在配置 `CYRENE_REMOTE_DESKTOP_MIC_SINK_ID` 虚拟输入端点时发布能力，不把普通扬声器播放伪装成麦克风注入 |
+| 文本、图片、文件/目录剪贴板与现有加密文件引擎复用 | 已实现；带大小、数量、路径、哈希和 TTL 边界 |
+| 一次性系统登录凭据窗口与内存 Credential Broker | 已实现 |
+| 被控端逐次批准、持续状态窗口、紧急断开与 30 秒防立即重连 | 已实现；重连仅复用同一次批准的短期 grace |
+| 当前桌面 WebRTC 断线重连、短期 TURN REST 凭据 | 已实现；生产 TURN 服务部署和公网矩阵仍待验收 |
+| secure surface | 已接入宿主锁屏状态、实时通知与轮询，Agent 取帧会拒绝；UAC/登录安全桌面的完整识别仍依赖原生 Provider/RDP Sidecar |
+| FreeRDP Sidecar 进程协议、能力探测、凭据管道和打包查找 | 已实现 |
+| RDP 端口发现、监听诊断、非 RDP 占用识别和 Sidecar 动态本地端口 | 已实现 |
+| Windows/Linux FreeRDP 原生二进制、签名、SBOM 和平台认证 | 外部发布制品；缺失时插件明确显示 `unsupported`，不会伪装为可用 |
+| Windows/macOS/Linux 真实设备发布矩阵 | 仍需使用正式 Sidecar 制品完成发布验收；当前仓库不能据此宣称全平台端到端已验证 |
+| 本次集中自动化验证 | 10 个 Electron/Plugin JavaScript 文件语法通过；App Use 输入桥 45/45、Remote Desktop/Remote 控制/Plugin/Workbench 分屏相关 Python 测试 484/484 通过 |
+
+本次实现遵守“远程桌面业务只属于插件”的边界。Workbench Core 仅增加可复用的集合工具、Pane 菜单、用户手势来源和资源观察宿主能力；`cyrene_remote` 仅增加声明式 capability、远程命令分发和受限文件 Scope，没有在核心层复制远程桌面业务。
+
+当前 Electron 回退实现已经支持双向图片/文件剪贴板，但 Chromium/Electron 不提供跨平台的系统剪贴板 delayed-rendering API，因此“远端复制、控制端在其他本机应用粘贴”方向会在收到 offer 后立即走现有文件通道取回内容。发布用原生 Sidecar 仍需实现按系统粘贴请求延迟取回，才能满足下文的最终时机目标；不得为追求延迟传输而绕过现有文件通道。
+
+当前可验证结论是：插件注册、设备卡片、点击/拖动分屏、会话授权、WebRTC 协商、当前桌面宿主、键鼠生命周期、音频能力降级、显示器切换、剪贴板文件通道、Agent 只读观察和流光状态在仓库级链路上已经闭合。完整发布可用性仍有三个外部前置条件：打包并签名 `cyrene-freerdp-sidecar`，在目标设备部署可用的 RDP/桌面与音频组件，以及为跨复杂网络连接配置 STUN/TURN。任一前置条件缺失时，插件会返回明确的 `unsupported`/诊断状态，不会静默回退成一个看似成功但不可操作的会话。
 
 ## 1. 目标
 
@@ -350,6 +380,10 @@ Controller FreeRDP Sidecar
 
 - 不在公网开放 3389/3390。
 - Host Agent 的 RDP bridge 只连接受控本机地址和已允许端口。
+- Windows 从 `RDP-Tcp/PortNumber` 读取实际监听端口；GNOME Remote Desktop 优先读取 `org.gnome.desktop.remote-desktop.rdp port`，其他 Linux 从 xrdp `[Globals] port` 读取，缺失时才回退 3389；部署环境可用 `CYRENE_RDP_PORT` 显式覆盖。
+- 目标端口已由预期 RDP 服务监听是正常状态，不得当作冲突；协议握手发现该监听者不是 RDP 服务时返回 `rdp_port_occupied_by_other_service`，不得杀进程或自动改写系统端口。
+- Sidecar/bridge 自己需要的本机临时监听端口必须绑定 `127.0.0.1:0`，由操作系统选择空闲端口，避免与 3389 或其他 Cyrene 实例竞争。
+- 配置端口没有监听时返回 `rdp_service_not_listening`；本地动态端口分配失败返回可重试的 `rdp_local_port_allocation_failed`，两者不得合并成笼统网络错误。
 - 客户端不能借助桌面隧道访问任意内网 TCP 目标。
 - RDP 服务证书必须校验并支持指纹固定；第一次信任由用户确认。
 - RDP 自身 TLS/NLA 与 Cyrene 隧道形成纵深防御，不因外层加密而关闭内层校验。
@@ -1017,7 +1051,7 @@ resource_observation.ended
 | 配对/授权 | 能力未授予、设备撤销 | 打开远程设置重新授权 |
 | 运行时 | Sidecar 缺失、版本不兼容 | 安装/更新组件 |
 | 系统权限 | 屏幕录制、辅助功能、麦克风未授权 | 打开系统设置并重新检测 |
-| RDP | 服务未启用、NLA/凭据失败、证书变化 | 启用服务、重新输入、确认新证书 |
+| RDP | 服务未启用、端口被非 RDP 服务占用、NLA/凭据失败、证书变化 | 启用服务、修正端口或占用、重新输入、确认新证书 |
 | Linux 后端 | xrdp/xorgxrdp/音频模块缺失 | 执行受审查的安装修复 |
 | 网络 | ICE 失败、TURN 不可用 | 检查网络或 TURN 设置 |
 | 媒体 | 编码器不可用、帧率过低 | 降级软件编码或画质 |
@@ -1320,17 +1354,18 @@ remote_desktop.turn
 
 ## 38. 实施前检查清单
 
-- [ ] 本文已作为产品和架构基线接受。
+- [x] 本文已作为产品和架构基线接受。
 - [ ] FreeRDP Sidecar 原型验证通过。
 - [ ] 确认 STUN/TURN 部署和短期凭据签发方式。
-- [ ] 确认通用可展开工具集合 API。
-- [ ] 确认通用 Pane Menu Contribution API。
-- [ ] 确认 Pane Layout user-origin 授权的可信来源。
-- [ ] 确认 Credential Broker 和宿主安全窗口。
+- [x] Plugin 支持 coturn shared-secret/HMAC 短期凭据，TTL 限制为 60–3600 秒；生产 secret、配额与服务地址仍由部署阶段确认。
+- [x] 确认通用可展开工具集合 API。
+- [x] 确认通用 Pane Menu Contribution API。
+- [x] 确认 Pane Layout user-origin 授权的可信来源。
+- [x] 确认 Credential Broker 和宿主安全窗口。
 - [ ] 确认原生组件安装、签名、更新和回滚路径。
 - [ ] 冻结第一批 Tier 1 OS/架构测试镜像。
 - [ ] 完成第三方依赖许可证和 SBOM 预审。
-- [ ] 为每个阶段选择集中、与风险相称的最终测试命令。
+- [x] 为本次 Plugin 实现执行集中、与风险相称的最终测试命令。
 
 ## 39. 相关现有实现
 

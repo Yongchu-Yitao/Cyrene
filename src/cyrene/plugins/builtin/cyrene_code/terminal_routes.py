@@ -47,6 +47,12 @@ class TerminalActivateRequest(BaseModel):
     terminalId: str | None = None
 
 
+class TerminalAgentEventRequest(BaseModel):
+    agentId: str = Field(min_length=1, max_length=60)
+    event: str = Field(min_length=1, max_length=100)
+    payload: dict = Field(default_factory=dict)
+
+
 def _http_error(exc: Exception) -> HTTPException:
     logger.warning("Terminal request failed", exc_info=(type(exc), exc, exc.__traceback__))
     if isinstance(exc, TerminalNotFoundError):
@@ -196,6 +202,29 @@ def register_terminal_routes(router: APIRouter) -> None:
     async def restart_terminal(terminal_id: str):
         try:
             result = await client.restart(terminal_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"terminal": result["terminal"]}
+
+    @router.post("/api/terminals/{terminal_id}/read")
+    async def mark_terminal_read(terminal_id: str):
+        try:
+            result = await client.mark_read(terminal_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"terminal": result["terminal"]}
+
+    @router.post("/api/terminals/{terminal_id}/agent-events")
+    async def report_terminal_agent_event(
+        terminal_id: str, payload: TerminalAgentEventRequest,
+    ):
+        try:
+            result = await client.agent_event(
+                terminal_id,
+                agent_id=payload.agentId,
+                event=payload.event,
+                payload=payload.payload,
+            )
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"terminal": result["terminal"]}

@@ -11,6 +11,14 @@ var MODEL_CONFIGURATION_ERROR_KEYS = {
   "model discovery failed": ["settings.modelDiscoveryFailed", "Model discovery failed."],
   "model discovery is unavailable": ["settings.modelDiscoveryUnavailable", "Model discovery is currently unavailable."],
 };
+var MODEL_CONFIGURATION_ERROR_CODE_KEYS = {
+  "model_connection_failed": ["settings.modelConnectionFailed", "Model connection failed."],
+  "model_tls_failed": ["settings.modelConnectionFailed", "Model connection failed."],
+  "model_timeout": ["settings.modelConnectionTimedOut", "Model connection timed out."],
+  "model_authentication_failed": ["settings.modelConnectionRejected", "The model service rejected the connection."],
+  "model_unavailable": ["settings.modelConnectionUnavailable", "The model service is currently unavailable."],
+  "model_service_unavailable": ["settings.modelConnectionUnavailable", "The model service is currently unavailable."],
+};
 var ROUTE_META = {
   primary: { title: "Primary model order", titleKey: "settings.primaryRouteTitle", description: "Primary models for chat and Agent work, with automatic fallback in order.", descriptionKey: "settings.primaryRouteHint", capability: "chat", ordered: true },
   secondary: { title: "Secondary model", titleKey: "settings.secondaryRouteTitle", description: "Used for summaries, titles, and lower-cost supporting tasks.", descriptionKey: "settings.secondaryRouteHint", capability: "chat", ordered: false },
@@ -162,7 +170,6 @@ function useModelConfigurationLifecycle(v) {
   v.useEffect(function () {
     if (!v.config || v.dirtyRef.current) return;
     v.queuedSnapshot.current = v.config;
-    if (Number.isInteger(v.config.revision)) v.knownRevision.current = v.config.revision;
   }, [v.config]);
 }
 
@@ -235,6 +242,8 @@ function useConnectionMenuLifecycle(v) {
   }
 
   function localizedModelConfigurationError(error, props) {
+    var coded = MODEL_CONFIGURATION_ERROR_CODE_KEYS[String(error && error.code || "").trim().toLowerCase()];
+    if (coded) return label(props, coded[0], coded[1]);
     var summary = String(error && (error.summary || error.message) || error || "").trim();
     var translation = MODEL_CONFIGURATION_ERROR_KEYS[summary.toLowerCase()];
     return translation ? label(props, translation[0], translation[1]) : summary;
@@ -556,8 +565,55 @@ function useConnectionMenuLifecycle(v) {
       }),
       routes: normalizeRoutes(config.routes),
     };
-    if (Number.isInteger(config.revision) && config.revision >= 0) payload.revision = config.revision;
     return payload;
+  }
+
+  function modelConfigurationPatchOperations(previousConfig, nextConfig) {
+    var previous = configPayload(previousConfig || {});
+    var next = configPayload(nextConfig || {});
+    var operations = [];
+    var unconfiguredConnectionIds = {};
+    ((previousConfig || {}).connections || []).forEach(function (connection) {
+      if (connection && connection._plugin_unconfigured === true) {
+        unconfiguredConnectionIds[String(connection.id || "")] = true;
+      }
+    });
+    function equal(left, right) {
+      return JSON.stringify(left) === JSON.stringify(right);
+    }
+    function entityOperations(collection, singular) {
+      var beforeById = {};
+      var afterById = {};
+      (previous[collection] || []).forEach(function (item) { beforeById[item.id] = item; });
+      (next[collection] || []).forEach(function (item) { afterById[item.id] = item; });
+      Object.keys(beforeById).forEach(function (id) {
+        if (!afterById[id]) operations.push({ op: "remove_" + singular, id: id });
+      });
+      Object.keys(afterById).forEach(function (id) {
+        var after = afterById[id];
+        var before = beforeById[id];
+        if (!before || (singular === "connection" && unconfiguredConnectionIds[id])) {
+          if (before && equal(before, after)) return;
+          operations.push({ op: "upsert_" + singular, id: id, value: after });
+          return;
+        }
+        var changes = {};
+        Object.keys(after).forEach(function (key) {
+          if (key !== "id" && !equal(before[key], after[key])) changes[key] = after[key];
+        });
+        if (Object.keys(changes).length) {
+          operations.push({ op: "patch_" + singular, id: id, changes: changes });
+        }
+      });
+    }
+    entityOperations("connections", "connection");
+    entityOperations("profiles", "profile");
+    Object.keys(next.routes || {}).forEach(function (route) {
+      if (!equal((previous.routes || {})[route] || [], next.routes[route] || [])) {
+        operations.push({ op: "set_route", route: route, value: next.routes[route] || [] });
+      }
+    });
+    return operations;
   }
 
   function connectionDraftPayload(connection) {
@@ -592,6 +648,9 @@ function useConnectionMenuLifecycle(v) {
     var [error, setError] = useState("");
     var [saveState, setSaveState] = useState("idle");
     var mounted = useRef(true);
+    var persistedConfig = useRef(
+      props && props.initialConfig ? normalizeConfig(props.initialConfig) : null
+    );
 
     function operationIsCurrent(options) {
       if (!mounted.current) return false;
@@ -607,6 +666,7 @@ function useConnectionMenuLifecycle(v) {
       }
       return requestJson("/api/settings/model-config").then(function (payload) {
         var next = normalizeConfig(payload);
+        persistedConfig.current = next;
         if (mounted.current) {
           if (operationIsCurrent(options)) setConfig(next);
           setLoading(false);
@@ -627,19 +687,26 @@ function useConnectionMenuLifecycle(v) {
       return function () { mounted.current = false; };
     }, []);
 
-    function save(nextConfig, dispatchRoutes, options) {
+    function saveOperations(operations, dispatchRoutes, options) {
       options = options || {};
-      var draft = normalizeConfig(nextConfig || config || {});
+      operations = Array.isArray(operations) ? operations : [];
+      if (!operations.length) {
+        return Promise.resolve(persistedConfig.current || config || normalizeConfig({}));
+      }
       if (mounted.current) {
         setSaveState("saving");
         if (operationIsCurrent(options)) setError("");
       }
       return requestJson("/api/settings/model-config", {
-        method: "PUT",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(configPayload(draft)),
+        body: JSON.stringify({
+          base_hash: String(persistedConfig.current && persistedConfig.current.content_hash || ""),
+          operations: operations,
+        }),
       }).then(function (payload) {
-        var saved = normalizeConfig(payload && (payload.connections || payload.profiles || payload.routes || payload.config) ? payload : draft);
+        var saved = normalizeConfig(payload);
+        persistedConfig.current = saved;
         var isCurrent = operationIsCurrent(options);
         if (mounted.current) setSaveState("idle");
         if (isCurrent) {
@@ -659,26 +726,22 @@ function useConnectionMenuLifecycle(v) {
         if (!mounted.current) throw saveError;
         setSaveState("idle");
         if (!operationIsCurrent(options) || options.surfaceErrors === false) throw saveError;
-        if (saveError.status === 409) {
-          setError(label(props, "settings.modelConfigConflict", "Model configuration was updated elsewhere. Reload it before making more changes."));
-          if (options.handleConflict !== false && window.confirm(label(props, "settings.modelConfigConflictConfirm", "Model configuration was updated on another page. Reload the latest configuration now? Unsaved changes will be lost."))) {
-            return load({ isCurrent: options.isCurrent }).then(function () {
-              saveError.reloaded = true;
-              throw saveError;
-            }).catch(function (reloadError) {
-              if (reloadError !== saveError) saveError.reloadError = reloadError;
-              throw saveError;
-            });
-          }
-        } else {
-          setError(saveError.message || String(saveError));
-        }
+        setError(saveError.message || String(saveError));
         showSettingsToast(saveError.message || String(saveError), "error");
         throw saveError;
       });
     }
 
-    return { config: config, setConfig: setConfig, loading: loading, error: error, setError: setError, saveState: saveState, load: load, save: save };
+    function save(nextConfig, dispatchRoutes, options) {
+      var draft = normalizeConfig(nextConfig || config || {});
+      var operations = modelConfigurationPatchOperations(
+        persistedConfig.current || config || {},
+        draft
+      );
+      return saveOperations(operations, dispatchRoutes, options);
+    }
+
+    return { config: config, setConfig: setConfig, loading: loading, error: error, setError: setError, saveState: saveState, load: load, save: save, saveOperations: saveOperations };
   }
 
   function LoadingState(props) {
@@ -772,6 +835,7 @@ function useConnectionMenuLifecycle(v) {
       glm: "glm",
       opencode_go: "opencode",
       openrouter: "openrouter",
+      aliyun_bailian: "aliyun",
       amd_gpu_cloud: "amd",
       ollama: "ollama",
       local_onnx: "onnx",
@@ -1207,8 +1271,8 @@ function useConnectionMenuLifecycle(v) {
     var editVersion = useRef(0);
     var dirtyRef = useRef(false);
     var queuedSnapshot = useRef(null);
+    var queuedOperations = useRef([]);
     var queuedVersion = useRef(0);
-    var knownRevision = useRef(null);
     var saveQueueTimer = useRef(null);
     var saveQueueInFlight = useRef(false);
     var saveQueueBlockedVersion = useRef(-1);
@@ -1231,7 +1295,7 @@ function useConnectionMenuLifecycle(v) {
     var [profileDrafts, setProfileDrafts] = useState({});
     var discoveryRequestVersions = useRef({});
     var selected = config && (config.connections || []).find(function (item) { return item.id === selectedId; });
-    useModelConfigurationLifecycle({ useEffect, config, selectedId, setSelectedId, oauthPoll, oauthCliPoll, saveQueueMounted, saveQueueTimer, dirtyRef, queuedSnapshot, knownRevision });
+    useModelConfigurationLifecycle({ useEffect, config, selectedId, setSelectedId, oauthPoll, oauthCliPoll, saveQueueMounted, saveQueueTimer, dirtyRef, queuedSnapshot });
     useConnectionMenuLifecycle({ useEffect, connectionMenu, connectionMenuRef, connectionMenuReturnFocus, setConnectionMenu });
     function setQueueDirty(value) {
       dirtyRef.current = !!value;
@@ -1251,62 +1315,39 @@ function useConnectionMenuLifecycle(v) {
     }
 
     function queueErrorMessage(error) {
-      if (error && error.status === 409) return label(props, "settings.modelConfigConflict", "Model configuration was updated elsewhere. Reload it before making more changes.");
       return localizedModelConfigurationError(error, props) || label(props, "settings.modelConfigSaveFailed", "Could not save model configuration.");
     }
 
-    function handleQueuedSaveFailure(error) {
+    function handleQueuedSaveFailure(error, failedOperations) {
       if (!saveQueueMounted.current) return;
       var failedVersion = queuedVersion.current;
+      queuedOperations.current = (failedOperations || []).concat(queuedOperations.current || []);
       saveQueueBlockedVersion.current = failedVersion;
       setQueueDirty(true);
       var message = queueErrorMessage(error);
       setSaveError(message);
       store.setError(message);
       showSettingsToast(message, "error");
-      if (!error || error.status !== 409) return;
-      if (!window.confirm(label(props, "settings.modelConfigConflictConfirm", "Model configuration was updated on another page. Reload the latest configuration now? Unsaved changes will be lost."))) return;
-      store.load({
-        isCurrent: function () {
-          return saveQueueMounted.current && queuedVersion.current === failedVersion;
-        },
-      }).then(function (reloaded) {
-        if (!saveQueueMounted.current || queuedVersion.current !== failedVersion) return;
-        queuedSnapshot.current = reloaded;
-        if (Number.isInteger(reloaded.revision)) knownRevision.current = reloaded.revision;
-        saveQueueBlockedVersion.current = -1;
-        setQueueDirty(false);
-        setSaveError("");
-        store.setError("");
-      }).catch(function (reloadError) {
-        if (!saveQueueMounted.current || queuedVersion.current !== failedVersion) return;
-        saveQueueBlockedVersion.current = failedVersion;
-        setQueueDirty(true);
-        var reloadMessage = reloadError.message || String(reloadError);
-        setSaveError(reloadMessage);
-        store.setError(reloadMessage);
-      });
     }
 
     function persistQueuedConfig() {
       if (!saveQueueMounted.current || saveQueueInFlight.current || !dirtyRef.current) return;
       if (saveQueueBlockedVersion.current === queuedVersion.current) return;
-      var snapshot = queuedSnapshot.current;
+      var operations = (queuedOperations.current || []).slice();
       var version = queuedVersion.current;
-      if (!snapshot) return;
+      if (!operations.length) return;
+      queuedOperations.current = [];
       saveQueueInFlight.current = true;
-      store.save(snapshot, true, {
+      store.saveOperations(operations, true, {
         silentSuccess: true,
         surfaceErrors: false,
-        handleConflict: false,
         isCurrent: function () {
           return saveQueueMounted.current && queuedVersion.current === version;
         },
       }).then(function (saved) {
         saveQueueInFlight.current = false;
         if (!saveQueueMounted.current) return;
-        if (Number.isInteger(saved.revision)) knownRevision.current = saved.revision;
-        if (queuedVersion.current === version) {
+        if (queuedVersion.current === version && !queuedOperations.current.length) {
           queuedSnapshot.current = saved;
           saveQueueBlockedVersion.current = -1;
           setQueueDirty(false);
@@ -1314,24 +1355,22 @@ function useConnectionMenuLifecycle(v) {
           store.setError("");
           return;
         }
-        queuedSnapshot.current = Object.assign({}, queuedSnapshot.current || {}, {
-          revision: knownRevision.current,
-        });
         scheduleQueuedSave(0);
       }).catch(function (error) {
         saveQueueInFlight.current = false;
-        handleQueuedSaveFailure(error);
+        handleQueuedSaveFailure(error, operations);
       });
     }
 
     function updateConfig(next, options) {
       options = options || {};
+      var previous = queuedSnapshot.current || config || {};
       var snapshot = next;
-      if (Number.isInteger(knownRevision.current)) {
-        snapshot = Object.assign({}, next, { revision: knownRevision.current });
-      }
+      var operations = modelConfigurationPatchOperations(previous, snapshot);
+      if (!operations.length) return queuedVersion.current;
       editVersion.current += 1;
       queuedVersion.current = editVersion.current;
+      queuedOperations.current = queuedOperations.current.concat(operations);
       queuedSnapshot.current = snapshot;
       saveQueueBlockedVersion.current = -1;
       setQueueDirty(true);
@@ -1347,6 +1386,7 @@ function useConnectionMenuLifecycle(v) {
     }
 
     function updateConnection(key, value) {
+      if (key === "use_proxy" && value === true) setProxyMasterEnabled(true);
       updateConfig(Object.assign({}, config, {
         connections: config.connections.map(function (connection) {
           if (connection.id !== selected.id) return connection;
@@ -1374,7 +1414,7 @@ function useConnectionMenuLifecycle(v) {
           }
           return next;
         }),
-      }));
+      }), { immediate: key === "use_proxy" && value === true });
     }
 
     function matchesConnectionQuery(connection) {

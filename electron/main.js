@@ -56,6 +56,7 @@ const { createBackendPortWaiters } = require('./backend-port-waiters');
 const { createSingleFlight, loadWindowUrl } = require('./main-window-lifecycle');
 const { RotatingFileLog } = require('./rotating-log');
 const { migrateLegacyDevelopmentData } = require('./development-data-migration');
+const { RemoteDesktopManager } = require('./remote-desktop');
 
 const APP_NAME = 'Cyrene';
 const DEVELOPMENT_APP_NAME = 'Cyrene-dev';
@@ -321,6 +322,7 @@ const agentCursorRunningSources = new Map();
 let electronRpcServer = null;
 let electronRpcPort = null;
 let hostControl = null;
+let remoteDesktopManager = null;
 
 function getHostControl() {
   if (!hostControl) {
@@ -337,6 +339,22 @@ function getHostControl() {
     });
   }
   return hostControl;
+}
+
+function getRemoteDesktopManager() {
+  if (!remoteDesktopManager) {
+    remoteDesktopManager = new RemoteDesktopManager({
+      getMainWindow: () => mainWindow,
+      getAppUseManager,
+      getLanguage: () => getDesktopLanguage(readDesktopSettings()),
+      clipboardRoot: path.join(
+        process.env.CYRENE_BASE_DIR || getCyreneUserDataDir(),
+        'data', 'plugins', 'cyrene_remote_desktop', 'clipboard'
+      ),
+    });
+    remoteDesktopManager.installIpc();
+  }
+  return remoteDesktopManager;
 }
 
 function executeApprovedLifecycle(actionId, action, receipt) {
@@ -5250,6 +5268,10 @@ async function handleHostRpc(method, args) {
   return getHostControl().handle(method, args || {});
 }
 
+async function handleRemoteDesktopRpc(method, args) {
+  return getRemoteDesktopManager().handle(method, args || {});
+}
+
 function startElectronRpcServer() {
   if (electronRpcServer && electronRpcPort) return Promise.resolve(electronRpcPort);
   const MAX_RETRIES = 3;
@@ -5257,7 +5279,7 @@ function startElectronRpcServer() {
     return new Promise((resolve, reject) => {
       const server = http.createServer((req, res) => {
         const rpcPath = String(req.url || '');
-        if (req.method !== 'POST' || !['/browser/rpc', '/app/rpc', '/host/rpc'].includes(rpcPath)) {
+        if (req.method !== 'POST' || !['/browser/rpc', '/app/rpc', '/host/rpc', '/desktop/rpc'].includes(rpcPath)) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'not_found' }));
           return;
@@ -5279,6 +5301,8 @@ function startElectronRpcServer() {
               ? await handleAppUseRpc(String(payload.method || ''), payload.args || {})
               : rpcPath === '/host/rpc'
                 ? await handleHostRpc(String(payload.method || ''), payload.args || {})
+                : rpcPath === '/desktop/rpc'
+                  ? await handleRemoteDesktopRpc(String(payload.method || ''), payload.args || {})
                 : await handleBrowserRpc(
                   String(payload.method || ''),
                   payload.args || {},
@@ -7426,6 +7450,7 @@ if (!gotSingleInstanceLock) {
       appendErrorLog(`[electron] Failed to start Electron RPC server: ${err && err.stack ? err.stack : err}\n`);
     }
     getAppUseManager();
+    getRemoteDesktopManager();
     const desktopSettings = readDesktopSettings();
     applyLaunchAtLogin(desktopSettings.launchAtLogin);
     // Only claim the global shortcut when the user has enabled quick chat.
@@ -7828,6 +7853,7 @@ if (!gotSingleInstanceLock) {
     destroyTray();
     globalShortcut.unregisterAll();
     if (appUseManager) appUseManager.stop();
+    if (remoteDesktopManager) remoteDesktopManager.close().catch(() => {});
     if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) appUsePointerWindow.destroy();
     appUsePointerWindow = null;
     appUsePointerOwnerTargetId = '';

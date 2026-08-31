@@ -444,6 +444,30 @@ async def test_model_discovery_uses_adapter_fallback_when_provider_preset_is_mis
     assert captured == {"provider_id": "", "adapter_id": "openai"}
 
 
+def test_version_10_configuration_adds_bailian_once_and_respects_later_deletion():
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        CONFIG_VERSION,
+        normalize_model_configuration,
+    )
+
+    migrated = normalize_model_configuration({
+        "version": 10,
+        "connections": [],
+        "profiles": [],
+        "routes": {
+            "primary": [],
+            "secondary": [],
+            "vision": [],
+            "embedding": [],
+        },
+    })
+
+    assert migrated["version"] == CONFIG_VERSION
+    assert [item["id"] for item in migrated["connections"]] == ["aliyun_bailian"]
+    assert normalize_model_configuration(migrated)["connections"] == migrated["connections"]
+
+    deleted = {**migrated, "connections": []}
+    assert normalize_model_configuration(deleted)["connections"] == []
 
 
 def test_default_provider_connections_include_managed_local_provider(
@@ -468,6 +492,16 @@ def test_default_provider_connections_include_managed_local_provider(
         "base_url": "https://api.openai.com/v1",
         "api_key": "",
         "options": {"provider_preset": "openai"},
+    }
+    assert providers["aliyun_bailian"] == {
+        "id": "aliyun_bailian",
+        "name": "Alibaba Cloud Model Studio",
+        "adapter": "openai",
+        "enabled": True,
+        "use_proxy": False,
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_key": "",
+        "options": {"provider_preset": "aliyun_bailian"},
     }
     assert providers["anthropic"] == {
         "id": "anthropic",
@@ -784,6 +818,156 @@ def test_deleting_connection_persists_the_canonical_graph(
     assert all(item["id"] != "qwen-next" for item in stored["profiles"])
 
 
+def test_enabling_connection_proxy_atomically_enables_master_proxy(
+    isolated_model_store,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        save_model_configuration,
+    )
+
+    save_model_configuration(_configuration())
+    revision = isolated_model_store.get_settings_revision()
+    proxied = _configuration()
+    proxied["connections"][0]["use_proxy"] = True
+
+    _saved, next_revision = save_model_configuration(
+        proxied,
+        expected_revision=revision,
+    )
+
+    assert next_revision == revision + 1
+    assert isolated_model_store.get_setting("external_agent_proxy_enabled") is True
+
+
+def test_patch_enabling_connection_proxy_atomically_enables_master_proxy(
+    isolated_model_store,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        model_configuration_hash,
+        patch_model_configuration,
+        save_model_configuration,
+    )
+
+    saved, _revision = save_model_configuration(_configuration())
+    revision = isolated_model_store.get_settings_revision()
+
+    patched, next_revision, _content_hash, _rebased = patch_model_configuration({
+        "base_hash": model_configuration_hash(saved),
+        "operations": [{
+            "op": "patch_connection",
+            "id": "fastllm",
+            "changes": {"use_proxy": True},
+        }],
+    })
+
+    assert next_revision == revision + 1
+    assert patched["connections"][0]["use_proxy"] is True
+    assert isolated_model_store.get_setting("external_agent_proxy_enabled") is True
+
+
+def test_stale_hash_patch_rebases_without_losing_unrelated_changes(
+    isolated_model_store,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        get_model_configuration,
+        model_configuration_hash,
+        patch_model_configuration,
+        save_model_configuration,
+    )
+
+    original, _revision = save_model_configuration(_configuration())
+    stale_hash = model_configuration_hash(original)
+    first, _revision, first_hash, rebased = patch_model_configuration({
+        "base_hash": stale_hash,
+        "operations": [{
+            "op": "patch_connection",
+            "id": "fastllm",
+            "changes": {"name": "Renamed elsewhere"},
+        }],
+    })
+    assert rebased is False
+    assert first_hash != stale_hash
+
+    # An unrelated settings write and another model edit must not reject or
+    # overwrite the stale client's field-level patch.
+    isolated_model_store.set_setting("timezone", "UTC")
+    patched, _revision, final_hash, rebased = patch_model_configuration({
+        "base_hash": stale_hash,
+        "operations": [{
+            "op": "patch_profile",
+            "id": "qwen-next",
+            "changes": {"description": "Saved from a stale page"},
+        }],
+    })
+
+    assert rebased is True
+    assert final_hash != first_hash
+    assert patched["connections"][0]["name"] == "Renamed elsewhere"
+    assert patched["profiles"][0]["description"] == "Saved from a stale page"
+    assert isolated_model_store.get_setting("timezone") == "UTC"
+    assert get_model_configuration() == patched
+
+
+def test_legacy_full_save_ignores_stale_global_revision(
+    isolated_model_store,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        get_model_configuration,
+        save_model_configuration,
+    )
+
+    _saved, stale_revision = save_model_configuration(_configuration())
+    isolated_model_store.set_setting("timezone", "UTC")
+    renamed = _configuration()
+    renamed["connections"][0]["name"] = "Saved without revision blocking"
+
+    saved, revision = save_model_configuration(
+        renamed,
+        expected_revision=stale_revision,
+    )
+
+    assert revision > stale_revision
+    assert saved["connections"][0]["name"] == "Saved without revision blocking"
+    assert get_model_configuration()["connections"][0]["name"] == saved["connections"][0]["name"]
+
+
+@pytest.mark.asyncio
+async def test_model_discovery_restores_structured_plugin_connection_error(monkeypatch):
+    from cyrene.core.plugin import Plugin, PluginRegistry
+    from cyrene.model.error_details import ModelCallError, classify_model_error
+    import cyrene.plugins.model_catalog as model_catalog
+    from cyrene.plugins.builtin.cyrene_model.routes import _discover
+
+    async def fail_discovery(_arguments, _context):
+        raise ModelCallError(classify_model_error("ConnectError"))
+
+    plugin = Plugin(
+        name="FailingProvider",
+        description="Provider with a public structured failure.",
+        input_schema={"type": "object", "additionalProperties": True},
+        handler=fail_discovery,
+        kind="model",
+    )
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(plugin, source="test")
+    monkeypatch.setattr(
+        model_catalog,
+        "resolve_model_plugin",
+        lambda _provider_id, _adapter_id: (registry, plugin),
+    )
+
+    with pytest.raises(ModelCallError) as captured:
+        await _discover({
+            "id": "failing",
+            "adapter": "openai",
+            "base_url": "https://provider.invalid/v1",
+            "api_key": "secret",
+            "options": {},
+        })
+
+    assert captured.value.details.code == "model_connection_failed"
+
+
 def test_frontend_registers_split_pages_and_live_context_contract():
     root = Path(__file__).resolve().parents[1]
     settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
@@ -807,6 +991,9 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert '"settings.modelConnectionFailed": "模型连接失败。"' in i18n
     assert '"settings.modelDiscoveryFailed": "Model discovery failed."' in i18n
     assert '"settings.modelDiscoveryFailed": "获取模型列表失败。"' in i18n
+    assert 'label(props, "settings.fetchingProviderModels", "Fetching models from the provider…")' in settings
+    assert '"settings.fetchingProviderModels": "Fetching models from the provider…"' in i18n
+    assert '"settings.fetchingProviderModels": "正在从提供商获取模型…"' in i18n
     assert "localizedModelConfigurationError(error, props)" in settings
     assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list"))' in settings
     assert "档案描述一个可被多个用途引用的远端模型。" not in settings
@@ -824,7 +1011,8 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'function ModelIdCombobox(props)' in settings
     assert 'modelPluginForConnection(config, selected)' in settings
     assert "function configPayload(config)" in settings
-    assert 'body: JSON.stringify(configPayload(draft))' in settings
+    assert 'method: "PATCH"' in settings
+    assert "modelConfigurationPatchOperations(" in settings
     assert 'role: "combobox"' in settings
     assert 'aria-autocomplete": "list"' in settings
     assert '"settings.refreshModels"' in settings
@@ -878,7 +1066,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert "payload.selectable_models" in chat
     assert 'setSelectedId("")' in chat
     assert "persistQueuedConfig();" in settings
-    assert "store.save(snapshot, true, {" in settings
+    assert "store.saveOperations(operations, true, {" in settings
     assert "saveQueueInFlight.current" in settings
     assert '"保存配置"' not in settings
     assert "saved immediately." in settings
@@ -978,6 +1166,10 @@ def test_model_service_api_row_has_per_connection_proxy_switch():
     assert 'checked: selected.use_proxy === true' in settings
     assert 'v.updateConnection("use_proxy", value)' in settings
     assert 'payload.external_agent_proxy_enabled === true' in settings
+    assert 'setProxyMasterEnabled(true)' in settings
+    assert 'immediate: key === "use_proxy" && value === true' in settings
+    assert 'MODEL_CONFIGURATION_ERROR_CODE_KEYS' in settings
+    assert '"model_connection_failed": ["settings.modelConnectionFailed"' in settings
     assert ".wb-mcfg-api-proxy-row" in styles
     assert "grid-template-columns: minmax(0, 1fr) auto" in styles
 
@@ -998,12 +1190,14 @@ def test_services_autosave_is_single_flight_retryable_and_current_only():
     )[1].split("function useConnectionMenuLifecycle(v) {", 1)[0]
 
     assert "var queuedSnapshot = useRef(null);" in services
+    assert "var queuedOperations = useRef([]);" in services
     assert "var queuedVersion = useRef(0);" in services
     assert "var saveQueueInFlight = useRef(false);" in services
     assert "if (!saveQueueMounted.current || saveQueueInFlight.current" in services
-    assert services.count("store.save(snapshot, true, {") == 1
+    assert services.count("store.saveOperations(operations, true, {") == 1
     assert services.count("store.setConfig(snapshot);") == 1
-    assert "queuedSnapshot.current = Object.assign({}, queuedSnapshot.current || {}," in services
+    assert "queuedOperations.current = []" in services
+    assert "failedOperations || []).concat(queuedOperations.current" in services
     assert "scheduleQueuedSave(0);" in services
 
     assert "updateConfig(nextConfig, { immediate: true });" in services
@@ -1021,18 +1215,11 @@ def test_services_autosave_is_single_flight_retryable_and_current_only():
     assert 'className: "wb-mcfg-status is-error wb-mcfg-save-error"' in services
     assert ".wb-mcfg-save-error" in styles
 
-    conflict_reload = services.split("store.load({", 1)[1].split(
-        ").catch(function (reloadError)", 1
-    )[0]
-    assert ").then(function (reloaded)" in conflict_reload
-    assert "setQueueDirty(false);" in conflict_reload
-    assert "setQueueDirty(false);" not in services.split("store.load({", 1)[0].split(
-        "function handleQueuedSaveFailure(error) {", 1
-    )[1]
-    reload_failure = services.split(").catch(function (reloadError)", 1)[1].split(
-        "function persistQueuedConfig()", 1
-    )[0]
-    assert "setQueueDirty(true);" in reload_failure
+    assert "settings.modelConfigConflict" not in services
+    assert "window.confirm(" not in services
+    assert 'method: "PATCH"' in hook
+    assert "base_hash:" in hook
+    assert "modelConfigurationPatchOperations(" in hook
 
     current_completion = hook.split("if (isCurrent) {", 1)[1].split(
         "return saved;", 1

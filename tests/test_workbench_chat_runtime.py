@@ -305,6 +305,7 @@ def test_model_gateway_routes_one_exact_identity_without_route_fallback(monkeypa
 def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     calls = []
     fallbacks = []
+    fallback_results = []
 
     async def failed(_arguments, _context):
         calls.append("failed")
@@ -343,8 +344,16 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     async def capture_fallback(_context, failed_candidate, fallback_candidate):
         fallbacks.append((failed_candidate["id"], fallback_candidate["id"]))
 
+    async def capture_fallback_result(_context, candidate, *, status):
+        fallback_results.append((candidate["id"], status))
+
     monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
     monkeypatch.setattr(model_router, "_publish_fallback", capture_fallback)
+    monkeypatch.setattr(
+        model_router,
+        "_persist_fallback_result",
+        capture_fallback_result,
+    )
     registry = PluginRegistry(include_core=False)
     for name, provider_id, handler in (
         ("ProviderOne", "provider_one", failed),
@@ -373,12 +382,15 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
 
     assert result.success is True
     assert result.value["content"] == "done"
-    assert result.value["provider_plugin"] == "ProviderTwo"
     assert calls == ["failed", "succeeded"]
     assert fallbacks == [("primary", "fallback")]
+    assert fallback_results == [("fallback", "switched")]
+    assert result.value["provider_plugin"] == "ProviderTwo"
 
 
 def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
+    route_statuses = []
+
     async def rejected(_arguments, _context):
         raise ModelCallError(classify_model_error("HTTP 401 Unauthorized: Invalid API Key"))
 
@@ -397,7 +409,15 @@ def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
     async def ignore_event(*_args, **_kwargs):
         return None
 
+    async def capture_route_status(_context, candidate, *, status):
+        route_statuses.append((candidate["id"], status))
+
     monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    monkeypatch.setattr(
+        model_router,
+        "_persist_fallback_result",
+        capture_route_status,
+    )
     registry = PluginRegistry(include_core=False)
     registry.register_plugin(
         Plugin(
@@ -425,6 +445,7 @@ def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
     assert result.error_details["detail_key"] == "workbenchChat.error.modelAuthenticationFailed"
     assert result.error_details["retryable"] is False
     assert result.error_details["status_code"] == 401
+    assert route_statuses == [("primary", "failed")]
 
 
 def test_permission_model_usage_does_not_report_agent_context():
@@ -640,28 +661,43 @@ def test_conversation_runtime_forwards_exact_model_identity(tmp_path, monkeypatc
     assert opened["plugin_context_data"]["model_identity"] is not identity
 
 
-def test_send_operation_builds_secret_free_selected_model_identity():
+def test_send_operation_uses_session_route_instead_of_exact_model_identity():
     from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     operation = object.__new__(_SendOperation)
-    operation.selected_candidate = {
-        "id": "candidate-minimax",
-        "provider": "openai",
-        "adapter": "openai",
-        "model": "MiniMax-M3",
-        "base_url": "https://api.minimax.example/v1",
-        "api_key": "must-not-leave-selection-layer",
-        "options": {"provider_preset": "minimax"},
-    }
-    operation.chat = {"reasoningEffort": "high"}
+    operation.chat_id = "chat-preferred-route"
+    operation.workspace_dir = "/tmp/workspace"
+    operation.context = SimpleNamespace(
+        db_path="/tmp/workbench.sqlite3",
+        bot=None,
+    )
+    operation.routes = SimpleNamespace(chat_id="host-chat")
+    operation.client_request_id = "request-1"
+    operation.mode = "default"
+    operation.command = ""
+    operation.public_message = "hello"
+    operation.normalized = []
+    operation.chat = {"title": "Chat", "remoteDeviceIds": []}
+    operation.context_activations = {}
+    operation.resolved_context_activations = {}
+    operation.project_id = "project-1"
+    operation.is_side_agent = False
+    operation.retry = False
+    operation.completed_turn_count_before = 0
+    operation.ui_instance_id = "ui-1"
+    operation.service = SimpleNamespace(
+        chat_soul_active=lambda _chat: True,
+        chat_workspace_active=lambda _chat: True,
+    )
 
-    identity = operation._selected_model_identity()
+    config = operation._conversation_config(
+        SimpleNamespace(guidance_channel=None),
+        memory_snapshot={},
+        turn_system_extras=[],
+        source="desktop_local",
+    )
 
-    assert identity["candidateId"] == "candidate-minimax"
-    assert identity["model"] == "MiniMax-M3"
-    assert identity["provider"] == "minimax"
-    assert identity["reasoningEffort"] == "high"
-    assert "api_key" not in identity
+    assert config.model_identity == {}
 
 
 def test_model_selection_is_validated_and_persisted_canonically(monkeypatch):

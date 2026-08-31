@@ -169,6 +169,23 @@ var PluginFrontendService = (function () {
     })
   }
 
+  function call(packId, method, args, projectId) {
+    var api = workbenchServices.api()
+    return api.json(
+      "/api/plugins/packs/" + encodeURIComponent(String(packId || "")) + "/call",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          method: String(method || ""),
+          args: args == null ? {} : args,
+          project_id: String(projectId || ""),
+        }),
+        toast: false,
+      }
+    ).then(function (response) { return response && response.result })
+  }
+
   function subscribe(listener) {
     if (typeof listener !== "function") return function () {}
     listeners.push(listener)
@@ -189,6 +206,7 @@ var PluginFrontendService = (function () {
     surface: function (surfaceId) { return pluginSnapshotSurface(state, surfaceId) },
     fileTypeFor: function (path, mime) { return pluginSnapshotFileTypeFor(state, path, mime) },
     actionsFor: function (resource) { return pluginSnapshotActionsFor(state, resource) },
+    call: call,
   }
 })()
 
@@ -236,7 +254,35 @@ function PluginView(props) {
       if (!frame || event.source !== frame.contentWindow) return
       if (event.origin !== window.location.origin && event.origin !== "null") return
       var message = event.data && typeof event.data === "object" ? event.data : {}
-      if (message.source !== "cyrene-plugin" || message.type !== "call") return
+      if (message.source !== "cyrene-plugin") return
+      if (message.type === "state") {
+        if (typeof props.onStateChange === "function") props.onStateChange(message.state)
+        return
+      }
+      if (message.type === "host-call") {
+        var hostRequestId = String(message.requestId || "")
+        var hostCapabilities = Array.isArray(view && view.host_capabilities)
+          ? view.host_capabilities.map(String) : []
+        var hostMethod = String(message.method || "")
+        var hostResult
+        try {
+          if (hostCapabilities.indexOf("clipboard_text") < 0) throw new Error("Plugin host capability denied.")
+          if (hostMethod === "clipboard.readText") {
+            if (!window.cyrene || typeof window.cyrene.readClipboardText !== "function") throw new Error("Clipboard host unavailable.")
+            hostResult = String(window.cyrene.readClipboardText() || "").slice(0, 1024 * 1024)
+          } else if (hostMethod === "clipboard.writeText") {
+            if (!window.cyrene || typeof window.cyrene.writeClipboardText !== "function") throw new Error("Clipboard host unavailable.")
+            hostResult = window.cyrene.writeClipboardText(String(message.args && message.args.text || "").slice(0, 1024 * 1024))
+          } else {
+            throw new Error("Plugin host method is not supported.")
+          }
+          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: true, result: hostResult })
+        } catch (error) {
+          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: false, error: String(error && error.message || error) })
+        }
+        return
+      }
+      if (message.type !== "call") return
       var requestId = String(message.requestId || "")
       workbenchServices.api().json(
         "/api/plugins/packs/" + encodeURIComponent(packId) + "/call",
@@ -258,7 +304,7 @@ function PluginView(props) {
     }
     window.addEventListener("message", onMessage)
     return function () { window.removeEventListener("message", onMessage) }
-  }, [packId, projectId, instanceId])
+  }, [packId, projectId, instanceId, props.onStateChange, view])
 
   if (registry.loading && !registry.loaded) {
     return <div className="wbc-plugin-view-state" role="status">{pluginLocalizedField({ title: "Loading Plugin…", i18n: { zh: { title: "正在加载插件…" } } }, "title")}</div>
@@ -272,12 +318,15 @@ function PluginView(props) {
   var entry = String(view.entry || "")
   var src = "/api/plugins/packs/" + encodeURIComponent(packId) + "/assets/"
     + entry.split("/").map(encodeURIComponent).join("/")
+  var iframeAllow = (Array.isArray(view.iframe_permissions) ? view.iframe_permissions : [])
+    .map(String).filter(Boolean).join("; ")
   return <iframe
     ref={iframeRef}
     className="wbc-plugin-view-frame"
     src={src}
     title={pluginLocalizedField(view, "title") || viewId || packId}
     sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"
+    allow={iframeAllow || undefined}
     onLoad={function () {
       if (!iframeRef.current || !iframeRef.current.contentWindow) return
       iframeRef.current.contentWindow.postMessage({
@@ -288,6 +337,7 @@ function PluginView(props) {
           projectId: projectId,
           viewId: viewId,
           instanceId: instanceId,
+          language: String(document.documentElement.lang || navigator.language || "en"),
           state: payload.state == null ? null : payload.state,
         },
       }, "*")

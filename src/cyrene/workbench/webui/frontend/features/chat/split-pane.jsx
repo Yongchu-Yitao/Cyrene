@@ -667,7 +667,7 @@ function WbcPaneFiveWayDropSurface({ card, dropKey, replaceConversation, dropTar
   );
 }
 
-function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave }) {
+function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave, observationState }) {
   var activeEdge = dropTarget && String(dropTarget.dropKey || "") === String(dropKey || "")
     ? dropTarget.edge
     : "";
@@ -676,12 +676,19 @@ function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropE
     : wbcT("workbenchChat.dropPaneReplace", "Release to replace this split");
   return (
     <article
-      className={"wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content")}
+      className={"wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content")
+        + (observationState ? " is-resource-observed" : "")
+        + (observationState && observationState.finishing ? " is-resource-observation-finishing" : "")}
       data-pane-card-id={card && card.id || ""}
       data-pane-semantic-node-id={semanticNodeId || ""}
       data-pane-drop-key={dropKey || card.id}
     >
       {grip ? <div className="wbc-pane-card-grip">{grip}</div> : null}
+      {observationState ? <div className="wbc-resource-observation-indicator" role="status">
+        <span className="wbc-running-dot wbc-resource-observation-dot" aria-hidden="true" />
+        <span>{wbcT("workbenchChat.agentViewing", "Agent is viewing")}</span>
+        {Number(observationState.count || 0) > 1 ? <b>{Number(observationState.count)}</b> : null}
+      </div> : null}
       {children}
       {dropEnabled ? (
         <div className={"wbc-pane-card-drop-layer" + (replaceOnly ? " replace-only" : "") + (axisEnabled ? " axis-enabled" : "")} onDragLeave={onDropLeave}>
@@ -973,8 +980,9 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
 // conversation panel or a new conversation, swap the side/vertical order, or
 // close). Every card exposes one grip; detached chat cards keep their existing
 // internal grip while the shared card frame supplies it for all other kinds.
-function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled }) {
+function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled, menuContributions, menuState, onInvokeContribution }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
+  var [settingsOpen, setSettingsOpen] = useWbcState(false);
   var rootRef = useWbcRef(null);
   var pointerDragRef = useWbcRef(null);
 
@@ -986,6 +994,10 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
   useWbcEffect(function () {
     if (menuDisabled && menuOpen) setMenuOpen(false);
   }, [menuDisabled, menuOpen]);
+
+  useWbcEffect(function () {
+    if (!menuOpen && settingsOpen) setSettingsOpen(false);
+  }, [menuOpen, settingsOpen]);
 
   useWbcEffect(function () {
     if (!menuOpen) return undefined;
@@ -1128,6 +1140,46 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
                 ? wbcT("workbenchChat.surfaceUnpin", "Unpin automatic surface")
                 : wbcT("workbenchChat.surfacePin", "Pin automatic surface")}</span>
             </button>
+          ) : null}
+          {Array.isArray(menuContributions) && menuContributions.length ? (
+            <React.Fragment>
+              <button
+                type="button"
+                role="menuitem"
+                aria-expanded={settingsOpen ? "true" : "false"}
+                onClick={function () { setSettingsOpen(function (open) { return !open; }); }}
+              >
+                <span aria-hidden="true">{WBC_ICONS.settings}</span>
+                <span>{wbcT("common.settings", "Settings")}</span>
+              </button>
+              {settingsOpen ? <div className="wbc-side-split-grip-settings" role="group" aria-label={wbcT("common.settings", "Settings")}>
+                {menuContributions.map(function (contribution) {
+                  var stateKey = String(contribution && contribution.state_key || "");
+                  var selected = menuState && menuState[stateKey];
+                  return <div className="wbc-side-split-grip-setting" key={String(contribution && contribution.id || stateKey)}>
+                    <span className="wbc-side-split-grip-setting-label">{String(contribution && contribution.label || contribution && contribution.id || "")}</span>
+                    {String(contribution && contribution.kind || "") === "radio-group" ? <div role="group">
+                      {(Array.isArray(contribution.options) ? contribution.options : []).map(function (option) {
+                        var active = String(selected == null ? "" : selected) === String(option && option.value || "");
+                        return <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={active ? "true" : "false"}
+                          className={active ? "is-selected" : ""}
+                          key={String(option && option.value || "")}
+                          onClick={function () {
+                            if (onInvokeContribution) Promise.resolve(onInvokeContribution(contribution, option.value)).catch(function () {});
+                          }}
+                        >
+                          <span aria-hidden="true">{active ? WBC_ICONS.check : null}</span>
+                          <span>{String(option && option.label || option && option.value || "")}</span>
+                        </button>;
+                      })}
+                    </div> : null}
+                  </div>;
+                })}
+              </div> : null}
+            </React.Fragment>
           ) : null}
           {onClose ? (
             <button

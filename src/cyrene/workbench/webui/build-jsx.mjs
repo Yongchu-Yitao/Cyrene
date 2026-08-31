@@ -62,6 +62,7 @@ const PROVIDER_ICON_FILES = [
   [join(LOBE_ICONS_DIR, 'zhipu-color.svg'), 'glm.svg'],
   [join(LOBE_ICONS_DIR, 'opencode.svg'), 'opencode.svg'],
   [join(LOBE_ICONS_DIR, 'openrouter-color.svg'), 'openrouter.svg'],
+  [join(LOBE_ICONS_DIR, 'alibabacloud-color.svg'), 'aliyun.svg'],
   [join(SIMPLE_ICONS_DIR, 'amd.svg'), 'amd.svg'],
   [join(SIMPLE_ICONS_DIR, 'ollama.svg'), 'ollama.svg'],
   [join(SIMPLE_ICONS_DIR, 'onnx.svg'), 'onnx.svg'],

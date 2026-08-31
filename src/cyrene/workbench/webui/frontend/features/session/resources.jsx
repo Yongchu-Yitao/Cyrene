@@ -1,5 +1,17 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 
+var sessionTabResourceCache = {};
+var SESSION_TAB_RESOURCE_CACHE_TTL = 30000;
+
+function sessionTabResourceKey(item) {
+  return String(item && item.kind || "") + ":" + String(item && item.id || "");
+}
+
+function peekSessionTabResources(item) {
+  var entry = sessionTabResourceCache[sessionTabResourceKey(item)];
+  return entry && entry.value ? entry.value : null;
+}
+
 function loadSessionTabBrowserPreview(item) {
   if (!item || !item.id) return Promise.resolve(null);
   var bridge = window.cyrene && window.cyrene.browser;
@@ -30,6 +42,12 @@ function loadSessionTabBrowserPreview(item) {
 
 function loadSessionTabResources(item) {
   if (!item || !item.id) return Promise.resolve({ browser: false, files: [] });
+  var cacheKey = sessionTabResourceKey(item);
+  var cached = sessionTabResourceCache[cacheKey];
+  if (cached && cached.promise) return cached.promise;
+  if (cached && cached.value && Date.now() - cached.updatedAt < SESSION_TAB_RESOURCE_CACHE_TTL) {
+    return Promise.resolve(cached.value);
+  }
   var browserPreviewPromise = loadSessionTabBrowserPreview(item);
   var filesPromise = item.kind === "chat"
     ? workbenchServices.api().json("/api/workbench/chats/" + encodeURIComponent(item.id), { toast: false })
@@ -49,9 +67,26 @@ function loadSessionTabResources(item) {
         return files;
       }).catch(function () { return []; })
     : Promise.resolve([]);
-  return Promise.all([browserPreviewPromise, filesPromise]).then(function (results) {
-    return { browser: results[0], files: results[1] };
+  var promise = Promise.all([browserPreviewPromise, filesPromise]).then(function (results) {
+    var value = { browser: results[0], files: results[1] };
+    sessionTabResourceCache[cacheKey] = { value: value, updatedAt: Date.now(), promise: null };
+    return value;
+  }).catch(function (error) {
+    if (cached && cached.value) {
+      sessionTabResourceCache[cacheKey] = cached;
+      return cached.value;
+    }
+    delete sessionTabResourceCache[cacheKey];
+    throw error;
   });
+  sessionTabResourceCache[cacheKey] = {
+    value: cached && cached.value || null,
+    updatedAt: cached && cached.updatedAt || 0,
+    promise: promise,
+  };
+  return promise;
 }
 
-export { loadSessionTabBrowserPreview, loadSessionTabResources }
+loadSessionTabResources.peek = peekSessionTabResources;
+
+export { loadSessionTabBrowserPreview, loadSessionTabResources, peekSessionTabResources }

@@ -2,6 +2,7 @@
 
 from cyrene.core.plugin import PluginPack
 
+from .aliyun_bailian import ALIYUN_BAILIAN_PLUGIN, ALIYUN_BAILIAN_PROVIDER
 from .amd_gpu_cloud import AMD_GPU_CLOUD_PLUGIN, AMD_GPU_CLOUD_PROVIDER
 from .anthropic import ANTHROPIC_PLUGIN, ANTHROPIC_PROVIDER
 from .codex_oauth import CODEX_OAUTH_PLUGIN, CODEX_OAUTH_PROVIDER
@@ -23,6 +24,7 @@ from .openrouter import OPENROUTER_PLUGIN, OPENROUTER_PROVIDER
 MODEL_PROVIDERS = (
     OPENAI_PROVIDER,
     OPENAI_COMPATIBLE_PROVIDER,
+    ALIYUN_BAILIAN_PROVIDER,
     ANTHROPIC_PROVIDER,
     DEEPSEEK_PROVIDER,
     MINIMAX_PROVIDER,
@@ -49,6 +51,7 @@ plugin_pack = PluginPack(
     plugins=(
         OPENAI_PLUGIN,
         OPENAI_COMPATIBLE_PLUGIN,
+        ALIYUN_BAILIAN_PLUGIN,
         ANTHROPIC_PLUGIN,
         DEEPSEEK_PLUGIN,
         MINIMAX_PLUGIN,

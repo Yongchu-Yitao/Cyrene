@@ -26,6 +26,7 @@ from cyrene.model.error_details import (
     details_from_mapping,
     preferred_model_error,
 )
+from cyrene.model.status import publish_context_model_status
 
 MODEL_ROUTER_PLUGIN = "CyreneModelRouter"
 EXACT_MODEL_UNAVAILABLE = "Requested exact model identity is no longer configured"
@@ -326,23 +327,12 @@ async def _publish_fallback(
 ) -> None:
     try:
         from cyrene.core.plugin.context import publish_runtime_event
-        from cyrene.model.status import persist_model_status
-
-        run_context = context.data.get("run_context")
-        run_context = run_context if isinstance(run_context, Mapping) else {}
-        session_id = str(context.data.get("session_id") or run_context.get("session_id") or "")
-        round_id = str(context.data.get("run_id") or run_context.get("round_id") or "")
         fallback_model = str(fallback.get("model") or "")
-        if session_id and round_id and fallback_model:
-            try:
-                await persist_model_status(
-                    session_id,
-                    round_id,
-                    status="switched",
-                    model=fallback_model,
-                )
-            except Exception:
-                pass
+        await publish_context_model_status(
+            context,
+            status="switching",
+            model=fallback_model,
+        )
 
         await publish_runtime_event(
             context,
@@ -360,6 +350,19 @@ async def _publish_fallback(
         )
     except Exception:
         return
+
+
+async def _persist_fallback_result(
+    context: PluginContext,
+    candidate: Mapping[str, Any],
+    *,
+    status: str,
+) -> None:
+    await publish_context_model_status(
+        context,
+        status=status,
+        model=str(candidate.get("model") or ""),
+    )
 
 
 async def _reset_model_stream(context: PluginContext) -> None:
@@ -557,6 +560,12 @@ async def route_model_call(
             duration_ms=output.get("latency_ms") or elapsed_ms,
             status="completed",
         )
+        if index > 0:
+            await _persist_fallback_result(
+                context,
+                candidate,
+                status="switched",
+            )
         try:
             remember_model_success(
                 session_id,
@@ -568,6 +577,12 @@ async def route_model_call(
             pass
         return output
 
+    if eligible:
+        await _persist_fallback_result(
+            context,
+            eligible[-1],
+            status="failed",
+        )
     logger.warning(
         "All configured model Provider Plugins failed: %s",
         "; ".join(failures),

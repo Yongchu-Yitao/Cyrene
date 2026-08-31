@@ -24,7 +24,7 @@ class ChatMessageDTO(TypedDict, total=False):
     modelGenerationDurationMs: float
     outputTokensPerSecond: float
     modelStatusCard: bool
-    modelStatus: dict[str, str]
+    modelStatus: dict[str, Any]
 
 
 class ChatSummaryDTO(TypedDict, total=False):

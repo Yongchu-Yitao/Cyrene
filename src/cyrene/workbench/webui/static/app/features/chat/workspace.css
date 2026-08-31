@@ -391,7 +391,7 @@ html[data-performance-mode="on"] {
   grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  margin: 6px 0 10px;
+  margin: 6px auto 10px;
   padding: 9px 10px;
   border: 1px solid var(--wb-line);
   border-radius: 9px;
@@ -1481,9 +1481,12 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 }
 
 .wbc-pane-card > .wbc-workspace-surface {
-  /* The host owns a 34px draggable grip. Native workspace surfaces reserve
-     the same protected band as file, browser, and Plugin panes. */
-  padding-top: 34px;
+  /* The 4px grip is vertically centred in the host's 34px drag band, so its
+     lower edge sits at 19px. Keep the toolbar controls the same distance from
+     that edge and the divider below instead of stacking a full grip band on
+     top of the toolbar's own padding. */
+  --wbc-workspace-toolbar-clearance: 12px;
+  padding-top: 0;
 }
 
 .wbc-workspace-chrome {
@@ -1500,6 +1503,12 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   align-items: center;
   gap: 6px;
   padding: 5px 12px 4px;
+}
+
+.wbc-pane-card > .wbc-workspace-surface .wbc-workspace-toolbar {
+  min-height: calc(19px + var(--wbc-workspace-toolbar-clearance) + 32px + var(--wbc-workspace-toolbar-clearance));
+  box-sizing: border-box;
+  padding: calc(19px + var(--wbc-workspace-toolbar-clearance)) 12px var(--wbc-workspace-toolbar-clearance);
 }
 
 .wbc-workspace-action-picker {

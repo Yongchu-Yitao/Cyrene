@@ -618,9 +618,8 @@ function wbcEscapeHtml(value) {
 function wbcSetResourceDrag(event, payload) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
   if (!transfer || !payload) return;
-  // The macOS Electron titlebar is a native app-region. Even though the
-  // resource shelf itself opts out with `no-drag`, Chromium can hand an
-  // in-flight HTML drag back to the window drag region before the shelf sees
+  // The macOS Electron titlebar is a native app-region. Chromium can hand an
+  // in-flight HTML drag to that window drag region before the shelf sees
   // dragenter/dragover. DevTools happens to rebuild that native hit-test map,
   // which is why the same file drag works only while DevTools is docked.
   // Temporarily make the whole topbar a DOM interaction region for the life of

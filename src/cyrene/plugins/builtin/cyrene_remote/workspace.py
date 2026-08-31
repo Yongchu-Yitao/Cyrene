@@ -175,6 +175,44 @@ class RemoteWorkspaceFiles:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         root = self._workspace(project_id)
+        return await self._execute_at_root(
+            peer_device_id,
+            command,
+            project_id,
+            root,
+            payload,
+        )
+
+    async def execute_scoped(
+        self,
+        peer_device_id: str,
+        command: str,
+        scope_id: str,
+        root: Path,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Reuse the hardened transfer engine for a host-owned sandbox Scope."""
+
+        resolved = Path(root).expanduser().resolve()
+        resolved.mkdir(parents=True, exist_ok=True)
+        if not str(scope_id or "").strip():
+            raise ValueError("scoped file transfer requires an owner id")
+        return await self._execute_at_root(
+            peer_device_id,
+            command,
+            str(scope_id),
+            resolved,
+            dict(payload or {}),
+        )
+
+    async def _execute_at_root(
+        self,
+        peer_device_id: str,
+        command: str,
+        project_id: str,
+        root: Path,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         operation = command.removeprefix("files.")
         peer = self.store.get_peer(peer_device_id)
         granted = set((peer or {}).get("granted_capabilities") or [])

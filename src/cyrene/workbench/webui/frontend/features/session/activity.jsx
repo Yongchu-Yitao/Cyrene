@@ -19,7 +19,7 @@ function wbArgsPreview(args) {
   return parts.join("  ").slice(0, 80);
 }
 
-function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedKeys, hiddenKeys, limit) {
+function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedKeys, hiddenKeys, limit, extraItems) {
   var items = [];
   (Array.isArray(projects) ? projects : []).forEach(function (project) {
     if (!project) return;
@@ -39,6 +39,17 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
         source: chat,
       });
     });
+  });
+  (Array.isArray(extraItems) ? extraItems : []).forEach(function (item) {
+    if (!item || !item.id || ["chat", "terminal", "file", "plugin-view"].indexOf(String(item.kind || "")) < 0) return;
+    items.push(Object.assign({}, item, {
+      id: String(item.id),
+      kind: String(item.kind),
+      title: String(item.title || item.id),
+      projectId: String(item.projectId || ""),
+      projectName: String(item.projectName || ""),
+      updatedAt: String(item.updatedAt || ""),
+    }));
   });
   var byKey = {};
   items.forEach(function (item) {
@@ -96,6 +107,34 @@ function wbVisibleSessionTabs(items, activeKey, limit) {
     visible: visible,
     overflow: candidates.filter(function (item) { return !visibleKeys[item.kind + ":" + item.id]; }),
   };
+}
+
+function wbVisibleSessionTabsByWidth(items, activeKey, availableWidth) {
+  var candidates = Array.isArray(items) ? items : [];
+  if (!candidates.length) return { visible: [], overflow: [] };
+  var width = Math.max(0, Number(availableWidth) || 0);
+  if (!width) return wbVisibleSessionTabs(candidates, activeKey, 1);
+  var active = String(activeKey || "");
+  var gap = 6;
+  function readableTabWidth(item) {
+    return item && item.kind + ":" + item.id === active ? 180 : 108;
+  }
+  function overflowButtonWidth(count) {
+    return 55 + Math.max(2, String(Math.max(0, Number(count) || 0)).length) * 7;
+  }
+  var readableFullWidth = candidates.reduce(function (total, item, index) {
+    return total + readableTabWidth(item) + (index ? gap : 0);
+  }, 0);
+  if (readableFullWidth <= width) return { visible: candidates.slice(), overflow: [] };
+  for (var count = candidates.length - 1; count >= 1; count -= 1) {
+    var layout = wbVisibleSessionTabs(candidates, active, count);
+    var required = layout.visible.reduce(function (total, item, index) {
+      return total + readableTabWidth(item) + (index ? gap : 0);
+    }, 0);
+    required += gap + overflowButtonWidth(layout.overflow.length);
+    if (required <= width) return layout;
+  }
+  return wbVisibleSessionTabs(candidates, active, 1);
 }
 
 function wbSessionPlanProgress(item) {
@@ -324,6 +363,12 @@ function wbRememberOpenedSessionKey(recentOpenedKeys, visibleSessionKeys, key, l
   var normalizedKey = String(key || "");
   var maxItems = Math.max(0, Number(limit) || 0);
   if (!normalizedKey || !maxItems) return list;
+
+  // Activation is not reordering. Several navigation paths report the active
+  // conversation after the click has completed; an already remembered tab
+  // must keep its durable visual slot even when that later report has no
+  // visible-order snapshot attached.
+  if (list.indexOf(normalizedKey) >= 0) return list;
 
   // Selecting a tab that is already visible must not turn the strip into an
   // MRU carousel. Snapshot any fallback tabs at the end of the stored order so
@@ -755,4 +800,5 @@ export {
   wbSubagentStatusText,
   wbSuppressOnScreenNotifications,
   wbVisibleSessionTabs,
+  wbVisibleSessionTabsByWidth,
 }

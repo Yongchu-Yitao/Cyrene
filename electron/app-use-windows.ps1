@@ -144,13 +144,22 @@ function Mouse-Click($Point, [bool]$Right, [int]$Count, [int]$IntervalMs) {
 }
 
 function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
-    if ($Capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'scroll_at')) {
+    if ($Capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'scroll_at', 'pointer_event')) {
         $point = Screen-Point $Target $Parameters 'x' 'y'
         $before = [CyreneWindowApi]::Cursor()
         if ($Capability -eq 'click_at') { Mouse-Click $point $false 1 0 }
         elseif ($Capability -eq 'double_click') { Mouse-Click $point $false 2 $(if ($Parameters.interval_ms) { [int]$Parameters.interval_ms } else { 100 }) }
         elseif ($Capability -eq 'right_click') { Mouse-Click $point $true 1 0 }
         elseif ($Capability -eq 'hover_at') { [CyreneWindowApi]::Move($before.X, $before.Y, $point.x, $point.y, $(if ($Parameters.duration_ms) { [int]$Parameters.duration_ms } else { 0 }), $false) }
+        elseif ($Capability -eq 'pointer_event') {
+            [void][CyreneWindowApi]::SetCursorPos($point.x, $point.y)
+            $action = if ($Parameters.action) { ([string]$Parameters.action).ToLowerInvariant() } else { 'move' }
+            $right = ([string]$Parameters.button).ToLowerInvariant() -eq 'right'
+            if ($action -eq 'button_down') { [CyreneWindowApi]::Mouse($(if ($right) { [uint32]0x0008 } else { [uint32]0x0002 }), 0) }
+            elseif ($action -eq 'button_up') { [CyreneWindowApi]::Mouse($(if ($right) { [uint32]0x0010 } else { [uint32]0x0004 }), 0) }
+            elseif ($action -eq 'move') { [CyreneWindowApi]::Mouse([uint32]0x0001, 0) }
+            else { throw 'pointer_event action must be move, button_down, or button_up.' }
+        }
         else {
             [void][CyreneWindowApi]::SetCursorPos($point.x, $point.y)
             $direction = if ($Parameters.direction) { ([string]$Parameters.direction).ToLowerInvariant() } else { 'down' }
@@ -173,7 +182,8 @@ function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
         $verified = [Math]::Abs($actual.X - $point.x) -le 2 -and [Math]::Abs($actual.Y - $point.y) -le 2
         $diagnostics = @{ method = 'SendInput'; point = $point; actualPointer = @{ x = $actual.X; y = $actual.Y }; pointerVerified = $verified; foregroundRequired = $true }
         if ($Capability -eq 'scroll_at') { $diagnostics.scrollEventCount = $scrollEventCount }
-        return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = ($Capability -ne 'hover_at'); summary = "Performed $Capability at ($($point.x), $($point.y))."; diagnostics = $diagnostics }
+        if ($Capability -eq 'pointer_event') { $diagnostics.inputAction = [string]$Parameters.action }
+        return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = ($Capability -ne 'hover_at' -and $Capability -ne 'pointer_event'); summary = "Performed $Capability at ($($point.x), $($point.y))."; diagnostics = $diagnostics }
     }
     $from = if ($Capability -eq 'drag') { Screen-Point $Target $Parameters 'from_x' 'from_y' } else { Screen-Point $Target $Parameters 'x' 'y' }
     if ($Capability -eq 'drag') { $to = Screen-Point $Target $Parameters 'to_x' 'to_y' }
@@ -542,7 +552,7 @@ function Perform-Action($Payload) {
     $element = if ($Payload.nativeRef) { Resolve-Element $root ([string]$Payload.nativeRef) } else { $root }
     $capability = [string]$Payload.capability
     $parameters = $Payload.parameters
-    if ($capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at')) { return Perform-CoordinateAction $Payload.target $capability $parameters }
+    if ($capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at', 'pointer_event')) { return Perform-CoordinateAction $Payload.target $capability $parameters }
     if ($capability -eq 'key_sequence') { return Perform-KeySequence $parameters.steps }
     if ($capability -in @('semantic_double_click', 'semantic_drag')) {
         $legacy = Try-Pattern $element ([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)

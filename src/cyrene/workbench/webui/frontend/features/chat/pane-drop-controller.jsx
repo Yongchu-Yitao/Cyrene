@@ -63,7 +63,20 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
     }
   } else if (wbcHasResourceDrag(event)) {
     var resource = wbcReadResourceDrag(event);
-    if (resource && resource.kind === "file") {
+    if (resource && resource.kind === "conversation") {
+      var resourceChatId = String(resource.conversationId || resource.ownerSessionId || "");
+      if (resourceChatId) {
+        var resourceChatCardId = "chat:" + resourceChatId;
+        var existingResourceChat = wbcPaneCardLocation(layout, resourceChatCardId);
+        card = existingResourceChat ? wbcPaneCard("chat", resourceChatId, {
+          ownerChatId: resourceChatId,
+          freshInstance: true,
+        }) : wbcPaneCard("chat", resourceChatId, {
+          id: resourceChatCardId,
+          ownerChatId: resourceChatId,
+        });
+      }
+    } else if (resource && resource.kind === "file") {
       var file = resource.file && Object.keys(resource.file).length ? resource.file : resource;
       card = context.paneContentCard("file", file, context.activeChatIdRef.current);
     } else if (resource && resource.kind === "terminal" && resource.terminalId) {

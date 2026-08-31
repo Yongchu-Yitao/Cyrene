@@ -1,8 +1,9 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { pluginLocalizedField } from "../../platform/plugins.jsx"
+import { PluginFrontendService, pluginLocalizedField } from "../../platform/plugins.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHasPluginViewDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetPluginViewDrag, wbcSetResourceDrag, wbcT } from "../../workbench-chat.jsx"
 import { wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue } from "./conversation.jsx"
 import { WbcProjectFileHeader, WbcProjectFileRow, useWbcProjectFiles } from "./project-files.jsx"
+import { wbcSubscribeTerminalRefresh } from "./terminal-controller.jsx"
 
 import { moveChatOrderBlock } from "./behavior.mjs"
 import { WbcRenameDialog } from "./rename-dialog.jsx"
@@ -14,7 +15,9 @@ import { useWbcRailDropController } from "./rail-drop-controller.jsx"
 var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";
 
 function wbcNormalizeProjectToolView(value) {
-  return value === "file" || value === "terminal" ? value : "";
+  var normalized = String(value || "");
+  if (normalized === "file" || normalized === "terminal") return normalized;
+  return /^plugin:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/.test(normalized) ? normalized : "";
 }
 
 function wbcProjectToolViewStorageKey(projectId) {
@@ -43,6 +46,68 @@ function wbcWriteProjectToolView(projectId, value) {
   try {
     localStorage.setItem(key, normalized || "none");
   } catch (error) {}
+}
+
+function wbcPluginToolOpenOptions(tool) {
+  tool = tool || {};
+  var clickBehavior = String(tool.click_behavior || "");
+  return {
+    replaceWorkspace: clickBehavior === "replace_workspace" || !clickBehavior,
+    restore: tool.restore_layout !== false,
+  };
+}
+
+function wbcTerminalVisibleInRail(terminal) {
+  if (!terminal) return false;
+  var launchMode = String(terminal.launchMode || "").trim().toLowerCase();
+  var status = String(terminal.status || "").trim().toLowerCase();
+  return launchMode !== "one_shot" || status === "starting" || status === "running";
+}
+
+function WbcTerminalStatusIcon({ stateKey, icon }) {
+  var normalizedKey = String(stateKey || "status-terminal-normal").trim();
+  var previousRef = useWbcRef({ key: normalizedKey, icon: icon });
+  var sequenceRef = useWbcRef(0);
+  var timerRef = useWbcRef(null);
+  var [leaving, setLeaving] = useWbcState(null);
+
+  useWbcLayoutEffect(function () {
+    var previous = previousRef.current;
+    if (previous.key === normalizedKey) {
+      previous.icon = icon;
+      return undefined;
+    }
+    sequenceRef.current += 1;
+    setLeaving({
+      key: previous.key + ":" + sequenceRef.current,
+      stateKey: previous.key,
+      icon: previous.icon,
+    });
+    previousRef.current = { key: normalizedKey, icon: icon };
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(function () {
+      timerRef.current = null;
+      setLeaving(null);
+    }, 240);
+    return undefined;
+  }, [normalizedKey, icon]);
+
+  useWbcEffect(function () {
+    return function () {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return <span className="wbc-terminal-status-icon">
+    {leaving ? <span
+      key={leaving.key}
+      className={"wbc-terminal-status-glyph is-leaving " + leaving.stateKey}
+    >{leaving.icon}</span> : null}
+    <span
+      key={normalizedKey}
+      className={"wbc-terminal-status-glyph is-current " + normalizedKey}
+    >{icon}</span>
+  </span>;
 }
 
 function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, terminalsLoading, activeTerminalId, railMode, pinnedChatIds, activeChatId, loading, runningChatIds, runtimeEngine, onSelect, onAnswer, onCreate, onRename, onDelete, onTogglePinned, onOpenFile, onOpenTerminal, onCreateTerminal, onRenameTerminal, onDeleteTerminal, onUpdateTerminalLayout, onOpenPluginView, onOpenSplit, collapsed, onToggleCollapsed, collapseControl, moduleDock }) {
@@ -74,19 +139,65 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   useWbcEffect(function () {
     var activeTerminalBelongsToProject = (Array.isArray(terminals) ? terminals : []).some(function (terminal) {
       return String(terminal && terminal.id || "") === String(activeTerminalId)
-        && String(terminal && terminal.projectId || "") === String(projectId);
+        && String(terminal && terminal.projectId || "") === String(projectId)
+        && wbcTerminalVisibleInRail(terminal);
     });
     if (!projectId || !activeTerminalId || !activeTerminalBelongsToProject || wbcHasStoredProjectToolView(projectId)) return;
     setProjectToolViewState("terminal");
     wbcWriteProjectToolView(projectId, "terminal");
   }, [projectId, activeTerminalId, terminals]);
   var [pluginTools, setPluginTools] = useWbcState([]);
+  var [pluginCollections, setPluginCollections] = useWbcState({});
+  var [pluginCollectionLoading, setPluginCollectionLoading] = useWbcState({});
+  var [pluginCollectionErrors, setPluginCollectionErrors] = useWbcState({});
   var [pluginDragId, setPluginDragId] = useWbcState("");
   useWbcEffect(function () {
     return workbenchServices.plugins().subscribe(function (snapshot) {
       setPluginTools(Array.isArray(snapshot && snapshot.projectTools) ? snapshot.projectTools : []);
     });
   }, []);
+  function pluginToolKey(tool) {
+    return String(tool && tool.pack_id || "") + ":" + String(tool && (tool.id || tool.view) || "");
+  }
+  function pluginToolView(tool) { return "plugin:" + pluginToolKey(tool); }
+  function pluginToolExpanded(tool) { return projectToolView === pluginToolView(tool); }
+  function loadPluginCollection(tool) {
+    var packId = String(tool && tool.pack_id || "");
+    var method = String(tool && tool.items_method || "");
+    var key = pluginToolKey(tool);
+    if (!packId || !method || pluginCollectionLoading[key]) return Promise.resolve();
+    setPluginCollectionLoading(function (current) { return Object.assign({}, current, { [key]: true }); });
+    setPluginCollectionErrors(function (current) { return Object.assign({}, current, { [key]: "" }); });
+    return PluginFrontendService.call(packId, method, {}, projectId).then(function (result) {
+      setPluginCollections(function (current) {
+        return Object.assign({}, current, { [key]: Array.isArray(result && result.cards) ? result.cards : [] });
+      });
+    }).catch(function (error) {
+      setPluginCollectionErrors(function (current) {
+        return Object.assign({}, current, { [key]: wbcErrorText(error) });
+      });
+    }).finally(function () {
+      setPluginCollectionLoading(function (current) { return Object.assign({}, current, { [key]: false }); });
+    });
+  }
+  function setPluginToolExpanded(tool, open) {
+    var next = open ? pluginToolView(tool) : "";
+    setProjectToolView(next);
+    if (open) loadPluginCollection(tool);
+  }
+  useWbcEffect(function () {
+    var events = window.CyreneUI && window.CyreneUI.events;
+    if (!events || typeof events.subscribe !== "function") return undefined;
+    return events.subscribe(function (event) {
+      if (!event || ["remote_desktop_cards_changed", "remote_desktop_session_changed"].indexOf(String(event.type || "")) < 0) return;
+      pluginTools.filter(function (tool) { return String(tool && tool.presentation || "") === "collection"; }).forEach(loadPluginCollection);
+    });
+  }, [pluginTools, projectId]);
+  useWbcEffect(function () {
+    pluginTools.filter(function (tool) {
+      return String(tool && tool.presentation || "") === "collection" && pluginToolExpanded(tool);
+    }).forEach(loadPluginCollection);
+  }, [pluginTools, projectId, projectToolView]);
   var [fileLocation, setFileLocation] = useWbcState(function () {
     return { projectId: String(projectId || ""), path: "." };
   });
@@ -109,7 +220,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   var [renameChat, setRenameChat] = useWbcState(null);
   var [renameGroup, setRenameGroup] = useWbcState(null);
   var [renameTerminalItem, setRenameTerminalItem] = useWbcState(null);
-  var terminalDefaultOrder = (codeAvailable && Array.isArray(terminals) ? terminals : []).slice().sort(function (left, right) {
+  var terminalDefaultOrder = (codeAvailable && Array.isArray(terminals) ? terminals : []).filter(wbcTerminalVisibleInRail).slice().sort(function (left, right) {
     return Number(left && left.orderIndex || 0) - Number(right && right.orderIndex || 0);
   }).map(function (terminal) { return String(terminal.id); });
   var [terminalOrder, setTerminalOrder] = useWbcState([]);
@@ -227,6 +338,17 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     setFileToolsExpanded(false);
     setTerminalToolsExpanded(false);
   }, [query]);
+
+  useWbcEffect(function () {
+    if (!menuId) return undefined;
+    function closeRailMenuOnOutside(event) {
+      var target = event.target;
+      if (target && target.closest && (target.closest(".wb-card-menu") || target.closest(".wb-card-menu-btn"))) return;
+      setMenuId("");
+    }
+    document.addEventListener("pointerdown", closeRailMenuOnOutside, true);
+    return function () { document.removeEventListener("pointerdown", closeRailMenuOnOutside, true); };
+  }, [menuId]);
 
   var railMotionCollapsedRef = useWbcRef(!!collapsed);
   /* Derive the phase during the first render that sees the new collapsed prop.
@@ -1841,25 +1963,38 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
 
   function terminalRailVisualState(terminal) {
     var status = String(terminal && terminal.status || "").trim().toLowerCase();
-    var commandState = String(terminal && terminal.commandState || "").trim().toLowerCase();
     var exitReason = String(terminal && terminal.exitReason || "").trim().toLowerCase();
     var processRunning = status === "running" || status === "starting";
-    var activityRunning = status === "starting"
-      || (status === "running" && ["command", "output"].indexOf(commandState) >= 0);
     var failed = ["failed", "error"].indexOf(status) >= 0
       || ["pty_lost", "signal", "recovery_failed", "restart_failed"].indexOf(exitReason) >= 0
       || (status === "exited" && terminal && terminal.exitCode != null && Number(terminal.exitCode) !== 0);
-    /* A live interactive shell waiting at its prompt is healthy/ready, not an
-       indefinitely-running job. Map activity to the same semantic tones as a
-       conversation: in progress uses status-running, success/ready uses
-       status-completed, and abnormal termination uses status-failed. */
-    var completed = !failed && (
-      (status === "running" && !activityRunning)
-      || (status === "exited" && exitReason === "process_exit")
-    );
+    var agent = terminal && terminal.agent || null;
+    var agentState = String(terminal && terminal.agentState || agent && agent.state || "").trim().toLowerCase();
+    var agentLabel = String(terminal && terminal.agentLabel || agent && agent.label || "Agent");
+    var agentStates = {
+      working: { tone: " status-agent-working", icon: WBC_ICONS.agentWorking, label: wbcT("terminal.agentWorking", "Agent working") },
+      waiting: { tone: " status-agent-waiting", icon: WBC_ICONS.agentWaiting, label: wbcT("terminal.agentWaiting", "Agent waiting for you") },
+      completed: { tone: " status-agent-completed", icon: WBC_ICONS.agentCompleted, label: wbcT("terminal.agentCompleted", "Agent completed") },
+      idle: { tone: " status-agent-idle", icon: WBC_ICONS.agentIdle, label: wbcT("terminal.agentIdle", "Agent ready") },
+      failed: { tone: " status-agent-failed", icon: WBC_ICONS.errorCircle, label: wbcT("terminal.agentFailed", "Agent failed") },
+      interrupted: { tone: " status-agent-interrupted", icon: WBC_ICONS.agentInterrupted, label: wbcT("terminal.agentInterrupted", "Agent interrupted") },
+    };
+    var agentVisual = agentStates[agentState];
+    if (agentVisual) {
+      return {
+        processRunning: processRunning,
+        tone: agentVisual.tone,
+        icon: agentVisual.icon,
+        statusText: agentLabel + " · " + agentVisual.label,
+      };
+    }
     return {
       processRunning: processRunning,
-      tone: failed ? " status-failed" : activityRunning ? " status-running" : completed ? " status-completed" : "",
+      tone: failed ? " status-terminal-failed" : " status-terminal-normal",
+      icon: failed ? WBC_ICONS.errorCircle : WBC_ICONS.slash,
+      statusText: failed
+        ? wbcT("terminal.statusFault", "Terminal fault")
+        : wbcT("terminal.statusNormal", "Terminal normal"),
     };
   }
 
@@ -1869,6 +2004,8 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     var isPinned = terminalPinnedSet.has(id);
     var visualState = terminalRailVisualState(terminal);
     var running = visualState.processRunning;
+    var unread = Boolean(terminal && terminal.unread);
+    var terminalName = terminal.displayTitle || terminal.title || wbcT("terminal.title", "Terminal");
     return <div
       key={id}
       role="button"
@@ -1880,7 +2017,9 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         + (String(activeTerminalId || "") === id ? " active" : "")
         + (isMenuOpen ? " menu-open" : "")
         + (terminalDragId === id ? " dragging" : "")
+        + (unread ? " has-unread" : "")
         + visualState.tone}
+      aria-label={terminalName + "，" + visualState.statusText + (unread ? "，" + wbcT("terminal.unread", "Unread") : "")}
       onClick={function () { setMenuId(""); if (onOpenTerminal) onOpenTerminal(id); }}
       onKeyDown={function (event) {
         if (event.key === "Enter" || event.key === " ") {
@@ -1920,7 +2059,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       onDragEnd={function () { storeTerminalOrder(terminalOrder); setTerminalDragId(""); }}
     >
       <span className="wbc-chat-card-top">
-        <span className="wbc-chat-row-icon" aria-hidden="true">{WBC_ICONS.slash}</span>
+        <span className="wbc-chat-row-icon" aria-hidden="true" title={visualState.statusText}>
+          <WbcTerminalStatusIcon stateKey={visualState.tone} icon={visualState.icon} />
+          {unread ? <i className="wbc-terminal-unread-dot" /> : null}
+        </span>
         <span className="wbc-chat-card-title">
           {isPinned && <span className="wbc-chat-card-pin" aria-hidden="true">{WBC_ICONS.pin}</span>}
           <b><WbcHoverMarquee text={terminal.displayTitle || terminal.title || wbcT("terminal.title", "Terminal")} /></b>
@@ -1951,7 +2093,9 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       </span>
       <span className="wbc-chat-card-preview">
         {running ? <i className="wbc-running-dot" /> : null}
-        <WbcHoverMarquee text={running ? String(terminal.cwd || "") : wbcT("terminal.exited", "Process exited")} />
+        <WbcHoverMarquee text={(terminal && terminal.agentState)
+          ? visualState.statusText
+          : (running ? String(terminal.cwd || "") : wbcT("terminal.exited", "Process exited"))} />
       </span>
     </div>;
   }
@@ -2355,7 +2499,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       {pluginTools.length && railMode === "chat" && !collapsed ? (
         <section
           className="wbc-project-tools wbc-plugin-project-tools"
-          aria-label={wbcT("rail.pluginTools", "Plugin tools")}
+          aria-label={wbcT("rail.projectTools", "Tools")}
           onDragOver={function (event) {
             if (!pluginDragId || !wbcHasPluginViewDrag(event)) return;
             // Mirror the conversation list's fallback drop surface. Marking
@@ -2371,7 +2515,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             setPluginDragId("");
           }}
         >
-          <header><span>{wbcT("rail.pluginTools", "Plugin tools")}</span></header>
+          {!codeAvailable ? <header><span>{wbcT("rail.projectTools", "Tools")}</span></header> : null}
           {pluginTools.map(function (tool) {
             var packId = String(tool && tool.pack_id || "");
             var viewId = String(tool && tool.view || "");
@@ -2380,7 +2524,8 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             var glyph = String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "◇";
             var toolKey = packId + ":" + String(tool && tool.id || viewId);
             var disabled = !packId || !viewId || !onOpenPluginView;
-            var payload = {
+            var openOptions = wbcPluginToolOpenOptions(tool);
+            var basePayload = {
               packId: packId,
               viewId: viewId,
               instanceId: String(tool && (tool.instance_id || tool.instanceId) || "default"),
@@ -2389,6 +2534,82 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
               subtitle: subtitle,
               state: !tool || tool.state == null ? null : tool.state,
             };
+            if (String(tool && tool.presentation || "") === "collection") {
+              var expanded = pluginToolExpanded(tool);
+              var cards = pluginCollections[toolKey] || [];
+              var collectionId = "wbc-plugin-collection-" + toolKey.replace(/[^A-Za-z0-9_-]/g, "-");
+              return <div key={toolKey} className={"wbc-plugin-tool-collection" + (expanded ? " is-expanded" : "")}>
+                <button
+                  type="button"
+                  className="wbc-plugin-tool-collection-toggle"
+                  aria-expanded={expanded ? "true" : "false"}
+                  aria-controls={collectionId}
+                  onClick={function () { setPluginToolExpanded(tool, !expanded); }}
+                >
+                  <span className="wbc-project-tool-icon" aria-hidden="true">{glyph}</span>
+                  <span className="wbc-project-tool-copy"><b>{title}</b><small>{subtitle}</small></span>
+                  <span className="wbc-project-tool-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+                </button>
+                <div id={collectionId} className="wbc-plugin-tool-collection-items" hidden={!expanded}>
+                  {pluginCollectionLoading[toolKey] && !cards.length ? <div className="workbench-muted wbc-rail-loading">{wbcT("common.loading", "Loading…")}</div> : null}
+                  {pluginCollectionErrors[toolKey] ? <div className="workbench-error wbc-rail-empty">{pluginCollectionErrors[toolKey]}</div> : null}
+                  {!pluginCollectionLoading[toolKey] && !pluginCollectionErrors[toolKey] && !cards.length ? <div className="workbench-muted wbc-rail-empty">{wbcT("rail.pluginCollectionEmpty", "No available devices.")}</div> : null}
+                  {cards.map(function (item) {
+                    var instanceId = String(item && (item.instance_id || item.instanceId || item.id) || "");
+                    var itemKey = toolKey + ":" + instanceId;
+                    var itemTitle = pluginLocalizedField(item, "title") || instanceId;
+                    var itemSubtitle = pluginLocalizedField(item, "subtitle") || String(item && item.state || "");
+                    var itemDisabled = disabled || !instanceId || item && item.eligible === false;
+                    var payload = Object.assign({}, basePayload, {
+                      instanceId: instanceId,
+                      title: itemTitle,
+                      subtitle: itemSubtitle,
+                      state: Object.assign({}, item || {}, {
+                        collectionToolId: String(tool && tool.id || ""),
+                        closeMethod: String(tool && tool.close_method || ""),
+                        paneMenu: Array.isArray(tool && tool.pane_menu) ? tool.pane_menu : [],
+                      }),
+                    });
+                    return <div
+                      key={itemKey}
+                      role="button"
+                      tabIndex={itemDisabled ? -1 : 0}
+                      draggable={itemDisabled ? undefined : "true"}
+                      aria-disabled={itemDisabled || undefined}
+                      className={"wbc-chat-card wbc-project-plugin-tool wbc-plugin-collection-card" + (pluginDragId === itemKey ? " dragging" : "") + (item && item.online ? " is-online" : "")}
+                      onClick={function () {
+                        if (itemDisabled || pluginSuppressClickRef.current === itemKey) return;
+                        onOpenPluginView(payload, openOptions);
+                      }}
+                      onKeyDown={function (event) {
+                        if (itemDisabled || (event.key !== "Enter" && event.key !== " ")) return;
+                        event.preventDefault();
+                        onOpenPluginView(payload, openOptions);
+                      }}
+                      onDragStart={function (event) {
+                        if (itemDisabled) { event.preventDefault(); return; }
+                        pluginSuppressClickRef.current = itemKey;
+                        setPluginDragId(itemKey);
+                        wbcSetPluginViewDrag(event, payload);
+                        if (event.dataTransfer) prepareRailDragImage(event.currentTarget, event.dataTransfer, event.clientX, event.clientY);
+                      }}
+                      onDragEnd={function () {
+                        clearRailDragImage();
+                        setPluginDragId("");
+                        window.setTimeout(function () { if (pluginSuppressClickRef.current === itemKey) pluginSuppressClickRef.current = ""; }, 0);
+                      }}
+                    >
+                      <span className="wbc-chat-card-top">
+                        <span className="wbc-chat-row-icon wbc-project-plugin-tool-icon" aria-hidden="true">{String(item && item.icon_text || glyph)}</span>
+                        <span className="wbc-chat-card-title"><b><WbcHoverMarquee text={itemTitle} /></b><small className="wbc-project-plugin-tool-subtitle">{itemSubtitle}</small></span>
+                        <span className="wbc-plugin-collection-status" aria-hidden="true"></span>
+                      </span>
+                    </div>;
+                  })}
+                </div>
+              </div>;
+            }
+            var payload = basePayload;
             return <div
               key={toolKey}
               data-plugin-tool-id={toolKey}
@@ -2401,12 +2622,12 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
               className={"wbc-chat-card wbc-project-plugin-tool" + (pluginDragId === toolKey ? " dragging" : "")}
               onClick={function () {
                 if (disabled || pluginSuppressClickRef.current === toolKey) return;
-                onOpenPluginView(payload);
+                onOpenPluginView(payload, openOptions);
               }}
               onKeyDown={function (event) {
                 if (disabled || (event.key !== "Enter" && event.key !== " ")) return;
                 event.preventDefault();
-                onOpenPluginView(payload);
+                onOpenPluginView(payload, openOptions);
               }}
               onDragStart={function (event) {
                 if (disabled) { event.preventDefault(); return; }
@@ -2520,10 +2741,7 @@ function WbcProjectRail(props) {
 
   useWbcEffect(function () {
     if (!codeAvailable || !projectId || props.active === false) return undefined;
-    var timer = window.setInterval(function () {
-      refreshTerminals({ background: true });
-    }, 1500);
-    return function () { window.clearInterval(timer); };
+    return wbcSubscribeTerminalRefresh(projectId, refreshTerminals);
   }, [projectId, props.active, codeAvailable]);
 
   function openTerminal(terminalId, side) {

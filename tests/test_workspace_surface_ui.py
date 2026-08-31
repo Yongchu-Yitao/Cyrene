@@ -23,7 +23,7 @@ PROJECT_FILES = WORKSPACE_SURFACE.with_name("project-files.jsx")
 PROJECT_RAIL = WORKSPACE_SURFACE.with_name("rail.jsx")
 
 
-def test_workspace_surface_reserves_the_host_grip_and_uses_compact_chrome() -> None:
+def test_workspace_surface_centers_the_toolbar_between_grip_and_divider() -> None:
     source = WORKSPACE_SURFACE.read_text(encoding="utf-8")
     styles = WORKSPACE_STYLES.read_text(encoding="utf-8")
 
@@ -32,7 +32,13 @@ def test_workspace_surface_reserves_the_host_grip_and_uses_compact_chrome() -> N
     grip_rule = styles.split(
         ".wbc-pane-card > .wbc-workspace-surface {", 1
     )[1].split("}", 1)[0]
-    assert "padding-top: 34px" in grip_rule
+    assert "--wbc-workspace-toolbar-clearance: 12px" in grip_rule
+    assert "padding-top: 0" in grip_rule
+    toolbar_rule = styles.split(
+        ".wbc-pane-card > .wbc-workspace-surface .wbc-workspace-toolbar {", 1
+    )[1].split("}", 1)[0]
+    assert toolbar_rule.count("var(--wbc-workspace-toolbar-clearance)") == 4
+    assert "padding: calc(19px + var(--wbc-workspace-toolbar-clearance))" in toolbar_rule
     assert "grid-template-rows: auto minmax(0, 1fr) auto" in styles
 
 

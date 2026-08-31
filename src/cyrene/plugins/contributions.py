@@ -19,6 +19,10 @@ _RESOURCE_KINDS = frozenset({
 })
 _ACTION_KINDS = frozenset({"build", "run", "test", "preview"})
 _ACTION_OUTPUTS = frozenset({"diagnostics", "artifact", "endpoint", "terminal"})
+_PLUGIN_IFRAME_PERMISSIONS = frozenset({
+    "autoplay", "camera", "display-capture", "microphone",
+})
+_PLUGIN_HOST_CAPABILITIES = frozenset({"clipboard_text"})
 _EXTENSION_DEPENDENCY = re.compile(
     r"^(?:toolchain|cli):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 )
@@ -450,6 +454,18 @@ def validate_workbench_contributions(pack: PluginPack) -> None:
             not isinstance(value, Mapping) for value in item_i18n.values()
         ):
             raise TypeError("Plugin frontend view i18n must map locales to objects")
+        if "iframe_permissions" in raw:
+            _enum_tuple(
+                raw.get("iframe_permissions"),
+                _PLUGIN_IFRAME_PERMISSIONS,
+                "Plugin frontend view iframe_permissions",
+            )
+        if "host_capabilities" in raw:
+            _enum_tuple(
+                raw.get("host_capabilities"),
+                _PLUGIN_HOST_CAPABILITIES,
+                "Plugin frontend view host_capabilities",
+            )
     tool_ids: set[str] = set()
     for raw in tools:
         if not isinstance(raw, Mapping):
@@ -470,6 +486,30 @@ def validate_workbench_contributions(pack: PluginPack) -> None:
             not isinstance(value, Mapping) for value in item_i18n.values()
         ):
             raise TypeError("Plugin project tool i18n must map locales to objects")
+        menu = raw.get("pane_menu", ())
+        if not isinstance(menu, (list, tuple)):
+            raise TypeError("Plugin project tool pane_menu must be an array")
+        menu_ids: set[str] = set()
+        for contribution in menu:
+            if not isinstance(contribution, Mapping):
+                raise TypeError("Plugin Pane menu contribution must be an object")
+            contribution_id = str(contribution.get("id") or "").strip()
+            if not _IDENTIFIER.fullmatch(contribution_id):
+                raise ValueError(
+                    f"invalid Plugin Pane menu contribution id: {contribution_id!r}"
+                )
+            if contribution_id in menu_ids:
+                raise ValueError(
+                    f"duplicate Plugin Pane menu contribution id: {contribution_id}"
+                )
+            menu_ids.add(contribution_id)
+            method = str(contribution.get("method") or "").strip()
+            if not _IDENTIFIER.fullmatch(method):
+                raise ValueError(f"invalid Plugin Pane menu method: {method!r}")
+            if not isinstance(contribution.get("requires_session", False), bool):
+                raise TypeError(
+                    "Plugin Pane menu requires_session must be a boolean"
+                )
 
     surface_values = workbench_surfaces(pack)
     surface_ids = [item.id for item in surface_values]

@@ -31,6 +31,7 @@ import pyte
 
 from cyrene.localization import localized
 
+from .agent_status import adapter_by_id, normalize_agent_event
 from .history import IncrementalPlainTextParser, osc133_commands, plain_terminal_text
 from .remote import build_managed_ssh_launch
 from .shell_integration import OscMetadataParser, prepare_shell_integration
@@ -254,7 +255,8 @@ _SESSION_METADATA_SQL = """
            command_state = ?, last_command_exit_code = ?,
            connection_kind = ?, ssh_target = ?, remote_cwd = ?,
            tmux_session = ?, connection_status = ?, disconnect_reason = ?,
-           reconnect_attempt = ?
+           reconnect_attempt = ?, agent_id = ?, agent_label = ?,
+           agent_state = ?, agent_event = ?, agent_updated_at = ?, unread = ?
      WHERE id = ?
 """
 
@@ -1483,6 +1485,12 @@ class TerminalSession:
     recovery_reason: str = ""
     recovered_at: str = ""
     recovery_count: int = 0
+    agent_id: str = ""
+    agent_label: str = ""
+    agent_state: str = ""
+    agent_event: str = ""
+    agent_updated_at: str = ""
+    unread: bool = False
 
     def public(self) -> dict[str, Any]:
         oldest_seq = self.output_start_seq
@@ -1491,6 +1499,15 @@ class TerminalSession:
             if self.shell_title and _DEFAULT_TITLE_RE.fullmatch(self.title.strip())
             else self.title
         )
+        agent = None
+        if self.agent_id:
+            agent = {
+                "id": self.agent_id,
+                "label": self.agent_label or self.agent_id,
+                "state": self.agent_state or "idle",
+                "event": self.agent_event,
+                "updatedAt": self.agent_updated_at,
+            }
         return {
             "id": self.id,
             "projectId": self.project_id,
@@ -1535,6 +1552,13 @@ class TerminalSession:
             "recoveryReason": self.recovery_reason,
             "recoveredAt": self.recovered_at,
             "recoveryCount": self.recovery_count,
+            "agent": agent,
+            "agentId": self.agent_id,
+            "agentLabel": self.agent_label,
+            "agentState": self.agent_state,
+            "agentEvent": self.agent_event,
+            "agentUpdatedAt": self.agent_updated_at,
+            "unread": self.unread,
         }
 
 
@@ -1760,6 +1784,14 @@ class TerminalManager:
         self._ensure_column(
             "terminal_sessions", "reconnect_attempt", "INTEGER NOT NULL DEFAULT 0"
         )
+        self._ensure_column("terminal_sessions", "agent_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "agent_label", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "agent_state", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "agent_event", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(
+            "terminal_sessions", "agent_updated_at", "TEXT NOT NULL DEFAULT ''"
+        )
+        self._ensure_column("terminal_sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
         self._db.commit()
         self._persistence_writer = _TerminalPersistenceWriter(
             self.state_dir, output_limit=self.output_limit
@@ -1846,6 +1878,12 @@ class TerminalManager:
                 connection_status=str(row["connection_status"] or "local"),
                 disconnect_reason=str(row["disconnect_reason"] or ""),
                 reconnect_attempt=int(row["reconnect_attempt"] or 0),
+                agent_id=str(row["agent_id"] or ""),
+                agent_label=str(row["agent_label"] or ""),
+                agent_state=str(row["agent_state"] or ""),
+                agent_event=str(row["agent_event"] or ""),
+                agent_updated_at=str(row["agent_updated_at"] or ""),
+                unread=bool(row["unread"]),
                 remote_connected=(
                     str(row["connection_kind"] or "local") == "ssh"
                     and str(row["connection_status"] or "")
@@ -2029,6 +2067,12 @@ class TerminalManager:
             session.connection_status,
             session.disconnect_reason,
             session.reconnect_attempt,
+            session.agent_id,
+            session.agent_label,
+            session.agent_state,
+            session.agent_event,
+            session.agent_updated_at,
+            int(session.unread),
             session.id,
         )
 
@@ -3224,6 +3268,13 @@ class TerminalManager:
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
         os.set_blocking(master_fd, False)
         env = _terminal_environment()
+        env["CYRENE_TERMINAL_ID"] = session.id
+        if self.state_dir is not None:
+            env["CYRENE_TERMINAL_STATE_DIR"] = str(self.state_dir)
+        env["CYRENE_AGENT_HOOK_MODULE"] = (
+            "cyrene.plugins.builtin.cyrene_code.terminal.agent_reporter"
+        )
+        env["CYRENE_AGENT_HOOK_PYTHON"] = sys.executable
         if session.connection_kind == "ssh":
             session.connection_event.clear()
             launch = build_managed_ssh_launch(
@@ -3297,6 +3348,13 @@ class TerminalManager:
             raise RuntimeError("pywinpty is required for terminal support on Windows") from exc
 
         env = _terminal_environment()
+        env["CYRENE_TERMINAL_ID"] = session.id
+        if self.state_dir is not None:
+            env["CYRENE_TERMINAL_STATE_DIR"] = str(self.state_dir)
+        env["CYRENE_AGENT_HOOK_MODULE"] = (
+            "cyrene.plugins.builtin.cyrene_code.terminal.agent_reporter"
+        )
+        env["CYRENE_AGENT_HOOK_PYTHON"] = sys.executable
         if session.connection_kind == "ssh":
             session.connection_event.clear()
             launch = build_managed_ssh_launch(
@@ -3499,6 +3557,12 @@ class TerminalManager:
         else:
             session.exit_reason = "process_exit"
         session.updated_at = now
+        if session.agent_id and session.agent_state in {"working", "waiting", "idle"}:
+            self._set_agent_state(
+                session,
+                state=("completed" if exit_code == 0 else "failed"),
+                event="terminal_exited",
+            )
         session.connection_event.set()
         self._persist_session(session)
         if session.status != "starting":
@@ -3573,6 +3637,7 @@ class TerminalManager:
         start = session.next_seq
         end = start + len(data)
         session.next_seq = end
+        session.unread = True
         session.output.append(OutputChunk(start=start, end=end, data=data))
         session.output_bytes += len(data)
         while session.output and session.output_bytes > self.output_limit:
@@ -3762,6 +3827,59 @@ class TerminalManager:
                 continue
             with contextlib.suppress(asyncio.QueueFull):
                 subscriber_queue.put_nowait(event)
+
+    def _set_agent_state(
+        self,
+        session: TerminalSession,
+        *,
+        state: str,
+        event: str,
+    ) -> None:
+        changed = session.agent_state != state or session.agent_event != event
+        if not changed:
+            return
+        session.agent_state = state
+        session.agent_event = event
+        session.agent_updated_at = _now_iso()
+        session.updated_at = session.agent_updated_at
+        session.unread = True
+        self._persist_session(session)
+        self._publish_state(session, reason="agent")
+        self._publish_list_change(session.project_id, "agent", session.id)
+
+    def agent_event(
+        self,
+        terminal_id: str,
+        agent_id: str,
+        event: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session = self.get(terminal_id)
+        adapter = adapter_by_id(agent_id)
+        if adapter is None:
+            # Some hooks identify only the client type in their JSON payload.
+            body = dict(payload or {})
+            adapter = adapter_by_id(str(body.get("client_type") or ""))
+        if adapter is None:
+            raise ValueError("unsupported coding agent")
+        state, canonical_event = normalize_agent_event(adapter.id, event, payload)
+        session.agent_id = adapter.id
+        session.agent_label = adapter.label
+        self._set_agent_state(
+            session,
+            state=state,
+            event=canonical_event,
+        )
+        return session.public()
+
+    def mark_read(self, terminal_id: str) -> dict[str, Any]:
+        session = self.get(terminal_id)
+        if session.unread:
+            session.unread = False
+            self._persist_session(session)
+            self._publish_state(session, reason="read")
+            self._publish_list_change(session.project_id, "read", session.id)
+        return session.public()
 
     def list(
         self, project_id: str = "", *, owner_chat_id: str | None = None,
@@ -3961,6 +4079,7 @@ class TerminalManager:
             session = self.get(normalized)
             if session.project_id != project_id:
                 raise LookupError("terminal not found")
+            self.mark_read(normalized)
         if self._db is not None:
             self._db.execute(
                 """INSERT INTO terminal_projects (project_id, active_terminal_id, updated_at)

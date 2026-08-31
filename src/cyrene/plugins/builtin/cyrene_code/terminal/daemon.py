@@ -250,6 +250,17 @@ class TerminalDaemon:
                 payload = await self.manager.screen_snapshot_async(
                     str(request.get("terminalId") or "")
                 )
+            elif action == "markRead":
+                payload = {"terminal": self.manager.mark_read(
+                    str(request.get("terminalId") or ""),
+                )}
+            elif action == "agentEvent":
+                payload = {"terminal": self.manager.agent_event(
+                    str(request.get("terminalId") or ""),
+                    str(request.get("agentId") or ""),
+                    str(request.get("event") or ""),
+                    dict(request.get("payload") or {}),
+                )}
             elif action == "waitConnected":
                 payload = {"terminal": await self.manager.wait_until_connected(
                     str(request.get("terminalId") or ""),
@@ -468,6 +479,8 @@ class TerminalDaemon:
                             )
                         elif action == "interrupt":
                             await self.manager.interrupt(terminal_id)
+                        elif action == "read":
+                            self.manager.mark_read(terminal_id)
                     except LookupError:
                         await send({
                             "type": "error",

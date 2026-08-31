@@ -1652,12 +1652,12 @@ def test_workbench_side_question_opens_the_existing_conversation_ui_in_a_split()
 
 
 def test_each_conversation_split_grip_closes_its_own_conversation():
-    source = workbench_chat_source()
+    source = frontend_module_source("features/chat/page.jsx")
     pane = source.split("function renderPaneCard", 1)[1].split(
         "function renderPaneColumn", 1
     )[0]
     assert "var close = function () { return closePaneCardWithConfirmation(card); };" in pane
-    assert "function closePaneCardWithConfirmation(card)" in source
+    assert "function closePaneCardWithConfirmation(card, ownerChatId)" in source
     assert "var move = function () { movePaneCardOtherSide(card.id); };" in pane
     assert "onClose={close}" in pane
     assert "onToggleSide={move}" in pane
@@ -4789,7 +4789,7 @@ def test_project_tool_view_persists_per_project_and_restores_terminal_list():
     source = frontend_module_source("features/chat/rail.jsx")
     helpers = source.split(
         'var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";', 1
-    )[1].split("function WbcRail(", 1)[0]
+    )[1].split("function WbcTerminalStatusIcon(", 1)[0]
     helpers = (
         'var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";'
         + helpers
@@ -4834,8 +4834,10 @@ process.stdout.write(JSON.stringify({{
     assert "!activeTerminalBelongsToProject || wbcHasStoredProjectToolView(projectId)" in source
 
 
-def test_project_terminal_cards_share_conversation_status_color_semantics():
+def test_project_terminal_cards_have_independent_agent_lifecycle_and_unread_semantics():
     source = frontend_module_source("features/chat/rail.jsx")
+    terminal_controller = frontend_module_source("features/chat/terminal-controller.jsx")
+    styles = workbench_style_source()
     terminal_state = source.split("function terminalRailVisualState(terminal)", 1)[1].split(
         "function renderTerminalCard", 1
     )[0]
@@ -4843,12 +4845,67 @@ def test_project_terminal_cards_share_conversation_status_color_semantics():
         "function renderTerminalSection", 1
     )[0]
 
-    assert '["command", "output"].indexOf(commandState) >= 0' in terminal_state
-    assert 'failed ? " status-failed"' in terminal_state
-    assert 'activityRunning ? " status-running"' in terminal_state
-    assert 'completed ? " status-completed"' in terminal_state
+    for state in ("working", "waiting", "completed", "idle", "failed", "interrupted"):
+        assert f'{state}:' in terminal_state
+        assert f'status-agent-{state}' in terminal_state
+    assert 'status-terminal-failed' in terminal_state
+    assert 'status-terminal-normal' in terminal_state
     assert "var visualState = terminalRailVisualState(terminal);" in terminal_card
+    assert 'var unread = Boolean(terminal && terminal.unread);' in terminal_card
+    assert 'wbc-terminal-unread-dot' in terminal_card
     assert "+ visualState.tone}" in terminal_card
+
+    terminal_source = frontend_module_source("terminal/entry.jsx")
+    assert 'socket.send(JSON.stringify({ type: "read" }))' in terminal_source
+    assert 'TerminalClient.markRead(terminalId)' in terminal_source
+    normal_terminal_css = styles.split(
+        ".wbc-rail .wbc-terminal-card.status-terminal-normal .wbc-chat-row-icon {", 1
+    )[1].split("}", 1)[0]
+    idle_agent_css = styles.split(
+        ".wbc-rail .wbc-terminal-card.status-agent-idle .wbc-chat-row-icon {", 1
+    )[1].split("}", 1)[0]
+    assert "color: var(--wb-green);" in normal_terminal_css
+    assert "color: var(--wb-green);" in idle_agent_css
+    assert "function wbcSubscribeTerminalRefresh(projectId, refreshTerminals)" in terminal_controller
+    assert "window.requestAnimationFrame" in terminal_controller
+    assert 'event.type !== "terminal_list_changed"' in terminal_controller
+    assert "return wbcSubscribeTerminalRefresh(projectId, refreshTerminals);" in source
+    assert "window.setInterval" not in source.split("function WbcProjectRail(props)", 1)[1].split(
+        "// ---------------------------------------------------------------------------\n// Conversation main", 1
+    )[0]
+    assert "function WbcTerminalStatusIcon({ stateKey, icon })" in source
+    assert 'className={"wbc-terminal-status-glyph is-leaving " + leaving.stateKey}' in source
+    assert '<WbcTerminalStatusIcon stateKey={visualState.tone} icon={visualState.icon} />' in terminal_card
+    assert "animation: wbc-terminal-icon-enter 240ms" in styles
+    assert "animation: wbc-terminal-icon-leave 180ms" in styles
+    assert "animation: wbc-terminal-agent-working 1.05s ease-in-out infinite;" in styles
+    assert "animation: wbc-terminal-agent-completed-settle 320ms" in styles
+    assert '@media (prefers-reduced-motion: reduce)' in styles
+    assert ".wbc-terminal-status-glyph.is-leaving { display: none; }" in styles
+
+
+def test_finished_one_shot_terminals_are_hidden_from_the_project_rail():
+    source = frontend_module_source("features/chat/rail.jsx")
+    helper = "function wbcTerminalVisibleInRail(" + source.split(
+        "function wbcTerminalVisibleInRail(", 1
+    )[1].split("function WbcTerminalStatusIcon(", 1)[0]
+    script = f"""
+eval({json.dumps(helper)});
+process.stdout.write(JSON.stringify([
+  wbcTerminalVisibleInRail({{launchMode: "one_shot", status: "starting"}}),
+  wbcTerminalVisibleInRail({{launchMode: "one_shot", status: "running"}}),
+  wbcTerminalVisibleInRail({{launchMode: "one_shot", status: "exited"}}),
+  wbcTerminalVisibleInRail({{launchMode: "interactive", status: "exited"}}),
+  wbcTerminalVisibleInRail({{status: "exited"}})
+]));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == [True, True, False, True, True]
+    assert ".filter(wbcTerminalVisibleInRail).slice().sort" in source
+    assert "&& wbcTerminalVisibleInRail(terminal);" in source
 
 
 def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
@@ -4896,6 +4953,11 @@ def test_plugin_tools_share_conversation_cards_and_split_drop_pipeline():
     assert 'setPluginDragId("");' in plugin_section
     assert 'role="button"' in rail
     assert 'event.key !== "Enter" && event.key !== " "' in rail
+    assert 'var clickBehavior = String(tool.click_behavior || "");' in rail
+    assert 'replaceWorkspace: clickBehavior === "replace_workspace" || !clickBehavior' in rail
+    assert 'restore: tool.restore_layout !== false' in rail
+    assert 'var openOptions = wbcPluginToolOpenOptions(tool);' in rail
+    assert rail.count("onOpenPluginView(payload, openOptions);") == 4
     assert 'setChatDragKind("plugin-view")' in page
     assert "wbcHasPluginViewDrag(event)" in page
     assert 'openPaneContent("plugin-view"' in page
@@ -6026,6 +6088,9 @@ def test_active_conversation_rail_and_board_use_their_current_menu_dismissal_sur
     )[0]
     assert '{menuId && <div className="wb-card-menu-scrim"' in conversation_rail
     assert 'className="wb-card-menu" role="menu"' in conversation_rail
+    assert 'document.addEventListener("pointerdown", closeRailMenuOnOutside, true);' in conversation_rail
+    assert 'target.closest(".wb-card-menu") || target.closest(".wb-card-menu-btn")' in conversation_rail
+    assert 'document.removeEventListener("pointerdown", closeRailMenuOnOutside, true);' in conversation_rail
     assert 'document.addEventListener("pointerdown", closeOnOutside, true);' in board
     assert 'target.closest(".wb-card-menu")' in board
     assert 'className="wb-card-menu-scrim"' not in board

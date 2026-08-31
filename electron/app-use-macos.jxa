@@ -411,12 +411,26 @@ function mouseClick(point, button, count, intervalMs) {
 
 function performCoordinateAction(target, capability, parameters) {
   let scrollEventCount = null;
-  if (capability === 'click_at' || capability === 'double_click' || capability === 'right_click' || capability === 'hover_at' || capability === 'scroll_at') {
+  if (capability === 'click_at' || capability === 'double_click' || capability === 'right_click' || capability === 'hover_at' || capability === 'scroll_at' || capability === 'pointer_event') {
     const point = screenPoint(target, parameters, 'x', 'y');
     if (capability === 'click_at') mouseClick(point, $.kCGMouseButtonLeft, 1, 0);
     else if (capability === 'double_click') mouseClick(point, $.kCGMouseButtonLeft, 2, parameters.interval_ms);
     else if (capability === 'right_click') mouseClick(point, $.kCGMouseButtonRight, 1, 0);
     else if (capability === 'hover_at') movePointer(cursorPoint(), point, parameters.duration_ms, false);
+    else if (capability === 'pointer_event') {
+      const action = String(parameters.action || 'move');
+      const right = String(parameters.button || 'left') === 'right';
+      if (!['move', 'button_down', 'button_up'].includes(action)) fail('invalid_arguments', 'pointer_event action must be move, button_down, or button_up.');
+      const button = right ? $.kCGMouseButtonRight : $.kCGMouseButtonLeft;
+      const eventType = action === 'button_down'
+        ? (right ? $.kCGEventRightMouseDown : $.kCGEventLeftMouseDown)
+        : action === 'button_up'
+          ? (right ? $.kCGEventRightMouseUp : $.kCGEventLeftMouseUp)
+          : parameters.pressed === true
+            ? (right ? $.kCGEventRightMouseDragged : $.kCGEventLeftMouseDragged)
+            : $.kCGEventMouseMoved;
+      postMouse(eventType, point, button, 0);
+    }
     else {
       movePointer(cursorPoint(), point, 0, false);
       const direction = String(parameters.direction || 'down').toLowerCase();
@@ -441,7 +455,8 @@ function performCoordinateAction(target, capability, parameters) {
     const pointerVerified = Math.abs(actual.x - point.x) <= 2 && Math.abs(actual.y - point.y) <= 2;
     const diagnostics = { method: 'Quartz CGEvent', point, actualPointer: actual, pointerVerified, foregroundRequired: true };
     if (capability === 'scroll_at') diagnostics.scrollEventCount = scrollEventCount;
-    return { ok: true, verified: pointerVerified, uncertain: !pointerVerified, skipSnapshot: true, visualChangeExpected: capability !== 'hover_at', summary: `Performed ${capability} at (${Math.round(point.x)}, ${Math.round(point.y)}).`, diagnostics };
+    if (capability === 'pointer_event') diagnostics.inputAction = String(parameters.action || 'move');
+    return { ok: true, verified: pointerVerified, uncertain: !pointerVerified, skipSnapshot: true, visualChangeExpected: capability !== 'hover_at' && capability !== 'pointer_event', summary: `Performed ${capability} at (${Math.round(point.x)}, ${Math.round(point.y)}).`, diagnostics };
   }
   let from;
   let to;
@@ -537,7 +552,7 @@ function perform(payload) {
     return performSafari(payload.target || {}, capability, parameters);
   }
   const resolved = resolveTarget(payload.target || {});
-  if (['click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at'].includes(capability)) {
+  if (['click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at', 'pointer_event'].includes(capability)) {
     return performCoordinateAction(payload.target || {}, capability, parameters);
   }
   if (capability === 'key_sequence') return performKeySequence(resolved, parameters);

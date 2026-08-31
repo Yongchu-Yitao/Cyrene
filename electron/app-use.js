@@ -1036,6 +1036,55 @@ class AppUseManager {
     return result || { ok: true };
   }
 
+  async remoteDesktopInput(sessionId, capability, parameters = {}) {
+    const requestedSessionId = String(sessionId || '');
+    this._expireSessions();
+    let session = this.sessions.get(requestedSessionId);
+    if (!session) throw new AppUseError('stale_session', 'The Remote Desktop input session expired.');
+    if (session.mode !== 'visual' || !['darwin', 'win32'].includes(String(session.target.platform || process.platform))) {
+      throw new AppUseError('unsupported_capability', 'Native remote desktop input is unavailable for this target.');
+    }
+    const name = String(capability || '');
+    if (!['pointer_event', 'right_click', 'scroll_at', 'key_sequence'].includes(name)) {
+      throw new AppUseError('unsupported_capability', `Unsupported remote desktop input capability: ${name || '(empty)'}.`);
+    }
+    const effective = parameters && typeof parameters === 'object' && !Array.isArray(parameters)
+      ? { ...parameters } : {};
+    const focusTarget = effective.focus_target === true;
+    const desktopBounds = effective.desktop_bounds;
+    delete effective.focus_target;
+    delete effective.desktop_bounds;
+    if (focusTarget) {
+      session = await this._getSession(requestedSessionId);
+      await this._focusSessionTarget(session);
+    } else {
+      session.lastUsedAt = Date.now();
+    }
+    let target = session.target;
+    if (desktopBounds && typeof desktopBounds === 'object') {
+      const bounds = {
+        x: Number(desktopBounds.x),
+        y: Number(desktopBounds.y),
+        width: Number(desktopBounds.width),
+        height: Number(desktopBounds.height),
+      };
+      if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+          || bounds.width <= 0 || bounds.height <= 0) {
+        throw new AppUseError('invalid_arguments', 'Remote desktop input requires valid display bounds.');
+      }
+      target = { ...session.target, bounds };
+    }
+    if (name === 'pointer_event') {
+      const action = String(effective.action || 'move');
+      const button = String(effective.button || 'left');
+      if (!['move', 'button_down', 'button_up'].includes(action) || !['left', 'right'].includes(button)) {
+        throw new AppUseError('invalid_arguments', 'pointer_event requires a valid action and button.');
+      }
+      this._coordinatePoint({ target }, effective);
+    }
+    return this.provider.perform(target, name, '', effective);
+  }
+
   async _restoreFocus(session) {
     if (session.previousFocusWasHost && typeof this.focusHost === 'function') {
       await this.focusHost();

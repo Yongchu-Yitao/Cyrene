@@ -1,4 +1,4 @@
-import { wbRecentSessionTabs, wbRememberOpenedSessionKey } from "./activity.jsx"
+import { wbRememberOpenedSessionKey } from "./activity.jsx"
 
 var { useState } = React;
 
@@ -19,30 +19,22 @@ function writeSessionKeys(storageKey, values) {
 
 function useWorkbenchSessionTabs(projects, recentChatsByProject) {
   var [recentOpenedSessionKeys, setRecentOpenedSessionKeys] = useState(function () {
-    return readSessionKeys("wb-recent-opened-sessions", /^chat:.+/, 20);
+    return readSessionKeys("wb-recent-opened-sessions", /^(chat|terminal|file|plugin-view):.+/, 40);
   });
   var [pinnedSessionKeys, setPinnedSessionKeys] = useState(function () {
-    return readSessionKeys("wb-pinned-sessions", /^chat:.+/, 20);
+    return readSessionKeys("wb-pinned-sessions", /^(chat|terminal|file|plugin-view):.+/, 40);
   });
   var [hiddenSessionKeys, setHiddenSessionKeys] = useState(function () {
-    return readSessionKeys("wb-hidden-session-tabs", /^chat:.+/, 100);
+    return readSessionKeys("wb-hidden-session-tabs", /^(chat|terminal|file|plugin-view):.+/, 100);
   });
 
-  function rememberOpenedSession(kind, sessionId) {
+  function rememberOpenedSession(kind, sessionId, visibleSessionKeys) {
     if (kind !== "chat") return;
     var normalizedId = String(sessionId || "");
     if (!normalizedId) return;
     var key = "chat:" + normalizedId;
     setRecentOpenedSessionKeys(function (prev) {
-      var visibleKeys = wbRecentSessionTabs(
-        projects,
-        recentChatsByProject,
-        prev,
-        pinnedSessionKeys,
-        hiddenSessionKeys,
-        3
-      ).map(function (item) { return item.kind + ":" + item.id; });
-      var next = wbRememberOpenedSessionKey(prev, visibleKeys, key, 20);
+      var next = wbRememberOpenedSessionKey(prev, visibleSessionKeys, key, 40);
       if (next === prev) return prev;
       writeSessionKeys("wb-recent-opened-sessions", next);
       return next;
@@ -62,7 +54,7 @@ function useWorkbenchSessionTabs(projects, recentChatsByProject) {
     setPinnedSessionKeys(function (prev) {
       var list = Array.isArray(prev) ? prev : [];
       var next = shouldPin
-        ? [key].concat(list.filter(function (entry) { return entry !== key; })).slice(0, 20)
+        ? [key].concat(list.filter(function (entry) { return entry !== key; })).slice(0, 40)
         : list.filter(function (entry) { return entry !== key; });
       writeSessionKeys("wb-pinned-sessions", next);
       return next;
@@ -75,6 +67,37 @@ function useWorkbenchSessionTabs(projects, recentChatsByProject) {
         return next;
       });
     }
+  }
+
+  function reorderPinnedSession(sourceKey, targetKey, after) {
+    var source = String(sourceKey || "");
+    var target = String(targetKey || "");
+    if (!source || !target || source === target) return;
+    setPinnedSessionKeys(function (previous) {
+      var list = Array.isArray(previous) ? previous.slice() : [];
+      if (list.indexOf(source) < 0 || list.indexOf(target) < 0) return previous;
+      list.splice(list.indexOf(source), 1);
+      var targetIndex = list.indexOf(target);
+      list.splice(targetIndex + (after ? 1 : 0), 0, source);
+      writeSessionKeys("wb-pinned-sessions", list);
+      return list;
+    });
+  }
+
+  function movePinnedSession(sourceKey, offset) {
+    var source = String(sourceKey || "");
+    var direction = Number(offset) < 0 ? -1 : 1;
+    setPinnedSessionKeys(function (previous) {
+      var list = Array.isArray(previous) ? previous.slice() : [];
+      var sourceIndex = list.indexOf(source);
+      var targetIndex = sourceIndex + direction;
+      if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= list.length) return previous;
+      var target = list[targetIndex];
+      list[targetIndex] = source;
+      list[sourceIndex] = target;
+      writeSessionKeys("wb-pinned-sessions", list);
+      return list;
+    });
   }
 
   function removeSessionTab(item) {
@@ -105,6 +128,8 @@ function useWorkbenchSessionTabs(projects, recentChatsByProject) {
     hiddenSessionKeys: hiddenSessionKeys,
     rememberOpenedSession: rememberOpenedSession,
     togglePinnedSession: togglePinnedSession,
+    reorderPinnedSession: reorderPinnedSession,
+    movePinnedSession: movePinnedSession,
     removeSessionTab: removeSessionTab,
   };
 }

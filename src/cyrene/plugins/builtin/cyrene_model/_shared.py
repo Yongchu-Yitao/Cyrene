@@ -20,10 +20,48 @@ import httpx
 
 from cyrene.core.observability import log_operation
 from cyrene.core.plugin import Plugin, PluginContext
+from cyrene.model.status import publish_context_model_status
 from cyrene.plugins.tool_call_parsers import GENERIC_TOOL_CALL_PARSER
 
 
 logger = logging.getLogger(__name__)
+MODEL_CONNECT_RETRY_LIMIT = 5
+MODEL_CONNECT_RETRY_DELAY_SECONDS = 10.0
+
+
+class _IPv4FallbackTransport(httpx.AsyncBaseTransport):
+    """Retry connection-establishment failures over IPv4.
+
+    A dual-stack host can accept an IPv6 TCP connection and then reset the TLS
+    handshake.  httpcore treats that as a completed address selection, so its
+    normal Happy Eyeballs behavior never reaches the working IPv4 address.
+    Keep the ordinary dual-stack transport first and retry only ConnectError
+    failures with an IPv4-bound transport; HTTP responses and request errors
+    are never replayed.
+    """
+
+    def __init__(
+        self,
+        primary: httpx.AsyncBaseTransport | None = None,
+        ipv4: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._primary = primary or httpx.AsyncHTTPTransport()
+        self._ipv4 = ipv4 or httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            return await self._primary.handle_async_request(request)
+        except httpx.ConnectError:
+            logger.info(
+                "Direct model connection failed over the preferred address; "
+                "retrying over IPv4 [host=%s]",
+                request.url.host,
+            )
+            return await self._ipv4.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._primary.aclose()
+        await self._ipv4.aclose()
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +225,8 @@ def _client_options(
             proxy = ""
         if proxy:
             options["proxy"] = proxy
+    if "proxy" not in options:
+        options["transport"] = _IPv4FallbackTransport()
     return options
 
 
@@ -437,6 +477,7 @@ async def discover_models(
 
     from cyrene.model.protocol_adapters import (
         discovery_request,
+        next_discovery_page,
         parse_discovery_response,
     )
 
@@ -446,15 +487,42 @@ async def discover_models(
     api_key = _provider_value({}, context, provider, "api_key")
     if provider.auth_type == "api_key" and not api_key:
         raise ValueError(f"{provider.name} API key is not configured")
-    endpoint, headers = discovery_request(adapter, base_url, api_key)
+    endpoint, headers = discovery_request(
+        adapter,
+        base_url,
+        api_key,
+        provider_preset=provider.id,
+    )
+    models: list[dict[str, Any]] = []
+    seen_model_ids: set[str] = set()
     async with httpx.AsyncClient(
         **_client_options(context, provider, discovery=True)
     ) as client:
-        response = await client.get(endpoint, headers=headers)
-    response.raise_for_status()
+        for _page in range(20):
+            response = await client.get(endpoint, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+            for item in parse_discovery_response(
+                adapter,
+                payload,
+                provider_preset=provider.id,
+            ):
+                model_id = str(item.get("id") or item.get("model") or "").strip()
+                if not model_id or model_id in seen_model_ids:
+                    continue
+                seen_model_ids.add(model_id)
+                models.append(item)
+            next_endpoint = next_discovery_page(
+                endpoint,
+                payload,
+                provider_preset=provider.id,
+            )
+            if not next_endpoint or next_endpoint == endpoint:
+                break
+            endpoint = next_endpoint
     return {
         "provider": provider.id,
-        "models": parse_discovery_response(adapter, response.json()),
+        "models": models,
     }
 
 
@@ -484,6 +552,9 @@ def _openai_payload(
         payload["temperature"] = float(arguments["temperature"])
     if isinstance(arguments.get("response_format"), Mapping):
         payload["response_format"] = dict(arguments["response_format"])
+    reasoning_effort = str(arguments.get("reasoning_effort") or "").strip()
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     return payload
 
 
@@ -499,22 +570,25 @@ async def _complete_stream_endpoint(
     model: str,
     started: float,
     has_fallback: bool,
+    retry_state: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     from cyrene.model.protocol_adapters import handle_stream
 
     attempt_streamed = False
     attempt_emitted = False
+    status_state = retry_state if retry_state is not None else {}
 
     async def publish_stream(event: dict[str, Any]) -> None:
         nonlocal attempt_emitted, attempt_streamed
         attempt_emitted = True
-        if str(event.get("type") or "").startswith("reply_"):
+        event_type = str(event.get("type") or "")
+        if event_type.startswith(("reply_", "reasoning_")):
             attempt_streamed = True
         if stream_callback is not None:
             await stream_callback(event)
 
     timing: dict[str, float] = {}
-    for attempt in range(5):
+    while True:
         try:
             message = await handle_stream(
                 adapter,
@@ -530,7 +604,14 @@ async def _complete_stream_endpoint(
                 exc,
                 (httpx.TransportError, TimeoutError, OSError),
             )
-            if attempt < 4 and transient and not attempt_emitted:
+            retry_count = int(status_state.get("count") or 0)
+            if (
+                retry_count < MODEL_CONNECT_RETRY_LIMIT
+                and transient
+                and not attempt_emitted
+            ):
+                retry_count += 1
+                status_state["count"] = retry_count
                 log_operation(
                     logger,
                     "model.provider",
@@ -539,15 +620,28 @@ async def _complete_stream_endpoint(
                     provider=provider.id,
                     model=model,
                     endpoint=endpoint,
-                    attempt=attempt + 1,
+                    attempt=retry_count,
                     error_type=type(exc).__name__,
                     error=repr(exc),
                 )
-                await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
+                await publish_context_model_status(
+                    context,
+                    status="retry",
+                    model=model,
+                    retry_count=retry_count,
+                    retry_limit=MODEL_CONNECT_RETRY_LIMIT,
+                )
+                await asyncio.sleep(MODEL_CONNECT_RETRY_DELAY_SECONDS)
                 continue
             if attempt_streamed and stream_callback is not None and has_fallback:
                 await stream_callback({"type": "reply_start", "reset": True})
             raise
+    if int(status_state.get("count") or 0) > 0:
+        await publish_context_model_status(
+            context,
+            status="recovered",
+            model=model,
+        )
     response_id = str(message.get("response_id") or "")
     returned_model = str(message.get("model") or model)
     log_operation(
@@ -689,6 +783,7 @@ async def complete_model(
 
     failures: list[str] = []
     public_failures: list[ModelErrorDetails] = []
+    retry_state: dict[str, int] = {}
     async with httpx.AsyncClient(
         **_client_options(context, provider, discovery=False)
     ) as client:
@@ -704,6 +799,7 @@ async def complete_model(
                     stream_callback=stream_callback, provider=provider, context=context,
                     model=model, started=started,
                     has_fallback=endpoint_index + 1 < len(ordered_endpoints),
+                    retry_state=retry_state,
                 )
             except Exception as exc:
                 public_failures.append(classify_model_error(exc))
@@ -922,12 +1018,22 @@ def model_input_schema() -> dict[str, Any]:
 
 def create_model_plugin(provider: ModelProvider) -> Plugin:
     async def handler(arguments: dict[str, Any], context: PluginContext) -> dict[str, Any]:
-        operation = str(arguments.get("operation") or "complete")
-        if operation == "list_models":
-            return await discover_models(provider, context)
-        if operation == "embed":
-            return await embed_model(arguments, context, provider)
-        return await complete_model(arguments, context, provider)
+        from cyrene.model.error_details import (
+            ModelCallError,
+            classify_model_error,
+        )
+
+        try:
+            operation = str(arguments.get("operation") or "complete")
+            if operation == "list_models":
+                return await discover_models(provider, context)
+            if operation == "embed":
+                return await embed_model(arguments, context, provider)
+            return await complete_model(arguments, context, provider)
+        except ModelCallError:
+            raise
+        except (httpx.HTTPError, TimeoutError, OSError) as exc:
+            raise ModelCallError(classify_model_error(exc)) from exc
 
     return Plugin(
         name=provider.plugin_name,

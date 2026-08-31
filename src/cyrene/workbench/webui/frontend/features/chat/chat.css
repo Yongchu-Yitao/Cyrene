@@ -1260,14 +1260,13 @@ span.wbc-chat-group-toggle {
   transform: scale(.985);
 }
 
-/* Semantic Agent actions receive a quiet, transient perimeter glint. */
-.wbc-rail .wbc-chat-card.agent-flow::after {
+/* Semantic Agent activity receives one quiet perimeter glint.  Pane-hosted
+   resources reuse this exact visual language so observation never invents a
+   second, brighter animation that could be confused with another state. */
+.wbc-rail .wbc-chat-card.agent-flow::after,
+.wbc-pane-card.is-resource-observed::before {
   content: "";
   position: absolute;
-  inset: 1px;
-  z-index: 2;
-  border-radius: 10px;
-  padding: 1px;
   pointer-events: none;
   background: linear-gradient(
     108deg,
@@ -1283,6 +1282,13 @@ span.wbc-chat-group-toggle {
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
   animation: wbc-agent-chat-flow 3.2s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+.wbc-rail .wbc-chat-card.agent-flow::after {
+  inset: 1px;
+  z-index: 2;
+  border-radius: 10px;
+  padding: 1px;
 }
 
 @keyframes wbc-agent-chat-flow {
@@ -1314,6 +1320,167 @@ span.wbc-chat-group-toggle {
 
 .wbc-rail .wbc-chat-card.status-running .wbc-chat-row-icon {
   color: var(--wb-accent);
+}
+
+/* Terminal lifecycle color is semantic and therefore remains visible on the
+   selected row. Selection background and status color encode different data. */
+.wbc-rail .wbc-terminal-card.status-terminal-normal .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-terminal-card.status-terminal-failed .wbc-chat-row-icon,
+.wbc-rail .wbc-terminal-card.status-agent-failed .wbc-chat-row-icon {
+  color: var(--wb-red);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-working .wbc-chat-row-icon {
+  color: var(--wb-purple);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-waiting .wbc-chat-row-icon {
+  color: var(--wb-amber);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-completed .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-idle .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-interrupted .wbc-chat-row-icon {
+  color: var(--wb-muted);
+}
+
+.wbc-terminal-card .wbc-chat-row-icon {
+  position: relative;
+  transition: color 120ms ease-out;
+}
+
+.wbc-terminal-status-icon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  isolation: isolate;
+}
+
+.wbc-terminal-status-glyph {
+  position: absolute;
+  inset: 0;
+  display: inline-grid;
+  place-items: center;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+
+.wbc-terminal-status-glyph.is-current {
+  z-index: 2;
+  animation: wbc-terminal-icon-enter 240ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.wbc-terminal-status-glyph.is-leaving {
+  z-index: 1;
+  pointer-events: none;
+  animation: wbc-terminal-icon-leave 180ms cubic-bezier(.4, 0, 1, 1) both;
+}
+
+.wbc-terminal-status-glyph.status-terminal-normal,
+.wbc-terminal-status-glyph.status-agent-completed,
+.wbc-terminal-status-glyph.status-agent-idle {
+  color: var(--wb-green);
+}
+
+.wbc-terminal-status-glyph.status-terminal-failed,
+.wbc-terminal-status-glyph.status-agent-failed {
+  color: var(--wb-red);
+}
+
+.wbc-terminal-status-glyph.status-agent-working {
+  color: var(--wb-purple);
+}
+
+.wbc-terminal-status-glyph.status-agent-waiting {
+  color: var(--wb-amber);
+}
+
+.wbc-terminal-status-glyph.status-agent-interrupted {
+  color: var(--wb-muted);
+}
+
+.wbc-terminal-card.status-agent-working .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-working 1.05s ease-in-out infinite;
+}
+
+.wbc-terminal-card.status-agent-waiting .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-waiting-settle 300ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.wbc-terminal-card.status-agent-completed .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-completed-settle 320ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.wbc-terminal-card.status-agent-failed .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-failed-in 260ms ease-out both;
+}
+
+@keyframes wbc-terminal-icon-enter {
+  0% { opacity: 0; transform: translateY(2px) scale(.78); }
+  62% { opacity: 1; transform: translateY(-.5px) scale(1.04); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes wbc-terminal-icon-leave {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-2px) scale(1.1); }
+}
+
+@keyframes wbc-terminal-agent-working {
+  0%, 100% { opacity: .76; transform: scale(.94); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes wbc-terminal-agent-waiting-settle {
+  0% { transform: rotate(-9deg); }
+  58% { transform: rotate(3deg); }
+  100% { transform: rotate(0); }
+}
+
+@keyframes wbc-terminal-agent-completed-settle {
+  0% { transform: scale(.82); }
+  64% { transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes wbc-terminal-agent-failed-in {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-2px); }
+  65% { transform: translateX(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-terminal-card[class*="status-agent-"] .wbc-chat-row-icon,
+  .wbc-terminal-status-glyph,
+  .wbc-terminal-status-glyph > svg {
+    animation: none;
+    transition: none;
+  }
+
+  .wbc-terminal-status-glyph.is-leaving { display: none; }
+}
+
+.wbc-terminal-unread-dot {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--wb-floating-rail-bg, var(--wb-card-bg));
+  border-radius: 999px;
+  background: var(--wb-blue);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-blue) 28%, transparent);
 }
 
 .wbc-rail .wbc-chat-card.status-planning .wbc-chat-row-icon {
@@ -1648,7 +1815,8 @@ span.wbc-chat-group-toggle {
     animation: none;
   }
 
-  .wbc-rail .wbc-chat-card.agent-flow::after {
+  .wbc-rail .wbc-chat-card.agent-flow::after,
+  .wbc-pane-card.is-resource-observed::before {
     animation: none;
     background: color-mix(in srgb, var(--wb-accent) 36%, transparent);
     opacity: .62;
@@ -1853,6 +2021,71 @@ span.wbc-chat-group-toggle {
   backdrop-filter: blur(18px) saturate(112%);
   animation: wbc-pane-card-settle 360ms cubic-bezier(.22, 1.16, .36, 1) both;
   backface-visibility: hidden;
+}
+
+/* Resource observation is rendered by the Pane Host so every sensitive
+   Plugin/resource uses the shared Agent-flow perimeter above iframe content.
+   Only Pane-specific geometry belongs here; the visual and animation live
+   with the existing Agent-flow rule. */
+.wbc-pane-card.is-resource-observed::before {
+  z-index: 1203;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  transition: opacity 420ms ease;
+}
+
+.wbc-pane-card.is-resource-observation-finishing::before { opacity: 0; }
+
+.wbc-resource-observation-indicator {
+  position: absolute;
+  z-index: 1204;
+  top: 39px;
+  right: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 44%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 88%, transparent);
+  color: var(--wb-text);
+  box-shadow: 0 7px 24px rgba(7, 12, 19, .22);
+  -webkit-backdrop-filter: blur(14px) saturate(118%);
+  backdrop-filter: blur(14px) saturate(118%);
+  pointer-events: none;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  transition: opacity 360ms ease, transform 360ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.wbc-pane-card.is-resource-observation-finishing .wbc-resource-observation-indicator {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+
+.wbc-resource-observation-indicator b {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-accent) 19%, transparent);
+  color: var(--wb-accent);
+  font-size: 10px;
+}
+
+.wbc-resource-observation-dot {
+  background: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-resource-observation-dot {
+    animation: none;
+  }
 }
 
 @keyframes wbc-pane-card-settle {

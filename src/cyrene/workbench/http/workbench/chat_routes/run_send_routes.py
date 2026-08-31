@@ -617,20 +617,6 @@ class _SendOperation:
         if self.requested_model:
             self.chat.pop("lastModel", None)
 
-    def _selected_model_identity(self) -> dict[str, str]:
-        candidate = getattr(self, "selected_candidate", None)
-        if not isinstance(candidate, Mapping):
-            return {}
-        from cyrene.plugins.model_catalog import candidate_identity
-
-        identity = candidate_identity(candidate)
-        identity["reasoningEffort"] = str(
-            self.chat.get("reasoningEffort")
-            or candidate.get("reasoning_effort")
-            or ""
-        ).strip().lower()
-        return identity
-
     async def _prepare_user_turn(self):
         self.now = self.service.utc_now_iso()
         messages = self.chat.setdefault("messages", [])
@@ -868,7 +854,11 @@ class _SendOperation:
             permission_mode=self.mode,
             command=self.command,
             public_user_message=self.public_message,
-            model_identity=self._selected_model_identity(),
+            # Composer selections are already persisted as the session's
+            # preferred primary candidate. Leaving the identity empty keeps
+            # the configured fallback route intact; auxiliary callers may
+            # still pass an exact identity through ConversationConfig.
+            model_identity={},
             attachment_paths=self._attachment_path_map(),
             remote_device_ids=tuple(
                 str(item or "").strip()

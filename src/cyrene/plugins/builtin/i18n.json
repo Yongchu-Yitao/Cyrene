@@ -313,6 +313,16 @@
         "description": "操作明确选中的已配对 Cyrene 设备。"
       }
     },
+    "cyrene_remote_desktop": {
+      "en": {
+        "name": "Remote Desktop",
+        "description": "Securely view and control desktops on paired Cyrene devices."
+      },
+      "zh": {
+        "name": "远程桌面",
+        "description": "安全查看和控制已配对 Cyrene 设备的桌面。"
+      }
+    },
     "cyrene_renderer": {
       "en": {
         "name": "Renderer tools",
@@ -393,6 +403,16 @@
       "zh": {
         "name": "AMD GPU Cloud",
         "description": "调用已配置的 AMD GPU Cloud 连接，并发现该连接可用的模型。"
+      }
+    },
+    "AliyunBailian": {
+      "en": {
+        "name": "Alibaba Cloud Model Studio",
+        "description": "Call Alibaba Cloud Model Studio and discover the models available to its configured connection."
+      },
+      "zh": {
+        "name": "阿里云百炼",
+        "description": "调用已配置的阿里云百炼连接，并发现该连接可用的模型。"
       }
     },
     "AnalyzeAttachment": {
@@ -905,6 +925,16 @@
         "description": "扫描 Python 代码并建立包含符号、调用关系与导入的 SQLite 索引。"
       }
     },
+    "InspectRemoteDesktop": {
+      "en": {
+        "name": "View remote desktop",
+        "description": "Get one fresh frame from a user-authorized Remote Desktop Pane; view-only, without audio or clipboard access."
+      },
+      "zh": {
+        "name": "查看远程桌面",
+        "description": "获取用户已授权远程桌面 Pane 的一张新画面；仅查看，不包含音频或剪贴板。"
+      }
+    },
     "InstallSkill": {
       "en": {
         "name": "Install skill",
@@ -1043,6 +1073,16 @@
       "zh": {
         "name": "列出远程设备",
         "description": "列出用户明确添加到当前对话上下文的已配对 Cyrene 设备。"
+      }
+    },
+    "ListRemoteDesktopSessions": {
+      "en": {
+        "name": "List remote desktop sessions",
+        "description": "List connected Remote Desktop sessions that the current main conversation is authorized to view."
+      },
+      "zh": {
+        "name": "列出可查看的远程桌面",
+        "description": "列出当前主对话通过同一 Pane 分屏获准查看的远程桌面会话。"
       }
     },
     "ListScripts": {

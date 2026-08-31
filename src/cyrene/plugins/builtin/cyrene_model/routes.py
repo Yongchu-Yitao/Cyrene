@@ -11,16 +11,21 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+from cyrene.model.error_details import (
+    ModelCallError,
+    details_from_mapping,
+)
 from cyrene.plugins.model_catalog import (
     application_model_runtime,
     registered_model_plugin_catalog,
     resolve_registered_model_plugin,
 )
 from cyrene.localization import app_language, localized
-from cyrene.platform import config_store
 from .configuration import (
     get_model_configuration,
+    model_configuration_hash,
     normalize_model_configuration,
+    patch_model_configuration,
     provider_preset_for_connection,
     public_model_configuration,
     save_model_configuration,
@@ -93,6 +98,34 @@ def _validation_error(
     return _error(en, zh, code)
 
 
+def _raise_model_plugin_failure(outcome: Any, fallback: str) -> None:
+    details = details_from_mapping(getattr(outcome, "error_details", None))
+    if details is not None:
+        raise ModelCallError(details)
+    raise RuntimeError(str(getattr(outcome, "error", "") or fallback))
+
+
+def _model_error_response(exc: ModelCallError) -> JSONResponse:
+    details = exc.details
+    status = {
+        "model_authentication_failed": 401,
+        "model_quota_exhausted": 402,
+        "model_rate_limited": 429,
+        "model_request_invalid": 400,
+        "model_request_too_large": 413,
+        "model_timeout": 504,
+        "model_service_unavailable": 503,
+    }.get(details.code, 502)
+    return _error(
+        details.message_en,
+        details.message_zh,
+        details.code,
+        status,
+        retryable=details.retryable,
+        **({"upstream_status": details.status_code} if details.status_code else {}),
+    )
+
+
 def _append_unconfigured_user_plugin_connections(
     payload: dict[str, Any],
     plugin_catalog: list[dict[str, Any]],
@@ -162,6 +195,7 @@ def _public_configuration_with_plugins(
 ) -> dict[str, Any]:
     resolved = configuration or get_model_configuration()
     payload = public_model_configuration(resolved)
+    payload["content_hash"] = model_configuration_hash(resolved)
     try:
         if service is not None:
             plugin_catalog = service.catalog()
@@ -285,7 +319,7 @@ async def _discover(
         ),
     )
     if not outcome.success:
-        raise RuntimeError(outcome.error or "model Plugin discovery failed")
+        _raise_model_plugin_failure(outcome, "model Plugin discovery failed")
     result = outcome.value
     if not isinstance(result, dict) or not isinstance(result.get("models"), list):
         raise RuntimeError(
@@ -383,9 +417,12 @@ async def _test_model(
             timeout=20.0,
         )
         if not outcome.success or not isinstance(outcome.value, dict):
-            raise RuntimeError(
-                outcome.error or "model Provider Plugin embedding test failed"
-            )
+            if not outcome.success:
+                _raise_model_plugin_failure(
+                    outcome,
+                    "model Provider Plugin embedding test failed",
+                )
+            raise RuntimeError("model Provider Plugin embedding test returned invalid data")
         return {"connected": True, "adapter": adapter, "model": model}
     outcome = await asyncio.wait_for(
         runtime.call(
@@ -411,7 +448,7 @@ async def _test_model(
         timeout=20.0,
     )
     if not outcome.success:
-        raise RuntimeError(outcome.error or "model Provider Plugin test failed")
+        _raise_model_plugin_failure(outcome, "model Provider Plugin test failed")
     response = outcome.value
     if not isinstance(response, dict):
         raise RuntimeError("model returned an invalid response")
@@ -442,31 +479,16 @@ def register_model_configuration_routes(
                 "模型配置必须是对象。",
                 "invalid_model_configuration",
             )
-        expected_revision: int | None = None
-        if "revision" in body:
-            value = body.get("revision")
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                return _error(
-                    "revision must be a non-negative integer",
-                    "revision 必须是非负整数。",
-                    "invalid_settings_revision",
-                )
-            expected_revision = value
-        source = {key: value for key, value in body.items() if key != "revision"}
+        # Compatibility fallback for older clients that still submit a full
+        # graph.  Global settings revisions are intentionally ignored: model
+        # writes must not be rejected because an unrelated setting changed.
+        source = {
+            key: value
+            for key, value in body.items()
+            if key not in {"revision", "content_hash"}
+        }
         try:
-            saved, revision = save_model_configuration(
-                source,
-                expected_revision=expected_revision,
-            )
-        except config_store.SettingsRevisionConflict as exc:
-            return _error(
-                "model configuration was changed by another client",
-                "模型配置已被其他客户端更改。",
-                "settings_revision_conflict",
-                409,
-                expected_revision=exc.expected,
-                actual_revision=exc.actual,
-            )
+            saved, revision = save_model_configuration(source)
         except (TypeError, ValueError) as exc:
             return _validation_error(
                 exc,
@@ -477,6 +499,30 @@ def register_model_configuration_routes(
         payload = _public_configuration_with_plugins(saved, service=service)
         payload["revision"] = revision
         return {"ok": True, **payload}
+
+    @router.patch("/api/settings/model-config")
+    async def api_patch_model_configuration(request: Request):
+        try:
+            body = await request.json()
+        except ValueError:
+            return _error(
+                "request body must be valid JSON",
+                "请求体必须是有效的 JSON。",
+                "invalid_json",
+            )
+        try:
+            saved, revision, content_hash, rebased = patch_model_configuration(body)
+        except (TypeError, ValueError) as exc:
+            return _validation_error(
+                exc,
+                en="Invalid model configuration patch.",
+                zh="模型配置补丁无效。",
+                code="invalid_model_configuration_patch",
+            )
+        payload = _public_configuration_with_plugins(saved, service=service)
+        payload["revision"] = revision
+        payload["content_hash"] = content_hash
+        return {"ok": True, "rebased": rebased, **payload}
 
     @router.get("/api/settings/model-config/provider-usage")
     async def api_get_provider_usage(request: Request):
@@ -514,6 +560,13 @@ def register_model_configuration_routes(
                 if profile is not None
                 else await _test_connection(connection, service=service)
             )
+        except ModelCallError as exc:
+            logger.info(
+                "Model connection test failed [%s]",
+                exc.details.code,
+                exc_info=True,
+            )
+            return _model_error_response(exc)
         except (TimeoutError, httpx.TimeoutException):
             logger.info("Model connection test timed out", exc_info=True)
             return _error(
@@ -575,6 +628,13 @@ def register_model_configuration_routes(
         try:
             connection = _connection_draft(connection_id, body)
             models = await _discover(connection, service=service)
+        except ModelCallError as exc:
+            logger.info(
+                "Model discovery failed [%s]",
+                exc.details.code,
+                exc_info=True,
+            )
+            return _model_error_response(exc)
         except (TimeoutError, httpx.TimeoutException):
             logger.info("Model discovery timed out", exc_info=True)
             return _error(

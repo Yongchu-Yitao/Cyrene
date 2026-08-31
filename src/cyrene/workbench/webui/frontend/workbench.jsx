@@ -119,6 +119,9 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [notifications, setNotifications] = useWorkbenchState({ items: [], counts: { all: 0, mention: 0, comment: 0, system: 0 }, unreadByTab: { all: 0, mention: 0, comment: 0, system: 0 }, unreadCount: 0 });
   var [activeChatId, setActiveChatId] = useWorkbenchState("");
   var [recentChatsByProject, setRecentChatsByProject] = useWorkbenchState({});
+  var [workspaceTabState, setWorkspaceTabState] = useWorkbenchState({ items: [], activeKey: "" });
+  var [workspaceTabRequest, setWorkspaceTabRequest] = useWorkbenchState(null);
+  var workspaceTabRequestSeqRef = useWorkbenchRef(0);
   var [pinnedResources, setPinnedResources] = useWorkbenchState([]);
   var chatModule = workbenchServices.chat();
   var chatRuntimeEngine = chatModule && chatModule.Runtimes;
@@ -131,6 +134,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var hiddenSessionKeys = sessionTabs.hiddenSessionKeys;
   var rememberOpenedSession = sessionTabs.rememberOpenedSession;
   var togglePinnedSession = sessionTabs.togglePinnedSession;
+  var reorderPinnedSession = sessionTabs.reorderPinnedSession;
+  var movePinnedSession = sessionTabs.movePinnedSession;
   var removeSessionTab = sessionTabs.removeSessionTab;
   // Always-fresh snapshot of what the user is looking at, read inside async
   // notification callbacks (interval / SSE closures captured once on mount).
@@ -332,11 +337,21 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     return <div className="workbench-sidebar-dock-slot" aria-hidden="true" />;
   }
 
+  function requestWorkspaceTabAction(item, action) {
+    if (!item) return;
+    if (item.projectId && (!store.activeProject || String(store.activeProject.id) !== String(item.projectId))) {
+      selectProject(item.projectId);
+    }
+    setFullPage("chat");
+    workspaceTabRequestSeqRef.current += 1;
+    setWorkspaceTabRequest({ id: workspaceTabRequestSeqRef.current, action: action, item: item });
+  }
+
   var modulePresentation = useWorkbenchModulePresentation(
     fullPage, setFullPage, mountedPages, setMountedPages, store, activeChatId,
     recentChatsByProject, {
       recent: recentOpenedSessionKeys, pinned: pinnedSessionKeys, hidden: hiddenSessionKeys,
-    }, chatRuntimes, sessionActivityLive, dataState, t, enabledModules
+    }, chatRuntimes, sessionActivityLive, dataState, t, enabledModules, workspaceTabState
   );
   var isKnowledge = modulePresentation.isKnowledge;
   var isSchedule = modulePresentation.isSchedule;
@@ -419,10 +434,21 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     },
     sessions: {
       activeChatId: activeChatId, setActiveChatId: setActiveChatId,
+      activeTabKey: modulePresentation.activeTabKey,
       recent: recentSessionTabs, overflow: overflowSessionTabs,
       browserOwners: browserOwnerSessions, candidates: sessionTabCandidates,
       rememberOpened: rememberOpenedSession, togglePinned: togglePinnedSession,
+      reorderPinned: reorderPinnedSession, movePinned: movePinnedSession,
       removeTab: removeSessionTab, openResource: openSessionTabResource,
+      workspaceTabs: workspaceTabState,
+      workspaceTabRequest: workspaceTabRequest,
+      updateWorkspaceTabs: setWorkspaceTabState,
+      completeWorkspaceTabRequest: function (requestId) {
+        setWorkspaceTabRequest(function (current) {
+          return current && current.id === requestId ? null : current;
+        });
+      },
+      requestWorkspaceTab: requestWorkspaceTabAction,
       updateRecentChats: function (projectId, chats) {
         setRecentChatsByProject(function (previous) {
           return previous[projectId] === chats

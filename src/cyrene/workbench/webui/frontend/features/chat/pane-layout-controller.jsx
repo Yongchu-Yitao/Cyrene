@@ -81,6 +81,15 @@ function wbcOpenPaneContent(context, type, payload, options) {
   var canonicalId = ["chat", "terminal"].indexOf(normalizedType) >= 0 && payload
     ? normalizedType + ":" + String(payload) : "";
   var baseCard = wbcPaneContentCard(context, normalizedType, payload, ownerId);
+  if (opts.origin === "agent") {
+    baseCard = Object.assign({}, baseCard, {
+      meta: Object.assign({}, baseCard.meta || {}, {
+        origin: "agent",
+        claimedByUser: false,
+        createdAt: Date.now(),
+      }),
+    });
+  }
   var reusableId = canonicalId || (normalizedType === "plugin-view" ? baseCard.id : "");
   var existing = reusableId ? wbcPaneCardLocation(wbcPaneLayoutFor(context, ownerChatId), reusableId) : null;
   if (normalizedType === "terminal" && existing && !opts.replaceWorkspace) return existing.card;

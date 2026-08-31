@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('cyrene', {
     clipboard.writeText(String(text == null ? '' : text));
     return true;
   },
+  readClipboardText: () => clipboard.readText(),
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', {
     path: String(filePath == null ? '' : filePath),
   }),

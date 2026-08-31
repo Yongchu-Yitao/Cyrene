@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Remote Desktop connected</title>
+  <link rel="stylesheet" href="remote-desktop-indicator.css">
+</head>
+<body>
+  <main>
+    <span class="status" aria-hidden="true"></span>
+    <div><strong id="title">Remote Desktop connected</strong><small id="detail"></small></div>
+    <button id="disconnect" type="button">Disconnect</button>
+  </main>
+  <script src="remote-desktop-indicator.js"></script>
+</body>
+</html>

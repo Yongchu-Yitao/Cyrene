@@ -4833,27 +4833,34 @@ class AgentSession:
                             ),
                         }
                     )
-                    mcp_service = self._plugin_services().get("mcp")
-                    builder = getattr(
-                        mcp_service,
-                        "build_observation_content",
-                        None,
-                    )
-                    observation = (
-                        builder(
+                    observation = None
+                    # Application services may contribute a managed multimodal
+                    # result adapter. The first service that recognizes this
+                    # tool value owns materialization. This keeps binary pixels
+                    # out of the durable Plugin result while allowing MCP and
+                    # user-authorized live resources to share the model path.
+                    for observation_service in self._plugin_services().values():
+                        builder = getattr(
+                            observation_service,
+                            "build_observation_content",
+                            None,
+                        )
+                        if not callable(builder):
+                            continue
+                        observation = builder(
                             result.get("value"),
                             tool_name=str(result.get("name") or ""),
                         )
-                        if callable(builder)
-                        else None
-                    )
-                    materialize = getattr(
-                        mcp_service,
-                        "materialize_content_block",
-                        None,
-                    )
-                    if observation and callable(materialize):
-                        observation = [materialize(block) for block in observation]
+                        if not observation:
+                            continue
+                        materialize = getattr(
+                            observation_service,
+                            "materialize_content_block",
+                            None,
+                        )
+                        if callable(materialize):
+                            observation = [materialize(block) for block in observation]
+                        break
                     if observation:
                         observations.append(
                             {

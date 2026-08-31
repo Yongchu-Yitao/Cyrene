@@ -57,9 +57,13 @@ function wbOpenPinnedResource(context, resource) {
 }
 
 function wbOpenTopbarSession(context, item) {
-  if (!item || item.kind !== "chat") return;
-  context.sessions.rememberOpened("chat", item.id);
-  context.navigation.navigate({ type: "chat", projectId: item.projectId, chatId: item.id });
+  if (!item) return;
+  if (item.kind === "chat") {
+    context.sessions.rememberOpened("chat", item.id, context.sessions.candidates
+      .filter(function (candidate) { return candidate && candidate.kind === "chat"; })
+      .map(function (candidate) { return "chat:" + String(candidate.id || ""); }));
+  }
+  context.sessions.requestWorkspaceTab(item, "open");
 }
 
 function wbOpenBrowserPage(context, page, owner) {
@@ -67,7 +71,9 @@ function wbOpenBrowserPage(context, page, owner) {
     return String(item.id || "") === String(page && page.sessionId || "");
   });
   if (!target) return;
-  context.sessions.rememberOpened("chat", target.id);
+  context.sessions.rememberOpened("chat", target.id, context.sessions.candidates
+    .filter(function (candidate) { return candidate && candidate.kind === "chat"; })
+    .map(function (candidate) { return "chat:" + String(candidate.id || ""); }));
   context.navigation.navigate({ type: "chat", projectId: target.projectId, chatId: target.id });
 }
 
@@ -89,6 +95,8 @@ function WorkbenchShellTopbar({ context }) {
     activeProject={context.store.activeProject}
     activePage={navigation.fullPage}
     activeChatId={sessions.activeChatId}
+    activeTabKey={sessions.activeTabKey}
+    sessionCandidates={sessions.candidates}
     recentSessions={sessions.recent}
     overflowSessions={sessions.overflow}
     browserOwners={sessions.browserOwners}
@@ -98,7 +106,16 @@ function WorkbenchShellTopbar({ context }) {
     onUnpinResource={context.resources.unpin}
     onOpenPinnedResource={function (resource) { wbOpenPinnedResource(context, resource); }}
     onTogglePinnedSession={sessions.togglePinned}
-    onRemoveSessionTab={sessions.removeTab}
+    onReorderPinnedSession={sessions.reorderPinned}
+    onMovePinnedSession={sessions.movePinned}
+    onRemoveSessionTab={function (item) {
+      if (item && item.kind !== "chat") {
+        sessions.togglePinned(item, false);
+        sessions.requestWorkspaceTab(item, "close");
+        return;
+      }
+      sessions.removeTab(item);
+    }}
     onLoadSessionResources={loadSessionTabResources}
     onLoadSessionBrowserPreview={loadSessionTabBrowserPreview}
     onOpenSessionResource={sessions.openResource}
@@ -146,6 +163,9 @@ function WorkbenchChatModuleSurface({ context }) {
         newChatRequestId: context.chat.newChatRequestId,
         onActiveChatIdChange: sessions.setActiveChatId,
         onChatsChange: sessions.updateRecentChats,
+        onWorkspaceTabsChange: sessions.updateWorkspaceTabs,
+        workspaceTabRequest: sessions.workspaceTabRequest,
+        onWorkspaceTabRequestHandled: sessions.completeWorkspaceTabRequest,
         pinnedSessions: sessions.pinnedView,
         navCollapsed: context.navigation.railCollapsed,
         onToggleNavCollapsed: context.navigation.toggleSidebar,

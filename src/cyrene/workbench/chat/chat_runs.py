@@ -41,6 +41,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
 from cyrene.localization import localized
+from cyrene.model.status import model_status_message, register_model_status_persister
 from cyrene.observability.trace import trace_span
 from cyrene.platform.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
 from cyrene.workbench.chat.chat_application import (
@@ -1485,6 +1486,35 @@ class ChatRunManager:
         finally:
             run.subscribers.discard(queue)
 
+    async def persist_model_status_message(
+        self,
+        chat_id: str,
+        round_id: str,
+        *,
+        status: str,
+        model: str,
+        retry_count: int = 0,
+        retry_limit: int = 0,
+    ) -> None:
+        """Insert or update the single durable model-status card for a round."""
+
+        session = str(chat_id or "").strip()
+        if not session:
+            return
+        message = model_status_message(
+            session,
+            round_id,
+            status=status,
+            model=model,
+            retry_count=retry_count,
+            retry_limit=retry_limit,
+        )
+        await asyncio.to_thread(
+            self._persist_live_public_message,
+            session,
+            message,
+        )
+
     def _persist_live_public_message(
         self,
         chat_id: str,
@@ -1789,6 +1819,11 @@ def schedule_post_reply_bookkeeping(coro: Any, *, error_context: str) -> None:
 # the singleton here makes the lifecycle independent from the retired route
 # composition module and gives WebUI startup/shutdown one explicit boundary.
 _CHAT_RUN_MANAGER = ChatRunManager()
+
+# Model providers are deliberately independent from the Workbench package.
+# Bind their low-level status seam here, where the process-owned conversation
+# manager and its configured repository are both available.
+register_model_status_persister(_CHAT_RUN_MANAGER.persist_model_status_message)
 
 
 def get_chat_run_manager() -> ChatRunManager:

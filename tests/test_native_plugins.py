@@ -39,6 +39,7 @@ TOOL_PACK_IDS = frozenset(
         "cyrene_memory",
         "cyrene_office",
         "cyrene_remote",
+        "cyrene_remote_desktop",
         "cyrene_renderer",
         "cyrene_schedule",
         "cyrene_skills",

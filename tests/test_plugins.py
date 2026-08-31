@@ -1920,6 +1920,7 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
             if item.plugin.kind == "model"
         } == {
             "AMDGPUCloud",
+            "AliyunBailian",
             "Anthropic",
             "CodexOAuth",
             "DeepSeek",
@@ -2041,6 +2042,85 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         assert requests[-1]["url"] == "https://custom-provider.test/v1/models"
         assert requests[-1]["authorization"] == ""
         store.close()
+
+    run(scenario())
+
+
+def test_aliyun_bailian_model_plugin_discovers_paginated_catalog():
+    from cyrene.plugins.builtin.cyrene_model.aliyun_bailian import (
+        ALIYUN_BAILIAN_PLUGIN,
+    )
+
+    async def scenario():
+        requests = []
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            requests.append({
+                "url": str(request.url),
+                "authorization": request.headers.get("Authorization", ""),
+            })
+            page_no = int(request.url.params.get("page_no", "1"))
+            model = "qwen-plus" if page_no == 1 else "qwen-vl-plus"
+            modalities = ["Text"] if page_no == 1 else ["Text", "Image"]
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "output": {
+                        "total": 2,
+                        "page_no": page_no,
+                        "page_size": 1,
+                        "models": [{
+                            "model": model,
+                            "name": model,
+                            "capabilities": ["TG" if page_no == 1 else "VU"],
+                            "inference_metadata": {
+                                "request_modality": modalities,
+                                "response_modality": ["Text"],
+                            },
+                        }],
+                    },
+                },
+            )
+
+        registry = PluginRegistry(include_core=False)
+        registry.register_plugin(ALIYUN_BAILIAN_PLUGIN, source="test")
+        discovered = await PluginRuntime(registry).call(
+            "AliyunBailian",
+            {"operation": "list_models"},
+            PluginContext(data={
+                "http_transport": httpx.MockTransport(respond),
+                "model_connection": {
+                    "base_url": (
+                        "https://workspace.cn-beijing.maas.aliyuncs.com"
+                        "/compatible-mode/v1"
+                    ),
+                    "api_key": "bailian-key",
+                },
+            }),
+        )
+
+        assert discovered.success is True
+        assert [item["id"] for item in discovered.value["models"]] == [
+            "qwen-plus",
+            "qwen-vl-plus",
+        ]
+        assert requests == [
+            {
+                "url": (
+                    "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/models"
+                    "?page_no=1&page_size=100"
+                ),
+                "authorization": "Bearer bailian-key",
+            },
+            {
+                "url": (
+                    "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/models"
+                    "?page_no=2&page_size=1"
+                ),
+                "authorization": "Bearer bailian-key",
+            },
+        ]
 
     run(scenario())
 

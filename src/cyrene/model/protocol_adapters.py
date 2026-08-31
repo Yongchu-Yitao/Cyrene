@@ -14,7 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -114,9 +114,34 @@ def protocol_endpoints(adapter_id: str, base_url: str, model: str) -> list[str]:
     return [f"{base}/chat/completions"]
 
 
-def discovery_request(adapter_id: str, base_url: str, api_key: str) -> tuple[str, dict[str, str]]:
+def _aliyun_bailian_discovery_url(base_url: str) -> str:
+    """Map a Bailian OpenAI-compatible endpoint to its model catalog API."""
+
+    parsed = urlsplit(str(base_url or "").strip().rstrip("/"))
+    path = parsed.path.rstrip("/")
+    compatible_suffix = "/compatible-mode/v1"
+    if path.endswith(compatible_suffix):
+        path = path[: -len(compatible_suffix)] + "/api/v1/models"
+    else:
+        path += "/models"
+    query = urlencode({"page_no": 1, "page_size": 100})
+    return urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
+
+
+def discovery_request(
+    adapter_id: str,
+    base_url: str,
+    api_key: str,
+    *,
+    provider_preset: str = "",
+) -> tuple[str, dict[str, str]]:
     adapter = str(adapter_id or "openai_compatible").strip().lower()
     base = str(base_url or "").strip().rstrip("/")
+    preset = str(provider_preset or "").strip().lower()
+    if preset == "aliyun_bailian":
+        return _aliyun_bailian_discovery_url(base), {
+            "Authorization": f"Bearer {api_key}"
+        }
     if adapter == "ollama":
         return f"{base}/api/tags", {}
     if adapter == "anthropic":
@@ -133,8 +158,123 @@ def discovery_request(adapter_id: str, base_url: str, api_key: str) -> tuple[str
     return f"{base}/models", headers
 
 
-def parse_discovery_response(adapter_id: str, payload: Any) -> list[dict[str, Any]]:
+def next_discovery_page(
+    endpoint: str,
+    payload: Any,
+    *,
+    provider_preset: str = "",
+) -> str | None:
+    """Return the next catalog page URL for a paginated Provider response."""
+
+    if str(provider_preset or "").strip().lower() != "aliyun_bailian":
+        return None
+    source = payload if isinstance(payload, dict) else {}
+    output = source.get("output") if isinstance(source.get("output"), dict) else {}
+    try:
+        page_no = max(1, int(output.get("page_no") or 1))
+        page_size = int(output.get("page_size") or 0)
+        total = max(0, int(output.get("total") or 0))
+    except (TypeError, ValueError):
+        return None
+    if page_size <= 0 or page_no * page_size >= total:
+        return None
+    parsed = urlsplit(str(endpoint or ""))
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["page_no"] = str(page_no + 1)
+    query["page_size"] = str(page_size)
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
+
+
+def _parse_aliyun_bailian_models(payload: Any) -> list[dict[str, Any]]:
+    source = payload if isinstance(payload, dict) else {}
+    if source.get("success") is False:
+        detail = str(source.get("message") or source.get("code") or "").strip()
+        raise ValueError(
+            "Alibaba Cloud Model Studio model discovery failed"
+            + (f": {detail}" if detail else "")
+        )
+    output = source.get("output") if isinstance(source.get("output"), dict) else {}
+    raw_items = output.get("models") if isinstance(output.get("models"), list) else []
+    result: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("model") or "").strip()
+        if not model_id:
+            continue
+        raw_capabilities = {
+            str(value or "").strip().lower()
+            for value in item.get("capabilities") or []
+            if str(value or "").strip()
+        }
+        features = {
+            str(value or "").strip().lower()
+            for value in item.get("features") or []
+            if str(value or "").strip()
+        }
+        inference = (
+            item.get("inference_metadata")
+            if isinstance(item.get("inference_metadata"), dict)
+            else {}
+        )
+        request_modalities = {
+            str(value or "").strip().lower()
+            for value in inference.get("request_modality") or []
+            if str(value or "").strip()
+        }
+        response_modalities = {
+            str(value or "").strip().lower()
+            for value in inference.get("response_modality") or []
+            if str(value or "").strip()
+        }
+        supports_chat = bool(
+            raw_capabilities.intersection({"tg", "vu", "multimodal-omni"})
+            or (
+                "text" in request_modalities
+                and "text" in response_modalities
+            )
+        )
+        if not supports_chat:
+            continue
+        capabilities = ["chat"]
+        if "image" in request_modalities or "vu" in raw_capabilities:
+            capabilities.append("vision")
+        if "function-calling" in features:
+            capabilities.append("tools")
+        if "reasoning" in raw_capabilities:
+            capabilities.append("reasoning")
+        discovered: dict[str, Any] = {
+            "id": model_id,
+            "model": model_id,
+            "name": str(item.get("name") or model_id).strip() or model_id,
+            "capabilities": capabilities,
+        }
+        description = str(item.get("description") or "").strip()
+        if description:
+            discovered["description"] = description
+        model_info = item.get("model_info") if isinstance(item.get("model_info"), dict) else {}
+        try:
+            context_limit = int(model_info.get("context_window") or 0)
+        except (TypeError, ValueError):
+            context_limit = 0
+        if context_limit > 0:
+            discovered["context_limit"] = context_limit
+        result.append(discovered)
+    return result
+
+
+def parse_discovery_response(
+    adapter_id: str,
+    payload: Any,
+    *,
+    provider_preset: str = "",
+) -> list[dict[str, Any]]:
     adapter = str(adapter_id or "openai_compatible").strip().lower()
+    preset = str(provider_preset or "").strip().lower()
+    if preset == "aliyun_bailian":
+        return _parse_aliyun_bailian_models(payload)
     source = payload if isinstance(payload, dict) else {}
     raw_items: Any
     if adapter == "ollama":
@@ -920,6 +1060,7 @@ __all__ = [
     "PreparedRequest",
     "discovery_request",
     "handle_stream",
+    "next_discovery_page",
     "parse_discovery_response",
     "parse_response",
     "prepare_request",
