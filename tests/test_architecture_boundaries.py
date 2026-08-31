@@ -35,6 +35,7 @@ CYRENE_TOP_LEVEL_FILES = {
     "local_cli.py",
     "localization.py",
     "path_policy.py",
+    "simplexng_child.py",
 }
 
 # Existing late-bound configuration reads are isolated migration debt. Keep the

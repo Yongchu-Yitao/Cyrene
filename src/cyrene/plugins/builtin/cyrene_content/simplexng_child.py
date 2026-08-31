@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from cyrene.simplexng_child import (
-    _PARENT_PID_ENV,
-    _install_windows_compat_patches,
-    _parent_is_alive,
-    _pid_exists,
-    _watch_parent,
-    main,
-)
+from cyrene import simplexng_child as _runtime
+
+
+_PARENT_PID_ENV = _runtime._PARENT_PID_ENV
+_install_windows_compat_patches = _runtime._install_windows_compat_patches
+_parent_is_alive = _runtime._parent_is_alive
+_pid_exists = _runtime._pid_exists
+_watch_parent = _runtime._watch_parent
+main = _runtime.main
 
 
 __all__ = [
