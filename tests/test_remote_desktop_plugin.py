@@ -491,11 +491,19 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "togglePopover(fileMenu, fileMenuClose)" in plugin_ui
     assert "popoverScrim.addEventListener('pointerdown'" in plugin_ui
     assert 'data-input-enabled="true"' not in plugin_css
-    assert "cursor: none" not in plugin_css
+    assert "#remote-video { z-index: 1; object-fit: contain; cursor: none; }" in plugin_css
+    assert '[data-state="connected"] .stage { cursor: none; }' in plugin_css
     assert "const retryDelays = [0, 100, 250, 500]" in electron_host
     assert "Failed to load the active-session indicator after retries" in electron_host
-    assert "constraints.cursor = 'never'" in media_host
+    assert "constraints.cursor = 'always'" in media_host
     assert "supported.cursor" not in media_host
+    assert "playoutDelayHint = 0" in plugin_ui
+    assert "jitterBufferTarget = 0" in plugin_ui
+    assert "videoBackdrop.srcObject = null" in plugin_ui
+    assert "videoBackdrop.srcObject = remoteVideoStream" not in plugin_ui
+    assert "auto: { width: { ideal: 1600 }, height: { ideal: 900 }, frameRate: { ideal: 30, max: 30 } }" in media_host
+    assert "auto: { maxBitrate: 8_000_000, maxFramerate: 30 }" in media_host
+    assert "Math.min(1, maxWidth / requestedWidth, maxHeight / requestedHeight)" in media_host
     assert "NotifyPointerMotionAbsolute(this.streamPath, x, y)" in electron_host
     assert "this.screenCastSession.RecordVirtual" in electron_host
     assert "pipewiresrc" in electron_host
@@ -513,6 +521,10 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "const scale = Math.min(rect.width / video.videoWidth" in plugin_ui
     assert "localX / renderedWidth" in plugin_ui
     assert 'id="connect-button"' not in plugin_html
+    assert "remoteDesktopGlobalInput" in app_use
+    assert "globalWindowsInput" in electron_host
+    perform_action = app_use_windows.split("function Perform-Action($Payload) {", 1)[1]
+    assert perform_action.index("if ($capability -eq 'key_sequence')") < perform_action.index("$root = Get-Root")
     assert 'class="mode-picker"' not in plugin_html
     assert "--bg: transparent" in plugin_styles
     assert ".stage { position: relative; min-height: 0; overflow: hidden; outline: none; background: var(--bg); }" in plugin_styles

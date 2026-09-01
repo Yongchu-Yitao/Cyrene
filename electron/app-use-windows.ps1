@@ -557,9 +557,12 @@ function Perform-Action($Payload) {
     $capability = [string]$Payload.capability
     $parameters = $Payload.parameters
     if ($capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at', 'pointer_event')) { return Perform-CoordinateAction $Payload.target $capability $parameters }
+    # Remote Desktop keyboard input is intentionally global: SendKeys targets
+    # the window foregrounded by the preceding pointer action. Resolving a UIA
+    # root here would reintroduce a full desktop tree lookup for every key.
+    if ($capability -eq 'key_sequence') { return Perform-KeySequence $parameters.steps }
     $root = Get-Root $Payload.target
     $element = if ($Payload.nativeRef) { Resolve-Element $root ([string]$Payload.nativeRef) } else { $root }
-    if ($capability -eq 'key_sequence') { return Perform-KeySequence $parameters.steps }
     if ($capability -in @('semantic_double_click', 'semantic_drag')) {
         $legacy = Try-Pattern $element ([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
         if ($null -eq $legacy) { throw "Element does not expose a native $capability action." }

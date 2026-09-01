@@ -527,11 +527,14 @@
         remoteMediaStream.addTrack(event.track);
       }
       if (event.track.kind === 'video') {
+        try { event.track.playoutDelayHint = 0; } catch (_) {}
+        try { if (event.receiver) event.receiver.jitterBufferTarget = 0; } catch (_) {}
         const remoteVideoStream = new MediaStream(remoteMediaStream.getVideoTracks());
         video.srcObject = remoteVideoStream;
-        videoBackdrop.srcObject = remoteVideoStream;
+        // Rendering a second full-size video with a live blur filter doubles
+        // compositor work and adds visible presentation delay on high-DPI panes.
+        videoBackdrop.srcObject = null;
         video.play().catch(function () {});
-        videoBackdrop.play().catch(function () {});
       } else if (event.track.kind === 'audio') {
         if (sessionPermissions.system_audio !== true) return;
         audio.srcObject = new MediaStream(remoteMediaStream.getAudioTracks());

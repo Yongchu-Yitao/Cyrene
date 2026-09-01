@@ -1203,22 +1203,24 @@ class RemoteDesktopManager {
     if (process.platform === 'linux') return this._linuxInput(record, event);
     const manager = this.getAppUseManager();
     const type = String(event.type || '');
+    const globalWindowsInput = process.platform === 'win32'
+      && typeof manager.remoteDesktopGlobalInput === 'function';
     let point = null;
     if (type === 'pointer') point = this._screenPoint(record, event);
     const pointerAction = type === 'pointer' ? String(event.action || 'move') : '';
     let appSession = '';
-    if (point && record.activePointerSession && ['move', 'button_up'].includes(pointerAction)) {
-      appSession = record.activePointerSession;
-    } else if (point) {
-      appSession = await this._appUseSessionForPoint(
-        record,
-        point,
-        ['button_down', 'right_click'].includes(pointerAction),
-      );
-    }
-    else if (record.focusedInputSession) appSession = record.focusedInputSession;
-    if (!appSession) {
-      appSession = await this._appUseSessionForPoint(record, null);
+    if (!globalWindowsInput) {
+      if (point && record.activePointerSession && ['move', 'button_up'].includes(pointerAction)) {
+        appSession = record.activePointerSession;
+      } else if (point) {
+        appSession = await this._appUseSessionForPoint(
+          record,
+          point,
+          ['button_down', 'right_click'].includes(pointerAction),
+        );
+      }
+      else if (record.focusedInputSession) appSession = record.focusedInputSession;
+      if (!appSession) appSession = await this._appUseSessionForPoint(record, null);
     }
     let capability = '';
     const bounds = this._inputBounds(record);
@@ -1250,19 +1252,23 @@ class RemoteDesktopManager {
     }
     if (!capability) return { ok: true };
     try {
-      const result = await manager.remoteDesktopInput(appSession, capability, parameters);
+      const result = globalWindowsInput
+        ? await manager.remoteDesktopGlobalInput(capability, parameters)
+        : await manager.remoteDesktopInput(appSession, capability, parameters);
       if (pointerAction === 'button_down') {
         record.pointerPressed = true;
-        record.activePointerSession = appSession;
-        record.focusedInputSession = appSession;
+        record.activePointerSession = globalWindowsInput ? 'desktop-global' : appSession;
+        if (!globalWindowsInput) record.focusedInputSession = appSession;
       } else if (pointerAction === 'right_click') {
-        record.focusedInputSession = appSession;
+        if (!globalWindowsInput) record.focusedInputSession = appSession;
       }
       if (point) record.lastPointerPoint = point;
       return result;
     } catch (error) {
-      this.inputSessions.delete(record.inputTargetId);
-      record.inputTargetBounds = null;
+      if (!globalWindowsInput) {
+        this.inputSessions.delete(record.inputTargetId);
+        record.inputTargetBounds = null;
+      }
       throw error;
     } finally {
       if (pointerAction === 'button_up') {
@@ -1286,7 +1292,7 @@ class RemoteDesktopManager {
         await runCommand('xdotool', ['mouseup', '1'], 1500);
       } else if (record.pointerPressed && record.activePointerSession && record.lastPointerPoint) {
         const bounds = this._inputBounds(record);
-        await this.getAppUseManager().remoteDesktopInput(record.activePointerSession, 'pointer_event', {
+        const parameters = {
           x: record.lastPointerPoint.x,
           y: record.lastPointerPoint.y,
           coordinate_space: 'screen',
@@ -1294,7 +1300,13 @@ class RemoteDesktopManager {
           button: 'left',
           pressed: false,
           desktop_bounds: bounds,
-        });
+        };
+        const manager = this.getAppUseManager();
+        if (process.platform === 'win32' && typeof manager.remoteDesktopGlobalInput === 'function') {
+          await manager.remoteDesktopGlobalInput('pointer_event', parameters);
+        } else {
+          await manager.remoteDesktopInput(record.activePointerSession, 'pointer_event', parameters);
+        }
       }
     } finally {
       record.dragStart = null;

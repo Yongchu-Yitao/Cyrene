@@ -312,6 +312,37 @@ test('lists foreground and background targets with stable opaque ids', async () 
   assert.equal(first.targets.find((item) => !item.foreground).app_name, 'TextEdit');
 });
 
+test('Windows Remote Desktop global input bypasses target enumeration and UIA sessions', async () => {
+  const provider = new FakeProvider();
+  provider.platform = 'win32';
+  provider.listTargets = async function () {
+    throw new Error('global input must not enumerate windows');
+  };
+  const manager = new AppUseManager({ provider, ownPid: 999 });
+  const bounds = { x: -1920, y: 0, width: 3840, height: 1080 };
+
+  await manager.remoteDesktopGlobalInput('pointer_event', {
+    desktop_bounds: bounds,
+    coordinate_space: 'screen',
+    x: 240,
+    y: 360,
+    action: 'move',
+    button: 'left',
+  });
+  await manager.remoteDesktopGlobalInput('key_sequence', {
+    desktop_bounds: bounds,
+    focus_target: true,
+    steps: [{ type: 'key', key: 'ENTER' }],
+  });
+
+  assert.equal(provider.performed.length, 2);
+  assert.deepEqual(provider.performed[0].target, { platform: 'win32', bounds });
+  assert.equal(provider.performed[0].parameters.desktop_bounds, undefined);
+  assert.equal(provider.performed[1].capability, 'key_sequence');
+  assert.equal(provider.performed[1].parameters.focus_target, undefined);
+  assert.deepEqual(provider.focused, []);
+});
+
 test('visual connect discloses only visual runtime capabilities', async () => {
   const { connected, provider } = await connectedManager();
   assert.equal(connected.status, 'success');

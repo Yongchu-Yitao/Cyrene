@@ -18,7 +18,7 @@
   let previousAutoStats = null;
 
   const qualityConstraints = {
-    auto: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 45, max: 60 } },
+    auto: { width: { ideal: 1600 }, height: { ideal: 900 }, frameRate: { ideal: 30, max: 30 } },
     smooth: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, max: 60 } },
     balanced: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 45 } },
     clear: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30, max: 30 } },
@@ -28,28 +28,34 @@
     smooth: { maxBitrate: 10_000_000, maxFramerate: 45 },
     balanced: { maxBitrate: 22_000_000, maxFramerate: 30 },
     clear: { maxBitrate: 42_000_000, maxFramerate: 30 },
-    auto: { maxBitrate: 12_000_000, maxFramerate: 30 },
+    auto: { maxBitrate: 8_000_000, maxFramerate: 30 },
   };
 
   const autoTransmissionProfiles = [
-    { maxBitrate: 12_000_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
-    { maxBitrate: 8_000_000, maxFramerate: 30, scaleResolutionDownBy: 1.5 },
-    { maxBitrate: 4_500_000, maxFramerate: 24, scaleResolutionDownBy: 2 },
+    { maxBitrate: 8_000_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
+    { maxBitrate: 5_000_000, maxFramerate: 30, scaleResolutionDownBy: 1.5 },
+    { maxBitrate: 3_000_000, maxFramerate: 24, scaleResolutionDownBy: 2 },
   ];
 
   function currentVideoConstraints() {
     const quality = qualityConstraints[qualityMode] || qualityConstraints.auto;
-    const constraints = viewportConstraints ? {
-      width: { ideal: viewportConstraints.width },
-      height: { ideal: viewportConstraints.height },
-      frameRate: quality.frameRate,
-    } : { ...quality };
-    // The controller uses its native OS pointer. Excluding the controlled
-    // machine's cursor from the capture prevents two cursors from appearing
-    // while pointer coordinates continue to map to the remote display.
-    // Chromium does not consistently advertise this display-capture setting
-    // through getSupportedConstraints(), even when the track accepts it.
-    constraints.cursor = 'never';
+    let constraints = { ...quality };
+    if (viewportConstraints) {
+      const requestedWidth = Math.max(1, Number(viewportConstraints.width) || 1);
+      const requestedHeight = Math.max(1, Number(viewportConstraints.height) || 1);
+      const maxWidth = Math.max(1, Number(quality.width && quality.width.ideal) || requestedWidth);
+      const maxHeight = Math.max(1, Number(quality.height && quality.height.ideal) || requestedHeight);
+      const scale = Math.min(1, maxWidth / requestedWidth, maxHeight / requestedHeight);
+      constraints = {
+        width: { ideal: Math.max(1, Math.round(requestedWidth * scale)) },
+        height: { ideal: Math.max(1, Math.round(requestedHeight * scale)) },
+        frameRate: quality.frameRate,
+      };
+    }
+    // The controller surface hides its local pointer and shows the controlled
+    // machine's captured pointer. This guarantees one authoritative cursor on
+    // Windows, where Chromium may ignore a request to exclude the cursor.
+    constraints.cursor = 'always';
     return constraints;
   }
 

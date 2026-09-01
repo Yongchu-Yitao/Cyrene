@@ -62,7 +62,8 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .stage:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-2); }
 .ime-input { position: absolute; width: 1px; height: 1px; left: 50%; bottom: 0; padding: 0; border: 0; opacity: .001; resize: none; pointer-events: none; }
 video { position: absolute; inset: 0; width: 100%; height: 100%; display: none; background: #050607; }
-#remote-video { z-index: 1; object-fit: contain; cursor: default; }
+#remote-video { z-index: 1; object-fit: contain; cursor: none; }
+[data-state="connected"] .stage { cursor: none; }
 .remote-video-backdrop { z-index: 0; object-fit: cover; pointer-events: none; filter: blur(28px) saturate(.82) brightness(.48); transform: scale(1.08); }
 [data-state="connected"] video { display: block; }
 .empty-state, .busy-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 28px; }

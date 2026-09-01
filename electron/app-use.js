@@ -1206,6 +1206,42 @@ class AppUseManager {
     return this.provider.perform(target, name, '', effective);
   }
 
+  async remoteDesktopGlobalInput(capability, parameters = {}) {
+    const providerPlatform = String(this.provider && this.provider.platform || process.platform);
+    if (providerPlatform !== 'win32') {
+      throw new AppUseError('unsupported_capability', 'Global Remote Desktop input is available only on Windows.');
+    }
+    const name = String(capability || '');
+    if (!['pointer_event', 'right_click', 'scroll_at', 'key_sequence'].includes(name)) {
+      throw new AppUseError('unsupported_capability', `Unsupported global Remote Desktop input capability: ${name || '(empty)'}.`);
+    }
+    const effective = parameters && typeof parameters === 'object' && !Array.isArray(parameters)
+      ? { ...parameters } : {};
+    const desktopBounds = effective.desktop_bounds;
+    delete effective.focus_target;
+    delete effective.desktop_bounds;
+    const bounds = {
+      x: Number(desktopBounds && desktopBounds.x),
+      y: Number(desktopBounds && desktopBounds.y),
+      width: Number(desktopBounds && desktopBounds.width),
+      height: Number(desktopBounds && desktopBounds.height),
+    };
+    if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+        || bounds.width <= 0 || bounds.height <= 0) {
+      throw new AppUseError('invalid_arguments', 'Global Remote Desktop input requires valid display bounds.');
+    }
+    const target = { platform: 'win32', bounds };
+    if (name === 'pointer_event') {
+      const action = String(effective.action || 'move');
+      const button = String(effective.button || 'left');
+      if (!['move', 'button_down', 'button_up'].includes(action) || !['left', 'right'].includes(button)) {
+        throw new AppUseError('invalid_arguments', 'pointer_event requires a valid action and button.');
+      }
+    }
+    if (name !== 'key_sequence') this._coordinatePoint({ target }, effective);
+    return this.provider.perform(target, name, '', effective);
+  }
+
   async _restoreFocus(session) {
     if (session.previousFocusWasHost && typeof this.focusHost === 'function') {
       await this.focusHost();
