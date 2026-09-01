@@ -772,7 +772,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
         <span className={"workbench-session-overflow-icon " + String(item.activity.phase || "idle")}>{item.kind === "chat"
           ? <WorkbenchSessionStatusIcon phase={item.activity.phase} active={item.activity.isLive} />
           : <WorkbenchTabKindIcon item={item} />}</span>
-        <span><b>{item.title}</b><small>{item.kind === "chat"
+        <span className="workbench-session-overflow-copy"><b title={item.title}>{item.title}</b><small>{item.kind === "chat"
           ? (detail && detail !== status ? status + " · " + detail : status)
           : [kindLabel, item.projectName].filter(Boolean).join(" · ")}</small></span>
         <span

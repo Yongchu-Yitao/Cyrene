@@ -1541,8 +1541,9 @@ html[data-platform="darwin"] .workbench-top-project-menu {
   background: color-mix(in srgb, var(--wb-red) 5%, var(--wb-card-bg));
 }
 
-.workbench-session-overflow-group-items > button > span:last-child {
+.workbench-session-overflow-copy {
   min-width: 0;
+  overflow: hidden;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;

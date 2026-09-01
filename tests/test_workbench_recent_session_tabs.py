@@ -460,6 +460,8 @@ def test_tab_center_supports_grid_cards_context_actions_and_dragging():
     overflow_card = shell.split("function renderOverflowSession", 1)[1].split(
         "function activeSessionIndex", 1
     )[0]
+    assert 'className="workbench-session-overflow-copy"' in overflow_card
+    assert "<b title={item.title}>{item.title}</b>" in overflow_card
     assert 'className="workbench-session-overflow-drag-handle"' in overflow_card
     assert overflow_card.index('onClick={function () {') < overflow_card.index(
         'className="workbench-session-overflow-drag-handle"'
@@ -494,6 +496,13 @@ def test_tab_center_supports_grid_cards_context_actions_and_dragging():
         ".workbench-session-overflow-drag-handle {", 1
     )[1].split("}", 1)[0]
     assert "margin-left: auto" in drag_handle_css
+    overflow_copy_css = css.split(
+        ".workbench-session-overflow-copy {", 1
+    )[1].split("}", 1)[0]
+    assert "min-width: 0" in overflow_copy_css
+    assert "overflow: hidden" in overflow_copy_css
+    assert "flex: 1 1 auto" in overflow_copy_css
+    assert ".workbench-session-overflow-group-items > button > span:last-child" not in css
 
 
 def test_workspace_tab_open_waits_for_its_owner_and_records_the_selected_card():
