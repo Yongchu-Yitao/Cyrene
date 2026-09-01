@@ -699,16 +699,17 @@ class FreeRdpProvider:
             raise RuntimeError("freerdp_sidecar_invalid_result")
         return result
 
-    async def probe(self) -> ProviderDescriptor:
-        system = platform.system().lower()
+    async def _probe_remote_login_service(
+        self, system: str
+    ) -> tuple[str, int, str, list[dict[str, Any]]]:
         diagnostics: list[dict[str, Any]] = []
         rdp_backend = ""
         rdp_port = 0
-        rdp_port_source = ""
         listener_state = "closed"
         targets: list[tuple[str, int, str, str]] = []
+        candidates = _rdp_backend_candidates(system)
         if system in {"windows", "linux"}:
-            if not _rdp_backend_candidates(system):
+            if not candidates:
                 diagnostics.append(
                     {
                         "code": "rdp_service_missing",
@@ -728,7 +729,7 @@ class FreeRdpProvider:
                     "message": "macOS current-desktop control uses ScreenCaptureKit; RDP remote login is unavailable.",
                 }
             )
-        if _rdp_backend_candidates(system):
+        if candidates:
             try:
                 targets = await _probe_rdp_targets(system)
             except ValueError:
@@ -743,7 +744,7 @@ class FreeRdpProvider:
             if selected is None and targets:
                 selected = next((item for item in targets if item[3] == "non_rdp"), targets[0])
             if selected is not None:
-                rdp_backend, rdp_port, rdp_port_source, listener_state = selected
+                rdp_backend, rdp_port, _rdp_port_source, listener_state = selected
             valid_listener_present = any(item[3] == "rdp" for item in targets)
             for backend, port, source, state in targets:
                 diagnostics.append(
@@ -767,6 +768,13 @@ class FreeRdpProvider:
                         ),
                     }
                 )
+        return rdp_backend, rdp_port, listener_state, diagnostics
+
+    async def probe(self) -> ProviderDescriptor:
+        system = platform.system().lower()
+        rdp_backend, rdp_port, listener_state, diagnostics = (
+            await self._probe_remote_login_service(system)
+        )
         command = self._sidecar_command()
         if not command:
             diagnostics.append(

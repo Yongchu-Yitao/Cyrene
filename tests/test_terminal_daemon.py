@@ -378,7 +378,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert "background: var(--wbc-terminal-background);" in terminal_frame
     assert "backdrop-filter: none;" in terminal_frame
     terminal_row = workspace_styles.split(
-        ".wbc-project-terminal-list .wbc-terminal-card {", 1
+        ".wbc-project-resource-list .wbc-project-resource-card {", 1
     )[1].split("}", 1)[0]
     assert "min-height: 36px;" in terminal_row
     assert "padding: 0 6px;" in terminal_row

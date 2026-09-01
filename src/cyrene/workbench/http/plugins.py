@@ -441,16 +441,21 @@ def _seed_value(seed: Any) -> dict[str, Any]:
     }
 
 
-def register_plugin_routes(
+def _register_workbench_entry_routes(
     router: APIRouter,
     host: PluginApplicationHost,
 ) -> None:
-    configure_hook_override_provider(runtime_hook_override)
-    configure_hook_action_provider(runtime_hook_action)
-
     @router.get("/api/plugins")
     async def api_list_plugins():
         return plugin_registry_status(host)
+
+    @router.get("/api/plugins/failures")
+    async def api_plugin_failures():
+        return {"failures": _failure_values(host)}
+
+    @router.get("/api/plugins/directory")
+    async def api_plugin_directory():
+        return _directory_status(host)
 
     @router.put("/api/plugins/workbench-entries/{pack_id}/{entry_id}")
     async def api_update_workbench_entry_visibility(
@@ -493,6 +498,15 @@ def register_plugin_routes(
                 "workbench_entry_visibility_invalid",
             )
         return plugin_registry_status(host)
+
+
+def register_plugin_routes(
+    router: APIRouter,
+    host: PluginApplicationHost,
+) -> None:
+    configure_hook_override_provider(runtime_hook_override)
+    configure_hook_action_provider(runtime_hook_action)
+    _register_workbench_entry_routes(router, host)
 
     @router.get("/api/hooks")
     async def api_list_hooks():
@@ -554,14 +568,6 @@ def register_plugin_routes(
                 },
                 status_code=400,
             )
-
-    @router.get("/api/plugins/failures")
-    async def api_plugin_failures():
-        return {"failures": _failure_values(host)}
-
-    @router.get("/api/plugins/directory")
-    async def api_plugin_directory():
-        return _directory_status(host)
 
     @router.get("/api/plugins/packs/{pack_id}/assets/{asset_path:path}")
     async def api_plugin_frontend_asset(pack_id: str, asset_path: str):

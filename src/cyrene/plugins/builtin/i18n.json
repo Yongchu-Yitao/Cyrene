@@ -323,6 +323,16 @@
         "description": "安全查看和控制已配对 Cyrene 设备的桌面。"
       }
     },
+    "pinned_topbar_context": {
+      "en": {
+        "name": "Pinned topbar context",
+        "description": "Mount the latest globally pinned Workbench resources with every new user turn."
+      },
+      "zh": {
+        "name": "顶部固定资源上下文",
+        "description": "每次用户发送新消息时挂载最新的全局固定资源。"
+      }
+    },
     "cyrene_renderer": {
       "en": {
         "name": "Renderer tools",

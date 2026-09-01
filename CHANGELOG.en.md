@@ -2,6 +2,75 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta5] - 2026-09-01
+
+This release adds cross-device Remote Desktop directly to Workbench and completes a broad pass over conversation recovery, memory learning, model setup, browser actions, tool calls, terminal state, and proactive delivery. Long-running work now keeps a more reliable state through retries, reconnects, model changes, and partial service outages, with clearer feedback the user can act on.
+
+### Remote Desktop and cross-device control
+
+- A built-in Remote Desktop plugin now lists paired Cyrene devices in Project tools and opens a target desktop as a restorable Workspace pane. Device cards show connection state, platform, connection mode, transport, latency, quality, and clipboard availability.
+- Users can view and control the other device's current desktop or, where the platform supports it, start a separate system-login desktop session. Connection-mode and quality preferences are saved per device and can be set before connecting.
+- The remote view supports mouse, keyboard, shortcuts, IME text, wheel, and trackpad input. Windows hosts now use a global input path for more reliable clicks, drags, and keystrokes across complex window layers and high-DPI displays.
+- Auto, Smooth, Balanced, and Clear quality modes are available, with resolution synchronized to the current viewport. Video keeps the correct aspect ratio through resizing, reconnects, and network changes, while a backdrop reduces black bars and visual jumps.
+- Remote sessions support display discovery and switching, remote system audio, local microphone sharing, and sending multiple files or complete folders through the existing encrypted file channel.
+- Connection failures and network changes now show a clear reason and a retry action. A configured relay can be used when a direct connection is unavailable, and reconnect restores the device, display, quality, and Workspace layout.
+- System-login sessions use a separate credential window, and credentials are limited to that connection. The host always shows a persistent sharing indicator and can stop the session at any time.
+- Permissions are granted per paired device and capability; expired or revoked grants stop working. Only one controller can hold a desktop at a time, protected surfaces cannot be inspected by the Agent, and the Agent cannot approve its own control permission.
+- Linux hosts now recognize Wayland environments and explain the available capabilities, while remote login can use the system RDP service. macOS, Windows, and Linux show platform-appropriate permission, component, and connection guidance.
+- With explicit permission, the Agent can list remote sessions and inspect a desktop; user takeover, display selection, connection mode, and security state continue to follow the current user's choices.
+
+### Conversations, retries, and context recovery
+
+- A public Agent reply is considered complete only after the conversation has been saved reliably. Closing the app, interrupting the backend, or reopening a chat resumes from the last fully committed state instead of leaving a visible answer missing from history.
+- Retrying the same message replaces the previous answer branch without appending duplicate messages. A failed retry keeps the old result, and a successful retry switches to the new result in one step.
+- Questions waiting for user input resume at their original position, without repeating completed work or adding an extra turn count.
+- Every run keeps using the exact model the user selected. Recovery, retries, and background context refreshes no longer switch silently to a similarly named or default model.
+- The Context panel retains its visible content and sources while refreshing, avoiding a brief empty state or an older request replacing newer details. Pinned topbar resources remain conversation-scoped and use the latest selection on each turn.
+- Goal milestone cards are now centered in the conversation lane and remain easier to read in narrow windows and split layouts.
+
+### Memory and long-term learning
+
+- Memory, project summaries, and conversation archives learn only from answers that were successfully displayed and saved. Cancelled, failed, or uncommitted content does not become long-term memory.
+- Retrying a turn supersedes that turn's previous project memory, structured memory, and archive evidence, preventing contradictory or duplicate conclusions from remaining durable.
+- Fixed a configuration conflict when memory was enabled again or updated in an existing conversation. Existing trigger settings are updated in place without losing saved memories or configuration.
+- A context learning threshold is marked complete only after learning succeeds. Temporary failures can retry later instead of permanently skipping that stage.
+- Long-term context still prioritizes repeatedly reinforced memories while also sampling a wider range of other memories, reducing repetition of the same small set over time.
+
+### Model selection, configuration, and error messages
+
+- Rapid model switching now accepts only the latest server-confirmed selection, so an older request cannot overwrite a newer choice. Invalid or unknown models are rejected without changing the current working model.
+- New model connections, service addresses, and profile edits remain drafts until explicitly saved. Missing preset values no longer make an untouched page appear to have unsaved changes.
+- Custom OpenAI-compatible models remain selectable without a separate provider label and preserve request token and cache usage during streaming replies.
+- Model failures now use structured, bilingual, actionable cards for missing configuration, authentication, quota, rate limits, unavailable models, excessive context, invalid requests, timeouts, certificates, network connection, unavailable services, and invalid responses.
+- Error cards provide cause-specific guidance without exposing keys, full requests, or other sensitive data. When several fallback attempts fail, Cyrene preserves the most useful underlying cause.
+
+### Browser, search, and content handling
+
+- Browser snapshots and targeting can continue into open component roots and nested pages. Click, type, wait, and scroll actions now try to operate in the correct child page and container.
+- References inside nested pages retain their origin, scrolling chooses the actual scrollable region, and tab listing, creation, switching, and closing are more reliable on complex sites.
+- Trusted clicks recheck target position, movement, and occlusion immediately before pressing, reducing accidental clicks caused by animation or overlays.
+- Concurrent requests to open the Electron main window now share one startup. A superseded navigation is ignored only when its replacement actually succeeds; otherwise the real error remains visible.
+- Failure of the local search service no longer disables attachment analysis, web reading, or tool-result reading. Web search reports its own outage while the other content features continue working.
+- Search temporarily avoids repeatedly unhealthy sources and uses them again after recovery. An ordinary no-results response is not treated as a service failure.
+
+### Tools, plugins, and proactive work
+
+- When a package name uniquely identifies one concrete tool, Cyrene can resolve it automatically and repair common operation-name, wrapper, number, and boolean formatting mistakes. Ambiguous requests still stop for clarification instead of guessing.
+- Tool validation failures, allowed values, and invoked operation names now have complete Chinese and English descriptions in activity traces and error messages.
+- Repeated failures from the same plugin during one run stop further attempts instead of looping indefinitely. The protection survives conversation recovery, while normal outcomes such as empty search results do not trigger it.
+- Updating an existing plugin trigger preserves its binding. If the new setup fails, Cyrene returns to the previous working state instead of deleting the existing trigger.
+- Every proactive run now explicitly chooses either Deliver or Suppress. Ordinary assistant text cannot accidentally create a notification or conversation, and delivery happens only when there is a concrete result.
+- Proactive work records input, output, cache, and total tokens for its latest request, and usage details and notifications link back to the corresponding conversation.
+
+### Terminal, Workspace, and interface details
+
+- Terminal recognizes Codex, Claude Code, Gemini CLI, Kimi, OpenCode, Aider, Qwen, Copilot, Goose, Amp, and MiniMax command-line agents and shows Working, Waiting, Completed, Failed, or Interrupted state.
+- Agent state and unread terminal output are tracked separately. Opening a terminal clears unread output without changing the Agent state, while app or terminal-service restarts preserve the terminal name, directory, scrollback, and latest Agent state.
+- Project Workspace panes, tabs, current selection, and user-adjusted layouts restore more reliably. Agent activity does not replace a pane the user has pinned, edited, or taken over.
+- Recent conversations, Workspace tabs, Remote Desktop cards, and plugin views now share consistent restore and close behavior, reducing duplicate tabs and lost selection after navigation.
+- Plugin Center tool menus render fully above cards instead of being clipped. Spacing, corner radii, and boundary colors are also more consistent across Context, Workspace, goal cards, and compact windows.
+- Routine logs contain far less repetition and redact prompts, messages, attachments, commands, workspace paths, local usernames, and other sensitive values. Important warnings remain available, and a single unusual event cannot grow without limit.
+
 ## [0.9.0-beta4] - 2026-08-31
 
 This release moves project work completely into conversations. It integrates the separate Task product's capabilities into conversations and adds persistent goal loops, an on-demand file workspace, plugin-provided project types, and shared one-click build, test, run, and preview actions. The interface, restoration, terminals, diff review, project settings, and notifications have been unified around that workflow.

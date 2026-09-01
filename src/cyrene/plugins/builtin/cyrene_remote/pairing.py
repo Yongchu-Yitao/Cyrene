@@ -400,11 +400,7 @@ class DirectPairingServer:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         status = 500
-        payload: dict[str, Any] = _pairing_error(
-            "pairing_request_failed",
-            "The pairing request failed.",
-            "配对请求失败。",
-        )
+        payload: dict[str, Any] = _pairing_error("pairing_request_failed", "The pairing request failed.", "配对请求失败。")
         try:
             header = await asyncio.wait_for(
                 reader.readuntil(b"\r\n\r\n"), timeout=5
@@ -621,6 +617,12 @@ class DirectPairingServer:
                 "The pairing request failed.",
                 "配对请求失败。",
             )
+        await self._write_response(writer, status, payload)
+
+    @staticmethod
+    async def _write_response(
+        writer: asyncio.StreamWriter, status: int, payload: dict[str, Any]
+    ) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         reason = {
             200: "OK",

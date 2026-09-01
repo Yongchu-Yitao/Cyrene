@@ -61,7 +61,8 @@ def test_board_rail_open_actions_activate_work_before_opening_content():
     assert "onOpenFile={function (entry) { activateWorkspace(); return openProjectFile(entry); }}" in rail
     assert "onOpenTerminal={function (terminalId, side) { activateWorkspace(); return openTerminal(terminalId, side); }}" in rail
     assert "onCreateTerminal={function () { activateWorkspace(); return createTerminal(); }}" in rail
-    assert 'activateWorkspace();\n          return openPaneContent("plugin-view"' in rail
+    plugin_open = rail.split("onOpenPluginView={function", 1)[1].split("onOpenSplit={function", 1)[0]
+    assert plugin_open.index("activateWorkspace();") < plugin_open.index('openPaneContent("plugin-view"')
     assert 'activateWorkspace();\n          return openPaneContent("chat"' in rail
 
 

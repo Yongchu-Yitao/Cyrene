@@ -1212,7 +1212,6 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
 
     right_panel_styles = styles.split("/* ---- right panel ---- */", 1)[1]
     side_css = right_panel_styles.split(".wbc-side {", 1)[1].split("}", 1)[0]
-    card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
     surface_css = styles.split(".wbc-panel-accordion-surface {", 1)[1].split("}", 1)[0]
     accordion_css = styles.split(".wbc-side-accordion {", 1)[1].split("}", 1)[0]
     side_body_css = styles.split(".wbc-side-body {", 1)[1].split("}", 1)[0]
@@ -1242,7 +1241,6 @@ def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
     dark_page_css = styles.split('html[data-theme="dark"] .wbc-page {', 1)[1].split("}", 1)[0]
     rail_card_css = styles.split(".wbc-rail::before {", 1)[1].split("}", 1)[0]
     pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
-    side_card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
     panel_surface_css = styles.split(".wbc-panel-accordion-surface {", 1)[1].split("}", 1)[0]
     dark_side_card_css = styles.split(
         'html[data-theme="dark"] .wbc-page .wbc-panel-accordion-surface {', 1
@@ -1354,7 +1352,7 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
 
     side = chat.split("function WbcSide(", 1)[1].split("function WbcChangesTab", 1)[0]
     browser = chat.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
-    card_start = side.index('<div className="wbc-side-card">')
+    card_start = side.index('<WbcPanelAccordionSurface className="wbc-side-card">')
     resizer = 'trackGutter: true'
     assert resizer in side
     assert card_start < side.index(resizer)
@@ -2130,7 +2128,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta5">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/cyrene/workbench/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -5237,7 +5235,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta5"></script>' in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -6223,7 +6221,7 @@ def test_unified_search_only_shows_loading_status_while_results_are_pending():
         ") : (", 1
     )[0]
 
-    assert "setGlobalFilesLoading(codeAvailable && Boolean(nextQuery.trim()))" in input_markup
+    assert "setGlobalFilesLoading(fileEntryAvailable && Boolean(nextQuery.trim()))" in input_markup
     assert "{globalFilesLoading ? (" in unified_results
     loading_branch, settled_branch = unified_results.split(") : <>", 1)
     assert 'className="workbench-muted wbc-rail-loading" role="status"' in loading_branch
@@ -8340,7 +8338,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.9.0-beta4" in index
+    assert "workbench.css?v=0.9.0-beta5" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -8383,7 +8381,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta5"></script>' in index
 
 
 def test_desktop_uses_cross_platform_native_directory_picker():
@@ -8846,7 +8844,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta5"></script>' in index
 
 
 def test_workbench_api_timeout_covers_response_body_consumption():
@@ -8913,7 +8911,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert 'requestJson("/api/settings/model-config")' in source
     assert "store.setConfig(snapshot);" in source
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta5"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -9710,8 +9708,9 @@ def test_code_and_terminal_frontend_stop_when_code_plugin_marker_is_absent():
     assert "if (!codeAvailable || !projectId || !isActive) return undefined;" in page
     assert "codeAvailable={codeAvailable}" in page
     assert "if (!codeAvailable || !projectId)" in rail
-    assert '{codeAvailable ? <>' in rail
-    assert '(codeAvailable || projectSectionPluginTools.length) && railMode === "chat" && !collapsed' in rail
+    assert '{fileEntryAvailable ? <>' in rail
+    assert '{terminalEntryAvailable ? <>' in rail
+    assert '(fileEntryAvailable || terminalEntryAvailable || projectSectionPluginTools.length) && railMode === "chat" && !collapsed' in rail
     assert 'var codeAvailable = pluginModules.indexOf("code") >= 0;' in terminal
     assert "if (!codeAvailable || !host || !terminalId) return undefined;" in terminal
     assert "}, [terminalId, codeAvailable]);" in terminal
@@ -10780,7 +10779,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta4">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta5">' in index_html
     entry_html = (root / "src/cyrene/workbench/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html

@@ -1751,8 +1751,6 @@ class TerminalManager:
         return self.state_dir / "scrollback" / terminal_id
 
     def _load_sessions(self) -> None:
-        import json
-
         assert self._db is not None
         for row in self._db.execute("SELECT * FROM terminal_sessions"):
             stored_status = str(row["status"])
@@ -1772,75 +1770,12 @@ class TerminalManager:
             status = stored_status
             if stored_status in {"starting", "running"}:
                 status = "exited"
-            session = TerminalSession(
-                id=str(row["id"]),
-                project_id=str(row["project_id"]),
-                title=str(row["title"]),
-                cwd=str(row["cwd"]),
-                shell=str(row["shell"]),
-                argv=list(json.loads(str(row["argv_json"]))),
-                created_at=str(row["created_at"]),
-                updated_at=str(row["updated_at"]),
+            session = self._session_from_row(
+                row,
                 status=status,
-                exit_code=row["exit_code"],
-                pid=None,
-                cols=int(row["cols"]),
-                rows=int(row["rows"]),
-                next_seq=int(row["next_seq"]),
-                output_start_seq=int(row["output_start_seq"]),
-                order_index=int(row["order_index"]),
-                pinned=bool(row["pinned"]),
-                title_locked=(
-                    bool(row["title_locked"])
-                    or not bool(_DEFAULT_TITLE_RE.fullmatch(str(row["title"] or "").strip()))
-                ),
-                owner_chat_id=str(row["owner_chat_id"] or ""),
-                created_by=str(row["created_by"] or "user"),
-                owner_tool_call_id=str(row["owner_tool_call_id"] or ""),
                 launch_mode=launch_mode,
-                wake_id=str(row["wake_id"] or ""),
-                last_actor=str(row["last_input_actor"] or ""),
-                last_input_at=str(row["last_input_at"] or ""),
-                input_event_count=int(row["input_event_count"] or 0),
                 recovery_pending=recovery_pending,
-                exit_reason=stored_exit_reason,
-                exit_at=str(row["exit_at"] or ""),
-                recovery_reason=str(row["recovery_reason"] or ""),
-                recovered_at=str(row["recovered_at"] or ""),
-                recovery_count=int(row["recovery_count"] or 0),
-                cwd_uri=str(row["cwd_uri"] or ""),
-                shell_title=str(row["shell_title"] or ""),
-                integration_level=str(row["integration_level"] or "none"),
-                command_state=str(row["command_state"] or ""),
-                last_command_exit_code=row["last_command_exit_code"],
-                command_title=str(row["command_title"] or ""),
-                connection_kind=str(row["connection_kind"] or "local"),
-                ssh_target=str(row["ssh_target"] or ""),
-                remote_cwd=str(row["remote_cwd"] or ""),
-                tmux_session=str(row["tmux_session"] or ""),
-                connection_status=str(row["connection_status"] or "local"),
-                disconnect_reason=str(row["disconnect_reason"] or ""),
-                reconnect_attempt=int(row["reconnect_attempt"] or 0),
-                agent_id=str(row["agent_id"] or ""),
-                agent_label=str(row["agent_label"] or ""),
-                agent_state=str(row["agent_state"] or ""),
-                agent_event=str(row["agent_event"] or ""),
-                agent_updated_at=str(row["agent_updated_at"] or ""),
-                agent_active=bool(row["agent_active"]) and not recovery_pending,
-                agent_session_ended_at=(
-                    str(row["agent_session_ended_at"] or "")
-                    or (
-                        self.started_at
-                        if recovery_pending and bool(row["agent_active"])
-                        else ""
-                    )
-                ),
-                unread=bool(row["unread"]),
-                remote_connected=(
-                    str(row["connection_kind"] or "local") == "ssh"
-                    and str(row["connection_status"] or "")
-                    in {"connected", "reconnecting"}
-                ),
+                stored_exit_reason=stored_exit_reason,
             )
             for event_row in self._db.execute(
                 """SELECT event_id, actor, input_kind, byte_count, accepted,
@@ -1863,6 +1798,59 @@ class TerminalManager:
             if status != row["status"] or row["pid"] is not None:
                 self._persist_session(session)
         self._repair_duplicate_titles()
+
+    def _session_from_row(
+        self,
+        row: sqlite3.Row,
+        *,
+        status: str,
+        launch_mode: str,
+        recovery_pending: bool,
+        stored_exit_reason: str,
+    ) -> TerminalSession:
+        return TerminalSession(
+            id=str(row["id"]), project_id=str(row["project_id"]),
+            title=str(row["title"]), cwd=str(row["cwd"]), shell=str(row["shell"]),
+            argv=list(json.loads(str(row["argv_json"]))), created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]), status=status, exit_code=row["exit_code"], pid=None,
+            cols=int(row["cols"]), rows=int(row["rows"]), next_seq=int(row["next_seq"]),
+            output_start_seq=int(row["output_start_seq"]), order_index=int(row["order_index"]),
+            pinned=bool(row["pinned"]),
+            title_locked=bool(row["title_locked"]) or not bool(
+                _DEFAULT_TITLE_RE.fullmatch(str(row["title"] or "").strip())
+            ),
+            owner_chat_id=str(row["owner_chat_id"] or ""),
+            created_by=str(row["created_by"] or "user"),
+            owner_tool_call_id=str(row["owner_tool_call_id"] or ""), launch_mode=launch_mode,
+            wake_id=str(row["wake_id"] or ""), last_actor=str(row["last_input_actor"] or ""),
+            last_input_at=str(row["last_input_at"] or ""),
+            input_event_count=int(row["input_event_count"] or 0),
+            recovery_pending=recovery_pending, exit_reason=stored_exit_reason,
+            exit_at=str(row["exit_at"] or ""), recovery_reason=str(row["recovery_reason"] or ""),
+            recovered_at=str(row["recovered_at"] or ""),
+            recovery_count=int(row["recovery_count"] or 0), cwd_uri=str(row["cwd_uri"] or ""),
+            shell_title=str(row["shell_title"] or ""),
+            integration_level=str(row["integration_level"] or "none"),
+            command_state=str(row["command_state"] or ""),
+            last_command_exit_code=row["last_command_exit_code"],
+            command_title=str(row["command_title"] or ""),
+            connection_kind=str(row["connection_kind"] or "local"),
+            ssh_target=str(row["ssh_target"] or ""), remote_cwd=str(row["remote_cwd"] or ""),
+            tmux_session=str(row["tmux_session"] or ""),
+            connection_status=str(row["connection_status"] or "local"),
+            disconnect_reason=str(row["disconnect_reason"] or ""),
+            reconnect_attempt=int(row["reconnect_attempt"] or 0),
+            agent_id=str(row["agent_id"] or ""), agent_label=str(row["agent_label"] or ""),
+            agent_state=str(row["agent_state"] or ""), agent_event=str(row["agent_event"] or ""),
+            agent_updated_at=str(row["agent_updated_at"] or ""),
+            agent_active=bool(row["agent_active"]) and not recovery_pending,
+            agent_session_ended_at=str(row["agent_session_ended_at"] or "") or (
+                self.started_at if recovery_pending and bool(row["agent_active"]) else ""
+            ),
+            unread=bool(row["unread"]),
+            remote_connected=str(row["connection_kind"] or "local") == "ssh"
+            and str(row["connection_status"] or "") in {"connected", "reconnecting"},
+        )
 
     @staticmethod
     def _title_key(title: str) -> str:
@@ -2461,8 +2449,7 @@ class TerminalManager:
                 inherited_cwd = active.cwd if active is not None else ""
                 resolved_cwd = self._resolve_cwd(project_id, inherited_cwd)
             project_sessions = [
-                current for current in self._sessions.values()
-                if current.project_id == project_id
+                current for current in self._sessions.values() if current.project_id == project_id
             ]
             requested_title = str(title or "").strip()[:60]
             if requested_title and any(
