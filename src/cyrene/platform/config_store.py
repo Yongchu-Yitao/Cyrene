@@ -71,6 +71,10 @@ _DEFAULT_SETTINGS: dict = {
     # subsequently saved empty graph remains empty.
     "enabled_plugins": _DEFAULT_ENABLED_PLUGINS,
     "enabled_plugin_packs": {},
+    # Per-entry Workbench visibility overrides.  Entries are visible by
+    # default; Plugin packs own the declarations and this map only records the
+    # user's explicit choice.
+    "workbench_entry_visibility": {},
     "plugin_tool_customizations": {},
     "app_language": "",
     "timezone": "Asia/Shanghai",

@@ -3,11 +3,11 @@
   const bridge = window.cyreneCredentialDialog;
   const catalogs = {
     en: {
-      title: 'Remote Desktop sign in', subtitle: 'Credentials are used once for this encrypted RDP session and are not saved.',
+      title: 'Remote Desktop sign in', subtitle: 'Use the credentials configured under Remote Login on the controlled device. They are used once and are not saved.',
       username: 'Username', domain: 'Domain (optional)', password: 'Password', cancel: 'Cancel', connect: 'Connect',
     },
     zh: {
-      title: '远程桌面登录', subtitle: '凭据只用于本次加密 RDP 会话，不会保存。',
+      title: '远程桌面登录', subtitle: '请输入被控端“远程登录”中配置的凭据；仅用于本次连接，不会保存。',
       username: '用户名', domain: '域（可选）', password: '密码', cancel: '取消', connect: '连接',
     },
   };
@@ -26,7 +26,17 @@
     document.getElementById('submit').textContent = messages.connect;
     document.getElementById('username').focus();
   });
-  document.getElementById('cancel').addEventListener('click', function () { bridge.cancel(); });
+  function cancel() {
+    const button = document.getElementById('cancel');
+    button.disabled = true;
+    bridge.cancel().catch(function () { button.disabled = false; });
+  }
+  document.getElementById('cancel').addEventListener('click', cancel);
+  window.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    cancel();
+  });
   document.getElementById('form').addEventListener('submit', function (event) {
     event.preventDefault();
     bridge.submit({

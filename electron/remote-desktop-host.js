@@ -11,6 +11,7 @@
   let permissions = {};
   let microphoneEnabled = false;
   let viewportConstraints = null;
+  let nativeSurface = null;
 
   const qualityConstraints = {
     auto: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 45, max: 60 } },
@@ -19,14 +20,26 @@
     clear: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30, max: 30 } },
   };
 
+  const transmissionProfiles = {
+    smooth: { maxBitrate: 10_000_000, maxFramerate: 45 },
+    balanced: { maxBitrate: 22_000_000, maxFramerate: 30 },
+    clear: { maxBitrate: 42_000_000, maxFramerate: 30 },
+    auto: { maxBitrate: 18_000_000, maxFramerate: 30 },
+  };
+
   function currentVideoConstraints() {
     const quality = qualityConstraints[qualityMode] || qualityConstraints.auto;
-    if (!viewportConstraints) return quality;
-    return {
+    const supported = navigator.mediaDevices.getSupportedConstraints();
+    const constraints = viewportConstraints ? {
       width: { ideal: viewportConstraints.width },
       height: { ideal: viewportConstraints.height },
       frameRate: quality.frameRate,
-    };
+    } : { ...quality };
+    // The controller uses its native OS pointer. Excluding the controlled
+    // machine's cursor from the capture prevents two cursors from appearing
+    // while pointer coordinates continue to map to the remote display.
+    if (supported.cursor === true) constraints.cursor = 'never';
+    return constraints;
   }
 
   function waitForIceGathering(pc, timeoutMs) {
@@ -67,7 +80,92 @@
     };
   }
 
-  async function capture() {
+  async function configureVideoSender() {
+    if (!peer) return;
+    const sender = peer.getSenders().find(function (candidate) {
+      return candidate.track && candidate.track.kind === 'video';
+    });
+    if (!sender) return;
+    const profile = transmissionProfiles[qualityMode] || transmissionProfiles.auto;
+    const parameters = sender.getParameters();
+    if (!Array.isArray(parameters.encodings) || !parameters.encodings.length) return;
+    parameters.encodings[0].maxBitrate = profile.maxBitrate;
+    parameters.encodings[0].maxFramerate = profile.maxFramerate;
+    parameters.degradationPreference = 'maintain-resolution';
+    await sender.setParameters(parameters).catch(function () {});
+  }
+
+  function releaseNativeSurface() {
+    if (!nativeSurface) return;
+    if (nativeSurface.animationFrame) cancelAnimationFrame(nativeSurface.animationFrame);
+    nativeSurface.image.src = '';
+    nativeSurface.image.remove();
+    nativeSurface.canvas.remove();
+    nativeSurface = null;
+  }
+
+  async function nativeVideoStream(config) {
+    releaseNativeSurface();
+    const image = document.createElement('img');
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) throw new Error('desktop_native_capture_canvas_unavailable');
+    image.crossOrigin = 'anonymous';
+    image.style.display = 'none';
+    canvas.style.display = 'none';
+    canvas.width = Math.max(1, Number(config.width || 1920));
+    canvas.height = Math.max(1, Number(config.height || 1080));
+    document.body.appendChild(image);
+    document.body.appendChild(canvas);
+    await new Promise(function (resolve, reject) {
+      const timeout = window.setTimeout(function () {
+        reject(new Error('desktop_native_capture_image_timeout'));
+      }, 8000);
+      image.onload = function () {
+        window.clearTimeout(timeout);
+        resolve();
+      };
+      image.onerror = function () {
+        window.clearTimeout(timeout);
+        reject(new Error('desktop_native_capture_image_failed'));
+      };
+      image.src = String(config.url || '');
+    });
+    const surface = { image: image, canvas: canvas, animationFrame: 0 };
+    const draw = function () {
+      try { context.drawImage(image, 0, 0, canvas.width, canvas.height); } catch (_) {}
+      surface.animationFrame = requestAnimationFrame(draw);
+    };
+    draw();
+    nativeSurface = surface;
+    const captured = canvas.captureStream(Math.max(1, Number(config.frame_rate || 30)));
+    const videoTrack = captured.getVideoTracks()[0];
+    if (videoTrack) videoTrack.contentHint = 'detail';
+    return captured;
+  }
+
+  async function captureSystemAudio() {
+    if (permissions.system_audio !== true) return null;
+    try {
+      const audioCapture = await navigator.mediaDevices.getDisplayMedia({
+        video: currentVideoConstraints(),
+        audio: true,
+        systemAudio: 'include',
+      });
+      audioCapture.getVideoTracks().forEach(function (track) { track.stop(); });
+      return audioCapture.getAudioTracks()[0] || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function capture(nativeCapture) {
+    if (nativeCapture && nativeCapture.url) {
+      const next = await nativeVideoStream(nativeCapture);
+      const audio = await captureSystemAudio();
+      if (audio) next.addTrack(audio);
+      return next;
+    }
     const options = {
       video: currentVideoConstraints(),
       audio: permissions.system_audio === true,
@@ -93,8 +191,8 @@
     return next;
   }
 
-  async function replaceCapture() {
-    const next = await capture();
+  async function replaceCapture(nativeCapture) {
+    const next = await capture(nativeCapture);
     const nextVideo = next.getVideoTracks()[0];
     const nextAudio = next.getAudioTracks()[0] || null;
     const videoSender = peer.getSenders().find(function (sender) { return sender.track && sender.track.kind === 'video'; });
@@ -109,6 +207,7 @@
     }
     if (stream) stream.getTracks().forEach(function (track) { track.stop(); });
     stream = next;
+    await configureVideoSender();
   }
 
   async function start(payload) {
@@ -131,8 +230,9 @@
       selectSink.then(function () { return audio.play(); }).catch(function () {});
     };
     await peer.setRemoteDescription(payload.offer);
-    stream = await capture();
+    stream = await capture(payload.native_capture);
     stream.getTracks().forEach(function (track) { peer.addTrack(track, stream); });
+    await configureVideoSender();
     peer.getTransceivers().forEach(function (transceiver) {
       if (!transceiver.receiver || !transceiver.receiver.track || transceiver.receiver.track.kind !== 'audio') return;
       const sendsAudio = Boolean(transceiver.sender && transceiver.sender.track && transceiver.sender.track.kind === 'audio');
@@ -142,6 +242,7 @@
     });
     const answer = await peer.createAnswer();
     await peer.setLocalDescription(answer);
+    await configureVideoSender();
     await waitForIceGathering(peer, 8000);
     const settings = stream.getVideoTracks()[0].getSettings();
     host.answer({
@@ -169,13 +270,14 @@
     const operation = String(command.operation || '');
     if (operation === 'disconnect') {
       if (stream) stream.getTracks().forEach(function (track) { track.stop(); });
+      releaseNativeSurface();
       if (peer) peer.close();
       stream = null;
       peer = null;
       return;
     }
     if (operation === 'select_display') {
-      replaceCapture().then(function () {
+      replaceCapture(command.native_capture).then(function () {
         host.state({ session_id: sessionId, display_id: String(command.display_id || '') });
       }).catch(function (error) {
         host.state({ session_id: sessionId, error: String(error && error.message || error) });
@@ -184,8 +286,15 @@
     }
     if (operation === 'set_quality') {
       qualityMode = String(command.quality_mode || 'auto');
+      if (command.native_capture) {
+        replaceCapture(command.native_capture).catch(function (error) {
+          host.state({ session_id: sessionId, error: String(error && error.message || error) });
+        });
+        return;
+      }
       const track = stream && stream.getVideoTracks()[0];
       if (track) track.applyConstraints(currentVideoConstraints()).catch(function () {});
+      configureVideoSender();
       return;
     }
     if (operation === 'set_viewport') {
@@ -194,6 +303,12 @@
         width: Math.max(320, Math.min(3840, Math.round(Number(command.width || 1) * ratio))),
         height: Math.max(240, Math.min(2160, Math.round(Number(command.height || 1) * ratio))),
       };
+      if (command.native_capture) {
+        replaceCapture(command.native_capture).catch(function (error) {
+          host.state({ session_id: sessionId, error: String(error && error.message || error) });
+        });
+        return;
+      }
       const track = stream && stream.getVideoTracks()[0];
       if (track) track.applyConstraints(currentVideoConstraints()).catch(function () {});
       return;

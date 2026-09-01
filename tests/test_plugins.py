@@ -275,6 +275,56 @@ def test_bad_user_pack_isolated_as_load_failure(tmp_path):
     assert registry.list_packs() == ()
 
 
+def test_system_exit_during_plugin_import_isolated_as_load_failure(tmp_path):
+    root = tmp_path / "plugin_impl"
+    root.mkdir()
+    (root / "a_exit.py").write_text(
+        "raise SystemExit('import exited')\n",
+        encoding="utf-8",
+    )
+    (root / "b_healthy.py").write_text(
+        """\
+from cyrene.core.plugin import Plugin
+plugin = Plugin(
+    name="HealthyAfterExit",
+    description="healthy",
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda _arguments, _context: "ok",
+)
+""",
+        encoding="utf-8",
+    )
+    registry = PluginRegistry(include_core=False)
+
+    failures = registry.load_directory(root)
+
+    assert [(failure.path.name, failure.error) for failure in failures] == [
+        ("a_exit.py", "import exited")
+    ]
+    assert registry.resolve("HealthyAfterExit").name == "HealthyAfterExit"
+
+
+def test_system_exit_from_plugin_handler_returns_scoped_failure():
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            "ExitTool",
+            "exit tool",
+            {"type": "object", "properties": {}},
+            lambda _arguments, _context: (_ for _ in ()).throw(
+                SystemExit("handler exited")
+            ),
+        ),
+        source="test",
+    )
+
+    result = run(PluginRuntime(registry).call("ExitTool", {}))
+
+    assert result.success is False
+    assert result.failure is not None
+    assert result.failure.error_code == "plugin_execution_failed"
+
+
 def test_reload_failure_quarantines_stale_session_registry_until_it_refreshes(
     tmp_path,
 ):

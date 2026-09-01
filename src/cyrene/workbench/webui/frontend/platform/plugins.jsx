@@ -14,6 +14,7 @@ function emptyPluginSnapshot() {
     standalonePlugins: [],
     frontendViews: [],
     projectTools: [],
+    workbenchEntries: [],
     workbenchSurfaces: [],
     workspaceFileTypes: [],
     workspaceActions: [],
@@ -38,6 +39,7 @@ function normalizePluginSnapshot(payload, pending) {
     standalonePlugins: Array.isArray(payload.standalone_plugins) ? payload.standalone_plugins : [],
     frontendViews: Array.isArray(payload.frontend_views) ? payload.frontend_views : [],
     projectTools: Array.isArray(payload.project_tools) ? payload.project_tools : [],
+    workbenchEntries: Array.isArray(payload.workbench_entries) ? payload.workbench_entries : [],
     workbenchSurfaces: Array.isArray(payload.workbench_surfaces) ? payload.workbench_surfaces : [],
     workspaceFileTypes: Array.isArray(payload.workspace_file_types) ? payload.workspace_file_types : [],
     workspaceActions: Array.isArray(payload.workspace_actions) ? payload.workspace_actions : [],
@@ -94,6 +96,35 @@ function pluginSnapshotActionsFor(snapshot, resource) {
     return (!!fileTypeId && fileTypes.indexOf(fileTypeId) >= 0)
       || extensions.some(function (extension) { return path.endsWith(String(extension || "").toLowerCase()) })
   })
+}
+
+function requestWorkbenchEntryVisibility(packId, entryId, visible) {
+  var api = workbenchServices.api()
+  var path = "/api/plugins/workbench-entries/"
+    + encodeURIComponent(String(packId || "")) + "/"
+    + encodeURIComponent(String(entryId || ""))
+  return api.json(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visible: visible === true }),
+    toast: false,
+  })
+}
+
+function callPluginFrontend(packId, method, args, projectId) {
+  return workbenchServices.api().json(
+    "/api/plugins/packs/" + encodeURIComponent(String(packId || "")) + "/call",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        method: String(method || ""),
+        args: args == null ? {} : args,
+        project_id: String(projectId || ""),
+      }),
+      toast: false,
+    }
+  ).then(function (response) { return response && response.result })
 }
 
 var PluginFrontendService = (function () {
@@ -169,21 +200,14 @@ var PluginFrontendService = (function () {
     })
   }
 
+  function setWorkbenchEntryVisible(packId, entryId, visible) {
+    return requestWorkbenchEntryVisibility(packId, entryId, visible).then(function (response) {
+      return commit(normalizePluginSnapshot(response, "workbench-entry-visibility"))
+    })
+  }
+
   function call(packId, method, args, projectId) {
-    var api = workbenchServices.api()
-    return api.json(
-      "/api/plugins/packs/" + encodeURIComponent(String(packId || "")) + "/call",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          method: String(method || ""),
-          args: args == null ? {} : args,
-          project_id: String(projectId || ""),
-        }),
-        toast: false,
-      }
-    ).then(function (response) { return response && response.result })
+    return callPluginFrontend(packId, method, args, projectId)
   }
 
   function subscribe(listener) {
@@ -201,6 +225,7 @@ var PluginFrontendService = (function () {
     reload: reload,
     updateTool: function (canonicalId, payload) { return mutateTool(canonicalId, payload, false) },
     deleteTool: function (canonicalId) { return mutateTool(canonicalId, null, true) },
+    setWorkbenchEntryVisible: setWorkbenchEntryVisible,
     snapshot: snapshot,
     subscribe: subscribe,
     surface: function (surfaceId) { return pluginSnapshotSurface(state, surfaceId) },
@@ -281,17 +306,24 @@ function PluginView(props) {
           if (hostCapabilities.indexOf("clipboard_text") < 0) throw new Error("Plugin host capability denied.")
           if (hostMethod === "clipboard.readText") {
             if (!window.cyrene || typeof window.cyrene.readClipboardText !== "function") throw new Error("Clipboard host unavailable.")
-            hostResult = String(window.cyrene.readClipboardText() || "").slice(0, 1024 * 1024)
+            hostResult = window.cyrene.readClipboardText()
           } else if (hostMethod === "clipboard.writeText") {
             if (!window.cyrene || typeof window.cyrene.writeClipboardText !== "function") throw new Error("Clipboard host unavailable.")
             hostResult = window.cyrene.writeClipboardText(String(message.args && message.args.text || "").slice(0, 1024 * 1024))
           } else {
             throw new Error("Plugin host method is not supported.")
           }
-          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: true, result: hostResult })
         } catch (error) {
           post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: false, error: String(error && error.message || error) })
+          return
         }
+        Promise.resolve(hostResult).then(function (value) {
+          var result = hostMethod === "clipboard.readText"
+            ? String(value || "").slice(0, 1024 * 1024) : value
+          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: true, result: result })
+        }).catch(function (error) {
+          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: false, error: String(error && error.message || error) })
+        })
         return
       }
       if (message.type !== "call") return
@@ -316,7 +348,15 @@ function PluginView(props) {
       ).then(function (response) {
         post({ source: "cyrene-host", type: "response", requestId: requestId, ok: true, result: response && response.result })
       }).catch(function (error) {
-        post({ source: "cyrene-host", type: "response", requestId: requestId, ok: false, error: workbenchServices.api().errorText(error) })
+        post({
+          source: "cyrene-host",
+          type: "response",
+          requestId: requestId,
+          ok: false,
+          error: workbenchServices.api().errorText(error),
+          code: String(error && error.code || ""),
+          status: Number(error && error.status || 0),
+        })
       })
     }
     window.addEventListener("message", onMessage)

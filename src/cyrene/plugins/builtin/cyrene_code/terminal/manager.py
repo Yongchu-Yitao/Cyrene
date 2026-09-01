@@ -31,7 +31,12 @@ import pyte
 
 from cyrene.localization import localized
 
-from .agent_status import adapter_by_id, normalize_agent_event
+from .agent_status import (
+    adapter_by_id,
+    adapter_for_command,
+    command_title,
+    normalize_agent_event,
+)
 from .history import IncrementalPlainTextParser, osc133_commands, plain_terminal_text
 from .remote import build_managed_ssh_launch
 from .shell_integration import OscMetadataParser, prepare_shell_integration
@@ -224,11 +229,11 @@ _SESSION_UPSERT_SQL = """
     INSERT INTO terminal_sessions (
         id, project_id, title, cwd, shell, argv_json, created_at,
         updated_at, status, exit_code, pid, cols, rows, next_seq,
-        output_start_seq, order_index, pinned,
+        output_start_seq, order_index, pinned, title_locked,
         owner_chat_id, created_by, owner_tool_call_id, launch_mode, wake_id,
         last_input_actor, last_input_at, input_event_count,
         exit_reason, exit_at, recovery_reason, recovered_at, recovery_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
         project_id=excluded.project_id, title=excluded.title,
         cwd=excluded.cwd, shell=excluded.shell, argv_json=excluded.argv_json,
@@ -237,6 +242,7 @@ _SESSION_UPSERT_SQL = """
         rows=excluded.rows, next_seq=excluded.next_seq,
         output_start_seq=excluded.output_start_seq,
         order_index=excluded.order_index, pinned=excluded.pinned,
+        title_locked=excluded.title_locked,
         owner_chat_id=excluded.owner_chat_id, created_by=excluded.created_by,
         owner_tool_call_id=excluded.owner_tool_call_id,
         launch_mode=excluded.launch_mode, wake_id=excluded.wake_id,
@@ -255,8 +261,9 @@ _SESSION_METADATA_SQL = """
            command_state = ?, last_command_exit_code = ?,
            connection_kind = ?, ssh_target = ?, remote_cwd = ?,
            tmux_session = ?, connection_status = ?, disconnect_reason = ?,
-           reconnect_attempt = ?, agent_id = ?, agent_label = ?,
-           agent_state = ?, agent_event = ?, agent_updated_at = ?, unread = ?
+           reconnect_attempt = ?, command_title = ?, agent_id = ?, agent_label = ?,
+           agent_state = ?, agent_event = ?, agent_updated_at = ?,
+           agent_active = ?, agent_session_ended_at = ?, unread = ?
      WHERE id = ?
 """
 
@@ -1430,6 +1437,7 @@ class TerminalSession:
     output_start_seq: int = 0
     order_index: int = 0
     pinned: bool = False
+    title_locked: bool = False
     owner_chat_id: str = ""
     created_by: str = "user"
     owner_tool_call_id: str = ""
@@ -1461,6 +1469,8 @@ class TerminalSession:
     integration_level: str = "none"
     command_state: str = ""
     last_command_exit_code: int | None = None
+    command_title: str = ""
+    command_capture_start_seq: int | None = None
     connection_kind: str = "local"
     ssh_target: str = ""
     remote_cwd: str = ""
@@ -1490,15 +1500,29 @@ class TerminalSession:
     agent_state: str = ""
     agent_event: str = ""
     agent_updated_at: str = ""
+    agent_active: bool = False
+    agent_session_ended_at: str = ""
+    agent_command_start_seq: int | None = None
     unread: bool = False
 
     def public(self) -> dict[str, Any]:
         oldest_seq = self.output_start_seq
-        display_title = (
-            self.shell_title
-            if self.shell_title and _DEFAULT_TITLE_RE.fullmatch(self.title.strip())
-            else self.title
-        )
+        shell_title = self.shell_title.strip()
+        cwd_values = {
+            str(self.cwd or "").strip(), str(self.remote_cwd or "").strip()
+        }
+        fallback_cwd = str(self.remote_cwd or self.cwd or "").rstrip("/\\")
+        cwd_title = fallback_cwd.replace("\\", "/").rsplit("/", 1)[-1]
+        display_title = self.title
+        if not self.title_locked:
+            if self.agent_active and self.agent_label:
+                display_title = self.agent_label
+            elif self.command_title:
+                display_title = self.command_title
+            elif shell_title and shell_title not in cwd_values:
+                display_title = shell_title
+            elif cwd_title:
+                display_title = cwd_title
         agent = None
         if self.agent_id:
             agent = {
@@ -1507,11 +1531,14 @@ class TerminalSession:
                 "state": self.agent_state or "idle",
                 "event": self.agent_event,
                 "updatedAt": self.agent_updated_at,
+                "active": self.agent_active,
+                "sessionEndedAt": self.agent_session_ended_at,
             }
         return {
             "id": self.id,
             "projectId": self.project_id,
             "title": self.title,
+            "titleLocked": self.title_locked,
             "displayTitle": display_title,
             "cwd": self.cwd,
             "cwdUri": self.cwd_uri,
@@ -1519,6 +1546,7 @@ class TerminalSession:
             "integrationLevel": self.integration_level,
             "commandState": self.command_state,
             "lastCommandExitCode": self.last_command_exit_code,
+            "commandTitle": self.command_title,
             "connectionKind": self.connection_kind,
             "sshTarget": self.ssh_target,
             "remoteCwd": self.remote_cwd,
@@ -1558,6 +1586,8 @@ class TerminalSession:
             "agentState": self.agent_state,
             "agentEvent": self.agent_event,
             "agentUpdatedAt": self.agent_updated_at,
+            "agentActive": self.agent_active,
+            "agentSessionEndedAt": self.agent_session_ended_at,
             "unread": self.unread,
         }
 
@@ -1646,6 +1676,9 @@ class TerminalManager:
             self._db.execute("DELETE FROM terminal_commands")
             self._db.execute("DELETE FROM terminal_index_state")
         self._ensure_column("terminal_sessions", "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(
+            "terminal_sessions", "title_locked", "INTEGER NOT NULL DEFAULT 0"
+        )
         self._ensure_column("terminal_sessions", "created_by", "TEXT NOT NULL DEFAULT 'user'")
         self._ensure_column("terminal_sessions", "owner_tool_call_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("terminal_sessions", "launch_mode", "TEXT NOT NULL DEFAULT 'interactive'")
@@ -1665,6 +1698,9 @@ class TerminalManager:
         )
         self._ensure_column("terminal_sessions", "command_state", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("terminal_sessions", "last_command_exit_code", "INTEGER")
+        self._ensure_column(
+            "terminal_sessions", "command_title", "TEXT NOT NULL DEFAULT ''"
+        )
         self._ensure_column(
             "terminal_sessions", "connection_kind", "TEXT NOT NULL DEFAULT 'local'"
         )
@@ -1686,6 +1722,12 @@ class TerminalManager:
         self._ensure_column("terminal_sessions", "agent_event", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(
             "terminal_sessions", "agent_updated_at", "TEXT NOT NULL DEFAULT ''"
+        )
+        self._ensure_column(
+            "terminal_sessions", "agent_active", "INTEGER NOT NULL DEFAULT 0"
+        )
+        self._ensure_column(
+            "terminal_sessions", "agent_session_ended_at", "TEXT NOT NULL DEFAULT ''"
         )
         self._ensure_column("terminal_sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
         self._db.commit()
@@ -1748,6 +1790,10 @@ class TerminalManager:
                 output_start_seq=int(row["output_start_seq"]),
                 order_index=int(row["order_index"]),
                 pinned=bool(row["pinned"]),
+                title_locked=(
+                    bool(row["title_locked"])
+                    or not bool(_DEFAULT_TITLE_RE.fullmatch(str(row["title"] or "").strip()))
+                ),
                 owner_chat_id=str(row["owner_chat_id"] or ""),
                 created_by=str(row["created_by"] or "user"),
                 owner_tool_call_id=str(row["owner_tool_call_id"] or ""),
@@ -1767,6 +1813,7 @@ class TerminalManager:
                 integration_level=str(row["integration_level"] or "none"),
                 command_state=str(row["command_state"] or ""),
                 last_command_exit_code=row["last_command_exit_code"],
+                command_title=str(row["command_title"] or ""),
                 connection_kind=str(row["connection_kind"] or "local"),
                 ssh_target=str(row["ssh_target"] or ""),
                 remote_cwd=str(row["remote_cwd"] or ""),
@@ -1779,6 +1826,15 @@ class TerminalManager:
                 agent_state=str(row["agent_state"] or ""),
                 agent_event=str(row["agent_event"] or ""),
                 agent_updated_at=str(row["agent_updated_at"] or ""),
+                agent_active=bool(row["agent_active"]) and not recovery_pending,
+                agent_session_ended_at=(
+                    str(row["agent_session_ended_at"] or "")
+                    or (
+                        self.started_at
+                        if recovery_pending and bool(row["agent_active"])
+                        else ""
+                    )
+                ),
                 unread=bool(row["unread"]),
                 remote_connected=(
                     str(row["connection_kind"] or "local") == "ssh"
@@ -1941,6 +1997,7 @@ class TerminalManager:
             session.updated_at, session.status, session.exit_code, session.pid,
             session.cols, session.rows, session.next_seq,
             session.output_start_seq, session.order_index, int(session.pinned),
+            int(session.title_locked),
             session.owner_chat_id, session.created_by, session.owner_tool_call_id,
             session.launch_mode, session.wake_id,
             session.last_actor, session.last_input_at, session.input_event_count,
@@ -1963,11 +2020,14 @@ class TerminalManager:
             session.connection_status,
             session.disconnect_reason,
             session.reconnect_attempt,
+            session.command_title,
             session.agent_id,
             session.agent_label,
             session.agent_state,
             session.agent_event,
             session.agent_updated_at,
+            int(session.agent_active),
+            session.agent_session_ended_at,
             int(session.unread),
             session.id,
         )
@@ -2427,6 +2487,7 @@ class TerminalManager:
                 cols=max(20, min(400, int(cols or 100))),
                 rows=max(5, min(200, int(rows or 30))),
                 order_index=next_order_index,
+                title_locked=bool(requested_title),
                 owner_chat_id=str(owner_chat_id or "").strip(),
                 created_by=str(created_by or "user").strip() or "user",
                 owner_tool_call_id=str(owner_tool_call_id or "").strip(),
@@ -2528,10 +2589,13 @@ class TerminalManager:
                 for metadata in session.osc_parser.feed(
                     data, start_seq=session.next_seq - len(data)
                 ):
-                    changed = self._apply_osc_metadata(session, metadata) or changed
+                    changed = self._apply_terminal_metadata(session, metadata) or changed
                 if changed:
                     self._persist_session(session)
                     self._publish_state(session, reason="metadata")
+                    self._publish_list_change(
+                        session.project_id, "metadata", session.id
+                    )
             self._persistence_writer.submit_screen(
                 session.id, data, cols=session.cols, rows=session.rows,
                 start_seq=session.next_seq - len(data), next_seq=session.next_seq,
@@ -2563,11 +2627,12 @@ class TerminalManager:
             return
         changed = False
         for metadata in metadata_events:
-            changed = self._apply_osc_metadata(session, metadata) or changed
+            changed = self._apply_terminal_metadata(session, metadata) or changed
         if changed:
             session.updated_at = _now_iso()
             self._persist_session(session)
             self._publish_state(session, reason="metadata")
+            self._publish_list_change(session.project_id, "metadata", session.id)
 
     def _drain_screen_now(self, session: TerminalSession) -> None:
         if self._persistence_writer is not None:
@@ -3453,11 +3518,16 @@ class TerminalManager:
         else:
             session.exit_reason = "process_exit"
         session.updated_at = now
+        if session.agent_active:
+            session.agent_active = False
+            session.agent_session_ended_at = now
+            session.agent_command_start_seq = None
         if session.agent_id and session.agent_state in {"working", "waiting", "idle"}:
             self._set_agent_state(
                 session,
                 state=("completed" if exit_code == 0 else "failed"),
                 event="terminal_exited",
+                active=False,
             )
         session.connection_event.set()
         self._persist_session(session)
@@ -3575,7 +3645,7 @@ class TerminalManager:
         if self._persistence_writer is None:
             for metadata in session.osc_parser.feed(data, start_seq=start):
                 metadata_changed = (
-                    self._apply_osc_metadata(session, metadata) or metadata_changed
+                    self._apply_terminal_metadata(session, metadata) or metadata_changed
                 )
         event = {
             "type": "output",
@@ -3587,6 +3657,7 @@ class TerminalManager:
         self._publish(session, event)
         if metadata_changed:
             self._publish_state(session, reason="metadata")
+            self._publish_list_change(session.project_id, "metadata", session.id)
         self._queue_screen_data(session, data)
 
     @staticmethod
@@ -3690,6 +3761,77 @@ class TerminalManager:
                 changed = True
         return changed
 
+    @staticmethod
+    def _recent_output_bytes(
+        session: TerminalSession, start_seq: int, end_seq: int,
+    ) -> bytes:
+        parts: list[bytes] = []
+        for chunk in session.output:
+            if chunk.end <= start_seq or chunk.start >= end_seq:
+                continue
+            left = max(start_seq, chunk.start) - chunk.start
+            right = min(end_seq, chunk.end) - chunk.start
+            parts.append(chunk.data[left:right])
+        return b"".join(parts)
+
+    def _apply_terminal_metadata(
+        self, session: TerminalSession, metadata: dict[str, Any],
+    ) -> bool:
+        """Apply OSC state plus live command and CLI-agent identity metadata."""
+        changed = self._apply_osc_metadata(session, metadata)
+        kind = str(metadata.get("kind") or "")
+        if kind == "command":
+            session.command_capture_start_seq = int(metadata.get("endSeq") or 0)
+            return changed
+        if kind == "output" and session.command_capture_start_seq is not None:
+            command_start = session.command_capture_start_seq
+            command_end = int(metadata.get("startSeq") or command_start)
+            raw = self._recent_output_bytes(session, command_start, command_end)
+            command = plain_terminal_text(raw).strip()
+            session.command_capture_start_seq = None
+            next_title = command_title(command)
+            if next_title and next_title != session.command_title:
+                session.command_title = next_title
+                changed = True
+            adapter = adapter_for_command(command)
+            if adapter is not None:
+                now = _now_iso()
+                before = (
+                    session.agent_id, session.agent_label, session.agent_state,
+                    session.agent_event, session.agent_active,
+                    session.agent_session_ended_at,
+                )
+                session.agent_id = adapter.id
+                session.agent_label = adapter.label
+                session.agent_state = "working"
+                session.agent_event = "command_started"
+                session.agent_active = True
+                session.agent_updated_at = now
+                session.agent_session_ended_at = ""
+                session.agent_command_start_seq = int(metadata.get("endSeq") or 0)
+                changed = changed or before != (
+                    session.agent_id, session.agent_label, session.agent_state,
+                    session.agent_event, session.agent_active,
+                    session.agent_session_ended_at,
+                )
+            return changed
+        if kind == "finished" and session.agent_command_start_seq is not None:
+            exit_code = metadata.get("exitCode")
+            now = _now_iso()
+            if exit_code == 0:
+                session.agent_state = "completed"
+            elif exit_code in {130, 143}:
+                session.agent_state = "interrupted"
+            else:
+                session.agent_state = "failed"
+            session.agent_event = "command_exited"
+            session.agent_updated_at = now
+            session.agent_active = False
+            session.agent_session_ended_at = now
+            session.agent_command_start_seq = None
+            return True
+        return changed
+
     def _publish_state(self, session: TerminalSession, *, reason: str = "") -> None:
         event = {"type": "state", "terminal": session.public()}
         if reason:
@@ -3730,13 +3872,24 @@ class TerminalManager:
         *,
         state: str,
         event: str,
+        active: bool | None = None,
     ) -> None:
-        changed = session.agent_state != state or session.agent_event != event
+        next_active = session.agent_active if active is None else bool(active)
+        changed = (
+            session.agent_state != state
+            or session.agent_event != event
+            or session.agent_active != next_active
+        )
         if not changed:
             return
         session.agent_state = state
         session.agent_event = event
+        session.agent_active = next_active
         session.agent_updated_at = _now_iso()
+        if next_active:
+            session.agent_session_ended_at = ""
+        elif not session.agent_session_ended_at:
+            session.agent_session_ended_at = session.agent_updated_at
         session.updated_at = session.agent_updated_at
         session.unread = True
         self._persist_session(session)
@@ -3761,10 +3914,12 @@ class TerminalManager:
         state, canonical_event = normalize_agent_event(adapter.id, event, payload)
         session.agent_id = adapter.id
         session.agent_label = adapter.label
+        session_ended = canonical_event == "session_end"
         self._set_agent_state(
             session,
             state=state,
             event=canonical_event,
+            active=not session_ended,
         )
         return session.public()
 
@@ -3809,6 +3964,7 @@ class TerminalManager:
         ):
             raise ValueError("terminal title already exists in this project")
         session.title = normalized
+        session.title_locked = True
         session.updated_at = _now_iso()
         self._persist_session(session)
         self._publish_state(session)

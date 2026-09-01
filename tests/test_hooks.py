@@ -286,6 +286,29 @@ def test_hook_failure_does_not_rollback_context_commit(tmp_path, caplog):
     run(scenario())
 
 
+def test_hook_system_exit_is_scoped_to_the_failing_hook(tmp_path, caplog):
+    async def scenario():
+        store = ContextStoreRouter(tmp_path / "context")
+        tree = store.create_tree(tree_id="tree", root_id="root")
+        hooks = store.hooks_for(tree.id)
+        observed: list[str] = []
+
+        hooks.register(
+            CONTEXT_CHANGE,
+            lambda _event: (_ for _ in ()).throw(SystemExit("hook exited")),
+        )
+        hooks.register(CONTEXT_CHANGE, lambda _event: observed.append("healthy"))
+        store.mount(tree.id, tree.root_id, "committed", node_id="child")
+        await hooks.drain()
+
+        assert observed == ["healthy"]
+        assert store.get_node(tree.id, "child").value == "committed"
+        assert "hook exited" in caplog.text
+        store.close()
+
+    run(scenario())
+
+
 def test_delete_hook_contains_surviving_parent_id(tmp_path):
     async def scenario():
         store = ContextStoreRouter(tmp_path / "context")

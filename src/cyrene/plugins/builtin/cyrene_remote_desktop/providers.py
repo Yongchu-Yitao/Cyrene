@@ -11,6 +11,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 from typing import Any
 
 from .contracts import (
@@ -389,6 +390,7 @@ class ElectronCurrentDesktopProvider:
         ice_servers: list[dict[str, Any]],
         credentials: dict[str, str] | None = None,
         permissions: dict[str, bool] | None = None,
+        viewport: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if mode != "current_desktop":
             return {
@@ -405,6 +407,7 @@ class ElectronCurrentDesktopProvider:
                 "quality_mode": quality_mode,
                 "ice_servers": ice_servers,
                 "permissions": dict(permissions or {}),
+                "viewport": dict(viewport or {}),
             },
             timeout=60,
         )
@@ -569,7 +572,12 @@ def _freerdp_connection_arguments(
     ice_servers: list[dict[str, Any]],
     permissions: dict[str, bool] | None,
     credentials: dict[str, str],
+    viewport: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    raw_viewport = viewport if isinstance(viewport, dict) else {}
+    pixel_ratio = max(0.5, min(2.0, float(raw_viewport.get("device_pixel_ratio") or 1)))
+    width = max(320, min(3840, round(float(raw_viewport.get("width") or 1920))))
+    height = max(240, min(2160, round(float(raw_viewport.get("height") or 1080))))
     return {
         "session_id": session_id,
         "target": {"host": "127.0.0.1", "port": rdp_port, "source": rdp_port_source},
@@ -579,6 +587,11 @@ def _freerdp_connection_arguments(
         "quality_mode": quality_mode,
         "ice_servers": ice_servers,
         "permissions": dict(permissions or {}),
+        "viewport": {
+            "width": width,
+            "height": height,
+            "device_pixel_ratio": pixel_ratio,
+        },
         "credentials": {
             "username": str(credentials.get("username") or ""),
             "domain": str(credentials.get("domain") or ""),
@@ -626,8 +639,31 @@ class FreeRdpProvider:
             ),
             "",
         )
+        electron_path = str(os.environ.get("CYRENE_ELECTRON_PATH") or "").strip()
+        electron_root = str(os.environ.get("CYRENE_ELECTRON_RESOURCES_DIR") or "").strip()
+        launcher = os.path.join(os.path.dirname(__file__), "freerdp_dev_sidecar.py")
+        media_host = os.path.join(electron_root, "remote-desktop-rdp-sidecar.js") if electron_root else ""
+        self._development_launcher = (
+            launcher
+            if platform.system().lower() == "linux"
+            and os.environ.get("CYRENE_ELECTRON_DEV") == "1"
+            and os.path.isfile(electron_path)
+            and os.path.isfile(media_host)
+            and os.path.isfile(launcher)
+            and bool(shutil.which("xfreerdp3") or shutil.which("xfreerdp"))
+            and bool(shutil.which("Xvfb"))
+            and bool(shutil.which("xdotool"))
+            else ""
+        )
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+
+    def _sidecar_command(self) -> tuple[str, ...]:
+        if self.binary:
+            return (self.binary,)
+        if self._development_launcher:
+            return (sys.executable, self._development_launcher)
+        return ()
 
     async def _request(
         self,
@@ -731,7 +767,8 @@ class FreeRdpProvider:
                         ),
                     }
                 )
-        if not self.binary:
+        command = self._sidecar_command()
+        if not command:
             diagnostics.append(
                 {
                     "code": "freerdp_sidecar_missing",
@@ -739,12 +776,24 @@ class FreeRdpProvider:
                     "message": "The signed Cyrene FreeRDP sidecar is not installed.",
                 }
             )
-        supported = bool(
-            self.binary and rdp_backend and rdp_port and listener_state == "rdp"
-        )
+        supported = bool(command and rdp_backend and rdp_port and listener_state == "rdp")
+        if self._development_launcher:
+            diagnostics.append(
+                {
+                    "code": "freerdp_development_bridge",
+                    "severity": "info",
+                    "message": "The built-in Linux FreeRDP development bridge is available.",
+                }
+            )
         return ProviderDescriptor(
             id=self.id,
-            version=_command_version(self.binary, "--version") if self.binary else "",
+            version=(
+                _command_version(self.binary, "--version")
+                if self.binary
+                else _command_version(shutil.which("xfreerdp3") or "xfreerdp", "/version")
+                if command
+                else ""
+            ),
             status="supported" if supported else "unsupported",
             modes=("remote_login",) if supported else (),
             capabilities=(
@@ -767,10 +816,12 @@ class FreeRdpProvider:
         ice_servers: list[dict[str, Any]],
         credentials: dict[str, str] | None = None,
         permissions: dict[str, bool] | None = None,
+        viewport: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Credential material reaches the sidecar only through its inherited
         # stdin pipe; it never enters argv, environment variables, or files.
-        if mode != "remote_login" or not self.binary:
+        command = self._sidecar_command()
+        if mode != "remote_login" or not command:
             return {
                 "ok": False,
                 "code": "freerdp_sidecar_missing",
@@ -789,7 +840,7 @@ class FreeRdpProvider:
         assert selected is not None
         _rdp_backend, rdp_port, rdp_port_source, _listener_state = selected
         process = await asyncio.create_subprocess_exec(
-            self.binary,
+            *command,
             "--stdio-json",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -812,6 +863,7 @@ class FreeRdpProvider:
                     ice_servers=ice_servers,
                     permissions=permissions,
                     credentials=credentials,
+                    viewport=viewport,
                 ),
                 timeout=75,
             )

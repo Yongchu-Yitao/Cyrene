@@ -44,6 +44,7 @@ class FakeWindow {
 function fixture(lifecycleExecutor) {
   const main = new FakeWindow('main');
   const quick = new FakeWindow('quick_chat');
+  const notifications = [];
   const control = new HostControl({
     app: { getVersion: () => '0.7.9' },
     screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1200, height: 900 } }) },
@@ -53,10 +54,25 @@ function fixture(lifecycleExecutor) {
     openQuickChat: async () => { quick.show(); quick.focus(); },
     getDesktopSettings: () => ({ settingsRevision: 0 }),
     updateDesktopSettings: () => ({ settingsRevision: 1 }),
+    showNotification: (notification) => {
+      notifications.push(notification);
+      return { ok: true };
+    },
     lifecycleExecutor,
   });
-  return { control, main, quick };
+  return { control, main, quick, notifications };
 }
+
+test('native notifications are owned by the Electron host', async () => {
+  const { control, notifications } = fixture();
+  const result = await control.handle('notification.show', {
+    title: 'Task done',
+    body: 'Backup complete',
+  });
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(notifications, [{ title: 'Task done', body: 'Backup complete' }]);
+});
 
 test('surface registration and window control stay bound to the current main or quick-chat renderer', async () => {
   const { control, main, quick } = fixture();

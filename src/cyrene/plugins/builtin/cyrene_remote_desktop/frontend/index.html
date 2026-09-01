@@ -21,6 +21,7 @@
     </header>
 
     <section id="stage" class="stage" tabindex="0" aria-label="Remote desktop display" data-i18n-aria="desktopDisplay">
+      <video id="remote-video-backdrop" class="remote-video-backdrop" autoplay playsinline muted aria-hidden="true"></video>
       <video id="remote-video" autoplay playsinline></video>
       <audio id="remote-audio" autoplay></audio>
       <textarea id="ime-input" class="ime-input" aria-label="Remote keyboard input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
@@ -34,12 +35,19 @@
       <div id="permission-banner" class="permission-banner" role="alert" hidden></div>
     </section>
 
-    <div id="display-menu" class="popover" hidden>
-      <header data-i18n="displays">Displays</header>
+    <div id="popover-scrim" class="popover-scrim" hidden></div>
+    <div id="display-menu" class="popover" role="dialog" aria-modal="true" aria-labelledby="display-menu-title" hidden>
+      <header class="popover-header">
+        <span id="display-menu-title" data-i18n="displays">Displays</span>
+        <button id="display-menu-close" class="popover-close" type="button" title="Close" aria-label="Close" data-i18n-title="close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
       <div id="display-list"></div>
     </div>
-    <div id="file-menu" class="popover file-popover" hidden>
-      <header data-i18n="fileClipboard">File clipboard</header>
+    <div id="file-menu" class="popover file-popover" role="dialog" aria-modal="true" aria-labelledby="file-menu-title" hidden>
+      <header class="popover-header">
+        <span id="file-menu-title" data-i18n="fileClipboard">File clipboard</span>
+        <button id="file-menu-close" class="popover-close" type="button" title="Close" aria-label="Close" data-i18n-title="close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
       <button id="choose-files" type="button"><span data-i18n="sendFiles">Send files</span><small data-i18n="fileChannelDetail">Use existing encrypted file channel</small></button>
       <button id="choose-folder" type="button"><span data-i18n="sendFolder">Send folder</span><small data-i18n="folderDetail">Keep its directory structure</small></button>
     </div>

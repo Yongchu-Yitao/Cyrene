@@ -233,6 +233,34 @@ const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
+function refreshLinuxXWaylandEnvironment() {
+  if (!isLinux) return;
+  const runtimeDir = String(
+    process.env.XDG_RUNTIME_DIR
+      || (typeof process.getuid === 'function' ? `/run/user/${process.getuid()}` : ''),
+  );
+  if (!runtimeDir) return;
+  try {
+    const candidates = fs.readdirSync(runtimeDir)
+      .filter((name) => name.startsWith('.mutter-Xwaylandauth.'))
+      .map((name) => {
+        const filePath = path.join(runtimeDir, name);
+        return { filePath, modified: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((left, right) => right.modified - left.modified);
+    if (!candidates.length) return;
+    // Mutter leaves the previous cookie file behind after the graphical
+    // session restarts. A process relaunched from SSH or a stale terminal can
+    // therefore inherit an existing but unusable XAUTHORITY. The newest
+    // Mutter-owned cookie belongs to the active XWayland server.
+    process.env.XAUTHORITY = candidates[0].filePath;
+    if (!process.env.DISPLAY) process.env.DISPLAY = ':0';
+    if (!process.env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = runtimeDir;
+  } catch (_) {}
+}
+
+refreshLinuxXWaylandEnvironment();
+
 if (isDev) {
   if (!process.env.CYRENE_USER_DATA_DIR && !process.env.CYRENE_BASE_DIR) {
     try {
@@ -343,6 +371,19 @@ let electronRpcPort = null;
 let hostControl = null;
 let remoteDesktopManager = null;
 
+function showNativeNotification({ title, body }) {
+  if (!Notification.isSupported()) {
+    return { ok: false, error: 'notifications_unsupported' };
+  }
+  const icon = getNotificationIconPath();
+  new Notification({
+    title: String(title || APP_NAME),
+    body: String(body || ''),
+    ...(icon ? { icon } : {}),
+  }).show();
+  return { ok: true };
+}
+
 function getHostControl() {
   if (!hostControl) {
     hostControl = new HostControl({
@@ -354,6 +395,7 @@ function getHostControl() {
       openQuickChat,
       getDesktopSettings,
       updateDesktopSettings: saveDesktopSettings,
+      showNotification: showNativeNotification,
       lifecycleExecutor: executeApprovedLifecycle,
     });
   }
@@ -5833,7 +5875,21 @@ function registerQuickChatShortcut(accelerator) {
 
 function getPythonBinaryPath() {
   if (isDev) {
-    return 'uv'; // use the same source entry point as `uv run cyrene`
+    // A desktop app relaunched through systemd/LaunchServices does not
+    // necessarily inherit the shell that installed `uv`.  Once the checkout
+    // has been bootstrapped, its console script is the most reliable entry
+    // point and also avoids an unnecessary resolver process on every launch.
+    const checkoutRoot = path.join(__dirname, '..');
+    const checkoutCommand = isWindows
+      ? path.join(checkoutRoot, '.venv', 'Scripts', 'cyrene.exe')
+      : path.join(checkoutRoot, '.venv', 'bin', 'cyrene');
+    try {
+      if (fs.statSync(checkoutCommand).isFile()) return checkoutCommand;
+    } catch (_) {
+      // An unbootstrapped checkout still falls back to `uv run cyrene` and
+      // receives the normal actionable startup error when uv is unavailable.
+    }
+    return 'uv';
   }
   // In a packaged Electron app, extraResources are in process.resourcesPath
   const base = process.resourcesPath;
@@ -5841,8 +5897,14 @@ function getPythonBinaryPath() {
   return path.join(base, 'python-bundle', name);
 }
 
-function getPythonArgs() {
+function getPythonArgs(binaryPath = getPythonBinaryPath()) {
   if (isDev) {
+    if (path.basename(binaryPath).toLowerCase().startsWith('cyrene')) {
+      return [
+        '--workbench',
+        '--electron-mode',
+      ];
+    }
     return [
       'run',
       'cyrene',
@@ -5875,11 +5937,17 @@ function spawnPython() {
   if (pythonProcess) return;
   clearCliConnection();
   const binaryPath = getPythonBinaryPath();
-  const args = getPythonArgs();
+  const args = getPythonArgs(binaryPath);
   const cwd = isDev ? path.join(__dirname, '..') : undefined;
   const childEnv = {
     ...process.env,
     CYRENE_APP_EXECUTABLE: getCurrentAppExecutablePath(),
+    // The Linux development FreeRDP bridge reuses this Electron runtime to
+    // capture its isolated X11 RDP window and feed the existing WebRTC host.
+    // Production builds still prefer the signed native sidecar.
+    CYRENE_ELECTRON_PATH: process.execPath,
+    CYRENE_ELECTRON_RESOURCES_DIR: __dirname,
+    CYRENE_ELECTRON_DEV: isDev ? '1' : '0',
     CYRENE_AUTH_TOKEN: AUTH_TOKEN,
     CYRENE_ELECTRON_RPC_PORT: electronRpcPort ? String(electronRpcPort) : '',
     CYRENE_ELECTRON_RPC_TOKEN: AUTH_TOKEN,
@@ -5888,7 +5956,13 @@ function spawnPython() {
     // GUI-launched Electron inherits LaunchServices' minimal PATH, which lacks
     // the user's shell-managed runtimes (nvm, Homebrew, ~/.local/bin). Without
     // them the Python backend cannot locate npm/node for managed installs.
-    const userBins = ['/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.local', 'bin')];
+    const userBins = [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/home/linuxbrew/.linuxbrew/bin',
+      path.join(os.homedir(), '.linuxbrew', 'bin'),
+      path.join(os.homedir(), '.local', 'bin'),
+    ];
     const nvmRoot = path.join(os.homedir(), '.nvm', 'versions', 'node');
     let nvmBins = [];
     try {
@@ -7648,8 +7722,12 @@ if (!gotSingleInstanceLock) {
       return { ok: true };
     });
     ipcMain.handle('notification:show', (_event, { title, body }) => {
-      const icon = getNotificationIconPath();
-      new Notification({ title, body, ...(icon ? { icon } : {}) }).show();
+      return showNativeNotification({ title, body });
+    });
+    ipcMain.handle('clipboard:read-text', () => clipboard.readText());
+    ipcMain.handle('clipboard:write-text', (_event, info) => {
+      clipboard.writeText(String(info && info.text || ''));
+      return true;
     });
     ipcMain.handle('shell:show-item-in-folder', (_event, info) => {
       const settings = readDesktopSettings();

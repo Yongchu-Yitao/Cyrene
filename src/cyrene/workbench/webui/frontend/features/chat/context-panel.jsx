@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { PluginView } from "../../platform/plugins.jsx"
+import { PluginFrontendService, PluginView, pluginLocalizedField } from "../../platform/plugins.jsx"
 import { WBC_CHAT_MODEL_CHANGED_EVENT, WBC_ICONS, WORKBENCH_BUDGET_CODES, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentConnectionLabel, wbcAgentDisplayName, wbcChatAgent, wbcCompactNumber, wbcCurrentModel, wbcErrorText, wbcFormatTime, wbcIsBuiltinAgent, wbcModelAccessLabel, wbcModelContextLimit, wbcOpenAgentDetail, wbcStructuredEventSummary, wbcT, wbcUsageReported } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcBrowserSplit, WbcChangeSplit, WbcChatSplit, WbcMapPaneContent, WbcSideAgentSplit, WbcSubagentsTab, wbcChatArtifactFiles, wbcMapItemLabel, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { wbcStartFileDrag } from "./file-resources.jsx"
@@ -1151,7 +1151,28 @@ function wbcUsedPluginPacks(contextBlocks) {
   return used;
 }
 
+function wbcLocalizedUsedPluginName(pluginId, snapshot) {
+  var id = String(pluginId || "").trim();
+  var registry = snapshot && typeof snapshot === "object" ? snapshot : {};
+  var candidates = []
+    .concat(Array.isArray(registry.packs) ? registry.packs : [])
+    .concat(Array.isArray(registry.standalonePlugins) ? registry.standalonePlugins : []);
+  var descriptor = candidates.find(function (item) {
+    return [item && item.id, item && item.name, item && item.canonical_name]
+      .some(function (value) { return String(value || "") === id; });
+  });
+  return descriptor ? (pluginLocalizedField(descriptor, "name") || id) : id;
+}
+
 function WbcContextTab({ chat, contextBlocks, inboxView }) {
+  var [pluginSnapshot, setPluginSnapshot] = useWbcState(function () {
+    return PluginFrontendService.snapshot();
+  });
+  useWbcEffect(function () {
+    var unsubscribe = PluginFrontendService.subscribe(setPluginSnapshot);
+    if (!PluginFrontendService.snapshot().loaded) PluginFrontendService.refresh();
+    return unsubscribe;
+  }, []);
   var usedPluginPacks = wbcUsedPluginPacks(contextBlocks);
   var messageCount = contextBlocks && contextBlocks.messageCount != null
     ? Number(contextBlocks.messageCount) || 0
@@ -1168,7 +1189,7 @@ function WbcContextTab({ chat, contextBlocks, inboxView }) {
       {!externalAgent && <section className="workbench-side-section" aria-label={wbcT("workbenchChat.usedPluginPacks", "Used plugins")}>
         <div className="wbc-context-empty-head wbc-plugin-pack-head">
           <span className="wbc-context-empty-label">{wbcT("workbenchChat.usedPluginPacks", "Used plugins")}</span>
-          {usedPluginPacks.length === 0 ? <b>{wbcT("workbenchChat.notUsed", "Not used")}</b> : null}
+          <b>{usedPluginPacks.length === 0 ? wbcT("workbenchChat.notUsed", "Not used") : usedPluginPacks.length}</b>
         </div>
         {usedPluginPacks.length === 0 ? (
           <div className="wbc-context-empty-module">
@@ -1176,18 +1197,25 @@ function WbcContextTab({ chat, contextBlocks, inboxView }) {
               <p>{wbcT("workbenchChat.noUsedPluginPacks", "The agent has not used a plugin in this chat.")}</p>
             </div>
           </div>
-        ) : usedPluginPacks.map(function (packId) {
-            return (
-              <div className="workbench-check wbc-plugin-pack-row" key={packId}>
-                <span className="workbench-status-dot green" aria-hidden="true"></span>
-                <span>{packId}</span>
-              </div>
-            );
-          })}
+        ) : (
+          <div className="wbc-plugin-pack-list">
+            {usedPluginPacks.map(function (packId) {
+              var pluginName = wbcLocalizedUsedPluginName(packId, pluginSnapshot);
+              return (
+                <div className="workbench-check wbc-plugin-pack-row" key={packId}>
+                  <span className="workbench-status-dot green" aria-hidden="true"></span>
+                  <span title={packId}>{pluginName}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>}
       <section className="workbench-side-section wbc-context-stats" aria-label={wbcT("workbenchChat.stats", "Chat stats")}>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{messageCount}</b></div>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.updatedAt", "Last updated")}</span><b>{wbcFormatTime(contextUpdatedAt) || "—"}</b></div>
+        <div className="wbc-context-facts">
+          <div><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{messageCount}</b></div>
+          <div><span>{wbcT("workbenchChat.updatedAt", "Last updated")}</span><b>{wbcFormatTime(contextUpdatedAt) || "—"}</b></div>
+        </div>
       </section>
     </div>
   );

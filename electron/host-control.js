@@ -18,6 +18,7 @@ class HostControl {
     this.openQuickChat = options.openQuickChat;
     this.getDesktopSettings = options.getDesktopSettings;
     this.updateDesktopSettings = options.updateDesktopSettings;
+    this.showNotification = options.showNotification || null;
     this.lifecycleExecutor = options.lifecycleExecutor || null;
     this.surfaces = new Map();
     this.pending = new Map();
@@ -245,6 +246,12 @@ class HostControl {
             detail: String(error && error.message || error),
           };
         }
+      case 'notification.show':
+        if (!this.showNotification) return { ok: false, error: 'notifications_unavailable' };
+        return this.showNotification({
+          title: String(input.title || '').slice(0, 160),
+          body: String(input.body || '').slice(0, 4096),
+        });
       case 'lifecycle.execute_approved':
         if (!this.lifecycleExecutor) return { ok: false, error: 'lifecycle_unavailable' };
         if (String(input.expectedAppVersion || '') !== String(this.app.getVersion())) {

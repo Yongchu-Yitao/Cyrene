@@ -211,6 +211,41 @@ def test_builtin_i18n_catalog_is_seeded_and_user_edits_are_preserved(tmp_path) -
     assert catalog_path.read_bytes() == edited
 
 
+def test_catalog_relocalizes_standalone_core_plugins_registered_first(
+    tmp_path,
+) -> None:
+    catalog = {
+        "version": 1,
+        "packs": {},
+        "plugins": {
+            "CyreneModelRouter": {
+                "en": {
+                    "name": "Cyrene model router",
+                    "description": "Route one model call.",
+                },
+                "zh": {
+                    "name": "Cyrene 模型路由器",
+                    "description": "路由单次模型调用。",
+                },
+            },
+        },
+    }
+    (tmp_path / "i18n.json").write_text(
+        json.dumps(catalog, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    registry = PluginRegistry()
+    ensure_model_router(registry)
+
+    assert registry.registered_by_canonical("CyreneModelRouter").plugin.localized(
+        "zh"
+    )[0] == "Cyrene Model Router"
+    assert registry.load_directory(tmp_path) == ()
+    assert registry.registered_by_canonical("CyreneModelRouter").plugin.localized(
+        "zh"
+    ) == ("Cyrene 模型路由器", "路由单次模型调用。")
+
+
 def test_builtin_catalog_explicitly_covers_every_plugin_description() -> None:
     catalog = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
     registry = PluginRegistry()

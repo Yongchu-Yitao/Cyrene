@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from cyrene.plugins.builtin.cyrene_code.terminal.agent_status import (
+    AGENT_ADAPTERS,
+    adapter_for_command,
     adapter_by_id,
+    command_title,
     normalize_agent_event,
 )
 from cyrene.plugins.builtin.cyrene_code.terminal.manager import (
@@ -32,6 +35,28 @@ def test_agent_adapters_normalize_native_hook_identities() -> None:
     assert adapter_by_id("mmx") is None
 
 
+def test_all_declared_agents_are_detected_from_shell_commands() -> None:
+    commands = {
+        "claude": "claude --resume",
+        "codex": "env OPENAI_LOG=1 codex",
+        "gemini": "npx @google/gemini-cli",
+        "opencode": "opencode",
+        "kimi": "kimi-cli",
+        "minimax": "minimax-code",
+        "aider": "python -m aider",
+        "qwen": "qwen-code",
+        "copilot": "gh copilot suggest",
+        "goose": "goose session",
+        "amp": "amp",
+    }
+    assert {adapter.id for adapter in AGENT_ADAPTERS} == set(commands)
+    assert {
+        agent_id: adapter_for_command(command).id
+        for agent_id, command in commands.items()
+    } == {agent_id: agent_id for agent_id in commands}
+    assert command_title("sudo -u runner env FOO=1 codex --full-auto") == "codex"
+
+
 def test_vendor_hook_events_normalize_to_shared_lifecycle() -> None:
     assert normalize_agent_event("kimi", "TurnStarted", {})[0] == "working"
     assert normalize_agent_event("claude", "PermissionRequest", {})[0] == "waiting"
@@ -54,6 +79,7 @@ def test_agent_state_and_unread_are_orthogonal_and_persisted(tmp_path) -> None:
         {"hook_event_name": "PermissionRequest", "session_id": "abc"},
     )
     assert reported["agentState"] == "waiting"
+    assert reported["agentActive"] is True
     assert reported["unread"] is True
 
     read = manager.mark_read(session.id)
@@ -69,9 +95,27 @@ def test_agent_state_and_unread_are_orthogonal_and_persisted(tmp_path) -> None:
         "state": "waiting",
         "event": "permission_request",
         "updatedAt": public["agentUpdatedAt"],
+        "active": False,
+        "sessionEndedAt": public["agentSessionEndedAt"],
     }
+    assert public["agentSessionEndedAt"]
     assert public["unread"] is False
     restored.close_store()
+
+
+def test_agent_session_end_clears_active_identity_without_losing_history() -> None:
+    manager = TerminalManager()
+    session = _session()
+    manager._sessions[session.id] = session
+    manager.agent_event(session.id, "claude", "SessionStart", {})
+
+    ended = manager.agent_event(session.id, "claude", "SessionEnd", {})
+
+    assert ended["agentId"] == "claude"
+    assert ended["agentState"] == "completed"
+    assert ended["agentEvent"] == "session_end"
+    assert ended["agentActive"] is False
+    assert ended["agentSessionEndedAt"]
 
 
 def test_output_unread_can_be_acknowledged_without_changing_agent_state() -> None:

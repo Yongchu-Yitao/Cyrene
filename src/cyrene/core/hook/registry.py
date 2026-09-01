@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..observability import log_operation, operation
+from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from .errors import HookAwaitingUser, HookBlocked, HookError
 from .hook import (
     CONTEXT_CHANGE,
@@ -88,7 +89,7 @@ def _hook_with_configured_override(hook: Hook) -> Hook:
             enabled=bool(raw.get("enabled", hook.enabled)),
             created_at=created_at,
         )
-    except Exception:
+    except PLUGIN_BOUNDARY_ERRORS:
         logger.warning(
             "Ignoring invalid configured Hook override for %s",
             hook.id,
@@ -550,7 +551,7 @@ class HookSet:
         if action_provider is not None:
             try:
                 plugin = action_provider(hook)
-            except Exception:
+            except PLUGIN_BOUNDARY_ERRORS:
                 logger.warning(
                     "Ignoring invalid configured action for Hook %s",
                     hook.id,
@@ -640,7 +641,7 @@ class HookSet:
                     results.append(await self._call(hook, event))
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
                     if hook.failure_policy == "closed":
                         log_operation(
                             logger,
@@ -763,7 +764,7 @@ class HookSet:
                     raise
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
                     if hook.failure_policy == "block":
                         log_operation(
                             logger,
@@ -887,7 +888,7 @@ class HookSet:
                     outputs = await self._call_batch(hook, events)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
                     for index in indices:
                         if hook.failure_policy == "block":
                             results[index] = HookBlocked(f"{hook.id}: {exc}")
@@ -941,7 +942,7 @@ class HookSet:
                             tool=calls[index][0],
                             reason=exc,
                         )
-                    except Exception as exc:
+                    except PLUGIN_BOUNDARY_ERRORS as exc:
                         if hook.failure_policy == "block":
                             results[index] = HookBlocked(f"{hook.id}: {exc}")
                         log_operation(
@@ -1037,7 +1038,7 @@ class HookSet:
                     released=True,
                 )
                 raise
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 failed += 1
                 self._persistence.fail(delivery.sequence, str(exc))
                 log_operation(
@@ -1485,7 +1486,7 @@ class HookSet:
                 value = provider(event)
                 if inspect.isawaitable(value):
                     value = await value
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 value = {
                     "error": type(exc).__name__,
                     "message": str(exc),

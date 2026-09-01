@@ -32,6 +32,29 @@ _CANONICAL_FILE_RENAMES = MappingProxyType(
         "cyrene_system_prompt/prompt.py": "cyrene_system_prompt/system_prompt.py",
     }
 )
+_LEGACY_CANONICAL_PACK_HASHES = MappingProxyType(
+    {
+        # ``pinned_topbar_context`` shipped as an installable example before it
+        # became a first-party editable PluginPack. Adopt only the exact legacy
+        # example bytes; any local edit or extra source remains user-owned.
+        "pinned_topbar_context": frozenset(
+            {
+                (
+                    "README.md",
+                    "8866d74dcbbd16f47d0ef291b4a6459cfb233f7a58747867d7a732d6962b6299",
+                ),
+                (
+                    "__init__.py",
+                    "bf08985679c5ddcd7097a4e48d131a9aeb111bd87d6626f14873ca902de78f86",
+                ),
+                (
+                    "context.py",
+                    "93778d412e6a1542d46b64d9724123edbe711f799e93d7f040b4151ed5e7572b",
+                ),
+            }
+        ),
+    }
+)
 _SEED_LOCK = threading.RLock()
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +235,69 @@ def _migrate_canonical_file_renames(
             previous_hashes[new_relative] = previous_hashes.pop(old_relative)
 
 
+def _regular_pack_hashes(pack: Path) -> frozenset[tuple[str, str]] | None:
+    """Return a stable source signature, rejecting links and special files."""
+
+    if not pack.is_dir() or pack.is_symlink():
+        return None
+    values: set[tuple[str, str]] = set()
+    try:
+        entries = tuple(pack.rglob("*"))
+    except OSError:
+        return None
+    for entry in entries:
+        relative = entry.relative_to(pack)
+        if entry.is_symlink():
+            return None
+        if "__pycache__" in relative.parts or entry.suffix in {".pyc", ".pyo"}:
+            continue
+        if entry.is_dir():
+            continue
+        if not entry.is_file():
+            return None
+        try:
+            values.add((relative.as_posix(), _content_hash(entry.read_bytes())))
+        except OSError:
+            return None
+    return frozenset(values)
+
+
+def _promote_legacy_canonical_packs(
+    root: Path,
+    canonical_files: Mapping[str, bytes],
+    previous_hashes: Mapping[str, str],
+) -> list[str]:
+    """Retire unchanged example installs promoted to first-party packs."""
+
+    diagnostics: list[str] = []
+    for pack_name, legacy_hashes in _LEGACY_CANONICAL_PACK_HASHES.items():
+        prefix = f"{pack_name}/"
+        if not any(relative.startswith(prefix) for relative in canonical_files):
+            continue
+        if any(relative.startswith(prefix) for relative in previous_hashes):
+            continue
+        target = root / pack_name
+        actual_hashes = _regular_pack_hashes(target)
+        canonical_hashes = frozenset(
+            (
+                Path(relative).relative_to(pack_name).as_posix(),
+                _content_hash(content),
+            )
+            for relative, content in canonical_files.items()
+            if relative.startswith(prefix)
+        )
+        if actual_hashes not in {legacy_hashes, canonical_hashes}:
+            continue
+        try:
+            shutil.rmtree(target)
+        except OSError:
+            continue
+        diagnostics.append(
+            f"promoted unchanged legacy Plugin pack to canonical ownership: {target}"
+        )
+    return diagnostics
+
+
 def _atomic_write(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, raw_temporary = tempfile.mkstemp(
@@ -337,6 +423,11 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
     manifest = root / _UPSTREAM_MANIFEST_RELATIVE
     previous_hashes = _load_upstream_hashes(manifest)
     _migrate_canonical_file_renames(root, canonical_files, previous_hashes)
+    promotion_diagnostics = _promote_legacy_canonical_packs(
+        root,
+        canonical_files,
+        previous_hashes,
+    )
     deleted_contributions = _load_deleted_contributions(manifest)
     modified_owned_packs: set[str] = set()
     for relative, baseline_hash in previous_hashes.items():
@@ -358,7 +449,7 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
     removed: list[Path] = []
 
     root.mkdir(parents=True, exist_ok=True)
-    diagnostics: list[str] = []
+    diagnostics: list[str] = list(promotion_diagnostics)
 
     skipped_packs, new_packs, pack_diagnostics = _classify_canonical_packs(
         root, canonical_files, previous_hashes, deleted_contributions, existing

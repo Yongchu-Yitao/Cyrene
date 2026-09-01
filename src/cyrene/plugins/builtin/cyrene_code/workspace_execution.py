@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
 from cyrene.localization import app_language
+from cyrene.core.plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from cyrene.platform.paths import CYRENE_DIR_NAME
 from cyrene.workbench.projects.project_execution import normalize_execution_actions
 from cyrene.plugins import WorkspaceProjectTypeContribution
@@ -195,7 +196,7 @@ class WorkspaceExecutionService:
                             timeout=_DETECTOR_TIMEOUT_SECONDS,
                         )
                 normalized = normalize_execution_actions(raw)
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 logger.exception("Workspace project detector failed: %s", canonical_id)
                 errors.append({"projectType": canonical_id, "error": str(exc)})
                 continue

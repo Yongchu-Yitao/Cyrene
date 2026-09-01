@@ -54,6 +54,14 @@ function itemDescription(item, t, pack) {
   return t("toolDesc." + id, item.description || id)
 }
 
+function workbenchEntryLabel(item) {
+  return authoredTranslation(item, "title") || String(item && (item.title || item.id) || "Workbench entry")
+}
+
+function workbenchEntryDescription(item) {
+  return authoredTranslation(item, "description") || String(item && item.description || "")
+}
+
 function searchable(item, t, pack) {
   if (!item || typeof item !== "object") return ""
   return [item.id, item.name, item.description, item.kind, item.source, item.source_path,
@@ -263,10 +271,28 @@ function RegistryMember(props) {
   )
 }
 
+function WorkbenchEntryMember(props) {
+  var item = props.item || {}
+  var title = workbenchEntryLabel(item)
+  return React.createElement("div", { className: "wb-registry-member wb-registry-entry-member" },
+    React.createElement("div", { className: "wb-registry-member-copy" },
+      React.createElement("span", { className: "wb-registry-entry-eyebrow" }, props.t("settings.workbenchEntry", "Workbench entry")),
+      React.createElement("strong", null, title),
+      workbenchEntryDescription(item) && React.createElement("small", null, workbenchEntryDescription(item))),
+    Toggle(item.configured_visible !== false, function () {
+      props.onToggle(item, item.configured_visible === false)
+    }, props.disabled || props.parentEnabled === false,
+    props.t("settings.workbenchEntryToggleLabel", { name: title }, "Show or hide {name} in Tools"))
+  )
+}
+
 function registryViewModel(registry, query, t) {
   var normalizedQuery = query.trim().toLowerCase()
   var visiblePacks = (Array.isArray(registry.packs) ? registry.packs : []).filter(function (pack) {
     if (!normalizedQuery || searchable(pack, t, true).indexOf(normalizedQuery) >= 0) return true
+    if ((Array.isArray(pack.workbench_entries) ? pack.workbench_entries : []).some(function (item) {
+      return [item.id, item.title, item.description, workbenchEntryLabel(item), workbenchEntryDescription(item)].join(" ").toLowerCase().indexOf(normalizedQuery) >= 0
+    })) return true
     return (Array.isArray(pack.plugins) ? pack.plugins : []).some(function (item) {
       return searchable(item, t, false).indexOf(normalizedQuery) >= 0
     })
@@ -357,7 +383,20 @@ function usePluginRegistryMutations(model) {
       throw error
     }).finally(function () { model.setBusy("") })
   }
-  return { tell: tell, reloadRegistry: reloadRegistry, updateEnabled: updateEnabled, updateTool: updateTool, deleteTool: deleteTool }
+  function updateWorkbenchEntry(item, visible) {
+    if (!item || model.busy) return
+    var packId = String(item.pack_id || "")
+    var entryId = String(item.id || "")
+    if (!packId || !entryId) return
+    model.setBusy("entry:" + packId + ":" + entryId)
+    model.setNotice("")
+    model.pluginService.setWorkbenchEntryVisible(packId, entryId, visible).then(function () {
+      tell(t("settings.saved", "Saved"), "success")
+    }).catch(function (error) {
+      tell(error && error.message || String(error), "error")
+    }).finally(function () { model.setBusy("") })
+  }
+  return { tell: tell, reloadRegistry: reloadRegistry, updateEnabled: updateEnabled, updateTool: updateTool, deleteTool: deleteTool, updateWorkbenchEntry: updateWorkbenchEntry }
 }
 
 function usePluginRegistryController(props) {
@@ -421,6 +460,8 @@ function PluginPackCard(props) {
   var pack = props.pack
   var packId = String(pack.id || "")
   var members = Array.isArray(pack.plugins) ? pack.plugins : []
+  var entries = Array.isArray(pack.workbench_entries) ? pack.workbench_entries : []
+  var expandable = members.length > 0 || entries.length > 0
   var [expanded, setExpanded] = useStateSt(false)
   var packName = packLabel(pack, c.t)
   var membersId = "wb-registry-pack-members-" + encodeURIComponent(packId)
@@ -428,7 +469,7 @@ function PluginPackCard(props) {
     ? c.t("settings.collapsePackage", { name: packName }, "Collapse " + packName)
     : c.t("settings.expandPackage", { name: packName }, "Expand " + packName)
   function toggleFromCard(event) {
-    if (!members.length) return
+    if (!expandable) return
     var interactive = event.target && event.target.closest && event.target.closest([
       "button", "a", "input", "select", "textarea", "label", "form",
       "[role='button']", "[role='switch']", "[role='menuitem']", "[role='dialog']",
@@ -459,16 +500,19 @@ function PluginPackCard(props) {
       React.createElement("div", { className: "wb-extension-actions" },
         Toggle(configuredEnabled(pack), function () { c.updateEnabled("pack", pack, !configuredEnabled(pack)) },
           c.disabled || pack.locked === true, packName)),
-      members.length > 0 && React.createElement("button", {
+      expandable && React.createElement("button", {
         type: "button", className: "wb-registry-pack-disclosure",
         "aria-expanded": expanded ? "true" : "false", "aria-controls": membersId,
         "aria-label": disclosureLabel, title: disclosureLabel,
         onClick: toggleFromDisclosure,
       }, React.createElement(DisclosureIcon, { expanded: expanded }))
     ),
-    members.length > 0 && React.createElement("div", {
+    expandable && React.createElement("div", {
       className: "wb-registry-pack-members", id: membersId, hidden: !expanded,
-    }, members.map(function (item) {
+    }, entries.map(function (item) {
+      return React.createElement(WorkbenchEntryMember, { key: "entry:" + String(item.id || ""), item: item, t: c.t,
+        disabled: c.disabled, parentEnabled: effectiveEnabled(pack), onToggle: c.updateWorkbenchEntry })
+    }), members.map(function (item) {
       return React.createElement(RegistryMember, { key: item.id || item.name, item: item, t: c.t,
         disabled: c.disabled, parentEnabled: effectiveEnabled(pack), onToggle: c.updateEnabled,
         onUpdate: c.updateTool, onDelete: c.deleteTool })

@@ -1,4 +1,4 @@
-const { clipboard, contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 let uiSurfaceHandler = null;
 ipcRenderer.on('ui-surface:request', async (_event, payload) => {
@@ -55,11 +55,11 @@ contextBridge.exposeInMainWorld('cyrene', {
     },
   },
   showNotification: ({ title, body }) => ipcRenderer.invoke('notification:show', { title, body }),
-  writeClipboardText: (text) => {
-    clipboard.writeText(String(text == null ? '' : text));
-    return true;
-  },
-  readClipboardText: () => clipboard.readText(),
+  writeClipboardText: (text) => ipcRenderer.invoke(
+    'clipboard:write-text',
+    { text: String(text == null ? '' : text) }
+  ),
+  readClipboardText: () => ipcRenderer.invoke('clipboard:read-text'),
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', {
     path: String(filePath == null ? '' : filePath),
   }),

@@ -302,7 +302,7 @@ def _prepare_claude_hook_plugin(root: Path) -> Path:
                 "hooks": [command_hook("waiting")],
             }],
             "Stop": [{"hooks": [command_hook("completed")]}],
-            "SessionEnd": [{"hooks": [command_hook("interrupted")]}],
+            "SessionEnd": [{"hooks": [command_hook("session_end")]}],
         },
     }
     manifest = {

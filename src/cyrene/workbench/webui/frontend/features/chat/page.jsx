@@ -3051,6 +3051,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
             var valueLabel = (Array.isArray(field && field.value_labels) ? field.value_labels : []).find(function (candidate) {
               return String(candidate && candidate.value || "") === String(rawValue == null ? "" : rawValue);
             });
+            var valueSuffix = pluginLocalizedField(field, "suffix");
             return Object.assign({}, field, {
               label: pluginLocalizedField(field, "label") || String(field && field.state_key || ""),
               tone: String(valueLabel && valueLabel.tone || ""),
@@ -3058,7 +3059,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
                 ? pluginLocalizedField(valueLabel, "label")
                 : String(rawValue == null || rawValue === ""
                   ? pluginLocalizedField(field, "empty_label") || "—"
-                  : rawValue),
+                  : rawValue) + (rawValue == null || rawValue === "" ? "" : valueSuffix),
             });
           }),
           options: (Array.isArray(contribution && contribution.options) ? contribution.options : []).filter(function (option) {
@@ -3095,6 +3096,19 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         var argumentKey = String(contribution && contribution.argument_key || contribution && contribution.state_key || "value");
         var args = { [argumentKey]: value };
         if (currentState[sessionKey]) args[sessionKey] = currentState[sessionKey];
+        var contextArguments = contribution && contribution.context_arguments;
+        if (contextArguments && typeof contextArguments === "object") {
+          Object.keys(contextArguments).forEach(function (targetKey) {
+            var stateKey = String(contextArguments[targetKey] || "");
+            var contextValue = stateKey ? currentState[stateKey] : null;
+            if ((contextValue == null || contextValue === "") && card.payload) {
+              contextValue = card.payload[stateKey];
+            }
+            if (stateKey && contextValue != null && contextValue !== "") {
+              args[String(targetKey)] = contextValue;
+            }
+          });
+        }
         return PluginFrontendService.call(
           String(card.payload && card.payload.packId || ""),
           String(contribution && contribution.method || ""),

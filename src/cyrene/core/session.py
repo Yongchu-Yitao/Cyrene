@@ -71,6 +71,7 @@ from .plugin.core_impl import (
     PermissionReviewPlugin,
 )
 from .plugin.scopes import ApplicationPluginScope, application_plugin_scope
+from .plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from .localization import localized, normalize_language, system_language
 
 
@@ -1375,13 +1376,13 @@ class AgentSession:
             if callable(request_cancel):
                 try:
                     request_cancel(reason)
-                except Exception:
+                except PLUGIN_BOUNDARY_ERRORS:
                     logger.exception("Failed to cancel session driver for %s", pack_id)
             close = getattr(driver, "close", None)
             if callable(close):
                 try:
                     close()
-                except Exception:
+                except PLUGIN_BOUNDARY_ERRORS:
                     logger.exception("Failed to close session driver for %s", pack_id)
             if self._session_driver is driver:
                 self._session_driver = None
@@ -1437,7 +1438,7 @@ class AgentSession:
                 if callable(attach) and self._transition_thread.is_alive():
                     attach()
             self._plugin_pack_attachments[pack.id] = attachment
-        except Exception as exc:
+        except PLUGIN_BOUNDARY_ERRORS as exc:
             self._plugin_setup_failures[pack.id] = str(exc)
             self._plugin_service_values.pop("agent_session", None)
             attachment = self._plugin_pack_attachments.get(pack.id)
@@ -1451,7 +1452,7 @@ class AgentSession:
                     if callable(close):
                         try:
                             close()
-                        except Exception:
+                        except PLUGIN_BOUNDARY_ERRORS:
                             logger.exception(
                                 "Failed to close setup driver for %s", pack.id
                             )

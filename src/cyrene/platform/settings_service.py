@@ -153,6 +153,7 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     _spec("budget_start_day", "integer", 1, tab="budget", minimum=1, maximum=28),
     _spec("enabled_plugins", "boolean_map", {}, tab="plugin-registry"),
     _spec("enabled_plugin_packs", "boolean_map", {}, tab="plugin-registry"),
+    _spec("workbench_entry_visibility", "boolean_map", {}, tab="plugin-registry"),
     _spec("theme", "string", "system", namespace="appearance", tab="appearance", agent=True, risk="R1", enum=("system", "light", "dark")),
     _spec("accent", "string", "", namespace="appearance", tab="appearance", agent=True, risk="R1"),
     _spec("text_scale", "number", 1.0, namespace="appearance", tab="appearance", agent=True, risk="R1", minimum=0.8, maximum=1.4),

@@ -6,7 +6,9 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import shutil
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,12 +33,55 @@ from cyrene.workbench.http.errors import localized_error_response
 
 logger = logging.getLogger(__name__)
 
+_PUBLIC_PLUGIN_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
 
-def _source_values(source: str) -> tuple[str, str | None]:
+
+def _frontend_call_error(exc: PluginRegistryError) -> tuple[str, str, int, str]:
+    cause = exc.__cause__
+    code = str(getattr(cause, "code", "") or "")
+    try:
+        status = int(getattr(cause, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        status = 0
+    if not _PUBLIC_PLUGIN_ERROR_CODE.fullmatch(code) or not 400 <= status <= 599:
+        return (
+            "The Plugin view request failed.",
+            "插件视图请求失败。",
+            400,
+            "plugin_view_call_failed",
+        )
+    if code == "remote_peer_identity_mismatch":
+        return (
+            "The paired remote device identity changed. Pair the device again.",
+            "配对的远端设备身份已变更，请重新配对。",
+            409,
+            code,
+        )
+    if code in {"remote_device_unreachable", "remote_transport_unavailable"}:
+        return (
+            "The remote device is unavailable.",
+            "远端设备当前不可用。",
+            503,
+            code,
+        )
+    return (
+        "The Plugin view request failed.",
+        "插件视图请求失败。",
+        status,
+        code,
+    )
+
+
+def _source_values(
+    source: str,
+    seeded: frozenset[str] = frozenset(),
+) -> tuple[str, str | None]:
     if source == "core":
         return "core", None
     if source.startswith("mcp:"):
         return "mcp", source.removeprefix("mcp:")
+    if source and Path(source).name in seeded:
+        return "builtin", source
     return "user", source
 
 
@@ -65,7 +110,7 @@ def _seeded_contribution_names(directory: Path) -> frozenset[str]:
 
 
 def _user_created_source(source: str, seeded: frozenset[str]) -> bool:
-    kind, source_path = _source_values(source)
+    kind, source_path = _source_values(source, seeded)
     return bool(
         kind == "user"
         and source_path
@@ -80,7 +125,7 @@ def _plugin_value(
 ) -> dict[str, Any]:
     registry = host.registry
     plugin = registered.plugin
-    source, source_path = _source_values(registered.source)
+    source, source_path = _source_values(registered.source, seeded)
     enabled = registry.plugin_enabled(plugin.name)
     customization = registry.customizations.get(plugin.canonical_name)
     pack_id = registered.pack_id
@@ -133,10 +178,11 @@ def _pack_value(
     pack: PluginPack,
     registered_by_name: dict[str, RegisteredPlugin],
     seeded: frozenset[str],
+    entry_visibility: dict[str, bool],
 ) -> dict[str, Any]:
     registry = host.registry
     source_value = registry.pack_source(pack.id)
-    source, source_path = _source_values(source_value)
+    source, source_path = _source_values(source_value, seeded)
     plugins = [
         _plugin_value(host, registered_by_name[plugin.name], seeded)
         for plugin in pack.plugins
@@ -165,10 +211,59 @@ def _pack_value(
         "tool_count": sum(plugin["kind"] == "tool" for plugin in plugins),
         "model_count": sum(plugin["kind"] == "model" for plugin in plugins),
         "plugins": plugins,
+        "workbench_entries": _workbench_entry_values(pack, entry_visibility),
         "source": source,
         "source_path": source_path,
         "user_created": _user_created_source(source_value, seeded),
     }
+
+
+def _declared_workbench_entries(pack: PluginPack) -> list[dict[str, Any]]:
+    """Return rail entries owned by a pack, including its project tools."""
+
+    metadata = pack.metadata if isinstance(pack.metadata, Mapping) else {}
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    declarations = metadata.get("workbench_entries", ())
+    project_tools = metadata.get("project_tools", ())
+    if not isinstance(declarations, Sequence) or isinstance(declarations, (str, bytes)):
+        declarations = ()
+    if not isinstance(project_tools, Sequence) or isinstance(project_tools, (str, bytes)):
+        project_tools = ()
+    for raw, kind in (
+        *((item, "native") for item in declarations if isinstance(item, Mapping)),
+        *((item, "project_tool") for item in project_tools if isinstance(item, Mapping)),
+    ):
+        entry_id = str(raw.get("id") or raw.get("view") or "").strip()
+        if not entry_id or entry_id in seen:
+            continue
+        seen.add(entry_id)
+        result.append({
+            "id": entry_id,
+            "key": f"{pack.id}/{entry_id}",
+            "pack_id": pack.id,
+            "kind": kind,
+            "title": str(raw.get("title") or entry_id),
+            "description": str(
+                raw.get("description") or raw.get("subtitle") or ""
+            ),
+            "i18n": dict(raw.get("i18n", {}))
+            if isinstance(raw.get("i18n"), Mapping) else {},
+        })
+    return result
+
+
+def _workbench_entry_values(
+    pack: PluginPack,
+    visibility: dict[str, bool],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **entry,
+            "configured_visible": visibility.get(entry["key"], True) is not False,
+        }
+        for entry in _declared_workbench_entries(pack)
+    ]
 
 
 def _failure_values(host: PluginApplicationHost) -> list[dict[str, str]]:
@@ -273,12 +368,20 @@ def _directory_status(host: PluginApplicationHost) -> dict[str, Any]:
 
 
 def plugin_registry_status(host: PluginApplicationHost) -> dict[str, Any]:
+    from cyrene.platform import settings_store
+
     registry = host.registry
+    raw_visibility = settings_store.get("workbench_entry_visibility", {}) or {}
+    entry_visibility = {
+        str(key): value
+        for key, value in raw_visibility.items()
+        if isinstance(key, str) and isinstance(value, bool)
+    } if isinstance(raw_visibility, dict) else {}
     seeded = _seeded_contribution_names(host.plugin_directory)
     registered = registry.list_plugins()
     registered_by_name = {item.plugin.name: item for item in registered}
     packs = [
-        _pack_value(host, pack, registered_by_name, seeded)
+        _pack_value(host, pack, registered_by_name, seeded, entry_visibility)
         for pack in registry.list_packs()
     ]
     plugins = [_plugin_value(host, item, seeded) for item in registered]
@@ -302,6 +405,9 @@ def plugin_registry_status(host: PluginApplicationHost) -> dict[str, Any]:
         "workspace_file_types": frontend["file_types"],
         "workspace_actions": frontend["actions"],
         "workspace_project_types": frontend["project_types"],
+        "workbench_entries": [
+            entry for pack in packs for entry in pack["workbench_entries"]
+        ],
     }
 
 
@@ -344,6 +450,48 @@ def register_plugin_routes(
 
     @router.get("/api/plugins")
     async def api_list_plugins():
+        return plugin_registry_status(host)
+
+    @router.put("/api/plugins/workbench-entries/{pack_id}/{entry_id}")
+    async def api_update_workbench_entry_visibility(
+        pack_id: str,
+        entry_id: str,
+        request: Request,
+    ):
+        try:
+            body = await request.json()
+            visible = body.get("visible") if isinstance(body, dict) else None
+            if not isinstance(visible, bool):
+                raise ValueError("visible must be a boolean")
+            pack = next(
+                (item for item in host.registry.list_packs() if item.id == pack_id),
+                None,
+            )
+            if pack is None or not any(
+                item["id"] == entry_id
+                for item in _declared_workbench_entries(pack)
+            ):
+                raise LookupError("workbench entry not found")
+            from cyrene.platform import settings_store
+
+            current = settings_store.get("workbench_entry_visibility", {}) or {}
+            visibility = dict(current) if isinstance(current, dict) else {}
+            visibility[f"{pack_id}/{entry_id}"] = visible
+            settings_store.set_("workbench_entry_visibility", visibility)
+        except LookupError:
+            return localized_error_response(
+                "Workbench entry not found.",
+                "未找到工作台入口。",
+                404,
+                "workbench_entry_not_found",
+            )
+        except (TypeError, ValueError):
+            return localized_error_response(
+                "The Workbench entry visibility could not be updated.",
+                "无法更新工作台入口可见性。",
+                400,
+                "workbench_entry_visibility_invalid",
+            )
         return plugin_registry_status(host)
 
     @router.get("/api/hooks")
@@ -456,7 +604,14 @@ def register_plugin_routes(
                 body.get("args"),
                 project_id=str(body.get("project_id") or ""),
             )
-        except (OSError, PluginRegistryError, TypeError, ValueError):
+        except PluginRegistryError as exc:
+            en, zh, status, code = _frontend_call_error(exc)
+            if code in {"remote_device_unreachable", "remote_transport_unavailable", "remote_peer_identity_mismatch"}:
+                logger.info("Plugin frontend call unavailable: %s (%s)", pack_id, code)
+            else:
+                logger.warning("Plugin frontend call failed: %s", pack_id, exc_info=True)
+            return localized_error_response(en, zh, status, code)
+        except (OSError, TypeError, ValueError):
             logger.warning("Plugin frontend call failed: %s", pack_id, exc_info=True)
             return localized_error_response(
                 "The Plugin view request failed.",

@@ -38,7 +38,7 @@ This release moves project work completely into conversations. It integrates the
 
 - Plugins can now contribute controlled conversation split cards, file types, project actions, and project types. A pane that the user edits, pins, or takes over remains user-owned and is not replaced by Agent activity.
 - Conversation file changes form a restorable snapshot for Review and remain available after restarting the app. Paths outside the project workspace are never exposed through this surface.
-- Context, pinned topbar resources, and plugin-provided context remain isolated per conversation. New pinned-topbar and split-context examples show how one plugin can present consistent information in different Workbench locations.
+- Context, pinned topbar resources, and plugin-provided context remain isolated per conversation. Pinned topbar context is now a built-in editable plugin that mounts the latest pins on each turn, while the split-context example shows how plugins can present consistent information in different Workbench locations.
 - Chat groups, recent conversations, and local interface preferences are retained during upgrades. Existing source-development data is copied into a separate development data directory so it no longer overwrites the installed app's state.
 
 ### Unified interface and interaction

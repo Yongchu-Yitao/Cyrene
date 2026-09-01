@@ -53,6 +53,7 @@ CONTEXT_PACK_IDS = frozenset({
     "cyrene_split_context",
     "cyrene_soul",
     "cyrene_system_prompt",
+    "pinned_topbar_context",
 })
 
 
@@ -403,6 +404,85 @@ def test_unmanaged_pack_and_standalone_collisions_are_never_merged(
     assert all("preserved" in diagnostic for diagnostic in seeded.diagnostics)
     manifest = json.loads(seeded.manifest.read_text(encoding="utf-8"))
     assert manifest == {"version": 1, "files": {}}
+
+
+def test_unchanged_legacy_example_is_promoted_to_canonical_pack(
+    tmp_path,
+    monkeypatch,
+):
+    plugin_directory = tmp_path / "plugin_impl"
+    legacy_files = {
+        "README.md": b"legacy readme\n",
+        "__init__.py": b"legacy initializer\n",
+        "context.py": b"legacy context\n",
+    }
+    canonical = MappingProxyType(
+        {
+            "pinned_topbar_context/README.md": b"canonical readme\n",
+            "pinned_topbar_context/__init__.py": b"canonical initializer\n",
+            "pinned_topbar_context/context.py": b"canonical context\n",
+        }
+    )
+    monkeypatch.setattr(native_tools, "_collect_canonical_files", lambda: canonical)
+    monkeypatch.setattr(
+        native_tools,
+        "_LEGACY_CANONICAL_PACK_HASHES",
+        MappingProxyType({
+            "pinned_topbar_context": frozenset(
+                (relative, _sha(content))
+                for relative, content in legacy_files.items()
+            ),
+        }),
+    )
+    legacy_pack = plugin_directory / "pinned_topbar_context"
+    legacy_pack.mkdir(parents=True)
+    for relative, content in legacy_files.items():
+        (legacy_pack / relative).write_bytes(content)
+    cache = legacy_pack / "__pycache__"
+    cache.mkdir()
+    (cache / "context.cpython-312.pyc").write_bytes(b"generated")
+
+    seeded = seed_builtin_plugin_directory(plugin_directory)
+
+    for relative, content in canonical.items():
+        assert (plugin_directory / relative).read_bytes() == content
+    assert any(
+        "promoted unchanged legacy Plugin pack" in item
+        for item in seeded.diagnostics
+    )
+    manifest = json.loads(seeded.manifest.read_text(encoding="utf-8"))
+    assert set(manifest["files"]) == set(canonical)
+
+
+def test_modified_legacy_example_remains_user_owned(tmp_path, monkeypatch):
+    plugin_directory = tmp_path / "plugin_impl"
+    canonical = MappingProxyType(
+        {"pinned_topbar_context/__init__.py": b"canonical\n"}
+    )
+    monkeypatch.setattr(native_tools, "_collect_canonical_files", lambda: canonical)
+    monkeypatch.setattr(
+        native_tools,
+        "_LEGACY_CANONICAL_PACK_HASHES",
+        MappingProxyType({
+            "pinned_topbar_context": frozenset({
+                ("__init__.py", _sha(b"legacy\n")),
+            }),
+        }),
+    )
+    legacy_pack = plugin_directory / "pinned_topbar_context"
+    legacy_pack.mkdir(parents=True)
+    initializer = legacy_pack / "__init__.py"
+    initializer.write_bytes(b"user edited\n")
+
+    seeded = seed_builtin_plugin_directory(plugin_directory)
+
+    assert initializer.read_bytes() == b"user edited\n"
+    assert any(
+        "preserved canonical pack collision" in item
+        for item in seeded.diagnostics
+    )
+    manifest = json.loads(seeded.manifest.read_text(encoding="utf-8"))
+    assert manifest["files"] == {}
 
 
 def test_bytecode_only_pack_shell_is_repaired_from_canonical_sources(

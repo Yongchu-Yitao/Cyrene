@@ -134,6 +134,7 @@ class RemoteDesktopProvider(Protocol):
         ice_servers: list[dict[str, Any]],
         credentials: dict[str, str] | None = None,
         permissions: dict[str, bool] | None = None,
+        viewport: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
     async def disconnect(self, session_id: str) -> None: ...

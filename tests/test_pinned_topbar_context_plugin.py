@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from pathlib import Path
 
 from cyrene.core.context import ContextStoreRouter
@@ -15,8 +14,10 @@ from cyrene.workbench.chat.chat_repository import ChatRepository
 def _plugin_source() -> Path:
     return (
         Path(__file__).resolve().parents[1]
-        / "examples"
+        / "src"
+        / "cyrene"
         / "plugins"
+        / "builtin"
         / "pinned_topbar_context"
     )
 
@@ -44,7 +45,9 @@ def test_pinned_topbar_context_mounts_resources_added_between_user_turns(
 
     plugin_root = tmp_path / "plugin_impl"
     plugin_root.mkdir()
-    shutil.copytree(source, plugin_root / "pinned_topbar_context")
+    from cyrene.plugins.native_tools import seed_builtin_plugin_directory
+
+    seed_builtin_plugin_directory(plugin_root)
     registry = PluginRegistry(include_core=False)
     assert registry.load_directory(plugin_root) == ()
     pack = next(

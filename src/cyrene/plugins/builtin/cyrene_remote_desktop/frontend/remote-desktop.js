@@ -16,7 +16,10 @@
   let observationTimer = null;
   let clipboardTimer = null;
   let securityTimer = null;
+  let securityPollRunning = false;
+  let securityFailureCount = 0;
   let connectionLossTimer = null;
+  let lastLatencyMs = null;
   let clipboardRevision = 0;
   let lastLocalClipboardText = '';
   let remoteMediaStream = null;
@@ -36,7 +39,7 @@
   const messages = {
     en: {
       remoteDesktop: 'Remote Desktop', ready: 'Ready', sendFiles: 'Send files', switchDisplay: 'Switch display',
-      shareMicrophone: 'Share microphone', microphoneShared: 'Microphone is being shared', disconnect: 'Disconnect',
+      shareMicrophone: 'Share microphone', microphoneShared: 'Microphone is being shared', disconnect: 'Disconnect', close: 'Close',
       desktopDisplay: 'Remote desktop display', connectTitle: 'Connect to this desktop',
       connectDetail: 'The picture, audio and controls stay inside the encrypted remote session.',
       connectionMode: 'Connection mode', currentDesktop: 'Current desktop', currentDesktopDetail: 'Share the signed-in session',
@@ -45,6 +48,7 @@
       connected: 'Connected', encryptedWebrtc: 'Encrypted WebRTC', directOnly: 'Direct ICE only · TURN is not configured', connectionLost: 'Connection lost',
       connectionLostDetail: 'The encrypted media connection ended. You can reconnect without restoring credentials.',
       couldNotConnect: 'Could not connect', signInCancelled: 'Sign-in was cancelled.', connectionFailed: 'Connection failed.',
+      rdpAuthenticationFailed: 'RDP authentication failed. Use the credentials configured under Remote Login on the controlled device.',
       notConnected: 'Not connected', qualityAuto: 'Auto quality', qualitySmooth: 'Smooth quality',
       qualityBalanced: 'Balanced quality', qualityClear: 'Clear quality', clipboardReady: 'Clipboard ready',
       clipboardSynced: 'Clipboard synced', remoteClipboardUpdated: 'Remote clipboard updated', receivingImage: 'Receiving image…',
@@ -53,6 +57,8 @@
       preparingFiles: 'Preparing {count} file(s)…', filesSent: '{count} file(s) sent', sendingImage: 'Sending image…',
       imageSent: 'Image clipboard sent', clipboardSent: 'Clipboard sent', hostTimeout: 'The Remote Desktop host did not respond.',
       capabilityTimeout: 'The desktop host capability did not respond.', pluginCallFailed: 'Plugin call failed.',
+      remoteUnavailable: 'The remote device is unavailable.',
+      remoteIdentityChanged: 'The paired device identity changed. Pair this device again.',
       imageReadFailed: 'Clipboard image could not be read.', fileReadFailed: 'Clipboard file could not be read.', displays: 'Displays', fileClipboard: 'File clipboard',
       fileChannelDetail: 'Use existing encrypted file channel', sendFolder: 'Send folder', folderDetail: 'Keep its directory structure',
       reconnecting: 'Reconnecting…', protectedSurface: 'The remote device is locked or showing a protected system surface.',
@@ -61,7 +67,7 @@
     },
     zh: {
       remoteDesktop: '远程桌面', ready: '就绪', sendFiles: '发送文件', switchDisplay: '切换显示器',
-      shareMicrophone: '共享麦克风', microphoneShared: '麦克风正在共享', disconnect: '断开连接',
+      shareMicrophone: '共享麦克风', microphoneShared: '麦克风正在共享', disconnect: '断开连接', close: '关闭',
       desktopDisplay: '远程桌面画面', connectTitle: '连接到此桌面',
       connectDetail: '画面、音频和控制操作仅在加密的远程会话内传输。',
       connectionMode: '连接模式', currentDesktop: '当前桌面', currentDesktopDetail: '共享已登录的桌面会话',
@@ -70,6 +76,7 @@
       connected: '已连接', encryptedWebrtc: '加密 WebRTC', directOnly: '仅直连 ICE · 尚未配置 TURN', connectionLost: '连接已中断',
       connectionLostDetail: '加密媒体连接已经结束。重新连接时不会恢复此前的登录凭据。',
       couldNotConnect: '无法连接', signInCancelled: '已取消系统登录。', connectionFailed: '连接失败。',
+      rdpAuthenticationFailed: 'RDP 身份验证失败，请使用被控端“远程登录”中配置的用户名和密码。',
       notConnected: '未连接', qualityAuto: '自动画质', qualitySmooth: '流畅画质',
       qualityBalanced: '均衡画质', qualityClear: '清晰画质', clipboardReady: '剪贴板已就绪',
       clipboardSynced: '剪贴板已同步', remoteClipboardUpdated: '远端文本剪贴板已更新', receivingImage: '正在接收图片…',
@@ -78,6 +85,8 @@
       preparingFiles: '正在准备 {count} 个文件…', filesSent: '已发送 {count} 个文件', sendingImage: '正在发送图片…',
       imageSent: '图片剪贴板已发送', clipboardSent: '剪贴板已发送', hostTimeout: '远程桌面宿主未响应。',
       capabilityTimeout: '桌面宿主能力未响应。', pluginCallFailed: '插件调用失败。',
+      remoteUnavailable: '远端设备当前不可用。',
+      remoteIdentityChanged: '配对的设备身份已变更，请重新配对此设备。',
       imageReadFailed: '无法读取剪贴板图片。', fileReadFailed: '无法读取剪贴板文件。', displays: '显示器', fileClipboard: '文件剪贴板',
       fileChannelDetail: '使用现有的加密文件通道', sendFolder: '发送文件夹', folderDetail: '保留目录结构',
       reconnecting: '正在重新连接…', protectedSurface: '远端设备已锁定或正在显示受保护的系统界面。',
@@ -121,6 +130,7 @@
   const stage = document.getElementById('stage');
   const imeInput = document.getElementById('ime-input');
   const video = document.getElementById('remote-video');
+  const videoBackdrop = document.getElementById('remote-video-backdrop');
   const audio = document.getElementById('remote-audio');
   const empty = document.getElementById('empty-state');
   const busy = document.getElementById('busy-state');
@@ -129,15 +139,48 @@
   const microphoneButton = document.getElementById('microphone-button');
   const displayButton = document.getElementById('display-button');
   const displayMenu = document.getElementById('display-menu');
+  const displayMenuClose = document.getElementById('display-menu-close');
   const displayList = document.getElementById('display-list');
   const fileButton = document.getElementById('file-button');
   const fileMenu = document.getElementById('file-menu');
+  const fileMenuClose = document.getElementById('file-menu-close');
+  const popoverScrim = document.getElementById('popover-scrim');
   const fileInput = document.getElementById('file-input');
   const folderInput = document.getElementById('folder-input');
   let viewportUpdateFrame = 0;
 
+  function focusStage() {
+    try { stage.focus({ preventScroll: true }); } catch (_) { stage.focus(); }
+  }
+
+  function closePopovers(options) {
+    displayMenu.hidden = true;
+    fileMenu.hidden = true;
+    popoverScrim.hidden = true;
+    if (options && options.focusStage) focusStage();
+  }
+
+  function openPopover(menu, closeButton) {
+    displayMenu.hidden = menu !== displayMenu;
+    fileMenu.hidden = menu !== fileMenu;
+    popoverScrim.hidden = false;
+    window.requestAnimationFrame(function () {
+      if (!menu.hidden && closeButton) closeButton.focus({ preventScroll: true });
+    });
+  }
+
+  function togglePopover(menu, closeButton) {
+    if (!menu.hidden) {
+      closePopovers({ focusStage: true });
+      return false;
+    }
+    openPopover(menu, closeButton);
+    return true;
+  }
+
   function callTimeoutMs(method) {
     if (method === 'remoteDesktop.session.connect' || method === 'remoteDesktop.session.reconnect') return 90_000;
+    if (method === 'remoteDesktop.credentials.request') return 185_000;
     if (method.indexOf('remoteDesktop.clipboard.files.') === 0) return 180_000;
     if (method.indexOf('remoteDesktop.clipboard.image.') === 0) return 90_000;
     return 25_000;
@@ -206,6 +249,7 @@
     disconnectButton.hidden = name !== 'connected';
     retryButton.hidden = name !== 'failed';
     const connected = name === 'connected';
+    if (!connected) closePopovers();
     fileButton.disabled = !connected || sessionPermissions.clipboard_file !== true;
     displayButton.disabled = !connected || sessionPermissions.display_select !== true;
     const modeCapabilities = providerCapabilitiesByMode[mode] || [];
@@ -290,15 +334,18 @@
     return true;
   }
 
-  function publishViewportSize() {
-    if (!controlChannel || controlChannel.readyState !== 'open') return;
+  function currentViewportSize() {
     const bounds = stage.getBoundingClientRect();
-    channelSend(controlChannel, {
-      type: 'viewport',
+    return {
       width: Math.max(1, Math.round(bounds.width)),
       height: Math.max(1, Math.round(bounds.height)),
       device_pixel_ratio: Math.max(0.5, Math.min(2, Number(window.devicePixelRatio || 1))),
-    });
+    };
+  }
+
+  function publishViewportSize() {
+    if (!controlChannel || controlChannel.readyState !== 'open') return;
+    channelSend(controlChannel, Object.assign({ type: 'viewport' }, currentViewportSize()));
   }
 
   if (typeof ResizeObserver === 'function') {
@@ -364,12 +411,15 @@
   function closePeer() {
     if (observationTimer) window.clearInterval(observationTimer);
     if (clipboardTimer) window.clearInterval(clipboardTimer);
-    if (securityTimer) window.clearInterval(securityTimer);
+    if (securityTimer) window.clearTimeout(securityTimer);
     if (connectionLossTimer) window.clearTimeout(connectionLossTimer);
     observationTimer = null;
     clipboardTimer = null;
     securityTimer = null;
+    securityPollRunning = false;
+    securityFailureCount = 0;
     connectionLossTimer = null;
+    lastLatencyMs = null;
     if (microphoneStream) microphoneStream.getTracks().forEach(function (track) { track.stop(); });
     microphoneStream = null;
     microphoneSender = null;
@@ -378,6 +428,7 @@
     inputChannel = null;
     controlChannel = null;
     video.srcObject = null;
+    videoBackdrop.srcObject = null;
     audio.srcObject = null;
     remoteMediaStream = null;
     secureSurface = false;
@@ -476,8 +527,11 @@
         remoteMediaStream.addTrack(event.track);
       }
       if (event.track.kind === 'video') {
-        video.srcObject = new MediaStream(remoteMediaStream.getVideoTracks());
+        const remoteVideoStream = new MediaStream(remoteMediaStream.getVideoTracks());
+        video.srcObject = remoteVideoStream;
+        videoBackdrop.srcObject = remoteVideoStream;
         video.play().catch(function () {});
+        videoBackdrop.play().catch(function () {});
       } else if (event.track.kind === 'audio') {
         if (sessionPermissions.system_audio !== true) return;
         audio.srcObject = new MediaStream(remoteMediaStream.getAudioTracks());
@@ -521,6 +575,7 @@
     if (reconnectInProgress || !lostSession) return;
     reconnectInProgress = true;
     closePeer();
+    publishState({ latency_ms: '' });
     state('connecting', t('reconnecting'), t('negotiating'));
     let lastError = null;
     try {
@@ -530,6 +585,8 @@
         if (delays[attempt]) await delay(delays[attempt]);
         try {
           const prepared = await call('remoteDesktop.session.prepare', { device_id: deviceId });
+          deviceId = String(prepared && prepared.device_id || deviceId);
+          publishState({ device_id: deviceId });
           if (prepared && prepared.network && prepared.network.turn_configured === false) {
             setText('transport-copy', t('directOnly'));
           }
@@ -540,6 +597,7 @@
           const result = await call('remoteDesktop.session.reconnect', {
             session_id: lostSession,
             offer,
+            viewport: currentViewportSize(),
           });
           candidateSessionId = String(result && result.session && result.session.session_id || '');
           if (!result || result.ok === false || !result.answer) {
@@ -578,12 +636,15 @@
   async function connect() {
     if (!context || !deviceId) return;
     closePeer();
+    publishState({ latency_ms: '' });
     applySessionPermissions({});
     state('connecting', mode === 'remote_login' ? t('openingLogin') : t('connecting'), t('negotiating'));
     let candidateSessionId = '';
     try {
       const requestedMode = mode;
       const prepared = await call('remoteDesktop.session.prepare', { device_id: deviceId });
+      deviceId = String(prepared && prepared.device_id || deviceId);
+      publishState({ device_id: deviceId });
       if (prepared && prepared.network && prepared.network.turn_configured === false) {
         setText('transport-copy', t('directOnly'));
       }
@@ -604,6 +665,7 @@
         mode,
         offer,
         quality_mode: qualityMode,
+        viewport: currentViewportSize(),
       });
       if (result && result.code === 'desktop_credentials_required' && result.session && result.session.session_id) {
         candidateSessionId = String(result.session.session_id);
@@ -615,11 +677,18 @@
           mode,
           offer,
           quality_mode: qualityMode,
+          viewport: currentViewportSize(),
           credential_handle: credential.credential_handle,
         });
       }
       candidateSessionId = String(result && result.session && result.session.session_id || candidateSessionId);
-      if (!result || result.ok === false || !result.answer) throw new Error(String(result && (result.error || result.code) || t('connectionFailed')));
+      if (!result || result.ok === false || !result.answer) {
+        throw new Error(
+          result && result.code === 'rdp_authentication_failed'
+            ? t('rdpAuthenticationFailed')
+            : String(result && (result.error || result.code) || t('connectionFailed')),
+        );
+      }
       sessionId = candidateSessionId;
       applySessionPermissions(result.permissions);
       publishState(Object.assign({}, result.session || {}, {
@@ -660,22 +729,29 @@
     closePeer();
     if (current) await call('remoteDesktop.session.disconnect', { session_id: current }).catch(function () {});
     setText('transport-copy', t('notConnected'));
-    publishState({ session_id: '', state: 'ready', microphone_enabled: false });
+    publishState({ session_id: '', state: 'ready', microphone_enabled: false, latency_ms: '' });
     state('failed', t('notConnected'), t('connectDetail'));
   }
 
   function videoPoint(event) {
     if (!video.videoWidth || !video.videoHeight) return null;
     const rect = video.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return null;
+    // The foreground uses object-fit: contain so every remote pixel stays
+    // visible and undistorted.  Map only the actual rendered picture; the
+    // blurred cover layer is decorative and must never receive input.
     const scale = Math.min(rect.width / video.videoWidth, rect.height / video.videoHeight);
-    const width = video.videoWidth * scale;
-    const height = video.videoHeight * scale;
-    const left = rect.left + (rect.width - width) / 2;
-    const top = rect.top + (rect.height - height) / 2;
-    if (event.clientX < left || event.clientX > left + width || event.clientY < top || event.clientY > top + height) return null;
+    const renderedWidth = video.videoWidth * scale;
+    const renderedHeight = video.videoHeight * scale;
+    const offsetX = Math.max(0, (rect.width - renderedWidth) / 2);
+    const offsetY = Math.max(0, (rect.height - renderedHeight) / 2);
+    const localX = event.clientX - rect.left - offsetX;
+    const localY = event.clientY - rect.top - offsetY;
+    if (localX < 0 || localX > renderedWidth || localY < 0 || localY > renderedHeight) return null;
     return {
-      x_normalized: (event.clientX - left) / width,
-      y_normalized: (event.clientY - top) / height,
+      x_normalized: Math.max(0, Math.min(1, localX / renderedWidth)),
+      y_normalized: Math.max(0, Math.min(1, localY / renderedHeight)),
     };
   }
 
@@ -947,7 +1023,7 @@
 
   async function showDisplays() {
     if (!sessionId) return;
-    if (!displayMenu.hidden) { displayMenu.hidden = true; return; }
+    if (!displayMenu.hidden) { closePopovers({ focusStage: true }); return; }
     try {
       const result = await call('remoteDesktop.display.list', { session_id: sessionId });
       displayList.textContent = '';
@@ -962,11 +1038,11 @@
         button.append(name, size);
         button.addEventListener('click', async function () {
           await call('remoteDesktop.display.select', { session_id: sessionId, display_id: display.id });
-          displayMenu.hidden = true;
+          closePopovers({ focusStage: true });
         });
         displayList.appendChild(button);
       });
-      displayMenu.hidden = false;
+      openPopover(displayMenu, displayMenuClose);
     } catch (_) {}
   }
 
@@ -1033,23 +1109,90 @@
   function refreshSecurityState() {
     if (!sessionId) return Promise.resolve();
     return call('remoteDesktop.security.get', { session_id: sessionId })
-      .then(applySecurityState)
-      .catch(function () {});
+      .then(function (result) {
+        securityFailureCount = 0;
+        applySecurityState(result);
+      })
+      .catch(function (error) {
+        securityFailureCount += 1;
+        if (securityFailureCount < 3 || !sessionId) return;
+        const lostSession = sessionId;
+        const code = String(error && error.code || '');
+        sessionId = '';
+        closePeer();
+        publishState({ session_id: '', state: 'disconnected', latency_ms: '' });
+        state(
+          'failed',
+          t('connectionLost'),
+          code === 'remote_peer_identity_mismatch'
+            ? t('remoteIdentityChanged') : t('remoteUnavailable')
+        );
+        call('remoteDesktop.session.disconnect', { session_id: lostSession }).catch(function () {});
+      });
+  }
+
+  async function refreshPeerLatency() {
+    const activePeer = peer;
+    if (!activePeer || !sessionId || activePeer.connectionState !== 'connected') return;
+    try {
+      const reports = await activePeer.getStats();
+      if (peer !== activePeer || !sessionId) return;
+      let selectedPairId = '';
+      let selectedPair = null;
+      reports.forEach(function (report) {
+        if (report.type === 'transport' && report.selectedCandidatePairId) {
+          selectedPairId = String(report.selectedCandidatePairId);
+        }
+      });
+      if (selectedPairId && typeof reports.get === 'function') selectedPair = reports.get(selectedPairId) || null;
+      if (!selectedPair) {
+        reports.forEach(function (report) {
+          if (selectedPair || report.type !== 'candidate-pair' || report.state !== 'succeeded') return;
+          if (report.selected === true || report.nominated === true) selectedPair = report;
+        });
+      }
+      if (!selectedPair) return;
+      let seconds = Number(selectedPair.currentRoundTripTime);
+      if (!Number.isFinite(seconds) && Number(selectedPair.responsesReceived) > 0) {
+        seconds = Number(selectedPair.totalRoundTripTime) / Number(selectedPair.responsesReceived);
+      }
+      if (!Number.isFinite(seconds) || seconds < 0 || seconds > 60) return;
+      const sample = Math.round(seconds * 1000);
+      const latencyMs = lastLatencyMs == null ? sample : Math.round(lastLatencyMs * .65 + sample * .35);
+      if (latencyMs === lastLatencyMs) return;
+      lastLatencyMs = latencyMs;
+      publishState({ session_id: sessionId, latency_ms: latencyMs });
+    } catch (_) {}
   }
 
   function startSecurityPoll() {
-    if (securityTimer || !sessionId) return;
-    refreshSecurityState();
-    securityTimer = window.setInterval(refreshSecurityState, 1200);
+    if (securityTimer || securityPollRunning || !sessionId) return;
+    securityPollRunning = true;
+    refreshPeerLatency();
+    refreshSecurityState().finally(function () {
+      securityPollRunning = false;
+      if (!sessionId) return;
+      const retryDelay = Math.min(15_000, 1200 * Math.pow(2, securityFailureCount));
+      securityTimer = window.setTimeout(function () {
+        securityTimer = null;
+        startSecurityPoll();
+      }, retryDelay);
+    });
   }
 
   retryButton.addEventListener('click', connect);
   disconnectButton.addEventListener('click', disconnect);
   microphoneButton.addEventListener('click', setMicrophone);
   displayButton.addEventListener('click', showDisplays);
-  fileButton.addEventListener('click', function () { fileMenu.hidden = !fileMenu.hidden; displayMenu.hidden = true; });
-  document.getElementById('choose-files').addEventListener('click', function () { fileMenu.hidden = true; fileInput.click(); });
-  document.getElementById('choose-folder').addEventListener('click', function () { fileMenu.hidden = true; folderInput.click(); });
+  fileButton.addEventListener('click', function () { togglePopover(fileMenu, fileMenuClose); });
+  displayMenuClose.addEventListener('click', function () { closePopovers({ focusStage: true }); });
+  fileMenuClose.addEventListener('click', function () { closePopovers({ focusStage: true }); });
+  popoverScrim.addEventListener('pointerdown', function (event) {
+    event.preventDefault();
+    closePopovers({ focusStage: true });
+  });
+  document.getElementById('choose-files').addEventListener('click', function () { closePopovers(); fileInput.click(); });
+  document.getElementById('choose-folder').addEventListener('click', function () { closePopovers(); folderInput.click(); });
   fileInput.addEventListener('change', function () { sendClipboardFiles(fileInput.files); fileInput.value = ''; });
   folderInput.addEventListener('change', function () { sendClipboardFiles(folderInput.files); folderInput.value = ''; });
   stage.addEventListener('dragover', function (event) {
@@ -1064,9 +1207,13 @@
   });
   document.addEventListener('pointerdown', function (event) {
     window.parent.postMessage({ source: 'cyrene-plugin', type: 'interaction' }, '*');
-    if (!displayMenu.hidden && !displayMenu.contains(event.target) && event.target !== displayButton) displayMenu.hidden = true;
-    if (!fileMenu.hidden && !fileMenu.contains(event.target) && event.target !== fileButton) fileMenu.hidden = true;
   });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || (displayMenu.hidden && fileMenu.hidden)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closePopovers({ focusStage: true });
+  }, true);
 
   window.addEventListener('message', function (event) {
     if (event.source !== window.parent) return;
@@ -1080,16 +1227,19 @@
       const request = pending.get(String(message.requestId || ''));
       if (!request) return;
       pending.delete(String(message.requestId || ''));
-      if (message.ok === false) request.reject(new Error(String(message.error || t('pluginCallFailed'))));
-      else request.resolve(message.result);
+      if (message.ok === false) {
+        const error = new Error(String(message.error || t('pluginCallFailed')));
+        error.code = String(message.code || '');
+        error.status = Number(message.status || 0);
+        request.reject(error);
+      } else request.resolve(message.result);
       return;
     }
     if (message.type === 'command') {
       const command = message.command && typeof message.command === 'object' ? message.command : {};
       const action = String(command.action || '');
       if (action === 'file_transfer') {
-        fileMenu.hidden = !fileMenu.hidden;
-        displayMenu.hidden = true;
+        togglePopover(fileMenu, fileMenuClose);
       } else if (action === 'switch_display') {
         showDisplays();
       } else if (action === 'toggle_microphone') {

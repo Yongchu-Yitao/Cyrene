@@ -12,6 +12,7 @@ from typing import Any
 
 from ..hook import HookAwaitingUser
 from ..observability import log_operation, operation
+from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS, PluginBoundaryError
 from .execution import bind_plugin_execution
 from .context import plugin_language, plugin_localized
 from .circuit import PluginCircuitBreaker
@@ -83,7 +84,10 @@ def _context_run_id(context: PluginContext) -> str:
     ).strip()
 
 
-def _validation_failure(context: PluginContext, exc: Exception) -> PluginFailure:
+def _validation_failure(
+    context: PluginContext,
+    exc: PluginBoundaryError,
+) -> PluginFailure:
     if isinstance(exc, PluginInputValidationError):
         code = "plugin_invalid_arguments"
         retryable = True
@@ -121,7 +125,10 @@ def plugin_context_is_read_only(context: PluginContext) -> bool:
     return isinstance(run_context, Mapping) and run_context.get("read_only") is True
 
 
-def _validation_error_text(context: PluginContext, exc: Exception) -> str:
+def _validation_error_text(
+    context: PluginContext,
+    exc: PluginBoundaryError,
+) -> str:
     english = str(exc) or "Plugin call validation failed."
     if isinstance(exc, PluginInputValidationError):
         chinese = exc.localized_message("zh")
@@ -142,7 +149,7 @@ def _validation_error_text(context: PluginContext, exc: Exception) -> str:
 def _execution_error_text(
     context: PluginContext,
     plugin: Plugin,
-    exc: Exception,
+    exc: PluginBoundaryError,
 ) -> str:
     public_error = str(exc).strip()
     if plugin.metadata.get("public_errors") is True and public_error:
@@ -162,7 +169,7 @@ def _execution_error_details(exc: BaseException) -> dict[str, Any]:
         return {}
     try:
         details = exporter()
-    except Exception:
+    except PLUGIN_BOUNDARY_ERRORS:
         return {}
     return dict(details) if isinstance(details, Mapping) else {}
 
@@ -425,7 +432,7 @@ class PluginRuntime:
                     plugin, normalization, arguments, permission_request = (
                         await _validated_call(self, call, context)
                     )
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
                     failure = _validation_failure(context, exc)
                     log_operation(
                         logger,
@@ -556,7 +563,7 @@ class PluginRuntime:
                                 reviewed_arguments,
                                 item.plugin.input_schema,
                             )
-                        except Exception as exc:
+                        except PLUGIN_BOUNDARY_ERRORS as exc:
                             failure = _validation_failure(context, exc)
                             log_operation(
                                 logger,
@@ -658,7 +665,7 @@ class PluginRuntime:
         plugin: Plugin,
         call: PluginCall,
         context: PluginContext,
-        exc: Exception,
+        exc: PluginBoundaryError,
     ) -> tuple[str, PluginFailure]:
         log_operation(
             logger,
@@ -743,7 +750,7 @@ class PluginRuntime:
         ) as op:
             try:
                 await self._validate_prepared_call(prepared, context)
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 failure = _validation_failure(context, exc)
                 op.finish(success=False, rejected=True, error=exc)
                 return PluginCallResult(
@@ -804,7 +811,7 @@ class PluginRuntime:
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 error, failure = self._handler_failure(
                     plugin, call, context, exc
                 )
@@ -932,7 +939,7 @@ class PluginRuntime:
                 op.finish(hook_result_count=len(results))
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 op.finish(dispatch_success=False, error=exc)
                 log_operation(
                     logger,

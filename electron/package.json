@@ -147,6 +147,8 @@
       "afterInstall": "linux-after-install.sh",
       "depends": [
         "at-spi2-core",
+        "freerdp3-x11 | freerdp2-x11",
+        "xvfb",
         "xdotool"
       ]
     },
@@ -175,6 +177,7 @@
       "remote-desktop-preload.js",
       "remote-desktop-host.html",
       "remote-desktop-host.js",
+      "remote-desktop-rdp-sidecar.js",
       "remote-desktop-indicator-preload.js",
       "remote-desktop-indicator.html",
       "remote-desktop-indicator.css",

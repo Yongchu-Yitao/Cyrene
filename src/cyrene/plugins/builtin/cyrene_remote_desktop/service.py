@@ -358,6 +358,28 @@ class RemoteDesktopService:
             )
         return peer
 
+    def _resolve_device_id(self, device_id: str = "") -> str:
+        """Resolve the Plugin view's placeholder for a single paired desktop.
+
+        Restored panes created before collection instances were persisted can carry
+        the generic ``default`` instance id.  Recover only when there is exactly
+        one non-revoked peer that granted desktop session access; never guess
+        between multiple desktop devices.
+        """
+        requested = str(device_id or "").strip()
+        if requested and requested != "default":
+            return requested
+        store = getattr(self.remote_service, "store", None)
+        peers = store.list_peers() if store is not None else []
+        candidates = [
+            str(peer.get("device_id") or "")
+            for peer in peers
+            if not str(peer.get("revoked_at") or "")
+            and "desktop:session_connect" in self._peer_capabilities(peer)
+            and str(peer.get("device_id") or "")
+        ]
+        return candidates[0] if len(candidates) == 1 else ""
+
     @staticmethod
     def _session_public(session: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -499,6 +521,11 @@ class RemoteDesktopService:
         }
 
     async def prepare(self, device_id: str) -> dict[str, Any]:
+        device_id = self._resolve_device_id(device_id)
+        if not device_id:
+            raise RemoteDesktopError(
+                "desktop_device_required", "Remote desktop device is required", 400
+            )
         self._require_peer_capability(device_id, "desktop:session_connect")
         remote_probe: dict[str, Any] = {}
         gateway = self._peer_transport()
@@ -522,6 +549,7 @@ class RemoteDesktopService:
         network = self._network_status(device_id)
         return {
             "ok": True,
+            "device_id": device_id,
             "protocol_version": REMOTE_DESKTOP_PROTOCOL_VERSION,
             "ice_servers": network["ice_servers"],
             "network": network,
@@ -555,6 +583,7 @@ class RemoteDesktopService:
             "display_id": str(values.get("display_id") or preference["preferred_display_id"] or ""),
             "quality_mode": quality,
             "ice_servers": self._ice_servers(session_id),
+            "viewport": dict(values.get("viewport") or {}),
         }
         credentials: dict[str, str] | None = None
         if mode == "remote_login":
@@ -617,7 +646,7 @@ class RemoteDesktopService:
         }
 
     async def connect(self, values: dict[str, Any]) -> dict[str, Any]:
-        device_id = str(values.get("device_id") or "").strip()
+        device_id = self._resolve_device_id(str(values.get("device_id") or ""))
         if not device_id:
             raise RemoteDesktopError("desktop_device_required", "device_id is required")
         mode = str(values.get("mode") or "current_desktop")
@@ -704,7 +733,12 @@ class RemoteDesktopService:
             credential_handle=credential_handle,
         )
 
-    async def reconnect(self, session_id: str, offer: dict[str, Any]) -> dict[str, Any]:
+    async def reconnect(
+        self,
+        session_id: str,
+        offer: dict[str, Any],
+        viewport: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         previous = self.store.get_session(session_id)
         if previous is None:
             raise RemoteDesktopError("desktop_session_not_found", "Remote desktop session not found", 404)
@@ -718,6 +752,7 @@ class RemoteDesktopService:
                 "quality_mode": previous["quality_mode"],
                 "pane_card_id": previous["pane_card_id"],
                 "pane_layout_id": previous["pane_layout_id"],
+                "viewport": dict(viewport or {}),
             }
         )
 
@@ -777,23 +812,36 @@ class RemoteDesktopService:
         await self._publish("remote_desktop_displays_changed", session=updated)
         return {"ok": True, "session": self._session_public(updated), "display": display}
 
-    async def set_mode(self, session_id: str, mode: str) -> dict[str, Any]:
+    async def set_mode(
+        self, session_id: str, mode: str, *, device_id: str = ""
+    ) -> dict[str, Any]:
         if mode not in {"current_desktop", "remote_login"}:
             raise RemoteDesktopError("desktop_mode_invalid", "Unsupported desktop mode")
-        session = self._connected_session(session_id)
-        device_id = str(session["device_id"])
+        session = self.store.get_session(session_id) if session_id else None
+        resolved_device_id = str(session.get("device_id") or "") if session else self._resolve_device_id(device_id)
+        if not resolved_device_id:
+            raise RemoteDesktopError(
+                "desktop_device_required", "Remote desktop device is required", 400
+            )
         capability = (
             "desktop:current_session"
             if mode == "current_desktop"
             else "desktop:remote_login"
         )
-        self._require_peer_capability(device_id, capability)
-        self.store.update_preference(device_id, preferred_mode=mode)
-        await self.disconnect(session_id, notify_remote=True, reconnecting=True)
+        self._require_peer_capability(resolved_device_id, capability)
+        self.store.update_preference(resolved_device_id, preferred_mode=mode)
+        # Mode changes are also a recovery path. Failed and credential-waiting
+        # sessions have no live remote Provider, but must still be closed.
+        if session is not None:
+            await self.disconnect(
+                session_id,
+                notify_remote=bool(session.get("remote_session_id")),
+                reconnecting=True,
+            )
         self.store.audit(
             "mode_changed",
             session_id=session_id,
-            device_id=device_id,
+            device_id=resolved_device_id,
             outcome="ok",
             detail={"mode": mode},
         )
@@ -810,16 +858,34 @@ class RemoteDesktopService:
             },
         }
 
-    async def set_quality(self, session_id: str, quality_mode: str) -> dict[str, Any]:
+    async def set_quality(
+        self, session_id: str, quality_mode: str, *, device_id: str = ""
+    ) -> dict[str, Any]:
         if quality_mode not in QUALITY_MODES:
             raise RemoteDesktopError("desktop_quality_invalid", "Unsupported quality mode")
-        session = self._connected_session(session_id)
-        await self._remote_request(session, "desktop.quality.set", {"quality_mode": quality_mode})
-        updated = self.store.update_session(session_id, quality_mode=quality_mode)
-        self.store.update_preference(str(session["device_id"]), quality_mode=quality_mode)
-        self.store.audit("quality_changed", session_id=session_id, device_id=str(session["device_id"]), outcome="ok", detail={"quality_mode": quality_mode})
-        await self._publish("remote_desktop_quality_changed", session=updated)
-        return {"ok": True, "session": self._session_public(updated)}
+        session = self.store.get_session(session_id) if session_id else None
+        resolved_device_id = str(session.get("device_id") or "") if session else self._resolve_device_id(device_id)
+        if not resolved_device_id:
+            raise RemoteDesktopError(
+                "desktop_device_required", "Remote desktop device is required", 400
+            )
+        self._peer(resolved_device_id)
+        self.store.update_preference(resolved_device_id, quality_mode=quality_mode)
+        if session is not None and session.get("state") == "connected":
+            await self._remote_request(
+                session, "desktop.quality.set", {"quality_mode": quality_mode}
+            )
+            updated = self.store.update_session(
+                session_id, quality_mode=quality_mode
+            )
+            self.store.audit("quality_changed", session_id=session_id, device_id=resolved_device_id, outcome="ok", detail={"quality_mode": quality_mode})
+            await self._publish("remote_desktop_quality_changed", session=updated)
+            return {"ok": True, "session": self._session_public(updated)}
+        self.store.audit("quality_changed", session_id=session_id, device_id=resolved_device_id, outcome="ok", detail={"quality_mode": quality_mode})
+        return {
+            "ok": True,
+            "session": {"quality_mode": quality_mode},
+        }
 
     async def set_microphone(self, session_id: str, enabled: bool) -> dict[str, Any]:
         session = self._connected_session(session_id)
@@ -1681,6 +1747,7 @@ class RemoteDesktopService:
                 ice_servers=[dict(item) for item in payload.get("ice_servers") or () if isinstance(item, dict)],
                 credentials=credentials,
                 permissions=permissions,
+                viewport=dict(payload.get("viewport") or {}),
             )
         except Exception as exc:
             logger.info("Remote desktop Provider negotiation failed", exc_info=True)

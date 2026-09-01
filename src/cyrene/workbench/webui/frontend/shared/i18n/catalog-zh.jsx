@@ -1290,6 +1290,8 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "rail.noUnifiedMatches": "没有匹配的对话、文件或终端。",
     "rail.contentType": "侧栏内容",
     "rail.projectTools": "工具",
+    "rail.hideWorkbenchEntry": "从工具中隐藏",
+    "rail.workbenchEntryHidden": "已隐藏“{title}”，可在所属插件包中重新开启。",
     "rail.pluginCollectionEmpty": "暂无可用设备。",
     "workbenchChat.agentViewing": "Agent 正在查看",
     "rail.pluginTools": "插件工具",

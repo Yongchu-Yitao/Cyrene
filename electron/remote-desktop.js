@@ -11,6 +11,7 @@ const {
 } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
@@ -65,6 +66,11 @@ const MUTTER_REMOTE_DESKTOP_BUS = 'org.gnome.Mutter.RemoteDesktop';
 const MUTTER_REMOTE_DESKTOP_PATH = '/org/gnome/Mutter/RemoteDesktop';
 const MUTTER_REMOTE_DESKTOP_MANAGER = 'org.gnome.Mutter.RemoteDesktop';
 const MUTTER_REMOTE_DESKTOP_SESSION = 'org.gnome.Mutter.RemoteDesktop.Session';
+const MUTTER_SCREEN_CAST_BUS = 'org.gnome.Mutter.ScreenCast';
+const MUTTER_SCREEN_CAST_PATH = '/org/gnome/Mutter/ScreenCast';
+const MUTTER_SCREEN_CAST_MANAGER = 'org.gnome.Mutter.ScreenCast';
+const MUTTER_SCREEN_CAST_SESSION = 'org.gnome.Mutter.ScreenCast.Session';
+const DBUS_PROPERTIES = 'org.freedesktop.DBus.Properties';
 
 const KEY_SYMS = {
   ArrowUp: 0xff52,
@@ -119,6 +125,19 @@ class MutterRemoteDesktopInput {
     this.manager = null;
     this.session = null;
     this.sessionPath = '';
+    this.screenCastManager = null;
+    this.screenCastSession = null;
+    this.screenCastSessionPath = '';
+    this.streamPath = '';
+    this.streamBounds = null;
+    this.streamIsVirtual = false;
+    this.pipeWireNode = null;
+    this.pipeWireNodeReady = null;
+    this.captureServer = null;
+    this.captureProcess = null;
+    this.captureClients = new Set();
+    this.captureBuffer = Buffer.alloc(0);
+    this.latestCaptureFrame = null;
     this.starting = null;
   }
 
@@ -140,7 +159,83 @@ class MutterRemoteDesktopInput {
     }
   }
 
-  async start() {
+  async _createAbsoluteStream(sessionProxy, display, captureSize = null) {
+    if (!dbus || !dbus.Variant) return;
+    const properties = sessionProxy.getInterface(DBUS_PROPERTIES);
+    const remoteSessionId = await properties.Get(MUTTER_REMOTE_DESKTOP_SESSION, 'SessionId');
+    const root = await this.bus.getProxyObject(MUTTER_SCREEN_CAST_BUS, MUTTER_SCREEN_CAST_PATH);
+    this.screenCastManager = root.getInterface(MUTTER_SCREEN_CAST_MANAGER);
+    this.screenCastSessionPath = String(await this.screenCastManager.CreateSession({
+      'remote-desktop-session-id': new dbus.Variant(
+        's',
+        String(remoteSessionId && remoteSessionId.value || remoteSessionId || ''),
+      ),
+    }));
+    const screenCastProxy = await this.bus.getProxyObject(
+      MUTTER_SCREEN_CAST_BUS,
+      this.screenCastSessionPath,
+    );
+    this.screenCastSession = screenCastProxy.getInterface(MUTTER_SCREEN_CAST_SESSION);
+    const bounds = display && display.bounds;
+    const streamOptions = {
+      // The controller renders its local system cursor. Keeping the compositor
+      // cursor out of the stream avoids the double-cursor artifact entirely.
+      'cursor-mode': new dbus.Variant('u', 0),
+      'is-recording': new dbus.Variant('b', false),
+    };
+    if (bounds) {
+      try {
+        this.streamPath = String(await this.screenCastSession.RecordArea(
+          Math.round(Number(bounds.x || 0)),
+          Math.round(Number(bounds.y || 0)),
+          Math.max(1, Math.round(Number(bounds.width || 1))),
+          Math.max(1, Math.round(Number(bounds.height || 1))),
+          streamOptions,
+        ));
+        this.streamBounds = {
+          width: Math.max(1, Number(bounds.width || 1)),
+          height: Math.max(1, Number(bounds.height || 1)),
+        };
+      } catch (_) {
+        // Headless GNOME sessions expose an XWayland root window but no Mutter
+        // monitor. RecordArea is therefore off-screen and Chromium captures a
+        // valid-looking black frame. RecordVirtual asks Mutter to create the
+        // actual compositor-backed desktop instead.
+      }
+    }
+    if (!this.streamPath) {
+      const width = Math.max(320, Math.round(Number(captureSize && captureSize.width || 1920)));
+      const height = Math.max(240, Math.round(Number(captureSize && captureSize.height || 1080)));
+      this.streamPath = String(await this.screenCastSession.RecordVirtual({
+        'cursor-mode': new dbus.Variant('u', 0),
+        'is-platform': new dbus.Variant('b', false),
+      }));
+      this.streamBounds = { width, height };
+      this.streamIsVirtual = true;
+    }
+    const streamProxy = await this.bus.getProxyObject(MUTTER_SCREEN_CAST_BUS, this.streamPath);
+    const stream = streamProxy.getInterface('org.gnome.Mutter.ScreenCast.Stream');
+    this.pipeWireNodeReady = new Promise((resolve) => {
+      stream.once('PipeWireStreamAdded', (nodeId) => {
+        this.pipeWireNode = Number(nodeId);
+        resolve(this.pipeWireNode);
+      });
+    });
+  }
+
+  _clearAbsoluteStream() {
+    this.screenCastManager = null;
+    this.screenCastSession = null;
+    this.screenCastSessionPath = '';
+    this.streamPath = '';
+    this.streamBounds = null;
+    this.streamIsVirtual = false;
+    this.pipeWireNode = null;
+    this.pipeWireNodeReady = null;
+  }
+
+  async start(display = null, captureSize = null) {
+    if (this.session && display && !this.streamPath) await this.stop();
     if (this.session) return this.session;
     if (this.starting) return this.starting;
     this.starting = (async () => {
@@ -148,12 +243,21 @@ class MutterRemoteDesktopInput {
       const sessionPath = await this.manager.CreateSession();
       const proxy = await this.bus.getProxyObject(MUTTER_REMOTE_DESKTOP_BUS, sessionPath);
       const session = proxy.getInterface(MUTTER_REMOTE_DESKTOP_SESSION);
+      try {
+        await this._createAbsoluteStream(proxy, display, captureSize);
+      } catch (_) {
+        // GNOME versions without a linked ScreenCast stream still support
+        // relative input. The fallback never re-anchors on button-down, which
+        // was the source of the visible click-time cursor jump.
+        this._clearAbsoluteStream();
+      }
       await session.Start();
       this.sessionPath = String(sessionPath);
       this.session = session;
       session.once('Closed', () => {
         this.session = null;
         this.sessionPath = '';
+        this._clearAbsoluteStream();
       });
       return session;
     })();
@@ -161,9 +265,11 @@ class MutterRemoteDesktopInput {
   }
 
   async stop() {
+    await this.stopNativeCapture();
     const session = this.session;
     this.session = null;
     this.sessionPath = '';
+    this._clearAbsoluteStream();
     if (session) await session.Stop().catch(() => {});
     if (this.bus) {
       try { this.bus.disconnect(); } catch (_) {}
@@ -172,9 +278,208 @@ class MutterRemoteDesktopInput {
     this.manager = null;
   }
 
-  async moveRelative(dx, dy) {
-    const session = await this.start();
+  _captureDimensions(qualityMode, viewport = null) {
+    const profiles = {
+      smooth: { maxWidth: 1600, maxHeight: 1200, maxPixels: 1_450_000, frameRate: 45, jpegQuality: 88 },
+      balanced: { maxWidth: 2560, maxHeight: 1600, maxPixels: 3_300_000, frameRate: 30, jpegQuality: 94 },
+      clear: { maxWidth: 3840, maxHeight: 2160, maxPixels: 8_300_000, frameRate: 30, jpegQuality: 96 },
+      auto: { maxWidth: 2560, maxHeight: 1600, maxPixels: 3_300_000, frameRate: 30, jpegQuality: 94 },
+    };
+    const profile = profiles[String(qualityMode || 'auto')] || profiles.auto;
+    const ratio = Math.max(0.5, Math.min(2, Number(viewport && viewport.device_pixel_ratio || 1)));
+    const requestedWidth = Math.max(320, Math.min(3840, Math.round(
+      Number(viewport && viewport.width || 1920) * ratio,
+    )));
+    const requestedHeight = Math.max(240, Math.min(2160, Math.round(
+      Number(viewport && viewport.height || 1080) * ratio,
+    )));
+    const scale = Math.min(
+      1,
+      profile.maxWidth / requestedWidth,
+      profile.maxHeight / requestedHeight,
+      Math.sqrt(profile.maxPixels / (requestedWidth * requestedHeight)),
+    );
+    return {
+      width: Math.max(320, Math.round(requestedWidth * scale / 2) * 2),
+      height: Math.max(240, Math.round(requestedHeight * scale / 2) * 2),
+      frameRate: profile.frameRate,
+      jpegQuality: profile.jpegQuality,
+    };
+  }
+
+  _publishCaptureFrame(frame) {
+    this.latestCaptureFrame = frame;
+    const header = Buffer.from(
+      `--cyrene-frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`,
+    );
+    const ending = Buffer.from('\r\n');
+    for (const response of [...this.captureClients]) {
+      if (response.destroyed || response.writableEnded) {
+        this.captureClients.delete(response);
+        continue;
+      }
+      try {
+        response.write(header);
+        response.write(frame);
+        response.write(ending);
+      } catch (_) {
+        this.captureClients.delete(response);
+      }
+    }
+  }
+
+  _consumeCaptureBytes(chunk) {
+    this.captureBuffer = Buffer.concat([this.captureBuffer, chunk]);
+    while (this.captureBuffer.length > 3) {
+      const start = this.captureBuffer.indexOf(Buffer.from([0xff, 0xd8]));
+      if (start < 0) {
+        this.captureBuffer = this.captureBuffer.subarray(Math.max(0, this.captureBuffer.length - 1));
+        return;
+      }
+      const end = this.captureBuffer.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
+      if (end < 0) {
+        if (start > 0) this.captureBuffer = this.captureBuffer.subarray(start);
+        if (this.captureBuffer.length > 32 * 1024 * 1024) this.captureBuffer = Buffer.alloc(0);
+        return;
+      }
+      const frame = this.captureBuffer.subarray(start, end + 2);
+      this.captureBuffer = this.captureBuffer.subarray(end + 2);
+      this._publishCaptureFrame(frame);
+    }
+  }
+
+  async startNativeCapture(display, qualityMode = 'auto', viewport = null) {
+    if (!commandExists('gst-launch-1.0')) throw new Error('desktop_pipewire_capture_component_missing');
+    const dimensions = this._captureDimensions(qualityMode, viewport);
+    await this.start(display, dimensions);
+    const nodeId = this.pipeWireNode || await Promise.race([
+      this.pipeWireNodeReady,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('desktop_pipewire_node_timeout')),
+        8000,
+      )),
+    ]);
+    if (!Number.isInteger(nodeId)) throw new Error('desktop_pipewire_node_unavailable');
+
+    this.captureServer = http.createServer((request, response) => {
+      if (request.url !== '/stream') {
+        response.writeHead(404, { 'Content-Type': 'text/plain' });
+        response.end('Not found');
+        return;
+      }
+      response.writeHead(200, {
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        Connection: 'close',
+        'Content-Type': 'multipart/x-mixed-replace; boundary=cyrene-frame',
+      });
+      this.captureClients.add(response);
+      if (this.latestCaptureFrame) this._publishCaptureFrame(this.latestCaptureFrame);
+      request.on('close', () => this.captureClients.delete(response));
+    });
+    await new Promise((resolve, reject) => {
+      this.captureServer.once('error', reject);
+      this.captureServer.listen(0, '127.0.0.1', resolve);
+    });
+
+    const captureWidth = this.streamIsVirtual
+      ? dimensions.width : Math.max(1, Math.round(Number(this.streamBounds && this.streamBounds.width || dimensions.width)));
+    const captureHeight = this.streamIsVirtual
+      ? dimensions.height : Math.max(1, Math.round(Number(this.streamBounds && this.streamBounds.height || dimensions.height)));
+    const caps = [
+      'video/x-raw',
+      'format=BGRx',
+      `width=${captureWidth}`,
+      `height=${captureHeight}`,
+      // Mutter advertises a fixed 0/1 framerate plus max-framerate. Requesting
+      // ordinary framerate here makes PipeWire reject every input format.
+      `max-framerate=${dimensions.frameRate}/1`,
+    ].join(',');
+    this.captureProcess = spawn('gst-launch-1.0', [
+      '-q',
+      'pipewiresrc', `path=${nodeId}`, 'do-timestamp=true',
+      '!', caps,
+      '!', 'videoconvert',
+      '!', 'jpegenc', `quality=${dimensions.jpegQuality}`, 'snapshot=false',
+      '!', 'fdsink', 'fd=1', 'sync=false',
+    ], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+    });
+    let captureError = '';
+    this.captureProcess.stderr.on('data', (chunk) => {
+      captureError = `${captureError}${String(chunk)}`.slice(-4096);
+    });
+    this.captureProcess.stdout.on('data', (chunk) => this._consumeCaptureBytes(chunk));
+    const firstFrame = new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      const timer = setInterval(() => {
+        if (this.latestCaptureFrame) {
+          clearInterval(timer);
+          resolve();
+        } else if (Date.now() - startedAt >= 8000) {
+          clearInterval(timer);
+          reject(new Error(captureError || 'desktop_pipewire_frame_timeout'));
+        }
+      }, 25);
+      this.captureProcess.once('exit', (code) => {
+        if (!this.latestCaptureFrame) {
+          clearInterval(timer);
+          reject(new Error(captureError || `desktop_pipewire_capture_exited_${code}`));
+        }
+      });
+      this.captureProcess.once('error', (error) => {
+        clearInterval(timer);
+        reject(error);
+      });
+    });
+    try {
+      await firstFrame;
+    } catch (error) {
+      await this.stopNativeCapture();
+      throw error;
+    }
+    const address = this.captureServer.address();
+    return {
+      url: `http://127.0.0.1:${Number(address && address.port)}/stream`,
+      width: captureWidth,
+      height: captureHeight,
+      frame_rate: dimensions.frameRate,
+      virtual: this.streamIsVirtual,
+    };
+  }
+
+  async stopNativeCapture() {
+    const processToStop = this.captureProcess;
+    this.captureProcess = null;
+    if (processToStop && processToStop.exitCode == null) {
+      try { processToStop.kill('SIGTERM'); } catch (_) {}
+    }
+    for (const response of this.captureClients) {
+      try { response.end(); } catch (_) {}
+    }
+    this.captureClients.clear();
+    const server = this.captureServer;
+    this.captureServer = null;
+    if (server) await new Promise((resolve) => server.close(resolve));
+    this.captureBuffer = Buffer.alloc(0);
+    this.latestCaptureFrame = null;
+  }
+
+  async moveRelative(dx, dy, display = null) {
+    const session = await this.start(display);
     await session.NotifyPointerMotionRelative(Number(dx || 0), Number(dy || 0));
+  }
+
+  async moveAbsolute(xNormalized, yNormalized, display) {
+    const session = await this.start(display);
+    if (!this.streamPath || !this.streamBounds) return false;
+    const x = Math.max(0, Math.min(1, Number(xNormalized || 0)))
+      * Math.max(1, this.streamBounds.width - 1);
+    const y = Math.max(0, Math.min(1, Number(yNormalized || 0)))
+      * Math.max(1, this.streamBounds.height - 1);
+    await session.NotifyPointerMotionAbsolute(this.streamPath, x, y);
+    return true;
   }
 
   async button(button, pressed) {
@@ -409,13 +714,12 @@ class RemoteDesktopManager {
         this.terminatedSessions.set(record.sessionId, 'host_closed');
         this.hideIndicator({ session_id: record.sessionId });
       }
-      this._releasePointer(record).catch(() => {});
+      this._releasePointer(record).catch(() => {}).finally(() => {
+        if (record.mutterInput) record.mutterInput.stop().catch(() => {});
+      });
       record.window = null;
       if (record.clipboardTimer) clearInterval(record.clipboardTimer);
       if (record.pendingAnswer) record.pendingAnswer.reject(new Error('desktop_host_closed'));
-      if (this.mutterInput && this.sessions.size === 0) {
-        this.mutterInput.stop().catch(() => {});
-      }
     });
     await window.loadFile(path.join(__dirname, 'remote-desktop-host.html'));
   }
@@ -451,11 +755,31 @@ class RemoteDesktopManager {
       inputQueue: Promise.resolve(),
       pendingMove: null,
       moveQueued: false,
+      mutterInput: process.platform === 'linux' ? new MutterRemoteDesktopInput() : null,
+      nativeCapture: null,
+      nativeCaptureTimer: null,
+      nativeCaptureUpdate: null,
+      viewport: args.viewport && typeof args.viewport === 'object' ? { ...args.viewport } : {},
     };
     const selected = this._display(record.displayId);
     if (selected) record.displayId = String(selected.id);
     this.sessions.set(sessionId, record);
     try {
+      if (
+        process.platform === 'linux'
+        && String(process.env.XDG_SESSION_TYPE || 'x11').toLowerCase() === 'wayland'
+        && record.mutterInput
+      ) {
+        // Use the linked compositor stream for both unattended video capture
+        // and absolute input. Chromium's X11 desktopCapturer only sees the
+        // empty XWayland root in headless Wayland sessions, producing a black
+        // but otherwise healthy WebRTC video track.
+        record.nativeCapture = await record.mutterInput.startNativeCapture(
+          selected,
+          record.qualityMode,
+          record.viewport,
+        );
+      }
       await this._createHost(record);
       const pendingAnswer = record.pendingAnswer;
       record.window.webContents.send('remote-desktop:start', {
@@ -466,6 +790,7 @@ class RemoteDesktopManager {
         ice_servers: Array.isArray(args.ice_servers) ? args.ice_servers : [],
         permissions: record.permissions,
         microphone_sink_id: record.microphoneSinkId,
+        native_capture: record.nativeCapture,
         secure_surface: this._secureSurface(),
       });
       const timeout = setTimeout(() => pendingAnswer.reject(new Error('desktop_negotiation_timeout')), ANSWER_TIMEOUT_MS);
@@ -552,12 +877,18 @@ class RemoteDesktopManager {
       return;
     }
     if (message.type === 'viewport') {
+      record.viewport = {
+        width: Math.max(1, Number(message.width || 1)),
+        height: Math.max(1, Number(message.height || 1)),
+        device_pixel_ratio: Math.max(0.5, Math.min(2, Number(message.device_pixel_ratio || 1))),
+      };
       record.window.webContents.send('remote-desktop:command', {
         operation: 'set_viewport',
-        width: Number(message.width || 0),
-        height: Number(message.height || 0),
-        device_pixel_ratio: Number(message.device_pixel_ratio || 1),
+        width: record.viewport.width,
+        height: record.viewport.height,
+        device_pixel_ratio: record.viewport.device_pixel_ratio,
       });
+      this._scheduleNativeViewport(record);
       return;
     }
     if (message.type === 'clipboard:text' && record.permissions.clipboard_text === true) {
@@ -566,6 +897,54 @@ class RemoteDesktopManager {
       record.clipboardRevision += 1;
       clipboard.writeText(text);
     }
+  }
+
+  _scheduleNativeViewport(record) {
+    if (
+      !record
+      || !record.nativeCapture
+      || !record.mutterInput
+      || !record.mutterInput.streamIsVirtual
+    ) return;
+    const target = record.mutterInput._captureDimensions(record.qualityMode, record.viewport);
+    const current = record.nativeCapture;
+    const materiallyChanged = Math.abs(Number(current.width || 0) - target.width) > Math.max(32, target.width * 0.06)
+      || Math.abs(Number(current.height || 0) - target.height) > Math.max(32, target.height * 0.06);
+    if (!materiallyChanged) return;
+    if (record.nativeCaptureTimer) clearTimeout(record.nativeCaptureTimer);
+    record.nativeCaptureTimer = setTimeout(() => {
+      record.nativeCaptureTimer = null;
+      const update = Promise.resolve(record.nativeCaptureUpdate).catch(() => {}).then(async () => {
+        if (this.sessions.get(record.sessionId) !== record) return;
+        await this._releasePointer(record).catch(() => {});
+        await record.mutterInput.stop();
+        const next = await record.mutterInput.startNativeCapture(
+          this._display(record.displayId),
+          record.qualityMode,
+          record.viewport,
+        );
+        if (this.sessions.get(record.sessionId) !== record) {
+          await record.mutterInput.stop().catch(() => {});
+          return;
+        }
+        record.nativeCapture = next;
+        record.lastPointerPoint = null;
+        record.window.webContents.send('remote-desktop:command', {
+          operation: 'set_viewport',
+          width: record.viewport.width,
+          height: record.viewport.height,
+          device_pixel_ratio: record.viewport.device_pixel_ratio,
+          native_capture: next,
+        });
+      });
+      record.nativeCaptureUpdate = update;
+      update.catch((error) => {
+        console.warn('[remote-desktop] Failed to resize native Wayland capture:', error);
+      }).finally(() => {
+        if (record.nativeCaptureUpdate === update) record.nativeCaptureUpdate = null;
+      });
+    }, 350);
+    if (record.nativeCaptureTimer.unref) record.nativeCaptureTimer.unref();
   }
 
   _startClipboardMonitor(record) {
@@ -656,61 +1035,70 @@ class RemoteDesktopManager {
 
   async _linuxInput(record, event) {
     if (String(process.env.XDG_SESSION_TYPE || 'x11').toLowerCase() === 'wayland') {
-      if (!this.mutterInput) throw new Error('desktop_wayland_input_bridge_unavailable');
+      if (record.nativeCaptureUpdate) await record.nativeCaptureUpdate.catch(() => {});
+      const mutterInput = record.mutterInput;
+      if (!mutterInput) throw new Error('desktop_wayland_input_bridge_unavailable');
       const type = String(event.type || '');
       if (type === 'pointer') {
         const point = this._screenPoint(record, event);
         const action = String(event.action || 'move');
+        const display = this._display(record.displayId);
         const displays = screen.getAllDisplays();
         const minX = Math.min(...displays.map((item) => Number(item.bounds && item.bounds.x || 0)));
         const minY = Math.min(...displays.map((item) => Number(item.bounds && item.bounds.y || 0)));
-        if (!record.lastPointerPoint || ['button_down', 'right_click', 'double_click'].includes(action)) {
-          await this.mutterInput.moveRelative(-100000, -100000);
-          await this.mutterInput.moveRelative(point.x - minX, point.y - minY);
-        } else {
-          await this.mutterInput.moveRelative(
+        const movedAbsolute = await mutterInput.moveAbsolute(
+          event.x_normalized,
+          event.y_normalized,
+          display,
+        );
+        if (!movedAbsolute && !record.lastPointerPoint) {
+          await mutterInput.moveRelative(-100000, -100000, display);
+          await mutterInput.moveRelative(point.x - minX, point.y - minY, display);
+        } else if (!movedAbsolute) {
+          await mutterInput.moveRelative(
             point.x - Number(record.lastPointerPoint.x || 0),
             point.y - Number(record.lastPointerPoint.y || 0),
+            display,
           );
         }
         record.lastPointerPoint = point;
         if (action === 'button_down') {
           record.pointerPressed = true;
-          return this.mutterInput.button(0x110, true);
+          return mutterInput.button(0x110, true);
         }
         if (action === 'button_up') {
           record.pointerPressed = false;
-          return this.mutterInput.button(0x110, false);
+          return mutterInput.button(0x110, false);
         }
         if (action === 'right_click') {
-          await this.mutterInput.button(0x111, true);
-          await this.mutterInput.button(0x111, false);
+          await mutterInput.button(0x111, true);
+          await mutterInput.button(0x111, false);
         } else if (action === 'double_click') {
           for (let index = 0; index < 2; index += 1) {
-            await this.mutterInput.button(0x110, true);
-            await this.mutterInput.button(0x110, false);
+            await mutterInput.button(0x110, true);
+            await mutterInput.button(0x110, false);
           }
         } else if (action === 'scroll') {
-          await this.mutterInput.scroll(
+          await mutterInput.scroll(
             Number(event.delta_x || 0),
             Number(event.delta_y || 0),
           );
         } else if (action === 'click') {
-          await this.mutterInput.button(0x110, true);
-          await this.mutterInput.button(0x110, false);
+          await mutterInput.button(0x110, true);
+          await mutterInput.button(0x110, false);
         }
         return { ok: true };
       }
       if (type === 'text') {
         for (const character of Array.from(String(event.text || '').slice(0, 65536))) {
           const sym = keySym(character);
-          if (sym) await this.mutterInput.typeKey(sym);
+          if (sym) await mutterInput.typeKey(sym);
         }
         return { ok: true };
       }
       if (type === 'key') {
         const sym = keySym(event.key);
-        if (sym) await this.mutterInput.typeKey(sym, Array.isArray(event.modifiers) ? event.modifiers : []);
+        if (sym) await mutterInput.typeKey(sym, Array.isArray(event.modifiers) ? event.modifiers : []);
         return { ok: true };
       }
       return { ok: true };
@@ -869,10 +1257,10 @@ class RemoteDesktopManager {
       if (
         process.platform === 'linux'
         && String(process.env.XDG_SESSION_TYPE || 'x11').toLowerCase() === 'wayland'
-        && this.mutterInput
+        && record.mutterInput
         && record.pointerPressed
       ) {
-        await this.mutterInput.button(0x110, false);
+        await record.mutterInput.button(0x110, false);
       } else if (process.platform === 'linux' && commandExists('xdotool')) {
         await runCommand('xdotool', ['mouseup', '1'], 1500);
       } else if (record.pointerPressed && record.activePointerSession && record.lastPointerPoint) {
@@ -902,14 +1290,13 @@ class RemoteDesktopManager {
     this.sessions.delete(sessionId);
     if (record.clipboardTimer) clearInterval(record.clipboardTimer);
     if (record.connectionLossTimer) clearTimeout(record.connectionLossTimer);
+    if (record.nativeCaptureTimer) clearTimeout(record.nativeCaptureTimer);
     await this._releasePointer(record).catch(() => {});
     if (record.window && !record.window.isDestroyed()) {
       record.window.webContents.send('remote-desktop:command', { operation: 'disconnect' });
       record.window.destroy();
     }
-    if (this.mutterInput && this.sessions.size === 0) {
-      await this.mutterInput.stop();
-    }
+    if (record.mutterInput) await record.mutterInput.stop();
     return { ok: true, disconnected: true };
   }
 
@@ -921,15 +1308,45 @@ class RemoteDesktopManager {
     if (!record || !display) return { ok: false, code: 'desktop_display_not_found' };
     if (record.permissions.display_select !== true) return { ok: false, code: 'desktop_capability_denied' };
     record.displayId = String(display.id);
-    record.window.webContents.send('remote-desktop:command', { operation: 'select_display', display_id: record.displayId });
+    record.lastPointerPoint = null;
+    if (record.mutterInput) {
+      await record.mutterInput.stop().catch(() => {});
+      if (String(process.env.XDG_SESSION_TYPE || 'x11').toLowerCase() === 'wayland') {
+        record.nativeCapture = await record.mutterInput.startNativeCapture(
+          display,
+          record.qualityMode,
+          record.viewport,
+        );
+      }
+    }
+    record.window.webContents.send('remote-desktop:command', {
+      operation: 'select_display',
+      display_id: record.displayId,
+      native_capture: record.nativeCapture,
+    });
     return { ok: true, display: publicDisplay(display, screen.getPrimaryDisplay().id) };
   }
 
-  setQuality(args) {
+  async setQuality(args) {
     const record = this.sessions.get(String(args.session_id || ''));
     if (!record) return { ok: false, code: 'desktop_session_not_found' };
     record.qualityMode = String(args.quality_mode || 'auto');
-    record.window.webContents.send('remote-desktop:command', { operation: 'set_quality', quality_mode: record.qualityMode });
+    if (
+      record.mutterInput
+      && String(process.env.XDG_SESSION_TYPE || 'x11').toLowerCase() === 'wayland'
+    ) {
+      await record.mutterInput.stop().catch(() => {});
+      record.nativeCapture = await record.mutterInput.startNativeCapture(
+        this._display(record.displayId),
+        record.qualityMode,
+        record.viewport,
+      );
+    }
+    record.window.webContents.send('remote-desktop:command', {
+      operation: 'set_quality',
+      quality_mode: record.qualityMode,
+      native_capture: record.nativeCapture,
+    });
     return { ok: true, quality_mode: record.qualityMode };
   }
 
@@ -1169,53 +1586,61 @@ class RemoteDesktopManager {
       return { ok: false, code: 'desktop_session_invalid' };
     }
     this.hideIndicator({ session_id: sessionId });
-    const indicator = new BrowserWindow({
-      width: 380,
-      height: 104,
-      show: false,
-      frame: false,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      closable: false,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      webPreferences: {
-        preload: path.join(__dirname, 'remote-desktop-indicator-preload.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-    const record = {
-      sessionId,
-      controllerName: String(args.controller_name || '').trim().slice(0, 160),
-      mode: String(args.mode || 'current_desktop'),
-      canControl: args.can_control === true,
-      language: String(this.getLanguage() || 'en'),
-      window: indicator,
-    };
-    this.indicatorWindows.set(sessionId, record);
-    indicator.on('closed', () => {
-      if (this.indicatorWindows.get(sessionId) === record) this.indicatorWindows.delete(sessionId);
-    });
-    indicator.once('ready-to-show', () => {
-      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-      const area = display && display.workArea || { x: 0, y: 0, width: 1280 };
-      indicator.setPosition(
-        Math.round(Number(area.x || 0) + Number(area.width || 1280) - 396),
-        Math.round(Number(area.y || 0) + 16),
-        false,
-      );
-      indicator.showInactive();
-    });
-    try {
-      await indicator.loadFile(path.join(__dirname, 'remote-desktop-indicator.html'));
-      return { ok: true };
-    } catch (_) {
-      this.hideIndicator({ session_id: sessionId });
-      return { ok: false, code: 'desktop_target_indicator_unavailable' };
+    const retryDelays = [0, 100, 250, 500];
+    let lastError = null;
+    for (const retryDelay of retryDelays) {
+      if (retryDelay) await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      const indicator = new BrowserWindow({
+        width: 380,
+        height: 104,
+        show: false,
+        frame: false,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        closable: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        webPreferences: {
+          preload: path.join(__dirname, 'remote-desktop-indicator-preload.js'),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      });
+      const record = {
+        sessionId,
+        controllerName: String(args.controller_name || '').trim().slice(0, 160),
+        mode: String(args.mode || 'current_desktop'),
+        canControl: args.can_control === true,
+        language: String(this.getLanguage() || 'en'),
+        window: indicator,
+      };
+      this.indicatorWindows.set(sessionId, record);
+      indicator.on('closed', () => {
+        if (this.indicatorWindows.get(sessionId) === record) this.indicatorWindows.delete(sessionId);
+      });
+      indicator.once('ready-to-show', () => {
+        if (indicator.isDestroyed() || this.indicatorWindows.get(sessionId) !== record) return;
+        const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+        const area = display && display.workArea || { x: 0, y: 0, width: 1280 };
+        indicator.setPosition(
+          Math.round(Number(area.x || 0) + Number(area.width || 1280) - 396),
+          Math.round(Number(area.y || 0) + 16),
+          false,
+        );
+        indicator.showInactive();
+      });
+      try {
+        await indicator.loadFile(path.join(__dirname, 'remote-desktop-indicator.html'));
+        return { ok: true };
+      } catch (error) {
+        lastError = error;
+        this.hideIndicator({ session_id: sessionId });
+      }
     }
+    console.warn('[remote-desktop] Failed to load the active-session indicator after retries:', lastError);
+    return { ok: false, code: 'desktop_target_indicator_unavailable' };
   }
 
   hideIndicator(args) {
@@ -1288,8 +1713,12 @@ class RemoteDesktopManager {
     this.pendingCredentials.delete(record.sessionId);
     this.credentialWindows.delete(record.sessionId);
     if (record.timer) clearTimeout(record.timer);
-    if (record.window && !record.window.isDestroyed()) record.window.destroy();
     record.request.resolve(result);
+    // Acknowledge ipcRenderer.invoke before destroying its sender. Destroying
+    // synchronously can strand the renderer promise in a modal flow.
+    setImmediate(() => {
+      if (record.window && !record.window.isDestroyed()) record.window.destroy();
+    });
     return { ok: true };
   }
 

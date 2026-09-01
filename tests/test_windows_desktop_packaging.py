@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_electron_dev_launcher_is_cross_platform_and_uses_uv_backend():
+def test_electron_dev_launcher_is_cross_platform_and_uses_checkout_backend():
     package = json.loads(
         (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
     )
@@ -17,7 +17,12 @@ def test_electron_dev_launcher_is_cross_platform_and_uses_uv_backend():
     assert package["scripts"]["dev"] == "node dev-launcher.js"
     assert "ELECTRON_DEV: '1'" in launcher
     assert "spawn(electronPath, ['.']" in launcher
+    assert "refreshLinuxXWaylandEnvironment();" in main
+    assert "name.startsWith('.mutter-Xwaylandauth.')" in main
+    assert "process.env.XAUTHORITY = candidates[0].filePath" in main
     assert "return 'uv';" in main
+    assert "'.venv', 'Scripts', 'cyrene.exe'" in main
+    assert "'.venv', 'bin', 'cyrene'" in main
     assert "'run'," in main
     assert "'cyrene'," in main
     assert "cwd: cwd" in main

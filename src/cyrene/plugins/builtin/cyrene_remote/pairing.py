@@ -28,8 +28,44 @@ InlineRequestReceiver = Callable[
 ]
 
 
+class RemotePeerTransportError(ConnectionError):
+    """A safe, typed failure returned by the direct peer transport."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int = 503,
+        *,
+        detail: str = "",
+    ) -> None:
+        super().__init__(detail or message)
+        self.code = str(code or "remote_transport_failed")
+        self.public_message = str(message or "The remote device is unavailable.")
+        self.status_code = int(status_code)
+
+
 def _pairing_error(code: str, en: str, zh: str) -> dict[str, str]:
     return {"error": localized(en, zh), "code": code}
+
+
+def _peer_response_error(response: httpx.Response) -> RemotePeerTransportError:
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError):
+        payload = {}
+    code = str(
+        payload.get("code") if isinstance(payload, dict) else ""
+    ) or "remote_transport_rejected"
+    message = str(
+        payload.get("error") if isinstance(payload, dict) else ""
+    ) or "The remote device rejected the request."
+    return RemotePeerTransportError(
+        code,
+        message,
+        response.status_code,
+        detail=f"remote endpoint rejected the request ({response.status_code} {code})",
+    )
 
 
 def _delivery_addresses(address: str) -> list[str]:
@@ -217,11 +253,12 @@ class DirectPairingServer:
             raise ConnectionError("remote device has no LAN address")
         candidates = _delivery_addresses(address)
         last_error: Exception | None = None
+        primary_protocol_error: RemotePeerTransportError | None = None
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(2, connect=0.25),
             trust_env=False,
         ) as client:
-            for normalized in candidates:
+            for candidate_index, normalized in enumerate(candidates):
                 try:
                     response = await client.post(
                         f"http://{normalized}/v1/control/envelope",
@@ -239,6 +276,11 @@ class DirectPairingServer:
                             request=response.request,
                             response=response,
                         )
+                except httpx.HTTPStatusError as exc:
+                    last_error = _peer_response_error(exc.response)
+                    if candidate_index == 0:
+                        primary_protocol_error = last_error
+                    continue
                 except (httpx.HTTPError, ValueError) as exc:
                     last_error = exc
                     continue
@@ -249,8 +291,13 @@ class DirectPairingServer:
                         normalized,
                     )
                 return
-        raise ConnectionError(
-            f"remote device is unreachable at {candidates[0]}"
+        if primary_protocol_error is not None:
+            raise primary_protocol_error
+        raise RemotePeerTransportError(
+            "remote_device_unreachable",
+            "The remote device is unavailable.",
+            503,
+            detail=f"remote device is unreachable at {candidates[0]}",
         ) from last_error
 
     async def request(
@@ -275,37 +322,63 @@ class DirectPairingServer:
             raise ConnectionError("remote device has no LAN address")
         candidates = _delivery_addresses(address)
         last_error: Exception | None = None
+        primary_protocol_error: RemotePeerTransportError | None = None
         request_timeout = max(1.0, float(timeout))
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(request_timeout + 2, connect=0.25),
             trust_env=False,
         ) as client:
-            for normalized in candidates:
-                try:
-                    response = await client.post(
-                        f"http://{normalized}/v1/control/request",
-                        json={"envelope": envelope},
-                    )
-                    response.raise_for_status()
-                    payload = response.json()
-                    response_envelope = (
-                        payload.get("envelope")
-                        if isinstance(payload, dict)
-                        else None
-                    )
-                    if (
-                        response.status_code != 200
-                        or not isinstance(payload, dict)
-                        or payload.get("accepted") is not True
-                        or not isinstance(response_envelope, dict)
-                    ):
-                        raise httpx.HTTPStatusError(
-                            "endpoint did not return a Cyrene response envelope",
-                            request=response.request,
-                            response=response,
+            for candidate_index, normalized in enumerate(candidates):
+                # A desktop app restart closes the saved listener for a short
+                # window. Retry that authenticated address in place before
+                # scanning fallback ports; this avoids both a spurious 30 s
+                # failure and requests reaching another local Cyrene identity.
+                attempts = 3 if candidate_index == 0 else 1
+                response_envelope: dict[str, Any] | None = None
+                for attempt in range(attempts):
+                    try:
+                        response = await client.post(
+                            f"http://{normalized}/v1/control/request",
+                            json={"envelope": envelope},
                         )
-                except (httpx.HTTPError, ValueError) as exc:
-                    last_error = exc
+                        response.raise_for_status()
+                        payload = response.json()
+                        response_envelope = (
+                            payload.get("envelope")
+                            if isinstance(payload, dict)
+                            else None
+                        )
+                        if (
+                            response.status_code != 200
+                            or not isinstance(payload, dict)
+                            or payload.get("accepted") is not True
+                            or not isinstance(response_envelope, dict)
+                        ):
+                            raise httpx.HTTPStatusError(
+                                "endpoint did not return a Cyrene response envelope",
+                                request=response.request,
+                                response=response,
+                            )
+                    except httpx.ConnectError as exc:
+                        last_error = exc
+                        response_envelope = None
+                        if attempt + 1 < attempts:
+                            await asyncio.sleep((0.15, 0.4)[attempt])
+                            continue
+                        break
+                    except httpx.HTTPStatusError as exc:
+                        last_error = _peer_response_error(exc.response)
+                        if candidate_index == 0:
+                            primary_protocol_error = last_error
+                        response_envelope = None
+                        break
+                    except (httpx.HTTPError, ValueError) as exc:
+                        last_error = exc
+                        response_envelope = None
+                        break
+                    else:
+                        break
+                if response_envelope is None:
                     continue
                 if normalized != candidates[0]:
                     await asyncio.to_thread(
@@ -314,8 +387,13 @@ class DirectPairingServer:
                         normalized,
                     )
                 return dict(response_envelope)
-        raise ConnectionError(
-            f"remote device is unreachable at {candidates[0]}"
+        if primary_protocol_error is not None:
+            raise primary_protocol_error
+        raise RemotePeerTransportError(
+            "remote_device_unreachable",
+            "The remote device is unavailable.",
+            503,
+            detail=f"remote device is unreachable at {candidates[0]}",
         ) from last_error
 
     async def _handle_connection(
@@ -508,20 +586,27 @@ class DirectPairingServer:
                 "配对尝试次数过多，请稍后重试。",
             )
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
-            logger.warning("Pairing request rejected (400): %s", exc, exc_info=True)
-            if str(exc) == "direct pairing is limited to local-network IP addresses":
-                payload = _pairing_error(
+            if str(exc) == "envelope recipient does not match":
+                logger.info("Control request rejected: envelope recipient does not match")
+                status, payload = 409, _pairing_error(
+                    "remote_peer_identity_mismatch",
+                    "The paired remote device identity changed. Pair the device again.",
+                    "配对的远端设备身份已变更，请重新配对。",
+                )
+            elif str(exc) == "direct pairing is limited to local-network IP addresses":
+                logger.warning("Pairing request rejected (400): %s", exc)
+                status, payload = 400, _pairing_error(
                     "pairing_lan_only",
                     "Direct pairing is limited to local-network IP addresses.",
                     "直接配对仅支持局域网 IP 地址。",
                 )
             else:
-                payload = _pairing_error(
+                logger.warning("Pairing request rejected (400): %s", exc, exc_info=True)
+                status, payload = 400, _pairing_error(
                     "invalid_pairing_request",
                     "The pairing request is invalid.",
                     "配对请求无效。",
                 )
-            status = 400
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
             logger.warning("Pairing request rejected (400): invalid pairing request")
             status, payload = 400, _pairing_error(
@@ -544,6 +629,7 @@ class DirectPairingServer:
             403: "Forbidden",
             404: "Not Found",
             405: "Method Not Allowed",
+            409: "Conflict",
             429: "Too Many Requests",
             500: "Internal Server Error",
             503: "Service Unavailable",
@@ -619,6 +705,7 @@ async def connect_by_address(
 
 __all__ = [
     "DirectPairingServer",
+    "RemotePeerTransportError",
     "connect_by_address",
     "local_pairing_addresses",
     "normalize_pairing_address",

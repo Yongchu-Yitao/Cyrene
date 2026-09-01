@@ -1,4 +1,4 @@
-"""Mount the latest Workbench topbar pins into every user turn."""
+"""Plugin-owned per-turn context for globally pinned Workbench resources."""
 
 from cyrene.core.plugin import PluginPack
 

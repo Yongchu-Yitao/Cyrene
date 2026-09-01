@@ -525,6 +525,20 @@ def _validate_project_tools(tools: Any, view_ids: set[str]) -> None:
                 raise TypeError(
                     "Plugin Pane menu requires_session must be a boolean"
                 )
+            context_arguments = contribution.get("context_arguments", {})
+            if not isinstance(context_arguments, Mapping):
+                raise TypeError(
+                    "Plugin Pane menu context_arguments must be an object"
+                )
+            if any(
+                not _IDENTIFIER.fullmatch(str(argument_key or "").strip())
+                or not _IDENTIFIER.fullmatch(str(state_key or "").strip())
+                for argument_key, state_key in context_arguments.items()
+            ):
+                raise ValueError(
+                    "Plugin Pane menu context_arguments must map argument identifiers "
+                    "to state identifiers"
+                )
 
 
 def _require_unique_ids(values: Any, *, kind: str, pack_id: str) -> None:

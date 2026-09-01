@@ -116,6 +116,32 @@ plugin_pack = PluginPack(
     + tuple(_plugin(definition, handler) for definition, handler in _declarations),
     setup=setup,
     application_setup=application_setup,
+    metadata={
+        "workbench_entries": (
+            {
+                "id": "files",
+                "title": "Files",
+                "description": "Browse files in the active Cyrene project.",
+                "i18n": {
+                    "zh": {
+                        "title": "文件",
+                        "description": "浏览当前 Cyrene 项目中的文件。",
+                    }
+                },
+            },
+            {
+                "id": "terminal",
+                "title": "Terminal",
+                "description": "Open and manage project terminal sessions.",
+                "i18n": {
+                    "zh": {
+                        "title": "终端",
+                        "description": "打开和管理项目终端会话。",
+                    }
+                },
+            },
+        ),
+    },
     contributions=(
         ExtensionContribution(WORKBENCH_SURFACE, WorkbenchSurfaceContribution(
             id="file-editor",

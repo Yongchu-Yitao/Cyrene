@@ -116,8 +116,19 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   var [projectToolView, setProjectToolViewState] = useWbcState(function () {
     return wbcReadProjectToolView(projectId);
   });
-  var fileToolsExpanded = codeAvailable && projectToolView === "file";
-  var terminalToolsExpanded = codeAvailable && projectToolView === "terminal";
+  var [workbenchEntries, setWorkbenchEntries] = useWbcState(function () {
+    var snapshot = workbenchServices.plugins().snapshot();
+    return Array.isArray(snapshot && snapshot.workbenchEntries) ? snapshot.workbenchEntries : [];
+  });
+  function workbenchEntryVisible(packId, entryId) {
+    var key = String(packId || "") + "/" + String(entryId || "");
+    var entry = workbenchEntries.find(function (item) { return String(item && item.key || "") === key; });
+    return !entry || entry.configured_visible !== false;
+  }
+  var fileEntryAvailable = codeAvailable && workbenchEntryVisible("cyrene_code", "files");
+  var terminalEntryAvailable = codeAvailable && workbenchEntryVisible("cyrene_code", "terminal");
+  var fileToolsExpanded = fileEntryAvailable && projectToolView === "file";
+  var terminalToolsExpanded = terminalEntryAvailable && projectToolView === "terminal";
   function setProjectToolView(next) {
     setProjectToolViewState(function (current) {
       var resolved = wbcNormalizeProjectToolView(
@@ -154,7 +165,13 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   var [pluginDragId, setPluginDragId] = useWbcState("");
   useWbcEffect(function () {
     return workbenchServices.plugins().subscribe(function (snapshot) {
-      setPluginTools(Array.isArray(snapshot && snapshot.projectTools) ? snapshot.projectTools : []);
+      var entries = Array.isArray(snapshot && snapshot.workbenchEntries) ? snapshot.workbenchEntries : [];
+      setWorkbenchEntries(entries);
+      setPluginTools((Array.isArray(snapshot && snapshot.projectTools) ? snapshot.projectTools : []).filter(function (tool) {
+        var key = String(tool && tool.pack_id || "") + "/" + String(tool && (tool.id || tool.view) || "");
+        var entry = entries.find(function (item) { return String(item && item.key || "") === key; });
+        return !entry || entry.configured_visible !== false;
+      }));
     });
   }, []);
   function pluginToolKey(tool) {
@@ -236,7 +253,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   var [renameChat, setRenameChat] = useWbcState(null);
   var [renameGroup, setRenameGroup] = useWbcState(null);
   var [renameTerminalItem, setRenameTerminalItem] = useWbcState(null);
-  var terminalDefaultOrder = (codeAvailable && Array.isArray(terminals) ? terminals : []).filter(wbcTerminalVisibleInRail).slice().sort(function (left, right) {
+  var terminalDefaultOrder = (terminalEntryAvailable && Array.isArray(terminals) ? terminals : []).filter(wbcTerminalVisibleInRail).slice().sort(function (left, right) {
     return Number(left && left.orderIndex || 0) - Number(right && right.orderIndex || 0);
   }).map(function (terminal) { return String(terminal.id); });
   var [terminalOrder, setTerminalOrder] = useWbcState([]);
@@ -245,6 +262,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   var [collapsedGroups, setCollapsedGroups] = useWbcState({});
   var [groups, setGroups] = useWbcState([]);
   var [announcement, setAnnouncement] = useWbcState("");
+  var [workbenchEntryMenu, setWorkbenchEntryMenu] = useWbcState(null);
   var ordering = useWbcRailOrdering({
     chats: chats,
     groups: groups,
@@ -281,7 +299,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   var [railMotionPhase, setRailMotionPhase] = useWbcState("");
   var [uiViewportRevision, setUiViewportRevision] = useWbcState(0);
   var projectFiles = useWbcProjectFiles({
-    enabled: codeAvailable && fileToolsExpanded,
+    enabled: fileEntryAvailable && fileToolsExpanded,
     path: filePath,
     projectId: projectId,
   });
@@ -310,7 +328,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   }, [projectId, terminalDefaultOrder.join("|")]);
   useWbcEffect(function () {
     var search = query.trim();
-    if (!codeAvailable || !search || !projectId) {
+    if (!fileEntryAvailable || !search || !projectId) {
       setGlobalFileEntries([]);
       setGlobalFilesLoading(false);
       setGlobalFilesError("");
@@ -347,7 +365,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       window.clearTimeout(timer);
       if (controller) controller.abort();
     };
-  }, [codeAvailable, query, projectId]);
+  }, [fileEntryAvailable, query, projectId]);
 
   useWbcEffect(function () {
     if (!query.trim()) return;
@@ -364,6 +382,53 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     document.addEventListener("pointerdown", closeRailMenuOnOutside, true);
     return function () { document.removeEventListener("pointerdown", closeRailMenuOnOutside, true); };
   }, [menuId]);
+
+  function openWorkbenchEntryMenu(event, packId, entryId, title, toolView) {
+    if (!event) return;
+    event.preventDefault();
+    event.stopPropagation();
+    var width = 220;
+    var height = 52;
+    var left = Math.max(8, Math.min(Number(event.clientX) || 8, window.innerWidth - width - 8));
+    var top = Math.max(8, Math.min(Number(event.clientY) || 8, window.innerHeight - height - 8));
+    setMenuId("");
+    setWorkbenchEntryMenu({
+      packId: String(packId || ""), entryId: String(entryId || ""),
+      title: String(title || ""), toolView: String(toolView || ""), left: left, top: top,
+    });
+  }
+  function openWorkbenchEntryMenuFromKeyboard(event, packId, entryId, title, toolView) {
+    if (!event || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return false;
+    var rect = event.currentTarget.getBoundingClientRect();
+    openWorkbenchEntryMenu({
+      preventDefault: function () { event.preventDefault(); },
+      stopPropagation: function () { event.stopPropagation(); },
+      clientX: rect.left + Math.min(rect.width, 36),
+      clientY: rect.top + Math.min(rect.height, 36),
+    }, packId, entryId, title, toolView);
+    return true;
+  }
+  function hideWorkbenchEntry() {
+    var entry = workbenchEntryMenu;
+    if (!entry) return;
+    setWorkbenchEntryMenu(null);
+    PluginFrontendService.setWorkbenchEntryVisible(entry.packId, entry.entryId, false).then(function () {
+      if (entry.toolView && projectToolView === entry.toolView) setProjectToolView("");
+      setAnnouncement(wbcT("rail.workbenchEntryHidden", "{title} was hidden. Re-enable it from its Plugin pack.", { title: entry.title }));
+    }).catch(function (error) {
+      workbenchServices.feedback().showToast(wbcErrorText(error), "error");
+    });
+  }
+  useWbcEffect(function () {
+    if (!workbenchEntryMenu) return undefined;
+    function closeOnEscape(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setWorkbenchEntryMenu(null);
+    }
+    document.addEventListener("keydown", closeOnEscape, true);
+    return function () { document.removeEventListener("keydown", closeOnEscape, true); };
+  }, [workbenchEntryMenu]);
 
   var railMotionCollapsedRef = useWbcRef(!!collapsed);
   /* Derive the phase during the first render that sees the new collapsed prop.
@@ -1991,6 +2056,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       || ["pty_lost", "signal", "recovery_failed", "restart_failed"].indexOf(exitReason) >= 0
       || (status === "exited" && terminal && terminal.exitCode != null && Number(terminal.exitCode) !== 0);
     var agent = terminal && terminal.agent || null;
+    var agentActive = Boolean(terminal && terminal.agentActive || agent && agent.active);
     var agentState = String(terminal && terminal.agentState || agent && agent.state || "").trim().toLowerCase();
     var agentLabel = String(terminal && terminal.agentLabel || agent && agent.label || "Agent");
     var agentStates = {
@@ -2001,7 +2067,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       failed: { tone: " status-agent-failed", icon: WBC_ICONS.errorCircle, label: wbcT("terminal.agentFailed", "Agent failed") },
       interrupted: { tone: " status-agent-interrupted", icon: WBC_ICONS.agentInterrupted, label: wbcT("terminal.agentInterrupted", "Agent interrupted") },
     };
-    var agentVisual = agentStates[agentState];
+    var agentVisual = agentActive ? agentStates[agentState] : null;
     if (agentVisual) {
       return {
         processRunning: processRunning,
@@ -2115,7 +2181,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       </span>
       <span className="wbc-chat-card-preview">
         {running ? <i className="wbc-running-dot" /> : null}
-        <WbcHoverMarquee text={(terminal && terminal.agentState)
+        <WbcHoverMarquee text={(terminal && terminal.agentActive && terminal.agentState)
           ? visualState.statusText
           : (running ? String(terminal.cwd || "") : wbcT("terminal.exited", "Process exited"))} />
       </span>
@@ -2234,7 +2300,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         key={context.toolKey}
         type="button"
         disabled={context.disabled}
+        data-cyrene-context-menu="true"
         onClick={function () { if (!context.disabled) onOpenPluginView(context.payload, context.openOptions); }}
+        onContextMenu={function (event) { openWorkbenchEntryMenu(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
+        onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
       >
         <span className="wbc-project-tool-icon" aria-hidden="true">{context.glyph}</span>
         <span className="wbc-project-tool-copy"><b>{context.title}</b><small>{context.subtitle}</small></span>
@@ -2243,7 +2312,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     }
     return <React.Fragment key={context.toolKey}>
       {expanded ? (
-        <div className="wbc-project-tool-inline-header is-plugin">
+        <div className="wbc-project-tool-inline-header is-plugin"
+          tabIndex="0" data-cyrene-context-menu="true"
+          onContextMenu={function (event) { openWorkbenchEntryMenu(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
+          onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}>
           <span className="wbc-project-tool-icon" aria-hidden="true">{context.glyph}</span>
           <span className="wbc-project-tool-copy"><b>{context.title}</b><small>{context.subtitle}</small></span>
           <button
@@ -2259,7 +2331,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         <button
           type="button"
           data-project-tool={pluginToolView(tool)}
+          data-cyrene-context-menu="true"
           onClick={function () { setMenuId(""); setPluginToolExpanded(tool, true); }}
+          onContextMenu={function (event) { openWorkbenchEntryMenu(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
+          onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
           aria-expanded="false"
           aria-controls={collectionId}
         >
@@ -2291,9 +2366,12 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         <button
           type="button"
           className="wbc-plugin-tool-collection-toggle"
+          data-cyrene-context-menu="true"
           aria-expanded={expanded ? "true" : "false"}
           aria-controls={collectionId}
           onClick={function () { setPluginToolExpanded(tool, !expanded); }}
+          onContextMenu={function (event) { openWorkbenchEntryMenu(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
+          onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
         >
           <span className="wbc-project-tool-icon" aria-hidden="true">{context.glyph}</span>
           <span className="wbc-project-tool-copy"><b>{context.title}</b><small>{context.subtitle}</small></span>
@@ -2312,6 +2390,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       draggable={context.disabled ? undefined : "true"}
       aria-disabled={context.disabled || undefined}
       aria-label={context.title}
+      data-cyrene-context-menu="true"
       title={wbcT("workbenchChat.dragPluginView", "Drag to open {title} in a split view.", { title: context.title })}
       className={"wbc-chat-card wbc-project-plugin-tool" + (pluginDragId === context.toolKey ? " dragging" : "")}
       onClick={function () {
@@ -2319,10 +2398,12 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         onOpenPluginView(context.payload, context.openOptions);
       }}
       onKeyDown={function (event) {
+        if (openWorkbenchEntryMenuFromKeyboard(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool))) return;
         if (context.disabled || (event.key !== "Enter" && event.key !== " ")) return;
         event.preventDefault();
         onOpenPluginView(context.payload, context.openOptions);
       }}
+      onContextMenu={function (event) { openWorkbenchEntryMenu(event, tool.pack_id, tool.id || tool.view, context.title, pluginToolView(tool)); }}
       onDragStart={function (event) {
         if (context.disabled) { event.preventDefault(); return; }
         pluginSuppressClickRef.current = context.toolKey;
@@ -2380,7 +2461,8 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
 
   var unifiedSearchActive = normalizedQuery.length > 0;
   var unifiedSearchResultCount = filtered.length
-    + (codeAvailable ? globalFileEntries.length + orderedTerminals.length : 0);
+    + (fileEntryAvailable ? globalFileEntries.length : 0)
+    + (terminalEntryAvailable ? orderedTerminals.length : 0);
 
   return (
     <aside ref={railRef} className={"wbc-rail workbench-integrated-rail"
@@ -2410,7 +2492,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
                   value={query}
                   onChange={function (e) {
                     var nextQuery = e.target.value;
-                    setGlobalFilesLoading(codeAvailable && Boolean(nextQuery.trim()));
+                    setGlobalFilesLoading(fileEntryAvailable && Boolean(nextQuery.trim()));
                     setQuery(nextQuery);
                   }}
                   placeholder={wbcT("rail.searchEverythingShort", "Search all")}
@@ -2446,11 +2528,11 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
                 <header className="wbc-rail-section-label"><b>{wbcT("workbench.page.chat", "Chats")}</b><span>{filtered.length}</span></header>
                 <div className="wbc-rail-section-items">{filtered.map(function (chat) { return renderChatCard(chat); })}</div>
               </section> : null}
-              {codeAvailable && globalFileEntries.length ? <section className="wbc-rail-section wbc-unified-search-section is-file">
+              {fileEntryAvailable && globalFileEntries.length ? <section className="wbc-rail-section wbc-unified-search-section is-file">
                 <header className="wbc-rail-section-label"><b>{wbcT("rail.files", "Files")}</b><span>{globalFileEntries.length}</span></header>
                 <div className="wbc-rail-section-items wbc-unified-search-file-items">{globalFileEntries.map(renderUnifiedFileResult)}</div>
               </section> : null}
-              {codeAvailable && orderedTerminals.length ? <section className="wbc-rail-section wbc-unified-search-section is-terminal">
+              {terminalEntryAvailable && orderedTerminals.length ? <section className="wbc-rail-section wbc-unified-search-section is-terminal">
                 <header className="wbc-rail-section-label"><b>{wbcT("terminal.title", "Terminal")}</b><span>{orderedTerminals.length}</span></header>
                 <div className="wbc-rail-section-items">{orderedTerminals.map(renderTerminalCard)}</div>
               </section> : null}
@@ -2609,7 +2691,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
           );
         })}
       </div>}
-      {(codeAvailable || projectSectionPluginTools.length) && railMode === "chat" && !collapsed ? (
+      {(fileEntryAvailable || terminalEntryAvailable || projectSectionPluginTools.length) && railMode === "chat" && !collapsed ? (
         <section
           ref={projectToolsRef}
           className={"wbc-project-tools"
@@ -2636,7 +2718,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
           }}
         >
           <header><span>{wbcT("rail.projectTools", "Tools")}</span></header>
-          {codeAvailable ? <>
+          {fileEntryAvailable ? <>
           {fileToolsExpanded ? (
             <WbcProjectFileHeader
               collapseControls="wbc-project-file-list"
@@ -2647,16 +2729,21 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
                 setFilePath(filePath.indexOf("/") === -1 ? "." : filePath.split("/").slice(0, -1).join("/"));
               }}
               onCollapse={function () { setFileToolsExpanded(false); }}
+              onContextMenu={function (event) { openWorkbenchEntryMenu(event, "cyrene_code", "files", wbcT("rail.files", "Files"), "file"); }}
+              onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, "cyrene_code", "files", wbcT("rail.files", "Files"), "file"); }}
             />
           ) : (
             <button
               type="button"
               data-project-tool="file"
+              data-cyrene-context-menu="true"
               onClick={function () {
                 setMenuId("");
                 setTerminalToolsExpanded(false);
                 setFileToolsExpanded(true);
               }}
+              onContextMenu={function (event) { openWorkbenchEntryMenu(event, "cyrene_code", "files", wbcT("rail.files", "Files"), "file"); }}
+              onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, "cyrene_code", "files", wbcT("rail.files", "Files"), "file"); }}
               aria-expanded="false"
               aria-controls="wbc-project-file-list"
             >
@@ -2694,8 +2781,13 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
               </div>
             </div>
           </div>
+          </> : null}
+          {terminalEntryAvailable ? <>
           {terminalToolsExpanded ? (
-            <div className="wbc-project-tool-inline-header is-terminal">
+            <div className="wbc-project-tool-inline-header is-terminal"
+              tabIndex="0" data-cyrene-context-menu="true"
+              onContextMenu={function (event) { openWorkbenchEntryMenu(event, "cyrene_code", "terminal", wbcT("terminal.title", "Terminal"), "terminal"); }}
+              onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, "cyrene_code", "terminal", wbcT("terminal.title", "Terminal"), "terminal"); }}>
               <span className="wbc-project-tool-icon" aria-hidden="true">{WBC_ICONS.slash}</span>
               <span className="wbc-project-tool-copy"><b>{wbcT("terminal.title", "Terminal")}</b><small>{terminals.filter(function (terminal) { return terminal && (terminal.status === "running" || terminal.status === "starting"); }).length} {wbcT("terminal.runningCountSuffix", "running")}</small></span>
               <button
@@ -2718,11 +2810,14 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             <button
               type="button"
               data-project-tool="terminal"
+              data-cyrene-context-menu="true"
               onClick={function () {
                 setMenuId("");
                 setFileToolsExpanded(false);
                 setTerminalToolsExpanded(true);
               }}
+              onContextMenu={function (event) { openWorkbenchEntryMenu(event, "cyrene_code", "terminal", wbcT("terminal.title", "Terminal"), "terminal"); }}
+              onKeyDown={function (event) { openWorkbenchEntryMenuFromKeyboard(event, "cyrene_code", "terminal", wbcT("terminal.title", "Terminal"), "terminal"); }}
               aria-expanded="false"
               aria-controls="wbc-project-terminal-list"
             >
@@ -2768,10 +2863,27 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             setPluginDragId("");
           }}
         >
-          {!codeAvailable && !projectSectionPluginTools.length ? <header><span>{wbcT("rail.projectTools", "Tools")}</span></header> : null}
+          {!fileEntryAvailable && !terminalEntryAvailable && !projectSectionPluginTools.length ? <header><span>{wbcT("rail.projectTools", "Tools")}</span></header> : null}
           {pluginSectionTools.map(renderAuxiliaryPluginTool)}
         </section>
       ) : null}
+      {workbenchEntryMenu ? <div className="wb-item-context-layer wbc-workbench-entry-context-layer">
+        <div className="wb-item-context-scrim" onPointerDown={function () { setWorkbenchEntryMenu(null); }} />
+        <div
+          className="wb-item-context-menu wbc-workbench-entry-context-menu"
+          role="menu"
+          aria-label={workbenchEntryMenu.title}
+          style={{ left: workbenchEntryMenu.left + "px", top: workbenchEntryMenu.top + "px" }}
+          onContextMenu={function (event) { event.preventDefault(); }}
+        >
+          <button type="button" role="menuitem" autoFocus onClick={hideWorkbenchEntry}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.2A10.8 10.8 0 0 1 12 4c5.5 0 9 5 9 5a15.6 15.6 0 0 1-2.1 2.6M6.2 6.2C4.2 7.5 3 9 3 9s3.5 5 9 5c1 0 1.9-.2 2.7-.4" />
+            </svg>
+            {wbcT("rail.hideWorkbenchEntry", "Hide from Tools")}
+          </button>
+        </div>
+      </div> : null}
       {moduleDock}
       <WbcRenameDialog
         chat={renameChat}

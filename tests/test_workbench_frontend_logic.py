@@ -796,15 +796,27 @@ def test_chat_sidebar_context_is_flat_and_overview_is_integrated():
     plugin_pack_heading = context_source.index('className="wbc-context-empty-head wbc-plugin-pack-head"')
     plugin_pack_condition = context_source.index("usedPluginPacks.length === 0 ? (")
     assert plugin_pack_heading < plugin_pack_condition
+    assert 'className="wbc-plugin-pack-list"' in context_source
+    assert "wbcLocalizedUsedPluginName(packId, pluginSnapshot)" in context_source
+    assert "PluginFrontendService.subscribe(setPluginSnapshot)" in context_source
+    assert 'pluginLocalizedField(descriptor, "name")' in source
     assert 'className="workbench-side-section wbc-context-stats"' in context_source
+    assert 'className="wbc-context-facts"' in context_source
     assert "WbcSortableCardStack" not in context_source
     context_css = styles.split(".wbc-context-sections {", 1)[1].split("}", 1)[0]
     assert "flex-direction: column;" in context_css
-    first_plugin_pack_css = styles.split(
-        ".wbc-context-sections .wbc-plugin-pack-head + .wbc-plugin-pack-row {",
+    assert ".wbc-plugin-pack-list {" in styles
+    assert ".wbc-context-facts {" in styles
+    context_facts_css = styles.split(".wbc-context-facts {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr);" in context_facts_css
+    assert "border: 0;" in context_facts_css
+    assert "background: transparent;" in context_facts_css
+    plugin_pack_row_css = styles.split(
+        ".wbc-side-body .wbc-plugin-pack-list .wbc-plugin-pack-row {",
         1,
     )[1].split("}", 1)[0]
-    assert "border-top: 0;" in first_plugin_pack_css
+    assert "display: flex;" in plugin_pack_row_css
+    assert "justify-content: space-between;" in plugin_pack_row_css
 
 
 def test_chat_overview_cache_rate_only_uses_latest_request():
@@ -1201,21 +1213,22 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
     right_panel_styles = styles.split("/* ---- right panel ---- */", 1)[1]
     side_css = right_panel_styles.split(".wbc-side {", 1)[1].split("}", 1)[0]
     card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
+    surface_css = styles.split(".wbc-panel-accordion-surface {", 1)[1].split("}", 1)[0]
     accordion_css = styles.split(".wbc-side-accordion {", 1)[1].split("}", 1)[0]
     side_body_css = styles.split(".wbc-side-body {", 1)[1].split("}", 1)[0]
     flush_css = styles.split(".wbc-side-body.flush {", 1)[1].split("}", 1)[0]
 
-    assert 'className="wbc-side-card"' in source
-    assert 'className="wbc-side-accordion"' in source
-    assert 'className="wbc-side-accordion-trigger"' in source
-    assert "aria-expanded={expanded}" in source
+    assert '<WbcPanelAccordionSurface className="wbc-side-card">' in source
+    assert '<WbcPanelAccordionList className="wbc-side-accordion" dataTour="chat_sidebar">' in source
+    assert 'className={"wbc-side-accordion-trigger"' in source
+    assert 'aria-expanded={expandable ? (expanded ? "true" : "false") : undefined}' in source
     assert 'var [sideTab, setSideTab] = useWbcState("");' in source
     assert 'var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "";' in source
     assert 'onTabChange(expanded ? "" : item.id)' in source
     assert "padding: var(--wbc-card-top-inset) var(--wbc-card-gutter) var(--wbc-card-gutter);" in side_css
     assert "background: transparent;" in side_css
-    assert "border-radius: 18px;" in card_css
-    assert "backdrop-filter: blur(18px) saturate(112%);" in card_css
+    assert "border-radius: 18px;" in surface_css
+    assert "backdrop-filter: blur(18px) saturate(112%);" in surface_css
     assert "overflow-y: auto;" in accordion_css
     assert "max-height: min(620px, calc(100vh - 250px));" in side_body_css
     assert "padding: 4px 16px 12px;" in side_body_css
@@ -1230,17 +1243,18 @@ def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
     rail_card_css = styles.split(".wbc-rail::before {", 1)[1].split("}", 1)[0]
     pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
     side_card_css = styles.split("\n.wbc-side-card {", 1)[1].split("}", 1)[0]
+    panel_surface_css = styles.split(".wbc-panel-accordion-surface {", 1)[1].split("}", 1)[0]
     dark_side_card_css = styles.split(
-        'html[data-theme="dark"] .wbc-page .wbc-side-card {', 1
+        'html[data-theme="dark"] .wbc-page .wbc-panel-accordion-surface {', 1
     )[1].split("}", 1)[0]
 
     assert "--wbc-panel-surface: var(--wb-floating-rail-bg);" in page_css
     assert "--wbc-panel-surface: #17181c;" in dark_page_css
     assert "background: var(--wbc-panel-surface);" in rail_card_css
     assert "background: var(--wbc-panel-surface);" in pane_card_css
-    assert "background: var(--wbc-panel-surface);" in side_card_css
+    assert "background: var(--wbc-panel-surface);" in panel_surface_css
     assert "background: var(--wbc-panel-surface);" in dark_side_card_css
-    assert styles.index('html[data-theme="dark"] .wbc-page .wbc-side-card {') > styles.index(
+    assert styles.index('html[data-theme="dark"] .wbc-page .wbc-panel-accordion-surface {') > styles.index(
         'html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {'
     )
 
@@ -1811,16 +1825,76 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert "floating ? WBC_ICONS.x : WBC_ICONS.chevronsRight" in source
     assert 'wbcT("workbenchChat.closeFloatingConversationPanel"' in source
 
-    split_menu_icon_css = styles.split(
-        ".wbc-side-split-grip-menu button > span:first-child {", 1
-    )[1].split("}", 1)[0]
-    assert "flex: 0 0 32px;" in split_menu_icon_css
-    assert "justify-content: center;" in split_menu_icon_css
+    assert "function WbcPanelAccordionSurface(" in source
+    assert "function WbcPanelAccordionList(" in source
+    assert "function WbcPanelAccordionSection(" in source
+    assert "function WbcSplitGripAccordionBody(" in source
+    assert 'className={"wbc-side-accordion-item"' in source
+    assert 'className={"wbc-side-accordion-trigger"' in source
+    assert 'className="wbc-side-accordion-chevron"' in source
+    assert "<WbcSideAccordionBody" in source
+    assert 'className={"wbc-side-split-grip-menu"' in grip_bar
+    assert 'wbc-side-split-grip-menu wbc-side-card' not in grip_bar
+    assert '<WbcPanelAccordionList className="wbc-side-split-grip-accordion">' in grip_bar
+    assert '<WbcPanelAccordionList className="wbc-side-accordion"' not in grip_bar
+    assert 'window.ReactDOM.createPortal((' in grip_bar
+    assert 'typeof document !== "undefined" ? document.body : null' in grip_bar
+    assert 'surfaceRef={menuRef}' in grip_bar
+    assert 'insideMenu = menuRef.current && menuRef.current.contains(event.target)' in grip_bar
+    assert 'rootRef.current.closest(".wbc-pane-card, .wbc-side-card")' in grip_bar
+    assert "window.getComputedStyle(card).backgroundColor" in grip_bar
+    assert '"--wbc-split-grip-surface": menuPosition.surface || "var(--wb-card-bg)"' in grip_bar
     split_menu_css = styles.split(".wbc-side-split-grip-menu {", 1)[1].split("}", 1)[0]
-    assert "top: calc(100% + 4px);" in split_menu_css
-    assert "left: 50%;" in split_menu_css
+    assert "position: fixed;" in split_menu_css
+    assert "top: var(--wbc-split-grip-menu-top);" in split_menu_css
+    assert "left: var(--wbc-split-grip-menu-left);" in split_menu_css
     assert "transform: translateX(-50%);" in split_menu_css
     assert "right:" not in split_menu_css
+    assert "height: max-content;" in split_menu_css
+    assert "align-self: start;" in split_menu_css
+    assert "max-height:" not in split_menu_css
+    assert "display: block;" in split_menu_css
+    assert "animation: wbc-floating-side-panel-in 170ms cubic-bezier(.2, .8, .2, 1) both;" in split_menu_css
+    assert "--wbc-panel-surface:" not in split_menu_css
+    split_menu_surface_css = styles.split(
+        ".wbc-panel-accordion-surface.wbc-side-split-grip-menu {", 1
+    )[1].split("}", 1)[0]
+    assert "background: var(--wbc-split-grip-surface, var(--wb-card-bg));" in split_menu_surface_css
+    split_accordion_css = styles.split(".wbc-side-split-grip-accordion {", 1)[1].split("}", 1)[0]
+    assert "max-height: min(620px, calc(100vh - var(--wbc-split-grip-menu-top) - 12px));" in split_accordion_css
+    assert "height: max-content;" in split_accordion_css
+    split_menu_body_css = styles.split(
+        ".wbc-side-split-grip-expanded-content {", 1
+    )[1].split("}", 1)[0]
+    assert "padding: 0 16px 12px;" in split_menu_body_css
+    assert "box-sizing: border-box;" in split_menu_body_css
+    assert "menuBody={true}" in grip_bar
+    assert 'bodyClass="wbc-side-split-grip-accordion-body"' not in grip_bar
+    split_menu_information_css = styles.split(
+        ".wbc-side-split-grip-information {", 1
+    )[1].split("}", 1)[0]
+    assert "padding: 3px 0 0;" in split_menu_information_css
+    panel_accordion_css = styles.split(".wbc-panel-accordion-list {", 1)[1].split("}", 1)[0]
+    surface_css = styles.split(".wbc-panel-accordion-surface {", 1)[1].split("}", 1)[0]
+    assert "flex:" not in panel_accordion_css
+    assert "height:" not in panel_accordion_css
+    assert ".wbc-panel-accordion-surface {" in styles
+    assert '<WbcPanelAccordionSurface className="wbc-side-card">' in source
+    accordion_item_css = styles.split(".wbc-side-accordion-item {", 1)[1].split("}", 1)[0]
+    assert "border-bottom: 1px solid" in accordion_item_css
+    assert ".wbc-side-collapse.open" in styles
+    collapse_css = styles.split("\n.wbc-side-collapse {", 1)[1].split("}", 1)[0]
+    open_collapse_css = styles.split("\n.wbc-side-collapse.open {", 1)[1].split("}", 1)[0]
+    assert "height: 0;" in collapse_css
+    assert "height: auto;" in open_collapse_css
+    assert "grid-template-rows:" not in collapse_css
+    assert "interpolate-size: allow-keywords;" in collapse_css
+    assert "interpolate-size:" not in surface_css
+    accordion_body = source.split("function WbcSideAccordionBody(", 1)[1].split(
+        "function WbcConversationTerminalList", 1
+    )[0]
+    assert "ResizeObserver" not in accordion_body
+    assert "--wbc-side-collapse-height" not in accordion_body
 
     floating_css = styles.split(
         ".wbc-split-main-grip > .wbc-side-floating {", 1
@@ -4902,6 +4976,9 @@ def test_project_terminal_cards_have_independent_agent_lifecycle_and_unread_sema
     assert 'status-terminal-normal' in terminal_state
     assert "var visualState = terminalRailVisualState(terminal);" in terminal_card
     assert 'var unread = Boolean(terminal && terminal.unread);' in terminal_card
+    assert 'var agentActive = Boolean(terminal && terminal.agentActive || agent && agent.active);' in terminal_state
+    assert 'var agentVisual = agentActive ? agentStates[agentState] : null;' in terminal_state
+    assert 'terminal && terminal.agentActive && terminal.agentState' in terminal_card
     assert 'wbc-terminal-unread-dot' in terminal_card
     assert "+ visualState.tone}" in terminal_card
 
@@ -7997,15 +8074,38 @@ def test_workbench_chat_reconnect_keeps_live_timeline_and_resumes_from_cursor():
 def test_workbench_copy_uses_electron_clipboard_bridge():
     root = Path(__file__).resolve().parent.parent
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    plugins = (
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend"
+        / "platform" / "plugins.jsx"
+    ).read_text(encoding="utf-8")
     chat = workbench_chat_source()
 
-    assert "clipboard, contextBridge, ipcRenderer" in preload
+    assert "const { contextBridge, ipcRenderer }" in preload
     assert "writeClipboardText: (text) =>" in preload
-    assert "clipboard.writeText(" in preload
+    assert "'clipboard:write-text'" in preload
+    assert "ipcRenderer.invoke('clipboard:read-text')" in preload
+    assert "ipcMain.handle('clipboard:write-text'" in main
+    assert "ipcMain.handle('clipboard:read-text'" in main
+    assert "Promise.resolve(hostResult)" in plugins
+    assert "clipboard.readText()" not in preload
     assert 'typeof window.cyrene.writeClipboardText === "function"' in chat
     assert "window.cyrene.writeClipboardText(text);" in chat
     assert "await navigator.clipboard.writeText(text);" in chat
     assert 'console.error("Failed to copy workbench message:", e);' in chat
+
+
+def test_workbench_shell_sets_a_restrictive_electron_csp():
+    root = Path(__file__).resolve().parent.parent
+    shell = (
+        root / "src" / "cyrene" / "workbench" / "http" / "system" / "shell.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"Content-Security-Policy": _WORKBENCH_CSP' in shell
+    assert "object-src 'none'" in shell
+    assert "frame-ancestors 'none'" in shell
+    assert "worker-src 'self' blob:" in shell
+    assert "unsafe-eval" not in shell
 
 
 def test_code_blocks_use_declared_language_and_resilient_clipboard_actions():

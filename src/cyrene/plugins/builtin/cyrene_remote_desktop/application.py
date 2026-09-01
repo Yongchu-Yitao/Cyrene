@@ -27,7 +27,11 @@ def _session_frontend_methods(service: RemoteDesktopService) -> dict[str, Any]:
 
     async def reconnect(arguments: Any, _metadata: Any) -> dict[str, Any]:
         values = _object(arguments)
-        return await service.reconnect(str(values.get("session_id") or ""), dict(values.get("offer") or {}))
+        return await service.reconnect(
+            str(values.get("session_id") or ""),
+            dict(values.get("offer") or {}),
+            dict(values.get("viewport") or {}),
+        )
 
     async def disconnect(arguments: Any, _metadata: Any) -> dict[str, Any]:
         return await service.disconnect(str(_object(arguments).get("session_id") or ""))
@@ -44,13 +48,18 @@ def _session_frontend_methods(service: RemoteDesktopService) -> dict[str, Any]:
 
     async def quality_set(arguments: Any, _metadata: Any) -> dict[str, Any]:
         values = _object(arguments)
-        return await service.set_quality(str(values.get("session_id") or ""), str(values.get("quality_mode") or ""))
+        return await service.set_quality(
+            str(values.get("session_id") or ""),
+            str(values.get("quality_mode") or ""),
+            device_id=str(values.get("device_id") or ""),
+        )
 
     async def mode_set(arguments: Any, _metadata: Any) -> dict[str, Any]:
         values = _object(arguments)
         return await service.set_mode(
             str(values.get("session_id") or ""),
             str(values.get("mode") or ""),
+            device_id=str(values.get("device_id") or ""),
         )
 
     async def microphone_set(arguments: Any, _metadata: Any) -> dict[str, Any]:

@@ -29,6 +29,7 @@ from cyrene.plugins.builtin.cyrene_remote_desktop.contracts import (
 from cyrene.plugins.builtin.cyrene_remote_desktop.providers import (
     FreeRdpProvider,
     _configured_rdp_port,
+    _freerdp_connection_arguments,
     _normalize_rdp_connect_error,
     _parse_rdp_port,
     _rdp_listener_state,
@@ -141,21 +142,33 @@ def test_remote_desktop_pack_declares_only_v1_view_tools_and_valid_contributions
     assert tool["restore_layout"] is True
     assert information["placement"] == "root"
     assert [field["state_key"] for field in information["fields"]][-3:] == [
-        "network_status",
+        "latency_ms",
         "quality_mode",
         "clipboard_status",
     ]
+    latency = next(
+        field for field in information["fields"]
+        if field["state_key"] == "latency_ms"
+    )
+    assert latency["label"] == "Latency"
+    assert latency["i18n"]["zh"]["label"] == "延迟"
+    assert latency["suffix"] == " ms"
     assert pane_menu["file_transfer"]["frontend_action"] == "file_transfer"
     assert pane_menu["switch_display"]["frontend_action"] == "switch_display"
     assert pane_menu["microphone"]["frontend_action"] == "toggle_microphone"
     assert mode["state_key"] == "preferred_mode"
+    assert mode["presentation"] == "slider"
     assert mode["available_values_state_key"] == "modes"
     assert mode["reload_view"] is True
+    assert mode["context_arguments"] == {"device_id": "device_id"}
+    assert mode.get("requires_session") is not True
     assert [item["value"] for item in mode["options"]] == [
         "current_desktop",
         "remote_login",
     ]
-    assert quality["requires_session"] is True
+    assert quality["context_arguments"] == {"device_id": "device_id"}
+    assert quality.get("requires_session") is not True
+    assert quality["presentation"] == "slider"
     assert [item["value"] for item in quality["options"]] == [
         "auto",
         "smooth",
@@ -238,6 +251,51 @@ def test_remote_desktop_mode_setting_disconnects_and_updates_preference(
     assert gateway.commands == ["desktop.disconnect"]
 
 
+def test_remote_desktop_mode_setting_recovers_a_failed_session(tmp_path: Path):
+    service = _service(tmp_path, received=("desktop:current_session",))
+    session_id = _connected_session(service)
+    service.store.update_session(
+        session_id,
+        state="failed",
+        remote_session_id="",
+        last_error_code="rdp_authentication_failed",
+    )
+
+    result = run(service.set_mode(session_id, "current_desktop"))
+
+    assert result["session"]["preferred_mode"] == "current_desktop"
+    assert service.store.preference("device-one")["preferred_mode"] == "current_desktop"
+    assert service.store.get_session(session_id)["state"] == "disconnected"
+
+
+def test_remote_desktop_device_settings_work_without_an_active_session(
+    tmp_path: Path,
+):
+    service = _service(
+        tmp_path,
+        received=(
+            "desktop:session_connect",
+            "desktop:current_session",
+            "desktop:remote_login",
+        ),
+    )
+
+    prepared = run(service.prepare("default"))
+    mode = run(
+        service.set_mode("", "remote_login", device_id="default")
+    )
+    quality = run(
+        service.set_quality("", "clear")
+    )
+
+    assert prepared["device_id"] == "device-one"
+    assert mode["session"]["preferred_mode"] == "remote_login"
+    assert quality["session"]["quality_mode"] == "clear"
+    preference = service.store.preference("device-one")
+    assert preference["preferred_mode"] == "remote_login"
+    assert preference["quality_mode"] == "clear"
+
+
 def test_remote_desktop_frontend_and_electron_host_are_packaged():
     root = Path(__file__).resolve().parent.parent
     rail = (
@@ -251,6 +309,10 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     styles = (
         root
         / "src/cyrene/workbench/webui/frontend/features/chat/chat.css"
+    ).read_text(encoding="utf-8")
+    context_styles = (
+        root
+        / "src/cyrene/workbench/webui/frontend/features/chat/context.css"
     ).read_text(encoding="utf-8")
     plugin_ui = (
         root
@@ -291,6 +353,7 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     electron_host = (root / "electron/remote-desktop.js").read_text(encoding="utf-8")
     electron_main = (root / "electron/main.js").read_text(encoding="utf-8")
     media_host = (root / "electron/remote-desktop-host.js").read_text(encoding="utf-8")
+    rdp_sidecar = (root / "electron/remote-desktop-rdp-sidecar.js").read_text(encoding="utf-8")
     app_use = (root / "electron/app-use.js").read_text(encoding="utf-8")
     app_use_macos = (root / "electron/app-use-macos.jxa").read_text(encoding="utf-8")
     app_use_windows = (root / "electron/app-use-windows.ps1").read_text(encoding="utf-8-sig")
@@ -319,8 +382,17 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "await waitForConnectedVideo(peer, 15000)" in plugin_ui
     assert "video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA" in plugin_ui
     assert "new ResizeObserver" in plugin_ui
+    assert "activePeer.getStats()" in plugin_ui
+    assert "currentRoundTripTime" in plugin_ui
+    assert "latency_ms: latencyMs" in plugin_ui
     assert "type: 'viewport'" in plugin_ui
     assert "currentVideoConstraints" in media_host
+    assert "startFreeRdp" in rdp_sidecar
+    assert "+dynamic-resolution" in rdp_sidecar
+    assert "rdp_authentication_failed" in rdp_sidecar
+    assert "remoteDesktop.credentials.request') return 185_000" in plugin_ui
+    assert "Acknowledge ipcRenderer.invoke" in electron_host
+    assert "remote-desktop-rdp-sidecar.js" in packaged_files
     assert "CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE" in electron_main
     assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" in electron_main
     assert "remote-audio" in plugin_ui
@@ -330,6 +402,12 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "remoteDesktop.clipboard.files.upload.chunk" in plugin_ui
     assert "remoteDesktop.session.reconnect" in plugin_ui
     assert "remoteDesktop.security.get" in plugin_ui
+    assert "securityPollRunning" in plugin_ui
+    assert "securityFailureCount < 3" in plugin_ui
+    assert "remote_peer_identity_mismatch" in plugin_ui
+    assert "securityTimer = window.setTimeout" in plugin_ui
+    assert "securityTimer = window.setInterval" not in plugin_ui
+    assert 'code: String(error && error.code || "")' in plugin_host
     assert "window.setTimeout(connect, 0)" in plugin_ui
     assert "autoConnectStarted" in plugin_ui
     assert "remoteDesktop.mode.set" in application
@@ -338,17 +416,78 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "projectOwnedPlugin" in pane_drop
     assert "wbc-side-split-grip-settings" in styles
     assert "wbc-side-split-grip-information" in pane
+    plugin_view_branch = page.split('} else if (card.kind === "plugin-view") {', 1)[1].split(
+        "    } else {", 1
+    )[0]
+    assert "pluginPaneState.paneMenu" in plugin_view_branch
+    assert "<WbcSplitGripBar" in plugin_view_branch
+    assert "menuContributions={pluginPaneMenu}" in plugin_view_branch
+    split_menu_css = styles.split(".wbc-side-split-grip-menu {", 1)[1].split("}", 1)[0]
+    split_menu_list_css = styles.split(".wbc-side-split-grip-accordion {", 1)[1].split("}", 1)[0]
+    assert "position: fixed;" in split_menu_css
+    assert "height: max-content;" in split_menu_css
+    assert "align-self: start;" in split_menu_css
+    assert "height: max-content;" in split_menu_list_css
+    assert 'rootRef.current.closest(".wbc-pane-card, .wbc-side-card")' in pane
+    assert "window.getComputedStyle(card).backgroundColor" in pane
+    assert '"--wbc-split-grip-surface": menuPosition.surface || "var(--wb-card-bg)"' in pane
+    split_menu_surface_css = styles.split(
+        ".wbc-panel-accordion-surface.wbc-side-split-grip-menu {", 1
+    )[1].split("}", 1)[0]
+    assert "background: var(--wbc-split-grip-surface, var(--wb-card-bg));" in split_menu_surface_css
+    split_menu_body_css = styles.split(
+        ".wbc-side-split-grip-expanded-content {", 1
+    )[1].split("}", 1)[0]
+    assert "padding: 0 16px 12px;" in split_menu_body_css
+    assert 'window.ReactDOM.createPortal((' in pane
+    assert 'typeof document !== "undefined" ? document.body : null' in pane
+    assert "menuBody={true}" in pane
+    collapse_css = context_styles.split(".wbc-side-collapse {", 1)[1].split("}", 1)[0]
+    assert "interpolate-size: allow-keywords;" in collapse_css
     assert "pluginViewCommand" in page
     assert "cyrene:plugin-view-interaction" in pane
+    assert "contextValue = card.payload[stateKey]" in page
     assert "type: 'interaction'" in plugin_ui
     assert '<div class="toolbar-actions" hidden' in plugin_html
+    assert 'id="popover-scrim"' in plugin_html
+    assert 'id="file-menu-close"' in plugin_html
+    assert 'aria-labelledby="file-menu-title"' in plugin_html
     assert '<footer class="statusbar">' not in plugin_html
     assert 'id="status-copy"' not in plugin_html
     assert "justify-content: center" in plugin_css
-    assert "grid-template-rows: 48px minmax(0, 1fr)" in plugin_css
+    assert "grid-template-rows: minmax(0, 1fr)" in plugin_css
+    assert ".toolbar { display: none; }" in plugin_css
+    assert "top: 12px" in plugin_css
+    assert "left: 50%" in plugin_css
+    assert ".file-popover { right:" not in plugin_css
+    assert "function closePopovers(options)" in plugin_ui
+    assert "togglePopover(fileMenu, fileMenuClose)" in plugin_ui
+    assert "popoverScrim.addEventListener('pointerdown'" in plugin_ui
+    assert 'data-input-enabled="true"' not in plugin_css
+    assert "cursor: none" not in plugin_css
+    assert "const retryDelays = [0, 100, 250, 500]" in electron_host
+    assert "Failed to load the active-session indicator after retries" in electron_host
+    assert "if (supported.cursor === true) constraints.cursor = 'never'" in media_host
+    assert "NotifyPointerMotionAbsolute(this.streamPath, x, y)" in electron_host
+    assert "this.screenCastSession.RecordVirtual" in electron_host
+    assert "pipewiresrc" in electron_host
+    assert "max-framerate=${dimensions.frameRate}/1" in electron_host
+    assert "native_capture: record.nativeCapture" in electron_host
+    assert "canvas.captureStream" in media_host
+    assert "releaseNativeSurface" in media_host
+    assert "['button_down', 'right_click', 'double_click'].includes(action)" not in electron_host
+    assert "#remote-video { z-index: 1; object-fit: contain" in plugin_css
+    assert ".remote-video-backdrop" in plugin_css
+    assert 'id="remote-video-backdrop"' in plugin_html
+    assert "viewport: currentViewportSize()" in plugin_ui
+    assert "maxBitrate: 42_000_000" in media_host
+    assert "maintain-resolution" in media_host
+    assert "const scale = Math.min(rect.width / video.videoWidth" in plugin_ui
+    assert "localX / renderedWidth" in plugin_ui
     assert 'id="connect-button"' not in plugin_html
     assert 'class="mode-picker"' not in plugin_html
     assert "--bg: transparent" in plugin_styles
+    assert ".stage { position: relative; min-height: 0; overflow: hidden; outline: none; background: var(--bg); }" in plugin_styles
     assert "background: radial-gradient" not in plugin_styles
     assert "backdrop-filter" not in plugin_styles
     assert ':root[data-theme="light"]' in plugin_styles
@@ -448,6 +587,78 @@ def test_rdp_probe_selects_the_backend_that_is_actually_listening(
     assert {"clipboard_text", "clipboard_image", "clipboard_file"}.issubset(
         descriptor.capabilities
     )
+
+
+def test_freerdp_connection_arguments_include_initial_controller_viewport():
+    arguments = _freerdp_connection_arguments(
+        session_id="rdp-one",
+        rdp_port=3389,
+        rdp_port_source="gnome_settings",
+        offer={"type": "offer", "sdp": "test"},
+        display_id="rdp-display-1",
+        quality_mode="clear",
+        ice_servers=[],
+        permissions={"input": True},
+        credentials={"username": "user", "password": "secret"},
+        viewport={"width": 1512, "height": 949, "device_pixel_ratio": 2},
+    )
+
+    assert arguments["viewport"] == {
+        "width": 1512,
+        "height": 949,
+        "device_pixel_ratio": 2,
+    }
+    assert arguments["rdp"]["dynamic_resolution"] is True
+
+
+def test_freerdp_sidecar_reports_failure_before_destroying_display():
+    root = Path(__file__).resolve().parent.parent
+    sidecar = (root / "electron/remote-desktop-rdp-sidecar.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "stop({ terminateRuntime: false })" in sidecar
+    assert "Destroying Xvfb here can terminate Electron" in sidecar
+
+
+def test_freerdp_development_launcher_uses_linux_electron_flags():
+    root = Path(__file__).resolve().parent.parent
+    source = (
+        root
+        / "src/cyrene/plugins/builtin/cyrene_remote_desktop/freerdp_dev_sidecar.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"--no-sandbox"' in source
+    assert '"--disable-dev-shm-usage"' in source
+    assert '"--disable-gpu"' in source
+
+
+def test_linux_development_freerdp_bridge_reuses_electron_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    electron = tmp_path / "electron"
+    electron.write_text("runtime", encoding="utf-8")
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "remote-desktop-rdp-sidecar.js").write_text("sidecar", encoding="utf-8")
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.providers.platform.system",
+        lambda: "Linux",
+    )
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_remote_desktop.providers.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name in {"xfreerdp3", "Xvfb", "xdotool"} else None,
+    )
+    monkeypatch.setenv("CYRENE_ELECTRON_DEV", "1")
+    monkeypatch.setenv("CYRENE_ELECTRON_PATH", str(electron))
+    monkeypatch.setenv("CYRENE_ELECTRON_RESOURCES_DIR", str(resources))
+    monkeypatch.delenv("CYRENE_FREERDP_SIDECAR", raising=False)
+
+    provider = FreeRdpProvider()
+
+    assert provider.binary == ""
+    assert provider._sidecar_command()[0] == sys.executable
+    assert provider._sidecar_command()[1].endswith("freerdp_dev_sidecar.py")
 
 
 def test_turn_shared_secret_issues_time_limited_credentials(monkeypatch: pytest.MonkeyPatch):

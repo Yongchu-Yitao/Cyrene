@@ -2803,59 +2803,74 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   width: 72px;
   background: var(--wb-accent);
 }
-/* Menu opened by clicking the bar: restore the conversation panel, swap the
-   split side, or close. Anchor it to the grip's center on both columns. */
+/* The menu is portalled to document.body so it never inherits a pane card's
+   clipping or the Workbench grid's full-height row. */
 .wbc-side-split-grip-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 50%;
+  position: fixed;
+  top: var(--wbc-split-grip-menu-top);
+  left: var(--wbc-split-grip-menu-left);
   transform: translateX(-50%);
-  z-index: 1200;
+  z-index: 3200;
+  display: block;
   min-width: 190px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--wb-flyout-border);
-  border-radius: var(--wb-flyout-radius);
-  background: var(--wb-flyout-bg);
-  box-shadow: var(--wb-flyout-shadow);
+  width: 260px;
+  height: max-content;
+  align-self: start;
+  padding: 0;
+  overflow: hidden;
+  animation: wbc-floating-side-panel-in 170ms cubic-bezier(.2, .8, .2, 1) both;
+}
+/* The shared accordion surface normally gets this fill from .wbc-page. This
+   menu lives under body, so use the resolved surface copied from its owning
+   conversation card instead of rebuilding a potentially cyclic token chain. */
+.wbc-panel-accordion-surface.wbc-side-split-grip-menu {
+  background: var(--wbc-split-grip-surface, var(--wb-card-bg));
 }
 .wbc-side-split-grip-menu.has-contributions {
-  width: 260px;
+  width: min(var(--wb-right-w, 350px), calc(100vw - 24px));
   max-width: calc(100vw - 24px);
 }
-.wbc-side-split-grip-menu button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
+.wbc-side-split-grip-accordion {
+  height: max-content;
+  max-height: min(620px, calc(100vh - var(--wbc-split-grip-menu-top) - 12px));
+  overflow-y: auto;
+}
+.wbc-side-split-grip-menu .wbc-side-accordion-trigger.is-selected {
   color: var(--wb-text);
-  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
-  text-align: left;
-  cursor: pointer;
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
 }
-.wbc-side-split-grip-menu button:hover {
-  background: var(--wb-row-hover-bg);
-}
-.wbc-side-split-grip-menu button:disabled {
+.wbc-side-split-grip-menu .wbc-side-accordion-trigger:disabled {
   opacity: .44;
   cursor: default;
 }
-.wbc-side-split-grip-menu button:disabled:hover {
+.wbc-side-split-grip-menu .wbc-side-accordion-trigger:disabled:hover {
   background: transparent;
 }
+/* Grip menus deliberately do not reuse the docked side panel's scroll body:
+   that body carries viewport max-height and padding rules. This compact body
+   is content-sized and owns exactly one 16px horizontal gutter. */
+.wbc-side-split-grip-expanded-body {
+  min-width: 0;
+  overflow: hidden;
+  animation: wbc-side-split-grip-body-in 160ms cubic-bezier(.2, .8, .2, 1) both;
+}
+.wbc-side-split-grip-expanded-content {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 16px 12px;
+}
 .wbc-side-split-grip-settings {
-  margin: 0 4px 6px;
-  padding: 3px 8px 7px;
+  margin: 0;
+  padding: 3px 0 0;
 }
 .wbc-side-split-grip-information {
-  margin: 0 4px 7px;
-  padding: 3px 8px 5px;
+  margin: 0;
+  padding: 3px 0 0;
+}
+@keyframes wbc-side-split-grip-body-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .wbc-side-split-grip-information-details,
 .wbc-side-split-grip-information-facts {
@@ -2889,6 +2904,7 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   color: var(--wb-muted);
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
   font-weight: 590;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 .wbc-side-split-grip-information-details dd.is-success {
@@ -2938,6 +2954,91 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
   font-weight: 600;
 }
+.wbc-side-split-grip-setting-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.wbc-side-split-grip-setting-heading .wbc-side-split-grip-setting-label {
+  min-width: 0;
+}
+.wbc-side-split-grip-setting-heading output {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-setting-slider input[type="range"] {
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--wb-accent) 72%, var(--wb-text)) 0 var(--wbc-setting-progress),
+    color-mix(in srgb, var(--wb-line) 72%, transparent) var(--wbc-setting-progress) 100%);
+  background-position: center;
+  background-size: 100% 4px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+.wbc-side-split-grip-setting-slider input[type="range"]::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--wb-flyout-bg);
+  border-radius: 50%;
+  -webkit-appearance: none;
+  background: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-text));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line)), 0 2px 5px color-mix(in srgb, var(--wb-text) 18%, transparent);
+}
+.wbc-side-split-grip-setting-slider input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--wb-flyout-bg);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-text));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line)), 0 2px 5px color-mix(in srgb, var(--wb-text) 18%, transparent);
+}
+.wbc-side-split-grip-setting-slider input[type="range"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 58%, transparent);
+  outline-offset: 2px;
+}
+.wbc-side-split-grip-setting-slider input[type="range"]:disabled {
+  opacity: .44;
+  cursor: default;
+}
+.wbc-side-split-grip-setting-ticks {
+  display: grid;
+  gap: 3px;
+  margin-top: -1px;
+}
+.wbc-side-split-grip-setting-ticks span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-faint);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-setting-ticks span:first-child {
+  text-align: left;
+}
+.wbc-side-split-grip-setting-ticks span:last-child {
+  text-align: right;
+}
+.wbc-side-split-grip-setting-ticks span.is-selected {
+  color: var(--wb-text);
+  font-weight: 650;
+}
 .wbc-side-split-grip-setting > [role="group"] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2947,27 +3048,28 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   color: var(--wb-text);
   background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-row-hover-bg));
 }
-.wbc-side-split-grip-menu button > span:first-child {
-  display: inline-flex;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  color: var(--wb-muted);
-}
-
-.wbc-side-split-grip-menu button > span:first-child svg {
-  display: block;
-  flex: 0 0 auto;
-}
 .wbc-side-split-grip-setting button {
   min-width: 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
   justify-content: center;
   gap: 5px;
   padding: 7px 6px;
+  border: 0;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--wb-row-hover-bg) 56%, transparent);
+  color: var(--wb-text);
+  cursor: pointer;
+}
+.wbc-side-split-grip-setting button:hover:not(:disabled),
+.wbc-side-split-grip-setting button:focus-visible {
+  background: var(--wb-row-hover-bg);
+  outline: 0;
+}
+.wbc-side-split-grip-setting button:disabled {
+  opacity: .44;
+  cursor: default;
 }
 .wbc-side-split-grip-setting button > span:first-child {
   flex: 0 0 14px;

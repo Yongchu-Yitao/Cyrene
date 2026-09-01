@@ -1282,6 +1282,8 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "rail.noUnifiedMatches": "No matching chats, files, or terminals.",
     "rail.contentType": "Sidebar content",
     "rail.projectTools": "Tools",
+    "rail.hideWorkbenchEntry": "Hide from Tools",
+    "rail.workbenchEntryHidden": "{title} was hidden. Re-enable it from its Plugin pack.",
     "rail.pluginCollectionEmpty": "No available devices.",
     "workbenchChat.agentViewing": "Agent is viewing",
     "rail.pluginTools": "Plugin tools",
