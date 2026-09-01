@@ -29,7 +29,6 @@
 
   function currentVideoConstraints() {
     const quality = qualityConstraints[qualityMode] || qualityConstraints.auto;
-    const supported = navigator.mediaDevices.getSupportedConstraints();
     const constraints = viewportConstraints ? {
       width: { ideal: viewportConstraints.width },
       height: { ideal: viewportConstraints.height },
@@ -38,7 +37,9 @@
     // The controller uses its native OS pointer. Excluding the controlled
     // machine's cursor from the capture prevents two cursors from appearing
     // while pointer coordinates continue to map to the remote display.
-    if (supported.cursor === true) constraints.cursor = 'never';
+    // Chromium does not consistently advertise this display-capture setting
+    // through getSupportedConstraints(), even when the track accepts it.
+    constraints.cursor = 'never';
     return constraints;
   }
 

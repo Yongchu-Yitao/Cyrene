@@ -10,7 +10,6 @@
   --control-hover: #222329;
   --success: #1f9d57;
   --danger: #db7373;
-  --shadow: 0 16px 44px rgba(0, 0, 0, .34), 0 2px 8px rgba(0, 0, 0, .18);
 }
 
 html[data-theme="light"] {
@@ -24,7 +23,6 @@ html[data-theme="light"] {
   --control-hover: #eaf0f4;
   --success: #1a8a4c;
   --danger: #cf5757;
-  --shadow: 0 16px 44px rgba(15, 23, 42, .22), 0 2px 8px rgba(15, 23, 42, .10);
 }
 
 * { box-sizing: border-box; }
@@ -54,7 +52,6 @@ main {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--card);
-  box-shadow: var(--shadow);
   animation: toast-in 180ms ease-out;
   -webkit-app-region: drag;
 }

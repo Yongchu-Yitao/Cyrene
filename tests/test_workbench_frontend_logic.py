@@ -1877,8 +1877,8 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
         ".wbc-side-split-grip-menu .wbc-side-accordion-item {", 1
     )[1].split("}", 1)[0]
     assert "border-bottom: 1px solid var(--wbc-split-grip-divider-color);" in split_menu_item_css
-    assert "--wbc-split-grip-divider-color: rgba(23, 28, 34, .08);" in split_menu_surface_css
-    assert "--wbc-split-grip-divider-color: rgba(255, 255, 255, .055);" in dark_split_menu_surface_css
+    assert "--wbc-split-grip-divider-color: rgba(23, 28, 34, .055);" in split_menu_surface_css
+    assert "--wbc-split-grip-divider-color: rgba(255, 255, 255, .03);" in dark_split_menu_surface_css
     split_menu_animation_css = styles.split(
         ".wbc-side-split-grip-expanded-body {", 1
     )[1].split("}", 1)[0]

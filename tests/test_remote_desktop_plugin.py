@@ -443,11 +443,11 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
         ".wbc-side-split-grip-menu .wbc-side-accordion-item {", 1
     )[1].split("}", 1)[0]
     assert "border-bottom: 1px solid var(--wbc-split-grip-divider-color);" in split_menu_item_css
-    assert "--wbc-split-grip-divider-color: rgba(23, 28, 34, .08);" in split_menu_surface_css
+    assert "--wbc-split-grip-divider-color: rgba(23, 28, 34, .055);" in split_menu_surface_css
     dark_split_menu_surface_css = styles.split(
         'html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {', 1
     )[1].split("}", 1)[0]
-    assert "--wbc-split-grip-divider-color: rgba(255, 255, 255, .055);" in dark_split_menu_surface_css
+    assert "--wbc-split-grip-divider-color: rgba(255, 255, 255, .03);" in dark_split_menu_surface_css
     split_menu_animation_css = styles.split(
         ".wbc-side-split-grip-expanded-body {", 1
     )[1].split("}", 1)[0]
@@ -490,7 +490,8 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "cursor: none" not in plugin_css
     assert "const retryDelays = [0, 100, 250, 500]" in electron_host
     assert "Failed to load the active-session indicator after retries" in electron_host
-    assert "if (supported.cursor === true) constraints.cursor = 'never'" in media_host
+    assert "constraints.cursor = 'never'" in media_host
+    assert "supported.cursor" not in media_host
     assert "NotifyPointerMotionAbsolute(this.streamPath, x, y)" in electron_host
     assert "this.screenCastSession.RecordVirtual" in electron_host
     assert "pipewiresrc" in electron_host

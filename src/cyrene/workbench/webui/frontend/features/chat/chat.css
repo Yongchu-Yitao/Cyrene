@@ -2825,7 +2825,7 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
    conversation card instead of rebuilding a potentially cyclic token chain. */
 .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
   --wbc-split-grip-border-color: #d2dae2;
-  --wbc-split-grip-divider-color: rgba(23, 28, 34, .08);
+  --wbc-split-grip-divider-color: rgba(23, 28, 34, .055);
   --wbc-split-grip-slider-track: #d2dae2;
   --wbc-split-grip-slider-thumb-ring: #fff;
   border: 1px solid var(--wbc-split-grip-border-color);
@@ -2838,7 +2838,7 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 }
 html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
   --wbc-split-grip-border-color: #41434d;
-  --wbc-split-grip-divider-color: rgba(255, 255, 255, .055);
+  --wbc-split-grip-divider-color: rgba(255, 255, 255, .03);
   --wbc-split-grip-slider-track: #454854;
   --wbc-split-grip-slider-thumb-ring: #17181c;
   background: var(--wbc-split-grip-surface, var(--wbc-panel-surface, #17181c));
