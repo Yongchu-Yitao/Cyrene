@@ -183,7 +183,13 @@ def error_details_from_exception(exc: BaseException) -> dict[str, Any]:
 def details_from_mapping(value: Any) -> ModelErrorDetails | None:
     if not isinstance(value, Mapping):
         return None
-    code = str(value.get("code") or "")
+    code = str(value.get("code") or value.get("error_code") or "")
+    if code == "plugin_timeout":
+        return _details(
+            "model_timeout",
+            bool(value.get("retryable", True)),
+            int(value.get("status_code") or 0),
+        )
     if code not in _DETAIL_KEYS:
         return None
     return ModelErrorDetails(

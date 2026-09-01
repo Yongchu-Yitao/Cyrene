@@ -448,6 +448,63 @@ def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
     assert route_statuses == [("primary", "failed")]
 
 
+def test_model_router_maps_localized_plugin_timeout_to_model_timeout(monkeypatch):
+    async def slow_provider(_arguments, _context):
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda _session, **_kwargs: [{
+            "id": "slow-primary",
+            "provider": "openai",
+            "adapter": "openai",
+            "model": "slow-model",
+            "options": {"provider_preset": "slow_provider"},
+        }],
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    monkeypatch.setattr(
+        model_router,
+        "_persist_fallback_result",
+        ignore_event,
+    )
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            name="SlowProvider",
+            description="slow provider",
+            input_schema={"type": "object"},
+            handler=slow_provider,
+            kind="model",
+            timeout_seconds=0.01,
+            metadata={"provider": {"id": "slow_provider", "name": "Slow"}},
+        ),
+        source="test",
+    )
+    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+
+    result = run(
+        PluginRuntime(registry).call(
+            model_router.MODEL_ROUTER_PLUGIN,
+            {"messages": [{"role": "user", "content": "hello"}]},
+            PluginContext(
+                data={"session_id": "chat-timeout", "language": "zh"},
+            ),
+        )
+    )
+
+    assert result.success is False
+    assert result.error_details["code"] == "model_timeout"
+    assert result.error_details["detail_key"] == "workbenchChat.error.modelTimeout"
+    assert result.error_details["message_zh"] == "模型服务响应超时。"
+    assert result.error_details["retryable"] is True
+
+
 def test_permission_model_usage_does_not_report_agent_context():
     from cyrene.plugins.builtin.cyrene_model._shared import (
         ModelProvider,

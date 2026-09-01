@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 
 from cyrene.core.plugin import (
@@ -74,6 +76,62 @@ def test_configured_candidates_honor_session_selection_and_endpoint_affinity(
     assert candidates[0]["preferred_endpoint"] == (
         "https://selected.example/v1/responses"
     )
+
+
+def test_configured_candidates_prepend_session_selection_outside_primary_route(
+    monkeypatch,
+):
+    from cyrene.platform import settings_store
+
+    primary = {
+        "id": "primary",
+        "provider": "openai",
+        "adapter": "openai",
+        "model": "primary-model",
+        "base_url": "https://primary.example/v1",
+        "capabilities": ["chat"],
+    }
+    selected = {
+        "id": "selected",
+        "provider": "openai",
+        "adapter": "openai",
+        "model": "selected-model",
+        "base_url": "https://selected.example/v1",
+        "capabilities": ["chat", "vision"],
+    }
+    service = SimpleNamespace(
+        candidates_for_route=lambda route: [primary] if route == "primary" else [],
+        candidate_for_profile=lambda profile_id: (
+            selected if profile_id == "selected" else None
+        ),
+    )
+    settings = {
+        "llm_session_model_preferences": {
+            "chat-1": {
+                "candidate_id": "selected",
+                "adapter": "openai",
+                "model": "selected-model",
+                "base_url": "https://selected.example/v1",
+                "reasoning_effort": "high",
+            }
+        },
+    }
+    monkeypatch.setattr(
+        settings_store,
+        "get",
+        lambda key, default=None: settings.get(key, default),
+    )
+    monkeypatch.setattr(model_catalog, "_model_configuration_port", lambda: service)
+
+    candidates = model_catalog.configured_model_candidates("chat-1")
+
+    assert [candidate["id"] for candidate in candidates] == [
+        "selected",
+        "primary",
+    ]
+    assert candidates[0]["_session_selected"] is True
+    assert candidates[0]["reasoning_effort"] == "high"
+    assert candidates[1].get("_session_selected") is not True
 
 
 def test_candidate_identity_never_exposes_credentials_or_paths():

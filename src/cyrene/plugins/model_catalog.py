@@ -270,13 +270,38 @@ def configured_model_candidates(
 ) -> list[dict[str, Any]]:
     """Resolve one configured model route without the retired Agent client."""
 
-    candidates_for_route = _model_configuration_port().candidates_for_route
+    model_configuration = _model_configuration_port()
+    candidates_for_route = model_configuration.candidates_for_route
     from cyrene.platform.settings_store import get as get_setting
 
     normalized_route = str(route or "primary").strip().lower()
     if normalized_route not in {"primary", "secondary", "vision", "embedding"}:
         raise ValueError(f"Unsupported model route: {route}")
     route_candidates = [dict(item) for item in candidates_for_route(normalized_route)]
+    normalized_session = str(session_id or "").strip()
+    raw_preferences = get_setting(_SESSION_MODEL_PREFERENCE_SETTING, {})
+    preferences = raw_preferences if isinstance(raw_preferences, Mapping) else {}
+    raw_preference = preferences.get(normalized_session) if normalized_session and normalized_route == "primary" else None
+    preference = raw_preference if isinstance(raw_preference, Mapping) else {}
+    if preference and not any(
+        _candidate_matches_saved(candidate, preference)
+        for candidate in route_candidates
+    ):
+        candidate_for_profile = model_configuration.candidate_for_profile
+        selected = candidate_for_profile(
+            str(preference.get("candidate_id") or "").strip()
+        )
+        selected_capabilities = set((selected or {}).get("capabilities") or ())
+        if (
+            selected is not None
+            and selected_capabilities.intersection({"chat", "vision"})
+            and _candidate_matches_saved(selected, preference)
+        ):
+            # A Composer selection is a conversation-level override, not a
+            # request to rewrite the configured automatic route.  Put the
+            # selected profile first, then retain the primary route as its
+            # fallback chain.
+            route_candidates.insert(0, dict(selected))
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
     for route_role, items in (
@@ -298,12 +323,6 @@ def configured_model_candidates(
             seen.add(key)
             item["_model_route"] = route_role
             candidates.append(item)
-    normalized_session = str(session_id or "").strip()
-    raw_preferences = get_setting(_SESSION_MODEL_PREFERENCE_SETTING, {})
-    preferences = raw_preferences if isinstance(raw_preferences, Mapping) else {}
-    raw_preference = preferences.get(normalized_session) if normalized_session and normalized_route == "primary" else None
-    preference = raw_preference if isinstance(raw_preference, Mapping) else {}
-
     raw_affinities = get_setting(_LAST_SUCCESS_SETTING, {})
     affinities = raw_affinities if isinstance(raw_affinities, Mapping) else {}
     prepared: list[dict[str, Any]] = []

@@ -518,6 +518,12 @@ async def route_model_call(
             error = result.error or "Provider Plugin returned no result"
             failures.append(f"{provider.name}({candidate.get('model')}): {error}")
             public_failure = details_from_mapping(result.error_details)
+            if public_failure is None and result.failure is not None:
+                # Runtime timeouts are structured Plugin failures. Preserve
+                # that code instead of reclassifying a localized message such
+                # as Chinese "超时", which previously became the generic
+                # model_call_failed error.
+                public_failure = details_from_mapping(result.failure.as_dict())
             public_failures.append(public_failure or classify_model_error(error))
             await _publish_llm_event(
                 context,

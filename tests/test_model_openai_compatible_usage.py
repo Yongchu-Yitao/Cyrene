@@ -9,6 +9,13 @@ from cyrene.plugins.builtin.cyrene_model.openai_compatible import (
 from cyrene.plugins.builtin.cyrene_model.aliyun_bailian import (
     ALIYUN_BAILIAN_PROVIDER,
 )
+from cyrene.plugins.builtin.cyrene_model.local_onnx import LOCAL_ONNX_PLUGIN
+from cyrene.plugins.builtin.cyrene_model.minimax import MINIMAX_PLUGIN
+
+
+def test_model_plugins_have_no_fixed_wall_clock_timeout() -> None:
+    assert MINIMAX_PLUGIN.timeout_seconds is None
+    assert LOCAL_ONNX_PLUGIN.timeout_seconds is None
 
 
 def test_openai_compatible_stream_requests_usage() -> None:

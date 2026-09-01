@@ -1081,7 +1081,9 @@ def create_model_plugin(provider: ModelProvider) -> Plugin:
         input_schema=model_input_schema(),
         handler=handler,
         kind="model",
-        timeout_seconds=180.0,
+        # Model streams may remain healthy and productive for longer than a
+        # fixed wall-clock deadline. Transport-level idle timeouts and the
+        # owning chat run's cancellation lifecycle still bound failed calls.
         metadata=provider.metadata(),
     )
 
@@ -1134,7 +1136,8 @@ def create_local_model_plugin(provider: ModelProvider) -> Plugin:
         },
         handler=handler,
         kind="model",
-        timeout_seconds=180.0,
+        # Local model work is likewise governed by the owning run rather than
+        # an unrelated Plugin wall-clock deadline.
         metadata=provider.metadata(),
     )
 
