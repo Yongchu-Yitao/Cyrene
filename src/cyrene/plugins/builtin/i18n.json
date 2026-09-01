@@ -44,11 +44,11 @@
     "cyrene_code": {
       "en": {
         "name": "Code tools",
-        "description": "Shell sessions, code analysis, Git, and workspace indexing."
+        "description": "Persistent terminal sessions and durable command jobs, workspace build/test actions, code analysis, Git, and symbol indexing."
       },
       "zh": {
         "name": "代码工具",
-        "description": "终端会话、代码分析、Git 与工作区索引。"
+        "description": "持久终端会话与持久命令任务、工作区构建/测试动作、代码分析、Git 与符号索引。"
       }
     },
     "cyrene_content": {
@@ -144,11 +144,11 @@
     "cyrene_goal": {
       "en": {
         "name": "Conversation Goal",
-        "description": "Define, execute, independently review, and continuously refine a Goal inside its conversation."
+        "description": "Propose durable Goals and submit completed Goal results and evidence for independent review."
       },
       "zh": {
         "name": "对话目标",
-        "description": "在对话中定义、持续执行、独立审查并迭代目标。"
+        "description": "提议持久目标，并提交已完成的目标结果与证据供独立审查。"
       }
     },
     "cyrene_project_python": {
@@ -216,11 +216,11 @@
     "cyrene_knowledge": {
       "en": {
         "name": "Knowledge tools",
-        "description": "Search, manage, index, and present project knowledge and library documents."
+        "description": "List and search project knowledge documents and literature, and maintain verified library metadata."
       },
       "zh": {
         "name": "知识工具",
-        "description": "搜索、管理、索引并呈现项目知识与文献库文档。"
+        "description": "列出并搜索项目知识文档与文献，并维护经验证的文献库元数据。"
       }
     },
     "cyrene_map": {
@@ -286,11 +286,11 @@
     "cyrene_plugin_development": {
       "en": {
         "name": "Plugin development",
-        "description": "Create, validate, install, and reload editable Cyrene PluginPacks."
+        "description": "Scaffold, validate, install, reload, manage, and edit Cyrene Plugins and PluginPacks, including standalone tools, providers, application integrations, source files, and Hooks."
       },
       "zh": {
         "name": "插件开发",
-        "description": "创建、验证、安装并重载可编辑的 Cyrene PluginPack。"
+        "description": "创建脚手架、验证、安装、重载、管理和编辑 Cyrene Plugin 与 PluginPack，包括独立工具、Provider、应用集成、源码文件与 Hook。"
       }
     },
     "cyrene_proactive": {
@@ -306,11 +306,11 @@
     "cyrene_remote": {
       "en": {
         "name": "Remote Cyrene tools",
-        "description": "Operate explicitly selected paired Cyrene devices."
+        "description": "Inspect paired Cyrene devices, transfer files, run remote jobs, invoke granted Plugins, and start or control remote Agent work."
       },
       "zh": {
         "name": "远程 Cyrene 工具",
-        "description": "操作明确选中的已配对 Cyrene 设备。"
+        "description": "检查已配对的 Cyrene 设备、传输文件、运行远程任务、调用已授权 Plugin，并启动或控制远程 Agent 工作。"
       }
     },
     "cyrene_remote_desktop": {

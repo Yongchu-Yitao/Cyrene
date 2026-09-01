@@ -51,7 +51,10 @@ def _plugin(module: ModuleType) -> Plugin:
 
 plugin_pack = PluginPack(
     id="cyrene_remote",
-    description="Operate explicitly selected paired Cyrene devices.",
+    description=(
+        "Inspect paired Cyrene devices, transfer files, run remote jobs, invoke "
+        "granted Plugins, and start or control remote Agent work."
+    ),
     plugins=tuple(
         _plugin(module)
         for module in (

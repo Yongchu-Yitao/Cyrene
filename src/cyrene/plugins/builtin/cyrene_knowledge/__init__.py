@@ -36,7 +36,10 @@ def application_setup(context: PluginApplicationContext) -> None:
 
 plugin_pack = PluginPack(
     id="cyrene_knowledge",
-    description="Search, manage, index, and present project knowledge and library documents.",
+    description=(
+        "List and search project knowledge documents and literature, and maintain "
+        "verified library metadata."
+    ),
     plugins=(
         list_knowledge_documents,
         search_knowledge,

@@ -90,7 +90,11 @@ _HOOK = {
 
 plugin_pack = PluginPack(
     id="cyrene_plugin_development",
-    description="Create, validate, install, and reload editable Cyrene PluginPacks.",
+    description=(
+        "Scaffold, validate, install, reload, manage, and edit Cyrene Plugins and "
+        "PluginPacks, including standalone tools, providers, application "
+        "integrations, source files, and Hooks."
+    ),
     plugins=(
         _plugin(
             "PluginAuthoringGuide",

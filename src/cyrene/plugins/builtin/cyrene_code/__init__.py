@@ -111,7 +111,10 @@ _declarations = (
 
 plugin_pack = PluginPack(
     id="cyrene_code",
-    description="Shell sessions, code analysis, Git, and workspace indexing.",
+    description=(
+        "Persistent terminal sessions and durable command jobs, workspace build/test "
+        "actions, code analysis, Git, and symbol indexing."
+    ),
     plugins=tuple(_module_plugin(module) for module in _shell_modules)
     + tuple(_plugin(definition, handler) for definition, handler in _declarations),
     setup=setup,

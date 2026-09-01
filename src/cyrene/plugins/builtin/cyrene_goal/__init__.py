@@ -113,8 +113,8 @@ def application_setup(context: PluginApplicationContext) -> None:
 plugin_pack = PluginPack(
     id="cyrene_goal",
     description=(
-        "Define, execute, independently review, and continuously refine a Goal "
-        "inside its owning conversation."
+        "Propose durable Goals and submit completed Goal results and evidence "
+        "for independent review."
     ),
     plugins=(
         Plugin(
@@ -169,11 +169,14 @@ plugin_pack = PluginPack(
         "i18n": {
             "en": {
                 "name": "Conversation Goal",
-                "description": "Durable Goal loops with independent review.",
+                "description": (
+                    "Propose durable Goals and submit completed Goal results and "
+                    "evidence for independent review."
+                ),
             },
             "zh": {
                 "name": "对话目标",
-                "description": "在对话中持续执行目标，并进行独立审查。",
+                "description": "提议持久目标，并提交已完成的目标结果与证据供独立审查。",
             },
         },
     },
