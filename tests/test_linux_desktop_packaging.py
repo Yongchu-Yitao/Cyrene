@@ -23,6 +23,31 @@ def test_linux_packages_include_appimage_deb_and_rpm():
     assert package["build"]["deb"]["afterInstall"] == "linux-after-install.sh"
     assert package["build"]["rpm"]["afterInstall"] == "linux-after-install.sh"
 
+    deb_dependencies = set(package["build"]["deb"]["depends"])
+    assert {
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+    } <= deb_dependencies
+
+    rpm_dependencies = set(package["build"]["rpm"]["depends"])
+    assert {
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "(libXtst or libXtst6)",
+        "xdg-utils",
+        "at-spi2-core",
+        "(libuuid or libuuid1)",
+    } <= rpm_dependencies
+
 
 def test_linux_package_uses_hicolor_compatible_icon_sizes():
     package = json.loads((ROOT / "electron" / "package.json").read_text(encoding="utf-8"))
