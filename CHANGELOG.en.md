@@ -2,6 +2,35 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta6] - 2026-09-02
+
+Beta6 focuses on model availability after upgrades, reliable long-running replies, clearer Agent tool discovery, and more readable Workbench lists. It restores built-in model services omitted by older settings, keeps each conversation on the model the user explicitly selected, and helps the Agent find persistent terminals, remote-device operations, knowledge, Goals, and plugin-development capabilities. Cross-device Remote Desktop is now enabled only when requested.
+
+### Model services, conversation selection, and long replies
+
+- Fixed an upgrade and reinstall issue where an old empty or partial model configuration could leave Model Services showing only the onboarding provider and Alibaba Cloud Model Studio. The next launch restores the built-in model services available in the current version while preserving existing credentials, model profiles, routes, and services the user intentionally removes afterward.
+- A model explicitly selected for a conversation now always takes priority over the automatic primary route, even when it is not in the current default candidate list. If that model is temporarily unavailable, the existing automatic route remains available as fallback without rewriting the user's global settings.
+- Long replies that are still producing content, including slower local-model work, are no longer stopped merely because a simple fixed duration has elapsed. User cancellation, connection failures, and genuine service timeouts still end the request normally.
+- Genuine model timeouts now show the correct bilingual timeout explanation and recovery guidance instead of a generic model-call failure. When several fallback models are attempted, Cyrene also retains the most useful underlying cause.
+
+### Agent tool discovery and persistent terminals
+
+- When listing tool packs, the Agent can now see directly that `cyrene_code` provides persistent terminal sessions, durable command jobs, workspace build/test actions, code analysis, Git, and symbol indexing. This makes it easier to choose the correct tools for commands that must keep running or be read again later.
+- The Goal pack now accurately explains that it proposes durable Goals and submits completed results and evidence for independent review, rather than implying direct execution or editing tools that it does not expose.
+- The Knowledge pack now clearly identifies listing and searching project knowledge and literature plus maintaining verified library metadata, avoiding confusion with general file management or indexing controls.
+- The Remote pack now advertises paired-device inspection, file transfer, remote jobs, granted Plugin invocation, and starting or controlling remote Agent work.
+- Plugin Development is no longer summarized only as creating PluginPacks. Its description now exposes standalone tools, providers, application integrations, source files, Hooks, and the available scaffold, validation, installation, reload, management, and editing operations.
+- These tool-pack descriptions are aligned in Chinese and English across Agent discovery, Plugin Center, and related details.
+
+### Remote Desktop activation
+
+- Cross-device Remote Desktop remains included with Cyrene, but is now disabled by default for new installations or when the user has not made an explicit choice. This keeps an extra remote-control entry out of the interface for users who do not use it. It can be enabled from Plugin Center at any time, and previously saved enable or disable choices remain respected.
+
+### Workbench recent-item lists
+
+- Long titles for recent conversations and Workspace items now shrink reliably inside their cards instead of pushing status, drag handles, or other actions out of view.
+- The complete title remains available on hover, while titles, status text, and controls stay aligned in compact windows and lists with many items.
+
 ## [0.9.0-beta5] - 2026-09-01
 
 This release adds cross-device Remote Desktop directly to Workbench and completes a broad pass over conversation recovery, memory learning, model setup, browser actions, tool calls, terminal state, and proactive delivery. Long-running work now keeps a more reliable state through retries, reconnects, model changes, and partial service outages, with clearer feedback the user can act on.
@@ -38,7 +67,6 @@ This release adds cross-device Remote Desktop directly to Workbench and complete
 
 ### Model selection, configuration, and error messages
 
-- Fixed an upgrade and reinstall issue, especially visible on Windows, where an old empty or partial model graph could leave Model Services showing only the onboarding provider and Alibaba Cloud Model Studio. The next launch restores missing services from the complete built-in model plugin catalog while preserving credentials, profiles, routes, and subsequent explicit deletions.
 - Rapid model switching now accepts only the latest server-confirmed selection, so an older request cannot overwrite a newer choice. Invalid or unknown models are rejected without changing the current working model.
 - New model connections, service addresses, and profile edits remain drafts until explicitly saved. Missing preset values no longer make an untouched page appear to have unsaved changes.
 - Custom OpenAI-compatible models remain selectable without a separate provider label and preserve request token and cache usage during streaming replies.
