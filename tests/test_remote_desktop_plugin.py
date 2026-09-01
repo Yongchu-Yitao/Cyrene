@@ -119,6 +119,7 @@ def _offer_payload(*, mode: str = "current_desktop") -> dict[str, Any]:
 def test_remote_desktop_pack_declares_only_v1_view_tools_and_valid_contributions():
     validate_workbench_contributions(plugin_pack)
 
+    assert plugin_pack.metadata["default_enabled"] is False
     assert plugin_pack.metadata["requires_plugin_packs"] == ("cyrene_remote",)
     assert {plugin.name for plugin in plugin_pack.plugins} == {
         "ListRemoteDesktopSessions",

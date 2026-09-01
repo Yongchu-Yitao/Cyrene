@@ -35,6 +35,7 @@ plugin_pack = PluginPack(
     plugins=tuple(_plugin(module) for module in (list_sessions, inspect_desktop)),
     application_setup=application_setup,
     metadata={
+        "default_enabled": False,
         "requires_plugin_packs": ("cyrene_remote",),
         "i18n": {
             "zh": {
