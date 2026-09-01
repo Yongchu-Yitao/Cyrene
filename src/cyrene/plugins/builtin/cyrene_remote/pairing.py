@@ -204,7 +204,7 @@ class DirectPairingServer:
         self,
         receiver: InlineRequestReceiver | None,
     ) -> None:
-        """Register the mobile controller request/response adapter."""
+        """Register the direct request/response transport adapter."""
         self._inline_request_receiver = receiver
 
     async def send(self, envelope: dict[str, Any]) -> None:
@@ -249,6 +249,71 @@ class DirectPairingServer:
                         normalized,
                     )
                 return
+        raise ConnectionError(
+            f"remote device is unreachable at {candidates[0]}"
+        ) from last_error
+
+    async def request(
+        self,
+        envelope: dict[str, Any],
+        *,
+        timeout: float = 30,
+    ) -> dict[str, Any]:
+        """Send one command and receive its encrypted response inline.
+
+        Direct peers can be reachable in only one direction, especially when
+        multiple LAN/VPN interfaces are present.  Reusing the authenticated
+        request connection avoids routing the response through a stale peer
+        address while retaining the same E2EE envelope protocol.
+        """
+        recipient = str(envelope.get("recipient_device_id") or "")
+        peer = await asyncio.to_thread(self.store.get_peer, recipient)
+        if peer is None:
+            raise ConnectionError("remote device is not trusted")
+        address = str(peer.get("lan_address") or "")
+        if not address:
+            raise ConnectionError("remote device has no LAN address")
+        candidates = _delivery_addresses(address)
+        last_error: Exception | None = None
+        request_timeout = max(1.0, float(timeout))
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(request_timeout + 2, connect=0.25),
+            trust_env=False,
+        ) as client:
+            for normalized in candidates:
+                try:
+                    response = await client.post(
+                        f"http://{normalized}/v1/control/request",
+                        json={"envelope": envelope},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    response_envelope = (
+                        payload.get("envelope")
+                        if isinstance(payload, dict)
+                        else None
+                    )
+                    if (
+                        response.status_code != 200
+                        or not isinstance(payload, dict)
+                        or payload.get("accepted") is not True
+                        or not isinstance(response_envelope, dict)
+                    ):
+                        raise httpx.HTTPStatusError(
+                            "endpoint did not return a Cyrene response envelope",
+                            request=response.request,
+                            response=response,
+                        )
+                except (httpx.HTTPError, ValueError) as exc:
+                    last_error = exc
+                    continue
+                if normalized != candidates[0]:
+                    await asyncio.to_thread(
+                        self.store.update_peer_lan_address,
+                        recipient,
+                        normalized,
+                    )
+                return dict(response_envelope)
         raise ConnectionError(
             f"remote device is unreachable at {candidates[0]}"
         ) from last_error
@@ -365,8 +430,27 @@ class DirectPairingServer:
                     else:
                         response_envelope = await asyncio.wait_for(
                             self._inline_request_receiver(dict(envelope)),
-                            timeout=60,
+                            timeout=300,
                         )
+                        refreshed_peer = self.store.get_peer(sender) or {}
+                        saved_address = str(
+                            refreshed_peer.get("lan_address") or ""
+                        )
+                        if saved_address:
+                            saved_url = httpx.URL(
+                                f"http://{normalize_pairing_address(saved_address)}"
+                            )
+                            port = int(saved_url.port or DIRECT_PAIRING_PORT)
+                            source_host = f"[{source}]" if ":" in source else source
+                            learned_address = normalize_pairing_address(
+                                f"{source_host}:{port}"
+                            )
+                            if learned_address != saved_address:
+                                await asyncio.to_thread(
+                                    self.store.update_peer_lan_address,
+                                    sender,
+                                    learned_address,
+                                )
                         status, payload = 200, {
                             "accepted": True,
                             "envelope": response_envelope,

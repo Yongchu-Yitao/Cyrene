@@ -370,6 +370,12 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         await target_gateway.start()
         await controller_gateway.start()
         try:
+            # A second LAN/VPN interface can leave the target with a stale
+            # controller host even though controller -> target still works.
+            target.update_peer_lan_address(
+                controller.identity.device_id,
+                f"127.0.0.2:{controller_port}",
+            )
             response = await controller_gateway.request(
                 target.identity.device_id,
                 command="chats.send",
@@ -394,6 +400,9 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
                 "project_1",
             )
         ]
+        assert target.get_peer(controller.identity.device_id)[
+            "lan_address"
+        ] == f"127.0.0.1:{controller_port}"
     finally:
         await controller_server.stop()
         await target_server.stop()

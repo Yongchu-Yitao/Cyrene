@@ -289,6 +289,7 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
         / "src/cyrene/plugins/builtin/cyrene_remote_desktop/providers.py"
     ).read_text(encoding="utf-8")
     electron_host = (root / "electron/remote-desktop.js").read_text(encoding="utf-8")
+    electron_main = (root / "electron/main.js").read_text(encoding="utf-8")
     media_host = (root / "electron/remote-desktop-host.js").read_text(encoding="utf-8")
     app_use = (root / "electron/app-use.js").read_text(encoding="utf-8")
     app_use_macos = (root / "electron/app-use-macos.jxa").read_text(encoding="utf-8")
@@ -309,7 +310,19 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "Number(message.timeoutMs)" in plugin_host
     assert "timeout: requestTimeout" in plugin_host
     assert "request_approval" not in electron_host
+    assert "MutterRemoteDesktopInput" in electron_host
+    assert "NotifyPointerMotionRelative" in electron_host
+    assert "NotifyKeyboardKeysym" in electron_host
+    assert "operation: 'set_viewport'" in electron_host
     assert "new RTCPeerConnection" in plugin_ui
+    assert "activePeer.addTransceiver('video', { direction: 'recvonly' })" in plugin_ui
+    assert "await waitForConnectedVideo(peer, 15000)" in plugin_ui
+    assert "video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA" in plugin_ui
+    assert "new ResizeObserver" in plugin_ui
+    assert "type: 'viewport'" in plugin_ui
+    assert "currentVideoConstraints" in media_host
+    assert "CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE" in electron_main
+    assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" in electron_main
     assert "remote-audio" in plugin_ui
     assert "getUserMedia({ audio: true" in plugin_ui
     assert "remoteDesktop.display.select" in plugin_ui

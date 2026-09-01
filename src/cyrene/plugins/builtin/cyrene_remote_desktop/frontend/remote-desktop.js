@@ -134,6 +134,7 @@
   const fileMenu = document.getElementById('file-menu');
   const fileInput = document.getElementById('file-input');
   const folderInput = document.getElementById('folder-input');
+  let viewportUpdateFrame = 0;
 
   function callTimeoutMs(method) {
     if (method === 'remoteDesktop.session.connect' || method === 'remoteDesktop.session.reconnect') return 90_000;
@@ -289,6 +290,27 @@
     return true;
   }
 
+  function publishViewportSize() {
+    if (!controlChannel || controlChannel.readyState !== 'open') return;
+    const bounds = stage.getBoundingClientRect();
+    channelSend(controlChannel, {
+      type: 'viewport',
+      width: Math.max(1, Math.round(bounds.width)),
+      height: Math.max(1, Math.round(bounds.height)),
+      device_pixel_ratio: Math.max(0.5, Math.min(2, Number(window.devicePixelRatio || 1))),
+    });
+  }
+
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(function () {
+      if (viewportUpdateFrame) window.cancelAnimationFrame(viewportUpdateFrame);
+      viewportUpdateFrame = window.requestAnimationFrame(function () {
+        viewportUpdateFrame = 0;
+        publishViewportSize();
+      });
+    }).observe(stage);
+  }
+
   function waitForIce(pc, timeoutMs) {
     if (pc.iceGatheringState === 'complete') return Promise.resolve();
     return new Promise(function (resolve) {
@@ -302,6 +324,40 @@
       function changed() { if (pc.iceGatheringState === 'complete') finish(); }
       pc.addEventListener('icegatheringstatechange', changed);
       window.setTimeout(finish, timeoutMs || 8000);
+    });
+  }
+
+  function waitForConnectedVideo(activePeer, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      const deadline = Date.now() + Math.max(1000, Number(timeoutMs || 15000));
+      const timer = window.setInterval(function () {
+        if (peer !== activePeer) {
+          window.clearInterval(timer);
+          reject(new Error(t('connectionLostDetail')));
+          return;
+        }
+        const connectionState = String(activePeer.connectionState || '');
+        if (connectionState === 'failed' || connectionState === 'closed') {
+          window.clearInterval(timer);
+          reject(new Error(t('connectionLostDetail')));
+          return;
+        }
+        const videoTrack = remoteMediaStream && remoteMediaStream.getVideoTracks()[0];
+        if (
+          connectionState === 'connected'
+          && videoTrack
+          && videoTrack.readyState === 'live'
+          && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+        ) {
+          window.clearInterval(timer);
+          resolve();
+          return;
+        }
+        if (Date.now() >= deadline) {
+          window.clearInterval(timer);
+          reject(new Error(t('connectionFailed')));
+        }
+      }, 50);
     });
   }
 
@@ -357,6 +413,11 @@
     peer = activePeer;
     inputChannel = activePeer.createDataChannel('cyrene-input', { ordered: false, maxRetransmits: 0 });
     controlChannel = activePeer.createDataChannel('cyrene-control', { ordered: true });
+    controlChannel.onopen = publishViewportSize;
+    // An answer cannot introduce a new media section. Declare the receive-only
+    // video transceiver in the offer so the controlled host can attach its
+    // captured desktop track to the negotiated video m-line.
+    activePeer.addTransceiver('video', { direction: 'recvonly' });
     const microphoneTransceiver = activePeer.addTransceiver('audio', { direction: 'sendrecv' });
     microphoneSender = microphoneTransceiver.sender;
     controlChannel.onmessage = function (event) {
@@ -429,11 +490,6 @@
       if (next === 'connected') {
         if (connectionLossTimer) window.clearTimeout(connectionLossTimer);
         connectionLossTimer = null;
-        state('connected', t('connected'));
-        setText('transport-copy', t('encryptedWebrtc'));
-        startObservationPoll();
-        startClipboardSync();
-        startSecurityPoll();
       } else if (next === 'failed' || next === 'disconnected') {
         if (connectionLossTimer) window.clearTimeout(connectionLossTimer);
         connectionLossTimer = window.setTimeout(function () {
@@ -492,6 +548,7 @@
           sessionId = candidateSessionId;
           applySessionPermissions(result.permissions);
           await peer.setRemoteDescription(result.answer);
+          await waitForConnectedVideo(peer, 15000);
           publishState(Object.assign({}, result.session || {}, {
             resource_kind: 'remote_desktop',
             resource_id: sessionId,
@@ -580,6 +637,7 @@
           || sessionPermissions.clipboard_image === true ? 'ready' : 'unavailable',
       }));
       await peer.setRemoteDescription(result.answer);
+      await waitForConnectedVideo(peer, 15000);
       setText('device-name', String(result.session && result.session.device_name || context.state && context.state.title || t('remoteDesktop')));
       setText('transport-copy', String(result.session && result.session.transport_kind || 'WebRTC').toUpperCase());
       state('connected', t('connected'));

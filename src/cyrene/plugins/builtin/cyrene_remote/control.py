@@ -2339,7 +2339,15 @@ class RemoteGateway:
             outcome="pending",
         )
         try:
-            await self.relay.send(envelope)
+            inline_request = getattr(self.relay, "request", None)
+            if callable(inline_request):
+                response_envelope = await inline_request(
+                    envelope,
+                    timeout=max(0.1, float(timeout)),
+                )
+                await self._receive(response_envelope)
+            else:
+                await self.relay.send(envelope)
             result = await asyncio.wait_for(
                 future,
                 timeout=max(0.1, float(timeout)),

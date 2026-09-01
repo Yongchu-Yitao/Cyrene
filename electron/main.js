@@ -257,6 +257,25 @@ if (isDev) {
 // automatic-read setting to produce sound reliably.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
+// Chromium's Wayland ScreenCast portal always requires an interactive screen
+// sharing confirmation.  Cyrene already authenticates and indicates active
+// remote sessions itself, so prefer the session's authenticated XWayland
+// display for unattended desktop capture when it is available.  Mutter's
+// RemoteDesktop D-Bus API remains responsible for native Wayland input.
+// Set CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE=1 to retain the portal picker.
+if (
+  isLinux
+  && process.env.CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE !== '1'
+  && process.env.DISPLAY
+  && process.env.XAUTHORITY
+) {
+  try {
+    if (fs.existsSync(process.env.XAUTHORITY)) {
+      app.commandLine.appendSwitch('ozone-platform', 'x11');
+    }
+  } catch (_) {}
+}
+
 // Chromium aborts with SIGTRAP when its Linux SUID sandbox helper exists but
 // is not root-owned with mode 4755. deb/rpm installers repair that permission;
 // portable/AppImage or manually copied builds cannot rely on a privileged

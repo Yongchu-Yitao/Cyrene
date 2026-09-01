@@ -15,6 +15,11 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 
+let dbus = null;
+if (process.platform === 'linux') {
+  try { dbus = require('dbus-next'); } catch (_) {}
+}
+
 const ANSWER_TIMEOUT_MS = 75_000;
 const CREDENTIAL_TIMEOUT_MS = 180_000;
 
@@ -56,6 +61,152 @@ function runCommand(binary, args, timeoutMs = 5000) {
   });
 }
 
+const MUTTER_REMOTE_DESKTOP_BUS = 'org.gnome.Mutter.RemoteDesktop';
+const MUTTER_REMOTE_DESKTOP_PATH = '/org/gnome/Mutter/RemoteDesktop';
+const MUTTER_REMOTE_DESKTOP_MANAGER = 'org.gnome.Mutter.RemoteDesktop';
+const MUTTER_REMOTE_DESKTOP_SESSION = 'org.gnome.Mutter.RemoteDesktop.Session';
+
+const KEY_SYMS = {
+  ArrowUp: 0xff52,
+  ArrowDown: 0xff54,
+  ArrowLeft: 0xff51,
+  ArrowRight: 0xff53,
+  Backspace: 0xff08,
+  Delete: 0xffff,
+  Enter: 0xff0d,
+  Escape: 0xff1b,
+  Home: 0xff50,
+  End: 0xff57,
+  Insert: 0xff63,
+  PageUp: 0xff55,
+  PageDown: 0xff56,
+  Tab: 0xff09,
+  ' ': 0x20,
+  F1: 0xffbe,
+  F2: 0xffbf,
+  F3: 0xffc0,
+  F4: 0xffc1,
+  F5: 0xffc2,
+  F6: 0xffc3,
+  F7: 0xffc4,
+  F8: 0xffc5,
+  F9: 0xffc6,
+  F10: 0xffc7,
+  F11: 0xffc8,
+  F12: 0xffc9,
+};
+
+const MODIFIER_KEY_SYMS = {
+  shift: 0xffe1,
+  control: 0xffe3,
+  ctrl: 0xffe3,
+  alt: 0xffe9,
+  meta: 0xffeb,
+  super: 0xffeb,
+};
+
+function keySym(value) {
+  const key = String(value || '');
+  if (Object.prototype.hasOwnProperty.call(KEY_SYMS, key)) return KEY_SYMS[key];
+  const codePoint = key.codePointAt(0);
+  if (!Number.isInteger(codePoint)) return 0;
+  return codePoint <= 0xff ? codePoint : 0x01000000 | codePoint;
+}
+
+class MutterRemoteDesktopInput {
+  constructor() {
+    this.bus = null;
+    this.manager = null;
+    this.session = null;
+    this.sessionPath = '';
+    this.starting = null;
+  }
+
+  async available() {
+    if (!dbus || !process.env.DBUS_SESSION_BUS_ADDRESS) return false;
+    try {
+      if (!this.bus) this.bus = dbus.sessionBus();
+      if (!this.manager) {
+        const root = await this.bus.getProxyObject(
+          MUTTER_REMOTE_DESKTOP_BUS,
+          MUTTER_REMOTE_DESKTOP_PATH,
+        );
+        this.manager = root.getInterface(MUTTER_REMOTE_DESKTOP_MANAGER);
+      }
+      return Boolean(this.manager && typeof this.manager.CreateSession === 'function');
+    } catch (_) {
+      await this.stop();
+      return false;
+    }
+  }
+
+  async start() {
+    if (this.session) return this.session;
+    if (this.starting) return this.starting;
+    this.starting = (async () => {
+      if (!await this.available()) throw new Error('desktop_wayland_input_bridge_unavailable');
+      const sessionPath = await this.manager.CreateSession();
+      const proxy = await this.bus.getProxyObject(MUTTER_REMOTE_DESKTOP_BUS, sessionPath);
+      const session = proxy.getInterface(MUTTER_REMOTE_DESKTOP_SESSION);
+      await session.Start();
+      this.sessionPath = String(sessionPath);
+      this.session = session;
+      session.once('Closed', () => {
+        this.session = null;
+        this.sessionPath = '';
+      });
+      return session;
+    })();
+    try { return await this.starting; } finally { this.starting = null; }
+  }
+
+  async stop() {
+    const session = this.session;
+    this.session = null;
+    this.sessionPath = '';
+    if (session) await session.Stop().catch(() => {});
+    if (this.bus) {
+      try { this.bus.disconnect(); } catch (_) {}
+    }
+    this.bus = null;
+    this.manager = null;
+  }
+
+  async moveRelative(dx, dy) {
+    const session = await this.start();
+    await session.NotifyPointerMotionRelative(Number(dx || 0), Number(dy || 0));
+  }
+
+  async button(button, pressed) {
+    const session = await this.start();
+    await session.NotifyPointerButton(Number(button), pressed === true);
+  }
+
+  async scroll(deltaX, deltaY) {
+    const session = await this.start();
+    await session.NotifyPointerAxis(Number(deltaX || 0), Number(deltaY || 0), 0);
+  }
+
+  async typeKey(sym, modifiers = []) {
+    const session = await this.start();
+    const pressed = [];
+    try {
+      for (const modifier of modifiers) {
+        const modifierSym = MODIFIER_KEY_SYMS[String(modifier || '').toLowerCase()];
+        if (!modifierSym || pressed.includes(modifierSym)) continue;
+        await session.NotifyKeyboardKeysym(modifierSym, true);
+        pressed.push(modifierSym);
+      }
+      await session.NotifyKeyboardKeysym(Number(sym), true);
+      await session.NotifyKeyboardKeysym(Number(sym), false);
+    } finally {
+      for (const modifierSym of pressed.reverse()) {
+        await session.NotifyKeyboardKeysym(modifierSym, false).catch(() => {});
+      }
+    }
+  }
+}
+
 function publicDisplay(display, primaryId) {
   const bounds = display.bounds || {};
   return {
@@ -84,6 +235,8 @@ class RemoteDesktopManager {
     this.screenLocked = false;
     this.securitySurfaceState = false;
     this.securityEpoch = 0;
+    this.mutterInput = process.platform === 'linux'
+      ? new MutterRemoteDesktopInput() : null;
     this.clipboardRoot = path.resolve(String(clipboardRoot || path.join(process.cwd(), '.cyrene-clipboard')));
     this.ipcInstalled = false;
   }
@@ -170,7 +323,8 @@ class RemoteDesktopManager {
       // view-only Wayland session look controllable even though native clients
       // reject its synthetic events.
       accessibilityPermission = displayServer === 'wayland'
-        ? 'denied' : commandExists('xdotool') ? 'granted' : 'denied';
+        ? await this.mutterInput.available() ? 'granted' : 'denied'
+        : commandExists('xdotool') ? 'granted' : 'denied';
     }
     const security = this._securitySnapshot();
     return {
@@ -259,6 +413,9 @@ class RemoteDesktopManager {
       record.window = null;
       if (record.clipboardTimer) clearInterval(record.clipboardTimer);
       if (record.pendingAnswer) record.pendingAnswer.reject(new Error('desktop_host_closed'));
+      if (this.mutterInput && this.sessions.size === 0) {
+        this.mutterInput.stop().catch(() => {});
+      }
     });
     await window.loadFile(path.join(__dirname, 'remote-desktop-host.html'));
   }
@@ -394,6 +551,15 @@ class RemoteDesktopManager {
       this._queueInput(record, message.event || {});
       return;
     }
+    if (message.type === 'viewport') {
+      record.window.webContents.send('remote-desktop:command', {
+        operation: 'set_viewport',
+        width: Number(message.width || 0),
+        height: Number(message.height || 0),
+        device_pixel_ratio: Number(message.device_pixel_ratio || 1),
+      });
+      return;
+    }
     if (message.type === 'clipboard:text' && record.permissions.clipboard_text === true) {
       const text = String(message.text || '').slice(0, 1024 * 1024);
       record.lastClipboardText = text;
@@ -490,7 +656,64 @@ class RemoteDesktopManager {
 
   async _linuxInput(record, event) {
     if (String(process.env.XDG_SESSION_TYPE || 'x11').toLowerCase() === 'wayland') {
-      throw new Error('desktop_wayland_input_bridge_unavailable');
+      if (!this.mutterInput) throw new Error('desktop_wayland_input_bridge_unavailable');
+      const type = String(event.type || '');
+      if (type === 'pointer') {
+        const point = this._screenPoint(record, event);
+        const action = String(event.action || 'move');
+        const displays = screen.getAllDisplays();
+        const minX = Math.min(...displays.map((item) => Number(item.bounds && item.bounds.x || 0)));
+        const minY = Math.min(...displays.map((item) => Number(item.bounds && item.bounds.y || 0)));
+        if (!record.lastPointerPoint || ['button_down', 'right_click', 'double_click'].includes(action)) {
+          await this.mutterInput.moveRelative(-100000, -100000);
+          await this.mutterInput.moveRelative(point.x - minX, point.y - minY);
+        } else {
+          await this.mutterInput.moveRelative(
+            point.x - Number(record.lastPointerPoint.x || 0),
+            point.y - Number(record.lastPointerPoint.y || 0),
+          );
+        }
+        record.lastPointerPoint = point;
+        if (action === 'button_down') {
+          record.pointerPressed = true;
+          return this.mutterInput.button(0x110, true);
+        }
+        if (action === 'button_up') {
+          record.pointerPressed = false;
+          return this.mutterInput.button(0x110, false);
+        }
+        if (action === 'right_click') {
+          await this.mutterInput.button(0x111, true);
+          await this.mutterInput.button(0x111, false);
+        } else if (action === 'double_click') {
+          for (let index = 0; index < 2; index += 1) {
+            await this.mutterInput.button(0x110, true);
+            await this.mutterInput.button(0x110, false);
+          }
+        } else if (action === 'scroll') {
+          await this.mutterInput.scroll(
+            Number(event.delta_x || 0),
+            Number(event.delta_y || 0),
+          );
+        } else if (action === 'click') {
+          await this.mutterInput.button(0x110, true);
+          await this.mutterInput.button(0x110, false);
+        }
+        return { ok: true };
+      }
+      if (type === 'text') {
+        for (const character of Array.from(String(event.text || '').slice(0, 65536))) {
+          const sym = keySym(character);
+          if (sym) await this.mutterInput.typeKey(sym);
+        }
+        return { ok: true };
+      }
+      if (type === 'key') {
+        const sym = keySym(event.key);
+        if (sym) await this.mutterInput.typeKey(sym, Array.isArray(event.modifiers) ? event.modifiers : []);
+        return { ok: true };
+      }
+      return { ok: true };
     }
     if (!commandExists('xdotool')) throw new Error('desktop_linux_input_component_missing');
     const type = String(event.type || '');
@@ -643,7 +866,14 @@ class RemoteDesktopManager {
   async _releasePointer(record) {
     if (!record) return;
     try {
-      if (process.platform === 'linux' && commandExists('xdotool')) {
+      if (
+        process.platform === 'linux'
+        && String(process.env.XDG_SESSION_TYPE || 'x11').toLowerCase() === 'wayland'
+        && this.mutterInput
+        && record.pointerPressed
+      ) {
+        await this.mutterInput.button(0x110, false);
+      } else if (process.platform === 'linux' && commandExists('xdotool')) {
         await runCommand('xdotool', ['mouseup', '1'], 1500);
       } else if (record.pointerPressed && record.activePointerSession && record.lastPointerPoint) {
         const display = this._display(record.displayId);
@@ -676,6 +906,9 @@ class RemoteDesktopManager {
     if (record.window && !record.window.isDestroyed()) {
       record.window.webContents.send('remote-desktop:command', { operation: 'disconnect' });
       record.window.destroy();
+    }
+    if (this.mutterInput && this.sessions.size === 0) {
+      await this.mutterInput.stop();
     }
     return { ok: true, disconnected: true };
   }
@@ -1154,6 +1387,7 @@ class RemoteDesktopManager {
     const manager = this.getAppUseManager();
     for (const sessionId of this.inputSessions.values()) await manager.handle('disconnect', { session_id: sessionId }).catch(() => {});
     this.inputSessions.clear();
+    if (this.mutterInput) await this.mutterInput.stop();
   }
 }
 

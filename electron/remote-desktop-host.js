@@ -10,6 +10,7 @@
   let qualityMode = 'auto';
   let permissions = {};
   let microphoneEnabled = false;
+  let viewportConstraints = null;
 
   const qualityConstraints = {
     auto: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 45, max: 60 } },
@@ -17,6 +18,16 @@
     balanced: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 45 } },
     clear: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30, max: 30 } },
   };
+
+  function currentVideoConstraints() {
+    const quality = qualityConstraints[qualityMode] || qualityConstraints.auto;
+    if (!viewportConstraints) return quality;
+    return {
+      width: { ideal: viewportConstraints.width },
+      height: { ideal: viewportConstraints.height },
+      frameRate: quality.frameRate,
+    };
+  }
 
   function waitForIceGathering(pc, timeoutMs) {
     if (pc.iceGatheringState === 'complete') return Promise.resolve();
@@ -58,7 +69,7 @@
 
   async function capture() {
     const options = {
-      video: qualityConstraints[qualityMode] || qualityConstraints.auto,
+      video: currentVideoConstraints(),
       audio: permissions.system_audio === true,
     };
     if (permissions.system_audio === true) options.systemAudio = 'include';
@@ -72,13 +83,13 @@
       // report the actual audio result to the controller instead of failing the
       // entire desktop session.
       next = await navigator.mediaDevices.getDisplayMedia({
-        video: qualityConstraints[qualityMode] || qualityConstraints.auto,
+        video: currentVideoConstraints(),
         audio: false,
       });
     }
     const video = next.getVideoTracks()[0];
     if (!video) throw new Error('desktop_video_track_unavailable');
-    await video.applyConstraints(qualityConstraints[qualityMode] || qualityConstraints.auto).catch(function () {});
+    await video.applyConstraints(currentVideoConstraints()).catch(function () {});
     return next;
   }
 
@@ -174,7 +185,17 @@
     if (operation === 'set_quality') {
       qualityMode = String(command.quality_mode || 'auto');
       const track = stream && stream.getVideoTracks()[0];
-      if (track) track.applyConstraints(qualityConstraints[qualityMode] || qualityConstraints.auto).catch(function () {});
+      if (track) track.applyConstraints(currentVideoConstraints()).catch(function () {});
+      return;
+    }
+    if (operation === 'set_viewport') {
+      const ratio = Math.max(0.5, Math.min(2, Number(command.device_pixel_ratio || 1)));
+      viewportConstraints = {
+        width: Math.max(320, Math.min(3840, Math.round(Number(command.width || 1) * ratio))),
+        height: Math.max(240, Math.min(2160, Math.round(Number(command.height || 1) * ratio))),
+      };
+      const track = stream && stream.getVideoTracks()[0];
+      if (track) track.applyConstraints(currentVideoConstraints()).catch(function () {});
       return;
     }
     if (operation === 'set_microphone') {
