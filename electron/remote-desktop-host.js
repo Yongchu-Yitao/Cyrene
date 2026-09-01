@@ -12,6 +12,10 @@
   let microphoneEnabled = false;
   let viewportConstraints = null;
   let nativeSurface = null;
+  let autoAdaptationLevel = 0;
+  let autoHealthySamples = 0;
+  let autoStatsTimer = null;
+  let previousAutoStats = null;
 
   const qualityConstraints = {
     auto: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 45, max: 60 } },
@@ -24,8 +28,14 @@
     smooth: { maxBitrate: 10_000_000, maxFramerate: 45 },
     balanced: { maxBitrate: 22_000_000, maxFramerate: 30 },
     clear: { maxBitrate: 42_000_000, maxFramerate: 30 },
-    auto: { maxBitrate: 18_000_000, maxFramerate: 30 },
+    auto: { maxBitrate: 12_000_000, maxFramerate: 30 },
   };
+
+  const autoTransmissionProfiles = [
+    { maxBitrate: 12_000_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
+    { maxBitrate: 8_000_000, maxFramerate: 30, scaleResolutionDownBy: 1.5 },
+    { maxBitrate: 4_500_000, maxFramerate: 24, scaleResolutionDownBy: 2 },
+  ];
 
   function currentVideoConstraints() {
     const quality = qualityConstraints[qualityMode] || qualityConstraints.auto;
@@ -87,13 +97,102 @@
       return candidate.track && candidate.track.kind === 'video';
     });
     if (!sender) return;
-    const profile = transmissionProfiles[qualityMode] || transmissionProfiles.auto;
+    const profile = qualityMode === 'auto'
+      ? autoTransmissionProfiles[autoAdaptationLevel]
+      : transmissionProfiles[qualityMode] || transmissionProfiles.auto;
     const parameters = sender.getParameters();
     if (!Array.isArray(parameters.encodings) || !parameters.encodings.length) return;
     parameters.encodings[0].maxBitrate = profile.maxBitrate;
     parameters.encodings[0].maxFramerate = profile.maxFramerate;
-    parameters.degradationPreference = 'maintain-resolution';
+    parameters.encodings[0].scaleResolutionDownBy = Number(profile.scaleResolutionDownBy || 1);
+    parameters.degradationPreference = 'maintain-framerate';
     await sender.setParameters(parameters).catch(function () {});
+  }
+
+  async function refreshAutoAdaptation() {
+    const activePeer = peer;
+    if (!activePeer || qualityMode !== 'auto' || activePeer.connectionState !== 'connected') return;
+    try {
+      const reports = await activePeer.getStats();
+      if (peer !== activePeer || qualityMode !== 'auto') return;
+      let outbound = null;
+      let remoteInbound = null;
+      let selectedPair = null;
+      let selectedPairId = '';
+      reports.forEach(function (report) {
+        if (report.type === 'transport' && report.selectedCandidatePairId) {
+          selectedPairId = String(report.selectedCandidatePairId);
+        }
+        if (report.type === 'outbound-rtp' && report.kind === 'video' && !report.isRemote) outbound = report;
+        if (report.type === 'remote-inbound-rtp' && report.kind === 'video') remoteInbound = report;
+      });
+      if (selectedPairId && typeof reports.get === 'function') selectedPair = reports.get(selectedPairId) || null;
+      if (!selectedPair) {
+        reports.forEach(function (report) {
+          if (selectedPair || report.type !== 'candidate-pair' || report.state !== 'succeeded') return;
+          if (report.selected === true || report.nominated === true) selectedPair = report;
+        });
+      }
+      if (!outbound) return;
+      const current = {
+        frames: Number(outbound.framesEncoded || 0),
+        packets: Number(outbound.packetsSent || 0),
+        encodeSeconds: Number(outbound.totalEncodeTime || 0),
+        lost: Number(remoteInbound && remoteInbound.packetsLost || 0),
+      };
+      const previous = previousAutoStats;
+      previousAutoStats = current;
+      if (!previous) return;
+      const frameDelta = Math.max(0, current.frames - previous.frames);
+      const packetDelta = Math.max(0, current.packets - previous.packets);
+      const lostDelta = Math.max(0, current.lost - previous.lost);
+      const encodeDelta = Math.max(0, current.encodeSeconds - previous.encodeSeconds);
+      const encodeMs = frameDelta > 0 ? encodeDelta * 1000 / frameDelta : 0;
+      const lossRatio = packetDelta + lostDelta > 0 ? lostDelta / (packetDelta + lostDelta) : 0;
+      const availableBitrate = Number(selectedPair && selectedPair.availableOutgoingBitrate || 0);
+      const roundTripTime = Number(
+        remoteInbound && remoteInbound.roundTripTime
+        || selectedPair && selectedPair.currentRoundTripTime
+        || 0,
+      );
+      const activeProfile = autoTransmissionProfiles[autoAdaptationLevel];
+      const limitation = String(outbound.qualityLimitationReason || 'none');
+      const pressured = ['cpu', 'bandwidth'].includes(limitation)
+        || encodeMs > 28
+        || lossRatio > 0.03
+        || roundTripTime > 0.15
+        || (availableBitrate > 0 && availableBitrate < activeProfile.maxBitrate * 1.15);
+      if (pressured) {
+        autoHealthySamples = 0;
+        if (autoAdaptationLevel < autoTransmissionProfiles.length - 1) {
+          autoAdaptationLevel += 1;
+          await configureVideoSender();
+        }
+        return;
+      }
+      const healthy = frameDelta > 0
+        && limitation === 'none'
+        && encodeMs < 18
+        && lossRatio < 0.01
+        && roundTripTime < 0.08
+        && (availableBitrate <= 0 || availableBitrate > activeProfile.maxBitrate * 1.5);
+      autoHealthySamples = healthy ? autoHealthySamples + 1 : 0;
+      if (autoHealthySamples >= 4 && autoAdaptationLevel > 0) {
+        autoHealthySamples = 0;
+        autoAdaptationLevel -= 1;
+        await configureVideoSender();
+      }
+    } catch (_) {}
+  }
+
+  function resetAutoAdaptation() {
+    if (autoStatsTimer) window.clearInterval(autoStatsTimer);
+    autoStatsTimer = null;
+    autoAdaptationLevel = 0;
+    autoHealthySamples = 0;
+    previousAutoStats = null;
+    if (qualityMode !== 'auto') return;
+    autoStatsTimer = window.setInterval(refreshAutoAdaptation, 2000);
   }
 
   function releaseNativeSurface() {
@@ -244,6 +343,7 @@
     const answer = await peer.createAnswer();
     await peer.setLocalDescription(answer);
     await configureVideoSender();
+    resetAutoAdaptation();
     await waitForIceGathering(peer, 8000);
     const settings = stream.getVideoTracks()[0].getSettings();
     host.answer({
@@ -270,6 +370,8 @@
   host.onCommand(function (command) {
     const operation = String(command.operation || '');
     if (operation === 'disconnect') {
+      if (autoStatsTimer) window.clearInterval(autoStatsTimer);
+      autoStatsTimer = null;
       if (stream) stream.getTracks().forEach(function (track) { track.stop(); });
       releaseNativeSurface();
       if (peer) peer.close();
@@ -287,6 +389,7 @@
     }
     if (operation === 'set_quality') {
       qualityMode = String(command.quality_mode || 'auto');
+      resetAutoAdaptation();
       if (command.native_capture) {
         replaceCapture(command.native_capture).catch(function (error) {
           host.state({ session_id: sessionId, error: String(error && error.message || error) });

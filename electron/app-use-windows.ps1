@@ -1,9 +1,11 @@
 ﻿param(
-    [Parameter(Mandatory = $true)]
-    [string]$PayloadBase64
+    [string]$PayloadBase64 = '',
+    [switch]$Worker
 )
 
 $ErrorActionPreference = 'Stop'
+$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $OutputEncoding
 $MaxScrollAtAmount = 50000
 $MaxScrollEventAmount = 10
 Add-Type -AssemblyName UIAutomationClient
@@ -213,10 +215,6 @@ function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
 function Result([hashtable]$Value) {
     $Value | ConvertTo-Json -Depth 12 -Compress
     exit 0
-}
-
-function Fail([string]$Type, [string]$Message) {
-    Result @{ ok = $false; errorType = $Type; error = $Message }
 }
 
 function Target-Handle($Target) {
@@ -658,20 +656,34 @@ function Perform-Action($Payload) {
     throw "Unsupported Windows capability: $capability"
 }
 
-try {
-    $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($PayloadBase64))
-    $payload = $json | ConvertFrom-Json
-    switch ([string]$payload.operation) {
-        'list_targets' { Result (Get-Targets $payload) }
-        'snapshot' { Result (Get-Snapshot $payload $false) }
-        'inspect' { Result (Get-Snapshot $payload $true) }
-        'hit_test' { Result (Hit-Test $payload) }
-        'perform' { Result (Perform-Action $payload) }
-        'focus' { Result (Focus-Target $payload.target) }
-        default { Fail 'invalid_arguments' "Unknown operation: $($payload.operation)" }
+function Invoke-EncodedRequest([string]$EncodedPayload) {
+    try {
+        $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedPayload))
+        $payload = $json | ConvertFrom-Json
+        switch ([string]$payload.operation) {
+            'list_targets' { return (Get-Targets $payload) }
+            'snapshot' { return (Get-Snapshot $payload $false) }
+            'inspect' { return (Get-Snapshot $payload $true) }
+            'hit_test' { return (Hit-Test $payload) }
+            'perform' { return (Perform-Action $payload) }
+            'focus' { return (Focus-Target $payload.target) }
+            default { return @{ ok = $false; errorType = 'invalid_arguments'; error = "Unknown operation: $($payload.operation)" } }
+        }
+    } catch {
+        $message = [string]$_.Exception.Message
+        $type = if ($message -match 'access|denied|privilege|integrity') { 'permission_required' } else { 'provider_error' }
+        return @{ ok = $false; errorType = $type; error = $message }
     }
-} catch {
-    $message = [string]$_.Exception.Message
-    $type = if ($message -match 'access|denied|privilege|integrity') { 'permission_required' } else { 'provider_error' }
-    Fail $type $message
 }
+
+if ($Worker.IsPresent) {
+    while ($null -ne ($encoded = [Console]::In.ReadLine())) {
+        if ([string]::IsNullOrWhiteSpace($encoded)) { continue }
+        $response = Invoke-EncodedRequest $encoded
+        [Console]::Out.WriteLine(($response | ConvertTo-Json -Depth 12 -Compress))
+        [Console]::Out.Flush()
+    }
+    exit 0
+}
+
+Result (Invoke-EncodedRequest $PayloadBase64)

@@ -1,14 +1,56 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
+const { PassThrough, Writable } = require('node:stream');
 const test = require('node:test');
 
 const {
   AppUseManager,
+  WindowsPowerShellWorker,
   capabilitiesForTarget,
   resolveDarwinHitTestHelperPath,
   resolveProviderScriptPath,
 } = require('./app-use');
+
+test('Windows low-latency input reuses one PowerShell worker with ordered responses', async () => {
+  let spawnCount = 0;
+  const received = [];
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = function () {};
+  child.stdin = new Writable({
+    write(chunk, _encoding, callback) {
+      const encoded = String(chunk).trim();
+      const payload = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      received.push(payload);
+      const response = `${JSON.stringify({ ok: true, action: payload.capability })}\n`;
+      queueMicrotask(function () {
+        child.stdout.write(response.slice(0, 7));
+        child.stdout.write(response.slice(7));
+      });
+      callback();
+    },
+  });
+  const worker = new WindowsPowerShellWorker('C:\\Cyrene\\app-use-windows.ps1', {
+    spawnImpl(command, args) {
+      spawnCount += 1;
+      assert.equal(command, 'powershell.exe');
+      assert.equal(args.includes('-Worker'), true);
+      return child;
+    },
+  });
+
+  const results = await Promise.all([
+    worker.request({ operation: 'perform', capability: 'pointer_event', sequence: 1 }),
+    worker.request({ operation: 'perform', capability: 'right_click', sequence: 2 }),
+  ]);
+
+  assert.equal(spawnCount, 1);
+  assert.deepEqual(received.map((item) => item.sequence), [1, 2]);
+  assert.deepEqual(results.map((item) => item.action), ['pointer_event', 'right_click']);
+});
 
 test('packaged provider resolves from external resources instead of app.asar', () => {
   const resourcesPath = path.join('/Applications', 'Cyrene.app', 'Contents', 'Resources');
@@ -40,6 +82,8 @@ test('Windows provider source includes Win32 bounds and robust focus fallbacks',
   assert.match(source, /WindowRect\(\$handleValue\)/);
   assert.match(source, /AttachThreadInput/);
   assert.match(source, /sameIntegrityLevelRequired/);
+  assert.match(source, /\$Worker\.IsPresent/);
+  assert.match(source, /\[Console\]::In\.ReadLine\(\)/);
 });
 
 test('semantic providers use complete native accessibility traversal on macOS and Windows', () => {

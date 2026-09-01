@@ -388,6 +388,10 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "latency_ms: latencyMs" in plugin_ui
     assert "type: 'viewport'" in plugin_ui
     assert "currentVideoConstraints" in media_host
+    assert "autoTransmissionProfiles" in media_host
+    assert "qualityLimitationReason" in media_host
+    assert "availableOutgoingBitrate" in media_host
+    assert "maintain-framerate" in media_host
     assert "startFreeRdp" in rdp_sidecar
     assert "+dynamic-resolution" in rdp_sidecar
     assert "rdp_authentication_failed" in rdp_sidecar
@@ -505,7 +509,7 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert 'id="remote-video-backdrop"' in plugin_html
     assert "viewport: currentViewportSize()" in plugin_ui
     assert "maxBitrate: 42_000_000" in media_host
-    assert "maintain-resolution" in media_host
+    assert "maintain-framerate" in media_host
     assert "const scale = Math.min(rect.width / video.videoWidth" in plugin_ui
     assert "localX / renderedWidth" in plugin_ui
     assert 'id="connect-button"' not in plugin_html

@@ -788,6 +788,11 @@ class RemoteDesktopManager {
         );
       }
       await this._createHost(record);
+      if (process.platform === 'win32') {
+        // Warm the persistent Windows input worker while WebRTC negotiates so
+        // the first pointer event never pays PowerShell/.NET startup cost.
+        this.getAppUseManager().handle('list_targets', {}).catch(() => {});
+      }
       const pendingAnswer = record.pendingAnswer;
       record.window.webContents.send('remote-desktop:start', {
         session_id: sessionId,

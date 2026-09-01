@@ -775,7 +775,7 @@
   let lastMoveAt = 0;
   let imeComposing = false;
   stage.addEventListener('pointermove', function (event) {
-    if (Date.now() - lastMoveAt < 35) return;
+    if (Date.now() - lastMoveAt < 16) return;
     lastMoveAt = Date.now();
     pointerEvent(event, 'move');
   });
