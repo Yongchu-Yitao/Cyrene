@@ -646,6 +646,7 @@ jobs:
           CYRENE_CACHE_DIR: ${{ runner.temp }}/cyrene-deb-smoke/cache
           CYRENE_TEMP_DIR: ${{ runner.temp }}/cyrene-deb-smoke/tmp
         run: |
+          sudo apt-get update
           sudo apt-get install -y ./dist-electron/Cyrene-*-x64.deb
           test "$(stat -c '%u:%a' /opt/Cyrene/chrome-sandbox)" = "0:4755"
           mkdir -p "$CYRENE_USER_DATA_DIR/data"

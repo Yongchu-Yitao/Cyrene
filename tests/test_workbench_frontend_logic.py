@@ -35,6 +35,10 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert '<video className="wbc-viewer-media"' in source
     assert "function wbcDurableTracePayload" in source
     assert "onUnknownAgentEvent" in source
+    assert 'eventType === "guidance_applied"' in source
+    assert 'activityKind: isSteering ? "steering" : "tool"' in source
+    assert '"workbenchChat.traceAction.steering": "Steering"' in i18n
+    assert '"workbenchChat.traceAction.steering": "引导中"' in i18n
     assert "wbcToolPresentationKind" in source
     assert "progress.slice(-40)" in source
     assert 'var failed = !!entry.failed || ["failed", "error", "failure", "expired", "cancelled"].indexOf(entryStatus) >= 0;' in source
@@ -3371,6 +3375,53 @@ def test_workbench_finalizing_runtime_closes_live_tool_activity():
         "timelineClosed": True,
         "heartbeatFinalizing": True,
         "activityActive": False,
+    }
+
+
+def test_workbench_active_runtime_adds_continuation_after_completed_activity():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  function continuation(runtime, options) {
+    return wbcRuntimeTimelineMessages(runtime, options).some(item => item.runtimeContinuation);
+  }
+  const base = { chatId: "chat_1", startedAt: 1000, text: "", artifacts: [] };
+  return {
+    completed: continuation({
+      ...base,
+      activities: [{ id: "done", progress: [{ kind: "tool", status: "completed" }] }]
+    }),
+    running: continuation({
+      ...base,
+      activities: [{ id: "running", progress: [{ kind: "tool", status: "running" }] }]
+    }),
+    emptyActivity: continuation({
+      ...base,
+      activities: [{ id: "thinking", reasoning: "", progress: [] }]
+    }),
+    replying: continuation({
+      ...base,
+      text: "reply",
+      activities: [{ id: "done", progress: [{ kind: "tool", status: "completed" }] }]
+    }),
+    finalizing: continuation({
+      ...base,
+      finalizing: true,
+      activities: [{ id: "done", progress: [{ kind: "tool", status: "completed" }] }]
+    }),
+    noPlaceholder: continuation(base, { showReasoningPlaceholder: false })
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "completed": True,
+        "running": False,
+        "emptyActivity": False,
+        "replying": False,
+        "finalizing": False,
+        "noPlaceholder": True,
     }
 
 
@@ -7132,6 +7183,29 @@ process.stdout.write(summary.label);
     )
 
     assert completed.stdout == "操作了浏览器并使用了Cyrene 应用工具"
+
+
+def test_workbench_trace_summary_labels_guidance_as_steering():
+    source = workbench_chat_source()
+    helpers = "function wbcTraceNormalizeName(" + source.split(
+        "function wbcTraceNormalizeName(", 1
+    )[1].split("function wbcNormalizeReasoningText", 1)[0]
+    script = f"""
+const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
+function wbcT(key, fallback) {{
+  return key === "workbenchChat.traceAction.steering" ? "引导中" : fallback;
+}}
+function wbcLocalizedToolName(toolName) {{ return String(toolName || ""); }}
+eval({json.dumps(helpers)});
+process.stdout.write(wbcTraceCollapsedSummary([
+  {{ kind: "steering", text: "引导中" }}
+]).label);
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+
+    assert completed.stdout == "引导中"
 
 
 def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():

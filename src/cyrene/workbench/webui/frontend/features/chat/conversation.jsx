@@ -1,6 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserAvoidancePlan, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserWindowTitle, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcClampBrowserWindowFrame, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcHasAgentCapabilitySnapshot, wbcHasChatDrag, wbcIsBuiltinAgent, wbcKeepBrowserWindowClearOfComposer, wbcLoadBrowserWindowFrame, wbcMergeChronologicalMessages, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcNotifyResourceShelfPointerDrag, wbcPointInsideResourceShelf, wbcReadChatDrag, wbcReconcileLiveUserMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcSaveBrowserWindowFrame, wbcT, wbcTraceDedupeKey } from "../../workbench-chat.jsx"
-import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
+import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
 import { WbcComposer } from "./composer.jsx"
 import { WbcConversationNavigator } from "./conversation-navigator.jsx"
 
@@ -1513,6 +1513,9 @@ function wbcRenderHistoryMessage(msg, context) {
     && String(context.chat.pendingQuestion.id || "") === String(msg.questionId || "")
   );
   if (msg.runtimeHeartbeat) return null;
+  if (msg.runtimeContinuation) {
+    return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcContinuationIndicator /></WbcThreadItem>;
+  }
   if (msg.modelStatusCard) {
     return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcModelStatusMessage msg={msg} /></WbcThreadItem>;
   }

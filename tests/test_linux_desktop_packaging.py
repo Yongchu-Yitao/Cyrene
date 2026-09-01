@@ -117,6 +117,10 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     assert "--no-sandbox" in workflow
     assert "--desktop-smoke-test" in workflow
     assert "Install and smoke test Debian package" in workflow
+    assert "sudo apt-get update" in linux_job
+    assert linux_job.index("sudo apt-get update") < linux_job.index(
+        "sudo apt-get install -y ./dist-electron/Cyrene-*-x64.deb"
+    )
     assert "stat -c '%u:%a' /opt/Cyrene/chrome-sandbox" in workflow
     assert "/opt/Cyrene/cyrene" in workflow
     assert "config.enc.missing-key.bak" in workflow

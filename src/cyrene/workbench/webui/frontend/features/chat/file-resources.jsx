@@ -28,6 +28,24 @@ function wbcUsesFilePointerDrag() {
     && document.documentElement.getAttribute("data-platform") === "darwin");
 }
 
+function wbcUnknownAgentActivity(event) {
+  var payload = wbcAgentEventPayload(event || {});
+  var eventType = String(event && event.type || "unknown");
+  var isSteering = eventType === "guidance_applied";
+  return {
+    toolCallId: "agent-event:" + String(event && (event.eventId || event.event_id) || Date.now()),
+    name: isSteering
+      ? wbcT("workbenchChat.traceAction.steering", "Steering")
+      : wbcT("workbenchChat.agentEvent", "Agent event") + " · " + eventType,
+    activityKind: isSteering ? "steering" : "tool",
+    detailKey: isSteering ? "workbenchChat.traceAction.steering" : "",
+    status: "completed",
+    outputSummary: wbcStructuredEventSummary(payload),
+    output: payload,
+    presentation: { kind: "event" },
+  };
+}
+
 function wbcCopyFileDragAppearance(sourceNode, cloneNode) {
   if (!sourceNode || !cloneNode || !window.getComputedStyle) return;
   var computed = window.getComputedStyle(sourceNode);
@@ -800,9 +818,10 @@ var WorkbenchChatRuntimes = (function () {
     }
     var progress = event.progress && typeof event.progress === "object" ? event.progress : null;
     var entry = {
-      kind: "tool",
+      kind: event.activityKind === "steering" ? "steering" : "tool",
       toolCallId: toolCallId,
       text: toolName || undefined,
+      detailKey: event.detailKey || "",
       preview: terminal
         ? String(event.outputSummary || event.inputSummary || "")
         : String(progress && progress.label || event.inputSummary || event.title || ""),
@@ -1160,14 +1179,7 @@ var WorkbenchChatRuntimes = (function () {
       onPermissionResolved: function (event) { resolveAgentRequestEvent(chatId, event); },
       onElicitationResolved: function (event) { resolveAgentRequestEvent(chatId, event); },
       onUnknownAgentEvent: function (event) {
-        applyStreamToolEvent(chatId, {
-          toolCallId: "agent-event:" + String(event && (event.eventId || event.event_id) || Date.now()),
-          name: wbcT("workbenchChat.agentEvent", "Agent event") + " · " + String(event && event.type || "unknown"),
-          status: "completed",
-          outputSummary: wbcStructuredEventSummary(wbcAgentEventPayload(event || {})),
-          output: wbcAgentEventPayload(event || {}),
-          presentation: { kind: "event" },
-        }, true);
+        applyStreamToolEvent(chatId, wbcUnknownAgentActivity(event), true);
       },
       onIntermediateMessage: function (event) { appendIntermediate(chatId, event && event.message); },
       onGuidanceReceived: function (event) {

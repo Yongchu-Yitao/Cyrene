@@ -31,6 +31,11 @@ Beta6 focuses on model availability after upgrades, reliable long-running replie
 - Long titles for recent conversations and Workspace items now shrink reliably inside their cards instead of pushing status, drag handles, or other actions out of view.
 - The complete title remains available on hover, while titles, status text, and controls stay aligned in compact windows and lists with many items.
 
+### Conversation activity status
+
+- When the Agent keeps processing after completing a tool action, the conversation now shows a separate “Continuing to process” state. Completed actions remain visibly settled, and the interface no longer leaves an unexplained quiet gap before the next event or reply.
+- Guidance added by the user while the Agent is running is now identified as “Steering” in the activity record, distinct from ordinary tool actions and unknown Agent events.
+
 ## [0.9.0-beta5] - 2026-09-01
 
 This release adds cross-device Remote Desktop directly to Workbench and completes a broad pass over conversation recovery, memory learning, model setup, browser actions, tool calls, terminal state, and proactive delivery. Long-running work now keeps a more reliable state through retries, reconnects, model changes, and partial service outages, with clearer feedback the user can act on.

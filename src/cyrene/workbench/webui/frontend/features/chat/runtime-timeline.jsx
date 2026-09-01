@@ -355,8 +355,9 @@ function wbcRuntimeTimelineMessages(runtime, options) {
   if (!runtime) return [];
   var showReasoningPlaceholder = !options || options.showReasoningPlaceholder !== false;
   var startedAt = Number(runtime.startedAt || Date.now());
-  var activities = Array.isArray(runtime.activities) && runtime.activities.length
-    ? runtime.activities
+  var runtimeActivities = Array.isArray(runtime.activities) ? runtime.activities : [];
+  var activities = runtimeActivities.length
+    ? runtimeActivities
     : (showReasoningPlaceholder ? [{ id: "activity_1", reasoning: "", progress: [] }] : []);
   var items = [{
     id: "runtime_heartbeat_" + String(runtime.chatId || "chat"),
@@ -384,6 +385,36 @@ function wbcRuntimeTimelineMessages(runtime, options) {
       notification: notice,
     });
   });
+  var hasRunningEntry = runtimeActivities.some(function (activity) {
+    return (Array.isArray(activity && activity.progress) ? activity.progress : []).some(function (entry) {
+      return String(entry && entry.status || "").trim().toLowerCase() === "running";
+    });
+  });
+  var latestActivity = runtimeActivities.length ? runtimeActivities[runtimeActivities.length - 1] : null;
+  var latestEntries = Array.isArray(latestActivity && latestActivity.progress) ? latestActivity.progress : [];
+  var hasLiveReply = !!String(runtime.text || "") || !!(runtime.artifacts && runtime.artifacts.length);
+  // A completed activity describes work that has already finished, so leave
+  // its card settled. If the runtime itself remains active, append a separate
+  // continuation row to cover the quiet gap before the next event or reply.
+  var needsContinuation = !runtime.finalizing
+    && !hasLiveReply
+    && !hasRunningEntry
+    && (
+      (runtimeActivities.length === 0 && !showReasoningPlaceholder)
+      || !!(latestActivity && latestEntries.length > 0)
+    );
+  if (needsContinuation) {
+    var continuationAt = items.reduce(function (latest, item) {
+      var timestamp = Date.parse(String(item && item.createdAt || ""));
+      return Number.isFinite(timestamp) ? Math.max(latest, timestamp) : latest;
+    }, Math.max(startedAt, Number(runtime.lastEventAt || 0))) + 1;
+    items.push({
+      id: "runtime_continuation_" + String(runtime.chatId || "chat"),
+      role: "assistant",
+      createdAt: new Date(continuationAt).toISOString(),
+      runtimeContinuation: true,
+    });
+  }
   return wbcMergeChronologicalMessages([], items);
 }
 

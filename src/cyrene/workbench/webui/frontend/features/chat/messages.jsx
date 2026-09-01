@@ -826,6 +826,7 @@ function wbcTraceActionKind(entry) {
   if (entryKind === "subagent") return "subagent";
   if (entryKind === "permission") return "permission";
   if (entryKind === "event") return "event";
+  if (entryKind === "steering") return "steering";
   if (/(^|_)(edit|apply_patch|replace|patch)($|_)/.test(name)) return "edit";
   if (/(^|_)(write|create_file|save_file)($|_)/.test(name)) return "write";
   if (/(^|_)(read|read_file|open_file)($|_)/.test(name)) return "read";
@@ -895,6 +896,7 @@ function wbcTraceActionLabel(entry) {
   if (kind === "subagent") return wbcT("workbenchChat.traceAction.subagent", "Coordinated subagents");
   if (kind === "permission") return wbcT("workbenchChat.traceAction.permission", "Reviewed permissions");
   if (kind === "event") return wbcT("workbenchChat.traceAction.event", "Handled an agent event");
+  if (kind === "steering") return wbcT("workbenchChat.traceAction.steering", "Steering");
   var toolName = wbcLocalizedToolName(raw);
   return wbcT("workbenchChat.traceAction.usedTool", "Used {tool}", { tool: toolName });
 }
@@ -1135,6 +1137,19 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function WbcContinuationIndicator() {
+  useWorkbenchI18n();
+  return (
+    <WbcTraceCard
+      trace={[]}
+      live={true}
+      running={true}
+      label={wbcT("workbenchChat.continueProcessing", "Continuing to process")}
+      reasoning=""
+    />
   );
 }
 
@@ -1578,6 +1593,9 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
         if (item.runtimeNotification) {
           return <WbcThreadItem key={item.id}><WbcAgentNotification notice={item.notification} /></WbcThreadItem>;
         }
+        if (item.runtimeContinuation) {
+          return <WbcThreadItem key={item.id}><WbcContinuationIndicator /></WbcThreadItem>;
+        }
         if (item.activityGroup) {
           return <WbcThreadItem key={item.id}><WbcActivityGroup group={item} /></WbcThreadItem>;
         }
@@ -1673,4 +1691,4 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }
+export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }
