@@ -146,7 +146,15 @@
     "deb": {
       "afterInstall": "linux-after-install.sh",
       "depends": [
-        "at-spi2-core",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
         "freerdp3-x11 | freerdp2-x11",
         "xvfb",
         "xdotool"
@@ -155,7 +163,14 @@
     "rpm": {
       "afterInstall": "linux-after-install.sh",
       "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "(libXtst or libXtst6)",
+        "xdg-utils",
         "at-spi2-core",
+        "(libuuid or libuuid1)",
         "xdotool"
       ]
     },
