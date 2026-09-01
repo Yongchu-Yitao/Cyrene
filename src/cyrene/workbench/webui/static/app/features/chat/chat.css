@@ -2824,7 +2824,24 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
    menu lives under body, so use the resolved surface copied from its owning
    conversation card instead of rebuilding a potentially cyclic token chain. */
 .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
-  background: var(--wbc-split-grip-surface, var(--wb-card-bg));
+  --wbc-split-grip-border-color: #d2dae2;
+  --wbc-split-grip-divider-color: rgba(23, 28, 34, .08);
+  --wbc-split-grip-slider-track: #d2dae2;
+  --wbc-split-grip-slider-thumb-ring: #fff;
+  border: 1px solid var(--wbc-split-grip-border-color);
+  border-radius: var(--wbc-split-grip-radius, 18px);
+  background: var(--wbc-split-grip-surface, var(--wbc-panel-surface, var(--wb-card-bg, #fff)));
+  box-shadow: var(--wbc-split-grip-shadow,
+    0 8px 22px rgba(9, 17, 30, .055),
+    inset 0 1px 0 rgba(255, 255, 255, .09),
+    inset 0 0 0 1px rgba(120, 132, 148, .12));
+}
+html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
+  --wbc-split-grip-border-color: #41434d;
+  --wbc-split-grip-divider-color: rgba(255, 255, 255, .055);
+  --wbc-split-grip-slider-track: #454854;
+  --wbc-split-grip-slider-thumb-ring: #17181c;
+  background: var(--wbc-split-grip-surface, var(--wbc-panel-surface, #17181c));
 }
 .wbc-side-split-grip-menu.has-contributions {
   width: min(var(--wb-right-w, 350px), calc(100vw - 24px));
@@ -2846,13 +2863,45 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-side-split-grip-menu .wbc-side-accordion-trigger:disabled:hover {
   background: transparent;
 }
+.wbc-side-split-grip-menu .wbc-side-accordion-item {
+  border-bottom: 1px solid var(--wbc-split-grip-divider-color);
+}
+.wbc-side-split-grip-menu .wbc-side-accordion-item:last-child {
+  border-bottom: 0;
+}
 /* Grip menus deliberately do not reuse the docked side panel's scroll body:
    that body carries viewport max-height and padding rules. This compact body
    is content-sized and owns exactly one 16px horizontal gutter. */
 .wbc-side-split-grip-expanded-body {
+  interpolate-size: allow-keywords;
+  height: 0;
   min-width: 0;
   overflow: hidden;
-  animation: wbc-side-split-grip-body-in 160ms cubic-bezier(.2, .8, .2, 1) both;
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition:
+    height 190ms cubic-bezier(.2, .8, .2, 1),
+    opacity 145ms ease,
+    transform 190ms cubic-bezier(.2, .8, .2, 1);
+}
+.wbc-side-split-grip-expanded-body.open {
+  height: auto;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+@starting-style {
+  .wbc-side-split-grip-expanded-body.open {
+    height: 0;
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wbc-side-split-grip-expanded-body {
+    transition: none;
+  }
 }
 .wbc-side-split-grip-expanded-content {
   width: 100%;
@@ -2867,10 +2916,6 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-side-split-grip-information {
   margin: 0;
   padding: 3px 0 0;
-}
-@keyframes wbc-side-split-grip-body-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 .wbc-side-split-grip-information-details,
 .wbc-side-split-grip-information-facts {
@@ -2973,6 +3018,7 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   white-space: nowrap;
 }
 .wbc-side-split-grip-setting-slider input[type="range"] {
+  display: block;
   width: 100%;
   height: 22px;
   margin: 0;
@@ -2982,8 +3028,8 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   appearance: none;
   -webkit-appearance: none;
   background: linear-gradient(90deg,
-    color-mix(in srgb, var(--wb-accent) 72%, var(--wb-text)) 0 var(--wbc-setting-progress),
-    color-mix(in srgb, var(--wb-line) 72%, transparent) var(--wbc-setting-progress) 100%);
+    var(--accent, #4d9a78) 0 var(--wbc-setting-progress),
+    var(--wbc-split-grip-slider-track) var(--wbc-setting-progress) 100%);
   background-position: center;
   background-size: 100% 4px;
   background-repeat: no-repeat;
@@ -2992,19 +3038,19 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
 .wbc-side-split-grip-setting-slider input[type="range"]::-webkit-slider-thumb {
   width: 16px;
   height: 16px;
-  border: 2px solid var(--wb-flyout-bg);
+  border: 2px solid var(--wbc-split-grip-slider-thumb-ring);
   border-radius: 50%;
   -webkit-appearance: none;
-  background: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-text));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line)), 0 2px 5px color-mix(in srgb, var(--wb-text) 18%, transparent);
+  background: var(--accent, #4d9a78);
+  box-shadow: 0 0 0 1px var(--wbc-split-grip-border-color), 0 2px 5px rgba(9, 17, 30, .22);
 }
 .wbc-side-split-grip-setting-slider input[type="range"]::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  border: 2px solid var(--wb-flyout-bg);
+  border: 2px solid var(--wbc-split-grip-slider-thumb-ring);
   border-radius: 50%;
-  background: color-mix(in srgb, var(--wb-accent) 72%, var(--wb-text));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line)), 0 2px 5px color-mix(in srgb, var(--wb-text) 18%, transparent);
+  background: var(--accent, #4d9a78);
+  box-shadow: 0 0 0 1px var(--wbc-split-grip-border-color), 0 2px 5px rgba(9, 17, 30, .22);
 }
 .wbc-side-split-grip-setting-slider input[type="range"]:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--wb-accent) 58%, transparent);

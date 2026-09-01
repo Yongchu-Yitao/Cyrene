@@ -1829,6 +1829,9 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert "function WbcPanelAccordionList(" in source
     assert "function WbcPanelAccordionSection(" in source
     assert "function WbcSplitGripAccordionBody(" in source
+    assert "window.setTimeout(function () { setRendered(false); }, 190)" in source
+    assert 'className={"wbc-side-split-grip-expanded-body" + (expanded ? " open" : "")}' in source
+    assert 'aria-hidden={expanded ? "false" : "true"}' in source
     assert 'className={"wbc-side-accordion-item"' in source
     assert 'className={"wbc-side-accordion-trigger"' in source
     assert 'className="wbc-side-accordion-chevron"' in source
@@ -1841,9 +1844,11 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert 'typeof document !== "undefined" ? document.body : null' in grip_bar
     assert 'surfaceRef={menuRef}' in grip_bar
     assert 'insideMenu = menuRef.current && menuRef.current.contains(event.target)' in grip_bar
+    assert 'rootRef.current.closest(".workbench-grid")' in grip_bar
+    assert 'propertyName.indexOf("--wb-") !== 0' in grip_bar
     assert 'rootRef.current.closest(".wbc-pane-card, .wbc-side-card")' in grip_bar
-    assert "window.getComputedStyle(card).backgroundColor" in grip_bar
-    assert '"--wbc-split-grip-surface": menuPosition.surface || "var(--wb-card-bg)"' in grip_bar
+    assert 'portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor' in grip_bar
+    assert 'style={Object.assign({}, menuPosition.portalTheme' in grip_bar
     split_menu_css = styles.split(".wbc-side-split-grip-menu {", 1)[1].split("}", 1)[0]
     assert "position: fixed;" in split_menu_css
     assert "top: var(--wbc-split-grip-menu-top);" in split_menu_css
@@ -1859,7 +1864,37 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     split_menu_surface_css = styles.split(
         ".wbc-panel-accordion-surface.wbc-side-split-grip-menu {", 1
     )[1].split("}", 1)[0]
-    assert "background: var(--wbc-split-grip-surface, var(--wb-card-bg));" in split_menu_surface_css
+    assert "--wbc-split-grip-border-color: #d2dae2;" in split_menu_surface_css
+    assert "border: 1px solid var(--wbc-split-grip-border-color);" in split_menu_surface_css
+    assert "border-radius: var(--wbc-split-grip-radius, 18px);" in split_menu_surface_css
+    assert "background: var(--wbc-split-grip-surface," in split_menu_surface_css
+    assert "box-shadow: var(--wbc-split-grip-shadow," in split_menu_surface_css
+    dark_split_menu_surface_css = styles.split(
+        'html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {', 1
+    )[1].split("}", 1)[0]
+    assert "--wbc-split-grip-border-color: #41434d;" in dark_split_menu_surface_css
+    split_menu_item_css = styles.split(
+        ".wbc-side-split-grip-menu .wbc-side-accordion-item {", 1
+    )[1].split("}", 1)[0]
+    assert "border-bottom: 1px solid var(--wbc-split-grip-divider-color);" in split_menu_item_css
+    assert "--wbc-split-grip-divider-color: rgba(23, 28, 34, .08);" in split_menu_surface_css
+    assert "--wbc-split-grip-divider-color: rgba(255, 255, 255, .055);" in dark_split_menu_surface_css
+    split_menu_animation_css = styles.split(
+        ".wbc-side-split-grip-expanded-body {", 1
+    )[1].split("}", 1)[0]
+    assert "interpolate-size: allow-keywords;" in split_menu_animation_css
+    assert "height: 0;" in split_menu_animation_css
+    assert "height 190ms cubic-bezier(.2, .8, .2, 1)" in split_menu_animation_css
+    split_menu_animation_open_css = styles.split(
+        ".wbc-side-split-grip-expanded-body.open {", 1
+    )[1].split("}", 1)[0]
+    assert "height: auto;" in split_menu_animation_open_css
+    assert "opacity: 1;" in split_menu_animation_open_css
+    slider_css = styles.split(
+        '.wbc-side-split-grip-setting-slider input[type="range"] {', 1
+    )[1].split("}", 1)[0]
+    assert "display: block;" in slider_css
+    assert "var(--wbc-split-grip-slider-track)" in slider_css
     split_accordion_css = styles.split(".wbc-side-split-grip-accordion {", 1)[1].split("}", 1)[0]
     assert "max-height: min(620px, calc(100vh - var(--wbc-split-grip-menu-top) - 12px));" in split_accordion_css
     assert "height: max-content;" in split_accordion_css

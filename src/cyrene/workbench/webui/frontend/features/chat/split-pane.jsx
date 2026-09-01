@@ -1051,8 +1051,20 @@ function WbcPanelAccordionList({ className, dataTour, children }) {
 }
 
 function WbcSplitGripAccordionBody({ expanded, children }) {
-  if (!expanded) return null;
-  return <div className="wbc-side-split-grip-expanded-body">
+  var [rendered, setRendered] = useWbcState(!!expanded);
+
+  useWbcEffect(function () {
+    if (expanded) {
+      setRendered(true);
+      return undefined;
+    }
+    if (!rendered) return undefined;
+    var hideTimer = window.setTimeout(function () { setRendered(false); }, 190);
+    return function () { window.clearTimeout(hideTimer); };
+  }, [expanded, rendered]);
+
+  if (!rendered) return null;
+  return <div className={"wbc-side-split-grip-expanded-body" + (expanded ? " open" : "")} aria-hidden={expanded ? "false" : "true"}>
     <div className="wbc-side-split-grip-expanded-content">{children}</div>
   </div>;
 }
@@ -1090,7 +1102,7 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
   var gripRef = useWbcRef(null);
   var menuRef = useWbcRef(null);
   var pointerDragRef = useWbcRef(null);
-  var [menuPosition, setMenuPosition] = useWbcState({ top: 0, left: 0, surface: "" });
+  var [menuPosition, setMenuPosition] = useWbcState({ top: 0, left: 0, portalTheme: {} });
   var rootMenuContributions = (Array.isArray(menuContributions) ? menuContributions : []).filter(function (contribution) {
     return String(contribution && contribution.placement || "settings") === "root";
   });
@@ -1151,16 +1163,33 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
       if (!grip) return;
       var rect = grip.getBoundingClientRect();
       // The popup is portalled to document.body to stay out of the Workbench
-      // grid, so it cannot inherit the conversation card's scoped surface
-      // token. Read the card's resolved fill before crossing that boundary.
+      // grid. Bridge the scoped theme tokens across that boundary so the
+      // panel surface and plugin controls keep the conversation card styling.
+      var portalTheme = {};
+      var page = rootRef.current && rootRef.current.closest(".wbc-page");
+      var grid = rootRef.current && rootRef.current.closest(".workbench-grid");
+      [grid, page].forEach(function (scope) {
+        if (!scope || !window.getComputedStyle) return;
+        var computed = window.getComputedStyle(scope);
+        for (var index = 0; index < computed.length; index += 1) {
+          var propertyName = computed[index];
+          if (propertyName.indexOf("--wb-") !== 0 && propertyName.indexOf("--wbc-") !== 0) continue;
+          portalTheme[propertyName] = computed.getPropertyValue(propertyName);
+        }
+      });
       var card = rootRef.current && rootRef.current.closest(".wbc-pane-card, .wbc-side-card");
-      var surface = card && window.getComputedStyle
-        ? window.getComputedStyle(card).backgroundColor
-        : "";
+      var cardStyle = card && window.getComputedStyle ? window.getComputedStyle(card) : null;
+      if (cardStyle && cardStyle.backgroundColor && cardStyle.backgroundColor !== "rgba(0, 0, 0, 0)") {
+        portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor;
+      }
+      if (cardStyle && cardStyle.borderRadius) portalTheme["--wbc-split-grip-radius"] = cardStyle.borderRadius;
+      if (cardStyle && cardStyle.boxShadow && cardStyle.boxShadow !== "none") {
+        portalTheme["--wbc-split-grip-shadow"] = cardStyle.boxShadow;
+      }
       setMenuPosition({
         top: Math.round(rect.bottom + 4),
         left: Math.round(rect.left + rect.width / 2),
-        surface: surface
+        portalTheme: portalTheme
       });
     }
     positionMenu();
@@ -1265,11 +1294,10 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
           className={"wbc-side-split-grip-menu" + (Array.isArray(menuContributions) && menuContributions.length ? " has-contributions" : "")}
           role="menu"
           surfaceRef={menuRef}
-          style={{
+          style={Object.assign({}, menuPosition.portalTheme, {
             "--wbc-split-grip-menu-top": menuPosition.top + "px",
-            "--wbc-split-grip-menu-left": menuPosition.left + "px",
-            "--wbc-split-grip-surface": menuPosition.surface || "var(--wb-card-bg)"
-          }}
+            "--wbc-split-grip-menu-left": menuPosition.left + "px"
+          })}
         >
           <WbcPanelAccordionList className="wbc-side-split-grip-accordion">
           {menuType === "content" ? (

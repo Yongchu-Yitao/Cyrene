@@ -357,6 +357,7 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     app_use = (root / "electron/app-use.js").read_text(encoding="utf-8")
     app_use_macos = (root / "electron/app-use-macos.jxa").read_text(encoding="utf-8")
     app_use_windows = (root / "electron/app-use-windows.ps1").read_text(encoding="utf-8-sig")
+    input_coordinates = (root / "electron/remote-desktop-coordinates.js").read_text(encoding="utf-8")
     package = json.loads((root / "electron/package.json").read_text(encoding="utf-8"))
     packaged_files = set(package["build"]["files"])
 
@@ -428,13 +429,35 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "height: max-content;" in split_menu_css
     assert "align-self: start;" in split_menu_css
     assert "height: max-content;" in split_menu_list_css
+    assert 'rootRef.current.closest(".workbench-grid")' in pane
+    assert 'propertyName.indexOf("--wb-") !== 0' in pane
     assert 'rootRef.current.closest(".wbc-pane-card, .wbc-side-card")' in pane
-    assert "window.getComputedStyle(card).backgroundColor" in pane
-    assert '"--wbc-split-grip-surface": menuPosition.surface || "var(--wb-card-bg)"' in pane
+    assert 'portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor' in pane
+    assert 'style={Object.assign({}, menuPosition.portalTheme' in pane
     split_menu_surface_css = styles.split(
         ".wbc-panel-accordion-surface.wbc-side-split-grip-menu {", 1
     )[1].split("}", 1)[0]
-    assert "background: var(--wbc-split-grip-surface, var(--wb-card-bg));" in split_menu_surface_css
+    assert "border: 1px solid var(--wbc-split-grip-border-color);" in split_menu_surface_css
+    assert "background: var(--wbc-split-grip-surface," in split_menu_surface_css
+    split_menu_item_css = styles.split(
+        ".wbc-side-split-grip-menu .wbc-side-accordion-item {", 1
+    )[1].split("}", 1)[0]
+    assert "border-bottom: 1px solid var(--wbc-split-grip-divider-color);" in split_menu_item_css
+    assert "--wbc-split-grip-divider-color: rgba(23, 28, 34, .08);" in split_menu_surface_css
+    dark_split_menu_surface_css = styles.split(
+        'html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {', 1
+    )[1].split("}", 1)[0]
+    assert "--wbc-split-grip-divider-color: rgba(255, 255, 255, .055);" in dark_split_menu_surface_css
+    split_menu_animation_css = styles.split(
+        ".wbc-side-split-grip-expanded-body {", 1
+    )[1].split("}", 1)[0]
+    assert "height 190ms cubic-bezier(.2, .8, .2, 1)" in split_menu_animation_css
+    assert 'className={"wbc-side-split-grip-expanded-body" + (expanded ? " open" : "")}' in pane
+    assert "window.setTimeout(function () { setRendered(false); }, 190)" in pane
+    slider_css = styles.split(
+        '.wbc-side-split-grip-setting-slider input[type="range"] {', 1
+    )[1].split("}", 1)[0]
+    assert "var(--wbc-split-grip-slider-track)" in slider_css
     split_menu_body_css = styles.split(
         ".wbc-side-split-grip-expanded-content {", 1
     )[1].split("}", 1)[0]
@@ -508,12 +531,17 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "{ name: 'pointer_event'" not in app_use
     assert "'pointer_event'" in app_use_macos
     assert "'pointer_event'" in app_use_windows
+    assert "SetProcessDPIAware" in app_use_windows
+    assert "SetPhysicalCursorPos" in app_use_windows
+    assert "dipToScreenPoint" in input_coordinates
+    assert "dipToScreenRect" in input_coordinates
     assert "microphoneEnabled" in media_host
     assert "transceiver.direction" in media_host
     assert "xdotool" in package["build"]["deb"]["depends"]
     assert "xdotool" in package["build"]["rpm"]["depends"]
     assert {
         "remote-desktop.js",
+        "remote-desktop-coordinates.js",
         "remote-desktop-preload.js",
         "remote-desktop-host.html",
         "remote-desktop-host.js",

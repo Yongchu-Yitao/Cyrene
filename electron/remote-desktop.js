@@ -4,6 +4,7 @@ const {
   desktopCapturer,
   ipcMain,
   nativeImage,
+  nativeTheme,
   powerMonitor,
   screen,
   session,
@@ -15,6 +16,10 @@ const http = require('http');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
+const {
+  inputBounds: remoteDesktopInputBounds,
+  inputPoint: remoteDesktopInputPoint,
+} = require('./remote-desktop-coordinates');
 
 let dbus = null;
 if (process.platform === 'linux') {
@@ -536,6 +541,8 @@ class RemoteDesktopManager {
     this.pendingCredentials = new Map();
     this.credentialWindows = new Map();
     this.indicatorWindows = new Map();
+    this.indicatorThemeSyncTimer = null;
+    this.indicatorThemeSyncRunning = false;
     this.terminatedSessions = new Map();
     this.screenLocked = false;
     this.securitySurfaceState = false;
@@ -859,13 +866,24 @@ class RemoteDesktopManager {
         if (latest) await this._performInput(record, latest);
         if (record.pendingMove) this._queueInput(record, record.pendingMove);
       });
-      record.inputQueue.catch(() => {});
+      record.inputQueue.catch((error) => this._reportInputFailure(record, event, error));
       return;
     }
     record.inputQueue = Promise.resolve(record.inputQueue)
       .catch(() => {})
       .then(() => this._performInput(record, event || {}));
-    record.inputQueue.catch(() => {});
+    record.inputQueue.catch((error) => this._reportInputFailure(record, event, error));
+  }
+
+  _reportInputFailure(record, event, error) {
+    const reason = String(error && (error.code || error.message) || error || 'desktop_input_failed');
+    const now = Date.now();
+    if (record.lastInputError === reason && now - Number(record.lastInputErrorAt || 0) < 2000) return;
+    record.lastInputError = reason;
+    record.lastInputErrorAt = now;
+    const type = String(event && event.type || 'unknown');
+    const action = String(event && event.action || '');
+    console.warn(`[remote-desktop] ${type}${action ? `/${action}` : ''} input failed: ${reason}`);
   }
 
   _acceptControl(sender, payload) {
@@ -1024,13 +1042,12 @@ class RemoteDesktopManager {
   _screenPoint(record, event) {
     const display = this._display(record.displayId);
     if (!display) throw new Error('desktop_display_not_found');
-    const bounds = display.bounds;
-    const nx = Math.max(0, Math.min(1, Number(event.x_normalized)));
-    const ny = Math.max(0, Math.min(1, Number(event.y_normalized)));
-    return {
-      x: Math.round(Number(bounds.x || 0) + nx * Math.max(1, Number(bounds.width || 1) - 1)),
-      y: Math.round(Number(bounds.y || 0) + ny * Math.max(1, Number(bounds.height || 1) - 1)),
-    };
+    return remoteDesktopInputPoint(display, event, { platform: process.platform, screenApi: screen });
+  }
+
+  _inputBounds(record) {
+    const display = this._display(record.displayId);
+    return remoteDesktopInputBounds(display, { platform: process.platform, screenApi: screen });
   }
 
   async _linuxInput(record, event) {
@@ -1199,8 +1216,7 @@ class RemoteDesktopManager {
       appSession = await this._appUseSessionForPoint(record, null);
     }
     let capability = '';
-    const display = this._display(record.displayId);
-    const bounds = display && display.bounds || { x: 0, y: 0, width: 1, height: 1 };
+    const bounds = this._inputBounds(record);
     let parameters = { desktop_bounds: bounds };
     if (type === 'pointer') {
       const action = String(event.action || 'move');
@@ -1264,8 +1280,7 @@ class RemoteDesktopManager {
       } else if (process.platform === 'linux' && commandExists('xdotool')) {
         await runCommand('xdotool', ['mouseup', '1'], 1500);
       } else if (record.pointerPressed && record.activePointerSession && record.lastPointerPoint) {
-        const display = this._display(record.displayId);
-        const bounds = display && display.bounds || { x: 0, y: 0, width: 1, height: 1 };
+        const bounds = this._inputBounds(record);
         await this.getAppUseManager().remoteDesktopInput(record.activePointerSession, 'pointer_event', {
           x: record.lastPointerPoint.x,
           y: record.lastPointerPoint.y,
@@ -1586,15 +1601,19 @@ class RemoteDesktopManager {
       return { ok: false, code: 'desktop_session_invalid' };
     }
     this.hideIndicator({ session_id: sessionId });
+    const theme = await this._readIndicatorTheme();
     const retryDelays = [0, 100, 250, 500];
     let lastError = null;
     for (const retryDelay of retryDelays) {
       if (retryDelay) await new Promise((resolve) => setTimeout(resolve, retryDelay));
       const indicator = new BrowserWindow({
-        width: 380,
-        height: 104,
+        width: 400,
+        height: 84,
         show: false,
         frame: false,
+        transparent: true,
+        backgroundColor: '#00000000',
+        hasShadow: false,
         resizable: false,
         minimizable: false,
         maximizable: false,
@@ -1614,18 +1633,21 @@ class RemoteDesktopManager {
         mode: String(args.mode || 'current_desktop'),
         canControl: args.can_control === true,
         language: String(this.getLanguage() || 'en'),
+        theme,
         window: indicator,
       };
       this.indicatorWindows.set(sessionId, record);
       indicator.on('closed', () => {
-        if (this.indicatorWindows.get(sessionId) === record) this.indicatorWindows.delete(sessionId);
+        if (this.indicatorWindows.get(sessionId) !== record) return;
+        this.indicatorWindows.delete(sessionId);
+        if (!this.indicatorWindows.size) this._stopIndicatorThemeSync();
       });
       indicator.once('ready-to-show', () => {
         if (indicator.isDestroyed() || this.indicatorWindows.get(sessionId) !== record) return;
         const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
         const area = display && display.workArea || { x: 0, y: 0, width: 1280 };
         indicator.setPosition(
-          Math.round(Number(area.x || 0) + Number(area.width || 1280) - 396),
+          Math.round(Number(area.x || 0) + Number(area.width || 1280) - 418),
           Math.round(Number(area.y || 0) + 16),
           false,
         );
@@ -1633,6 +1655,7 @@ class RemoteDesktopManager {
       });
       try {
         await indicator.loadFile(path.join(__dirname, 'remote-desktop-indicator.html'));
+        this._startIndicatorThemeSync();
         return { ok: true };
       } catch (error) {
         lastError = error;
@@ -1649,7 +1672,49 @@ class RemoteDesktopManager {
     if (!record) return { ok: true, hidden: false };
     this.indicatorWindows.delete(sessionId);
     if (record.window && !record.window.isDestroyed()) record.window.destroy();
+    if (!this.indicatorWindows.size) this._stopIndicatorThemeSync();
     return { ok: true, hidden: true };
+  }
+
+  async _readIndicatorTheme() {
+    let mainWindow = null;
+    try { mainWindow = this.getMainWindow(); } catch (_) {}
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      try {
+        const theme = await mainWindow.webContents.executeJavaScript(
+          "document.documentElement.dataset.theme || ''",
+          true,
+        );
+        if (theme === 'light' || theme === 'dark') return theme;
+      } catch (_) {}
+    }
+    return nativeTheme && nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+  }
+
+  _startIndicatorThemeSync() {
+    if (this.indicatorThemeSyncTimer) return;
+    const sync = async () => {
+      if (this.indicatorThemeSyncRunning || !this.indicatorWindows.size) return;
+      this.indicatorThemeSyncRunning = true;
+      try {
+        const theme = await this._readIndicatorTheme();
+        for (const record of this.indicatorWindows.values()) {
+          if (record.theme === theme || !record.window || record.window.isDestroyed()) continue;
+          record.theme = theme;
+          record.window.webContents.send('remote-desktop:indicator-theme', theme);
+        }
+      } finally {
+        this.indicatorThemeSyncRunning = false;
+      }
+    };
+    this.indicatorThemeSyncTimer = setInterval(sync, 1000);
+    if (typeof this.indicatorThemeSyncTimer.unref === 'function') this.indicatorThemeSyncTimer.unref();
+  }
+
+  _stopIndicatorThemeSync() {
+    if (!this.indicatorThemeSyncTimer) return;
+    clearInterval(this.indicatorThemeSyncTimer);
+    this.indicatorThemeSyncTimer = null;
   }
 
   _indicatorRecord(sender) {
@@ -1667,6 +1732,7 @@ class RemoteDesktopManager {
       mode: record.mode,
       can_control: record.canControl,
       language: record.language,
+      theme: record.theme,
     } : {};
   }
 

@@ -8,10 +8,20 @@
   <link rel="stylesheet" href="remote-desktop-indicator.css">
 </head>
 <body>
-  <main>
-    <span class="status" aria-hidden="true"></span>
-    <div><strong id="title">Remote Desktop connected</strong><small id="detail"></small></div>
-    <button id="disconnect" type="button">Disconnect</button>
+  <main aria-labelledby="title" aria-describedby="detail">
+    <span class="session-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none">
+        <rect x="3.75" y="4.75" width="16.5" height="11.5" rx="2.25"></rect>
+        <path d="M8.5 20h7M12 16.5V20"></path>
+      </svg>
+    </span>
+    <div class="copy">
+      <strong id="title">Remote control active</strong>
+      <small id="detail"></small>
+    </div>
+    <button id="disconnect" type="button">
+      <span id="disconnect-label">Disconnect</span>
+    </button>
   </main>
   <script src="remote-desktop-indicator.js"></script>
 </body>
