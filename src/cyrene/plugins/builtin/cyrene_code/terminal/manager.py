@@ -31,6 +31,12 @@ import pyte
 
 from cyrene.localization import localized
 
+from .agent_status import (
+    adapter_by_id,
+    adapter_for_command,
+    command_title,
+    normalize_agent_event,
+)
 from .history import IncrementalPlainTextParser, osc133_commands, plain_terminal_text
 from .remote import build_managed_ssh_launch
 from .shell_integration import OscMetadataParser, prepare_shell_integration
@@ -223,11 +229,11 @@ _SESSION_UPSERT_SQL = """
     INSERT INTO terminal_sessions (
         id, project_id, title, cwd, shell, argv_json, created_at,
         updated_at, status, exit_code, pid, cols, rows, next_seq,
-        output_start_seq, order_index, pinned,
+        output_start_seq, order_index, pinned, title_locked,
         owner_chat_id, created_by, owner_tool_call_id, launch_mode, wake_id,
         last_input_actor, last_input_at, input_event_count,
         exit_reason, exit_at, recovery_reason, recovered_at, recovery_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
         project_id=excluded.project_id, title=excluded.title,
         cwd=excluded.cwd, shell=excluded.shell, argv_json=excluded.argv_json,
@@ -236,6 +242,7 @@ _SESSION_UPSERT_SQL = """
         rows=excluded.rows, next_seq=excluded.next_seq,
         output_start_seq=excluded.output_start_seq,
         order_index=excluded.order_index, pinned=excluded.pinned,
+        title_locked=excluded.title_locked,
         owner_chat_id=excluded.owner_chat_id, created_by=excluded.created_by,
         owner_tool_call_id=excluded.owner_tool_call_id,
         launch_mode=excluded.launch_mode, wake_id=excluded.wake_id,
@@ -254,7 +261,9 @@ _SESSION_METADATA_SQL = """
            command_state = ?, last_command_exit_code = ?,
            connection_kind = ?, ssh_target = ?, remote_cwd = ?,
            tmux_session = ?, connection_status = ?, disconnect_reason = ?,
-           reconnect_attempt = ?
+           reconnect_attempt = ?, command_title = ?, agent_id = ?, agent_label = ?,
+           agent_state = ?, agent_event = ?, agent_updated_at = ?,
+           agent_active = ?, agent_session_ended_at = ?, unread = ?
      WHERE id = ?
 """
 
@@ -1428,6 +1437,7 @@ class TerminalSession:
     output_start_seq: int = 0
     order_index: int = 0
     pinned: bool = False
+    title_locked: bool = False
     owner_chat_id: str = ""
     created_by: str = "user"
     owner_tool_call_id: str = ""
@@ -1459,6 +1469,8 @@ class TerminalSession:
     integration_level: str = "none"
     command_state: str = ""
     last_command_exit_code: int | None = None
+    command_title: str = ""
+    command_capture_start_seq: int | None = None
     connection_kind: str = "local"
     ssh_target: str = ""
     remote_cwd: str = ""
@@ -1483,18 +1495,50 @@ class TerminalSession:
     recovery_reason: str = ""
     recovered_at: str = ""
     recovery_count: int = 0
+    agent_id: str = ""
+    agent_label: str = ""
+    agent_state: str = ""
+    agent_event: str = ""
+    agent_updated_at: str = ""
+    agent_active: bool = False
+    agent_session_ended_at: str = ""
+    agent_command_start_seq: int | None = None
+    unread: bool = False
 
     def public(self) -> dict[str, Any]:
         oldest_seq = self.output_start_seq
-        display_title = (
-            self.shell_title
-            if self.shell_title and _DEFAULT_TITLE_RE.fullmatch(self.title.strip())
-            else self.title
-        )
+        shell_title = self.shell_title.strip()
+        cwd_values = {
+            str(self.cwd or "").strip(), str(self.remote_cwd or "").strip()
+        }
+        fallback_cwd = str(self.remote_cwd or self.cwd or "").rstrip("/\\")
+        cwd_title = fallback_cwd.replace("\\", "/").rsplit("/", 1)[-1]
+        display_title = self.title
+        if not self.title_locked:
+            if self.agent_active and self.agent_label:
+                display_title = self.agent_label
+            elif self.command_title:
+                display_title = self.command_title
+            elif shell_title and shell_title not in cwd_values:
+                display_title = shell_title
+            elif cwd_title:
+                display_title = cwd_title
+        agent = None
+        if self.agent_id:
+            agent = {
+                "id": self.agent_id,
+                "label": self.agent_label or self.agent_id,
+                "state": self.agent_state or "idle",
+                "event": self.agent_event,
+                "updatedAt": self.agent_updated_at,
+                "active": self.agent_active,
+                "sessionEndedAt": self.agent_session_ended_at,
+            }
         return {
             "id": self.id,
             "projectId": self.project_id,
             "title": self.title,
+            "titleLocked": self.title_locked,
             "displayTitle": display_title,
             "cwd": self.cwd,
             "cwdUri": self.cwd_uri,
@@ -1502,6 +1546,7 @@ class TerminalSession:
             "integrationLevel": self.integration_level,
             "commandState": self.command_state,
             "lastCommandExitCode": self.last_command_exit_code,
+            "commandTitle": self.command_title,
             "connectionKind": self.connection_kind,
             "sshTarget": self.ssh_target,
             "remoteCwd": self.remote_cwd,
@@ -1535,6 +1580,15 @@ class TerminalSession:
             "recoveryReason": self.recovery_reason,
             "recoveredAt": self.recovered_at,
             "recoveryCount": self.recovery_count,
+            "agent": agent,
+            "agentId": self.agent_id,
+            "agentLabel": self.agent_label,
+            "agentState": self.agent_state,
+            "agentEvent": self.agent_event,
+            "agentUpdatedAt": self.agent_updated_at,
+            "agentActive": self.agent_active,
+            "agentSessionEndedAt": self.agent_session_ended_at,
+            "unread": self.unread,
         }
 
 
@@ -1582,111 +1636,7 @@ class TerminalManager:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA busy_timeout=5000")
-        self._db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS terminal_sessions (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                shell TEXT NOT NULL,
-                argv_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                exit_code INTEGER,
-                pid INTEGER,
-                cols INTEGER NOT NULL,
-                rows INTEGER NOT NULL,
-                next_seq INTEGER NOT NULL DEFAULT 0,
-                output_start_seq INTEGER NOT NULL DEFAULT 0,
-                order_index INTEGER NOT NULL DEFAULT 0,
-                pinned INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS terminal_projects (
-                project_id TEXT PRIMARY KEY,
-                active_terminal_id TEXT,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS terminal_wakes (
-                wake_id TEXT PRIMARY KEY,
-                terminal_id TEXT NOT NULL UNIQUE,
-                project_id TEXT NOT NULL,
-                chat_id TEXT NOT NULL,
-                note TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL,
-                exit_status TEXT NOT NULL DEFAULT '',
-                exit_code INTEGER,
-                final_screen TEXT NOT NULL DEFAULT '',
-                prompt TEXT NOT NULL DEFAULT '',
-                lease_token TEXT NOT NULL DEFAULT '',
-                lease_until REAL NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                ready_at TEXT NOT NULL DEFAULT '',
-                delivered_at TEXT NOT NULL DEFAULT '',
-                cancelled_at TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS terminal_input_events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                terminal_id TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                input_kind TEXT NOT NULL,
-                byte_count INTEGER NOT NULL,
-                accepted INTEGER NOT NULL,
-                reason TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_input_events_terminal
-                ON terminal_input_events(terminal_id, event_id);
-            CREATE TABLE IF NOT EXISTS terminal_output_events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                terminal_id TEXT NOT NULL,
-                start_seq INTEGER NOT NULL,
-                end_seq INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_output_events_terminal
-                ON terminal_output_events(terminal_id, start_seq);
-            CREATE TABLE IF NOT EXISTS terminal_text_chunks (
-                chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                terminal_id TEXT NOT NULL,
-                line_number INTEGER NOT NULL,
-                start_seq INTEGER NOT NULL,
-                end_seq INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                search_text TEXT NOT NULL,
-                complete INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_text_chunks_terminal
-                ON terminal_text_chunks(terminal_id, start_seq);
-            CREATE TABLE IF NOT EXISTS terminal_commands (
-                terminal_id TEXT NOT NULL,
-                command_id TEXT NOT NULL,
-                command_start_seq INTEGER NOT NULL,
-                command_text TEXT NOT NULL,
-                output_start_seq INTEGER NOT NULL,
-                output_end_seq INTEGER NOT NULL,
-                exit_code INTEGER,
-                started_at TEXT NOT NULL DEFAULT '',
-                finished_at TEXT NOT NULL DEFAULT '',
-                running INTEGER NOT NULL DEFAULT 1,
-                PRIMARY KEY (terminal_id, command_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_terminal_commands_terminal
-                ON terminal_commands(terminal_id, output_start_seq);
-            CREATE TABLE IF NOT EXISTS terminal_index_state (
-                terminal_id TEXT PRIMARY KEY,
-                indexed_next_seq INTEGER NOT NULL DEFAULT 0,
-                command_capture_start_seq INTEGER,
-                command_capture BLOB NOT NULL DEFAULT X'',
-                running_output_start_seq INTEGER,
-                running_command_text TEXT NOT NULL DEFAULT '',
-                text_state_json TEXT NOT NULL DEFAULT ''
-            );
-            """
-        )
+        self._db.executescript(_TERMINAL_SCHEMA)
         text_columns = {
             str(row[1])
             for row in self._db.execute("PRAGMA table_info(terminal_text_chunks)")
@@ -1726,6 +1676,9 @@ class TerminalManager:
             self._db.execute("DELETE FROM terminal_commands")
             self._db.execute("DELETE FROM terminal_index_state")
         self._ensure_column("terminal_sessions", "owner_chat_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(
+            "terminal_sessions", "title_locked", "INTEGER NOT NULL DEFAULT 0"
+        )
         self._ensure_column("terminal_sessions", "created_by", "TEXT NOT NULL DEFAULT 'user'")
         self._ensure_column("terminal_sessions", "owner_tool_call_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("terminal_sessions", "launch_mode", "TEXT NOT NULL DEFAULT 'interactive'")
@@ -1746,6 +1699,9 @@ class TerminalManager:
         self._ensure_column("terminal_sessions", "command_state", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column("terminal_sessions", "last_command_exit_code", "INTEGER")
         self._ensure_column(
+            "terminal_sessions", "command_title", "TEXT NOT NULL DEFAULT ''"
+        )
+        self._ensure_column(
             "terminal_sessions", "connection_kind", "TEXT NOT NULL DEFAULT 'local'"
         )
         self._ensure_column("terminal_sessions", "ssh_target", "TEXT NOT NULL DEFAULT ''")
@@ -1760,6 +1716,20 @@ class TerminalManager:
         self._ensure_column(
             "terminal_sessions", "reconnect_attempt", "INTEGER NOT NULL DEFAULT 0"
         )
+        self._ensure_column("terminal_sessions", "agent_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "agent_label", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "agent_state", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("terminal_sessions", "agent_event", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(
+            "terminal_sessions", "agent_updated_at", "TEXT NOT NULL DEFAULT ''"
+        )
+        self._ensure_column(
+            "terminal_sessions", "agent_active", "INTEGER NOT NULL DEFAULT 0"
+        )
+        self._ensure_column(
+            "terminal_sessions", "agent_session_ended_at", "TEXT NOT NULL DEFAULT ''"
+        )
+        self._ensure_column("terminal_sessions", "unread", "INTEGER NOT NULL DEFAULT 0")
         self._db.commit()
         self._persistence_writer = _TerminalPersistenceWriter(
             self.state_dir, output_limit=self.output_limit
@@ -1781,8 +1751,6 @@ class TerminalManager:
         return self.state_dir / "scrollback" / terminal_id
 
     def _load_sessions(self) -> None:
-        import json
-
         assert self._db is not None
         for row in self._db.execute("SELECT * FROM terminal_sessions"):
             stored_status = str(row["status"])
@@ -1802,55 +1770,12 @@ class TerminalManager:
             status = stored_status
             if stored_status in {"starting", "running"}:
                 status = "exited"
-            session = TerminalSession(
-                id=str(row["id"]),
-                project_id=str(row["project_id"]),
-                title=str(row["title"]),
-                cwd=str(row["cwd"]),
-                shell=str(row["shell"]),
-                argv=list(json.loads(str(row["argv_json"]))),
-                created_at=str(row["created_at"]),
-                updated_at=str(row["updated_at"]),
+            session = self._session_from_row(
+                row,
                 status=status,
-                exit_code=row["exit_code"],
-                pid=None,
-                cols=int(row["cols"]),
-                rows=int(row["rows"]),
-                next_seq=int(row["next_seq"]),
-                output_start_seq=int(row["output_start_seq"]),
-                order_index=int(row["order_index"]),
-                pinned=bool(row["pinned"]),
-                owner_chat_id=str(row["owner_chat_id"] or ""),
-                created_by=str(row["created_by"] or "user"),
-                owner_tool_call_id=str(row["owner_tool_call_id"] or ""),
                 launch_mode=launch_mode,
-                wake_id=str(row["wake_id"] or ""),
-                last_actor=str(row["last_input_actor"] or ""),
-                last_input_at=str(row["last_input_at"] or ""),
-                input_event_count=int(row["input_event_count"] or 0),
                 recovery_pending=recovery_pending,
-                exit_reason=stored_exit_reason,
-                exit_at=str(row["exit_at"] or ""),
-                recovery_reason=str(row["recovery_reason"] or ""),
-                recovered_at=str(row["recovered_at"] or ""),
-                recovery_count=int(row["recovery_count"] or 0),
-                cwd_uri=str(row["cwd_uri"] or ""),
-                shell_title=str(row["shell_title"] or ""),
-                integration_level=str(row["integration_level"] or "none"),
-                command_state=str(row["command_state"] or ""),
-                last_command_exit_code=row["last_command_exit_code"],
-                connection_kind=str(row["connection_kind"] or "local"),
-                ssh_target=str(row["ssh_target"] or ""),
-                remote_cwd=str(row["remote_cwd"] or ""),
-                tmux_session=str(row["tmux_session"] or ""),
-                connection_status=str(row["connection_status"] or "local"),
-                disconnect_reason=str(row["disconnect_reason"] or ""),
-                reconnect_attempt=int(row["reconnect_attempt"] or 0),
-                remote_connected=(
-                    str(row["connection_kind"] or "local") == "ssh"
-                    and str(row["connection_status"] or "")
-                    in {"connected", "reconnecting"}
-                ),
+                stored_exit_reason=stored_exit_reason,
             )
             for event_row in self._db.execute(
                 """SELECT event_id, actor, input_kind, byte_count, accepted,
@@ -1873,6 +1798,59 @@ class TerminalManager:
             if status != row["status"] or row["pid"] is not None:
                 self._persist_session(session)
         self._repair_duplicate_titles()
+
+    def _session_from_row(
+        self,
+        row: sqlite3.Row,
+        *,
+        status: str,
+        launch_mode: str,
+        recovery_pending: bool,
+        stored_exit_reason: str,
+    ) -> TerminalSession:
+        return TerminalSession(
+            id=str(row["id"]), project_id=str(row["project_id"]),
+            title=str(row["title"]), cwd=str(row["cwd"]), shell=str(row["shell"]),
+            argv=list(json.loads(str(row["argv_json"]))), created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]), status=status, exit_code=row["exit_code"], pid=None,
+            cols=int(row["cols"]), rows=int(row["rows"]), next_seq=int(row["next_seq"]),
+            output_start_seq=int(row["output_start_seq"]), order_index=int(row["order_index"]),
+            pinned=bool(row["pinned"]),
+            title_locked=bool(row["title_locked"]) or not bool(
+                _DEFAULT_TITLE_RE.fullmatch(str(row["title"] or "").strip())
+            ),
+            owner_chat_id=str(row["owner_chat_id"] or ""),
+            created_by=str(row["created_by"] or "user"),
+            owner_tool_call_id=str(row["owner_tool_call_id"] or ""), launch_mode=launch_mode,
+            wake_id=str(row["wake_id"] or ""), last_actor=str(row["last_input_actor"] or ""),
+            last_input_at=str(row["last_input_at"] or ""),
+            input_event_count=int(row["input_event_count"] or 0),
+            recovery_pending=recovery_pending, exit_reason=stored_exit_reason,
+            exit_at=str(row["exit_at"] or ""), recovery_reason=str(row["recovery_reason"] or ""),
+            recovered_at=str(row["recovered_at"] or ""),
+            recovery_count=int(row["recovery_count"] or 0), cwd_uri=str(row["cwd_uri"] or ""),
+            shell_title=str(row["shell_title"] or ""),
+            integration_level=str(row["integration_level"] or "none"),
+            command_state=str(row["command_state"] or ""),
+            last_command_exit_code=row["last_command_exit_code"],
+            command_title=str(row["command_title"] or ""),
+            connection_kind=str(row["connection_kind"] or "local"),
+            ssh_target=str(row["ssh_target"] or ""), remote_cwd=str(row["remote_cwd"] or ""),
+            tmux_session=str(row["tmux_session"] or ""),
+            connection_status=str(row["connection_status"] or "local"),
+            disconnect_reason=str(row["disconnect_reason"] or ""),
+            reconnect_attempt=int(row["reconnect_attempt"] or 0),
+            agent_id=str(row["agent_id"] or ""), agent_label=str(row["agent_label"] or ""),
+            agent_state=str(row["agent_state"] or ""), agent_event=str(row["agent_event"] or ""),
+            agent_updated_at=str(row["agent_updated_at"] or ""),
+            agent_active=bool(row["agent_active"]) and not recovery_pending,
+            agent_session_ended_at=str(row["agent_session_ended_at"] or "") or (
+                self.started_at if recovery_pending and bool(row["agent_active"]) else ""
+            ),
+            unread=bool(row["unread"]),
+            remote_connected=str(row["connection_kind"] or "local") == "ssh"
+            and str(row["connection_status"] or "") in {"connected", "reconnecting"},
+        )
 
     @staticmethod
     def _title_key(title: str) -> str:
@@ -2007,6 +1985,7 @@ class TerminalManager:
             session.updated_at, session.status, session.exit_code, session.pid,
             session.cols, session.rows, session.next_seq,
             session.output_start_seq, session.order_index, int(session.pinned),
+            int(session.title_locked),
             session.owner_chat_id, session.created_by, session.owner_tool_call_id,
             session.launch_mode, session.wake_id,
             session.last_actor, session.last_input_at, session.input_event_count,
@@ -2029,6 +2008,15 @@ class TerminalManager:
             session.connection_status,
             session.disconnect_reason,
             session.reconnect_attempt,
+            session.command_title,
+            session.agent_id,
+            session.agent_label,
+            session.agent_state,
+            session.agent_event,
+            session.agent_updated_at,
+            int(session.agent_active),
+            session.agent_session_ended_at,
+            int(session.unread),
             session.id,
         )
 
@@ -2461,8 +2449,7 @@ class TerminalManager:
                 inherited_cwd = active.cwd if active is not None else ""
                 resolved_cwd = self._resolve_cwd(project_id, inherited_cwd)
             project_sessions = [
-                current for current in self._sessions.values()
-                if current.project_id == project_id
+                current for current in self._sessions.values() if current.project_id == project_id
             ]
             requested_title = str(title or "").strip()[:60]
             if requested_title and any(
@@ -2487,6 +2474,7 @@ class TerminalManager:
                 cols=max(20, min(400, int(cols or 100))),
                 rows=max(5, min(200, int(rows or 30))),
                 order_index=next_order_index,
+                title_locked=bool(requested_title),
                 owner_chat_id=str(owner_chat_id or "").strip(),
                 created_by=str(created_by or "user").strip() or "user",
                 owner_tool_call_id=str(owner_tool_call_id or "").strip(),
@@ -2588,10 +2576,13 @@ class TerminalManager:
                 for metadata in session.osc_parser.feed(
                     data, start_seq=session.next_seq - len(data)
                 ):
-                    changed = self._apply_osc_metadata(session, metadata) or changed
+                    changed = self._apply_terminal_metadata(session, metadata) or changed
                 if changed:
                     self._persist_session(session)
                     self._publish_state(session, reason="metadata")
+                    self._publish_list_change(
+                        session.project_id, "metadata", session.id
+                    )
             self._persistence_writer.submit_screen(
                 session.id, data, cols=session.cols, rows=session.rows,
                 start_seq=session.next_seq - len(data), next_seq=session.next_seq,
@@ -2623,11 +2614,12 @@ class TerminalManager:
             return
         changed = False
         for metadata in metadata_events:
-            changed = self._apply_osc_metadata(session, metadata) or changed
+            changed = self._apply_terminal_metadata(session, metadata) or changed
         if changed:
             session.updated_at = _now_iso()
             self._persist_session(session)
             self._publish_state(session, reason="metadata")
+            self._publish_list_change(session.project_id, "metadata", session.id)
 
     def _drain_screen_now(self, session: TerminalSession) -> None:
         if self._persistence_writer is not None:
@@ -3224,6 +3216,13 @@ class TerminalManager:
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
         os.set_blocking(master_fd, False)
         env = _terminal_environment()
+        env["CYRENE_TERMINAL_ID"] = session.id
+        if self.state_dir is not None:
+            env["CYRENE_TERMINAL_STATE_DIR"] = str(self.state_dir)
+        env["CYRENE_AGENT_HOOK_MODULE"] = (
+            "cyrene.plugins.builtin.cyrene_code.terminal.agent_reporter"
+        )
+        env["CYRENE_AGENT_HOOK_PYTHON"] = sys.executable
         if session.connection_kind == "ssh":
             session.connection_event.clear()
             launch = build_managed_ssh_launch(
@@ -3297,6 +3296,13 @@ class TerminalManager:
             raise RuntimeError("pywinpty is required for terminal support on Windows") from exc
 
         env = _terminal_environment()
+        env["CYRENE_TERMINAL_ID"] = session.id
+        if self.state_dir is not None:
+            env["CYRENE_TERMINAL_STATE_DIR"] = str(self.state_dir)
+        env["CYRENE_AGENT_HOOK_MODULE"] = (
+            "cyrene.plugins.builtin.cyrene_code.terminal.agent_reporter"
+        )
+        env["CYRENE_AGENT_HOOK_PYTHON"] = sys.executable
         if session.connection_kind == "ssh":
             session.connection_event.clear()
             launch = build_managed_ssh_launch(
@@ -3499,6 +3505,17 @@ class TerminalManager:
         else:
             session.exit_reason = "process_exit"
         session.updated_at = now
+        if session.agent_active:
+            session.agent_active = False
+            session.agent_session_ended_at = now
+            session.agent_command_start_seq = None
+        if session.agent_id and session.agent_state in {"working", "waiting", "idle"}:
+            self._set_agent_state(
+                session,
+                state=("completed" if exit_code == 0 else "failed"),
+                event="terminal_exited",
+                active=False,
+            )
         session.connection_event.set()
         self._persist_session(session)
         if session.status != "starting":
@@ -3573,6 +3590,7 @@ class TerminalManager:
         start = session.next_seq
         end = start + len(data)
         session.next_seq = end
+        session.unread = True
         session.output.append(OutputChunk(start=start, end=end, data=data))
         session.output_bytes += len(data)
         while session.output and session.output_bytes > self.output_limit:
@@ -3614,7 +3632,7 @@ class TerminalManager:
         if self._persistence_writer is None:
             for metadata in session.osc_parser.feed(data, start_seq=start):
                 metadata_changed = (
-                    self._apply_osc_metadata(session, metadata) or metadata_changed
+                    self._apply_terminal_metadata(session, metadata) or metadata_changed
                 )
         event = {
             "type": "output",
@@ -3626,6 +3644,7 @@ class TerminalManager:
         self._publish(session, event)
         if metadata_changed:
             self._publish_state(session, reason="metadata")
+            self._publish_list_change(session.project_id, "metadata", session.id)
         self._queue_screen_data(session, data)
 
     @staticmethod
@@ -3729,6 +3748,77 @@ class TerminalManager:
                 changed = True
         return changed
 
+    @staticmethod
+    def _recent_output_bytes(
+        session: TerminalSession, start_seq: int, end_seq: int,
+    ) -> bytes:
+        parts: list[bytes] = []
+        for chunk in session.output:
+            if chunk.end <= start_seq or chunk.start >= end_seq:
+                continue
+            left = max(start_seq, chunk.start) - chunk.start
+            right = min(end_seq, chunk.end) - chunk.start
+            parts.append(chunk.data[left:right])
+        return b"".join(parts)
+
+    def _apply_terminal_metadata(
+        self, session: TerminalSession, metadata: dict[str, Any],
+    ) -> bool:
+        """Apply OSC state plus live command and CLI-agent identity metadata."""
+        changed = self._apply_osc_metadata(session, metadata)
+        kind = str(metadata.get("kind") or "")
+        if kind == "command":
+            session.command_capture_start_seq = int(metadata.get("endSeq") or 0)
+            return changed
+        if kind == "output" and session.command_capture_start_seq is not None:
+            command_start = session.command_capture_start_seq
+            command_end = int(metadata.get("startSeq") or command_start)
+            raw = self._recent_output_bytes(session, command_start, command_end)
+            command = plain_terminal_text(raw).strip()
+            session.command_capture_start_seq = None
+            next_title = command_title(command)
+            if next_title and next_title != session.command_title:
+                session.command_title = next_title
+                changed = True
+            adapter = adapter_for_command(command)
+            if adapter is not None:
+                now = _now_iso()
+                before = (
+                    session.agent_id, session.agent_label, session.agent_state,
+                    session.agent_event, session.agent_active,
+                    session.agent_session_ended_at,
+                )
+                session.agent_id = adapter.id
+                session.agent_label = adapter.label
+                session.agent_state = "working"
+                session.agent_event = "command_started"
+                session.agent_active = True
+                session.agent_updated_at = now
+                session.agent_session_ended_at = ""
+                session.agent_command_start_seq = int(metadata.get("endSeq") or 0)
+                changed = changed or before != (
+                    session.agent_id, session.agent_label, session.agent_state,
+                    session.agent_event, session.agent_active,
+                    session.agent_session_ended_at,
+                )
+            return changed
+        if kind == "finished" and session.agent_command_start_seq is not None:
+            exit_code = metadata.get("exitCode")
+            now = _now_iso()
+            if exit_code == 0:
+                session.agent_state = "completed"
+            elif exit_code in {130, 143}:
+                session.agent_state = "interrupted"
+            else:
+                session.agent_state = "failed"
+            session.agent_event = "command_exited"
+            session.agent_updated_at = now
+            session.agent_active = False
+            session.agent_session_ended_at = now
+            session.agent_command_start_seq = None
+            return True
+        return changed
+
     def _publish_state(self, session: TerminalSession, *, reason: str = "") -> None:
         event = {"type": "state", "terminal": session.public()}
         if reason:
@@ -3763,6 +3853,72 @@ class TerminalManager:
             with contextlib.suppress(asyncio.QueueFull):
                 subscriber_queue.put_nowait(event)
 
+    def _set_agent_state(
+        self,
+        session: TerminalSession,
+        *,
+        state: str,
+        event: str,
+        active: bool | None = None,
+    ) -> None:
+        next_active = session.agent_active if active is None else bool(active)
+        changed = (
+            session.agent_state != state
+            or session.agent_event != event
+            or session.agent_active != next_active
+        )
+        if not changed:
+            return
+        session.agent_state = state
+        session.agent_event = event
+        session.agent_active = next_active
+        session.agent_updated_at = _now_iso()
+        if next_active:
+            session.agent_session_ended_at = ""
+        elif not session.agent_session_ended_at:
+            session.agent_session_ended_at = session.agent_updated_at
+        session.updated_at = session.agent_updated_at
+        session.unread = True
+        self._persist_session(session)
+        self._publish_state(session, reason="agent")
+        self._publish_list_change(session.project_id, "agent", session.id)
+
+    def agent_event(
+        self,
+        terminal_id: str,
+        agent_id: str,
+        event: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session = self.get(terminal_id)
+        adapter = adapter_by_id(agent_id)
+        if adapter is None:
+            # Some hooks identify only the client type in their JSON payload.
+            body = dict(payload or {})
+            adapter = adapter_by_id(str(body.get("client_type") or ""))
+        if adapter is None:
+            raise ValueError("unsupported coding agent")
+        state, canonical_event = normalize_agent_event(adapter.id, event, payload)
+        session.agent_id = adapter.id
+        session.agent_label = adapter.label
+        session_ended = canonical_event == "session_end"
+        self._set_agent_state(
+            session,
+            state=state,
+            event=canonical_event,
+            active=not session_ended,
+        )
+        return session.public()
+
+    def mark_read(self, terminal_id: str) -> dict[str, Any]:
+        session = self.get(terminal_id)
+        if session.unread:
+            session.unread = False
+            self._persist_session(session)
+            self._publish_state(session, reason="read")
+            self._publish_list_change(session.project_id, "read", session.id)
+        return session.public()
+
     def list(
         self, project_id: str = "", *, owner_chat_id: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -3795,6 +3951,7 @@ class TerminalManager:
         ):
             raise ValueError("terminal title already exists in this project")
         session.title = normalized
+        session.title_locked = True
         session.updated_at = _now_iso()
         self._persist_session(session)
         self._publish_state(session)
@@ -3961,6 +4118,7 @@ class TerminalManager:
             session = self.get(normalized)
             if session.project_id != project_id:
                 raise LookupError("terminal not found")
+            self.mark_read(normalized)
         if self._db is not None:
             self._db.execute(
                 """INSERT INTO terminal_projects (project_id, active_terminal_id, updated_at)
@@ -4215,3 +4373,106 @@ _MANAGER = TerminalManager()
 
 def get_terminal_manager() -> TerminalManager:
     return _MANAGER
+_TERMINAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS terminal_sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    shell TEXT NOT NULL,
+    argv_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code INTEGER,
+    pid INTEGER,
+    cols INTEGER NOT NULL,
+    rows INTEGER NOT NULL,
+    next_seq INTEGER NOT NULL DEFAULT 0,
+    output_start_seq INTEGER NOT NULL DEFAULT 0,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    pinned INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS terminal_projects (
+    project_id TEXT PRIMARY KEY,
+    active_terminal_id TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS terminal_wakes (
+    wake_id TEXT PRIMARY KEY,
+    terminal_id TEXT NOT NULL UNIQUE,
+    project_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    exit_status TEXT NOT NULL DEFAULT '',
+    exit_code INTEGER,
+    final_screen TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL DEFAULT '',
+    lease_token TEXT NOT NULL DEFAULT '',
+    lease_until REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    ready_at TEXT NOT NULL DEFAULT '',
+    delivered_at TEXT NOT NULL DEFAULT '',
+    cancelled_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS terminal_input_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terminal_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    input_kind TEXT NOT NULL,
+    byte_count INTEGER NOT NULL,
+    accepted INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_input_events_terminal
+    ON terminal_input_events(terminal_id, event_id);
+CREATE TABLE IF NOT EXISTS terminal_output_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terminal_id TEXT NOT NULL,
+    start_seq INTEGER NOT NULL,
+    end_seq INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_output_events_terminal
+    ON terminal_output_events(terminal_id, start_seq);
+CREATE TABLE IF NOT EXISTS terminal_text_chunks (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    terminal_id TEXT NOT NULL,
+    line_number INTEGER NOT NULL,
+    start_seq INTEGER NOT NULL,
+    end_seq INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    search_text TEXT NOT NULL,
+    complete INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_text_chunks_terminal
+    ON terminal_text_chunks(terminal_id, start_seq);
+CREATE TABLE IF NOT EXISTS terminal_commands (
+    terminal_id TEXT NOT NULL,
+    command_id TEXT NOT NULL,
+    command_start_seq INTEGER NOT NULL,
+    command_text TEXT NOT NULL,
+    output_start_seq INTEGER NOT NULL,
+    output_end_seq INTEGER NOT NULL,
+    exit_code INTEGER,
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT '',
+    running INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (terminal_id, command_id)
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_commands_terminal
+    ON terminal_commands(terminal_id, output_start_seq);
+CREATE TABLE IF NOT EXISTS terminal_index_state (
+    terminal_id TEXT PRIMARY KEY,
+    indexed_next_seq INTEGER NOT NULL DEFAULT 0,
+    command_capture_start_seq INTEGER,
+    command_capture BLOB NOT NULL DEFAULT X'',
+    running_output_start_seq INTEGER,
+    running_command_text TEXT NOT NULL DEFAULT '',
+    text_state_json TEXT NOT NULL DEFAULT ''
+);
+"""

@@ -141,24 +141,27 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
             {step === "llm" ? (
               <div className="wb-ob-section">
                 <h2>{T("welcome.setup.llm.title", null, "Connect your model")}</h2>
-                <p className="wb-ob-sub">{T("welcome.setup.llm.subtitle", null, "Choose a supported service, then enter its API key and model identifier.")}</p>
+                <p className="wb-ob-sub">{T("welcome.setup.llm.subtitle", null, "Choose a service or enter a custom OpenAI-compatible endpoint, then provide its credentials and model identifier.")}</p>
                 <div className="wb-ob-form-grid">
                     <label className="wb-ob-field">
-                      <span className="wb-ob-label">{T("welcome.setup.llm.endpoint", null, "Endpoint")}<small>{T("welcome.setup.llm.endpointHint", null, "Choose a model service supported by Cyrene")}</small></span>
-                      <select className="wb-ob-input mono" data-cyrene-node-id="onboarding_base_url" value={baseUrl} disabled={!endpointOptions.length} onChange={function (e) {
+                      <span className="wb-ob-label">{T("welcome.setup.llm.endpoint", null, "Endpoint")}<small>{T("welcome.setup.llm.endpointHint", null, "Choose a preset or enter a custom OpenAI-compatible endpoint")}</small></span>
+                      <input className="wb-ob-input mono" data-cyrene-node-id="onboarding_base_url" list="onboarding_endpoint_options" value={baseUrl} placeholder="https://api.example.com/v1" autoComplete="url" onChange={function (e) {
                         var nextUrl = e.target.value;
-                        var selected = endpointOptions.find(function (item) { return item.url === nextUrl; }) || {};
+                        var normalizedUrl = String(nextUrl || "").trim().replace(/\/+$/, "");
+                        var selected = endpointOptions.find(function (item) {
+                          return String(item.url || "").trim().replace(/\/+$/, "") === normalizedUrl;
+                        }) || {};
                         setBaseUrl(nextUrl);
                         setProviderId(selected.providerId || "");
-                        setModel(selected.defaultModel || "");
+                        if (selected.providerId) setModel(selected.defaultModel || "");
                         setError("");
                         setNotice("");
-                      }}>
-                        {!endpointOptions.length ? <option value="">{T("welcome.setup.llm.endpointUnavailable", null, "No supported endpoints available")}</option> : null}
+                      }} />
+                      <datalist id="onboarding_endpoint_options">
                         {endpointOptions.map(function (item) {
-                          return <option key={item.providerId} value={item.url}>{item.name + " · " + item.url}</option>;
+                          return <option key={item.providerId} value={item.url} label={item.name} />;
                         })}
-                      </select>
+                      </datalist>
                     </label>
                     <label className="wb-ob-field">
                       <span className="wb-ob-label">{T("welcome.setup.llm.apiKey", null, "API key")}<small>{T("welcome.setup.llm.apiKeyHint", null, "Stored locally, never uploaded")}</small></span>
@@ -170,7 +173,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
                     </label>
                 </div>
                 <div className="wb-ob-actions">
-                  <button type="button" className="wb-btn primary" disabled={busy || !model.trim() || !baseUrl.trim() || !providerId} onClick={saveLlm}>
+                  <button type="button" className="wb-btn primary" disabled={busy || !model.trim() || !baseUrl.trim()} onClick={saveLlm}>
                     {busy ? T("welcome.setup.llm.testing", null, "Testing...") : T("welcome.setup.llm.save", null, "Save & test")}
                   </button>
                 </div>

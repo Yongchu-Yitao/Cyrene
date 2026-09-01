@@ -59,6 +59,20 @@ def test_schedule_and_library_async_results_are_selection_scoped():
     assert "loadMoreSeq.current += 1;" in library
 
 
+def test_context_inspector_background_refresh_preserves_visible_content():
+    source = _source(FRONTEND / "features" / "chat" / "context-indicator.jsx")
+    details_hook = source.split("function useWbcContextDetails(", 1)[1].split(
+        "function WbcComposerContextIndicator(", 1
+    )[0]
+
+    assert 'var [snapshot, setSnapshot] = useWbcState({ chatId: "", data: null });' in details_hook
+    assert "var hasCurrentDetails = !!(" in details_hook
+    assert "if (!hasCurrentDetails) setLoading(true);" in details_hook
+    assert "&& !hasCurrentDetails) setErrorChatId(chatId);" in details_hook
+    assert "loading: loading || (!!open && !currentDetails && !currentError)" in details_hook
+    assert details_hook.count("setLoading(true)") == 1
+
+
 def test_schedule_frontend_persists_local_iana_timezone():
     source = _source(FRONTEND / "workbench-schedule.jsx")
 
@@ -119,11 +133,13 @@ def test_calendar_expansion_uses_the_editable_plugin_timezone_rule_across_dst():
     "filename",
     [
         "settings-overlay.jsx",
+        "settings-model-configuration.jsx",
         "workbench-schedule.jsx",
         "workbench-library.jsx",
         "workbench.jsx",
         "workbench-chat.jsx",
         "workbench-quick-chat.jsx",
+        "features/chat/context-indicator.jsx",
     ],
 )
 @pytest.mark.skipif(

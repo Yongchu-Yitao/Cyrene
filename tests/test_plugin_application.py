@@ -17,6 +17,7 @@ from cyrene.core.plugin import (
     PluginContext,
     PluginPack,
     PluginRegistry,
+    PluginRegistryError,
     PluginRuntime,
 )
 from cyrene.plugins import (
@@ -177,6 +178,128 @@ def test_required_application_setup_failure_aborts_attachment(tmp_path):
     ):
         host.attach(APIRouter())
     assert host.service("composer_context") is None
+
+
+def test_optional_workbench_validation_failure_isolated_during_attachment(tmp_path):
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(
+        PluginPack(
+            id="bad-metadata",
+            description="bad metadata",
+            plugins=(),
+            metadata={"frontend_views": "not-an-array"},
+        ),
+        source="test",
+    )
+    registry.register_pack(
+        PluginPack(
+            id="healthy-application",
+            description="healthy application",
+            plugins=(),
+            application_setup=lambda context: context.provide("healthy", True),
+        ),
+        source="test",
+    )
+    host = _host(tmp_path, registry)
+
+    host.attach(APIRouter())
+
+    assert "frontend_views must be an array" in host.setup_failures["bad-metadata"]
+    assert host.attached_packs == ("healthy-application",)
+    assert host.service("healthy") is True
+
+
+def test_system_exit_isolated_across_application_plugin_boundaries(tmp_path):
+    events: list[str] = []
+
+    def exit_setup(_context) -> None:
+        raise SystemExit("setup exited")
+
+    def exit_lifecycle(context) -> None:
+        context.on_startup(lambda: (_ for _ in ()).throw(SystemExit("startup exited")))
+        context.on_shutdown(lambda: events.append("rollback"))
+
+    def healthy_setup(context) -> None:
+        context.on_startup(lambda: events.append("healthy-started"))
+        context.on_shutdown(lambda: events.append("healthy-stopped"))
+        context.provide_frontend_method(
+            "exit",
+            lambda _arguments, _metadata: (_ for _ in ()).throw(
+                SystemExit("frontend exited")
+            ),
+        )
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_pack(
+        PluginPack("a-setup-exit", "setup exit", (), application_setup=exit_setup),
+        source="test",
+    )
+    registry.register_pack(
+        PluginPack("b-startup-exit", "startup exit", (), application_setup=exit_lifecycle),
+        source="test",
+    )
+    registry.register_pack(
+        PluginPack("c-healthy", "healthy", (), application_setup=healthy_setup),
+        source="test",
+    )
+    host = _host(tmp_path, registry)
+    host.attach(APIRouter())
+
+    async def scenario() -> None:
+        await host.startup()
+        assert host.setup_failures == {"a-setup-exit": "setup exited"}
+        assert host.startup_failures == {"b-startup-exit": "startup exited"}
+        assert host.pack_running("c-healthy") is True
+        with pytest.raises(PluginRegistryError, match="Plugin frontend method failed"):
+            await host.call_frontend_method("c-healthy", "exit", {})
+        assert host.pack_running("c-healthy") is True
+        await host.shutdown()
+
+    asyncio.run(scenario())
+    assert events == ["rollback", "healthy-started", "healthy-stopped"]
+
+
+def test_system_exit_isolated_from_other_session_plugin_setups(tmp_path):
+    def exit_setup(_context) -> None:
+        raise SystemExit("session setup exited")
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            "MiniMax",
+            "test model",
+            {"type": "object", "properties": {}},
+            lambda _arguments, _context: {"content": "", "tool_calls": []},
+            kind="model",
+        ),
+        source="test",
+    )
+    registry.register_pack(
+        PluginPack("a-session-exit", "session exit", (), setup=exit_setup),
+        source="test",
+    )
+    registry.register_pack(
+        PluginPack(
+            "b-session-healthy",
+            "session healthy",
+            (),
+            setup=lambda context: context.provide("session_healthy", True),
+        ),
+        source="test",
+    )
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        tmp_path / "plugins",
+        registry=registry,
+    )
+    try:
+        assert session._plugin_setup_failures == {
+            "a-session-exit": "session setup exited"
+        }
+        assert session._plugin_services()["session_healthy"] is True
+    finally:
+        session.close()
 
 
 def test_application_contributions_follow_pack_activation_without_restart(tmp_path):

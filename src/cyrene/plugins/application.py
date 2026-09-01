@@ -17,6 +17,7 @@ from cyrene.core.plugin.activation import (
     PluginActivationState,
     set_active_plugin_activation_state,
 )
+from cyrene.core.plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from cyrene.core.plugin.extensions import ExtensionPoint, PluginScope
 from cyrene.core.plugin.customization import (
     PluginCustomizationState,
@@ -435,11 +436,16 @@ class PluginApplicationHost:
             raise PluginRegistryError(
                 f"Plugin frontend method is not registered: {normalized_method}"
             )
-        result = handler(
-            arguments,
-            {"pack_id": normalized_pack, "project_id": str(project_id or "")},
-        )
-        return await result if inspect.isawaitable(result) else result
+        try:
+            result = handler(
+                arguments,
+                {"pack_id": normalized_pack, "project_id": str(project_id or "")},
+            )
+            return await result if inspect.isawaitable(result) else result
+        except PLUGIN_BOUNDARY_ERRORS as exc:
+            raise PluginRegistryError(
+                f"Plugin frontend method failed: {normalized_pack}.{normalized_method}"
+            ) from exc
 
     @property
     def search_providers(self) -> dict[str, PluginSearchHandler]:
@@ -496,41 +502,41 @@ class PluginApplicationHost:
             raise RuntimeError("Plugin application host is already attached")
         self._attached = True
         for pack in self.registry.list_packs():
-            validate_workbench_contributions(pack)
-            if not pack.has_application_contributions:
-                continue
-            # Optional packs that are disabled at process composition time must
-            # remain completely inert.  Running application_setup here would
-            # still construct stores, managers, route closures, and other
-            # process state even though guards later hide the contribution.
-            # Enabling one of these packs is therefore an explicit restart
-            # boundary; the next composition attaches its application surface.
-            if not self._pack_enabled(pack.id):
-                continue
-            child_router = APIRouter()
-            inherited_services = dict(self.services)
-            services: dict[str, Any] = dict(inherited_services)
-            frontend_modules: list[str] = []
-            search_providers: dict[str, PluginSearchHandler] = {}
-            startup_handlers: list[PluginLifecycleHandler] = []
-            shutdown_handlers: list[PluginLifecycleHandler] = []
-            frontend_methods: dict[str, PluginFrontendHandler] = {}
-            context = PluginApplicationContext(
-                app=self.app,
-                router=child_router,
-                bot=self.bot,
-                db_path=self.db_path,
-                data_directory=self.data_directory,
-                plugin_directory=self.plugin_directory,
-                services=services,
-                frontend_modules=frontend_modules,
-                search_providers=search_providers,
-                startup_handlers=startup_handlers,
-                shutdown_handlers=shutdown_handlers,
-                frontend_methods=frontend_methods,
-                registry=self.registry,
-            )
             try:
+                validate_workbench_contributions(pack)
+                if not pack.has_application_contributions:
+                    continue
+                # Optional packs that are disabled at process composition time must
+                # remain completely inert. Running application_setup here would
+                # still construct stores, managers, route closures, and other
+                # process state even though guards later hide the contribution.
+                # Enabling one of these packs is therefore an explicit restart
+                # boundary; the next composition attaches its application surface.
+                if not self._pack_enabled(pack.id):
+                    continue
+                child_router = APIRouter()
+                inherited_services = dict(self.services)
+                services: dict[str, Any] = dict(inherited_services)
+                frontend_modules: list[str] = []
+                search_providers: dict[str, PluginSearchHandler] = {}
+                startup_handlers: list[PluginLifecycleHandler] = []
+                shutdown_handlers: list[PluginLifecycleHandler] = []
+                frontend_methods: dict[str, PluginFrontendHandler] = {}
+                context = PluginApplicationContext(
+                    app=self.app,
+                    router=child_router,
+                    bot=self.bot,
+                    db_path=self.db_path,
+                    data_directory=self.data_directory,
+                    plugin_directory=self.plugin_directory,
+                    services=services,
+                    frontend_modules=frontend_modules,
+                    search_providers=search_providers,
+                    startup_handlers=startup_handlers,
+                    shutdown_handlers=shutdown_handlers,
+                    frontend_methods=frontend_methods,
+                    registry=self.registry,
+                )
                 for setup in pack.application_setups:
                     setup(context)
                 service_collisions = {name for name, value in services.items() if name in inherited_services and value is not inherited_services[name]}
@@ -539,7 +545,7 @@ class PluginApplicationHost:
                     raise ValueError("application service collision: " + ", ".join(sorted(service_collisions)))
                 if search_collisions:
                     raise ValueError("search provider collision: " + ", ".join(sorted(search_collisions)))
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 self._setup_failures[pack.id] = str(exc)
                 logger.exception("Failed to attach Plugin application pack %s", pack.id)
                 if bool(pack.metadata.get("required")):
@@ -617,7 +623,7 @@ class PluginApplicationHost:
                     len(handlers),
                     (time.perf_counter() - stage_started) * 1000,
                 )
-        except Exception as exc:
+        except PLUGIN_BOUNDARY_ERRORS as exc:
             self._startup_failures[pack_id] = str(exc)
             logger.exception(
                 "Plugin startup pack failed pack=%s stage=%s "
@@ -630,7 +636,7 @@ class PluginApplicationHost:
             for handler in reversed(self._shutdown_handlers.get(pack_id, ())):
                 try:
                     await self._call_lifecycle(handler)
-                except Exception:
+                except PLUGIN_BOUNDARY_ERRORS:
                     logger.exception(
                         "Plugin application rollback failed for pack %s",
                         pack_id,
@@ -657,7 +663,7 @@ class PluginApplicationHost:
             for handler in reversed(self._shutdown_handlers.get(pack_id, ())):
                 try:
                     await self._call_lifecycle(handler)
-                except Exception:
+                except PLUGIN_BOUNDARY_ERRORS:
                     logger.exception(
                         "Plugin application shutdown failed for pack %s",
                         pack_id,

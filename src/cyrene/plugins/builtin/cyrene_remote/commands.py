@@ -1146,6 +1146,22 @@ class RemoteCommandExecutor:
     def set_remote_event_sender(self, sender: Any) -> None:
         self._remote_jobs.set_event_sender(sender)
 
+    async def execute_scoped_file(
+        self,
+        peer_device_id: str,
+        command: str,
+        scope_id: str,
+        root: Path,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._remote_files.execute_scoped(
+            peer_device_id,
+            command,
+            scope_id,
+            root,
+            payload,
+        )
+
     async def __call__(
         self,
         peer_device_id: str,
@@ -1183,6 +1199,7 @@ class RemoteCommandExecutor:
                     "workspace_files_v1": True,
                     "remote_jobs_v1": True,
                     "remote_authorization_v1": True,
+                    "remote_desktop_v1": application_plugin_service("remote_desktop") is not None,
                 },
             }
         if command == "projects.list":
@@ -1226,6 +1243,19 @@ class RemoteCommandExecutor:
         if command.startswith("harness."):
             return await self._harness_command(
                 peer_device_id, command, project_id, payload
+            )
+        if command.startswith("desktop."):
+            service = application_plugin_service("remote_desktop")
+            if service is None:
+                return {
+                    "ok": False,
+                    "code": "remote_desktop_plugin_unavailable",
+                    "error": "The Remote Desktop Plugin is disabled or unavailable.",
+                }
+            return await service.handle_remote_command(
+                peer_device_id,
+                command,
+                payload,
             )
         return {
             "ok": False,

@@ -102,6 +102,35 @@ read-only current-page preview without hiding the original PiP view.
 - The panel auto-reveals in the chat's right sidebar the moment the agent starts
   browsing, and a **Browser** tab lets you reopen it.
 
+## Page interaction model and current boundaries
+
+- `browser_snapshot` returns only visible, hit-testable elements in the current
+  viewport and assigns short-lived refs such as `e1` and `e2`. Take a fresh
+  snapshot after navigation, same-document navigation, scrolling, or substantial
+  layout changes instead of reusing stale refs.
+- Before an Electron click sends trusted Chromium mouse input, it resolves the
+  target again, checks whether the click point is obscured, and retries up to
+  three times when the target moves. It refuses to click a persistently unstable
+  target.
+- `browser_navigate` validates the initial HTTP(S) destination and blocks
+  loopback, private, link-local, cloud-metadata, and reserved networks. This is
+  not a complete browser network sandbox: subresources, script-driven
+  navigation, and every Electron redirect are not all governed by a per-request
+  IP policy. The browser remains intended for one local operator browsing
+  trusted public content.
+- Snapshot, ref targeting, and wait DOM projection primarily cover the current
+  top-level document. Iframes, cross-origin frames, shadow DOM, Canvas/WebGL, and
+  complex rich-text editors do not have one recursive semantic model; use a
+  screenshot or user takeover when the projected DOM is insufficient.
+- `browser_network_log` reads the page's Resource Performance entries. It reports
+  URL, initiator type, duration, and transfer size, not full DevTools request or
+  response headers, bodies, status codes, or WebSocket messages.
+- Navigation, clicking, typing, and optional Enter submission are normal browser
+  tool actions and do not automatically receive the human-only confirmation used
+  for file uploads. Callers must apply the user's request and permission policy
+  before purchases, publishing, deletion, account changes, or other high-impact
+  actions.
+
 ## Login takeover
 
 In Electron, the browser is already a visible embedded native view, so the user
@@ -181,4 +210,9 @@ changed source file; the snapshot is removed after at most 15 minutes.
 | `browser_upload_files` | Attach exact local files to an intercepted or referenced file input after single-use human approval. |
 | `browser_wait` | Wait for SPA URL/text/selector conditions after async rendering. |
 | `browser_network_log` | Return recent resource/fetch/XHR URLs visible to the page. |
+| `browser_tab_list` | List Electron browser tabs and their current state. |
+| `browser_tab_new` | Open a new tab when the user asks to preserve the current page. |
+| `browser_tab_select` | Select an existing browser tab. |
+| `browser_tab_close` | Close a specified or active browser tab. |
+| `browser_scroll` | Send trusted wheel input to the page or a nested scroll container. |
 | `browser_request_takeover` | Open a real window for the user to log in, pause, then resume authenticated. |

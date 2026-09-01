@@ -1,5 +1,5 @@
 import { workbenchFullPageConfig } from "./support.jsx"
-import { wbRecentSessionTabs, wbSessionActivitySnapshot, wbVisibleSessionTabs } from "../session/activity.jsx"
+import { wbRecentSessionTabs, wbSessionActivitySnapshot } from "../session/activity.jsx"
 
 var { useEffect } = React;
 
@@ -11,15 +11,24 @@ function workbenchSessionTabsPresentation(
   sessionActivityLive,
   dataState,
   activeSessionKey,
-  t
+  t,
+  workspaceTabState
 ) {
+  var workspaceItems = workspaceTabState && Array.isArray(workspaceTabState.items)
+    ? workspaceTabState.items : [];
+  var workspaceKeys = workspaceItems.map(function (item) {
+    return String(item.kind || "") + ":" + String(item.id || "");
+  });
   var candidates = wbRecentSessionTabs(
     store.projects,
     recentChatsByProject,
-    sessionKeys.recent,
+    workspaceKeys.concat(sessionKeys.recent.filter(function (key) {
+      return workspaceKeys.indexOf(String(key || "")) < 0;
+    })),
     sessionKeys.pinned,
     sessionKeys.hidden,
-    1000
+    1000,
+    workspaceItems
   ).map(function (item) {
     var runtime = item.kind === "chat" ? chatRuntimes[item.id] : null;
     var browserByChat = dataState.browserByChat || {};
@@ -47,8 +56,11 @@ function workbenchSessionTabsPresentation(
       });
     });
   });
-  var layout = wbVisibleSessionTabs(candidates, activeSessionKey, 3);
-  return { candidates: candidates, browserOwners: browserOwners, layout: layout };
+  return {
+    candidates: candidates,
+    browserOwners: browserOwners,
+    activeTabKey: String(workspaceTabState && workspaceTabState.activeKey || activeSessionKey || ""),
+  };
 }
 
 function useWorkbenchModulePresentation(
@@ -64,7 +76,8 @@ function useWorkbenchModulePresentation(
   sessionActivityLive,
   dataState,
   t,
-  enabledModules
+  enabledModules,
+  workspaceTabState
 ) {
   var knowledgeEnabled = !Array.isArray(enabledModules)
     || enabledModules.indexOf("knowledge") >= 0;
@@ -99,7 +112,7 @@ function useWorkbenchModulePresentation(
   var activeSessionKey = isChat && activeChatId ? "chat:" + activeChatId : "";
   var sessions = workbenchSessionTabsPresentation(
     store, recentChatsByProject, sessionKeys, chatRuntimes,
-    sessionActivityLive, dataState, activeSessionKey, t
+    sessionActivityLive, dataState, activeSessionKey, t, workspaceTabState
   );
   return {
     isKnowledge: isKnowledge,
@@ -117,10 +130,11 @@ function useWorkbenchModulePresentation(
     showSettingsPage: isSettings || mountedPages.settings,
     activeDestination: activeDestination,
     activeSessionKey: activeSessionKey,
+    activeTabKey: isChat ? sessions.activeTabKey : "",
     sessionTabCandidates: sessions.candidates,
     browserOwnerSessions: sessions.browserOwners,
-    recentSessionTabs: sessions.layout.visible,
-    overflowSessionTabs: sessions.layout.overflow,
+    recentSessionTabs: sessions.candidates,
+    overflowSessionTabs: [],
   };
 }
 

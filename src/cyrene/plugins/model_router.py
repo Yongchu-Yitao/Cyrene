@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
-from uuid import uuid4
 
-from cyrene.core.plugin.execution import require_plugin_execution
+from cyrene.core.plugin.execution import invoke_plugin, require_plugin_execution
+from .tool_call_parsers import GENERIC_TOOL_CALL_PARSER
 from .model_catalog import (
     candidate_identity,
     candidate_provider_id,
@@ -26,32 +26,73 @@ from cyrene.model.error_details import (
     details_from_mapping,
     preferred_model_error,
 )
+from cyrene.model.status import publish_context_model_status
 
 MODEL_ROUTER_PLUGIN = "CyreneModelRouter"
 EXACT_MODEL_UNAVAILABLE = "Requested exact model identity is no longer configured"
 logger = logging.getLogger(__name__)
 
 
-def _normalize_tool_calls(raw_calls: Any) -> list[dict[str, Any]]:
-    from cyrene.model.messages import parse_tool_arguments
+def _tool_call_parser(plugin: Plugin) -> str:
+    provider = plugin.metadata.get("provider")
+    if not isinstance(provider, Mapping):
+        return GENERIC_TOOL_CALL_PARSER
+    return str(
+        provider.get("tool_call_parser") or GENERIC_TOOL_CALL_PARSER
+    ).strip()
 
-    iterable = raw_calls if isinstance(raw_calls, Sequence) and not isinstance(raw_calls, (str, bytes, bytearray)) else ()
-    calls: list[dict[str, Any]] = []
-    for raw in iterable:
-        if not isinstance(raw, Mapping):
-            raise ValueError("Model Provider Plugin returned an invalid tool call")
-        function = raw.get("function")
-        source = function if isinstance(function, Mapping) else raw
-        name = str(source.get("name") or "").strip()
-        if not name:
-            raise ValueError("Model Provider Plugin tool call is missing a name")
-        calls.append(
-            {
-                "id": str(raw.get("id") or f"call_{uuid4().hex}"),
-                "name": name,
-                "arguments": parse_tool_arguments(source.get("arguments")),
-            }
+
+async def _parse_tool_calls(
+    raw_calls: Any,
+    provider_plugin: Plugin,
+    tools: Any,
+) -> list[dict[str, Any]]:
+    parser_name = _tool_call_parser(provider_plugin)
+    execution = require_plugin_execution()
+    parser = execution.runtime.registry.resolve(parser_name)
+    if (
+        parser.kind != "tool"
+        or parser.metadata.get("tool_call_parser") is not True
+        or parser.metadata.get("model_visible") is not False
+    ):
+        raise ValueError(
+            f"Provider Plugin selected a non-parser Plugin: {parser_name!r}"
         )
+    parsed = await invoke_plugin(
+        parser_name,
+        {
+            "tool_calls": raw_calls if isinstance(raw_calls, list) else [],
+            "tools": tools if isinstance(tools, list) else [],
+        },
+        review=False,
+    )
+    if not isinstance(parsed, Mapping) or not isinstance(
+        parsed.get("tool_calls"),
+        list,
+    ):
+        raise ValueError(
+            f"Tool-call parser Plugin {parser_name!r} returned an invalid result"
+        )
+    calls: list[dict[str, Any]] = []
+    for call in parsed["tool_calls"]:
+        if not isinstance(call, Mapping):
+            raise ValueError(
+                f"Tool-call parser Plugin {parser_name!r} returned a non-object call"
+            )
+        name = str(call.get("name") or "").strip()
+        arguments = call.get("arguments")
+        if not name or not isinstance(arguments, Mapping):
+            raise ValueError(
+                f"Tool-call parser Plugin {parser_name!r} returned a non-canonical call"
+            )
+        normalized: dict[str, Any] = {
+            "id": str(call.get("id") or ""),
+            "name": name,
+            "arguments": dict(arguments),
+        }
+        if call.get("arguments_normalized") is True:
+            normalized["arguments_normalized"] = True
+        calls.append(normalized)
     return calls
 
 
@@ -169,10 +210,11 @@ def _provider_id(plugin: Plugin, candidate: Mapping[str, Any]) -> str:
     return candidate_provider_id(candidate)
 
 
-def _normalized_provider_result(
+async def _normalized_provider_result(
     value: Mapping[str, Any],
     candidate: Mapping[str, Any],
     provider_plugin: Plugin,
+    tools: Any,
 ) -> dict[str, Any]:
     content = value.get("content")
     reasoning = value.get("reasoning")
@@ -188,11 +230,16 @@ def _normalized_provider_result(
         latency_ms = max(0.0, float(value.get("latency_ms") or 0.0))
     except (TypeError, ValueError):
         latency_ms = 0.0
+    tool_calls = await _parse_tool_calls(
+        value.get("tool_calls"),
+        provider_plugin,
+        tools,
+    )
     result = {
         "content": content if isinstance(content, str) else "",
         "reasoning": reasoning if isinstance(reasoning, str) else "",
         "reasoning_details": ([dict(item) for item in reasoning_details if isinstance(item, Mapping)] if isinstance(reasoning_details, list) else []),
-        "tool_calls": _normalize_tool_calls(value.get("tool_calls")),
+        "tool_calls": tool_calls,
         "finish_reason": str(value.get("finish_reason") or ""),
         "usage": dict(usage) if isinstance(usage, Mapping) else {},
         "usage_observation": (dict(value["usage_observation"]) if isinstance(value.get("usage_observation"), Mapping) else {}),
@@ -280,23 +327,12 @@ async def _publish_fallback(
 ) -> None:
     try:
         from cyrene.core.plugin.context import publish_runtime_event
-        from cyrene.model.status import persist_model_status
-
-        run_context = context.data.get("run_context")
-        run_context = run_context if isinstance(run_context, Mapping) else {}
-        session_id = str(context.data.get("session_id") or run_context.get("session_id") or "")
-        round_id = str(context.data.get("run_id") or run_context.get("round_id") or "")
         fallback_model = str(fallback.get("model") or "")
-        if session_id and round_id and fallback_model:
-            try:
-                await persist_model_status(
-                    session_id,
-                    round_id,
-                    status="switched",
-                    model=fallback_model,
-                )
-            except Exception:
-                pass
+        await publish_context_model_status(
+            context,
+            status="switching",
+            model=fallback_model,
+        )
 
         await publish_runtime_event(
             context,
@@ -314,6 +350,19 @@ async def _publish_fallback(
         )
     except Exception:
         return
+
+
+async def _persist_fallback_result(
+    context: PluginContext,
+    candidate: Mapping[str, Any],
+    *,
+    status: str,
+) -> None:
+    await publish_context_model_status(
+        context,
+        status=status,
+        model=str(candidate.get("model") or ""),
+    )
 
 
 async def _reset_model_stream(context: PluginContext) -> None:
@@ -374,12 +423,9 @@ def _routed_candidates(
     return [exact_candidate], "requested exact model"
 
 
-async def route_model_call(
-    arguments: dict[str, Any],
-    context: PluginContext,
-) -> dict[str, Any]:
-    """Try configured candidates by invoking their actual Provider Plugins."""
-
+def _route_call_inputs(
+    arguments: dict[str, Any], context: PluginContext
+) -> tuple[list[Any], list[Any] | None, str, str, list[dict[str, Any]]]:
     messages = arguments.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ValueError("messages must be a non-empty array")
@@ -393,8 +439,17 @@ async def route_model_call(
     route = str(arguments.get("route") or context.data.get("model_route") or "primary").strip().lower()
     if route not in {"primary", "secondary", "vision"}:
         raise ValueError(f"Unsupported chat model route: {route}")
-    # AgentSession already supplies the cache-friendly transcript projection.
     model_messages = messages if all(isinstance(item, dict) for item in messages) else [dict(item) for item in messages]
+    return messages, tools, session_id, route, model_messages
+
+
+async def route_model_call(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any]:
+    """Try configured candidates by invoking their actual Provider Plugins."""
+
+    _messages, tools, session_id, route, model_messages = _route_call_inputs(arguments, context)
     candidates, candidate_context = _routed_candidates(
         session_id,
         route,
@@ -479,7 +534,12 @@ async def route_model_call(
             continue
 
         try:
-            output = _normalized_provider_result(result.value, candidate, provider)
+            output = await _normalized_provider_result(
+                result.value,
+                candidate,
+                provider,
+                tools,
+            )
         except Exception as exc:
             error = f"invalid Provider Plugin result: {exc}"
             failures.append(f"{provider.name}({candidate.get('model')}): {error}")
@@ -507,6 +567,12 @@ async def route_model_call(
             duration_ms=output.get("latency_ms") or elapsed_ms,
             status="completed",
         )
+        if index > 0:
+            await _persist_fallback_result(
+                context,
+                candidate,
+                status="switched",
+            )
         try:
             remember_model_success(
                 session_id,
@@ -518,6 +584,12 @@ async def route_model_call(
             pass
         return output
 
+    if eligible:
+        await _persist_fallback_result(
+            context,
+            eligible[-1],
+            status="failed",
+        )
     logger.warning(
         "All configured model Provider Plugins failed: %s",
         "; ".join(failures),

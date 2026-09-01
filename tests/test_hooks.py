@@ -286,6 +286,29 @@ def test_hook_failure_does_not_rollback_context_commit(tmp_path, caplog):
     run(scenario())
 
 
+def test_hook_system_exit_is_scoped_to_the_failing_hook(tmp_path, caplog):
+    async def scenario():
+        store = ContextStoreRouter(tmp_path / "context")
+        tree = store.create_tree(tree_id="tree", root_id="root")
+        hooks = store.hooks_for(tree.id)
+        observed: list[str] = []
+
+        hooks.register(
+            CONTEXT_CHANGE,
+            lambda _event: (_ for _ in ()).throw(SystemExit("hook exited")),
+        )
+        hooks.register(CONTEXT_CHANGE, lambda _event: observed.append("healthy"))
+        store.mount(tree.id, tree.root_id, "committed", node_id="child")
+        await hooks.drain()
+
+        assert observed == ["healthy"]
+        assert store.get_node(tree.id, "child").value == "committed"
+        assert "hook exited" in caplog.text
+        store.close()
+
+    run(scenario())
+
+
 def test_delete_hook_contains_surviving_parent_id(tmp_path):
     async def scenario():
         store = ContextStoreRouter(tmp_path / "context")
@@ -396,13 +419,13 @@ def test_hook_bindings_share_tree_database_and_restore(tmp_path):
 
     with ContextStoreRouter(directory) as store:
         tree = store.create_tree(tree_id="tree", root_id="root")
+        database = store.tree_database_path(tree.id)
         store.hooks_for(tree.id).register(
             CONTEXT_CHANGE,
             plugin,
             hook_id="persistent-hook",
             plugin_id="persistent-plugin",
         )
-        database = store.tree_database_path(tree.id)
 
     with sqlite3.connect(database) as connection:
         assert connection.execute(
@@ -422,6 +445,56 @@ def test_hook_bindings_share_tree_database_and_restore(tmp_path):
         reopened.close()
 
     run(reopened_scenario())
+
+
+def test_restored_hook_config_is_updated_in_place(tmp_path):
+    directory = tmp_path / "context"
+
+    with ContextStoreRouter(directory) as store:
+        tree = store.create_tree(tree_id="tree", root_id="root")
+        database = store.tree_database_path(tree.id)
+        store.hooks_for(tree.id).register(
+            CONTEXT_USED,
+            lambda _event: None,
+            hook_id="persistent-hook",
+            plugin_id="persistent-plugin",
+            config={"include_node_tokens": True},
+        )
+
+    with ContextStoreRouter(directory) as reopened:
+        hooks = reopened.hooks_for("tree")
+        hooks.bind_plugin("persistent-plugin", lambda _event: None, replace=True)
+        hooks.update_config("persistent-hook", {"include_node_tokens": False})
+        assert hooks.list()[0].config == {"include_node_tokens": False}
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*), config_json FROM hook_bindings "
+            "WHERE hook_id = 'persistent-hook'"
+        ).fetchone() == (1, '{"include_node_tokens":false}')
+
+
+def test_restored_hook_failure_policy_is_updated_without_losing_binding(tmp_path):
+    from cyrene.core.context import ContextStoreRouter
+
+    directory = tmp_path / "context"
+    with ContextStoreRouter(directory) as store:
+        tree = store.create_tree(
+            {"role": "system", "content": "root"},
+            tree_id="tree-policy",
+        )
+        store.hooks_for(tree.id).register(
+            SESSION_END,
+            lambda _event: None,
+            plugin_id="persistent-plugin",
+            hook_id="persistent-hook",
+        )
+
+    with ContextStoreRouter(directory) as reopened:
+        hooks = reopened.hooks_for("tree-policy")
+        hooks.update_failure_policy("persistent-hook", "closed")
+        hook = hooks.list()[0]
+        assert hook.failure_policy == "closed"
 
 
 def test_blocked_delivery_resumes_when_plugin_is_restored(tmp_path):

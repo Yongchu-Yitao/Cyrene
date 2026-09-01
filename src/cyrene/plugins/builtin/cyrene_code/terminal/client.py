@@ -15,8 +15,11 @@ from typing import Any
 
 from cyrene.platform.paths import user_data_dir
 
-PROTOCOL_VERSION = 8
-LIFECYCLE_VERSION = 1
+PROTOCOL_VERSION = 9
+# Version 2 restarts persistent daemons created before coding-agent hook
+# injection was added. Protocol compatibility alone is insufficient because a
+# daemon keeps its imported shell-integration implementation for its lifetime.
+LIFECYCLE_VERSION = 2
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
@@ -525,6 +528,28 @@ class TerminalDaemonClient:
     ) -> dict[str, Any]:
         return await self._request(
             "input", terminalId=terminal_id, data=data, actor=actor,
+        )
+
+    async def mark_read(self, terminal_id: str) -> dict[str, Any]:
+        return await self._request(
+            "markRead", terminalId=terminal_id, request_timeout=5.0,
+        )
+
+    async def agent_event(
+        self,
+        terminal_id: str,
+        *,
+        agent_id: str,
+        event: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "agentEvent",
+            request_timeout=5.0,
+            terminalId=terminal_id,
+            agentId=agent_id,
+            event=event,
+            payload=dict(payload or {}),
         )
 
     async def wait_until_connected(

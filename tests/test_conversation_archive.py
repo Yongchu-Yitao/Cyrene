@@ -73,3 +73,30 @@ def test_archive_is_idempotent_for_one_round(tmp_path: Path) -> None:
     assert content.count("<!-- round_id: run-1 -->") == 1
     assert "first" in content
     assert "duplicate" not in content
+
+
+def test_archive_retry_replaces_same_public_turn(tmp_path: Path) -> None:
+    path = archive_session_exchange(
+        "chat-retry",
+        "question",
+        "first answer",
+        workspace_dir=tmp_path,
+        round_id="run-1",
+        turn_id="msg-1",
+    )
+    replaced = archive_session_exchange(
+        "chat-retry",
+        "question",
+        "retry answer",
+        workspace_dir=tmp_path,
+        round_id="run-2",
+        turn_id="msg-1",
+    )
+
+    assert replaced == path
+    assert path is not None
+    content = path.read_text(encoding="utf-8")
+    assert content.count("<!-- turn_id: msg-1 -->") == 1
+    assert "<!-- round_id: run-2 -->" in content
+    assert "first answer" not in content
+    assert content.count("**User**:") == 1

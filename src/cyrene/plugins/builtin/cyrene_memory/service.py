@@ -14,6 +14,7 @@ from typing import Any
 
 from cyrene.core.hook import (
     CONTEXT_USED,
+    CONVERSATION_TURN_COMMITTED,
     SESSION_END,
     SESSION_START,
     STOP,
@@ -479,20 +480,26 @@ class MemoryService:
     ) -> None:
         if not _bool(self.data, run_data, "memory_archive_enabled", True) or not self.is_main or not self.session_id:
             return
-        try:
-            from .archive import archive_session_exchange
+        from .archive import archive_session_exchange
 
-            archive_session_exchange(
-                self.session_id,
-                public_user,
-                assistant_text,
-                workspace_dir=self.workspace,
-                session_title=str(self.data.get("session_title") or ""),
-                round_id=str(details.get("run_id") or ""),
-                language=self.language,
-            )
-        except Exception:
-            logger.exception("Failed to archive conversation from memory Plugin")
+        archive_session_exchange(
+            self.session_id,
+            public_user,
+            assistant_text,
+            workspace_dir=self.workspace,
+            session_title=str(self.data.get("session_title") or ""),
+            round_id=str(details.get("run_id") or ""),
+            turn_id=str(
+                details.get("turn_id")
+                or (
+                    details.get("metadata")
+                    if isinstance(details.get("metadata"), Mapping)
+                    else {}
+                ).get("turn_id")
+                or ""
+            ),
+            language=self.language,
+        )
 
     def _persist_learning_snapshot(
         self,
@@ -501,37 +508,123 @@ class MemoryService:
         run_id: str,
         anchor_value: Mapping[str, Any],
         details: Mapping[str, Any],
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         self.configure_stores()
-        try:
-            from .project_memory import persist_tree_context_snapshot
+        from .project_memory import persist_tree_context_snapshot
 
-            return persist_tree_context_snapshot(
-                self.session_id,
-                str(self.project_id or ""),
-                messages,
-                tree_id=self.tree_id,
-                tree_node_id=assistant_node_id,
-                completed_turn_count=int(self.data.get("completed_turn_count") or 0),
-                round_id=run_id,
-                model={
-                    "id": str(anchor_value.get("model") or details.get("model") or ""),
-                    **(dict(anchor_value.get("model_identity") or {}) if isinstance(anchor_value.get("model_identity"), Mapping) else {}),
-                },
-                language=self.language,
-            )
-        except Exception:
-            logger.exception("Could not persist ContextTree memory snapshot")
-            return None
+        return persist_tree_context_snapshot(
+            self.session_id,
+            str(self.project_id or ""),
+            messages,
+            tree_id=self.tree_id,
+            tree_node_id=assistant_node_id,
+            completed_turn_count=int(
+                details.get("completed_turn_count")
+                or self.data.get("completed_turn_count")
+                or 0
+            ),
+            round_id=run_id,
+            turn_id=str(details.get("turn_id") or ""),
+            model={
+                "id": str(anchor_value.get("model") or details.get("model") or ""),
+                **(
+                    dict(anchor_value.get("model_identity") or {})
+                    if isinstance(anchor_value.get("model_identity"), Mapping)
+                    else {}
+                ),
+            },
+            language=self.language,
+        )
 
     async def on_session_end(self, event: HookEvent) -> None:
+        """SessionEnd is computational only; public side effects wait for commit."""
+
+        return None
+
+    def _committed_learning_context(
+        self,
+        details: Mapping[str, Any],
+        public_user: str,
+        assistant_node_id: str,
+    ) -> tuple[list[dict[str, Any]], str, str, dict[str, Any], str, str] | None:
+        metadata = details.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        turn_id = str(details.get("turn_id") or metadata.get("turn_id") or "")
+        path = self._path(assistant_node_id)
+        anchor = path[-1] if path and path[-1].id == assistant_node_id else None
+        anchor_value = (
+            dict(anchor.value)
+            if anchor is not None and isinstance(anchor.value, Mapping)
+            else {}
+        )
+        run_id = str(anchor_value.get("run_id") or details.get("run_id") or "")
+        tree_user = next(
+            (
+                node
+                for node in reversed(path[:-1])
+                if isinstance(node.value, Mapping)
+                and node.value.get("role") == "user"
+                and str(node.value.get("run_id") or "") == run_id
+            ),
+            None,
+        )
+        tree_user_text = str(
+            tree_user.value.get("content")
+            if tree_user is not None and isinstance(tree_user.value, Mapping)
+            else public_user
+        ).strip()
+        if (
+            not self.is_main
+            or not self.project_id
+            or anchor is None
+            or not turn_id
+        ):
+            return None
+        messages = self.messages(assistant_node_id)
+        return (
+            messages,
+            turn_id,
+            run_id,
+            anchor_value,
+            tree_user_text,
+            str(anchor_value.get("content") or "").strip(),
+        )
+
+    def _supersede_committed_learning(self, turn_id: str, run_id: str) -> tuple[int, int]:
+        from .project_memory import supersede_turn_learning
+        from .structured import supersede_conversation_turn
+
+        structured = supersede_conversation_turn(
+            self.project_id,
+            session_id=self.session_id,
+            turn_id=turn_id,
+            replacement_run_id=run_id,
+        )
+        project = supersede_turn_learning(
+            self.project_id,
+            chat_id=self.session_id,
+            turn_id=turn_id,
+            replacement_run_id=run_id,
+        )
+        return structured, project
+
+    async def on_conversation_turn_committed(self, event: HookEvent) -> None:
+        """Archive and learn only after Workbench durably accepts the turn."""
+
         details = event.payload if isinstance(event.payload, Mapping) else {}
         if str(details.get("status") or "") != "completed":
             return
         metadata = details.get("metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
-        assistant_node_id = str(details.get("assistant_node_id") or "")
-        public_user = str(metadata.get("public_user_message") if "public_user_message" in metadata else details.get("user_request") or "").strip()
+        assistant_node_id = str(
+            details.get("assistant_node_id") or details.get("node_id") or ""
+        )
+        public_user = str(
+            details.get("user_text")
+            or metadata.get("public_user_message")
+            or details.get("user_request")
+            or ""
+        ).strip()
         assistant_text = str(details.get("assistant_text") or "").strip()
         run_data = self.run_data
         self._archive_completed_exchange(
@@ -541,32 +634,34 @@ class MemoryService:
             run_data,
         )
 
+        learning = self._committed_learning_context(
+            details,
+            public_user,
+            assistant_node_id,
+        )
+        if learning is None:
+            return
+        (
+            messages,
+            turn_id,
+            run_id,
+            anchor_value,
+            tree_user_text,
+            tree_assistant_text,
+        ) = learning
+        structured_superseded, learning_superseded = (
+            self._supersede_committed_learning(turn_id, run_id)
+        )
         learning_enabled = _bool(
             self.data,
-            run_data,
+            self.run_data,
             "memory_write_enabled",
             self.is_main,
         )
-        command = str(metadata.get("command") or run_data.get("command") or "").strip()
-        retry = bool(self.data.get("retry") or metadata.get("retry"))
-        path = self._path(assistant_node_id)
-        anchor = path[-1] if path and path[-1].id == assistant_node_id else None
-        anchor_value = dict(anchor.value) if anchor is not None and isinstance(anchor.value, Mapping) else {}
-        run_id = str(anchor_value.get("run_id") or details.get("run_id") or "")
-        tree_user = next(
-            (node for node in reversed(path[:-1]) if isinstance(node.value, Mapping) and node.value.get("role") == "user" and str(node.value.get("run_id") or "") == run_id),
-            None,
-        )
-        tree_user_text = str(
-            tree_user.value.get("content")
-            if tree_user is not None and isinstance(tree_user.value, Mapping)
-            else public_user
+        command = str(
+            metadata.get("command") or self.run_data.get("command") or ""
         ).strip()
-        tree_assistant_text = str(anchor_value.get("content") or "").strip()
-        if not learning_enabled or not self.is_main or command or retry or not self.project_id or anchor is None or not tree_user_text:
-            return
-        messages = self.messages(assistant_node_id)
-        if not messages:
+        if not learning_enabled or command or not tree_user_text or not messages:
             return
         snapshot = self._persist_learning_snapshot(
             messages,
@@ -575,32 +670,41 @@ class MemoryService:
             anchor_value,
             details,
         )
-        if snapshot is None:
-            return
-        try:
-            from .project_memory import claim_structured_memory_threshold
+        if learning_superseded:
+            snapshot["supersededTurnId"] = turn_id
+        from .project_memory import (
+            complete_structured_memory_threshold,
+            pending_structured_memory_threshold,
+        )
 
-            structured_threshold = claim_structured_memory_threshold(
-                self.session_id,
-                messages,
-                observed_percent=(self._context_threshold or None),
-            )
-        except Exception:
-            logger.exception("Could not evaluate structured-memory threshold")
-            return
+        structured_threshold = pending_structured_memory_threshold(
+            self.session_id,
+            messages,
+            observed_percent=(self._context_threshold or None),
+        )
+        if structured_threshold is None and (
+            structured_superseded or learning_superseded
+        ):
+            structured_threshold = int(
+                snapshot.get("structuredMemoryThresholdPercent") or 0
+            ) or None
         if structured_threshold is None:
             return
         snapshot["structuredMemoryThresholdPercent"] = structured_threshold
         evidence = self.verified_evidence(assistant_node_id)
-        coroutine = self._capture_and_learn(
+        await self._capture_and_learn(
             tree_user_text,
             tree_assistant_text,
             messages,
             snapshot,
             evidence=evidence,
         )
-        if not self._submit_background(coroutine):
-            await coroutine
+        complete_structured_memory_threshold(
+            self.session_id,
+            turn_id=turn_id,
+            round_id=run_id,
+            threshold=structured_threshold,
+        )
 
     async def _capture_and_learn(
         self,
@@ -615,44 +719,36 @@ class MemoryService:
         if not project_id:
             return
         self.configure_stores()
-        try:
-            from .structured import capture_from_exchange
+        from .project_memory import context_auto_trigger_threshold, learn_from_snapshot
+        from .structured import capture_from_exchange
 
-            await capture_from_exchange(
+        await capture_from_exchange(
+            project_id,
+            user_text,
+            assistant_text,
+            verified_evidence=evidence,
+            model_gateway=self.model_gateway,
+            session_id=self.session_id,
+            turn_id=str(snapshot.get("turnId") or ""),
+            run_id=str(snapshot.get("roundId") or ""),
+        )
+        if self._context_threshold:
+            snapshot["observedContextThresholdPercent"] = self._context_threshold
+        threshold = context_auto_trigger_threshold(
+            project_id,
+            self.session_id,
+            messages,
+            observed_percent=(self._context_threshold or None),
+        )
+        if threshold is not None:
+            snapshot["contextThresholdPercent"] = threshold
+            await learn_from_snapshot(
                 project_id,
-                user_text,
-                assistant_text,
-                verified_evidence=evidence,
+                snapshot,
+                source="conversation_auto",
+                reason=f"context_{threshold}_percent",
                 model_gateway=self.model_gateway,
-                session_id=self.session_id,
             )
-        except Exception:
-            logger.exception("Project memory capture failed")
-        try:
-            from .project_memory import (
-                context_auto_trigger_threshold,
-                schedule_learning,
-            )
-
-            if self._context_threshold:
-                snapshot["observedContextThresholdPercent"] = self._context_threshold
-            threshold = context_auto_trigger_threshold(
-                project_id,
-                self.session_id,
-                messages,
-                observed_percent=(self._context_threshold or None),
-            )
-            if threshold is not None:
-                snapshot["contextThresholdPercent"] = threshold
-                schedule_learning(
-                    project_id,
-                    snapshot,
-                    source="conversation_auto",
-                    reason=f"context_{threshold}_percent",
-                    model_gateway=self.model_gateway,
-                )
-        except Exception:
-            logger.exception("Project-memory prompt learning failed")
 
     def trigger_project_learning(self, reason: str, *, node_id: str) -> dict[str, Any]:
         language = self.language
@@ -772,6 +868,7 @@ def _bind_hook(
     *,
     root_only: bool = False,
     config: Mapping[str, Any] | None = None,
+    failure_policy: str = "open",
 ) -> None:
     hook_id = f"cyrene-memory-{suffix}"
     plugin_id = f"cyrene_memory.{suffix}"
@@ -780,6 +877,7 @@ def _bind_hook(
         context.hooks.bind_plugin(plugin_id, handler, replace=True)
         if config is not None:
             context.hooks.update_config(hook_id, config)
+        context.hooks.update_failure_policy(hook_id, failure_policy)
         return
     context.hooks.register(
         event,
@@ -788,6 +886,7 @@ def _bind_hook(
         hook_id=hook_id,
         root_only=root_only,
         config=config,
+        failure_policy=failure_policy,
     )
 
 
@@ -818,6 +917,14 @@ def setup_memory(context: PluginSetupContext) -> None:
         config={"include_node_tokens": False},
     )
     _bind_hook(context, SESSION_END, "session_end", service.on_session_end, root_only=True)
+    _bind_hook(
+        context,
+        CONVERSATION_TURN_COMMITTED,
+        "conversation_turn_committed",
+        service.on_conversation_turn_committed,
+        root_only=True,
+        failure_policy="closed",
+    )
     _bind_hook(context, STOP, "stop", service.on_stop)
 
 

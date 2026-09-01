@@ -308,6 +308,23 @@ Chromium，并与可见 `WebContentsView` 共享持久 Profile。打包桌面版
 Playwright/第二份 Chromium。非 Electron 模式可选 Playwright，最终可回退到
 `httpx` 文本导航。
 
+Browser Tool Surface 由 17 个 Main-only、默认有序执行的操作组成。Snapshot 在
+当前 Top-level Document 注入 DOM Projection，为可见且可命中的 Element 分配
+短期 Ref；Electron Click 在 Cursor Move 和 Press 后重新解析 Target，验证
+Hit-test、遮挡与位置稳定性，再通过 `sendInputEvent` 发送 Trusted Input。Wait
+与 Network Log 同样运行在当前 Page Context，后者只读取 Resource Performance
+Entry。Iframe/Shadow DOM 没有统一递归 Projection。
+
+Python 入口在初始 Navigate 前解析 Hostname 并拒绝 Loopback、Private、
+Link-local、Cloud Metadata 与 Reserved IP；`httpx` Redirect Hook 会再次检查
+Location。Electron Session 当前没有对每个 Request 执行同等 IP Policy，
+Playwright 对最终 Redirect URL 的检查发生在 Browser 已建立连接之后，因此该
+机制是 Agent Observation Guard，而不是严格的 Network Sandbox。Browser Page
+启用 Context Isolation、Sandbox，并关闭 Node Integration；Camera、Microphone、
+Location 和 Capture Permission 默认拒绝。File Upload 另有 Human-only、
+Single-use、Destination/File Hash Binding 与执行前 Revalidation；普通 Click、
+Type/Submit 不继承该确认边界。
+
 ### Search
 
 内置 [SimpleXNG](https://github.com/jlevy/simplexng)，无需 Docker。Manager

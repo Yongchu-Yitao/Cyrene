@@ -63,6 +63,183 @@ process.stdout.write(JSON.stringify(wbRecentSessionTabs(
     assert all(item["pinned"] is True for item in items)
 
 
+def test_plugin_workspace_tabs_survive_the_shared_session_projection():
+    script = _session_activity_script("""
+const plugin = {
+  id: "plugin-view:usage", kind: "plugin-view", title: "Provider Usage",
+  projectId: "p1", projectName: "Cyrene"
+};
+process.stdout.write(JSON.stringify(wbRecentSessionTabs(
+  [{id: "p1", name: "Cyrene"}], {p1: []},
+  ["plugin-view:plugin-view:usage"], ["plugin-view:plugin-view:usage"], [], 20,
+  [plugin]
+)));
+""")
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, cwd=ROOT
+    )
+    items = json.loads(result.stdout)
+
+    assert [(item["kind"], item["title"], item["pinned"]) for item in items] == [
+        ("plugin-view", "Provider Usage", True)
+    ]
+    controller = _frontend_source("features/session/tabs-controller.jsx")
+    assert controller.count("chat|terminal|file|plugin-view") == 3
+
+
+def test_visible_session_tabs_follow_available_width_and_keep_the_active_tab():
+    script = _session_activity_script("""
+const items = ["c1", "c2", "c3", "c4"].map(id => ({id, kind: "chat"}));
+const denseItems = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"].map(id => ({id, kind: "chat"}));
+const manyItems = Array.from({length: 103}, (_, index) => ({id: "c" + (index + 1), kind: "chat"}));
+process.stdout.write(JSON.stringify({
+  wide: wbVisibleSessionTabsByWidth(items, "chat:c4", 700),
+  narrow: wbVisibleSessionTabsByWidth(items, "chat:c4", 400),
+  dense: wbVisibleSessionTabsByWidth(denseItems, "chat:c8", 700),
+  threeDigitOverflow: wbVisibleSessionTabsByWidth(manyItems, "chat:c103", 370)
+}));
+""")
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, cwd=ROOT
+    )
+    layout = json.loads(result.stdout)
+
+    assert [item["id"] for item in layout["wide"]["visible"]] == ["c1", "c2", "c3", "c4"]
+    assert [item["id"] for item in layout["narrow"]["visible"]] == ["c1", "c4"]
+    assert [item["id"] for item in layout["narrow"]["overflow"]] == ["c2", "c3"]
+    assert [item["id"] for item in layout["dense"]["visible"]] == ["c1", "c2", "c3", "c8"]
+    assert [item["id"] for item in layout["dense"]["overflow"]] == ["c4", "c5", "c6", "c7"]
+    assert [item["id"] for item in layout["threeDigitOverflow"]["visible"]] == ["c103"]
+    assert len(layout["threeDigitOverflow"]["overflow"]) == 102
+
+
+def test_workspace_tabs_project_terminal_and_file_panes_into_the_topbar_model():
+    source = _frontend_source("features/chat/workspace-tabs.jsx")
+    source = source.rsplit("\nexport {", 1)[0]
+    script = source + """
+const layout = {
+  left: [
+    {id: "chat:c1", kind: "chat", payload: "c1"},
+    {id: "plugin-view:usage", kind: "plugin-view", payload: {
+      packId: "provider-usage", viewId: "usage", title: "Provider Usage"
+    }}
+  ],
+  right: [
+    {id: "terminal:t1", kind: "terminal", payload: "t1"},
+    {id: "file:readme", kind: "file", payload: {path: "README.md", name: "README.md"}}
+  ]
+};
+process.stdout.write(JSON.stringify({
+  fallback: wbWorkspaceTabsFromPaneLayouts({
+    activeOwner: "c1",
+    currentLayout: layout,
+    layouts: {c1: layout},
+    terminals: [{id: "t1", displayTitle: "Dev server"}],
+    project: {id: "p1", name: "Cyrene"}
+  }),
+  selected: wbWorkspaceTabsFromPaneLayouts({
+    activeOwner: "c1",
+    activeKey: "terminal:t1",
+    currentLayout: layout,
+    layouts: {c1: layout},
+    terminals: [{id: "t1", displayTitle: "Dev server"}],
+    project: {id: "p1", name: "Cyrene"}
+  }),
+  selectedPlugin: wbWorkspaceTabsFromPaneLayouts({
+    activeOwner: "c1",
+    activeKey: "plugin-view:plugin-view:usage",
+    currentLayout: layout,
+    layouts: {c1: layout},
+    terminals: [{id: "t1", displayTitle: "Dev server"}],
+    project: {id: "p1", name: "Cyrene"}
+  })
+}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, cwd=ROOT
+    )
+    projections = json.loads(result.stdout)
+    projection = projections["fallback"]
+
+    assert projection["activeKey"] == "chat:c1"
+    assert projections["selected"]["activeKey"] == "terminal:t1"
+    assert projections["selectedPlugin"]["activeKey"] == "plugin-view:plugin-view:usage"
+    assert [(item["kind"], item["title"]) for item in projection["items"]] == [
+        ("plugin-view", "Provider Usage"),
+        ("terminal", "Dev server"),
+        ("file", "README.md"),
+    ]
+
+
+def test_terminal_workspace_persists_and_is_validated_before_restart_restore():
+    source = _frontend_source("features/chat/pane-workspace-persistence.mjs")
+    source = source.rsplit("\nexport {", 1)[0]
+    script = source + """
+const values = new Map();
+global.localStorage = {
+  getItem: key => values.has(key) ? values.get(key) : null,
+  setItem: (key, value) => values.set(key, String(value)),
+  removeItem: key => values.delete(key),
+};
+const layout = {
+  left: [{id: "chat:c1", kind: "chat", payload: "c1"}],
+  right: [
+    {id: "terminal:t1", kind: "terminal", payload: "t1"},
+    {id: "file:readme", kind: "file", payload: {path: "README.md", name: "README.md"}}
+  ],
+  leftRatio: 0.4,
+  rightRatio: 0.6,
+};
+const written = wbcWritePaneWorkspace("p1", "c1", layout);
+const stored = wbcReadPaneWorkspace("p1");
+const restored = wbcValidatePaneWorkspace(
+  stored,
+  [{id: "c1"}],
+  [{id: "t1", status: "running"}]
+);
+const stale = wbcValidatePaneWorkspace(stored, [{id: "c1"}], []);
+const cleared = wbcWritePaneWorkspace("p1", "c1", {
+  left: [{id: "chat:c1", kind: "chat", payload: "c1"}],
+  right: [],
+});
+process.stdout.write(JSON.stringify({
+  written,
+  stored,
+  restored,
+  stale,
+  cleared,
+  remaining: values.has(wbcPaneWorkspaceStorageKey("p1")),
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, cwd=ROOT
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["written"] is True
+    assert result["stored"]["activeChatId"] == "c1"
+    assert [card["kind"] for card in result["restored"]["layout"]["right"]] == [
+        "terminal",
+        "file",
+    ]
+    assert result["stale"] is None
+    assert result["cleared"] is False
+    assert result["remaining"] is False
+
+
+def test_chat_page_restores_only_a_valid_persisted_terminal_workspace():
+    page = _frontend_source("features/chat/page.jsx")
+    terminal_controller = _frontend_source("features/chat/terminal-controller.jsx")
+
+    assert "var restored = wbcReadPaneWorkspace(projectId);" in page
+    assert "wbcValidatePaneWorkspace(stored, chats, terminals)" in page
+    assert "wbcWritePaneWorkspace(projectId, activeChatId, paneLayout);" in page
+    assert "wbcClearPaneWorkspace(projectId);" in page
+    assert "persistedWorkspace && persistedWorkspace.activeChatId" in page
+    assert "hydrated: loadedProjectId === String(projectId || \"\")" in terminal_controller
+    assert "Opening a terminal\n      // pane remains an explicit user or Agent presentation action." in terminal_controller
+
+
 def test_existing_topbar_session_keeps_order_until_an_unshown_session_is_opened():
     source = _frontend_source("features/session/activity.jsx")
     helper = source.split("function wbRememberOpenedSessionKey", 1)[1].split(
@@ -75,6 +252,7 @@ def test_existing_topbar_session_keeps_order_until_an_unshown_session_is_opened(
 const initial = ["chat:c1", "chat:c2", "chat:c3"];
 const visible = initial.slice();
 const existing = wbRememberOpenedSessionKey(initial, visible, "chat:c2", 20);
+const existingWithoutSnapshot = wbRememberOpenedSessionKey(initial, [], "chat:c2", 20);
 const newlyOpened = wbRememberOpenedSessionKey(existing, visible, "chat:c4", 20);
 const fallbackSnapshot = wbRememberOpenedSessionKey(
   ["chat:c1"],
@@ -85,6 +263,8 @@ const fallbackSnapshot = wbRememberOpenedSessionKey(
 process.stdout.write(JSON.stringify({
   existing,
   existingUsesSameArray: existing === initial,
+  existingWithoutSnapshot,
+  existingWithoutSnapshotUsesSameArray: existingWithoutSnapshot === initial,
   newlyOpened,
   fallbackSnapshot
 }));
@@ -101,6 +281,8 @@ process.stdout.write(JSON.stringify({
 
     assert result["existing"] == ["chat:c1", "chat:c2", "chat:c3"]
     assert result["existingUsesSameArray"] is True
+    assert result["existingWithoutSnapshot"] == ["chat:c1", "chat:c2", "chat:c3"]
+    assert result["existingWithoutSnapshotUsesSameArray"] is True
     assert result["newlyOpened"][:4] == [
         "chat:c4",
         "chat:c1",
@@ -108,6 +290,21 @@ process.stdout.write(JSON.stringify({
         "chat:c3",
     ]
     assert result["fallbackSnapshot"] == ["chat:c1", "chat:c2", "chat:c3"]
+
+
+def test_topbar_activation_passes_the_current_visual_order_to_recent_history():
+    controller = _frontend_source("features/session/tabs-controller.jsx")
+    shell = _frontend_source("features/shell/shell-composition.jsx")
+
+    assert "function rememberOpenedSession(kind, sessionId, visibleSessionKeys)" in controller
+    assert "wbRememberOpenedSessionKey(prev, visibleSessionKeys, key, 40)" in controller
+    opener = shell.split("function wbOpenTopbarSession", 1)[1].split(
+        "function wbOpenBrowserPage", 1
+    )[0]
+    assert "context.sessions.candidates" in opener
+    assert 'candidate.kind === "chat"' in opener
+    assert 'return "chat:" + String(candidate.id || "");' in opener
+    assert 'context.sessions.rememberOpened("chat", item.id,' in opener
 
 
 def test_recent_conversation_lists_stay_in_sync_with_chat_page():
@@ -250,6 +447,125 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     assert 'resource.type === "file"' in chat
 
 
+def test_tab_center_supports_grid_cards_context_actions_and_dragging():
+    shell = workbench_shell_source()
+    css = workbench_style_source()
+    pane_drop = _frontend_source("features/chat/pane-drop-controller.jsx")
+
+    assert 'className="workbench-session-overflow-drag-handle"' in shell
+    assert "WORKBENCH_TOPBAR_TAB_DRAG_MIME" in shell
+    assert "onReorderPinnedSession" in shell
+    assert "onMovePinnedSession" in shell
+    assert "openSessionMenu(event, item, item.activity" in shell
+    overflow_card = shell.split("function renderOverflowSession", 1)[1].split(
+        "function activeSessionIndex", 1
+    )[0]
+    assert 'className="workbench-session-overflow-drag-handle"' in overflow_card
+    assert overflow_card.index('onClick={function () {') < overflow_card.index(
+        'className="workbench-session-overflow-drag-handle"'
+    )
+    assert "startTopbarTabDrag(event, item)" in overflow_card
+    assert 'item.kind === "plugin-view"' in shell
+    assert "wbcSetPluginViewDrag(event, item.payload || {})" in shell
+    assert "commitPinnedTabReorder(event, item)" in overflow_card
+    overflow_portal = shell.split("var overflowMenuPortal", 1)[1].split(
+        "var resourceMenuPortal", 1
+    )[0]
+    assert overflow_portal.index("overflowGroups.exceptional.map") < overflow_portal.index(
+        "overflowGroups.regular.map"
+    )
+    assert 'resource.kind === "conversation"' in pane_drop
+    assert 'wbcHasPluginViewDrag(event)' in pane_drop
+    grid = css.split(".workbench-session-overflow-group-items {", 1)[1].split("}", 1)[0]
+    assert "display: grid" in grid
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in grid
+    assert "fit-content(28vw)" in css
+    topbar_css = css.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
+    assert "column-gap: 6px" in topbar_css
+    overflow_opener = shell.split("function openOverflowMenu", 1)[1].split(
+        "function closeOverflowMenu", 1
+    )[0]
+    assert "rect.right - width" in overflow_opener
+    assert "rect.left + rect.width / 2 - width / 2" not in overflow_opener
+    assert "top: rect.bottom + 8" in shell
+    assert "wb-tab-center-open" in css
+    assert "wb-tab-center-close" in css
+    drag_handle_css = css.split(
+        ".workbench-session-overflow-drag-handle {", 1
+    )[1].split("}", 1)[0]
+    assert "margin-left: auto" in drag_handle_css
+
+
+def test_workspace_tab_open_waits_for_its_owner_and_records_the_selected_card():
+    page = _frontend_source("features/chat/page.jsx")
+    open_request = page.split('if (request.action === "open") {', 1)[1].split(
+        'if (request.action === "close") {', 1
+    )[0]
+
+    assert 'var ownerChatId = String(location.ownerChatId || "");' in open_request
+    assert 'ownerChatId !== String(activeChatId || "")' in open_request
+    assert 'selectChat(ownerChatId);\n        return;' in open_request
+    assert 'setSelectedWorkspaceTabKey(String(item.kind || "") + ":" + String(item.id || ""));' in open_request
+    assert open_request.index("setSelectedWorkspaceTabKey") < open_request.index("complete();")
+
+
+def test_topbar_tab_keeps_click_activation_while_the_whole_card_is_draggable():
+    shell = workbench_shell_source()
+    visible_tabs = shell.split("{tabs.map(function (item)", 1)[1].split(
+        "{overflowTabs.length ?", 1
+    )[0]
+
+    tab_button = visible_tabs.split('className={"workbench-session-tab"', 1)[1].split(
+        '<span\n                  className={"workbench-session-tab-status', 1
+    )[0]
+    assert 'onClick={function () { if (onOpenSession) onOpenSession(item); }}' in tab_button
+    assert 'draggable="true"' in tab_button
+    assert "startTopbarTabDrag(event, item)" in tab_button
+    assert 'className={"workbench-session-tab-status "' in visible_tabs
+    status_icon = visible_tabs.split('className={"workbench-session-tab-status "', 1)[1].split(
+        ">", 1
+    )[0]
+    assert 'draggable="true"' not in status_icon
+
+
+def test_all_topbar_tabs_use_the_acknowledged_workspace_navigation_request():
+    workbench = _frontend_source("workbench.jsx")
+    shell = _frontend_source("features/shell/shell-composition.jsx")
+    page = _frontend_source("features/chat/page.jsx")
+
+    request_action = workbench.split("function requestWorkspaceTabAction", 1)[1].split(
+        "var modulePresentation", 1
+    )[0]
+    assert 'item.kind === "chat"' not in request_action
+    open_tab = shell.split("function wbOpenTopbarSession", 1)[1].split(
+        "function wbOpenBrowserPage", 1
+    )[0]
+    assert 'context.sessions.requestWorkspaceTab(item, "open")' in open_tab
+    assert "context.navigation.navigate" not in open_tab
+    request_effect = page.split("var request = workspaceTabRequest;", 1)[1].split(
+        "function renderPaneCard", 1
+    )[0]
+    assert 'request.action === "open" && item.kind === "chat"' in request_effect
+    assert "targetChatId === String(activeChatId" in request_effect
+    assert "selectChat(targetChatId)" in request_effect
+    assert "refreshChats(targetChatId)" in request_effect
+
+
+def test_topbar_tab_drag_exposes_the_existing_bottom_split_target():
+    shell = _frontend_source("features/shell/topbar.jsx")
+    split_pane = _frontend_source("features/chat/split-pane.jsx")
+    pane_drop = _frontend_source("features/chat/pane-drop-controller.jsx")
+
+    visible_tabs = shell.split("{tabs.map(function (item)", 1)[1].split(
+        "{overflowTabs.length ?", 1
+    )[0]
+    assert 'draggable="true"' in visible_tabs
+    assert "startTopbarTabDrag(event, item)" in visible_tabs
+    assert 'className="wbc-pane-card-axis-sensor bottom"' in split_pane
+    assert 'onDrop(event, card.id, "bottom")' in split_pane
+    assert '["top", "left", "replace", "right", "bottom"]' in pane_drop
+
+
 def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
     shell = workbench_shell_source()
     live_activity = _frontend_source("features/session/live-activity.jsx")
@@ -267,6 +583,13 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
     assert "onClick={function () { if (onOpenSession) onOpenSession(item); }}" in shell
     assert "scheduleSessionPreview(event, item, activity, false)" in shell
     assert "scheduleSessionPreview(event, item, activity, true)" in shell
+    assert "Promise.resolve(onLoadSessionResources(item))" in shell
+    assert 'typeof loadResources.peek === "function"' in session_menu_opener
+    assert "Loading resources…" not in shell
+    resources = _frontend_source("features/session/resources.jsx")
+    assert "sessionTabResourceCache" in resources
+    assert "cached && cached.promise" in resources
+    assert "loadSessionTabResources.peek = peekSessionTabResources" in resources
     assert 'morphUntil: state.phase === "completed"' in shell
     assert "setActivityClock(Date.now())" in shell
     assert 'var visibleStatusText = "";' in shell
@@ -287,8 +610,8 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
     assert "overflowMenuPortal" in shell
     assert "wbSessionActivityRank" in shell
     assert "wbSplitOverflowSessions" in shell
-    assert 't("workbench.sessionOverflow.title", "All conversations")' in shell
-    assert 't("workbench.sessionOverflow.other", "Other sessions")' in shell
+    assert 't("workbench.sessionOverflow.title", "Tab Center")' in shell
+    assert 't("workbench.sessionOverflow.other", "Other tabs")' in shell
     assert 't("workbench.sessionOverflow.exceptions", "Exceptions")' in shell
     assert 'className="workbench-session-overflow-divider"' in shell
     assert shell.count('className="workbench-session-overflow-group-items"') == 2
@@ -298,17 +621,22 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
     assert ".workbench-session-overflow-menu.split-scroll" in css
     assert ".workbench-session-overflow-group-items" in css
     group_items_css = css.split(".workbench-session-overflow-group-items {", 1)[1].split("}", 1)[0]
+    assert "display: grid" in group_items_css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in group_items_css
     assert "overflow-y: auto" in group_items_css
-    assert "overscroll-behavior: contain" in group_items_css
+    assert "scrollbar-width: none" in group_items_css
+    overflow_list_css = css.split(".workbench-session-overflow-list {", 1)[1].split("}", 1)[0]
+    assert "overflow: hidden" in overflow_list_css
     exceptional_css = css.split(
         ".workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group.exceptional {",
         1,
     )[1].split("}", 1)[0]
-    assert "height: auto" in exceptional_css
+    assert "height: 54%" in exceptional_css
     assert "min-height: 0" in exceptional_css
-    assert "max-height: 190px" in exceptional_css
-    assert "flex: 0 0 auto" in exceptional_css
-    assert "var height = Math.min(500, window.innerHeight - 16)" in shell
+    assert "max-height: 300px" in exceptional_css
+    assert "flex: 1 1 54%" in exceptional_css
+    assert ".workbench-session-overflow-group-items::-webkit-scrollbar" in css
+    assert "window.innerHeight - rect.bottom - 16" in shell
     assert ".workbench-session-tab-more" in css
     inactive_tab_css = css.split(
         ".workbench-session-tab-group .workbench-session-tab {", 1
@@ -886,7 +1214,7 @@ def test_topbar_sessions_and_resources_have_keyboard_control():
     assert 'keys: ["mod", "W"]' in shortcuts
 
 
-def test_resource_shelf_fills_topbar_gap_with_a_left_aligned_pin_hint():
+def test_resource_shelf_stays_right_aligned_without_blocking_window_drag():
     shell = workbench_shell_source()
     css = workbench_style_source()
 
@@ -901,7 +1229,10 @@ def test_resource_shelf_fills_topbar_gap_with_a_left_aligned_pin_hint():
     assert 'viewBox="0 0 24 24"' in empty_hint
     assert '<path d="M12 17v5" />' in empty_hint
     assert '<path d="M5 17h14" />' in empty_hint
-    assert "width: 100%" in shelf_css
-    assert "max-width: none" in shelf_css
-    assert "-webkit-app-region: no-drag" in shelf_css
+    assert "width: auto" in shelf_css
+    assert "min-width: 26px" in shelf_css
+    assert "max-width: 28vw" in shelf_css
+    assert "justify-content: flex-end" in shelf_css
+    assert "-webkit-app-region: no-drag" not in shelf_css
     assert "margin-left: 0" in empty_hint_css
+    assert "-webkit-app-region: no-drag" not in empty_hint_css

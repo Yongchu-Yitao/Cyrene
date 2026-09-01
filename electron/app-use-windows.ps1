@@ -1,9 +1,11 @@
 ﻿param(
-    [Parameter(Mandatory = $true)]
-    [string]$PayloadBase64
+    [string]$PayloadBase64 = '',
+    [switch]$Worker
 )
 
 $ErrorActionPreference = 'Stop'
+$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $OutputEncoding
 $MaxScrollAtAmount = 50000
 $MaxScrollEventAmount = 10
 Add-Type -AssemblyName UIAutomationClient
@@ -32,8 +34,11 @@ public static class CyreneWindowApi {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll", SetLastError=true)] public static extern bool AttachThreadInput(uint sourceThreadId, uint targetThreadId, bool attach);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT point);
+    [DllImport("user32.dll")] public static extern bool SetPhysicalCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern bool GetPhysicalCursorPos(out POINT point);
     [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
@@ -46,7 +51,7 @@ public static class CyreneWindowApi {
         var input = new INPUT { type = 0, U = new INPUTUNION { mi = new MOUSEINPUT { dwFlags = flags, mouseData = data } } };
         if (SendInput(1, new [] { input }, Marshal.SizeOf(typeof(INPUT))) != 1) throw new InvalidOperationException("SendInput did not inject the mouse event.");
     }
-    public static POINT Cursor() { POINT point; if (!GetCursorPos(out point)) throw new InvalidOperationException("GetCursorPos failed."); return point; }
+    public static POINT Cursor() { POINT point; if (!GetPhysicalCursorPos(out point)) throw new InvalidOperationException("GetPhysicalCursorPos failed."); return point; }
     public static RECT WindowRect(IntPtr hWnd) {
         RECT rect;
         if (!GetWindowRect(hWnd, out rect)) throw new InvalidOperationException("GetWindowRect failed.");
@@ -85,7 +90,7 @@ public static class CyreneWindowApi {
             double ratio = i / (double)steps;
             int x = (int)Math.Round(fromX + ((toX - fromX) * ratio));
             int y = (int)Math.Round(fromY + ((toY - fromY) * ratio));
-            SetCursorPos(x, y);
+            SetPhysicalCursorPos(x, y);
             if (drag) Mouse(0x0001);
             if (durationMs > 0) Thread.Sleep(Math.Max(1, durationMs / steps));
         }
@@ -112,6 +117,11 @@ public static class CyreneWindowApi {
 }
 "@
 
+# UI Automation and Win32 cursor/window APIs must agree on physical pixels. The
+# helper process is short-lived, so setting awareness here happens before any
+# screen coordinate is queried.
+[void][CyreneWindowApi]::SetProcessDPIAware()
+
 function Finite-Number($Value, [string]$Name) {
     $number = 0.0
     if (-not [double]::TryParse([string]$Value, [ref]$number) -or [double]::IsNaN($number) -or [double]::IsInfinity($number)) { throw "$Name must be a finite number." }
@@ -134,7 +144,7 @@ function Screen-Point($Target, $Parameters, [string]$XName, [string]$YName) {
 }
 
 function Mouse-Click($Point, [bool]$Right, [int]$Count, [int]$IntervalMs) {
-    [void][CyreneWindowApi]::SetCursorPos($Point.x, $Point.y)
+    [void][CyreneWindowApi]::SetPhysicalCursorPos($Point.x, $Point.y)
     $down = if ($Right) { [uint32]0x0008 } else { [uint32]0x0002 }
     $up = if ($Right) { [uint32]0x0010 } else { [uint32]0x0004 }
     for ($index = 0; $index -lt $Count; $index += 1) {
@@ -144,15 +154,24 @@ function Mouse-Click($Point, [bool]$Right, [int]$Count, [int]$IntervalMs) {
 }
 
 function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
-    if ($Capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'scroll_at')) {
+    if ($Capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'scroll_at', 'pointer_event')) {
         $point = Screen-Point $Target $Parameters 'x' 'y'
         $before = [CyreneWindowApi]::Cursor()
         if ($Capability -eq 'click_at') { Mouse-Click $point $false 1 0 }
         elseif ($Capability -eq 'double_click') { Mouse-Click $point $false 2 $(if ($Parameters.interval_ms) { [int]$Parameters.interval_ms } else { 100 }) }
         elseif ($Capability -eq 'right_click') { Mouse-Click $point $true 1 0 }
         elseif ($Capability -eq 'hover_at') { [CyreneWindowApi]::Move($before.X, $before.Y, $point.x, $point.y, $(if ($Parameters.duration_ms) { [int]$Parameters.duration_ms } else { 0 }), $false) }
+        elseif ($Capability -eq 'pointer_event') {
+            [void][CyreneWindowApi]::SetPhysicalCursorPos($point.x, $point.y)
+            $action = if ($Parameters.action) { ([string]$Parameters.action).ToLowerInvariant() } else { 'move' }
+            $right = ([string]$Parameters.button).ToLowerInvariant() -eq 'right'
+            if ($action -eq 'button_down') { [CyreneWindowApi]::Mouse($(if ($right) { [uint32]0x0008 } else { [uint32]0x0002 }), 0) }
+            elseif ($action -eq 'button_up') { [CyreneWindowApi]::Mouse($(if ($right) { [uint32]0x0010 } else { [uint32]0x0004 }), 0) }
+            elseif ($action -eq 'move') { [CyreneWindowApi]::Mouse([uint32]0x0001, 0) }
+            else { throw 'pointer_event action must be move, button_down, or button_up.' }
+        }
         else {
-            [void][CyreneWindowApi]::SetCursorPos($point.x, $point.y)
+            [void][CyreneWindowApi]::SetPhysicalCursorPos($point.x, $point.y)
             $direction = if ($Parameters.direction) { ([string]$Parameters.direction).ToLowerInvariant() } else { 'down' }
             if ($direction -notin @('up', 'down', 'left', 'right')) { throw 'direction must be up, down, left, or right.' }
             $amountNumber = Finite-Number $(if ($null -ne $Parameters.amount) { $Parameters.amount } else { 3 }) 'amount'
@@ -173,7 +192,8 @@ function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
         $verified = [Math]::Abs($actual.X - $point.x) -le 2 -and [Math]::Abs($actual.Y - $point.y) -le 2
         $diagnostics = @{ method = 'SendInput'; point = $point; actualPointer = @{ x = $actual.X; y = $actual.Y }; pointerVerified = $verified; foregroundRequired = $true }
         if ($Capability -eq 'scroll_at') { $diagnostics.scrollEventCount = $scrollEventCount }
-        return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = ($Capability -ne 'hover_at'); summary = "Performed $Capability at ($($point.x), $($point.y))."; diagnostics = $diagnostics }
+        if ($Capability -eq 'pointer_event') { $diagnostics.inputAction = [string]$Parameters.action }
+        return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = ($Capability -ne 'hover_at' -and $Capability -ne 'pointer_event'); summary = "Performed $Capability at ($($point.x), $($point.y))."; diagnostics = $diagnostics }
     }
     $from = if ($Capability -eq 'drag') { Screen-Point $Target $Parameters 'from_x' 'from_y' } else { Screen-Point $Target $Parameters 'x' 'y' }
     if ($Capability -eq 'drag') { $to = Screen-Point $Target $Parameters 'to_x' 'to_y' }
@@ -185,7 +205,7 @@ function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
         if ($direction -eq 'up') { $toParams.to_y -= $distance } elseif ($direction -eq 'down') { $toParams.to_y += $distance } elseif ($direction -eq 'left') { $toParams.to_x -= $distance } else { $toParams.to_x += $distance }
         $to = Screen-Point $Target $toParams 'to_x' 'to_y'
     }
-    [void][CyreneWindowApi]::SetCursorPos($from.x, $from.y); [CyreneWindowApi]::Mouse([uint32]0x0002, 0)
+    [void][CyreneWindowApi]::SetPhysicalCursorPos($from.x, $from.y); [CyreneWindowApi]::Mouse([uint32]0x0002, 0)
     [CyreneWindowApi]::Move($from.x, $from.y, $to.x, $to.y, $(if ($Parameters.duration_ms) { [int]$Parameters.duration_ms } else { 350 }), $true)
     [CyreneWindowApi]::Mouse([uint32]0x0004, 0)
     $actual = [CyreneWindowApi]::Cursor(); $verified = [Math]::Abs($actual.X - $to.x) -le 2 -and [Math]::Abs($actual.Y - $to.y) -le 2
@@ -195,10 +215,6 @@ function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
 function Result([hashtable]$Value) {
     $Value | ConvertTo-Json -Depth 12 -Compress
     exit 0
-}
-
-function Fail([string]$Type, [string]$Message) {
-    Result @{ ok = $false; errorType = $Type; error = $Message }
 }
 
 function Target-Handle($Target) {
@@ -538,12 +554,15 @@ function Perform-KeySequence($Steps) {
 }
 
 function Perform-Action($Payload) {
-    $root = Get-Root $Payload.target
-    $element = if ($Payload.nativeRef) { Resolve-Element $root ([string]$Payload.nativeRef) } else { $root }
     $capability = [string]$Payload.capability
     $parameters = $Payload.parameters
-    if ($capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at')) { return Perform-CoordinateAction $Payload.target $capability $parameters }
+    if ($capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at', 'pointer_event')) { return Perform-CoordinateAction $Payload.target $capability $parameters }
+    # Remote Desktop keyboard input is intentionally global: SendKeys targets
+    # the window foregrounded by the preceding pointer action. Resolving a UIA
+    # root here would reintroduce a full desktop tree lookup for every key.
     if ($capability -eq 'key_sequence') { return Perform-KeySequence $parameters.steps }
+    $root = Get-Root $Payload.target
+    $element = if ($Payload.nativeRef) { Resolve-Element $root ([string]$Payload.nativeRef) } else { $root }
     if ($capability -in @('semantic_double_click', 'semantic_drag')) {
         $legacy = Try-Pattern $element ([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
         if ($null -eq $legacy) { throw "Element does not expose a native $capability action." }
@@ -640,20 +659,34 @@ function Perform-Action($Payload) {
     throw "Unsupported Windows capability: $capability"
 }
 
-try {
-    $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($PayloadBase64))
-    $payload = $json | ConvertFrom-Json
-    switch ([string]$payload.operation) {
-        'list_targets' { Result (Get-Targets $payload) }
-        'snapshot' { Result (Get-Snapshot $payload $false) }
-        'inspect' { Result (Get-Snapshot $payload $true) }
-        'hit_test' { Result (Hit-Test $payload) }
-        'perform' { Result (Perform-Action $payload) }
-        'focus' { Result (Focus-Target $payload.target) }
-        default { Fail 'invalid_arguments' "Unknown operation: $($payload.operation)" }
+function Invoke-EncodedRequest([string]$EncodedPayload) {
+    try {
+        $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedPayload))
+        $payload = $json | ConvertFrom-Json
+        switch ([string]$payload.operation) {
+            'list_targets' { return (Get-Targets $payload) }
+            'snapshot' { return (Get-Snapshot $payload $false) }
+            'inspect' { return (Get-Snapshot $payload $true) }
+            'hit_test' { return (Hit-Test $payload) }
+            'perform' { return (Perform-Action $payload) }
+            'focus' { return (Focus-Target $payload.target) }
+            default { return @{ ok = $false; errorType = 'invalid_arguments'; error = "Unknown operation: $($payload.operation)" } }
+        }
+    } catch {
+        $message = [string]$_.Exception.Message
+        $type = if ($message -match 'access|denied|privilege|integrity') { 'permission_required' } else { 'provider_error' }
+        return @{ ok = $false; errorType = $type; error = $message }
     }
-} catch {
-    $message = [string]$_.Exception.Message
-    $type = if ($message -match 'access|denied|privilege|integrity') { 'permission_required' } else { 'provider_error' }
-    Fail $type $message
 }
+
+if ($Worker.IsPresent) {
+    while ($null -ne ($encoded = [Console]::In.ReadLine())) {
+        if ([string]::IsNullOrWhiteSpace($encoded)) { continue }
+        $response = Invoke-EncodedRequest $encoded
+        [Console]::Out.WriteLine(($response | ConvertTo-Json -Depth 12 -Compress))
+        [Console]::Out.Flush()
+    }
+    exit 0
+}
+
+Result (Invoke-EncodedRequest $PayloadBase64)

@@ -1260,14 +1260,13 @@ span.wbc-chat-group-toggle {
   transform: scale(.985);
 }
 
-/* Semantic Agent actions receive a quiet, transient perimeter glint. */
-.wbc-rail .wbc-chat-card.agent-flow::after {
+/* Semantic Agent activity receives one quiet perimeter glint.  Pane-hosted
+   resources reuse this exact visual language so observation never invents a
+   second, brighter animation that could be confused with another state. */
+.wbc-rail .wbc-chat-card.agent-flow::after,
+.wbc-pane-card.is-resource-observed::before {
   content: "";
   position: absolute;
-  inset: 1px;
-  z-index: 2;
-  border-radius: 10px;
-  padding: 1px;
   pointer-events: none;
   background: linear-gradient(
     108deg,
@@ -1283,6 +1282,13 @@ span.wbc-chat-group-toggle {
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
   animation: wbc-agent-chat-flow 3.2s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+.wbc-rail .wbc-chat-card.agent-flow::after {
+  inset: 1px;
+  z-index: 2;
+  border-radius: 10px;
+  padding: 1px;
 }
 
 @keyframes wbc-agent-chat-flow {
@@ -1314,6 +1320,167 @@ span.wbc-chat-group-toggle {
 
 .wbc-rail .wbc-chat-card.status-running .wbc-chat-row-icon {
   color: var(--wb-accent);
+}
+
+/* Terminal lifecycle color is semantic and therefore remains visible on the
+   selected row. Selection background and status color encode different data. */
+.wbc-rail .wbc-terminal-card.status-terminal-normal .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-terminal-card.status-terminal-failed .wbc-chat-row-icon,
+.wbc-rail .wbc-terminal-card.status-agent-failed .wbc-chat-row-icon {
+  color: var(--wb-red);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-working .wbc-chat-row-icon {
+  color: var(--wb-purple);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-waiting .wbc-chat-row-icon {
+  color: var(--wb-amber);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-completed .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-idle .wbc-chat-row-icon {
+  color: var(--wb-green);
+}
+
+.wbc-rail .wbc-terminal-card.status-agent-interrupted .wbc-chat-row-icon {
+  color: var(--wb-muted);
+}
+
+.wbc-terminal-card .wbc-chat-row-icon {
+  position: relative;
+  transition: color 120ms ease-out;
+}
+
+.wbc-terminal-status-icon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  isolation: isolate;
+}
+
+.wbc-terminal-status-glyph {
+  position: absolute;
+  inset: 0;
+  display: inline-grid;
+  place-items: center;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+
+.wbc-terminal-status-glyph.is-current {
+  z-index: 2;
+  animation: wbc-terminal-icon-enter 240ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.wbc-terminal-status-glyph.is-leaving {
+  z-index: 1;
+  pointer-events: none;
+  animation: wbc-terminal-icon-leave 180ms cubic-bezier(.4, 0, 1, 1) both;
+}
+
+.wbc-terminal-status-glyph.status-terminal-normal,
+.wbc-terminal-status-glyph.status-agent-completed,
+.wbc-terminal-status-glyph.status-agent-idle {
+  color: var(--wb-green);
+}
+
+.wbc-terminal-status-glyph.status-terminal-failed,
+.wbc-terminal-status-glyph.status-agent-failed {
+  color: var(--wb-red);
+}
+
+.wbc-terminal-status-glyph.status-agent-working {
+  color: var(--wb-purple);
+}
+
+.wbc-terminal-status-glyph.status-agent-waiting {
+  color: var(--wb-amber);
+}
+
+.wbc-terminal-status-glyph.status-agent-interrupted {
+  color: var(--wb-muted);
+}
+
+.wbc-terminal-card.status-agent-working .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-working 1.05s ease-in-out infinite;
+}
+
+.wbc-terminal-card.status-agent-waiting .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-waiting-settle 300ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.wbc-terminal-card.status-agent-completed .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-completed-settle 320ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.wbc-terminal-card.status-agent-failed .wbc-terminal-status-glyph.is-current > svg {
+  animation: wbc-terminal-agent-failed-in 260ms ease-out both;
+}
+
+@keyframes wbc-terminal-icon-enter {
+  0% { opacity: 0; transform: translateY(2px) scale(.78); }
+  62% { opacity: 1; transform: translateY(-.5px) scale(1.04); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes wbc-terminal-icon-leave {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-2px) scale(1.1); }
+}
+
+@keyframes wbc-terminal-agent-working {
+  0%, 100% { opacity: .76; transform: scale(.94); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes wbc-terminal-agent-waiting-settle {
+  0% { transform: rotate(-9deg); }
+  58% { transform: rotate(3deg); }
+  100% { transform: rotate(0); }
+}
+
+@keyframes wbc-terminal-agent-completed-settle {
+  0% { transform: scale(.82); }
+  64% { transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes wbc-terminal-agent-failed-in {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-2px); }
+  65% { transform: translateX(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-terminal-card[class*="status-agent-"] .wbc-chat-row-icon,
+  .wbc-terminal-status-glyph,
+  .wbc-terminal-status-glyph > svg {
+    animation: none;
+    transition: none;
+  }
+
+  .wbc-terminal-status-glyph.is-leaving { display: none; }
+}
+
+.wbc-terminal-unread-dot {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--wb-floating-rail-bg, var(--wb-card-bg));
+  border-radius: 999px;
+  background: var(--wb-blue);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-blue) 28%, transparent);
 }
 
 .wbc-rail .wbc-chat-card.status-planning .wbc-chat-row-icon {
@@ -1648,7 +1815,8 @@ span.wbc-chat-group-toggle {
     animation: none;
   }
 
-  .wbc-rail .wbc-chat-card.agent-flow::after {
+  .wbc-rail .wbc-chat-card.agent-flow::after,
+  .wbc-pane-card.is-resource-observed::before {
     animation: none;
     background: color-mix(in srgb, var(--wb-accent) 36%, transparent);
     opacity: .62;
@@ -1853,6 +2021,71 @@ span.wbc-chat-group-toggle {
   backdrop-filter: blur(18px) saturate(112%);
   animation: wbc-pane-card-settle 360ms cubic-bezier(.22, 1.16, .36, 1) both;
   backface-visibility: hidden;
+}
+
+/* Resource observation is rendered by the Pane Host so every sensitive
+   Plugin/resource uses the shared Agent-flow perimeter above iframe content.
+   Only Pane-specific geometry belongs here; the visual and animation live
+   with the existing Agent-flow rule. */
+.wbc-pane-card.is-resource-observed::before {
+  z-index: 1203;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  transition: opacity 420ms ease;
+}
+
+.wbc-pane-card.is-resource-observation-finishing::before { opacity: 0; }
+
+.wbc-resource-observation-indicator {
+  position: absolute;
+  z-index: 1204;
+  top: 39px;
+  right: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 44%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 88%, transparent);
+  color: var(--wb-text);
+  box-shadow: 0 7px 24px rgba(7, 12, 19, .22);
+  -webkit-backdrop-filter: blur(14px) saturate(118%);
+  backdrop-filter: blur(14px) saturate(118%);
+  pointer-events: none;
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  transition: opacity 360ms ease, transform 360ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.wbc-pane-card.is-resource-observation-finishing .wbc-resource-observation-indicator {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+
+.wbc-resource-observation-indicator b {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-accent) 19%, transparent);
+  color: var(--wb-accent);
+  font-size: 10px;
+}
+
+.wbc-resource-observation-dot {
+  background: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-resource-observation-dot {
+    animation: none;
+  }
 }
 
 @keyframes wbc-pane-card-settle {
@@ -2570,55 +2803,324 @@ body.wbc-resizing-side-agent .wbc-page.wbc-split-left .wbc-side-agent-split-moti
   width: 72px;
   background: var(--wb-accent);
 }
-/* Menu opened by clicking the bar: restore the conversation panel, swap the
-   split side, or close. Anchor it to the grip's center on both columns. */
+/* The menu is portalled to document.body so it never inherits a pane card's
+   clipping or the Workbench grid's full-height row. */
 .wbc-side-split-grip-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 50%;
+  position: fixed;
+  top: var(--wbc-split-grip-menu-top);
+  left: var(--wbc-split-grip-menu-left);
   transform: translateX(-50%);
-  z-index: 1200;
+  z-index: 3200;
+  display: block;
   min-width: 190px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--wb-flyout-border);
-  border-radius: var(--wb-flyout-radius);
-  background: var(--wb-flyout-bg);
-  box-shadow: var(--wb-flyout-shadow);
+  width: 260px;
+  height: max-content;
+  align-self: start;
+  padding: 0;
+  overflow: hidden;
+  animation: wbc-floating-side-panel-in 170ms cubic-bezier(.2, .8, .2, 1) both;
 }
-.wbc-side-split-grip-menu button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
+/* The shared accordion surface normally gets this fill from .wbc-page. This
+   menu lives under body, so use the resolved surface copied from its owning
+   conversation card instead of rebuilding a potentially cyclic token chain. */
+.wbc-panel-accordion-surface.wbc-side-split-grip-menu {
+  --wbc-split-grip-border-color: #d2dae2;
+  --wbc-split-grip-divider-color: rgba(23, 28, 34, .055);
+  --wbc-split-grip-slider-track: #d2dae2;
+  --wbc-split-grip-slider-thumb-ring: #fff;
+  border: 1px solid var(--wbc-split-grip-border-color);
+  border-radius: var(--wbc-split-grip-radius, 18px);
+  background: var(--wbc-split-grip-surface, var(--wbc-panel-surface, var(--wb-card-bg, #fff)));
+  box-shadow: var(--wbc-split-grip-shadow,
+    0 8px 22px rgba(9, 17, 30, .055),
+    inset 0 1px 0 rgba(255, 255, 255, .09),
+    inset 0 0 0 1px rgba(120, 132, 148, .12));
+}
+html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
+  --wbc-split-grip-border-color: #41434d;
+  --wbc-split-grip-divider-color: rgba(255, 255, 255, .03);
+  --wbc-split-grip-slider-track: #454854;
+  --wbc-split-grip-slider-thumb-ring: #17181c;
+  background: var(--wbc-split-grip-surface, var(--wbc-panel-surface, #17181c));
+}
+.wbc-side-split-grip-menu.has-contributions {
+  width: min(var(--wb-right-w, 350px), calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+}
+.wbc-side-split-grip-accordion {
+  height: max-content;
+  max-height: min(620px, calc(100vh - var(--wbc-split-grip-menu-top) - 12px));
+  overflow-y: auto;
+}
+.wbc-side-split-grip-menu .wbc-side-accordion-trigger.is-selected {
   color: var(--wb-text);
-  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
-  text-align: left;
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+.wbc-side-split-grip-menu .wbc-side-accordion-trigger:disabled {
+  opacity: .44;
+  cursor: default;
+}
+.wbc-side-split-grip-menu .wbc-side-accordion-trigger:disabled:hover {
+  background: transparent;
+}
+.wbc-side-split-grip-menu .wbc-side-accordion-item {
+  border-bottom: 1px solid var(--wbc-split-grip-divider-color);
+}
+.wbc-side-split-grip-menu .wbc-side-accordion-item:last-child {
+  border-bottom: 0;
+}
+/* Grip menus deliberately do not reuse the docked side panel's scroll body:
+   that body carries viewport max-height and padding rules. This compact body
+   is content-sized and owns exactly one 16px horizontal gutter. */
+.wbc-side-split-grip-expanded-body {
+  interpolate-size: allow-keywords;
+  height: 0;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition:
+    height 190ms cubic-bezier(.2, .8, .2, 1),
+    opacity 145ms ease,
+    transform 190ms cubic-bezier(.2, .8, .2, 1);
+}
+.wbc-side-split-grip-expanded-body.open {
+  height: auto;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+@starting-style {
+  .wbc-side-split-grip-expanded-body.open {
+    height: 0;
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wbc-side-split-grip-expanded-body {
+    transition: none;
+  }
+}
+.wbc-side-split-grip-expanded-content {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 16px 12px;
+}
+.wbc-side-split-grip-settings {
+  margin: 0;
+  padding: 3px 0 0;
+}
+.wbc-side-split-grip-information {
+  margin: 0;
+  padding: 3px 0 0;
+}
+.wbc-side-split-grip-information-details,
+.wbc-side-split-grip-information-facts {
+  margin: 0;
+}
+.wbc-side-split-grip-information-details {
+  display: grid;
+  gap: 1px;
+}
+.wbc-side-split-grip-information-details > div {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 25px;
+  align-items: center;
+}
+.wbc-side-split-grip-information-details dt,
+.wbc-side-split-grip-information-details dd,
+.wbc-side-split-grip-information-facts dt,
+.wbc-side-split-grip-information-facts dd {
+  margin: 0;
+}
+.wbc-side-split-grip-information-details dt {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+}
+.wbc-side-split-grip-information-details dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 590;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.wbc-side-split-grip-information-details dd.is-success {
+  color: var(--wb-green);
+}
+.wbc-side-split-grip-information-details dd.is-danger {
+  color: var(--wb-danger, #d85d5d);
+}
+.wbc-side-split-grip-information-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 7px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 46%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 48%, transparent);
+}
+.wbc-side-split-grip-information-facts > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 7px;
+}
+.wbc-side-split-grip-information-facts dt {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-information-facts dd {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-setting + .wbc-side-split-grip-setting {
+  margin-top: 10px;
+}
+.wbc-side-split-grip-setting-label {
+  display: block;
+  padding: 3px 1px 5px;
+  color: var(--wb-faint);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+}
+.wbc-side-split-grip-setting-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.wbc-side-split-grip-setting-heading .wbc-side-split-grip-setting-label {
+  min-width: 0;
+}
+.wbc-side-split-grip-setting-heading output {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-setting-slider input[type="range"] {
+  display: block;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: linear-gradient(90deg,
+    var(--accent, #4d9a78) 0 var(--wbc-setting-progress),
+    var(--wbc-split-grip-slider-track) var(--wbc-setting-progress) 100%);
+  background-position: center;
+  background-size: 100% 4px;
+  background-repeat: no-repeat;
   cursor: pointer;
 }
-.wbc-side-split-grip-menu button:hover {
-  background: var(--wb-row-hover-bg);
+.wbc-side-split-grip-setting-slider input[type="range"]::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--wbc-split-grip-slider-thumb-ring);
+  border-radius: 50%;
+  -webkit-appearance: none;
+  background: var(--accent, #4d9a78);
+  box-shadow: 0 0 0 1px var(--wbc-split-grip-border-color), 0 2px 5px rgba(9, 17, 30, .22);
 }
-.wbc-side-split-grip-menu button > span:first-child {
-  display: inline-flex;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 20px;
+.wbc-side-split-grip-setting-slider input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--wbc-split-grip-slider-thumb-ring);
+  border-radius: 50%;
+  background: var(--accent, #4d9a78);
+  box-shadow: 0 0 0 1px var(--wbc-split-grip-border-color), 0 2px 5px rgba(9, 17, 30, .22);
+}
+.wbc-side-split-grip-setting-slider input[type="range"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 58%, transparent);
+  outline-offset: 2px;
+}
+.wbc-side-split-grip-setting-slider input[type="range"]:disabled {
+  opacity: .44;
+  cursor: default;
+}
+.wbc-side-split-grip-setting-ticks {
+  display: grid;
+  gap: 3px;
+  margin-top: -1px;
+}
+.wbc-side-split-grip-setting-ticks span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-faint);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbc-side-split-grip-setting-ticks span:first-child {
+  text-align: left;
+}
+.wbc-side-split-grip-setting-ticks span:last-child {
+  text-align: right;
+}
+.wbc-side-split-grip-setting-ticks span.is-selected {
+  color: var(--wb-text);
+  font-weight: 650;
+}
+.wbc-side-split-grip-setting > [role="group"] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+.wbc-side-split-grip-setting button.is-selected {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-row-hover-bg));
+}
+.wbc-side-split-grip-setting button {
+  min-width: 0;
+  min-height: 32px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  color: var(--wb-muted);
+  gap: 5px;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 56%, transparent);
+  color: var(--wb-text);
+  cursor: pointer;
 }
-
-.wbc-side-split-grip-menu button > span:first-child svg {
-  display: block;
-  flex: 0 0 auto;
+.wbc-side-split-grip-setting button:hover:not(:disabled),
+.wbc-side-split-grip-setting button:focus-visible {
+  background: var(--wb-row-hover-bg);
+  outline: 0;
+}
+.wbc-side-split-grip-setting button:disabled {
+  opacity: .44;
+  cursor: default;
+}
+.wbc-side-split-grip-setting button > span:first-child {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 16px;
 }
 
 /* Mirror grip on the conversation column's top edge: reposition the split

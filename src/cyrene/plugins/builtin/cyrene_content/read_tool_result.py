@@ -61,7 +61,7 @@ async def _tool_read_tool_result(
     )
     service = context.services.get("tool_results")
     reader = getattr(service, "read", None)
-    if not callable(reader) or context.services.get("content") is None:
+    if not callable(reader):
         raise RuntimeError("cyrene_content application service is unavailable")
     try:
         options = {

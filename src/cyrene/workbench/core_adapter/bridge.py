@@ -8,7 +8,7 @@ import json
 import logging
 import math
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +48,9 @@ class WorkbenchPendingQuestion:
     asked_at: str
     tool_name: str
     plan: Any = None
+    retry: bool = False
+    turn_id: str = ""
+    original_user_message: str = ""
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> WorkbenchPendingQuestion:
@@ -70,6 +73,9 @@ class WorkbenchPendingQuestion:
             asked_at=str(raw.get("asked_at") or ""),
             tool_name=str(raw.get("tool_name") or ""),
             plan=raw.get("plan"),
+            retry=raw.get("retry") is True,
+            turn_id=str(raw.get("turn_id") or ""),
+            original_user_message=str(raw.get("original_user_message") or ""),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -82,6 +88,9 @@ class WorkbenchPendingQuestion:
             "roundId": self.round_id,
             "clientRequestId": self.client_request_id,
             "askedAt": self.asked_at,
+            "retry": self.retry,
+            "turnId": self.turn_id,
+            "originalUserMessage": self.original_user_message,
         }
 
 
@@ -886,6 +895,7 @@ class WorkbenchSessionBridge:
         plugin_services: Mapping[str, Any] | None = None,
         application_scope: ApplicationPluginScope | None = None,
         max_model_calls: int | None = None,
+        extra_direct_tool_names: Sequence[str] = (),
     ) -> WorkbenchSessionBridge:
         return cls(
             AgentSession(
@@ -901,6 +911,7 @@ class WorkbenchSessionBridge:
                 plugin_services=plugin_services,
                 application_scope=application_scope,
                 max_model_calls=max_model_calls,
+                extra_direct_tool_names=extra_direct_tool_names,
             )
         )
 
@@ -911,6 +922,17 @@ class WorkbenchSessionBridge:
         """Select the durable parent used by the next retried submission."""
 
         return self.session.prepare_retry()
+
+    async def commit_public_turn(
+        self,
+        run_id: str,
+        node_id: str,
+        details: Mapping[str, Any],
+    ) -> None:
+        """Commit branch selection and post-public-write lifecycle effects."""
+
+        self.session.commit_result(node_id, run_id)
+        await self.session.hooks.conversation_turn_committed(details)
 
     async def compact(
         self,

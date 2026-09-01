@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { WbVoiceCommand } from "../../workbench-chat.jsx"
+import { WbVoiceCommand, wbcSetPluginViewDrag } from "../../workbench-chat.jsx"
 import { WbcHoverMarquee } from "../chat/rail.jsx"
 import {
   wbCopyBrowserToChat,
@@ -7,6 +7,7 @@ import {
   wbNotificationNavigationTarget,
   wbSessionActivityRank,
   wbSplitOverflowSessions,
+  wbVisibleSessionTabsByWidth,
 } from "../session/activity.jsx"
 import { wbSetBrowserOverlayObscured } from "../../shared/browser/overlays.jsx"
 import { WorkbenchHelpCenter } from "./support.jsx"
@@ -18,6 +19,30 @@ var {
   useState: useWorkbenchState,
 } = React;
 var WorkbenchModel = workbenchServices.model();
+var WORKBENCH_TOPBAR_TAB_DRAG_MIME = "application/x-cyrene-topbar-tab+json";
+
+function wbTopbarTabKey(item) {
+  return String(item && item.kind || "") + ":" + String(item && item.id || "");
+}
+
+function WorkbenchTabKindIcon({ item }) {
+  var resolvedKind = String(item && item.kind || "");
+  var payload = item && item.payload && typeof item.payload === "object" ? item.payload : {};
+  var pluginPackId = String(payload.packId || payload.pack_id || "");
+  if (resolvedKind === "terminal") {
+    return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1.8" y="2.3" width="12.4" height="11.4" rx="2"/><path d="m4.5 5.4 2 1.8-2 1.8M8.3 10h3"/></svg>;
+  }
+  if (resolvedKind === "file") {
+    return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M3 1.8h6l4 4v8.4H3Z"/><path d="M9 1.8v4h4"/></svg>;
+  }
+  if (resolvedKind === "plugin-view" && pluginPackId === "cyrene_remote_desktop") {
+    return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.1" width="13" height="9.2" rx="1.8"/><path d="M5 14h6M8 11.3V14"/></svg>;
+  }
+  if (resolvedKind === "plugin-view") {
+    return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6.2 2.2v2.1H4.1v2.1H2v3.2h2.1v2.1h2.1v2.1h3.6v-2.1h2.1V9.6H14V6.4h-2.1V4.3H9.8V2.2Z"/><circle cx="8" cy="8" r="1.7"/></svg>;
+  }
+  return <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13.8 9.7a2.7 2.7 0 0 1-2.7 2.7H6L2.2 14V4.9a2.7 2.7 0 0 1 2.7-2.7h6.2a2.7 2.7 0 0 1 2.7 2.7Z"/><path d="M5.1 6.1h5.8M5.1 8.7h3.7"/></svg>;
+}
 
 function WorkbenchSessionMenuFileName({ name }) {
   var labelRef = useWorkbenchRef(null);
@@ -170,14 +195,22 @@ function WorkbenchSessionActivityPreview({ preview, t }) {
   );
 }
 
-function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, recentSessions, overflowSessions, browserOwners, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onOpenBrowserPage, onStopSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, activeTabKey, sessionCandidates, recentSessions, overflowSessions, browserOwners, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onOpenBrowserPage, onStopSession, onTogglePinnedSession, onReorderPinnedSession, onMovePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = workbenchServices.i18n().use();
   var dataState = workbenchServices.data().state;
   var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
   var browserAvailable = pluginModules.indexOf("browser") >= 0;
   var memoryAvailable = pluginModules.indexOf("memory") >= 0;
-  var tabs = Array.isArray(recentSessions) ? recentSessions : [];
-  var overflowTabs = Array.isArray(overflowSessions) ? overflowSessions : [];
+  var fallbackTabs = (Array.isArray(recentSessions) ? recentSessions : []).concat(
+    Array.isArray(overflowSessions) ? overflowSessions : []
+  );
+  var candidates = Array.isArray(sessionCandidates) && sessionCandidates.length
+    ? sessionCandidates : fallbackTabs;
+  var selectedTabKey = String(activeTabKey || (activePage === "chat" && activeChatId ? "chat:" + activeChatId : ""));
+  var [tabStripWidth, setTabStripWidth] = useWorkbenchState(0);
+  var adaptiveTabs = wbVisibleSessionTabsByWidth(candidates, selectedTabKey, tabStripWidth);
+  var tabs = adaptiveTabs.visible;
+  var overflowTabs = adaptiveTabs.overflow;
   var overflowGroups = wbSplitOverflowSessions(overflowTabs);
   var resources = (Array.isArray(pinnedResources) ? pinnedResources : []).filter(function (resource) {
     return browserAvailable || !resource || resource.kind !== "browser";
@@ -197,12 +230,36 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
   var topbarRef = useWorkbenchRef(null);
   var projectMenuRef = useWorkbenchRef(null);
   var browserManagerRef = useWorkbenchRef(null);
+  var tabStripRef = useWorkbenchRef(null);
   var resourceMenuRef = useWorkbenchRef(null);
   var sessionMenuSeqRef = useWorkbenchRef(0);
   var previewTimerRef = useWorkbenchRef(0);
+  var overflowCloseTimerRef = useWorkbenchRef(0);
   var terminalMorphKey = tabs.map(function (item) {
     return item.kind + ":" + item.id + ":" + Number(item.activity && item.activity.morphUntil || 0);
   }).join("|");
+
+  useWorkbenchLayoutEffect(function () {
+    var node = tabStripRef.current;
+    if (!node) return undefined;
+    var frame = 0;
+    function measure() {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(function () {
+        var width = Math.max(0, Math.floor(node.clientWidth));
+        setTabStripWidth(function (current) { return current === width ? current : width; });
+      });
+    }
+    measure();
+    var observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    if (observer) observer.observe(node);
+    window.addEventListener("resize", measure);
+    return function () {
+      cancelAnimationFrame(frame);
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   useWorkbenchEffect(function () {
     return WbVoiceCommand.subscribe(setVoiceCommand);
@@ -377,6 +434,114 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
     // deliberately excluded because their cards have the richer custom type.
     return types.indexOf("text/plain") >= 0 && types.indexOf("Files") < 0;
   }
+  function readTopbarTabDrag(event) {
+    var transfer = event && event.dataTransfer;
+    if (!transfer) return null;
+    try {
+      var raw = transfer.getData(WORKBENCH_TOPBAR_TAB_DRAG_MIME);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function hasTopbarTabDrag(event) {
+    var transfer = event && event.dataTransfer;
+    if (!transfer) return false;
+    return Array.prototype.slice.call(transfer.types || []).indexOf(WORKBENCH_TOPBAR_TAB_DRAG_MIME) >= 0;
+  }
+  function topbarTabResource(item) {
+    var common = {
+      ownerProjectId: String(item && item.projectId || ""),
+      title: String(item && item.title || ""),
+      stableRef: String(item && item.id || ""),
+    };
+    if (item.kind === "chat") return Object.assign(common, {
+      kind: "conversation",
+      ownerSessionId: String(item.id || ""),
+      conversationId: String(item.id || ""),
+    });
+    if (item.kind === "terminal") return Object.assign(common, {
+      kind: "terminal",
+      terminalId: String(item.id || ""),
+      ownerSessionId: String(item.ownerChatId || ""),
+    });
+    return Object.assign(common, item.payload || {}, {
+      kind: "file",
+      file: item.payload || {},
+      ownerSessionId: String(item.ownerChatId || ""),
+    });
+  }
+  function startTopbarTabDrag(event, item) {
+    closeSessionPreview();
+    var transfer = event.dataTransfer;
+    if (item && item.kind === "plugin-view") {
+      wbcSetPluginViewDrag(event, item.payload || {});
+    }
+    var resourceApi = workbenchServices.resources();
+    if (resourceApi && resourceApi.setDrag) resourceApi.setDrag(event, topbarTabResource(item));
+    try {
+      transfer.setData(WORKBENCH_TOPBAR_TAB_DRAG_MIME, JSON.stringify({
+        key: wbTopbarTabKey(item),
+        pinned: !!item.pinned,
+      }));
+      transfer.effectAllowed = "copyMove";
+    } catch (e) {}
+    var dragVisual = event.currentTarget.closest(".workbench-session-tab, .workbench-session-overflow-group-items > button");
+    if (dragVisual) dragVisual.classList.add("dragging");
+    if (event.currentTarget.closest(".workbench-session-overflow-menu")) {
+      document.documentElement.classList.add("wbc-tab-center-drag-active");
+    }
+  }
+  function finishTopbarTabDrag(event) {
+    var dragVisual = event && event.currentTarget
+      ? event.currentTarget.closest(".workbench-session-tab, .workbench-session-overflow-group-items > button")
+      : null;
+    if (dragVisual) dragVisual.classList.remove("dragging");
+    document.documentElement.classList.remove("wbc-tab-center-drag-active", "wbc-tab-center-external-drag");
+    document.querySelectorAll(".is-reorder-target").forEach(function (node) {
+      node.classList.remove("is-reorder-target");
+    });
+  }
+  function tabDragTargetNode(node) {
+    return node && (node.closest(".workbench-session-tab-group") || node);
+  }
+  function previewPinnedTabReorder(event, item) {
+    var dragged = hasTopbarTabDrag(event) ? readTopbarTabDrag(event) : null;
+    if (!dragged || !dragged.pinned || !item.pinned || dragged.key === wbTopbarTabKey(item)) return false;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    var target = tabDragTargetNode(event.currentTarget);
+    if (target) target.classList.add("is-reorder-target");
+    return true;
+  }
+  function clearPinnedTabReorder(event) {
+    var target = tabDragTargetNode(event.currentTarget);
+    if (target) target.classList.remove("is-reorder-target");
+  }
+  function commitPinnedTabReorder(event, item) {
+    var dragged = readTopbarTabDrag(event);
+    if (!dragged || !dragged.pinned || !item.pinned || dragged.key === wbTopbarTabKey(item)) return false;
+    var rect = event.currentTarget.getBoundingClientRect();
+    if (onReorderPinnedSession) onReorderPinnedSession(
+      dragged.key,
+      wbTopbarTabKey(item),
+      event.clientX > rect.left + rect.width / 2
+    );
+    return true;
+  }
+  function leaveTabCenterDragSurface(event) {
+    var rect = event.currentTarget.getBoundingClientRect();
+    if (event.clientX <= rect.left || event.clientX >= rect.right
+      || event.clientY <= rect.top || event.clientY >= rect.bottom) {
+      document.documentElement.classList.add("wbc-tab-center-external-drag");
+    }
+  }
+  function topbarTabKindLabel(item) {
+    if (item.kind === "terminal") return t("workbench.tabKind.terminal", "Terminal");
+    if (item.kind === "file") return t("workbench.tabKind.file", "File");
+    if (item.kind === "plugin-view") return t("workbench.tabKind.plugin", "Plugin");
+    return t("workbench.page.chat", "Conversation");
+  }
   var themeTitle = theme === "system" ? t("workbench.theme.system") : actualTheme === "dark" ? t("workbench.theme.dark") : t("workbench.theme.light");
   var themeIcon = theme === "system" ? (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></svg>
@@ -515,6 +680,9 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
 
   function scheduleSessionPreview(event, item, activity, immediate) {
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    if (item && item.kind === "chat" && onLoadSessionResources) {
+      Promise.resolve(onLoadSessionResources(item)).catch(function () {});
+    }
     var node = event.currentTarget;
     var rect = node.getBoundingClientRect();
     previewTimerRef.current = setTimeout(function () {
@@ -535,38 +703,89 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
     event.stopPropagation();
     closeSessionPreview();
     var rect = event.currentTarget.getBoundingClientRect();
-    var width = 300;
-    var height = Math.min(500, window.innerHeight - 16);
+    var width = Math.min(480, window.innerWidth - 16);
+    var height = Math.min(500, Math.max(180, window.innerHeight - rect.bottom - 16));
+    if (overflowCloseTimerRef.current) clearTimeout(overflowCloseTimerRef.current);
+    overflowCloseTimerRef.current = 0;
     setSessionMenu(null);
     setResourceMenu(null);
     setOverflowMenu({
-      left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
-      top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - height - 8)),
+      left: Math.max(8, Math.min(
+        rect.right - width,
+        window.innerWidth - width - 8
+      )),
+      top: rect.bottom + 8,
+      height: height,
       portalTheme: readTopbarPortalTheme(),
+      closing: false,
     });
   }
 
-  function closeOverflowMenu() { setOverflowMenu(null); }
+  function closeOverflowMenu() {
+    if (overflowCloseTimerRef.current) clearTimeout(overflowCloseTimerRef.current);
+    var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      overflowCloseTimerRef.current = 0;
+      setOverflowMenu(null);
+      return;
+    }
+    setOverflowMenu(function (current) {
+      return current ? Object.assign({}, current, { closing: true }) : current;
+    });
+    overflowCloseTimerRef.current = setTimeout(function () {
+      overflowCloseTimerRef.current = 0;
+      setOverflowMenu(null);
+    }, 140);
+  }
 
   function renderOverflowSession(item) {
     var status = wbSessionStatusLabel(item.activity, t);
     var detail = wbSessionActivityCopy(item.activity, t);
+    var kindLabel = topbarTabKindLabel(item);
     return (
-      <button key={item.kind + ":" + item.id} type="button" role="menuitem" onClick={function () {
-        closeOverflowMenu();
-        if (onOpenSession) onOpenSession(item);
-      }}>
-        <span className={"workbench-session-overflow-icon " + String(item.activity.phase || "idle")}><WorkbenchSessionStatusIcon phase={item.activity.phase} active={item.activity.isLive} /></span>
-        <span><b>{item.title}</b><small>{detail && detail !== status ? status + " · " + detail : status}</small></span>
+      <button
+        key={item.kind + ":" + item.id}
+        type="button"
+        draggable="true"
+        role="menuitem"
+        className={"phase-" + String(item.activity.phase || "idle") + (item.pinned ? " pinned" : "")}
+        data-kind={item.kind}
+        aria-label={kindLabel + ": " + item.title + " · " + t("workbench.sessionTab.drag", "Drag to split")}
+        title={t("workbench.sessionTab.drag", "Drag to split")}
+        onDragStart={function (event) { startTopbarTabDrag(event, item); }}
+        onDragEnd={finishTopbarTabDrag}
+        onDragOver={function (event) { previewPinnedTabReorder(event, item); }}
+        onDragLeave={clearPinnedTabReorder}
+        onDrop={function (event) {
+          event.preventDefault();
+          clearPinnedTabReorder(event);
+          commitPinnedTabReorder(event, item);
+        }}
+        onContextMenu={function (event) {
+          openSessionMenu(event, item, item.activity || { phase: "idle" }, false);
+        }}
+        onClick={function () {
+          closeOverflowMenu();
+          if (onOpenSession) onOpenSession(item);
+        }}
+      >
+        <span className={"workbench-session-overflow-icon " + String(item.activity.phase || "idle")}>{item.kind === "chat"
+          ? <WorkbenchSessionStatusIcon phase={item.activity.phase} active={item.activity.isLive} />
+          : <WorkbenchTabKindIcon item={item} />}</span>
+        <span><b>{item.title}</b><small>{item.kind === "chat"
+          ? (detail && detail !== status ? status + " · " + detail : status)
+          : [kindLabel, item.projectName].filter(Boolean).join(" · ")}</small></span>
+        <span
+          className="workbench-session-overflow-drag-handle"
+          aria-hidden="true"
+        />
       </button>
     );
   }
 
   function activeSessionIndex() {
     return tabs.findIndex(function (item) {
-      return item.kind === "chat"
-        && activePage === "chat"
-        && String(activeChatId || "") === String(item.id || "");
+      return wbTopbarTabKey(item) === selectedTabKey;
     });
   }
 
@@ -588,8 +807,13 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
     });
   }
 
-  function handleTopbarItemKeyDown(event, onRemove) {
+  function handleTopbarItemKeyDown(event, onRemove, item) {
     var key = String(event.key || "");
+    if (event.altKey && item && item.pinned && (key === "ArrowLeft" || key === "ArrowRight")) {
+      event.preventDefault();
+      if (onMovePinnedSession) onMovePinnedSession(wbTopbarTabKey(item), key === "ArrowLeft" ? -1 : 1);
+      return;
+    }
     if (key === "Delete" || key === "Backspace") {
       if (onRemove) {
         event.preventDefault();
@@ -684,7 +908,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
       sessionMenuSeqRef.current += 1;
       setSessionMenu(null);
       setResourceMenu(null);
-      setOverflowMenu(null);
+      closeOverflowMenu();
     }
     function handleKey(event) {
       if (event.key === "Escape") closeMenu();
@@ -730,7 +954,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
   }, [!!sessionMenu, !!resourceMenu, !!overflowMenu, !!hoverPreview]);
 
   useWorkbenchEffect(function () {
-    if (!browserAvailable || !sessionMenu || !onLoadSessionBrowserPreview) return undefined;
+    if (!browserAvailable || !sessionMenu || sessionMenu.item.kind !== "chat" || !onLoadSessionBrowserPreview) return undefined;
     var item = sessionMenu.item;
     var cancelled = false;
     var inFlight = false;
@@ -766,6 +990,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
   useWorkbenchEffect(function () {
     return function () {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+      if (overflowCloseTimerRef.current) clearTimeout(overflowCloseTimerRef.current);
     };
   }, []);
 
@@ -784,14 +1009,27 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
     var portalTheme = readTopbarPortalTheme();
     var seq = sessionMenuSeqRef.current + 1;
     sessionMenuSeqRef.current = seq;
-    setSessionMenu({ item: item, activity: activity || item.activity || {}, left: left, top: top, portalTheme: portalTheme, loading: true, resources: { browser: false, files: [] } });
-    Promise.resolve(onLoadSessionResources ? onLoadSessionResources(item) : null)
+    var loadResources = item.kind === "chat" && onLoadSessionResources;
+    var cachedResources = loadResources && typeof loadResources.peek === "function"
+      ? loadResources.peek(item) : null;
+    setSessionMenu({
+      item: item,
+      activity: activity || item.activity || {},
+      left: left,
+      top: top,
+      portalTheme: portalTheme,
+      resources: {
+        browser: browserAvailable && cachedResources && cachedResources.browser ? cachedResources.browser : null,
+        files: cachedResources && Array.isArray(cachedResources.files) ? cachedResources.files : [],
+      },
+    });
+    if (!loadResources) return;
+    Promise.resolve(loadResources(item))
       .then(function (resources) {
         if (sessionMenuSeqRef.current !== seq) return;
         setSessionMenu(function (current) {
           if (!current || current.item.id !== item.id || current.item.kind !== item.kind) return current;
           return Object.assign({}, current, {
-            loading: false,
             resources: {
               browser: browserAvailable && resources && resources.browser ? resources.browser : null,
               files: resources && Array.isArray(resources.files) ? resources.files : [],
@@ -800,10 +1038,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
         });
       })
       .catch(function () {
-        if (sessionMenuSeqRef.current !== seq) return;
-        setSessionMenu(function (current) {
-          return current ? Object.assign({}, current, { loading: false }) : current;
-        });
+        return null;
       });
   }
 
@@ -882,14 +1117,18 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
         >
           <div className="workbench-session-activity-menu-head">
             <span className={"workbench-session-activity-menu-state " + String(sessionMenuCurrentActivity.phase || "idle")}>
-              <WorkbenchSessionStatusIcon phase={sessionMenuCurrentActivity.phase} active={sessionMenuCurrentActivity.isLive} />
+              {sessionMenuCurrentItem.kind === "chat"
+                ? <WorkbenchSessionStatusIcon phase={sessionMenuCurrentActivity.phase} active={sessionMenuCurrentActivity.isLive} />
+                : <WorkbenchTabKindIcon item={sessionMenuCurrentItem} />}
             </span>
             <div>
-              <b>{t("workbench.sessionActivity.title", "Agent activity")}</b>
-              <small>{wbSessionStatusLabel(sessionMenuCurrentActivity, t)}</small>
+              <b>{sessionMenuCurrentItem.title}</b>
+              <small>{sessionMenuCurrentItem.kind === "chat"
+                ? wbSessionStatusLabel(sessionMenuCurrentActivity, t)
+                : topbarTabKindLabel(sessionMenuCurrentItem)}</small>
             </div>
           </div>
-          <div className="workbench-session-activity-menu-list">
+          {sessionMenuCurrentItem.kind === "chat" ? <div className="workbench-session-activity-menu-list">
             <div className="workbench-session-activity-menu-row">
               <span className={"workbench-session-activity-agent-mark main " + (sessionMenuCurrentActivity.isLive ? "running" : "idle")} aria-hidden="true" />
               <span><b>{t("workbench.sessionActivity.mainAgent", "Main Agent")}</b><small>{sessionMenuCurrentActivity.isLive ? (wbSessionActivityCopy(sessionMenuCurrentActivity, t) || t("workbench.sessionStatus.running", "Running")) : wbSessionStatusLabel(sessionMenuCurrentActivity, t)}</small></span>
@@ -902,8 +1141,8 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
                 </div>
               );
             })}
-          </div>
-          {sessionMenuCurrentActivity.progress && sessionMenuCurrentActivity.progress.total ? (
+          </div> : null}
+          {sessionMenuCurrentItem.kind === "chat" && sessionMenuCurrentActivity.progress && sessionMenuCurrentActivity.progress.total ? (
             <div className="workbench-session-activity-menu-progress">
               <span>{t("workbench.sessionStatus.step", {
                 current: sessionMenuCurrentActivity.progress.current || sessionMenuCurrentActivity.progress.completed,
@@ -959,9 +1198,6 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
               })}
             </div>
           ) : null}
-          {sessionMenu.loading ? (
-            <div className="workbench-session-menu-loading">{t("workbench.sessionMenu.loading", "Loading resources…")}</div>
-          ) : null}
           <div className={"workbench-session-primary-actions" + (sessionMenuCurrentActivity.capabilities && (sessionMenuCurrentActivity.capabilities.canPause || sessionMenuCurrentActivity.capabilities.canStop) ? " has-runtime-control" : "")}>
             {sessionMenuCurrentActivity.capabilities && sessionMenuCurrentActivity.capabilities.canStop ? (
               <button type="button" role="menuitem" className="stop" onClick={function () {
@@ -1015,30 +1251,38 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
 
   var overflowMenuPortal = overflowMenu && typeof ReactDOM !== "undefined"
     ? ReactDOM.createPortal((
-      <div className="workbench-session-menu-portal" style={overflowMenu.portalTheme}>
+      <div className={"workbench-session-menu-portal workbench-tab-center-portal" + (overflowMenu.closing ? " is-closing" : "")} style={overflowMenu.portalTheme}>
         <div className="workbench-session-menu-scrim" onPointerDown={closeOverflowMenu} />
         <div
-          className={"workbench-session-overflow-menu workbench-session-context-menu" + (overflowGroups.regular.length && overflowGroups.exceptional.length ? " split-scroll" : "")}
+          className={"workbench-session-overflow-menu workbench-session-context-menu" + (overflowGroups.regular.length && overflowGroups.exceptional.length ? " split-scroll" : "") + (overflowMenu.closing ? " is-closing" : "")}
           role="menu"
-          aria-label={t("workbench.sessionOverflow.title", "More sessions")}
-          style={{ ...overflowMenu.portalTheme, left: overflowMenu.left, top: overflowMenu.top }}
+          aria-label={t("workbench.sessionOverflow.title", "Tab Center")}
+          style={{
+            ...overflowMenu.portalTheme,
+            left: overflowMenu.left,
+            top: overflowMenu.top,
+            maxHeight: overflowMenu.height,
+            height: overflowGroups.regular.length && overflowGroups.exceptional.length
+              ? overflowMenu.height : undefined,
+          }}
+          onDragLeave={leaveTabCenterDragSurface}
         >
           <div className="workbench-session-overflow-head">
-            <b>{t("workbench.sessionOverflow.title", "All conversations")}</b>
+            <b>{t("workbench.sessionOverflow.title", "Tab Center")}</b>
             <small>{t("workbench.sessionOverflow.count", { count: overflowTabs.length }, "{count} more")}</small>
           </div>
           <div className={"workbench-session-overflow-list" + (overflowGroups.regular.length ? " has-regular" : "") + (overflowGroups.exceptional.length ? " has-exceptions" : "")}>
-            {overflowGroups.regular.length ? (
-              <div className="workbench-session-overflow-group" role="group" aria-label={t("workbench.sessionOverflow.other", "Other sessions")}>
-                <div className="workbench-session-overflow-group-head"><span>{t("workbench.sessionOverflow.other", "Other sessions")}</span><small>{overflowGroups.regular.length}</small></div>
-                <div className="workbench-session-overflow-group-items">{overflowGroups.regular.map(renderOverflowSession)}</div>
-              </div>
-            ) : null}
-            {overflowGroups.regular.length && overflowGroups.exceptional.length ? <div className="workbench-session-overflow-divider" /> : null}
             {overflowGroups.exceptional.length ? (
               <div className="workbench-session-overflow-group exceptional" role="group" aria-label={t("workbench.sessionOverflow.exceptions", "Exceptions")}>
                 <div className="workbench-session-overflow-group-head"><span>{t("workbench.sessionOverflow.exceptions", "Exceptions")}</span><small>{overflowGroups.exceptional.length}</small></div>
                 <div className="workbench-session-overflow-group-items">{overflowGroups.exceptional.map(renderOverflowSession)}</div>
+              </div>
+            ) : null}
+            {overflowGroups.regular.length && overflowGroups.exceptional.length ? <div className="workbench-session-overflow-divider" /> : null}
+            {overflowGroups.regular.length ? (
+              <div className="workbench-session-overflow-group" role="group" aria-label={t("workbench.sessionOverflow.other", "Other tabs")}>
+                <div className="workbench-session-overflow-group-head"><span>{t("workbench.sessionOverflow.other", "Other tabs")}</span><small>{overflowGroups.regular.length}</small></div>
+                <div className="workbench-session-overflow-group-items">{overflowGroups.regular.map(renderOverflowSession)}</div>
               </div>
             ) : null}
           </div>
@@ -1356,12 +1600,10 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
           </div>
         )}
       </div>
-      <nav className="workbench-session-tabs" aria-label={t("workbench.recentSessions", "Recent sessions")}>
+      <nav ref={tabStripRef} className="workbench-session-tabs" aria-label={t("workbench.recentSessions", "Recent sessions")}>
         {tabs.map(function (item) {
-          var isActive = item.kind === "chat"
-            && activePage === "chat"
-            && String(activeChatId || "") === item.id;
-          var kindLabel = t("workbench.page.chat", "Conversation");
+          var isActive = wbTopbarTabKey(item) === selectedTabKey;
+          var kindLabel = topbarTabKindLabel(item);
           var activity = item.activity || { phase: "idle" };
           var statusLabel = wbSessionStatusLabel(activity, t);
           var activityCopy = wbSessionActivityCopy(activity, t);
@@ -1388,6 +1630,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
               <button
                 type="button"
                 className={"workbench-session-tab" + (isActive ? " active" : "")}
+                draggable="true"
                 data-workbench-topbar-item="session"
                 data-session-kind={item.kind}
                 data-session-id={item.id}
@@ -1397,32 +1640,41 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
                   ? "workbench-session-activity-preview"
                   : undefined}
                 aria-label={kindLabel + ": " + item.title + " · " + statusLabel}
-                title={[item.projectName, kindLabel, item.title, statusLabel].filter(Boolean).join(" · ")}
+                title={[item.projectName, kindLabel, item.title, item.pinned
+                  ? t("workbench.sessionTab.dragPinned", "Drag to reorder or split")
+                  : t("workbench.sessionTab.drag", "Drag to split")].filter(Boolean).join(" · ")}
                 onClick={function () { if (onOpenSession) onOpenSession(item); }}
-                onPointerEnter={function (event) { scheduleSessionPreview(event, item, activity, false); }}
+                onDragStart={function (event) { startTopbarTabDrag(event, item); }}
+                onDragEnd={finishTopbarTabDrag}
+                onPointerEnter={item.kind === "chat" ? function (event) { scheduleSessionPreview(event, item, activity, false); } : undefined}
                 onPointerLeave={closeSessionPreview}
-                onFocus={function (event) { scheduleSessionPreview(event, item, activity, true); }}
+                onFocus={item.kind === "chat" ? function (event) { scheduleSessionPreview(event, item, activity, true); } : undefined}
                 onBlur={closeSessionPreview}
                 onKeyDown={function (event) {
                   handleTopbarItemKeyDown(event, function () {
                     if (onRemoveSessionTab) onRemoveSessionTab(item);
-                  });
+                  }, item);
                 }}
                 onContextMenu={function (event) { openSessionMenu(event, item, activity, false); }}
-                onDragOver={item.kind === "chat" ? function (event) {
+                onDragOver={function (event) {
+                  if (previewPinnedTabReorder(event, item)) return;
                   var resourceApi = workbenchServices.resources();
-                  if (acceptsResourceDrag(event, resourceApi)) {
+                  if (item.kind === "chat" && acceptsResourceDrag(event, resourceApi)) {
                     event.preventDefault();
                     event.dataTransfer.dropEffect = "copy";
                     event.currentTarget.classList.add("resource-drop-target");
                   }
-                } : undefined}
-                onDragLeave={item.kind === "chat" ? function (event) {
+                }}
+                onDragLeave={function (event) {
                   event.currentTarget.classList.remove("resource-drop-target");
-                } : undefined}
-                onDrop={item.kind === "chat" ? function (event) {
+                  clearPinnedTabReorder(event);
+                }}
+                onDrop={function (event) {
                   event.preventDefault();
                   event.currentTarget.classList.remove("resource-drop-target");
+                  clearPinnedTabReorder(event);
+                  if (commitPinnedTabReorder(event, item)) return;
+                  if (item.kind !== "chat") return;
                   var resourceApi = workbenchServices.resources();
                   var resource = resourceApi && resourceApi.readDrag(event);
                   if (!resource) return;
@@ -1436,10 +1688,15 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
                       "success"
                     );
                   }
-                } : undefined}
+                }}
               >
-                <span className={"workbench-session-tab-status " + String(activity.phase || "idle")} aria-hidden="true">
-                  <WorkbenchSessionStatusIcon phase={activity.phase} active={activity.isLive} />
+                <span
+                  className={"workbench-session-tab-status " + String(activity.phase || "idle")}
+                  aria-hidden="true"
+                >
+                  {item.kind === "chat"
+                    ? <WorkbenchSessionStatusIcon phase={activity.phase} active={activity.isLive} />
+                    : <WorkbenchTabKindIcon item={item} />}
                 </span>
                 <span className="workbench-session-tab-copy">
                   {visibleStatusText ? (
@@ -1476,8 +1733,8 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, re
             type="button"
             className={"workbench-session-overflow-button " + String(overflowActivity.phase || "idle")}
             data-workbench-topbar-item="overflow"
-            aria-label={t("workbench.sessionOverflow.buttonLabel", { count: overflowTabs.length }, "Show {count} more sessions") + " · " + wbSessionStatusLabel(overflowActivity, t)}
-            title={t("workbench.sessionOverflow.title", "All conversations")}
+            aria-label={t("workbench.sessionOverflow.buttonLabel", { count: overflowTabs.length }, "Show {count} more tabs") + " · " + wbSessionStatusLabel(overflowActivity, t)}
+            title={t("workbench.sessionOverflow.title", "Tab Center")}
             onClick={openOverflowMenu}
             onKeyDown={handleTopbarItemKeyDown}
           >

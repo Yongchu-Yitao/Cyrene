@@ -13,6 +13,7 @@ from cyrene.core.plugin import (
     PluginRegistry,
 )
 from cyrene.plugins.native_tools import seed_builtin_plugin_directory
+from cyrene.plugins.model_gateway import ensure_model_router
 
 
 _HAN_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
@@ -210,10 +211,46 @@ def test_builtin_i18n_catalog_is_seeded_and_user_edits_are_preserved(tmp_path) -
     assert catalog_path.read_bytes() == edited
 
 
+def test_catalog_relocalizes_standalone_core_plugins_registered_first(
+    tmp_path,
+) -> None:
+    catalog = {
+        "version": 1,
+        "packs": {},
+        "plugins": {
+            "CyreneModelRouter": {
+                "en": {
+                    "name": "Cyrene model router",
+                    "description": "Route one model call.",
+                },
+                "zh": {
+                    "name": "Cyrene 模型路由器",
+                    "description": "路由单次模型调用。",
+                },
+            },
+        },
+    }
+    (tmp_path / "i18n.json").write_text(
+        json.dumps(catalog, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    registry = PluginRegistry()
+    ensure_model_router(registry)
+
+    assert registry.registered_by_canonical("CyreneModelRouter").plugin.localized(
+        "zh"
+    )[0] == "Cyrene Model Router"
+    assert registry.load_directory(tmp_path) == ()
+    assert registry.registered_by_canonical("CyreneModelRouter").plugin.localized(
+        "zh"
+    ) == ("Cyrene 模型路由器", "路由单次模型调用。")
+
+
 def test_builtin_catalog_explicitly_covers_every_plugin_description() -> None:
     catalog = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
     registry = PluginRegistry()
     assert registry.load_directory(_CATALOG_PATH.parent) == ()
+    ensure_model_router(registry)
 
     # Keep historical/compatibility translations in the catalog even after a
     # Plugin is removed; the currently registered identities must nevertheless
@@ -244,6 +281,34 @@ def test_builtin_catalog_explicitly_covers_every_plugin_description() -> None:
                 translations["zh"]["description"]
                 != translations["en"]["description"]
             ), identity
+
+
+def test_workbench_tool_name_catalog_covers_every_registered_builtin() -> None:
+    root = Path(__file__).parents[1]
+    i18n_root = (
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend"
+        / "shared" / "i18n"
+    )
+    key_sets = []
+    for filename in ("catalog-en.jsx", "catalog-zh.jsx"):
+        source = (i18n_root / filename).read_text(encoding="utf-8")
+        key_sets.append(set(re.findall(r'"toolName\.([^"\\]+)"\s*:', source)))
+    assert key_sets[0] == key_sets[1]
+
+    alias_source = (i18n_root / "tool-name-aliases.jsx").read_text(encoding="utf-8")
+    aliases = dict(re.findall(r'^\s*"([^"]+)":\s*"([^"]+)"', alias_source, re.M))
+    assert set(aliases.values()) <= key_sets[0]
+
+    registry = PluginRegistry()
+    assert registry.load_directory(_CATALOG_PATH.parent) == ()
+    ensure_model_router(registry)
+    missing = {
+        registered.plugin.canonical_name
+        for registered in registry.list_plugins()
+        if registered.plugin.canonical_name not in key_sets[0]
+        and aliases.get(registered.plugin.canonical_name) not in key_sets[0]
+    }
+    assert missing == set()
 
 
 def test_seeded_plugin_english_descriptions_match_english_source(tmp_path) -> None:

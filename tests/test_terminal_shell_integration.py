@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
@@ -88,6 +90,8 @@ def test_prepare_zsh_and_fish_preserve_user_startup(tmp_path) -> None:
     assert zsh.env["CYRENE_SHELL_INTEGRATION_SCRIPT"].endswith(
         "cyrene.zsh.integration"
     )
+    zsh_integration = Path(zsh.env["CYRENE_SHELL_INTEGRATION_SCRIPT"]).read_text()
+    assert 'command claude --plugin-dir "${CYRENE_CLAUDE_PLUGIN_DIR}" "$@"' in zsh_integration
 
     fish = prepare_shell_integration(
         shell="fish", argv=["/usr/bin/fish", "-i"], env={}, runtime_dir=tmp_path,
@@ -101,6 +105,29 @@ def test_prepare_zsh_and_fish_preserve_user_startup(tmp_path) -> None:
     assert (
         tmp_path / "shell-integration" / "xdg" / "fish" / "conf.d" / "cyrene.fish"
     ).is_file()
+
+
+def test_prepare_installs_session_scoped_claude_lifecycle_hooks(tmp_path) -> None:
+    launch = prepare_shell_integration(
+        shell="zsh",
+        argv=["/bin/zsh", "-i"],
+        env={"HOME": "/home/user"},
+        runtime_dir=tmp_path,
+    )
+
+    plugin = Path(launch.env["CYRENE_CLAUDE_PLUGIN_DIR"])
+    manifest = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text())
+    hooks = json.loads((plugin / "hooks" / "hooks.json").read_text())["hooks"]
+
+    assert manifest["name"] == "cyrene-agent-status"
+    assert set(hooks) == {
+        "SessionStart", "UserPromptSubmit", "PermissionRequest", "PreToolUse",
+        "Notification", "Stop", "SessionEnd",
+    }
+    assert hooks["PreToolUse"][0]["matcher"] == "AskUserQuestion"
+    assert "--event waiting" in hooks["PermissionRequest"][0]["hooks"][0]["command"]
+    assert "--event completed" in hooks["Stop"][0]["hooks"][0]["command"]
+    assert "--event session_end" in hooks["SessionEnd"][0]["hooks"][0]["command"]
 
 
 def test_prepare_powershell_and_cmd_report_capability(tmp_path) -> None:
@@ -200,6 +227,65 @@ def test_parser_normalizes_windows_file_uri() -> None:
     }]
 
 
+def test_latest_command_drives_unlocked_title_and_cli_agent_lifecycle() -> None:
+    manager = TerminalManager()
+    now = _now_iso()
+    session = TerminalSession(
+        id="term_cli_title",
+        project_id="project-1",
+        title="Terminal 1",
+        cwd="/workspace",
+        shell="zsh",
+        argv=["zsh", "-i"],
+        created_at=now,
+        updated_at=now,
+        status="running",
+    )
+    manager._sessions[session.id] = session
+
+    manager._append_output(
+        session,
+        b"\x1b]133;B\x1b\\codex --full-auto\r\n\x1b]133;C\x1b\\",
+    )
+    running = session.public()
+    assert running["commandTitle"] == "codex"
+    assert running["agentId"] == "codex"
+    assert running["agentActive"] is True
+    assert running["displayTitle"] == "Codex CLI"
+
+    manager._append_output(session, b"done\r\n\x1b]133;D;0\x1b\\")
+    finished = session.public()
+    assert finished["agentActive"] is False
+    assert finished["agentSessionEndedAt"]
+    assert finished["displayTitle"] == "codex"
+
+
+def test_user_locked_terminal_title_is_never_replaced_by_command_metadata() -> None:
+    manager = TerminalManager()
+    now = _now_iso()
+    session = TerminalSession(
+        id="term_locked_title",
+        project_id="project-1",
+        title="Production API",
+        title_locked=True,
+        cwd="/workspace",
+        shell="zsh",
+        argv=["zsh", "-i"],
+        created_at=now,
+        updated_at=now,
+        status="running",
+    )
+    manager._sessions[session.id] = session
+
+    manager._append_output(
+        session,
+        b"\x1b]133;B\x1b\\ping 127.0.0.1\r\n\x1b]133;C\x1b\\",
+    )
+
+    assert session.public()["commandTitle"] == "ping"
+    assert session.public()["displayTitle"] == "Production API"
+
+
 @pytest.mark.asyncio
 async def test_manager_publishes_dynamic_shell_metadata_without_renaming(
     tmp_path,
@@ -246,11 +332,13 @@ async def test_manager_publishes_dynamic_shell_metadata_without_renaming(
     assert session.title == "Terminal 1"
     assert session.cwd == str(cwd)
     assert session.shell_title == "pytest — nested"
+    assert session.command_title == "echo"
     assert session.command_state == "finished"
     assert session.last_command_exit_code == 7
-    assert session.public()["displayTitle"] == "pytest — nested"
+    assert session.public()["displayTitle"] == "echo"
     renamed = manager.rename(session.id, "Pinned shell")
     assert renamed["title"] == "Pinned shell"
+    assert renamed["titleLocked"] is True
     assert renamed["displayTitle"] == "Pinned shell"
     assert renamed["shellTitle"] == "pytest — nested"
 
@@ -259,6 +347,7 @@ async def test_manager_publishes_dynamic_shell_metadata_without_renaming(
     metadata = restored.get(session.id).public()
     assert metadata["cwd"] == str(cwd)
     assert metadata["shellTitle"] == "pytest — nested"
+    assert metadata["commandTitle"] == "echo"
     assert metadata["lastCommandExitCode"] == 7
     manager._drain_screen_now(session)
     await asyncio.sleep(0)

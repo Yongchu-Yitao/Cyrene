@@ -39,6 +39,7 @@ from cyrene.plugins.builtin.cyrene_remote.commands import (
 from cyrene.plugins.builtin.cyrene_remote.relay import CyreneRelayServer
 from cyrene.plugins.builtin.cyrene_remote.pairing import (
     DirectPairingServer,
+    RemotePeerTransportError,
     connect_by_address,
     normalize_pairing_address,
 )
@@ -370,6 +371,12 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         await target_gateway.start()
         await controller_gateway.start()
         try:
+            # A second LAN/VPN interface can leave the target with a stale
+            # controller host even though controller -> target still works.
+            target.update_peer_lan_address(
+                controller.identity.device_id,
+                f"127.0.0.2:{controller_port}",
+            )
             response = await controller_gateway.request(
                 target.identity.device_id,
                 command="chats.send",
@@ -394,6 +401,9 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
                 "project_1",
             )
         ]
+        assert target.get_peer(controller.identity.device_id)[
+            "lan_address"
+        ] == f"127.0.0.1:{controller_port}"
     finally:
         await controller_server.stop()
         await target_server.stop()
@@ -418,6 +428,138 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         f"127.0.0.1:{controller_port}"
     )
     assert persisted_target_peer["granted_project_scopes"] == ["project_1"]
+
+
+@pytest.mark.asyncio
+async def test_inline_request_retries_saved_address_during_listener_restart(
+    monkeypatch,
+    paired_stores,
+):
+    from cyrene.plugins.builtin.cyrene_remote import pairing
+
+    controller = paired_stores["controller"]
+    target = paired_stores["target"]
+    controller.update_peer_lan_address(
+        target.identity.device_id,
+        "192.168.10.20:41234",
+    )
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, request):
+            self.request = request
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "accepted": True,
+                "envelope": {"kind": "command_result"},
+            }
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, json):
+            request = httpx.Request("POST", url, json=json)
+            calls.append(url)
+            if len(calls) < 3:
+                raise httpx.ConnectError("listener restarting", request=request)
+            return FakeResponse(request)
+
+    monkeypatch.setattr(pairing.httpx, "AsyncClient", FakeClient)
+    server = DirectPairingServer(controller, host="127.0.0.1", port=0)
+    response = await server.request(
+        {"recipient_device_id": target.identity.device_id},
+        timeout=2,
+    )
+
+    assert response == {"kind": "command_result"}
+    assert calls == [
+        "http://192.168.10.20:41234/v1/control/request",
+        "http://192.168.10.20:41234/v1/control/request",
+        "http://192.168.10.20:41234/v1/control/request",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_inline_request_preserves_primary_peer_identity_mismatch(
+    monkeypatch,
+    paired_stores,
+):
+    from cyrene.plugins.builtin.cyrene_remote import pairing
+
+    controller = paired_stores["controller"]
+    target = paired_stores["target"]
+    controller.update_peer_lan_address(
+        target.identity.device_id,
+        "192.168.10.20:50000",
+    )
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, json):
+            request = httpx.Request("POST", url, json=json)
+            return httpx.Response(
+                409,
+                request=request,
+                json={
+                    "code": "remote_peer_identity_mismatch",
+                    "error": "Pair the device again.",
+                },
+            )
+
+    monkeypatch.setattr(pairing.httpx, "AsyncClient", FakeClient)
+    server = DirectPairingServer(controller, host="127.0.0.1", port=0)
+
+    with pytest.raises(RemotePeerTransportError) as failure:
+        await server.request(
+            {"recipient_device_id": target.identity.device_id},
+            timeout=2,
+        )
+
+    assert failure.value.code == "remote_peer_identity_mismatch"
+    assert failure.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_direct_listener_reports_recipient_identity_mismatch(tmp_path):
+    store = RemoteControlStore(str(tmp_path / "identity-mismatch.sqlite3"))
+    server = DirectPairingServer(store, host="127.0.0.1", port=0)
+    await server.start()
+    port = server._server.sockets[0].getsockname()[1]
+    try:
+        async with httpx.AsyncClient(trust_env=False) as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}/v1/control/request",
+                json={
+                    "envelope": {
+                        "recipient_device_id": "dev_stale_identity",
+                    }
+                },
+            )
+        assert response.status_code == 409
+        assert response.json()["code"] == "remote_peer_identity_mismatch"
+    finally:
+        await server.stop()
 
 
 @pytest.mark.asyncio

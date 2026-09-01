@@ -11,7 +11,9 @@ from .configuration import (
     candidates_for_route,
     connection_with_secret,
     get_model_configuration,
+    model_configuration_hash,
     normalize_model_configuration,
+    patch_model_configuration,
     public_model_configuration,
     save_model_configuration,
     selectable_model_candidates,
@@ -31,6 +33,8 @@ class ModelConfigurationService(ModelConfigurationApplicationService):
 
     get_model_configuration = staticmethod(get_model_configuration)
     normalize_model_configuration = staticmethod(normalize_model_configuration)
+    model_configuration_hash = staticmethod(model_configuration_hash)
+    patch_model_configuration = staticmethod(patch_model_configuration)
     public_model_configuration = staticmethod(public_model_configuration)
     save_model_configuration = staticmethod(save_model_configuration)
     candidate_for_profile = staticmethod(candidate_for_profile)

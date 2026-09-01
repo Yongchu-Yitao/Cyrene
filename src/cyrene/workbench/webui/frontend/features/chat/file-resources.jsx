@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { WBC_COMMANDS, WBC_ICONS, wbcAgentEventPayload, wbcAgentSessionPayload, wbcAttachmentVisual, wbcConfirmOptimisticMessage, wbcDurableTracePayload, wbcErrorText, wbcFileDragPayload, wbcFileViewKind, wbcFinalizeRuntime, wbcMergeToolOccurrence, wbcNotifyResourceShelfPointerDrag, wbcPersistDurableTrace, wbcPointInsideResourceShelf, wbcSetResourceDrag, wbcStructuredEventSummary, wbcSubagentStatusText, wbcT, wbcToolArgsPreview } from "../../workbench-chat.jsx"
+import { WBC_COMMANDS, WBC_ICONS, wbcAgentEventPayload, wbcAgentSessionPayload, wbcAgentToolDisplayName, wbcAttachmentVisual, wbcConfirmOptimisticMessage, wbcDurableTracePayload, wbcErrorText, wbcFileDragPayload, wbcFileViewKind, wbcFinalizeRuntime, wbcMergeToolOccurrence, wbcNotifyResourceShelfPointerDrag, wbcPersistDurableTrace, wbcPointInsideResourceShelf, wbcSetResourceDrag, wbcStructuredEventSummary, wbcSubagentStatusText, wbcT, wbcToolArgsPreview } from "../../workbench-chat.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcFileVisual({ file, className }) {
@@ -291,7 +291,7 @@ function wbcCommandMeta(id) {
 }
 
 function wbcRuntimeToolEvent(event, eventAt) {
-  var toolName = String(event.tool || "");
+  var toolName = wbcAgentToolDisplayName(event.tool || "", event.args);
   if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return null;
   var toolStarted = event.type === "tool_call_started";
   var toolProgress = event.type === "tool_call_progress";
@@ -778,7 +778,7 @@ var WorkbenchChatRuntimes = (function () {
   function applyStreamToolEvent(chatId, event) {
     if (!chatId || !event) return;
     var toolCallId = String(event.toolCallId || event.tool_call_id || "");
-    var toolName = String(event.name || event.tool || event.title || "");
+    var toolName = wbcAgentToolDisplayName(event.name || event.tool || event.title || "", event.input || event.args);
     if (!toolCallId && !toolName) return;
     if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
     var status = String(event.status || "running").toLowerCase();

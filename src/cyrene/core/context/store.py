@@ -275,6 +275,57 @@ class ContextTreeStore:
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
 
+    def committed_state(self) -> tuple[str, str]:
+        """Return the public conversation branch accepted by the host."""
+
+        with self._lock:
+            self._ensure_available()
+            row = self._connection.execute(
+                "SELECT committed_leaf_id, committed_run_id "
+                "FROM context_tree_metadata WHERE singleton = 1"
+            ).fetchone()
+        if row is None:
+            return "", ""
+        return (
+            str(row["committed_leaf_id"] or ""),
+            str(row["committed_run_id"] or ""),
+        )
+
+    def commit_state(self, leaf_id: str, run_id: str) -> None:
+        """Atomically select a durable branch after the public reply is saved."""
+
+        normalized_leaf_id = str(leaf_id or "").strip()
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_leaf_id or not normalized_run_id:
+            raise ValueError("leaf_id and run_id are required")
+        with self._lock, transaction(self._connection):
+            row = self._connection.execute(
+                "SELECT value_json FROM context_nodes WHERE node_id = ?",
+                (normalized_leaf_id,),
+            ).fetchone()
+            if row is None:
+                raise NodeNotFoundError(
+                    f"context node not found in tree {self._tree.id}: "
+                    f"{normalized_leaf_id}"
+                )
+            value = decode_value(str(row["value_json"]))
+            node_run_id = (
+                str(value.get("run_id") or "")
+                if isinstance(value, dict)
+                else ""
+            )
+            if node_run_id and node_run_id != normalized_run_id:
+                raise ValueError(
+                    f"run_id {normalized_run_id} does not own node "
+                    f"{normalized_leaf_id}"
+                )
+            self._connection.execute(
+                "UPDATE context_tree_metadata "
+                "SET committed_leaf_id = ?, committed_run_id = ? "
+                "WHERE singleton = 1",
+                (normalized_leaf_id, normalized_run_id),
+            )
+
     def _node_from_row(self, row: sqlite3.Row) -> ContextNode:
         return ContextNode(
             id=str(row["node_id"]),

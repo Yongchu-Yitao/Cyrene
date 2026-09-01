@@ -71,6 +71,10 @@ _DEFAULT_SETTINGS: dict = {
     # subsequently saved empty graph remains empty.
     "enabled_plugins": _DEFAULT_ENABLED_PLUGINS,
     "enabled_plugin_packs": {},
+    # Per-entry Workbench visibility overrides.  Entries are visible by
+    # default; Plugin packs own the declarations and this map only records the
+    # user's explicit choice.
+    "workbench_entry_visibility": {},
     "plugin_tool_customizations": {},
     "app_language": "",
     "timezone": "Asia/Shanghai",
@@ -554,6 +558,70 @@ def update_settings_atomic(
         remove_setting_keys=remove_setting_keys,
     )
     return revision, settings
+
+
+def mutate_setting_atomic(
+    key: str,
+    mutator,
+    *,
+    companion_updates=None,
+) -> tuple[int, object, object]:
+    """Atomically transform one setting without a global revision precondition.
+
+    The callback receives a detached copy of the setting's current value and
+    must return its complete replacement.  The read, transformation, encrypted
+    write, and cache swap share one lock, so callers can safely implement
+    field-level patches without losing unrelated writes. ``companion_updates``
+    may derive a small related settings patch from the replacement and persists
+    it under that same lock. An idempotent transformation whose companion values
+    are also unchanged does not advance the global settings revision.
+    """
+
+    if not isinstance(key, str) or not key:
+        raise ValueError("setting key must be a non-empty string")
+    if key in _REMOVED_SETTING_KEYS:
+        raise ValueError(f"Setting has been removed: {key}")
+    if not callable(mutator):
+        raise TypeError("setting mutator must be callable")
+    if companion_updates is not None and not callable(companion_updates):
+        raise TypeError("companion_updates must be callable or None")
+    with _PERSIST_LOCK:
+        current = _ensure_loaded()
+        actual_revision = int(current.get("settings_revision", 0) or 0)
+        candidate = deepcopy(current)
+        candidate_settings = candidate.setdefault("settings", {})
+        before = deepcopy(candidate_settings.get(key, _DEFAULT_SETTINGS.get(key)))
+        next_value = deepcopy(mutator(deepcopy(before)))
+        companions = (
+            companion_updates(deepcopy(next_value))
+            if companion_updates is not None
+            else {}
+        )
+        if not isinstance(companions, dict):
+            raise TypeError("companion_updates must return an object")
+        for companion_key in companions:
+            if not isinstance(companion_key, str) or not companion_key:
+                raise ValueError("companion setting keys must be non-empty strings")
+            if companion_key == key:
+                raise ValueError("companion updates cannot replace the mutated setting")
+            if companion_key in _REMOVED_SETTING_KEYS:
+                raise ValueError(f"Setting has been removed: {companion_key}")
+        companions_changed = any(
+            candidate_settings.get(companion_key, _DEFAULT_SETTINGS.get(companion_key))
+            != companion_value
+            for companion_key, companion_value in companions.items()
+        )
+        if next_value == before and not companions_changed:
+            return actual_revision, before, deepcopy(before)
+        candidate_settings[key] = next_value
+        for companion_key, companion_value in companions.items():
+            candidate_settings[companion_key] = deepcopy(companion_value)
+        next_revision = actual_revision + 1
+        candidate["settings_revision"] = next_revision
+        _persist(candidate)
+        global _cache
+        _cache = candidate
+        return next_revision, before, deepcopy(next_value)
 
 
 def update_settings_and_env_atomic(

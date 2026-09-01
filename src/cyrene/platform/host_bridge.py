@@ -12,6 +12,7 @@ from cyrene.plugins.native_runtime import run_context_value
 
 _ALLOWED_METHODS = frozenset({
     "host.status",
+    "notification.show",
     "window.control",
     "ui.snapshot.current",
     "ui.gesture.execute_current",

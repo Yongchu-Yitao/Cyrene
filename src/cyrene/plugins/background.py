@@ -14,6 +14,7 @@ from typing import Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .native_tools import seed_builtin_plugin_directory
+from cyrene.core.plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from cyrene.core.plugin.plugin import Plugin, PluginContext
 from cyrene.core.plugin.registry import PluginRegistry, default_plugin_impl_directory
 from cyrene.core.plugin.runtime import PluginRuntime
@@ -280,7 +281,7 @@ class BackgroundPluginHost:
                 continue
             try:
                 spec = background_job_spec(registered.plugin)
-            except Exception:
+            except PLUGIN_BOUNDARY_ERRORS:
                 logger.exception(
                     "Invalid background metadata for Plugin %s",
                     registered.plugin.name,

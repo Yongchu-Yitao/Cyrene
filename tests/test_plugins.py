@@ -275,6 +275,56 @@ def test_bad_user_pack_isolated_as_load_failure(tmp_path):
     assert registry.list_packs() == ()
 
 
+def test_system_exit_during_plugin_import_isolated_as_load_failure(tmp_path):
+    root = tmp_path / "plugin_impl"
+    root.mkdir()
+    (root / "a_exit.py").write_text(
+        "raise SystemExit('import exited')\n",
+        encoding="utf-8",
+    )
+    (root / "b_healthy.py").write_text(
+        """\
+from cyrene.core.plugin import Plugin
+plugin = Plugin(
+    name="HealthyAfterExit",
+    description="healthy",
+    input_schema={"type": "object", "properties": {}},
+    handler=lambda _arguments, _context: "ok",
+)
+""",
+        encoding="utf-8",
+    )
+    registry = PluginRegistry(include_core=False)
+
+    failures = registry.load_directory(root)
+
+    assert [(failure.path.name, failure.error) for failure in failures] == [
+        ("a_exit.py", "import exited")
+    ]
+    assert registry.resolve("HealthyAfterExit").name == "HealthyAfterExit"
+
+
+def test_system_exit_from_plugin_handler_returns_scoped_failure():
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            "ExitTool",
+            "exit tool",
+            {"type": "object", "properties": {}},
+            lambda _arguments, _context: (_ for _ in ()).throw(
+                SystemExit("handler exited")
+            ),
+        ),
+        source="test",
+    )
+
+    result = run(PluginRuntime(registry).call("ExitTool", {}))
+
+    assert result.success is False
+    assert result.failure is not None
+    assert result.failure.error_code == "plugin_execution_failed"
+
+
 def test_reload_failure_quarantines_stale_session_registry_until_it_refreshes(
     tmp_path,
 ):
@@ -773,6 +823,219 @@ def test_plugin_runtime_repairs_unambiguous_arguments_for_direct_and_toolbox_cal
         assert deferred_invalid.success is True
         assert deferred_invalid.value["error"]["code"] == "invalid_arguments"
         assert "arguments.steps" in deferred_invalid.value["error"]["message"]
+
+    run(scenario())
+
+
+def test_toolbox_repairs_plugin_name_supplied_as_operation():
+    async def scenario():
+        registry = PluginRegistry()
+        registry.register_plugin(
+            Plugin(
+                "browser_snapshot",
+                "Capture the browser accessibility tree",
+                {
+                    "type": "object",
+                    "properties": {
+                        "max_elements": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                },
+                lambda arguments, _context: arguments,
+            ),
+            source="test",
+        )
+        runtime = PluginRuntime(registry)
+
+        exact_result = await runtime.call(
+            "toolbox",
+            {
+                "operation": "browser_snapshot",
+                "name": "cyrene_browser",
+            },
+        )
+        result = await runtime.call(
+            "toolbox",
+            {
+                "operation": "browser_snapshot",
+                "name": "cyrene_browser",
+                "max_elements": "50",
+            },
+        )
+
+        assert exact_result.success is True
+        assert exact_result.value["operation"] == "invoke"
+        assert exact_result.value["name"] == "browser_snapshot"
+        assert exact_result.value["result"] == {}
+        assert result.success is True
+        assert result.value["operation"] == "invoke"
+        assert result.value["name"] == "browser_snapshot"
+        assert result.value["result"] == {"max_elements": 50}
+        assert result.value["argument_repairs"] == [
+            {
+                "path": "arguments",
+                "kind": "promote_operation_to_invocation",
+                "detail": (
+                    "operation->browser_snapshot;"
+                    "previous_name=cyrene_browser"
+                ),
+            },
+            {
+                "path": "arguments.max_elements",
+                "kind": "coerce_integer_string",
+            }
+        ]
+
+    run(scenario())
+
+
+def test_toolbox_resolves_pack_name_by_unique_plugin_schema_before_review():
+    async def scenario():
+        reviewed = []
+
+        class CapturingHooks:
+            async def pre_tool_use_batch(self, calls, *, permissions=()):
+                reviewed.extend(
+                    (name, dict(arguments)) for name, arguments in calls
+                )
+                return tuple(dict(arguments) for _name, arguments in calls)
+
+            async def post_tool_use(self, *_args, **_kwargs):
+                return ()
+
+        registry = PluginRegistry()
+        registry.register_pack(
+            PluginPack(
+                "cyrene_content",
+                "Content tools",
+                (
+                    Plugin(
+                        "read_tool_result",
+                        "Read a previous result",
+                        {
+                            "type": "object",
+                            "properties": {"content_ref": {"type": "string"}},
+                            "required": ["content_ref"],
+                            "additionalProperties": False,
+                        },
+                        lambda arguments, _context: arguments,
+                    ),
+                    Plugin(
+                        "AnalyzeAttachment",
+                        "Analyze an attachment",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "prompt": {"type": "string"},
+                            },
+                            "required": ["path"],
+                            "additionalProperties": False,
+                        },
+                        lambda arguments, _context: arguments,
+                    ),
+                    Plugin(
+                        "WebFetch",
+                        "Fetch a URL",
+                        {
+                            "type": "object",
+                            "properties": {"url": {"type": "string"}},
+                            "required": ["url"],
+                            "additionalProperties": False,
+                        },
+                        lambda arguments, _context: arguments,
+                    ),
+                ),
+            ),
+            source="test",
+        )
+        runtime = PluginRuntime(registry)
+        result = await runtime.call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "cyrene_content",
+                "arguments": {
+                    "path": "/tmp/upload.docx",
+                    "prompt": "Find Shao's assignments",
+                },
+            },
+            PluginContext(hooks=CapturingHooks()),
+        )
+
+        assert result.success is True
+        assert result.value["name"] == "AnalyzeAttachment"
+        assert result.value["pack"] == "cyrene_content"
+        assert result.value["result"] == {
+            "path": "/tmp/upload.docx",
+            "prompt": "Find Shao's assignments",
+        }
+        assert result.value["argument_repairs"] == [
+            {
+                "path": "arguments.name",
+                "kind": "resolve_pack_by_unique_schema",
+                "detail": "cyrene_content->AnalyzeAttachment",
+            }
+        ]
+        assert reviewed == [
+            (
+                "AnalyzeAttachment",
+                {
+                    "path": "/tmp/upload.docx",
+                    "prompt": "Find Shao's assignments",
+                },
+            )
+        ]
+
+    run(scenario())
+
+
+def test_toolbox_rejects_ambiguous_pack_schema_without_invoking_a_plugin():
+    async def scenario():
+        calls = []
+        shared_schema = {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+
+        def handler(arguments, _context):
+            calls.append(dict(arguments))
+            return arguments
+
+        registry = PluginRegistry()
+        registry.register_pack(
+            PluginPack(
+                "ambiguous",
+                "Ambiguous tools",
+                (
+                    Plugin("FirstMatch", "first", shared_schema, handler),
+                    Plugin("SecondMatch", "second", shared_schema, handler),
+                ),
+            ),
+            source="test",
+        )
+        result = await PluginRuntime(registry).call(
+            "toolbox",
+            {
+                "operation": "invoke",
+                "name": "ambiguous",
+                "arguments": {"value": "same"},
+            },
+        )
+
+        assert result.success is False
+        assert result.failure is not None
+        assert result.failure.error_code == "plugin_pack_target_ambiguous"
+        assert result.failure.retry_scope == "different_arguments"
+        assert result.failure.circuit_scope == "none"
+        assert result.failure.details == {
+            "pack": "ambiguous",
+            "candidates": ["FirstMatch", "SecondMatch"],
+            "matches": ["FirstMatch", "SecondMatch"],
+        }
+        assert calls == []
 
     run(scenario())
 
@@ -1707,6 +1970,7 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
             if item.plugin.kind == "model"
         } == {
             "AMDGPUCloud",
+            "AliyunBailian",
             "Anthropic",
             "CodexOAuth",
             "DeepSeek",
@@ -1768,8 +2032,11 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         assert result.value["tool_calls"] == [
             {
                 "id": "call-read",
-                "name": "Read",
-                "arguments": {"path": "README.md"},
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "arguments": '{"path":"README.md"}',
+                },
             }
         ]
         assert requests[0]["model"] == "MiniMax-M2.7"
@@ -1825,6 +2092,85 @@ def test_minimax_model_pack_uses_openai_tool_call_shape(tmp_path, monkeypatch):
         assert requests[-1]["url"] == "https://custom-provider.test/v1/models"
         assert requests[-1]["authorization"] == ""
         store.close()
+
+    run(scenario())
+
+
+def test_aliyun_bailian_model_plugin_discovers_paginated_catalog():
+    from cyrene.plugins.builtin.cyrene_model.aliyun_bailian import (
+        ALIYUN_BAILIAN_PLUGIN,
+    )
+
+    async def scenario():
+        requests = []
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            requests.append({
+                "url": str(request.url),
+                "authorization": request.headers.get("Authorization", ""),
+            })
+            page_no = int(request.url.params.get("page_no", "1"))
+            model = "qwen-plus" if page_no == 1 else "qwen-vl-plus"
+            modalities = ["Text"] if page_no == 1 else ["Text", "Image"]
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "output": {
+                        "total": 2,
+                        "page_no": page_no,
+                        "page_size": 1,
+                        "models": [{
+                            "model": model,
+                            "name": model,
+                            "capabilities": ["TG" if page_no == 1 else "VU"],
+                            "inference_metadata": {
+                                "request_modality": modalities,
+                                "response_modality": ["Text"],
+                            },
+                        }],
+                    },
+                },
+            )
+
+        registry = PluginRegistry(include_core=False)
+        registry.register_plugin(ALIYUN_BAILIAN_PLUGIN, source="test")
+        discovered = await PluginRuntime(registry).call(
+            "AliyunBailian",
+            {"operation": "list_models"},
+            PluginContext(data={
+                "http_transport": httpx.MockTransport(respond),
+                "model_connection": {
+                    "base_url": (
+                        "https://workspace.cn-beijing.maas.aliyuncs.com"
+                        "/compatible-mode/v1"
+                    ),
+                    "api_key": "bailian-key",
+                },
+            }),
+        )
+
+        assert discovered.success is True
+        assert [item["id"] for item in discovered.value["models"]] == [
+            "qwen-plus",
+            "qwen-vl-plus",
+        ]
+        assert requests == [
+            {
+                "url": (
+                    "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/models"
+                    "?page_no=1&page_size=100"
+                ),
+                "authorization": "Bearer bailian-key",
+            },
+            {
+                "url": (
+                    "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/models"
+                    "?page_no=2&page_size=1"
+                ),
+                "authorization": "Bearer bailian-key",
+            },
+        ]
 
     run(scenario())
 

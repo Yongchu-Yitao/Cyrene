@@ -21,6 +21,71 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
+def test_session_extra_direct_tool_exposes_hidden_tool_only_when_selected(tmp_path):
+    captured_tools = []
+
+    async def fake_model(arguments, _context):
+        captured_tools.append(
+            {
+                item["function"]["name"]
+                for item in arguments.get("tools") or []
+            }
+        )
+        return {"content": "done", "tool_calls": []}
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, fake_model, kind="model"),),
+        ),
+        source="test",
+    )
+    registry.register_pack(
+        PluginPack(
+            "hidden-control",
+            "hidden control",
+            (
+                Plugin(
+                    "finish_hidden_workflow",
+                    "hidden",
+                    {"type": "object", "additionalProperties": False},
+                    lambda _arguments, _context: {"ok": True},
+                    metadata={"agent_exposure": "hidden", "read_only": True},
+                ),
+            ),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+
+    ordinary = AgentSession(
+        tmp_path / "ordinary-data",
+        tmp_path / "ordinary-workspace",
+        plugin_directory,
+        registry=registry,
+    )
+    ordinary.submit("ordinary", run_id="ordinary-run")
+    run(ordinary.drain())
+    ordinary.close()
+
+    selected = AgentSession(
+        tmp_path / "selected-data",
+        tmp_path / "selected-workspace",
+        plugin_directory,
+        registry=registry,
+        extra_direct_tool_names=("finish_hidden_workflow",),
+    )
+    selected.submit("selected", run_id="selected-run")
+    run(selected.drain())
+    selected.close()
+
+    assert "finish_hidden_workflow" not in captured_tools[0]
+    assert "finish_hidden_workflow" in captured_tools[1]
+
+
 def test_model_failure_mounts_structured_public_error_metadata(tmp_path):
     async def failing_model(_arguments, _context):
         raise ModelCallError(classify_model_error("HTTP 401 Unauthorized: Invalid API Key"))
@@ -831,3 +896,146 @@ def test_session_restores_tree_and_does_not_repeat_completed_transition(tmp_path
     assert len(second_snapshot["nodes"]) == len(first_snapshot["nodes"])
     assert second_snapshot["status"] == "idle"
     second.close()
+
+
+def test_failed_retry_restores_previous_committed_branch(tmp_path):
+    model_calls = 0
+
+    async def fake_model(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls > 1:
+            raise RuntimeError("retry failed")
+        return {"content": "first answer", "tool_calls": [], "model": "fake"}
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake",
+                    {"type": "object"},
+                    fake_model,
+                    kind="model",
+                ),
+            ),
+        ),
+        source="test",
+    )
+    workspace = tmp_path / "workspace"
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        workspace,
+        plugin_directory,
+        tree_id="retry-session",
+        registry=registry,
+    )
+    session.submit("question", run_id="run-1", metadata={"turn_id": "msg-1"})
+    run(session.drain())
+    committed_leaf = session.snapshot()["leaf_id"]
+    session.commit_result(committed_leaf, "run-1")
+
+    origin = session.prepare_retry()
+    assert origin["previous_run_id"] == "run-1"
+    session.submit(
+        "question",
+        run_id="run-2",
+        metadata={
+            "retry": True,
+            "turn_id": "msg-1",
+            "retry_of_run_id": origin["previous_run_id"],
+        },
+    )
+    run(session.drain())
+    failed_leaf = session.snapshot()["leaf_id"]
+    assert failed_leaf != committed_leaf
+    session.close()
+
+    reopened = AgentSession(
+        tmp_path / "data",
+        workspace,
+        plugin_directory,
+        tree_id="retry-session",
+        registry=registry,
+    )
+    assert reopened.snapshot()["leaf_id"] == committed_leaf
+    assert reopened.snapshot()["run_id"] == "run-1"
+    reopened.close()
+
+
+def test_normal_failure_after_committed_retry_does_not_restore_older_branch(tmp_path):
+    model_calls = 0
+
+    async def fake_model(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 3:
+            raise RuntimeError("ordinary follow-up failed")
+        return {
+            "content": f"answer {model_calls}",
+            "tool_calls": [],
+            "model": "fake",
+        }
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake",
+                    {"type": "object"},
+                    fake_model,
+                    kind="model",
+                ),
+            ),
+        ),
+        source="test",
+    )
+    data = tmp_path / "data"
+    workspace = tmp_path / "workspace"
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        data,
+        workspace,
+        plugin_directory,
+        tree_id="retry-then-follow-up",
+        registry=registry,
+    )
+    session.submit("question", run_id="run-1", metadata={"turn_id": "msg-1"})
+    run(session.drain())
+    session.commit_result(session.snapshot()["leaf_id"], "run-1")
+
+    session.prepare_retry()
+    session.submit(
+        "question",
+        run_id="run-2",
+        metadata={"retry": True, "turn_id": "msg-1"},
+    )
+    run(session.drain())
+    session.commit_result(session.snapshot()["leaf_id"], "run-2")
+
+    session.submit("follow up", run_id="run-3", metadata={"turn_id": "msg-2"})
+    run(session.drain())
+    failed_leaf = session.snapshot()["leaf_id"]
+    assert session.snapshot()["run_id"] == "run-3"
+    session.close()
+
+    reopened = AgentSession(
+        data,
+        workspace,
+        plugin_directory,
+        tree_id="retry-then-follow-up",
+        registry=registry,
+    )
+    assert reopened.snapshot()["leaf_id"] == failed_leaf
+    assert reopened.snapshot()["run_id"] == "run-3"
+    reopened.close()

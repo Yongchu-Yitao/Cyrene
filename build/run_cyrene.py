@@ -347,9 +347,7 @@ if __name__ == "__main__":
 
             _runpy.run_path(str(_plugin_child), run_name="__main__")
         else:
-            from cyrene.plugins.builtin.cyrene_content.simplexng_child import (
-                main as _run_simplexng_child,
-            )
+            from cyrene.simplexng_child import main as _run_simplexng_child
 
             _run_simplexng_child()
         raise SystemExit(0)

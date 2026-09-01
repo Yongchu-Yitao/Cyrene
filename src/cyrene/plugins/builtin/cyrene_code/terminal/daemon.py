@@ -178,62 +178,52 @@ class TerminalDaemon:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
 
-    async def _dispatch(self, writer: asyncio.StreamWriter, request: dict[str, Any]) -> None:
-        action = str(request.get("action") or "")
-        try:
-            if action == "ping":
-                payload: dict[str, Any] = {}
-            elif action == "shutdown":
-                payload = {"stopping": True}
-            elif action == "list":
-                project_id = str(request.get("projectId") or "")
-                payload = {
-                    "terminals": self.manager.list(
-                        project_id,
-                        owner_chat_id=(
-                            str(request.get("ownerChatId") or "")
-                            if request.get("ownerChatId") is not None else None
-                        ),
-                    ),
-                    "activeTerminalId": self.manager.active_terminal_id(project_id),
-                }
-            elif action == "create":
-                payload = {"terminal": await self._create_terminal(request)}
-            elif action == "screen":
-                payload = await self.manager.screen_snapshot_async(
-                    str(request.get("terminalId") or "")
-                )
-            elif action == "scrollback":
-                requested_cursor = request.get("cursor")
-                payload = await self.manager.scrollback_snapshot_async(
-                    str(request.get("terminalId") or ""),
-                    cursor=int(requested_cursor) if requested_cursor is not None else None,
-                    max_bytes=int(request.get("maxBytes") or 64 * 1024),
-                )
-            elif action == "historySearch":
-                payload = {"matches": await self.manager.search_history_async(
-                    str(request.get("projectId") or ""),
-                    str(request.get("query") or ""),
-                    terminal_id=str(request.get("terminalId") or ""),
-                    limit=int(request.get("limit") or 100),
-                )}
-            elif action == "commands":
-                payload = {"commands": await self.manager.commands_async(
-                    str(request.get("terminalId") or "")
-                )}
-            elif action == "commandOutput":
-                payload = await self.manager.command_output_async(
-                    str(request.get("terminalId") or ""),
-                    str(request.get("commandId") or ""),
-                )
-            elif action == "inputHistory":
-                payload = {
-                    "events": self.manager.input_history(
-                        str(request.get("terminalId") or ""),
-                        limit=int(request.get("limit") or 200),
-                    )
-                }
-            elif action == "input":
+    async def _dispatch_query_action(
+        self, action: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        if action == "ping":
+            return {}
+        if action == "list":
+            project_id = str(request.get("projectId") or "")
+            return {
+                "terminals": self.manager.list(
+                    project_id,
+                    owner_chat_id=(str(request.get("ownerChatId") or "") if request.get("ownerChatId") is not None else None),
+                ),
+                "activeTerminalId": self.manager.active_terminal_id(project_id),
+            }
+        if action == "screen":
+            return await self.manager.screen_snapshot_async(str(request.get("terminalId") or ""))
+        if action == "scrollback":
+            requested_cursor = request.get("cursor")
+            return await self.manager.scrollback_snapshot_async(
+                str(request.get("terminalId") or ""),
+                cursor=int(requested_cursor) if requested_cursor is not None else None,
+                max_bytes=int(request.get("maxBytes") or 64 * 1024),
+            )
+        if action == "historySearch":
+            return {"matches": await self.manager.search_history_async(
+                str(request.get("projectId") or ""), str(request.get("query") or ""),
+                terminal_id=str(request.get("terminalId") or ""), limit=int(request.get("limit") or 100),
+            )}
+        if action == "commands":
+            return {"commands": await self.manager.commands_async(str(request.get("terminalId") or ""))}
+        if action == "commandOutput":
+            return await self.manager.command_output_async(
+                str(request.get("terminalId") or ""), str(request.get("commandId") or "")
+            )
+        return {"events": self.manager.input_history(
+            str(request.get("terminalId") or ""), limit=int(request.get("limit") or 200),
+        )}
+
+    async def _dispatch_mutation_action(
+        self, action: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        if action == "shutdown":
+            return {"stopping": True}
+        if action == "create":
+            return {"terminal": await self._create_terminal(request)}
+        if action == "input":
                 data = str(request.get("data") or "")
                 if request.get("encoding") == "base64":
                     decoded = base64.b64decode(data, validate=True)
@@ -247,63 +237,80 @@ class TerminalDaemon:
                         str(request.get("terminalId") or ""), data,
                         actor=str(request.get("actor") or "agent"),
                     )
-                payload = await self.manager.screen_snapshot_async(
+                return await self.manager.screen_snapshot_async(
                     str(request.get("terminalId") or "")
                 )
-            elif action == "waitConnected":
-                payload = {"terminal": await self.manager.wait_until_connected(
+        if action == "markRead":
+                return {"terminal": self.manager.mark_read(
+                    str(request.get("terminalId") or ""),
+                )}
+        if action == "agentEvent":
+                return {"terminal": self.manager.agent_event(
+                    str(request.get("terminalId") or ""),
+                    str(request.get("agentId") or ""),
+                    str(request.get("event") or ""),
+                    dict(request.get("payload") or {}),
+                )}
+        if action == "waitConnected":
+                return {"terminal": await self.manager.wait_until_connected(
                     str(request.get("terminalId") or ""),
                     timeout=float(request.get("timeoutSeconds") or 300),
                 )}
-            elif action == "interrupt":
-                terminal_id = str(request.get("terminalId") or "")
-                await self.manager.interrupt(terminal_id)
-                payload = await self.manager.screen_snapshot_async(terminal_id)
-            elif action == "restart":
-                payload = {"terminal": await self.manager.restart(
+        if action == "interrupt":
+            terminal_id = str(request.get("terminalId") or "")
+            await self.manager.interrupt(terminal_id)
+            return await self.manager.screen_snapshot_async(terminal_id)
+        if action == "restart":
+                return {"terminal": await self.manager.restart(
                     str(request.get("terminalId") or ""),
                     reason=str(request.get("reason") or "user_restart"),
                 )}
-            elif action == "rename":
-                payload = {"terminal": self.manager.rename(
+        if action == "rename":
+                return {"terminal": self.manager.rename(
                     str(request.get("terminalId") or ""), str(request.get("title") or "")
                 )}
-            elif action == "delete":
-                terminal_id = str(request.get("terminalId") or "")
-                wake = self.manager.wake_info(terminal_id)
-                payload = {
-                    "terminal": await self.manager.close(terminal_id, remove=True),
-                    "deleted": True,
-                    "wakeCancelled": bool(
-                        wake and str(wake.get("status") or "") in {"watching", "ready", "claimed"}
-                    ),
-                }
-            elif action == "layout":
+        if action == "delete":
+            terminal_id = str(request.get("terminalId") or "")
+            wake = self.manager.wake_info(terminal_id)
+            return {
+                "terminal": await self.manager.close(terminal_id, remove=True), "deleted": True,
+                "wakeCancelled": bool(wake and str(wake.get("status") or "") in {"watching", "ready", "claimed"}),
+            }
+        if action == "layout":
                 project_id = str(request.get("projectId") or "")
-                payload = {"terminals": self.manager.update_layout(
+                return {"terminals": self.manager.update_layout(
                     project_id,
                     list(request.get("order") or []),
                     list(request.get("pinned") or []),
                 )}
-            elif action == "activate":
-                payload = {"activeTerminalId": self.manager.set_active(
+        if action == "activate":
+                return {"activeTerminalId": self.manager.set_active(
                     str(request.get("projectId") or ""), request.get("terminalId")
                 )}
-            elif action == "wakeInfo":
-                payload = {"wake": self.manager.wake_info(str(request.get("terminalId") or ""))}
-            elif action == "claimWake":
-                payload = {"wake": self.manager.claim_wake(
+        if action == "wakeInfo":
+            return {"wake": self.manager.wake_info(str(request.get("terminalId") or ""))}
+        if action == "claimWake":
+                return {"wake": self.manager.claim_wake(
                     str(request.get("consumerId") or "web"),
                     float(request.get("leaseSeconds") or 30),
                 )}
-            elif action == "settleWake":
-                payload = {"wake": self.manager.settle_wake(
+        if action == "settleWake":
+                return {"wake": self.manager.settle_wake(
                     str(request.get("wakeId") or ""),
                     str(request.get("leaseToken") or ""),
                     str(request.get("outcome") or "release"),
                 )}
-            else:
-                raise ValueError("unknown terminal daemon action")
+        raise ValueError("unknown terminal daemon action")
+
+    async def _dispatch_action(self, action: str, request: dict[str, Any]) -> dict[str, Any]:
+        if action in {"ping", "list", "screen", "scrollback", "historySearch", "commands", "commandOutput", "inputHistory"}:
+            return await self._dispatch_query_action(action, request)
+        return await self._dispatch_mutation_action(action, request)
+
+    async def _dispatch(self, writer: asyncio.StreamWriter, request: dict[str, Any]) -> None:
+        action = str(request.get("action") or "")
+        try:
+            payload = await self._dispatch_action(action, request)
         except TerminalInputBusyError as exc:
             await self._send(writer, {
                 "ok": False,
@@ -387,9 +394,7 @@ class TerminalDaemon:
             self.manager.set_active(terminal["projectId"], terminal["id"])
         return terminal
 
-    async def _subscribe(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, request: dict[str, Any],
-    ) -> None:
+    async def _subscribe(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, request: dict[str, Any]) -> None:
         terminal_id = str(request.get("terminalId") or "")
         try:
             session = self.manager.get(terminal_id)
@@ -468,6 +473,8 @@ class TerminalDaemon:
                             )
                         elif action == "interrupt":
                             await self.manager.interrupt(terminal_id)
+                        elif action == "read":
+                            self.manager.mark_read(terminal_id)
                     except LookupError:
                         await send({
                             "type": "error",

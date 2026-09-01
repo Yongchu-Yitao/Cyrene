@@ -145,6 +145,48 @@ class TreeHookStore:
             enabled=hook.enabled,
         )
 
+    def update_hook(self, hook: Hook) -> None:
+        """Update an existing binding without changing its identity or age."""
+
+        config_json = json.dumps(
+            dict(hook.config),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        with self._lock, transaction(self._connection):
+            cursor = self._connection.execute(
+                """
+                UPDATE hook_bindings
+                SET event = ?, plugin_id = ?, root_only = ?, matcher = ?,
+                    failure_policy = ?, config_json = ?, enabled = ?
+                WHERE hook_id = ?
+                """,
+                (
+                    hook.event,
+                    hook.plugin_id,
+                    int(hook.root_only),
+                    hook.matcher,
+                    hook.failure_policy,
+                    config_json,
+                    int(hook.enabled),
+                    hook.id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Hook binding does not exist: {hook.id}")
+        log_operation(
+            logger,
+            "hook.store",
+            "update_binding",
+            phase="completed",
+            hook_id=hook.id,
+            event=hook.event,
+            plugin_id=hook.plugin_id,
+            config=dict(hook.config),
+            enabled=hook.enabled,
+        )
+
     def delete_hook(self, hook_id: str) -> bool:
         with self._lock, transaction(self._connection):
             cursor = self._connection.execute(

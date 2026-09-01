@@ -56,9 +56,15 @@ function useWbcProjectFiles({ enabled, path, projectId }) {
   return snapshot
 }
 
-function WbcProjectFileHeader({ collapseControls, onBack, onCollapse, path, rootLabel, workspace }) {
+function WbcProjectFileHeader({ collapseControls, onBack, onCollapse, onContextMenu, onKeyDown, path, rootLabel, workspace }) {
   var normalizedPath = String(path || ".")
-  return <div className={"wbc-project-tool-inline-header is-file wbc-project-file-header" + (workspace ? " is-workspace" : "")}>
+  return <div
+    className={"wbc-project-tool-inline-header is-file wbc-project-file-header" + (workspace ? " is-workspace" : "")}
+    tabIndex={onContextMenu ? 0 : undefined}
+    data-cyrene-context-menu={onContextMenu ? "true" : undefined}
+    onContextMenu={onContextMenu}
+    onKeyDown={onKeyDown}
+  >
     {normalizedPath === "." ? (
       <span className="wbc-project-tool-icon" aria-hidden="true">{WBC_ICONS.folder}</span>
     ) : (

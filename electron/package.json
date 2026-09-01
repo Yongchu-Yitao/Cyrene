@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.9.0-beta4",
+  "version": "0.9.0-beta5",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "desktopName": "cyrene.desktop",
@@ -92,7 +92,9 @@
       "category": "public.app-category.productivity",
       "icon": "../build/icon.icns",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Cyrene uses the microphone only when you start local voice input."
+        "NSMicrophoneUsageDescription": "Cyrene uses the microphone only when you start voice input or explicitly share it with a remote desktop session.",
+        "NSScreenCaptureUsageDescription": "Cyrene shares a selected display only while an authorized Remote Desktop session is active.",
+        "NSAudioCaptureUsageDescription": "Cyrene captures system audio only while an authorized Remote Desktop session is active."
       },
       "target": [
         "dmg"
@@ -144,24 +146,46 @@
     "deb": {
       "afterInstall": "linux-after-install.sh",
       "depends": [
-        "at-spi2-core"
+        "at-spi2-core",
+        "freerdp3-x11 | freerdp2-x11",
+        "xvfb",
+        "xdotool"
       ]
     },
     "rpm": {
-      "afterInstall": "linux-after-install.sh"
+      "afterInstall": "linux-after-install.sh",
+      "depends": [
+        "at-spi2-core",
+        "xdotool"
+      ]
     },
     "files": [
       "main.js",
       "backend-port-waiters.js",
+      "main-window-lifecycle.js",
       "development-data-migration.js",
       "host-control.js",
       "browser-input.js",
+      "browser-deep-dom.js",
       "browser-context-menu.js",
       "browser-popup-policy.js",
       "browser-target.js",
       "agent-cursor.js",
       "terminal-lifecycle-soak.js",
       "rotating-log.js",
+      "remote-desktop.js",
+      "remote-desktop-coordinates.js",
+      "remote-desktop-preload.js",
+      "remote-desktop-host.html",
+      "remote-desktop-host.js",
+      "remote-desktop-rdp-sidecar.js",
+      "remote-desktop-indicator-preload.js",
+      "remote-desktop-indicator.html",
+      "remote-desktop-indicator.css",
+      "remote-desktop-indicator.js",
+      "remote-desktop-credential-preload.js",
+      "remote-desktop-credential.html",
+      "remote-desktop-credential.js",
       "preload.js",
       "browser-chat-overlay-preload.js",
       "browser-tab-picker-preload.js",

@@ -88,6 +88,23 @@ REMOTE_EXTENSION_CAPABILITIES = frozenset(
         "remote_job:read",
         "remote_job:run",
         "remote_job:control",
+        "desktop:session_connect",
+        "desktop:current_session",
+        "desktop:remote_login",
+        "desktop:screen_view_user",
+        "desktop:screen_view_agent",
+        "desktop:input_user",
+        "desktop:input_agent",
+        "desktop:display_list",
+        "desktop:display_select_user",
+        "desktop:display_select_agent",
+        "desktop:audio_output_user",
+        "desktop:audio_input_user",
+        "desktop:audio_agent",
+        "desktop:clipboard_text_user",
+        "desktop:clipboard_image_user",
+        "desktop:clipboard_file_user",
+        "desktop:clipboard_agent",
     }
 )
 REMOTE_CAPABILITIES = BASE_REMOTE_CAPABILITIES | REMOTE_EXTENSION_CAPABILITIES
@@ -113,6 +130,19 @@ DEFAULT_REMOTE_CAPABILITIES = (
     "remote_job:read",
     "remote_job:run",
     "remote_job:control",
+    "desktop:session_connect",
+    "desktop:current_session",
+    "desktop:remote_login",
+    "desktop:screen_view_user",
+    "desktop:screen_view_agent",
+    "desktop:input_user",
+    "desktop:display_list",
+    "desktop:display_select_user",
+    "desktop:audio_output_user",
+    "desktop:audio_input_user",
+    "desktop:clipboard_text_user",
+    "desktop:clipboard_image_user",
+    "desktop:clipboard_file_user",
     "settings:read",
     "settings:update",
 )
@@ -229,6 +259,28 @@ _COMMAND_CAPABILITIES = {
     "harness.list": "",
     "harness.describe": "",
     "harness.invoke": "",
+    "desktop.probe": "desktop:session_connect",
+    "desktop.negotiate": "desktop:screen_view_user",
+    "desktop.disconnect": "desktop:session_connect",
+    "desktop.display.list": "desktop:display_list",
+    "desktop.display.select": "desktop:display_select_user",
+    "desktop.quality.set": "desktop:screen_view_user",
+    "desktop.microphone.set": "desktop:audio_input_user",
+    "desktop.security.get": "desktop:screen_view_user",
+    "desktop.clipboard.image.upload.begin": "desktop:clipboard_image_user",
+    "desktop.clipboard.image.upload.chunk": "desktop:clipboard_image_user",
+    "desktop.clipboard.image.upload.commit": "desktop:clipboard_image_user",
+    "desktop.clipboard.image.upload.abort": "desktop:clipboard_image_user",
+    "desktop.clipboard.image.download": "desktop:clipboard_image_user",
+    "desktop.clipboard.image.ack": "desktop:clipboard_image_user",
+    "desktop.clipboard.file.upload.begin": "desktop:clipboard_file_user",
+    "desktop.clipboard.file.upload.chunk": "desktop:clipboard_file_user",
+    "desktop.clipboard.file.upload.commit": "desktop:clipboard_file_user",
+    "desktop.clipboard.file.upload.abort": "desktop:clipboard_file_user",
+    "desktop.clipboard.file.apply": "desktop:clipboard_file_user",
+    "desktop.clipboard.file.download.prepare": "desktop:clipboard_file_user",
+    "desktop.clipboard.file.download": "desktop:clipboard_file_user",
+    "desktop.clipboard.file.ack": "desktop:clipboard_file_user",
 }
 _REMOTE_SHELL_COMMANDS = frozenset(
     {"shell.open", "shell.read", "shell.write", "shell.interrupt", "shell.close"}
@@ -244,7 +296,7 @@ def _remote_shell_plugin_available() -> bool:
 _PROJECT_SCOPED_COMMANDS = frozenset(
     command
     for command in _COMMAND_CAPABILITIES
-    if command not in {
+    if not command.startswith("desktop.") and command not in {
         "capabilities.read",
         "projects.list",
         "settings.read",
@@ -296,6 +348,23 @@ _SIDE_EFFECT_COMMANDS = frozenset(
         "jobs.start",
         "jobs.cancel",
         "jobs.interrupt",
+        "desktop.negotiate",
+        "desktop.disconnect",
+        "desktop.display.select",
+        "desktop.quality.set",
+        "desktop.microphone.set",
+        "desktop.clipboard.image.upload.begin",
+        "desktop.clipboard.image.upload.chunk",
+        "desktop.clipboard.image.upload.commit",
+        "desktop.clipboard.image.upload.abort",
+        "desktop.clipboard.image.ack",
+        "desktop.clipboard.file.upload.begin",
+        "desktop.clipboard.file.upload.chunk",
+        "desktop.clipboard.file.upload.commit",
+        "desktop.clipboard.file.upload.abort",
+        "desktop.clipboard.file.apply",
+        "desktop.clipboard.file.download.prepare",
+        "desktop.clipboard.file.ack",
     }
 )
 
@@ -2270,7 +2339,15 @@ class RemoteGateway:
             outcome="pending",
         )
         try:
-            await self.relay.send(envelope)
+            inline_request = getattr(self.relay, "request", None)
+            if callable(inline_request):
+                response_envelope = await inline_request(
+                    envelope,
+                    timeout=max(0.1, float(timeout)),
+                )
+                await self._receive(response_envelope)
+            else:
+                await self.relay.send(envelope)
             result = await asyncio.wait_for(
                 future,
                 timeout=max(0.1, float(timeout)),

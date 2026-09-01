@@ -447,6 +447,9 @@ class PluginCall:
     name: str
     arguments: Mapping[str, Any]
     id: str = field(default_factory=lambda: f"call_{uuid4().hex}")
+    arguments_normalized: bool = False
+    nested_arguments_normalized: bool = False
+    argument_repairs: tuple[Mapping[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         name = str(self.name).strip()
@@ -458,6 +461,113 @@ class PluginCall:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "id", call_id)
         object.__setattr__(self, "arguments", deepcopy(dict(self.arguments)))
+        object.__setattr__(self, "arguments_normalized", bool(self.arguments_normalized))
+        object.__setattr__(
+            self,
+            "nested_arguments_normalized",
+            bool(self.nested_arguments_normalized),
+        )
+        object.__setattr__(
+            self,
+            "argument_repairs",
+            tuple(
+                deepcopy(dict(repair))
+                for repair in self.argument_repairs
+                if isinstance(repair, Mapping)
+            ),
+        )
+
+
+PluginRetryScope: TypeAlias = Literal[
+    "never",
+    "different_arguments",
+    "after_delay",
+    "after_config_change",
+    "new_run",
+]
+PluginCircuitScope: TypeAlias = Literal["none", "run_plugin"]
+
+
+@dataclass(frozen=True, slots=True)
+class PluginFailure:
+    """Safe, structured failure information carried across Plugin boundaries."""
+
+    error_code: str
+    message: str
+    retryable: bool = False
+    retry_scope: PluginRetryScope = "never"
+    retry_after_ms: int | None = None
+    circuit_scope: PluginCircuitScope = "none"
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        error_code = str(self.error_code or "").strip()
+        if not _IDENTIFIER.fullmatch(error_code):
+            raise ValueError(f"invalid Plugin failure error_code: {self.error_code!r}")
+        if self.retry_scope not in {
+            "never",
+            "different_arguments",
+            "after_delay",
+            "after_config_change",
+            "new_run",
+        }:
+            raise ValueError(f"invalid Plugin retry_scope: {self.retry_scope!r}")
+        if self.circuit_scope not in {"none", "run_plugin"}:
+            raise ValueError(f"invalid Plugin circuit_scope: {self.circuit_scope!r}")
+        retry_after_ms = self.retry_after_ms
+        if retry_after_ms is not None:
+            if isinstance(retry_after_ms, bool) or not isinstance(retry_after_ms, int):
+                raise TypeError("Plugin failure retry_after_ms must be an integer or None")
+            if retry_after_ms < 0:
+                raise ValueError("Plugin failure retry_after_ms cannot be negative")
+        if not isinstance(self.details, Mapping):
+            raise TypeError("Plugin failure details must be a mapping")
+        object.__setattr__(self, "error_code", error_code)
+        object.__setattr__(self, "message", str(self.message or ""))
+        object.__setattr__(self, "retryable", bool(self.retryable))
+        object.__setattr__(self, "details", deepcopy(dict(self.details)))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "error_code": self.error_code,
+            "message": self.message,
+            "retryable": self.retryable,
+            "retry_scope": self.retry_scope,
+            "retry_after_ms": self.retry_after_ms,
+            "circuit_scope": self.circuit_scope,
+            "details": deepcopy(dict(self.details)),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> PluginFailure:
+        retry_after = value.get("retry_after_ms")
+        return cls(
+            error_code=str(value.get("error_code") or "plugin_execution_failed"),
+            message=str(value.get("message") or ""),
+            retryable=value.get("retryable") is True,
+            retry_scope=str(value.get("retry_scope") or "never"),  # type: ignore[arg-type]
+            retry_after_ms=(
+                int(retry_after)
+                if isinstance(retry_after, int) and not isinstance(retry_after, bool)
+                else None
+            ),
+            circuit_scope=str(value.get("circuit_scope") or "none"),  # type: ignore[arg-type]
+            details=(
+                value.get("details")
+                if isinstance(value.get("details"), Mapping)
+                else {}
+            ),
+        )
+
+
+class PluginExecutionError(RuntimeError):
+    """A Plugin-declared failure safe to expose to routing and model layers."""
+
+    def __init__(self, failure: PluginFailure) -> None:
+        if not isinstance(failure, PluginFailure):
+            raise TypeError("failure must be a PluginFailure")
+        self.failure = failure
+        super().__init__(failure.message or failure.error_code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,6 +580,7 @@ class PluginCallResult:
     value: Any
     error: str
     time: datetime
+    failure: PluginFailure | None = None
     error_details: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -478,10 +589,14 @@ __all__ = [
     "PluginApplicationSetupHandler",
     "PluginCall",
     "PluginCallResult",
+    "PluginCircuitScope",
     "PluginContext",
+    "PluginExecutionError",
+    "PluginFailure",
     "PluginHandler",
     "PluginPack",
     "PermissionBoundaryProvider",
+    "PluginRetryScope",
     "PluginSetupContext",
     "PluginSetupHandler",
     "merge_plugin_pack_metadata",

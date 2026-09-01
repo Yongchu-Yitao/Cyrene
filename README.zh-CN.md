@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.9.0-beta4-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.0-beta5-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
@@ -32,7 +32,10 @@
   Office 文档、音视频和文献库结合起来，沉淀为结构化知识或精美的 PDF 报告。
 - **真正会操作浏览器**：你可以实时看到 Cyrene 浏览页面、点击、输入、上传和
   检查内容；遇到登录、CAPTCHA 或 2FA 时，可在同一个浏览器中接管，完成后再
-  交还给 Agent，无需丢失会话状态。
+  交还给 Agent，无需丢失会话状态。Snapshot Ref、可信点击和一次性批准上传
+  降低误操作，但当前 DOM Projection 主要覆盖 Top-level Document，且 Browser
+  URL Policy 不等同于完整的逐 Request 网络 Sandbox；详见
+  [Browser 能力与边界](docs/browser-live-view.zh-CN.md#页面操作模型与当前边界)。
 - **实时创作 PowerPoint**：通过本地 Office 加载项，Cyrene 能检查、批量新增、
   移动、缩放和修改当前演示文稿中的元素，并在每页完成后直接让 PowerPoint
   渲染和验证；用户可以连续看到整套 PPT 的渐进式变化。
@@ -46,57 +49,12 @@
 
 ## 一个由插件组装出来的 Agent
 
-Cyrene 不是“固定 Agent + 外挂扩展层”。每次运行的 Agent 都由当前对话启用的
-插件共同组成：
+Cyrene 的人格、记忆、模型、工具与工作流都由插件提供，而不是固化在一个不可改变
+的 Agent 中。不同 Conversation 和 Project 可以启用不同能力；你也可以在 Plugin
+Center 中管理插件和工具的可见性。
 
-```text
-空的 ContextTree Root
-  + 可编辑的 System Prompt 插件
-  + SOUL 人格插件（启用时）
-  + Memory、Project、Runtime 与输入框上下文插件
-  + Model Provider 插件
-  + Agent 直接可见工具和可发现工具插件
-  + Lifecycle、Permission、Learning 与 Delivery Hook
-  = 本次运行实际使用的 Agent
-```
-
-对话开始时，Tree-local `SessionStart` Hook 会冻结稳定的 System Prompt、SOUL、
-Memory 与已学习技能前缀。随后每次 `TurnStart` 只追加本轮选择的 Workspace、MCP
-Server、Attachment、Runtime State 等动态上下文。稳定字节始终位于变化后缀之前，
-让模型 Provider 尽可能复用最长的 Prompt Cache 前缀。
-
-模型只会立即看到固定 Kernel Tool 和设为“Agent 直接可见”的工具；其余已启用的
-工具包与独立工具统一通过 `toolbox.list → toolbox.describe → toolbox.invoke` 渐进
-发现。调用前后的 Tree-local Hook 可以校验或修改参数、请求权限、记录学习证据并
-发布结果；`SessionEnd` 与 `Stop` Hook 负责收尾或取消插件拥有的工作。ContextTree
-持久化恢复所需的 Message、Mount、Tool Result、Token Usage、Compaction
-Checkpoint 与 Inbox State。
-
-Subagent 也遵循同一组装方式：创建时继承 Main Agent 的初始 Tree，再加入 Main
-Agent 的任务指令；能力由 Actor Policy 决定，并通过持久 Inbox 通信。Plugin
-Center 则统一控制插件包是否存在、每个工具是直接可见还是由 Agent 寻找使用，
-以及用户编辑后的名称和 Agent 可见描述。
-
-完整生命周期见[架构说明](docs/architecture.zh-CN.md)，插件贡献格式见
+实现原理见[架构说明](docs/architecture.zh-CN.md)，扩展方式见
 [自定义插件](docs/project-plugins.zh-CN.md)。
-
-Workbench 现在以 Conversation 为唯一工作入口。`/goal` 可以把当前对话变成
-持久 Goal Loop，用户可编辑目标和持续时间、查看 Plan、随时停止或手动验收；
-Agent 完成后由独立 Reviewer 对照目标检查，不通过时继续反思和修复。用户明确
-要求处理文件时，同一对话可在旁边打开 Dynamic Workspace，在 Editor、Terminal、
-Problems、Review、Preview 与 Files 间切换；无内容的视图自动隐藏，导航或重启后
-仍能恢复工作现场。
-
-Project 支持也由插件提供，不再硬编码。JavaScript/TypeScript（Node.js、Bun、
-pnpm、Yarn 或 Deno）、Python 与 uv、TeX、Go、Rust、Java（Maven/Gradle）、
-Make 和 GitHub Repository 都可以贡献安全的一键 Build、Run、Test 与 Preview
-动作。安装或检测到对应 Runtime Extension 后会自动启用 Project Plugin，用户
-也可在 Project Settings 中检查、补充或修复识别结果。
-
-源码也遵循同一边界：`cyrene.core` 与 Host 无关，`cyrene.plugins` 拥有
-Cyrene 产品贡献与内置功能插件，`cyrene.workbench` 将它们适配到 HTTP、
-持久化、Electron 和 SPA。原顶层 `agent`、`route`、`webui` 包已删除，
-不保留兼容外壳。
 
 ## 快速开始
 

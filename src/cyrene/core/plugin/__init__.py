@@ -3,6 +3,7 @@
 from .activation import PluginActivationSnapshot, PluginActivationState
 from .batch_catcher import PluginBatchCatcher
 from .batch_runner import PluginBatchRunner
+from .circuit import PluginCircuitBreaker
 from .core_impl import (
     PERMISSION_PLUGIN_ID,
     PermissionDecision,
@@ -36,9 +37,13 @@ from .plugin import (
     PluginApplicationSetupHandler,
     PluginCall,
     PluginCallResult,
+    PluginCircuitScope,
     PluginContext,
+    PluginExecutionError,
+    PluginFailure,
     PluginHandler,
     PluginPack,
+    PluginRetryScope,
     PermissionBoundaryProvider,
     PluginSetupContext,
     PluginSetupHandler,
@@ -53,7 +58,7 @@ from .registry import (
     RegisteredPlugin,
     default_plugin_impl_directory,
 )
-from .runtime import PluginRuntime, PreparedPluginCall
+from .runtime import NormalizedPluginCall, PluginRuntime, PreparedPluginCall
 from .resource_effects import (
     PluginResourceEffect,
     RESOURCE_REVEAL_ARGUMENT,
@@ -116,13 +121,19 @@ __all__ = [
     "PluginBatchRunner",
     "PluginCall",
     "PluginCallResult",
+    "PluginCircuitBreaker",
+    "PluginCircuitScope",
     "PluginContext",
     "PluginCustomizationState",
     "PluginHandler",
+    "PluginExecutionError",
+    "PluginFailure",
     "PluginInputValidationError",
     "PluginLoadFailure",
+    "NormalizedPluginCall",
     "PluginNotFoundError",
     "PluginPack",
+    "PluginRetryScope",
     "PluginRegistry",
     "PluginRegistryError",
     "PluginResourceEffect",

@@ -956,6 +956,235 @@ _BROWSER_FIND_JS = r"""
 """
 
 
+# Supplemental collectors used only after the historical top-document path.
+# Keeping these separate makes ordinary-page snapshot and target behavior
+# byte-for-byte compatible with the existing implementation.
+_BROWSER_SHADOW_INSPECT_JS = r"""
+(function(maxArg, textArg, startArg) {
+  const maxElements = Math.max(0, Math.min(200, Number(maxArg) || 0));
+  const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
+  const startIndex = Math.max(0, Number(startArg) || 0);
+  const clean = (value, limit = textLimit) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  const roots = [];
+  const pending = [document];
+  for (let index = 0; index < pending.length; index += 1) {
+    const root = pending[index];
+    for (const node of Array.from(root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+      if (node.shadowRoot && !pending.includes(node.shadowRoot)) {
+        pending.push(node.shadowRoot);
+        roots.push(node.shadowRoot);
+      }
+    }
+  }
+  const deepPoint = (x, y) => {
+    let hit = document.elementFromPoint ? document.elementFromPoint(x, y) : null;
+    while (hit && hit.shadowRoot && typeof hit.shadowRoot.elementFromPoint === 'function') {
+      const nested = hit.shadowRoot.elementFromPoint(x, y);
+      if (!nested || nested === hit) break;
+      hit = nested;
+    }
+    return hit;
+  };
+  const roleOf = (el, tag) => {
+    const explicit = clean(el.getAttribute('role'), 60);
+    if (explicit) return explicit;
+    if (tag === 'a' && el.href) return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'input') return String(el.type || '').toLowerCase() === 'file' ? 'file-upload' : 'textbox';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'img') return 'img';
+    if (el.isContentEditable) return 'textbox';
+    return '';
+  };
+  const selectors = [
+    'input,textarea,select,button,a[href],[contenteditable="true"],[role],[tabindex]',
+    'summary,label,img,video,section,article,div,span',
+  ];
+  const out = [];
+  const seen = new Set();
+  for (const root of roots) {
+    for (const el of selectors.flatMap((selector) => Array.from(root.querySelectorAll(selector)))) {
+      if (!(el instanceof Element) || seen.has(el)) continue;
+      seen.add(el);
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0
+          || !rect || rect.width <= 0 || rect.height <= 0) continue;
+      const x = Math.max(0, rect.left) + Math.max(0, Math.min(innerWidth, rect.right) - Math.max(0, rect.left)) / 2;
+      const y = Math.max(0, rect.top) + Math.max(0, Math.min(innerHeight, rect.bottom) - Math.max(0, rect.top)) / 2;
+      const hit = deepPoint(x, y);
+      if (!hit || (hit !== el && !el.contains(hit))) continue;
+      const tag = String(el.tagName || '').toLowerCase();
+      const role = roleOf(el, tag);
+      const inputType = tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '';
+      const text = tag === 'input' || tag === 'textarea'
+        ? (inputType === 'password' ? '' : clean(el.value))
+        : clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
+      const ariaLabel = clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt'));
+      const placeholder = clean(el.getAttribute('placeholder'));
+      const href = el.href ? String(el.href) : clean(el.getAttribute('href'), 300);
+      if (!(role || href || placeholder || ariaLabel || ['img', 'input', 'textarea', 'select'].includes(tag) || text.length >= 2)) continue;
+      const refNumber = startIndex + out.length + 1;
+      el.setAttribute('data-cyrene-ref', String(refNumber));
+      out.push({
+        ref: 'e' + refNumber, tag, role, visible: true,
+        interactive: !el.disabled && (['a','button','input','textarea','select','summary'].includes(tag) || el.isContentEditable || el.tabIndex >= 0),
+        disabled: !!el.disabled || String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true',
+        inputType,
+        accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
+        multiple: tag === 'input' && el.hasAttribute('multiple'),
+        text, ariaLabel, placeholder, href,
+        src: tag === 'img' ? String(el.currentSrc || el.src || '') : '',
+        alt: tag === 'img' ? clean(el.getAttribute('alt')) : '',
+        selector: '[data-cyrene-ref="' + refNumber + '"]',
+        rect: {x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height)},
+        shadowDepth: 1,
+      });
+      if (out.length >= maxElements) break;
+    }
+    if (out.length >= maxElements) break;
+  }
+  return {ok: true, url: location.href, title: document.title || '', elements: out};
+})
+"""
+
+
+_BROWSER_NESTED_FIND_JS = r"""
+(function(modeArg, valueArg, exactArg, visibleOnlyArg, includeLightDomArg) {
+  const mode = String(modeArg || 'selector');
+  const value = String(valueArg || '');
+  const exact = exactArg === true;
+  const visibleOnly = visibleOnlyArg !== false;
+  const roots = [document];
+  for (let index = 0; index < roots.length; index += 1) {
+    for (const node of Array.from(roots[index].querySelectorAll ? roots[index].querySelectorAll('*') : [])) {
+      if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+    }
+  }
+  const selected = includeLightDomArg === true ? roots : roots.slice(1);
+  const queryOne = (selector) => {
+    for (const root of selected) {
+      const found = root.querySelector ? root.querySelector(selector) : null;
+      if (found) return found;
+    }
+    return null;
+  };
+  const norm = (input) => String(input || '').replace(/\s+/g, ' ').trim();
+  let el = null;
+  if (mode === 'ref') {
+    const number = value.replace(/^e/i, '').replace(/"/g, '\\"');
+    el = queryOne('[data-cyrene-ref="' + number + '"]');
+  } else if (mode === 'text') {
+    const needle = norm(value).toLowerCase();
+    const nodes = selected.flatMap((root) => Array.from(root.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],label,summary,[contenteditable="true"],div,span,section,article')));
+    el = nodes.find((node) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      if (visibleOnly && (!style || style.display === 'none' || style.visibility === 'hidden' || !rect || rect.width <= 0 || rect.height <= 0)) return false;
+      const haystack = norm(node.innerText || node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('placeholder') || node.getAttribute('value')).toLowerCase();
+      return exact ? haystack === needle : haystack.includes(needle);
+    }) || null;
+  } else {
+    el = queryOne(value);
+  }
+  if (!el) return {ok: false, code: 'TARGET_NOT_FOUND'};
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  if (visibleOnly && (!style || style.display === 'none' || style.visibility === 'hidden' || !rect || rect.width <= 0 || rect.height <= 0)) return {ok: false, code: 'TARGET_NOT_VISIBLE'};
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  const settled = el.getBoundingClientRect();
+  return {
+    ok: true,
+    x: Math.round(settled.left + settled.width / 2),
+    y: Math.round(settled.top + settled.height / 2),
+    box: {x: Math.round(settled.left), y: Math.round(settled.top), w: Math.round(settled.width), h: Math.round(settled.height)},
+    tag: String(el.tagName || '').toLowerCase(),
+    inputType: String(el.getAttribute && el.getAttribute('type') || '').toLowerCase(),
+    accept: String(el.getAttribute && el.getAttribute('accept') || ''),
+    multiple: !!(el.hasAttribute && el.hasAttribute('multiple')),
+  };
+})
+"""
+
+
+_BROWSER_SCROLL_REF_TARGET_JS = r"""(target, [dx, dy, probeId]) => {
+    const root = document.scrollingElement || document.documentElement;
+    const canMove = (el) => {
+        if (!(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        const overflowX = style.overflowX || style.overflow;
+        const overflowY = style.overflowY || style.overflow;
+        const scrollableX = el === root || /^(auto|scroll|overlay)$/.test(overflowX);
+        const scrollableY = el === root || /^(auto|scroll|overlay)$/.test(overflowY);
+        const canX = dx > 0 ? scrollableX && el.scrollLeft + el.clientWidth < el.scrollWidth - 1 : dx < 0 && scrollableX && el.scrollLeft > 1;
+        const canY = dy > 0 ? scrollableY && el.scrollTop + el.clientHeight < el.scrollHeight - 1 : dy < 0 && scrollableY && el.scrollTop > 1;
+        return canX || canY;
+    };
+    const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+    while (target && !canMove(target)) target = parentOf(target);
+    if (!target && canMove(root)) target = root;
+    if (!target) return {found: false};
+    target.setAttribute('data-cyrene-scroll-probe', probeId);
+    return {found: true, tag: String(target.tagName || '').toLowerCase(), id: String(target.id || ''), ref: String(target.getAttribute('data-cyrene-ref') || ''), scrollLeft: Number(target.scrollLeft || 0), scrollTop: Number(target.scrollTop || 0)};
+}"""
+
+
+_BROWSER_SCROLL_POINT_TARGET_JS = r"""([x, y, dx, dy, probeId]) => {
+    const root = document.scrollingElement || document.documentElement;
+    const canMove = (el) => {
+        if (!(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        const overflowX = style.overflowX || style.overflow;
+        const overflowY = style.overflowY || style.overflow;
+        const scrollableX = el === root || /^(auto|scroll|overlay)$/.test(overflowX);
+        const scrollableY = el === root || /^(auto|scroll|overlay)$/.test(overflowY);
+        const canX = dx > 0
+            ? scrollableX && el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+            : dx < 0 && scrollableX && el.scrollLeft > 1;
+        const canY = dy > 0
+            ? scrollableY && el.scrollTop + el.clientHeight < el.scrollHeight - 1
+            : dy < 0 && scrollableY && el.scrollTop > 1;
+        return canX || canY;
+    };
+    const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+    let target = document.elementFromPoint(x, y);
+    while (target && !canMove(target)) target = parentOf(target);
+    if (!target && canMove(root)) target = root;
+    if (!target) return {found: false};
+    target.setAttribute('data-cyrene-scroll-probe', probeId);
+    return {
+        found: true,
+        tag: String(target.tagName || '').toLowerCase(),
+        id: String(target.id || ''),
+        ref: String(target.getAttribute('data-cyrene-ref') || ''),
+        scrollLeft: Number(target.scrollLeft || 0),
+        scrollTop: Number(target.scrollTop || 0),
+    };
+}"""
+
+
+_BROWSER_SCROLL_RESULT_JS = r"""(probeId) => {
+    const roots = [document];
+    let target = null;
+    for (let index = 0; index < roots.length && !target; index += 1) {
+        const root = roots[index];
+        target = root.querySelector(`[data-cyrene-scroll-probe="${CSS.escape(probeId)}"]`);
+        for (const node of Array.from(root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+            if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+        }
+    }
+    if (!target) return {found: false};
+    const result = {
+        found: true,
+        scrollLeft: Number(target.scrollLeft || 0),
+        scrollTop: Number(target.scrollTop || 0),
+    };
+    target.removeAttribute('data-cyrene-scroll-probe');
+    return result;
+}"""
+
+
 _BROWSER_TEXT_LINKS_JS = r"""
 (function(maxArg, textArg) {
   const maxLinks = Math.max(1, Math.min(200, Number(maxArg) || 120));
@@ -1265,6 +1494,58 @@ class _BrowserSession:
     def _invalidate_snapshot(self) -> None:
         self._latest_snapshot = None
 
+    def _snapshot_ref_entry(self, ref: str) -> dict[str, Any] | None:
+        snapshot = self._latest_snapshot if isinstance(self._latest_snapshot, dict) else {}
+        refs = snapshot.get("refs") if isinstance(snapshot.get("refs"), dict) else {}
+        entry = refs.get(str(ref or "").lower())
+        return entry if isinstance(entry, dict) else None
+
+    async def _frame_offset(self, frame: Any, page: Any) -> tuple[float, float, float, float] | None:
+        if frame is page.main_frame:
+            return (0.0, 0.0, 1.0, 1.0)
+        try:
+            element = await frame.frame_element()
+            box = await element.bounding_box()
+            viewport = await frame.evaluate(
+                "() => ({width: window.innerWidth || 1, height: window.innerHeight || 1})"
+            )
+        except Exception:
+            return None
+        if not box:
+            return None
+        width = max(1.0, float((viewport or {}).get("width") or 1))
+        height = max(1.0, float((viewport or {}).get("height") or 1))
+        return (
+            float(box.get("x") or 0),
+            float(box.get("y") or 0),
+            float(box.get("width") or width) / width,
+            float(box.get("height") or height) / height,
+        )
+
+    @staticmethod
+    def _transform_frame_info(
+        info: dict[str, Any], offset: tuple[float, float, float, float]
+    ) -> dict[str, Any]:
+        x_offset, y_offset, scale_x, scale_y = offset
+        result = dict(info)
+        if isinstance(info.get("x"), (int, float)):
+            result["x"] = round(x_offset + float(info["x"]) * scale_x)
+        if isinstance(info.get("y"), (int, float)):
+            result["y"] = round(y_offset + float(info["y"]) * scale_y)
+        box = info.get("box") if isinstance(info.get("box"), dict) else info.get("rect")
+        if isinstance(box, dict):
+            transformed = {
+                "x": round(x_offset + float(box.get("x") or 0) * scale_x),
+                "y": round(y_offset + float(box.get("y") or 0) * scale_y),
+                "w": round(float(box.get("w", box.get("width", 0)) or 0) * scale_x),
+                "h": round(float(box.get("h", box.get("height", 0)) or 0) * scale_y),
+            }
+            if "rect" in info:
+                result["rect"] = transformed
+            else:
+                result["box"] = transformed
+        return result
+
     # -- Login takeover (M3): headless <-> headed restart -------------------
     #
     # A persistent ``user_data_dir`` may only back one Chromium instance at a
@@ -1456,6 +1737,73 @@ class _BrowserSession:
                 "error": None,
             }
 
+    async def _append_frame_inspection(
+        self,
+        page: Any,
+        frames: list[Any],
+        elements: list[dict[str, Any]],
+        refs: dict[str, dict[str, Any]],
+        *,
+        limit: int,
+        text_limit: int,
+    ) -> None:
+        remaining = max(0, limit - len(elements))
+        for frame in frames:
+            if not remaining or frame is page.main_frame:
+                continue
+            offset = await self._frame_offset(frame, page)
+            if offset is None:
+                continue
+            local = await frame.evaluate(
+                f"([maxArg, textArg]) => ({_BROWSER_INSPECT_JS})(maxArg, textArg)",
+                [remaining, text_limit],
+            )
+            local_elements = local.get("elements", []) if isinstance(local, dict) else []
+            start = len(elements)
+            if local_elements:
+                await frame.evaluate(
+                    """(startArg) => {
+                        for (const node of document.querySelectorAll('[data-cyrene-ref]')) {
+                            const oldValue = Number(node.getAttribute('data-cyrene-ref') || 0);
+                            if (oldValue > 0) node.setAttribute('data-cyrene-ref', String(startArg + oldValue));
+                        }
+                    }""",
+                    start,
+                )
+            for local_item in local_elements:
+                item = self._transform_frame_info(local_item, offset)
+                old_number = str(local_item.get("ref") or "").removeprefix("e").removeprefix("E")
+                new_number = start + int(old_number or 0)
+                item["ref"] = f"e{new_number}"
+                if str(item.get("selector") or "").startswith('[data-cyrene-ref='):
+                    item["selector"] = f'[data-cyrene-ref="{new_number}"]'
+                item["context"] = {
+                    "frameDepth": 1,
+                    "frameUrl": str(frame.url or ""),
+                    "shadowDepth": 0,
+                }
+                elements.append(item)
+                refs[item["ref"].lower()] = {"frame": frame, "nested": True}
+            remaining = max(0, limit - len(elements))
+            if remaining:
+                shadow = await frame.evaluate(
+                    f"([maxArg, textArg, startArg]) => ({_BROWSER_SHADOW_INSPECT_JS})(maxArg, textArg, startArg)",
+                    [remaining, text_limit, len(elements)],
+                )
+                for local_item in shadow.get("elements", []) if isinstance(shadow, dict) else []:
+                    item = self._transform_frame_info(local_item, offset)
+                    item["context"] = {
+                        "frameDepth": 1,
+                        "frameUrl": str(frame.url or ""),
+                        "shadowDepth": int(local_item.get("shadowDepth") or 1),
+                    }
+                    elements.append(item)
+                    refs[str(item.get("ref") or "").lower()] = {
+                        "frame": frame,
+                        "nested": True,
+                    }
+                remaining = max(0, limit - len(elements))
+
     async def inspect(self, *, max_elements: int = 80, text_limit: int = 160) -> dict[str, Any]:
         if not await self._wait_for_control():
             return {
@@ -1468,11 +1816,65 @@ class _BrowserSession:
             }
         async with self._action_lock:
             page = await self.page()
+            frames = list(page.frames)
+            clear_script = r"""() => {
+                const roots = [document];
+                for (let index = 0; index < roots.length; index += 1) {
+                    const root = roots[index];
+                    for (const node of Array.from(root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+                        node.removeAttribute('data-cyrene-ref');
+                        if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+                    }
+                }
+            }"""
+            await asyncio.gather(
+                *(frame.evaluate(clear_script) for frame in frames),
+                return_exceptions=True,
+            )
             result = await page.evaluate(
                 f"([maxArg, textArg]) => ({_BROWSER_INSPECT_JS})(maxArg, textArg)",
                 [max_elements, text_limit],
             )
             if isinstance(result, dict):
+                elements = result.get("elements") if isinstance(result.get("elements"), list) else []
+                refs: dict[str, dict[str, Any]] = {
+                    str(item.get("ref") or "").lower(): {
+                        "frame": page.main_frame,
+                        "nested": False,
+                    }
+                    for item in elements
+                    if isinstance(item, dict) and item.get("ref")
+                }
+                limit = max(1, min(200, int(max_elements or 80)))
+                remaining = max(0, limit - len(elements))
+
+                if remaining:
+                    shadow = await page.main_frame.evaluate(
+                        f"([maxArg, textArg, startArg]) => ({_BROWSER_SHADOW_INSPECT_JS})(maxArg, textArg, startArg)",
+                        [remaining, text_limit, len(elements)],
+                    )
+                    for item in shadow.get("elements", []) if isinstance(shadow, dict) else []:
+                        item["context"] = {
+                            "frameDepth": 0,
+                            "frameUrl": str(page.url or ""),
+                            "shadowDepth": int(item.get("shadowDepth") or 1),
+                        }
+                        elements.append(item)
+                        refs[str(item.get("ref") or "").lower()] = {
+                            "frame": page.main_frame,
+                            "nested": True,
+                        }
+                    remaining = max(0, limit - len(elements))
+
+                await self._append_frame_inspection(
+                    page,
+                    frames,
+                    elements,
+                    refs,
+                    limit=limit,
+                    text_limit=text_limit,
+                )
+                result["elements"] = elements
                 snapshot_token = secrets.token_urlsafe(32)
                 snapshot_url = str(result.get("url") or page.url)
                 self._latest_snapshot = {
@@ -1480,6 +1882,7 @@ class _BrowserSession:
                     "url": snapshot_url,
                     "issued_at": time.monotonic(),
                     "page": page,
+                    "refs": refs,
                 }
                 result["snapshot_token"] = snapshot_token
                 result["page_signal"] = _browser_page_signal(
@@ -1628,15 +2031,59 @@ class _BrowserSession:
                 "matches": [],
             }
 
-    async def _find_target(self, mode: str, value: str, *, exact: bool = False) -> dict[str, Any]:
+    async def _find_target(
+        self,
+        mode: str,
+        value: str,
+        *,
+        exact: bool = False,
+        frame_hint: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         page = await self.page()
-        result = await page.evaluate(
-            f"([modeArg, valueArg, exactArg]) => ({_BROWSER_FIND_JS})(modeArg, valueArg, exactArg, true)",
-            [mode, value, exact],
-        )
-        if isinstance(result, dict):
+        entry = frame_hint or (self._snapshot_ref_entry(value) if mode == "ref" else None)
+
+        async def run(frame: Any, *, nested: bool) -> dict[str, Any]:
+            if nested:
+                result = await frame.evaluate(
+                    f"([modeArg, valueArg, exactArg, includeLight]) => ({_BROWSER_NESTED_FIND_JS})(modeArg, valueArg, exactArg, true, includeLight)",
+                    [mode, value, exact, frame is not page.main_frame],
+                )
+            else:
+                result = await page.evaluate(
+                    f"([modeArg, valueArg, exactArg]) => ({_BROWSER_FIND_JS})(modeArg, valueArg, exactArg, true)",
+                    [mode, value, exact],
+                )
+            if not isinstance(result, dict) or result.get("ok") is not True:
+                return result if isinstance(result, dict) else {"ok": False, "code": "TARGET_NOT_FOUND"}
+            local_x = result.get("x")
+            local_y = result.get("y")
+            if frame is not page.main_frame:
+                offset = await self._frame_offset(frame, page)
+                if offset is None:
+                    return {"ok": False, "code": "FRAME_DETACHED"}
+                result = self._transform_frame_info(result, offset)
+            result["_frame"] = frame
+            result["_nested"] = nested
+            result["_local_x"] = local_x
+            result["_local_y"] = local_y
             return result
-        return {"ok": False, "code": "TARGET_NOT_FOUND"}
+
+        if entry and entry.get("frame") is not None:
+            return await run(entry["frame"], nested=bool(entry.get("nested")))
+
+        legacy = await run(page.main_frame, nested=False)
+        if legacy.get("ok") is True:
+            return legacy
+        shadow = await run(page.main_frame, nested=True)
+        if shadow.get("ok") is True:
+            return shadow
+        for frame in page.frames:
+            if frame is page.main_frame:
+                continue
+            nested = await run(frame, nested=True)
+            if nested.get("ok") is True:
+                return nested
+        return legacy
 
     async def _semantic_content_state(self, page: Any) -> dict[str, str]:
         try:
@@ -1739,11 +2186,12 @@ class _BrowserSession:
                 "code": "BROWSER_USER_CONTROLLED",
             }
         async with self._action_lock:
+            frame_hint = self._snapshot_ref_entry(value) if mode == "ref" else None
             self._invalidate_snapshot()
             page = await self.page()
             if self._click_debounced():
                 return self._click_debounced_result(page)
-            info = await self._find_target(mode, value, exact=exact)
+            info = await self._find_target(mode, value, exact=exact, frame_hint=frame_hint)
             if not info.get("ok"):
                 failure = _sanitize_browser_result(
                     info,
@@ -1791,7 +2239,24 @@ class _BrowserSession:
             if self._click_debounced():
                 return self._click_debounced_result(page)
             el = page.locator(selector)
-            await expect(el).to_be_visible(timeout=5000)
+            try:
+                await expect(el).to_be_visible(timeout=5000)
+            except Exception:
+                # The existing top-page locator remains authoritative; child
+                # frames are a fallback only when it cannot produce a target.
+                el = None
+                for frame in page.frames:
+                    if frame is page.main_frame:
+                        continue
+                    candidate = frame.locator(selector)
+                    try:
+                        await expect(candidate).to_be_visible(timeout=500)
+                    except Exception:
+                        continue
+                    el = candidate
+                    break
+                if el is None:
+                    raise
             box = await el.bounding_box()
             before = await self._semantic_content_state(page)
             pages_before = set(self._context.pages) if self._context is not None else {page}
@@ -1855,6 +2320,14 @@ class _BrowserSession:
             self._invalidate_snapshot()
             page = await self.page()
             el = page.locator(selector)
+            if await el.count() == 0:
+                for frame in page.frames:
+                    if frame is page.main_frame:
+                        continue
+                    candidate = frame.locator(selector)
+                    if await candidate.count() > 0:
+                        el = candidate
+                        break
             box = await el.bounding_box()
             await el.fill(text)
             if submit:
@@ -1874,14 +2347,19 @@ class _BrowserSession:
                 "code": "BROWSER_USER_CONTROLLED",
             }
         async with self._action_lock:
+            entry = self._snapshot_ref_entry(ref)
             self._invalidate_snapshot()
             page = await self.page()
-            await page.evaluate(
-                f"([maxArg, textArg]) => ({_BROWSER_INSPECT_JS})(maxArg, textArg)",
-                [120, 160],
-            )
             selector = f'[data-cyrene-ref="{str(ref).removeprefix("e").removeprefix("E")}"]'
-            el = page.locator(selector)
+            if entry and entry.get("nested") and entry.get("frame") is not None:
+                el = entry["frame"].locator(selector)
+            else:
+                # Preserve the historical light-DOM refresh behavior.
+                await page.evaluate(
+                    f"([maxArg, textArg]) => ({_BROWSER_INSPECT_JS})(maxArg, textArg)",
+                    [120, 160],
+                )
+                el = page.locator(selector)
             box = await el.bounding_box()
             await el.fill(text)
             if submit:
@@ -1915,7 +2393,9 @@ class _BrowserSession:
             }
         async with self._action_lock:
             page = await self.page()
-            locator = page.locator(f'[data-cyrene-ref="{normalized}"]')
+            entry = self._snapshot_ref_entry(f"e{normalized}")
+            target_frame = entry.get("frame") if entry and entry.get("nested") else page.main_frame
+            locator = target_frame.locator(f'[data-cyrene-ref="{normalized}"]')
             try:
                 details = await locator.evaluate(
                     """el => ({
@@ -1957,7 +2437,8 @@ class _BrowserSession:
             top_url = str(page.url or "")
             upload_id = str(details.get("uploadId") or "")
             target_id = "upload_" + hashlib.sha256(f"{top_url}\n{upload_id}".encode("utf-8")).hexdigest()[:24]
-            parsed = urlparse(top_url)
+            frame_url = str(target_frame.url or top_url)
+            parsed = urlparse(frame_url)
             origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
             return {
                 "ok": True,
@@ -1973,7 +2454,7 @@ class _BrowserSession:
                     "name": str(details.get("name") or ""),
                     "ariaLabel": str(details.get("ariaLabel") or ""),
                     "topUrl": top_url,
-                    "frameUrl": top_url,
+                    "frameUrl": frame_url,
                     "origin": origin,
                 },
             }
@@ -2002,7 +2483,29 @@ class _BrowserSession:
                     "error": _browser_error_for_code("FILE_INPUT_EXPIRED", "", ""),
                     "code": "FILE_INPUT_EXPIRED",
                 }
-            locator = page.locator(f'[data-cyrene-upload-id="{upload_id}"]')
+            locator = None
+            locator_frame = None
+            for frame in page.frames:
+                candidate = frame.locator(f'[data-cyrene-upload-id="{upload_id}"]')
+                try:
+                    if await candidate.count() == 1:
+                        locator = candidate
+                        locator_frame = frame
+                        break
+                except Exception:
+                    continue
+            if locator is None:
+                return {
+                    "ok": False,
+                    "error": _browser_error_for_code("FILE_INPUT_EXPIRED", "", ""),
+                    "code": "FILE_INPUT_EXPIRED",
+                }
+            if str(locator_frame.url or "") != str(target.get("frameUrl") or target.get("topUrl") or ""):
+                return {
+                    "ok": False,
+                    "error": _browser_error_for_code("UPLOAD_ORIGIN_CHANGED", "", ""),
+                    "code": "UPLOAD_ORIGIN_CHANGED",
+                }
             try:
                 details = await locator.evaluate(
                     """el => ({
@@ -2073,6 +2576,29 @@ class _BrowserSession:
                     text_ok = text in body_text
                 if url_ok and selector_ok and text_ok:
                     return {"ok": True, "url": page.url, "title": await page.title()}
+                if selector or text:
+                    for frame in page.frames:
+                        try:
+                            include_light = frame is not page.main_frame
+                            nested_ok = await frame.evaluate(
+                                r"""([selector, text, includeLight]) => {
+                                    const roots = [document];
+                                    for (let index = 0; index < roots.length; index += 1) {
+                                        for (const node of Array.from(roots[index].querySelectorAll ? roots[index].querySelectorAll('*') : [])) {
+                                            if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+                                        }
+                                    }
+                                    const selected = includeLight ? roots : roots.slice(1);
+                                    const selectorOk = !selector || selected.some((root) => root.querySelector && root.querySelector(selector));
+                                    const textOk = !text || selected.some((root) => String(root.textContent || '').includes(text));
+                                    return selectorOk && textOk;
+                                }""",
+                                [selector, text, include_light],
+                            )
+                        except Exception:
+                            nested_ok = False
+                        if nested_ok and url_ok:
+                            return {"ok": True, "url": page.url, "title": await page.title()}
                 await asyncio.sleep(0.15)
             return {
                 "ok": False,
@@ -3347,12 +3873,18 @@ async def scroll_page(
             "当前没有打开的页面。请先调用 browser_navigate。",
         )
     try:
+        ref_entry = session._snapshot_ref_entry(ref) if ref else None
         session._invalidate_snapshot()
         page = await session.page()
         px = x
         py = y
+        ref_locator = None
+        probe_frame = page.main_frame
         if ref:
-            box = await page.locator(f'[data-cyrene-ref="{ref.removeprefix("e")}"]').bounding_box()
+            if ref_entry and ref_entry.get("nested") and ref_entry.get("frame") is not None:
+                probe_frame = ref_entry["frame"]
+            ref_locator = probe_frame.locator(f'[data-cyrene-ref="{ref.removeprefix("e")}"]')
+            box = await ref_locator.bounding_box()
             if box is None:
                 return _browser_failure(
                     "TARGET_NOT_FOUND",
@@ -3366,56 +3898,21 @@ async def scroll_page(
             px = round(viewport["width"] / 2) if px is None else px
             py = round(viewport["height"] / 2) if py is None else py
         probe_id = f"cyrene-scroll-{time.monotonic_ns()}"
-        before = await page.evaluate(
-            """([x, y, dx, dy, probeId]) => {
-                const root = document.scrollingElement || document.documentElement;
-                const canMove = (el) => {
-                    if (!(el instanceof Element)) return false;
-                    const style = getComputedStyle(el);
-                    const overflowX = style.overflowX || style.overflow;
-                    const overflowY = style.overflowY || style.overflow;
-                    const scrollableX = el === root || /^(auto|scroll|overlay)$/.test(overflowX);
-                    const scrollableY = el === root || /^(auto|scroll|overlay)$/.test(overflowY);
-                    const canX = dx > 0
-                        ? scrollableX && el.scrollLeft + el.clientWidth < el.scrollWidth - 1
-                        : dx < 0 && scrollableX && el.scrollLeft > 1;
-                    const canY = dy > 0
-                        ? scrollableY && el.scrollTop + el.clientHeight < el.scrollHeight - 1
-                        : dy < 0 && scrollableY && el.scrollTop > 1;
-                    return canX || canY;
-                };
-                const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
-                let target = document.elementFromPoint(x, y);
-                while (target && !canMove(target)) target = parentOf(target);
-                if (!target && canMove(root)) target = root;
-                if (!target) return {found: false};
-                target.setAttribute('data-cyrene-scroll-probe', probeId);
-                return {
-                    found: true,
-                    tag: String(target.tagName || '').toLowerCase(),
-                    id: String(target.id || ''),
-                    ref: String(target.getAttribute('data-cyrene-ref') || ''),
-                    scrollLeft: Number(target.scrollLeft || 0),
-                    scrollTop: Number(target.scrollTop || 0),
-                };
-            }""",
-            [px, py, delta_x, delta_y, probe_id],
-        )
+        if ref_locator is not None and ref_entry and ref_entry.get("nested"):
+            before = await ref_locator.evaluate(
+                _BROWSER_SCROLL_REF_TARGET_JS,
+                [delta_x, delta_y, probe_id],
+            )
+        else:
+            before = await page.evaluate(
+                _BROWSER_SCROLL_POINT_TARGET_JS,
+                [px, py, delta_x, delta_y, probe_id],
+            )
         await page.mouse.move(px, py)
         await page.mouse.wheel(delta_x, delta_y)
         await page.wait_for_timeout(100)
-        after = await page.evaluate(
-            """(probeId) => {
-                const target = document.querySelector(`[data-cyrene-scroll-probe="${CSS.escape(probeId)}"]`);
-                if (!target) return {found: false};
-                const result = {
-                    found: true,
-                    scrollLeft: Number(target.scrollLeft || 0),
-                    scrollTop: Number(target.scrollTop || 0),
-                };
-                target.removeAttribute('data-cyrene-scroll-probe');
-                return result;
-            }""",
+        after = await probe_frame.evaluate(
+            _BROWSER_SCROLL_RESULT_JS,
             probe_id,
         )
         actual_delta_x = after.get("scrollLeft", 0) - before.get("scrollLeft", 0) if before.get("found") and after.get("found") else 0

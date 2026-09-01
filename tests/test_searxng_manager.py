@@ -130,6 +130,20 @@ def test_windows_arm_does_not_fall_back_to_in_process_simplexng(monkeypatch):
         manager_module._build_simplexng_launch_cmd(8888, "127.0.0.1")
 
 
+@pytest.mark.asyncio
+async def test_search_service_startup_failure_is_degraded(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_content import search_service as manager_module
+
+    async def fail_startup(*_args, **_kwargs):
+        raise RuntimeError("sidecar unavailable")
+
+    monkeypatch.setattr(manager_module, "start_searxng", fail_startup)
+    service = manager_module.WebSearchService()
+
+    assert await service.startup_best_effort() == ""
+    assert service.startup_error == "RuntimeError: sidecar unavailable"
+
+
 def test_external_searxng_url_is_used_without_starting_child(monkeypatch):
     from cyrene.plugins.builtin.cyrene_content import search_service as manager_module
 
@@ -165,7 +179,7 @@ def test_search_only_bypasses_proxy_for_loopback_urls():
 
 
 def test_parent_identity_change_marks_parent_dead(monkeypatch):
-    from cyrene.plugins.builtin.cyrene_content import simplexng_child
+    from cyrene import simplexng_child
 
     monkeypatch.setattr(simplexng_child.os, "getppid", lambda: 222)
     monkeypatch.setattr(simplexng_child, "_pid_exists", lambda pid: True)
@@ -174,7 +188,7 @@ def test_parent_identity_change_marks_parent_dead(monkeypatch):
 
 
 def test_simplexng_child_installs_windows_compat_patches(monkeypatch):
-    from cyrene.plugins.builtin.cyrene_content import simplexng_child
+    from cyrene import simplexng_child
     import multiprocessing
 
     fake_winloop = types.ModuleType("winloop")

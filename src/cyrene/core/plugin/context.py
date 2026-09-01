@@ -83,17 +83,18 @@ def plugin_localized_plural(
 async def publish_runtime_event(
     context: PluginContext,
     event: Mapping[str, Any],
-) -> None:
+) -> bool:
     writer = (
         context.services.get("runtime_events")
         or run_context_data(context).get("runtime_event_writer")
         or context.data.get("runtime_event_writer")
     )
     if not callable(writer):
-        return
+        return False
     result = writer(dict(event))
     if inspect.isawaitable(result):
         await result
+    return True
 
 
 def json_result(payload: Any) -> str:

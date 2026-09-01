@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
 from cyrene.model.error_details import ModelCallError, classify_model_error
-from cyrene.plugins import model_router
+from cyrene.plugins import ensure_model_router, model_router
 from cyrene.workbench.core_adapter import chat_runtime
+from cyrene.workbench.core_adapter import conversation_runtime
 
 
 def run(coroutine):
@@ -31,7 +31,7 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
                 "type": "function",
                 "function": {
                     "name": "Read",
-                    "arguments": json.dumps({"path": "README.md"}),
+                    "arguments": '```json\n{"path":"README.md",}\n```',
                 },
             }],
             "usage": {"prompt_tokens": 12, "completion_tokens": 4},
@@ -83,7 +83,7 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
         ),
         source="test",
     )
-    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+    ensure_model_router(registry)
     runtime = PluginRuntime(registry)
     stored_messages = [
         {"role": "system", "content": "base system"},
@@ -94,7 +94,20 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
             model_router.MODEL_ROUTER_PLUGIN,
             {
                 "messages": stored_messages,
-                "tools": [],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "Read",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                                "required": ["path"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    }
+                ],
             },
             PluginContext(
                 tree_id="chat-selected",
@@ -119,6 +132,7 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
             "id": "call-read",
             "name": "Read",
             "arguments": {"path": "README.md"},
+            "arguments_normalized": True,
         }
     ]
     assert result["reasoning"] == "inspect first"
@@ -127,6 +141,94 @@ def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch
     assert result["model_identity"]["provider"] == "test_provider"
     assert result["output_tokens_per_second"] == 2.0
     assert captured["remembered"][0:2] == ("chat-selected", "candidate-selected")
+
+
+def test_model_router_selects_codex_oauth_parser_plugin(monkeypatch):
+    from cyrene.plugins.tool_call_parsers import CODEX_OAUTH_TOOL_CALL_PARSER
+
+    async def provider(_arguments, _context):
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-codex",
+                    "name": "toolbox",
+                    "arguments": {
+                        "operation": "browser_snapshot",
+                        "name": "cyrene_browser",
+                    },
+                }
+            ],
+            "model": "codex-test",
+            "usage": {},
+        }
+
+    candidate = {
+        "id": "candidate-codex",
+        "provider": "openai",
+        "adapter": "codex_oauth",
+        "model": "codex-test",
+        "options": {"provider_preset": "codex_provider"},
+    }
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda *_args, **_kwargs: [candidate],
+    )
+    monkeypatch.setattr(
+        model_router,
+        "remember_model_success",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    registry = PluginRegistry()
+    registry.register_plugin(
+        Plugin(
+            name="CodexProvider",
+            description="Codex provider",
+            input_schema={"type": "object"},
+            handler=provider,
+            kind="model",
+            metadata={
+                "provider": {
+                    "id": "codex_provider",
+                    "tool_call_parser": CODEX_OAUTH_TOOL_CALL_PARSER,
+                }
+            },
+        ),
+        source="test",
+    )
+    ensure_model_router(registry)
+    toolbox_definition = registry.resolve("toolbox").tool_definition()
+
+    result = run(
+        PluginRuntime(registry).call(
+            model_router.MODEL_ROUTER_PLUGIN,
+            {
+                "messages": [{"role": "user", "content": "inspect"}],
+                "tools": [toolbox_definition],
+            },
+            PluginContext(data={"session_id": "chat-codex-parser"}),
+        )
+    )
+
+    assert result.success is True
+    assert result.value["tool_calls"] == [
+        {
+            "id": "call-codex",
+            "name": "toolbox",
+            "arguments": {
+                "operation": "invoke",
+                "name": "browser_snapshot",
+                "arguments": {},
+            },
+            "arguments_normalized": True,
+        }
+    ]
 
 
 def test_model_gateway_routes_one_exact_identity_without_route_fallback(monkeypatch):
@@ -203,6 +305,7 @@ def test_model_gateway_routes_one_exact_identity_without_route_fallback(monkeypa
 def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     calls = []
     fallbacks = []
+    fallback_results = []
 
     async def failed(_arguments, _context):
         calls.append("failed")
@@ -241,8 +344,16 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     async def capture_fallback(_context, failed_candidate, fallback_candidate):
         fallbacks.append((failed_candidate["id"], fallback_candidate["id"]))
 
+    async def capture_fallback_result(_context, candidate, *, status):
+        fallback_results.append((candidate["id"], status))
+
     monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
     monkeypatch.setattr(model_router, "_publish_fallback", capture_fallback)
+    monkeypatch.setattr(
+        model_router,
+        "_persist_fallback_result",
+        capture_fallback_result,
+    )
     registry = PluginRegistry(include_core=False)
     for name, provider_id, handler in (
         ("ProviderOne", "provider_one", failed),
@@ -259,7 +370,7 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
             ),
             source="test",
         )
-    registry.register_plugin(model_router.create_model_router_plugin(), source="test")
+    ensure_model_router(registry)
 
     result = run(
         PluginRuntime(registry).call(
@@ -271,12 +382,15 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
 
     assert result.success is True
     assert result.value["content"] == "done"
-    assert result.value["provider_plugin"] == "ProviderTwo"
     assert calls == ["failed", "succeeded"]
     assert fallbacks == [("primary", "fallback")]
+    assert fallback_results == [("fallback", "switched")]
+    assert result.value["provider_plugin"] == "ProviderTwo"
 
 
 def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
+    route_statuses = []
+
     async def rejected(_arguments, _context):
         raise ModelCallError(classify_model_error("HTTP 401 Unauthorized: Invalid API Key"))
 
@@ -295,7 +409,15 @@ def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
     async def ignore_event(*_args, **_kwargs):
         return None
 
+    async def capture_route_status(_context, candidate, *, status):
+        route_statuses.append((candidate["id"], status))
+
     monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    monkeypatch.setattr(
+        model_router,
+        "_persist_fallback_result",
+        capture_route_status,
+    )
     registry = PluginRegistry(include_core=False)
     registry.register_plugin(
         Plugin(
@@ -323,6 +445,7 @@ def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
     assert result.error_details["detail_key"] == "workbenchChat.error.modelAuthenticationFailed"
     assert result.error_details["retryable"] is False
     assert result.error_details["status_code"] == 401
+    assert route_statuses == [("primary", "failed")]
 
 
 def test_permission_model_usage_does_not_report_agent_context():
@@ -479,6 +602,161 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
         "runtime-event",
     ]
     assert opened["closed"] is True
+
+
+def test_conversation_runtime_forwards_exact_model_identity(tmp_path, monkeypatch):
+    opened = {}
+    identity = {
+        "candidateId": "candidate-minimax",
+        "provider": "minimax",
+        "adapter": "openai",
+        "model": "MiniMax-M3",
+        "baseUrl": "https://api.minimax.example",
+        "reasoningEffort": "",
+    }
+
+    monkeypatch.setattr(
+        conversation_runtime,
+        "resolve_plugin_registry",
+        lambda _directory: (PluginRegistry(), True),
+    )
+    monkeypatch.setattr(
+        conversation_runtime,
+        "application_plugin_scope",
+        lambda: None,
+    )
+
+    marker = object()
+
+    def fake_open(*_args, **kwargs):
+        opened.update(kwargs)
+        return marker
+
+    monkeypatch.setattr(
+        conversation_runtime.WorkbenchSessionBridge,
+        "open",
+        fake_open,
+    )
+    runtime = conversation_runtime.ConversationRuntime()
+    config = conversation_runtime.ConversationConfig(
+        session_id="chat-exact-model",
+        workspace_dir=str(tmp_path / "workspace"),
+        db_path=str(tmp_path / "workbench.sqlite3"),
+        model_identity=identity,
+        plugin_directory=tmp_path / "plugins",
+        data_directory=tmp_path / "agent-data",
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        result = runtime._open_bridge(
+            config,
+            owner_loop=loop,
+            raw_publisher=None,
+        )
+    finally:
+        loop.close()
+
+    assert result is marker
+    assert opened["plugin_context_data"]["model_identity"] == identity
+    assert opened["plugin_context_data"]["model_identity"] is not identity
+
+
+def test_send_operation_uses_session_route_instead_of_exact_model_identity():
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
+
+    operation = object.__new__(_SendOperation)
+    operation.chat_id = "chat-preferred-route"
+    operation.workspace_dir = "/tmp/workspace"
+    operation.context = SimpleNamespace(
+        db_path="/tmp/workbench.sqlite3",
+        bot=None,
+    )
+    operation.routes = SimpleNamespace(chat_id="host-chat")
+    operation.client_request_id = "request-1"
+    operation.mode = "default"
+    operation.command = ""
+    operation.public_message = "hello"
+    operation.normalized = []
+    operation.chat = {"title": "Chat", "remoteDeviceIds": []}
+    operation.context_activations = {}
+    operation.resolved_context_activations = {}
+    operation.project_id = "project-1"
+    operation.is_side_agent = False
+    operation.retry = False
+    operation.completed_turn_count_before = 0
+    operation.ui_instance_id = "ui-1"
+    operation.service = SimpleNamespace(
+        chat_soul_active=lambda _chat: True,
+        chat_workspace_active=lambda _chat: True,
+    )
+
+    config = operation._conversation_config(
+        SimpleNamespace(guidance_channel=None),
+        memory_snapshot={},
+        turn_system_extras=[],
+        source="desktop_local",
+    )
+
+    assert config.model_identity == {}
+
+
+def test_model_selection_is_validated_and_persisted_canonically(monkeypatch):
+    from cyrene.core import plugin as plugin_module
+    from cyrene.workbench.http.workbench.chat_routes.detail_routes import (
+        _apply_model_selection,
+    )
+
+    candidates = [
+        {
+            "id": "candidate-minimax",
+            "name": "MiniMax M3",
+            "model": "MiniMax-M3",
+        }
+    ]
+    service = SimpleNamespace(selectable_model_candidates=lambda: candidates)
+    monkeypatch.setattr(
+        plugin_module,
+        "application_plugin_service",
+        lambda name: service if name == "model_configuration" else None,
+    )
+    chat = {
+        "modelSelectionId": "candidate-qwen",
+        "model": "qwen",
+        "lastModel": "qwen",
+    }
+
+    error = _apply_model_selection(chat, "MiniMax M3")
+
+    assert error is None
+    assert chat["modelSelectionId"] == "candidate-minimax"
+    assert chat["model"] == "MiniMax-M3"
+    assert "lastModel" not in chat
+
+
+def test_model_selection_rejects_unknown_candidate_without_mutating_chat(monkeypatch):
+    from cyrene.core import plugin as plugin_module
+    from cyrene.workbench.http.workbench.chat_routes.detail_routes import (
+        _apply_model_selection,
+    )
+
+    service = SimpleNamespace(selectable_model_candidates=lambda: [])
+    monkeypatch.setattr(
+        plugin_module,
+        "application_plugin_service",
+        lambda name: service if name == "model_configuration" else None,
+    )
+    chat = {
+        "modelSelectionId": "candidate-qwen",
+        "model": "qwen",
+        "lastModel": "qwen",
+    }
+    before = dict(chat)
+
+    error = _apply_model_selection(chat, "missing-model")
+
+    assert error is not None
+    assert error.status_code == 400
+    assert chat == before
 
 
 def test_builtin_workbench_route_always_uses_new_runtime(
@@ -652,6 +930,165 @@ def test_failed_plugin_workflow_atomically_restores_the_user_turn(tmp_path):
     assert repository.get(base_chat["id"]) == before
     assert operation.chat == before
     assert finalized == []
+
+
+def test_chat_write_and_conversation_commit_outbox_are_atomic(tmp_path):
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+    from cyrene.workbench.chat.conversation_commit import ConversationTurnCommit
+
+    repository = ChatRepository(str(tmp_path / "workbench.db"))
+    repository.write(
+        {
+            "chats": [
+                {
+                    "id": "chat-commit",
+                    "title": "Commit",
+                    "messages": [],
+                    "status": "running",
+                }
+            ]
+        }
+    )
+    chat = repository.get("chat-commit")
+    assert chat is not None
+    base = dict(chat)
+    chat["status"] = "idle"
+    chat["messages"] = [
+        {"id": "msg-1", "role": "user", "content": "question"},
+        {"id": "msg-2", "role": "assistant", "content": "answer"},
+    ]
+    event = ConversationTurnCommit(
+        chat_id="chat-commit",
+        turn_id="msg-1",
+        run_id="run-1",
+        node_id="assistant-1",
+        status="completed",
+        retry=False,
+        user_text="question",
+        assistant_text="answer",
+        completed_turn_count=1,
+    ).as_event()
+
+    repository.write_one(chat, base_chat=base, commit_event=event)
+    assert repository.get("chat-commit")["status"] == "idle"
+    assert repository.pending_commit_events("chat-commit", limit=1) == [event]
+    repository.fail_commit_event(event["event_id"], "try again")
+    assert repository.pending_commit_events("chat-commit", limit=1) == [event]
+    repository.complete_commit_event(event["event_id"])
+    assert repository.pending_commit_events("chat-commit", limit=1) == []
+
+
+def test_invalid_commit_event_rolls_back_the_public_chat_write(tmp_path):
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+
+    repository = ChatRepository(str(tmp_path / "workbench.db"))
+    original = {
+        "id": "chat-invalid-commit",
+        "title": "Commit",
+        "messages": [],
+        "status": "running",
+    }
+    repository.write({"chats": [original]})
+    chat = repository.get(original["id"])
+    assert chat is not None
+    base = dict(chat)
+    chat["status"] = "idle"
+
+    import pytest
+
+    with pytest.raises(ValueError, match="ConversationTurnCommitted"):
+        repository.write_one(
+            chat,
+            base_chat=base,
+            commit_event={
+                "event_id": "bad",
+                "type": "ConversationTurnCommitted",
+                "chat_id": original["id"],
+                "turn_id": "",
+                "run_id": "run-1",
+                "node_id": "assistant-1",
+            },
+        )
+    assert repository.get(original["id"])["status"] == "running"
+
+
+def test_retry_question_identity_survives_resume_without_incrementing_turn_count(
+    tmp_path,
+):
+    from cyrene.workbench.chat.chat_application import next_completed_turn_count
+    from cyrene.workbench.core_adapter.bridge import WorkbenchPendingQuestion
+    from cyrene.workbench.http.workbench.chat_routes.run_answer_routes import (
+        _AnswerOperation,
+    )
+
+    pending = WorkbenchPendingQuestion.from_mapping(
+        {
+            "id": "question-1",
+            "text": "Choose",
+            "round_id": "run-retry",
+            "retry": True,
+            "turn_id": "msg-original",
+            "original_user_message": "original question",
+        }
+    ).as_dict()
+    assert pending["retry"] is True
+    assert pending["turnId"] == "msg-original"
+
+    captured = {}
+
+    async def answer(config, question_id, answer_text, *, publish):
+        captured.update(
+            config=config,
+            question_id=question_id,
+            answer_text=answer_text,
+            publish=publish,
+        )
+        return SimpleNamespace(active_plan=None)
+
+    operation = object.__new__(_AnswerOperation)
+    operation.chat_id = "chat-retry-question"
+    operation.question_id = "question-1"
+    operation.answer_text = "choice"
+    operation.original_request = "original question"
+    operation.pending = {"clientRequestId": "request-1"}
+    operation.mode = "default"
+    operation.workspace_dir = str(tmp_path / "workspace")
+    operation.routes = SimpleNamespace(chat_id="host-chat")
+    operation.context = SimpleNamespace(db_path=str(tmp_path / "workbench.db"), bot=None)
+    operation.chat = {
+        "completedTurnCount": 7,
+        "title": "Retry",
+        "remoteDeviceIds": [],
+    }
+    operation.project_id = "project-1"
+    operation.is_side_agent = False
+    operation.retry = True
+    operation.ui_instance_id = "ui-1"
+    operation.conversation_source = "desktop_local"
+    operation.service = SimpleNamespace(
+        ensure_chat_memory_snapshot=lambda _chat: {},
+        resolve_composer_input_context=lambda *_args, **_kwargs: {
+            "remoteDeviceIds": [],
+            "soulActive": True,
+            "workspaceActive": True,
+            "contextActivations": {},
+            "resolvedContextActivations": {},
+        },
+        next_completed_turn_count=next_completed_turn_count,
+        run_manager=SimpleNamespace(
+            conversation_runtime=SimpleNamespace(answer=answer),
+        ),
+    )
+    workbench_run = SimpleNamespace(
+        publish=lambda _event: None,
+        guidance_channel=None,
+        events=[],
+    )
+
+    run(operation._resume_agent(workbench_run))
+
+    assert captured["config"].retry is True
+    assert captured["config"].completed_turn_count == 7
 
 
 def test_builtin_runtime_message_fields_preserve_latest_request_usage():

@@ -15,8 +15,6 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_analyze_attachment(args: dict[str, Any], context: PluginContext) -> str:
-    if context.services.get("content") is None:
-        raise RuntimeError("cyrene_content application service is unavailable")
     path = resolve_tool_path(str(args["path"]))
     prompt = str(args.get("prompt", "") or "")
     force_refresh = bool(args.get("force_refresh", False))

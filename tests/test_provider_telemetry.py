@@ -6,6 +6,16 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 
+@pytest.mark.parametrize(
+    "connection",
+    [{}, {"options": {}}, {"options": {"provider_preset": None}}],
+)
+def test_provider_preset_normalizes_missing_values_to_empty(connection):
+    from cyrene.plugins.builtin.cyrene_model.telemetry import _provider_preset
+
+    assert _provider_preset(connection) == ""
+
+
 def test_deepseek_balance_normalization_preserves_provider_currencies():
     from cyrene.plugins.builtin.cyrene_model.telemetry import _normalize_deepseek
 

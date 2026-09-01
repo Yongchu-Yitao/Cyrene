@@ -15,6 +15,12 @@
   通过正常 File Tool 读取。
 - 其他 Session 固定的 Browser 在 Cyrene Tool 层只读，但所有 Electron Browser
   Session 仍共享同一个本地 Cookie Partition。
+- Browser Navigation 会阻止直接访问 Loopback、Private、Link-local、Cloud
+  Metadata 和 Reserved Network，但这不是逐 Request 的完整网络 Sandbox；页面
+  子资源、脚本导航和 Electron Redirect 不应被视为具有网络级隔离。
+- Browser Click、Type 和 Enter Submit 不会自动获得 File Upload 使用的
+  Human-only Confirmation。购买、发布、删除和账号修改等高影响网页动作仍依赖
+  用户请求、Agent Policy 与正常 Permission 判断。
 
 ## 模型、集成与预算
 
@@ -53,6 +59,13 @@
 - Pull-request CI 在 Linux 上覆盖完整 Python Suite、WebUI Build 和 Electron
   App Use Test；打包、视觉、升级和带 Credential 的 Integration 仍是
   Release/Manual Gate。
+- Browser 的 Python/Electron 测试主要验证协议、状态机、安全检查和独立 JS
+  行为，许多测试使用 Fake Page、Mock Locator 或 Source Contract；复杂真实网站、
+  OAuth/CAPTCHA、跨 Origin Iframe、Shadow DOM 和各平台原生 Window Flow 仍需要
+  Manual/Release Integration 验证。
+- Browser Snapshot、Ref Targeting 和 Wait 主要覆盖当前 Top-level DOM；Iframe、
+  Shadow DOM、Canvas/WebGL 和复杂 Editor 没有统一的递归语义支持。Network Log
+  也只是 Resource Performance Entry，不是完整 DevTools Trace。
 
 精确验证基线见[开发指南](development.zh-CN.md)，已知工程风险见
 [开发记录](../project-notes/README.md)。

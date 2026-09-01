@@ -28,14 +28,17 @@ def test_uv_console_script_and_electron_use_runtime_entrypoint():
     source = (PROJECT_DIR / "electron" / "main.js").read_text(encoding="utf-8")
     development_binary = source.split(
         "function getPythonBinaryPath()", 1
-    )[1].split("function getPythonArgs()", 1)[0]
-    development_args = source.split("function getPythonArgs()", 1)[1].split(
+    )[1].split("function getPythonArgs(", 1)[0]
+    development_args = source.split("function getPythonArgs(", 1)[1].split(
         "function getCurrentAppExecutablePath()", 1
     )[0]
 
     assert "return 'uv'" in development_binary
+    assert "'.venv', 'bin', 'cyrene'" in development_binary
+    assert "'.venv', 'Scripts', 'cyrene.exe'" in development_binary
     assert "'run'" in development_args
     assert "'cyrene'" in development_args
+    assert "path.basename(binaryPath)" in development_args
     assert "'local_cli.py'" not in development_args
     assert "const DEVELOPMENT_APP_NAME = 'Cyrene-dev';" in source
     assert "app.setPath('userData', getCyreneUserDataDir())" in source

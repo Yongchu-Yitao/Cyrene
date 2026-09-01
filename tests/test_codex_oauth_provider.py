@@ -792,9 +792,11 @@ async def test_codex_completion_uses_structured_cyrene_actions_without_leaking_j
     )
 
     assert response["content"] == ""
-    assert response["tool_calls"][0]["function"] == {
+    assert response["tool_calls"][0] | {"id": "ignored"} == {
+        "id": "ignored",
         "name": "use_tools",
-        "arguments": '{"task": "打开 B 站，用浏览器"}',
+        "arguments": {"task": "打开 B 站，用浏览器"},
+        "index": 0,
     }
     assert events == []
     assert seen_turn_params["outputSchema"]["properties"]["tool_calls"][
@@ -840,7 +842,7 @@ def test_codex_structured_action_preserves_only_terminal_content() -> None:
     )
 
     assert response["content"] == ""
-    assert response["tool_calls"][0]["function"]["name"] == "quit"
+    assert response["tool_calls"][0]["name"] == "quit"
 
 
 def test_codex_structured_action_rejects_invalid_arguments_json() -> None:
@@ -862,7 +864,7 @@ def test_codex_structured_action_rejects_invalid_arguments_json() -> None:
         )
 
 
-def test_codex_structured_action_repairs_unambiguous_schema_arguments() -> None:
+def test_codex_structured_action_defers_schema_repairs_to_parser_plugin() -> None:
     tools = [
         {
             "type": "function",
@@ -921,15 +923,8 @@ def test_codex_structured_action_repairs_unambiguous_schema_arguments() -> None:
         tools,
     )
 
-    arguments = json.loads(
-        response["tool_calls"][0]["function"]["arguments"]
-    )
-    assert arguments == {
-        "steps": [
-            {"title": "Inspect", "tasks": ["Read", "Verify"]}
-        ],
-        "max_steps": 2,
-    }
+    arguments = response["tool_calls"][0]["arguments"]
+    assert arguments == malformed
 
 
 def test_codex_multi_tool_action_contract_allows_direct_completion() -> None:

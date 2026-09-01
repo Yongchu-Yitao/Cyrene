@@ -511,7 +511,12 @@ class MCPPluginService:
                     target_server: str = server_name,
                     target_tool: str = tool_name,
                 ) -> Any:
-                    return await self.invoke(target_server, target_tool, arguments)
+                    return await self.invoke(
+                        target_server,
+                        target_tool,
+                        arguments,
+                        arguments_normalized=True,
+                    )
 
                 try:
                     plugins.append(
@@ -611,9 +616,16 @@ class MCPPluginService:
         server_name: str,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        arguments_normalized: bool = False,
     ) -> Any:
         return await self._on_owner(
-            lambda: self._invoke_owned(server_name, tool_name, arguments),
+            lambda: self._invoke_owned(
+                server_name,
+                tool_name,
+                arguments,
+                arguments_normalized=arguments_normalized,
+            ),
         )
 
     async def _invoke_owned(
@@ -621,8 +633,15 @@ class MCPPluginService:
         server_name: str,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        arguments_normalized: bool = False,
     ) -> Any:
-        raw = await self._invoke_raw_owned(server_name, tool_name, arguments)
+        raw = await self._invoke_raw_owned(
+            server_name,
+            tool_name,
+            arguments,
+            arguments_normalized=arguments_normalized,
+        )
         value = serialize_mcp_result(
             server_name,
             tool_name,
@@ -651,6 +670,8 @@ class MCPPluginService:
         server_name: str,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        arguments_normalized: bool = False,
     ) -> dict[str, Any]:
         if not self._started:
             raise RuntimeError("MCP Plugin service is not running")
@@ -696,10 +717,12 @@ class MCPPluginService:
             raise RuntimeError(
                 f"MCP tool '{tool_name}' does not match its active Plugin identity"
             )
-        normalized_arguments = normalize_plugin_arguments(
-            dict(arguments or {}),
-            resolved.input_schema,
-        ).arguments
+        normalized_arguments = dict(arguments or {})
+        if not arguments_normalized:
+            normalized_arguments = normalize_plugin_arguments(
+                normalized_arguments,
+                resolved.input_schema,
+            ).arguments
         validate_plugin_arguments(
             resolved.name,
             normalized_arguments,

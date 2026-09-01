@@ -43,6 +43,15 @@ function wbcAgentPhasePayload(event) {
   };
 }
 
+function wbcAgentToolDisplayName(name, input) {
+  var raw = String(name || "").trim();
+  if (raw !== "toolbox" || !input || typeof input !== "object" || Array.isArray(input)) return raw;
+  var operation = String(input.operation || "").trim();
+  var target = String(input.name || "").trim();
+  if (operation === "invoke" && target) return target;
+  return ["toolbox", operation].filter(Boolean).join(".") || raw;
+}
+
 function wbcAgentToolPayload(event) {
   var payload = wbcAgentEventPayload(event);
   var timestamp = String(event && event.timestamp || payload.timestamp || payload.createdAt || payload.created_at || "");
@@ -52,14 +61,21 @@ function wbcAgentToolPayload(event) {
         current: Number(payload.progress.current) || 0,
         total: Number(payload.progress.total) || 0,
         label: String(payload.progress.label || ""),
-      }
+    }
     : null;
+  var input = payload.inputSummary != null
+    ? payload.inputSummary
+    : (payload.input_summary != null ? payload.input_summary : payload.args);
+  var toolName = wbcAgentToolDisplayName(
+    payload.name || payload.tool || payload.title || "",
+    payload.args && typeof payload.args === "object" ? payload.args : input
+  );
   return {
     eventId: String(event.eventId || event.event_id || ""),
     runId: String(event.runId || event.run_id || payload.runId || payload.run_id || ""),
     toolCallId: String(payload.toolCallId || payload.tool_call_id || ""),
-    name: String(payload.name || payload.tool || payload.title || ""),
-    title: String(payload.title || payload.name || ""),
+    name: toolName,
+    title: toolName,
     status: String(payload.status || "running"),
     failed: !!payload.failed,
     createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now(),
@@ -67,9 +83,7 @@ function wbcAgentToolPayload(event) {
       ? payload.inputSummary
       : (payload.input_summary != null ? payload.input_summary : payload.args)),
     outputSummary: wbcStructuredEventSummary(payload.outputSummary != null ? payload.outputSummary : payload.output_summary),
-    input: payload.inputSummary != null
-      ? payload.inputSummary
-      : (payload.input_summary != null ? payload.input_summary : payload.args),
+    input: input,
     output: payload.outputSummary != null ? payload.outputSummary : payload.output_summary,
     progress: progress,
     presentation: payload.presentation && typeof payload.presentation === "object" ? payload.presentation : {},
@@ -279,4 +293,4 @@ function wbcRouteAgentEvent(type, event, handlers) {
 // Data access
 // ---------------------------------------------------------------------------
 
-export { wbcAgentEventPayload, wbcAgentDeltaPayload, wbcAgentDonePayload, wbcAgentReasoningDelta, wbcAgentReasoningDone, wbcAgentPhasePayload, wbcAgentToolPayload, wbcAgentPermissionPayload, wbcAgentPermissionReviewPayload, wbcAgentElicitationPayload, wbcStructuredEventSummary, wbcAgentSessionPayload, wbcAgentAwaitingPayload, wbcAgentRunFailedError, wbcAgentNotificationPayload, AGENT_EVENT_ROUTER, wbcRouteAgentEvent }
+export { wbcAgentEventPayload, wbcAgentDeltaPayload, wbcAgentDonePayload, wbcAgentReasoningDelta, wbcAgentReasoningDone, wbcAgentPhasePayload, wbcAgentToolDisplayName, wbcAgentToolPayload, wbcAgentPermissionPayload, wbcAgentPermissionReviewPayload, wbcAgentElicitationPayload, wbcStructuredEventSummary, wbcAgentSessionPayload, wbcAgentAwaitingPayload, wbcAgentRunFailedError, wbcAgentNotificationPayload, AGENT_EVENT_ROUTER, wbcRouteAgentEvent }

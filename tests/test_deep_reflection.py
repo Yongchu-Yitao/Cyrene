@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from cyrene.core import AgentSession
 from cyrene.core.context import ContextStoreRouter
-from cyrene.core.hook import HookEvent, SESSION_END
+from cyrene.core.hook import CONVERSATION_TURN_COMMITTED, HookEvent
 from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
 from cyrene.plugins.builtin.cyrene_control.deep_reflect import (
     DeepReflectionService,
@@ -264,7 +264,7 @@ def test_deep_reflect_tool_rewrites_context_then_continues_without_changing_ui(
     session.close()
 
 
-def test_memory_session_end_hook_keeps_workspace_conversation_archive(tmp_path):
+def test_memory_committed_turn_hook_keeps_workspace_conversation_archive(tmp_path):
     service = MemoryService(
         workspace=tmp_path,
         tree=None,
@@ -276,12 +276,13 @@ def test_memory_session_end_hook_keeps_workspace_conversation_archive(tmp_path):
         },
     )
     event = HookEvent(
-        SESSION_END,
+        CONVERSATION_TURN_COMMITTED,
         "chat",
         datetime.now(timezone.utc),
         payload={
             "status": "completed",
             "run_id": "run-archive",
+            "turn_id": "turn-archive",
             "user_request": "decorated internal request",
             "assistant_text": "archived answer",
             "metadata": {"public_user_message": "original visible request"},
@@ -289,7 +290,7 @@ def test_memory_session_end_hook_keeps_workspace_conversation_archive(tmp_path):
         is_root=True,
     )
 
-    run(service.on_session_end(event))
+    run(service.on_conversation_turn_committed(event))
 
     entries = load_session_conversation_entries("chat", tmp_path)
     assert (tmp_path / ".cyrene" / "conversations" / "chat.md").is_file()

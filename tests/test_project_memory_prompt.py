@@ -262,6 +262,37 @@ def test_prompt_versions_use_modified_time_conflicts_and_restore_as_new_revision
     assert restored_again["current"]["modifiedAt"] > current_time
 
 
+def test_retry_supersedes_project_learning_revision_by_stable_turn_id():
+    first, changed = memory_prompt._commit_prompt(
+        "project-retry",
+        "Old learned status.",
+        base_modified_at="",
+        modified_by="memory_agent",
+        source="conversation_auto",
+        change_summary="old",
+        trigger={
+            "conversationId": "chat-1",
+            "turnId": "turn-1",
+            "roundId": "run-1",
+        },
+    )
+    assert changed is True
+    old_revision = first["current"]["revisionId"]
+
+    assert memory_prompt.supersede_turn_learning(
+        "project-retry",
+        chat_id="chat-1",
+        turn_id="turn-1",
+        replacement_run_id="run-2",
+    ) == 2
+    document = memory_prompt.get_project_memory_prompt("project-retry")
+    retired = next(
+        item for item in document["versions"] if item["revisionId"] == old_revision
+    )
+    assert retired["supersededByRoundId"] == "run-2"
+    assert document["current"]["prompt"] == ""
+
+
 def _project_memory_api(*, chat=None) -> TestClient:
     class Chats:
         @staticmethod

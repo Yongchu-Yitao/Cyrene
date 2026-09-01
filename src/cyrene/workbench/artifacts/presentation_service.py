@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.config import DB_PATH
+from cyrene.core.plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from cyrene.workbench.artifacts import presentation_runtime
 from cyrene.workbench.sessions.session_presentation import (
     WorkbenchSessionExport,
@@ -92,7 +93,7 @@ class PresentationQueryService:
                     if isinstance(value, (list, tuple))
                     else []
                 )
-            except Exception:
+            except PLUGIN_BOUNDARY_ERRORS:
                 logger.exception("Plugin Workbench search failed for %s", result_type)
                 results[result_type] = []
         return results

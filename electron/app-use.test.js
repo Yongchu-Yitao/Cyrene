@@ -1,14 +1,56 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
+const { PassThrough, Writable } = require('node:stream');
 const test = require('node:test');
 
 const {
   AppUseManager,
+  WindowsPowerShellWorker,
   capabilitiesForTarget,
   resolveDarwinHitTestHelperPath,
   resolveProviderScriptPath,
 } = require('./app-use');
+
+test('Windows low-latency input reuses one PowerShell worker with ordered responses', async () => {
+  let spawnCount = 0;
+  const received = [];
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = function () {};
+  child.stdin = new Writable({
+    write(chunk, _encoding, callback) {
+      const encoded = String(chunk).trim();
+      const payload = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      received.push(payload);
+      const response = `${JSON.stringify({ ok: true, action: payload.capability })}\n`;
+      queueMicrotask(function () {
+        child.stdout.write(response.slice(0, 7));
+        child.stdout.write(response.slice(7));
+      });
+      callback();
+    },
+  });
+  const worker = new WindowsPowerShellWorker('C:\\Cyrene\\app-use-windows.ps1', {
+    spawnImpl(command, args) {
+      spawnCount += 1;
+      assert.equal(command, 'powershell.exe');
+      assert.equal(args.includes('-Worker'), true);
+      return child;
+    },
+  });
+
+  const results = await Promise.all([
+    worker.request({ operation: 'perform', capability: 'pointer_event', sequence: 1 }),
+    worker.request({ operation: 'perform', capability: 'right_click', sequence: 2 }),
+  ]);
+
+  assert.equal(spawnCount, 1);
+  assert.deepEqual(received.map((item) => item.sequence), [1, 2]);
+  assert.deepEqual(results.map((item) => item.action), ['pointer_event', 'right_click']);
+});
 
 test('packaged provider resolves from external resources instead of app.asar', () => {
   const resourcesPath = path.join('/Applications', 'Cyrene.app', 'Contents', 'Resources');
@@ -40,6 +82,8 @@ test('Windows provider source includes Win32 bounds and robust focus fallbacks',
   assert.match(source, /WindowRect\(\$handleValue\)/);
   assert.match(source, /AttachThreadInput/);
   assert.match(source, /sameIntegrityLevelRequired/);
+  assert.match(source, /\$Worker\.IsPresent/);
+  assert.match(source, /\[Console\]::In\.ReadLine\(\)/);
 });
 
 test('semantic providers use complete native accessibility traversal on macOS and Windows', () => {
@@ -266,6 +310,37 @@ test('lists foreground and background targets with stable opaque ids', async () 
   assert.equal(first.targets[0].target_id, second.targets[0].target_id);
   assert.equal(first.targets.find((item) => item.foreground).app_name, 'Notes');
   assert.equal(first.targets.find((item) => !item.foreground).app_name, 'TextEdit');
+});
+
+test('Windows Remote Desktop global input bypasses target enumeration and UIA sessions', async () => {
+  const provider = new FakeProvider();
+  provider.platform = 'win32';
+  provider.listTargets = async function () {
+    throw new Error('global input must not enumerate windows');
+  };
+  const manager = new AppUseManager({ provider, ownPid: 999 });
+  const bounds = { x: -1920, y: 0, width: 3840, height: 1080 };
+
+  await manager.remoteDesktopGlobalInput('pointer_event', {
+    desktop_bounds: bounds,
+    coordinate_space: 'screen',
+    x: 240,
+    y: 360,
+    action: 'move',
+    button: 'left',
+  });
+  await manager.remoteDesktopGlobalInput('key_sequence', {
+    desktop_bounds: bounds,
+    focus_target: true,
+    steps: [{ type: 'key', key: 'ENTER' }],
+  });
+
+  assert.equal(provider.performed.length, 2);
+  assert.deepEqual(provider.performed[0].target, { platform: 'win32', bounds });
+  assert.equal(provider.performed[0].parameters.desktop_bounds, undefined);
+  assert.equal(provider.performed[1].capability, 'key_sequence');
+  assert.equal(provider.performed[1].parameters.focus_target, undefined);
+  assert.deepEqual(provider.focused, []);
 });
 
 test('visual connect discloses only visual runtime capabilities', async () => {

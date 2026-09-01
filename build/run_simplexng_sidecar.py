@@ -44,6 +44,7 @@ if __name__ == "__main__":
         import brotli  # noqa: F401 - smoke test verifies the bundled dependency
         import fasttext  # noqa: F401 - smoke test verifies the bundled dependency
         import simplexng
+        from cyrene.simplexng_child import main as _run_simplexng_child  # noqa: F401
 
         print(json.dumps({
             "ok": True,
@@ -54,6 +55,6 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if "--cyrene-prepare-settings" in sys.argv:
         raise SystemExit(_prepare_settings())
-    from cyrene.plugins.builtin.cyrene_content.simplexng_child import main
+    from cyrene.simplexng_child import main
 
     main()

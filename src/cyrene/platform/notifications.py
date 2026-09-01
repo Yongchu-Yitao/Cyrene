@@ -1,7 +1,7 @@
 """Notification system — desktop notifications, webhook alerts, and in-app SSE events.
 
 Supports three delivery channels:
-  1. **Desktop native** — macOS (``terminal-notifier`` with app icon), Windows (VBScript popup), Linux (notify-send).
+  1. **Desktop native** — Electron's native operating-system notification API.
   2. **Webhook** — POST to Discord, Slack, or generic webhook URLs.
   3. **In-app SSE** — pushes through the existing ``debug.publish_event`` bus.
 
@@ -16,16 +16,13 @@ from __future__ import annotations
 
 import logging
 import os
-import platform
-import subprocess
-import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
 from cyrene.localization import localized
-from cyrene.platform.paths import TEMP_DIR
+from cyrene.platform.host_bridge import HostBridgeError, call_host
 
 logger = logging.getLogger(__name__)
 
@@ -161,122 +158,41 @@ async def _publish_sse(title: str, body: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Desktop — cross-platform (macOS, Windows, Linux)
+# Desktop — Electron native host
 # ---------------------------------------------------------------------------
 
 
 async def _notify_desktop(title: str, body: str) -> dict[str, Any]:
-    system = platform.system()
-    try:
-        if system == "Darwin":
-            return _notify_macos(title, body)
-        elif system == "Windows":
-            return _notify_windows(title, body)
-        elif system == "Linux":
-            return _notify_linux(title, body)
-        else:
-            return {"ok": False, "error": localized(
-                "Unsupported platform: {platform}",
-                "不支持的平台：{platform}",
-                platform=system,
-            )}
-    except Exception:
-        logger.warning("Desktop notification failed", exc_info=True)
-        return {
-            "ok": False,
-            "error": localized(
-                "The desktop notification could not be delivered.",
-                "桌面通知发送失败。",
-            ),
-            "code": "desktop_notification_failed",
-        }
+    """Deliver through the authenticated Electron main-process bridge.
 
-
-def _notify_macos(title: str, body: str) -> dict[str, Any]:
-    """macOS native notification via ``terminal-notifier``.
-
-    ``terminal-notifier`` is a small CLI tool (``brew install terminal-notifier``)
-    that sends real Notification Center alerts from any process — no bundle ID,
-    no running NSApplication, no AppleScript required.  It fires even when no
-    Web UI or Electron window is open, which is the whole point for scheduled-task
-    reminders (#12).
-
-    Three-tier layout so each piece of information has its own line::
-
-        [Cyrene icon]  Cyrene                ← ASSISTANT_NAME (always)
-                       Scheduled task done   ← title arg  (event/task label)
-                       Backed up 42 files    ← body arg   (execution detail)
-
-    When ``terminal-notifier`` is not installed the channel reports failure so
-    ``auto`` mode can fall through to the next available channel (SSE, WeChat,
-    Telegram) rather than silently dropping the notification.
+    Desktop notifications belong to the desktop host. Keeping their lifecycle
+    in Electron avoids launching platform helper processes from the Python
+    event loop and works even when every renderer window is hidden.
     """
-    import shutil
-    from cyrene.config import ASSISTANT_NAME
-
-    binary = shutil.which("terminal-notifier")
-    if not binary:
+    try:
+        result = await call_host(
+            "notification.show",
+            {"title": str(title), "body": str(body)},
+            timeout=3.0,
+        )
+    except HostBridgeError as exc:
         return {
             "ok": False,
             "error": localized(
-                "terminal-notifier was not found; install it with: brew install terminal-notifier",
-                "未找到 terminal-notifier；请运行 brew install terminal-notifier 安装。",
+                "The Electron desktop host is unavailable.",
+                "Electron 桌面宿主当前不可用。",
             ),
+            "code": exc.code,
         }
-
-    # Use the installed Cyrene.app as the notification sender so the left icon
-    # shows Cyrene's own app icon on all macOS versions (the -appIcon flag was
-    # restricted by Apple on macOS 12+, but -sender is reliable).  If the
-    # Electron app is not installed, terminal-notifier falls back to its own
-    # icon gracefully — no error, no crash.
-    #
-    # Three-tier layout:
-    #   -title    → ASSISTANT_NAME ("Cyrene")  — always the app/agent name
-    #   -subtitle → title arg                  — task type / event label
-    #   -message  → body arg                   — execution detail / content
-    cmd = [
-        binary,
-        "-sender",   "com.cyrene.app",
-        "-title",    ASSISTANT_NAME,
-        "-subtitle", title,
-        "-message",  body,
-        "-sound",    "default",
-    ]
-
-    proc = subprocess.run(cmd, capture_output=True, timeout=10)
-    if proc.returncode != 0:
-        err = proc.stderr.decode("utf-8", "replace").strip() or f"terminal-notifier exited {proc.returncode}"
-        return {"ok": False, "error": err}
-    return {"ok": True}
-
-
-def _notify_windows(title: str, body: str) -> dict[str, Any]:
-    """Windows toast popup via VBScript (auto-dismisses after 5s)."""
-    safe_title = title.replace('"', '""')
-    safe_body = body.replace('"', '""')
-    vbs = f'CreateObject("Wscript.Shell").Popup "{safe_body}", 5, "{safe_title}", 64'
-    tmp = None
-    try:
-        TEMP_DIR.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(suffix=".vbs", mode="w", dir=TEMP_DIR, delete=False) as f:
-            f.write(vbs)
-            tmp = f.name
-        subprocess.run(["cscript", "//NoLogo", tmp], capture_output=True, timeout=10)
-        return {"ok": True}
-    finally:
-        if tmp:
-            try:
-                os.unlink(tmp)
-            except Exception:
-                pass
-
-
-def _notify_linux(title: str, body: str) -> dict[str, Any]:
-    """Linux desktop notification via notify-send (libnotify)."""
-    subprocess.run(
-        ["notify-send", title, body],
-        capture_output=True, timeout=10,
-    )
+    if result.get("ok") is not True:
+        return {
+            "ok": False,
+            "error": str(result.get("detail") or result.get("error") or localized(
+                "The desktop host rejected the notification.",
+                "桌面宿主拒绝了这条通知。",
+            )),
+            "code": str(result.get("error") or "desktop_notification_failed"),
+        }
     return {"ok": True}
 
 

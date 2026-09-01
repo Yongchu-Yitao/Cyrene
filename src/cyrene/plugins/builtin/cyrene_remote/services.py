@@ -100,10 +100,11 @@ class RemoteDeviceProjectionService:
         state = "syncing_grants" if not capabilities or not scopes else "offline" if stale else "ready"
         workspace = all(item in capabilities for item in ("workspace_file:metadata", "workspace_file:read", "workspace_file:write"))
         jobs = all(item in capabilities for item in ("remote_job:read", "remote_job:run"))
+        desktop = all(item in capabilities for item in ("desktop:session_connect", "desktop:screen_view_user"))
         return {
             **peer, "state": state, "eligible": bool(capabilities and scopes),
             "online": state == "ready",
-            "features": {"workspace_files_v1": workspace, "remote_jobs_v1": jobs, "remote_authorization_v1": workspace or jobs},
+            "features": {"workspace_files_v1": workspace, "remote_jobs_v1": jobs, "remote_desktop_v1": desktop, "remote_authorization_v1": workspace or jobs or desktop},
         }
 
 
@@ -117,6 +118,36 @@ class RemoteControlApplicationService:
         self.store = store
         self.projection = projection
         self.runtime = runtime
+
+    @property
+    def peer_transport(self) -> Any | None:
+        """Return the live peer transport owned by this Plugin generation.
+
+        Application plugins are loaded under isolated module names. Consumers
+        must obtain process state through the injected application service,
+        rather than importing another Plugin's module-level registry.
+        """
+        if self.runtime is None:
+            return None
+        return getattr(self.runtime, "gateway", None)
+
+    async def execute_scoped_file(
+        self,
+        peer_device_id: str,
+        command: str,
+        scope_id: str,
+        root: Any,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.runtime is None or getattr(self.runtime, "executor", None) is None:
+            raise RuntimeError("Remote file channel is unavailable")
+        return await self.runtime.executor.execute_scoped_file(
+            peer_device_id,
+            command,
+            scope_id,
+            root,
+            payload,
+        )
 
     async def update_settings(self, values: dict[str, Any]) -> dict[str, Any]:
         try:

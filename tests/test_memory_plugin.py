@@ -171,6 +171,62 @@ def test_memory_pack_mounts_session_context_through_hook(monkeypatch, tmp_path):
     session.close()
 
 
+def test_memory_pack_rebinds_persisted_hooks_on_reopen(monkeypatch, tmp_path):
+    from cyrene.core.plugin import Plugin, PluginPack
+    from cyrene.core.session import AgentSession
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
+
+    async def model(_arguments, _context):
+        return {"content": "done", "tool_calls": [], "model": "fake"}
+
+    monkeypatch.setattr(MemoryService, "context_block", lambda _self: "memory")
+    registry = PluginRegistry()
+    registry.register_pack(plugin_pack, source="test-memory")
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "test model",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake",
+                    {"type": "object"},
+                    model,
+                    kind="model",
+                ),
+            ),
+        ),
+        source="test-model",
+    )
+    data = tmp_path / "data"
+    workspace = tmp_path / "workspace"
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+
+    first = AgentSession(data, workspace, plugin_directory, registry=registry)
+    first.close()
+    reopened = AgentSession(data, workspace, plugin_directory, registry=registry)
+
+    memory_hooks = {
+        hook.id: hook
+        for hook in reopened.hooks.list()
+        if hook.id.startswith("cyrene-memory-")
+    }
+    assert set(memory_hooks) == {
+        "cyrene-memory-session_start",
+        "cyrene-memory-turn_start",
+        "cyrene-memory-context_used",
+        "cyrene-memory-session_end",
+        "cyrene-memory-conversation_turn_committed",
+        "cyrene-memory-stop",
+    }
+    assert memory_hooks["cyrene-memory-context_used"].config == {
+        "include_node_tokens": False
+    }
+    assert reopened._plugin_setup_failures == {}
+    reopened.close()
+
+
 def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
     monkeypatch,
     tmp_path,
@@ -320,14 +376,28 @@ def test_memory_transcript_uses_the_shared_context_lifecycle_projection(tmp_path
     ]
 
 
-def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path):
+def test_memory_plugin_waits_for_public_commit_before_automatic_capture(
+    monkeypatch,
+    tmp_path,
+):
     from datetime import datetime, timezone
 
     from cyrene.core.context import ContextStoreRouter
-    from cyrene.core.hook import HookEvent, SESSION_END
+    from cyrene.core.hook import (
+        CONVERSATION_TURN_COMMITTED,
+        HookEvent,
+        SESSION_END,
+    )
     from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
     captured = {}
+
+    def archive(_self, details, user_text, assistant_text, _run_data):
+        captured["archive"] = {
+            "turn_id": details.get("turn_id"),
+            "user": user_text,
+            "assistant": assistant_text,
+        }
 
     def persist(
         _self,
@@ -363,9 +433,22 @@ def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path)
 
     monkeypatch.setattr(MemoryService, "_persist_learning_snapshot", persist)
     monkeypatch.setattr(MemoryService, "_capture_and_learn", capture)
+    monkeypatch.setattr(MemoryService, "_archive_completed_exchange", archive)
     monkeypatch.setattr(
-        "cyrene.plugins.builtin.cyrene_memory.project_memory.claim_structured_memory_threshold",
+        "cyrene.plugins.builtin.cyrene_memory.project_memory.pending_structured_memory_threshold",
         lambda *_args, **_kwargs: 10,
+    )
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_memory.project_memory.complete_structured_memory_threshold",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_memory.project_memory.supersede_turn_learning",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        "cyrene.plugins.builtin.cyrene_memory.structured.supersede_conversation_turn",
+        lambda *_args, **_kwargs: 0,
     )
 
     with ContextStoreRouter(tmp_path / "context") as store:
@@ -414,7 +497,30 @@ def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path)
                         "status": "completed",
                         "assistant_node_id": assistant.id,
                         "run_id": "run-1",
+                        "turn_id": "turn-1",
                         "assistant_text": "I will use the Plugin boundary.",
+                    },
+                    node_id=assistant.id,
+                    is_root=True,
+                )
+            )
+        )
+        assert captured == {}
+        run(
+            service.on_conversation_turn_committed(
+                HookEvent(
+                    CONVERSATION_TURN_COMMITTED,
+                    tree.id,
+                    datetime.now(timezone.utc),
+                    payload={
+                        "status": "completed",
+                        "assistant_node_id": assistant.id,
+                        "node_id": assistant.id,
+                        "run_id": "run-1",
+                        "turn_id": "msg-1",
+                        "user_text": "Remember this verified choice.",
+                        "assistant_text": "I will use the Plugin boundary.",
+                        "completed_turn_count": 1,
                     },
                     node_id=assistant.id,
                     is_root=True,
@@ -426,6 +532,11 @@ def test_memory_plugin_session_end_owns_automatic_capture(monkeypatch, tmp_path)
     assert captured["snapshot"]["run_id"] == "run-1"
     assert captured["capture"]["user"] == "Remember this verified choice."
     assert captured["capture"]["assistant"] == "I will use the Plugin boundary."
+    assert captured["archive"] == {
+        "turn_id": "msg-1",
+        "user": "Remember this verified choice.",
+        "assistant": "I will use the Plugin boundary.",
+    }
     assert captured["capture"]["snapshot"] == {
         "chatId": "chat-memory",
         "projectId": "project-memory",

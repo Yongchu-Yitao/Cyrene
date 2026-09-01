@@ -101,6 +101,14 @@ Electron Lockfile。必需检查包括完整 Python Suite、Ruff、Python Byteco
 Compilation、Production WebUI Build、全部 WebUI Test、全部 Electron Test、
 Generated WebUI Cleanliness 与 Whitespace Check。
 
+Browser 自动化测试的覆盖层级需要单独理解：Python Suite 广泛覆盖 RPC Routing、
+SSRF Initial/Redirect Check、Snapshot Credential、Upload Binding、Takeover 与
+Lifecycle；Electron Test 覆盖 Target Selection、Popup Policy、Context Menu 和
+Source Contract。但大量用例使用 Fake Page、Mock Locator 或独立 VM Script，
+不会启动真实 Electron 并遍历带 OAuth/CAPTCHA、跨 Origin Iframe、Shadow DOM
+和各平台 Native Window 的网站。此类流程必须进入 Release/Manual Integration
+Matrix，不能仅凭 Unit Suite 通过宣称完整网站兼容性。
+
 文档复核期间 OpenAPI Test 最初失败，是因为其 Hash 由 Ambient Python
 3.13.12、FastAPI 0.115.8、Pydantic 2.12.5 采集，而不是使用 `uv.lock` 中
 早已存在的版本。直接对比发现 10 个 Generator-level Difference：4 个

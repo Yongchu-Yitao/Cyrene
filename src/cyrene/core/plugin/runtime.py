@@ -12,9 +12,18 @@ from typing import Any
 
 from ..hook import HookAwaitingUser
 from ..observability import log_operation, operation
+from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS, PluginBoundaryError
 from .execution import bind_plugin_execution
 from .context import plugin_language, plugin_localized
-from .plugin import Plugin, PluginCall, PluginCallResult, PluginContext
+from .circuit import PluginCircuitBreaker
+from .plugin import (
+    Plugin,
+    PluginCall,
+    PluginCallResult,
+    PluginContext,
+    PluginExecutionError,
+    PluginFailure,
+)
 from .registry import PluginNotFoundError, PluginRegistry, PluginUnavailableError
 from .validation import (
     PluginInputValidationError,
@@ -63,6 +72,50 @@ def _context_agent_id(context: PluginContext) -> str:
     return "main"
 
 
+def _context_run_id(context: PluginContext) -> str:
+    direct = str(context.data.get("run_id") or "").strip()
+    if direct:
+        return direct
+    run_context = context.data.get("run_context")
+    if not isinstance(run_context, Mapping):
+        return ""
+    return str(
+        run_context.get("round_id") or run_context.get("run_id") or ""
+    ).strip()
+
+
+def _validation_failure(
+    context: PluginContext,
+    exc: PluginBoundaryError,
+) -> PluginFailure:
+    if isinstance(exc, PluginInputValidationError):
+        code = "plugin_invalid_arguments"
+        retryable = True
+        retry_scope = "different_arguments"
+    elif isinstance(exc, PluginSchemaError):
+        code = "plugin_invalid_schema"
+        retryable = False
+        retry_scope = "after_config_change"
+    elif isinstance(exc, PluginNotFoundError):
+        code = "plugin_not_found"
+        retryable = False
+        retry_scope = "after_config_change"
+    elif isinstance(exc, PluginUnavailableError):
+        code = "plugin_unavailable"
+        retryable = False
+        retry_scope = "after_config_change"
+    else:
+        code = "plugin_validation_failed"
+        retryable = False
+        retry_scope = "never"
+    return PluginFailure(
+        error_code=code,
+        message=_validation_error_text(context, exc),
+        retryable=retryable,
+        retry_scope=retry_scope,
+    )
+
+
 def plugin_context_is_read_only(context: PluginContext) -> bool:
     """Resolve the execution policy shared by direct and Toolbox calls."""
 
@@ -72,12 +125,15 @@ def plugin_context_is_read_only(context: PluginContext) -> bool:
     return isinstance(run_context, Mapping) and run_context.get("read_only") is True
 
 
-def _validation_error_text(context: PluginContext, exc: Exception) -> str:
+def _validation_error_text(
+    context: PluginContext,
+    exc: PluginBoundaryError,
+) -> str:
     english = str(exc) or "Plugin call validation failed."
     if isinstance(exc, PluginInputValidationError):
-        chinese = f"插件参数无效：{english}"
+        chinese = exc.localized_message("zh")
     elif isinstance(exc, PluginSchemaError):
-        chinese = f"插件输入规则无效：{english}"
+        chinese = "插件输入规则无效。"
     elif isinstance(exc, PluginNotFoundError):
         chinese = "未找到请求的插件。"
     elif isinstance(exc, PluginUnavailableError):
@@ -93,7 +149,7 @@ def _validation_error_text(context: PluginContext, exc: Exception) -> str:
 def _execution_error_text(
     context: PluginContext,
     plugin: Plugin,
-    exc: Exception,
+    exc: PluginBoundaryError,
 ) -> str:
     public_error = str(exc).strip()
     if plugin.metadata.get("public_errors") is True and public_error:
@@ -113,7 +169,7 @@ def _execution_error_details(exc: BaseException) -> dict[str, Any]:
         return {}
     try:
         details = exporter()
-    except Exception:
+    except PLUGIN_BOUNDARY_ERRORS:
         return {}
     return dict(details) if isinstance(details, Mapping) else {}
 
@@ -126,6 +182,18 @@ class PreparedPluginCall:
     plugin: Plugin
     arguments: dict[str, Any]
     permission_boundary: dict[str, Any] | None = None
+    argument_repairs: tuple[dict[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedPluginCall:
+    """One canonical Plugin call plus its effective resource target."""
+
+    call: PluginCall
+    plugin: Plugin
+    arguments: dict[str, Any]
+    effective_plugin: Plugin
+    effective_arguments: dict[str, Any]
     argument_repairs: tuple[dict[str, str], ...] = ()
 
 
@@ -147,13 +215,13 @@ async def _permission_boundary(
 
 
 async def _validated_call(
-    registry: PluginRegistry,
+    runtime: PluginRuntime,
     call: PluginCall,
     context: PluginContext,
-) -> tuple[Plugin, Any, dict[str, Any], dict[str, Any] | None]:
-    plugin = registry.resolve(call.name, agent_id=_context_agent_id(context))
-    normalization = normalize_plugin_arguments(call.arguments, plugin.input_schema)
-    arguments = normalization.arguments
+) -> tuple[Plugin, NormalizedPluginCall, dict[str, Any], dict[str, Any] | None]:
+    normalized = runtime.normalize_call(call, context)
+    plugin = normalized.plugin
+    arguments = normalized.arguments
     validate_plugin_arguments(plugin.name, arguments, plugin.input_schema)
     if (
         plugin_context_is_read_only(context)
@@ -163,7 +231,7 @@ async def _validated_call(
             f"Plugin is unavailable in a read-only context: {plugin.name}"
         )
     permission_request = await _permission_boundary(plugin, arguments, context)
-    return plugin, normalization, arguments, permission_request
+    return plugin, normalized, arguments, permission_request
 
 
 class PluginRuntime:
@@ -171,6 +239,141 @@ class PluginRuntime:
 
     def __init__(self, registry: PluginRegistry) -> None:
         self.registry = registry
+        self.circuits = PluginCircuitBreaker()
+
+    def circuit_failure(
+        self,
+        name: str,
+        run_id: str,
+        *,
+        agent_id: str = "main",
+    ) -> PluginFailure | None:
+        try:
+            canonical_name = self.registry.resolve(
+                name,
+                agent_id=agent_id,
+            ).canonical_name
+        except Exception:
+            canonical_name = str(name or "")
+        return self.circuits.failure_for(run_id, canonical_name)
+
+    def restore_circuit(
+        self,
+        name: str,
+        run_id: str,
+        failure: PluginFailure | Mapping[str, object] | None,
+        *,
+        agent_id: str = "main",
+    ) -> None:
+        try:
+            canonical_name = self.registry.resolve(
+                name,
+                agent_id=agent_id,
+            ).canonical_name
+        except Exception:
+            canonical_name = str(name or "")
+        self.circuits.record(run_id, canonical_name, failure)
+
+    def _blocked_failure(
+        self,
+        plugin: Plugin,
+        context: PluginContext,
+    ) -> PluginFailure | None:
+        return self.circuits.blocked_failure(
+            _context_run_id(context),
+            plugin.canonical_name,
+        )
+
+    def _record_failure(
+        self,
+        plugin: Plugin,
+        context: PluginContext,
+        failure: PluginFailure | None,
+    ) -> None:
+        self.circuits.record(
+            _context_run_id(context),
+            plugin.canonical_name,
+            failure,
+        )
+
+    def normalize_call(
+        self,
+        call: PluginCall,
+        context: PluginContext | None = None,
+    ) -> NormalizedPluginCall:
+        """Canonicalize one call chain through the resolved Plugin schemas.
+
+        Model Provider Plugins may mark only their outer arguments canonical.
+        Deferred toolbox arguments are normalized here against the dynamically
+        resolved target schema, so Session and proxy Plugins can consume the
+        same result without implementing their own repair paths.
+        """
+
+        context = context or PluginContext()
+        agent_id = _context_agent_id(context)
+        plugin = self.registry.resolve(call.name, agent_id=agent_id)
+        repairs = tuple(dict(item) for item in call.argument_repairs)
+        if call.arguments_normalized:
+            arguments = dict(call.arguments)
+        else:
+            normalization = normalize_plugin_arguments(
+                call.arguments,
+                plugin.input_schema,
+            )
+            arguments = normalization.arguments
+            repairs += tuple(repair.as_dict() for repair in normalization.repairs)
+
+        effective_plugin = plugin
+        effective_arguments = arguments
+        nested_normalized = call.nested_arguments_normalized
+        if (
+            plugin.name == "toolbox"
+            and str(arguments.get("operation") or "") == "invoke"
+            and str(arguments.get("name") or "").strip()
+        ):
+            try:
+                target_plugin = self.registry.resolve(
+                    str(arguments.get("name") or ""),
+                    agent_id=agent_id,
+                )
+            except (PluginNotFoundError, PluginUnavailableError):
+                # Preserve toolbox's opaque failure boundary for disappeared or
+                # inaccessible deferred Plugins. The handler refreshes the live
+                # registry and reports the normal generic execution failure.
+                target_plugin = None
+            if target_plugin is not None:
+                effective_plugin = target_plugin
+                nested_arguments = arguments.get("arguments") or {}
+                if not isinstance(nested_arguments, Mapping):
+                    raise TypeError("toolbox invoke arguments must be an object")
+                if nested_normalized:
+                    effective_arguments = dict(nested_arguments)
+                else:
+                    nested = normalize_plugin_arguments(
+                        nested_arguments,
+                        effective_plugin.input_schema,
+                    )
+                    effective_arguments = nested.arguments
+                    repairs += tuple(repair.as_dict() for repair in nested.repairs)
+                arguments["arguments"] = effective_arguments
+                nested_normalized = True
+
+        canonical_call = PluginCall(
+            name=call.name,
+            arguments=arguments,
+            id=call.id,
+            arguments_normalized=True,
+            nested_arguments_normalized=nested_normalized,
+            argument_repairs=repairs,
+        )
+        return NormalizedPluginCall(
+            call=canonical_call,
+            plugin=plugin,
+            arguments=arguments,
+            effective_plugin=effective_plugin,
+            effective_arguments=effective_arguments,
+            argument_repairs=repairs,
+        )
 
     async def run(
         self,
@@ -227,9 +430,10 @@ class PluginRuntime:
                 normalization = None
                 try:
                     plugin, normalization, arguments, permission_request = (
-                        await _validated_call(self.registry, call, context)
+                        await _validated_call(self, call, context)
                     )
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
+                    failure = _validation_failure(context, exc)
                     log_operation(
                         logger,
                         "plugin.runtime",
@@ -244,7 +448,7 @@ class PluginRuntime:
                             else dict(call.arguments)
                         ),
                         argument_repairs=(
-                            [repair.as_dict() for repair in normalization.repairs]
+                            list(normalization.argument_repairs)
                             if normalization is not None
                             else []
                         ),
@@ -257,8 +461,9 @@ class PluginRuntime:
                             call.name,
                             False,
                             None,
-                            _validation_error_text(context, exc),
+                            failure.message,
                             _utc_now(),
+                            failure,
                         )
                     )
                     continue
@@ -273,17 +478,17 @@ class PluginRuntime:
                     original_arguments=dict(call.arguments),
                     arguments=arguments,
                     argument_repairs=[
-                        repair.as_dict() for repair in normalization.repairs
+                        dict(repair) for repair in normalization.argument_repairs
                     ],
                     **_context_fields(context),
                 )
                 item = PreparedPluginCall(
-                    call=call,
+                    call=normalization.call,
                     plugin=plugin,
                     arguments=arguments,
                     permission_boundary=permission_request,
                     argument_repairs=tuple(
-                        repair.as_dict() for repair in normalization.repairs
+                        dict(repair) for repair in normalization.argument_repairs
                     ),
                 )
                 prepared.append(item)
@@ -316,6 +521,12 @@ class PluginRuntime:
                         )
                         continue
                     if isinstance(decision, BaseException):
+                        failure = PluginFailure(
+                            error_code="plugin_review_rejected",
+                            message=str(decision),
+                            retryable=False,
+                            retry_scope="never",
+                        )
                         log_operation(
                             logger,
                             "plugin.runtime",
@@ -331,22 +542,29 @@ class PluginRuntime:
                             item.call.name,
                             False,
                             None,
-                            str(decision),
+                            failure.message,
                             _utc_now(),
+                            failure,
                         )
                     else:
                         try:
-                            reviewed_normalization = normalize_plugin_arguments(
-                                dict(decision),
-                                item.plugin.input_schema,
+                            reviewed = self.normalize_call(
+                                PluginCall(
+                                    name=item.call.name,
+                                    arguments=dict(decision),
+                                    id=item.call.id,
+                                    argument_repairs=item.argument_repairs,
+                                ),
+                                context,
                             )
-                            reviewed_arguments = reviewed_normalization.arguments
+                            reviewed_arguments = reviewed.arguments
                             validate_plugin_arguments(
                                 item.plugin.name,
                                 reviewed_arguments,
                                 item.plugin.input_schema,
                             )
-                        except Exception as exc:
+                        except PLUGIN_BOUNDARY_ERRORS as exc:
+                            failure = _validation_failure(context, exc)
                             log_operation(
                                 logger,
                                 "plugin.runtime",
@@ -363,8 +581,9 @@ class PluginRuntime:
                                 item.call.name,
                                 False,
                                 None,
-                                _validation_error_text(context, exc),
+                                failure.message,
                                 _utc_now(),
+                                failure,
                             )
                         else:
                             log_operation(
@@ -376,24 +595,15 @@ class PluginRuntime:
                                 plugin=item.call.name,
                                 arguments=reviewed_arguments,
                                 modified=reviewed_arguments != item.arguments,
-                                argument_repairs=[
-                                    repair.as_dict()
-                                    for repair in reviewed_normalization.repairs
-                                ],
+                                argument_repairs=list(reviewed.argument_repairs),
                                 **_context_fields(context),
                             )
                             prepared[position] = PreparedPluginCall(
-                                call=item.call,
+                                call=reviewed.call,
                                 plugin=item.plugin,
                                 arguments=reviewed_arguments,
                                 permission_boundary=item.permission_boundary,
-                                argument_repairs=(
-                                    item.argument_repairs
-                                    + tuple(
-                                        repair.as_dict()
-                                        for repair in reviewed_normalization.repairs
-                                    )
-                                ),
+                                argument_repairs=reviewed.argument_repairs,
                             )
             result = tuple(item for item in prepared if item is not None)
             op.finish(
@@ -402,6 +612,117 @@ class PluginRuntime:
                 rejected=sum(isinstance(item, PluginCallResult) for item in result),
             )
             return result
+
+    async def _validate_prepared_call(
+        self,
+        prepared: PreparedPluginCall,
+        context: PluginContext,
+    ) -> None:
+        plugin = prepared.plugin
+        arguments = dict(prepared.arguments)
+        self.registry.resolve(
+            plugin.name,
+            agent_id=_context_agent_id(context),
+        )
+        validate_plugin_arguments(plugin.name, arguments, plugin.input_schema)
+        current_boundary = await _permission_boundary(plugin, arguments, context)
+        if current_boundary != prepared.permission_boundary:
+            raise PermissionError(
+                "Plugin permission boundary changed after review; retry the exact call."
+            )
+
+    async def _invoke_prepared_handler(
+        self,
+        prepared: PreparedPluginCall,
+        context: PluginContext,
+    ) -> Any:
+        plugin = prepared.plugin
+        arguments = dict(prepared.arguments)
+        with bind_plugin_execution(self, prepared.call, context):
+            if plugin.timeout_seconds is not None and not inspect.iscoroutinefunction(
+                plugin.handler
+            ):
+                value = await asyncio.wait_for(
+                    asyncio.to_thread(plugin.handler, arguments, context),
+                    timeout=plugin.timeout_seconds,
+                )
+            else:
+                value = plugin.handler(arguments, context)
+                if inspect.isawaitable(value):
+                    if plugin.timeout_seconds is None:
+                        value = await value
+                    else:
+                        value = await asyncio.wait_for(
+                            value,
+                            timeout=plugin.timeout_seconds,
+                        )
+            if inspect.isawaitable(value):
+                value = await value
+        return value
+
+    def _handler_failure(
+        self,
+        plugin: Plugin,
+        call: PluginCall,
+        context: PluginContext,
+        exc: PluginBoundaryError,
+    ) -> tuple[str, PluginFailure]:
+        log_operation(
+            logger,
+            "plugin.runtime",
+            "handler",
+            phase="failed",
+            level=logging.ERROR,
+            exc_info=True,
+            call_id=call.id,
+            plugin=call.name,
+            error=exc,
+            **_context_fields(context),
+        )
+        if isinstance(exc, PluginExecutionError):
+            failure = exc.failure
+            error = failure.message
+        else:
+            error = _execution_error_text(context, plugin, exc)
+            failure = PluginFailure(
+                error_code="plugin_execution_failed",
+                message=error,
+                retryable=False,
+                retry_scope="new_run",
+                circuit_scope="run_plugin" if plugin.kind == "tool" else "none",
+            )
+        self._record_failure(plugin, context, failure)
+        return error, failure
+
+    async def _blocked_result(
+        self,
+        prepared: PreparedPluginCall,
+        context: PluginContext,
+    ) -> PluginCallResult | None:
+        plugin = prepared.plugin
+        blocked = self._blocked_failure(plugin, context)
+        if blocked is None:
+            return None
+        arguments = dict(prepared.arguments)
+        if _dispatches_own_tool_hooks(plugin):
+            await self._post(
+                context,
+                prepared.call.name,
+                arguments,
+                None,
+                False,
+                blocked.message,
+                failure=blocked,
+            )
+        return PluginCallResult(
+            prepared.call.id,
+            prepared.call.name,
+            False,
+            None,
+            blocked.message,
+            _utc_now(),
+            blocked,
+        )
 
     async def execute(
         self,
@@ -428,55 +749,29 @@ class PluginRuntime:
             **_context_fields(context),
         ) as op:
             try:
-                self.registry.resolve(
-                    plugin.name,
-                    agent_id=_context_agent_id(context),
-                )
-                validate_plugin_arguments(
-                    plugin.name,
-                    arguments,
-                    plugin.input_schema,
-                )
-                current_boundary = await _permission_boundary(
-                    plugin,
-                    arguments,
-                    context,
-                )
-                if current_boundary != prepared.permission_boundary:
-                    raise PermissionError(
-                        "Plugin permission boundary changed after review; retry the exact call."
-                    )
-            except Exception as exc:
+                await self._validate_prepared_call(prepared, context)
+            except PLUGIN_BOUNDARY_ERRORS as exc:
+                failure = _validation_failure(context, exc)
                 op.finish(success=False, rejected=True, error=exc)
                 return PluginCallResult(
                     call.id,
                     call.name,
                     False,
                     None,
-                    _validation_error_text(context, exc),
+                    failure.message,
                     _utc_now(),
+                    failure,
                 )
+            blocked_result = await self._blocked_result(prepared, context)
+            if blocked_result is not None:
+                op.finish(
+                    success=False,
+                    circuit_open=True,
+                    error_code=blocked_result.failure.error_code,
+                )
+                return blocked_result
             try:
-                with bind_plugin_execution(self, call, context):
-                    if plugin.timeout_seconds is not None and not inspect.iscoroutinefunction(
-                        plugin.handler
-                    ):
-                        value = await asyncio.wait_for(
-                            asyncio.to_thread(plugin.handler, arguments, context),
-                            timeout=plugin.timeout_seconds,
-                        )
-                    else:
-                        value = plugin.handler(arguments, context)
-                        if inspect.isawaitable(value):
-                            if plugin.timeout_seconds is None:
-                                value = await value
-                            else:
-                                value = await asyncio.wait_for(
-                                    value,
-                                    timeout=plugin.timeout_seconds,
-                                )
-                    if inspect.isawaitable(value):
-                        value = await value
+                value = await self._invoke_prepared_handler(prepared, context)
             except asyncio.TimeoutError:
                 error = plugin_localized(
                     context,
@@ -484,8 +779,26 @@ class PluginRuntime:
                     "插件在 {seconds:g} 秒后超时。",
                     seconds=plugin.timeout_seconds,
                 )
+                failure = PluginFailure(
+                    error_code="plugin_timeout",
+                    message=error,
+                    retryable=True,
+                    retry_scope="after_delay",
+                    circuit_scope=(
+                        "run_plugin" if plugin.kind == "tool" else "none"
+                    ),
+                )
+                self._record_failure(plugin, context, failure)
                 if _dispatches_own_tool_hooks(plugin):
-                    await self._post(context, call.name, arguments, None, False, error)
+                    await self._post(
+                        context,
+                        call.name,
+                        arguments,
+                        None,
+                        False,
+                        error,
+                        failure=failure,
+                    )
                 op.finish(success=False, timed_out=True, error=error)
                 return PluginCallResult(
                     call.id,
@@ -494,25 +807,24 @@ class PluginRuntime:
                     None,
                     error,
                     _utc_now(),
+                    failure,
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                log_operation(
-                    logger,
-                    "plugin.runtime",
-                    "handler",
-                    phase="failed",
-                    level=logging.ERROR,
-                    exc_info=True,
-                    call_id=call.id,
-                    plugin=call.name,
-                    error=exc,
-                    **_context_fields(context),
+            except PLUGIN_BOUNDARY_ERRORS as exc:
+                error, failure = self._handler_failure(
+                    plugin, call, context, exc
                 )
-                error = _execution_error_text(context, plugin, exc)
                 if _dispatches_own_tool_hooks(plugin):
-                    await self._post(context, call.name, arguments, None, False, error)
+                    await self._post(
+                        context,
+                        call.name,
+                        arguments,
+                        None,
+                        False,
+                        error,
+                        failure=failure,
+                    )
                 op.finish(success=False, error=exc)
                 return PluginCallResult(
                     call.id,
@@ -521,6 +833,7 @@ class PluginRuntime:
                     None,
                     error,
                     _utc_now(),
+                    failure,
                     _execution_error_details(exc),
                 )
 
@@ -536,11 +849,17 @@ class PluginRuntime:
         context: PluginContext | None = None,
         *,
         call_id: str | None = None,
+        arguments_normalized: bool = False,
+        nested_arguments_normalized: bool = False,
+        argument_repairs: tuple[Mapping[str, str], ...] = (),
     ) -> PluginCallResult:
-        call = (
-            PluginCall(name=name, arguments=arguments)
-            if call_id is None
-            else PluginCall(name=name, arguments=arguments, id=call_id)
+        call = PluginCall(
+            name=name,
+            arguments=arguments,
+            arguments_normalized=arguments_normalized,
+            nested_arguments_normalized=nested_arguments_normalized,
+            argument_repairs=argument_repairs,
+            **({} if call_id is None else {"id": call_id}),
         )
         return await self.run(call, context)
 
@@ -557,13 +876,15 @@ class PluginRuntime:
         try:
             registered = self.registry.registered_by_canonical(canonical_name)
         except Exception as exc:
+            failure = _validation_failure(context or PluginContext(), exc)
             return PluginCallResult(
                 call_id or f"call_{canonical_name}",
                 str(canonical_name),
                 False,
                 None,
-                _validation_error_text(context or PluginContext(), exc),
+                failure.message,
                 _utc_now(),
+                failure,
             )
         return await self.call(
             registered.plugin.name,
@@ -580,6 +901,8 @@ class PluginRuntime:
         value: Any,
         success: bool,
         error: str,
+        *,
+        failure: PluginFailure | None = None,
     ) -> None:
         if context.hooks is None:
             log_operation(
@@ -611,11 +934,12 @@ class PluginRuntime:
                     value,
                     success=success,
                     error=error,
+                    failure=(failure.as_dict() if failure is not None else None),
                 )
                 op.finish(hook_result_count=len(results))
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 op.finish(dispatch_success=False, error=exc)
                 log_operation(
                     logger,

@@ -33,7 +33,17 @@ const {
   agentCursorRunningCommand,
   agentCursorVisualScaleForZoom,
 } = require('./agent-cursor');
-const { buildBrowserTypeTargetScript } = require('./browser-input');
+const {
+  buildBrowserDeepTypeTargetScript,
+  buildBrowserTypeTargetScript,
+} = require('./browser-input');
+const {
+  BROWSER_CLEAR_DEEP_REFS_SCRIPT,
+  BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT,
+  BROWSER_FIND_NESTED_TARGET_SCRIPT,
+  BROWSER_INSPECT_NESTED_SCRIPT,
+  browserFrameElementGeometryScript,
+} = require('./browser-deep-dom');
 const { buildBrowserContextMenuTemplate } = require('./browser-context-menu');
 const {
   decideBrowserWindowOpen,
@@ -43,8 +53,10 @@ const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
 const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
 const { createBackendPortWaiters } = require('./backend-port-waiters');
+const { createSingleFlight, loadWindowUrl } = require('./main-window-lifecycle');
 const { RotatingFileLog } = require('./rotating-log');
 const { migrateLegacyDevelopmentData } = require('./development-data-migration');
+const { RemoteDesktopManager } = require('./remote-desktop');
 
 const APP_NAME = 'Cyrene';
 const DEVELOPMENT_APP_NAME = 'Cyrene-dev';
@@ -221,6 +233,34 @@ const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
+function refreshLinuxXWaylandEnvironment() {
+  if (!isLinux) return;
+  const runtimeDir = String(
+    process.env.XDG_RUNTIME_DIR
+      || (typeof process.getuid === 'function' ? `/run/user/${process.getuid()}` : ''),
+  );
+  if (!runtimeDir) return;
+  try {
+    const candidates = fs.readdirSync(runtimeDir)
+      .filter((name) => name.startsWith('.mutter-Xwaylandauth.'))
+      .map((name) => {
+        const filePath = path.join(runtimeDir, name);
+        return { filePath, modified: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((left, right) => right.modified - left.modified);
+    if (!candidates.length) return;
+    // Mutter leaves the previous cookie file behind after the graphical
+    // session restarts. A process relaunched from SSH or a stale terminal can
+    // therefore inherit an existing but unusable XAUTHORITY. The newest
+    // Mutter-owned cookie belongs to the active XWayland server.
+    process.env.XAUTHORITY = candidates[0].filePath;
+    if (!process.env.DISPLAY) process.env.DISPLAY = ':0';
+    if (!process.env.XDG_RUNTIME_DIR) process.env.XDG_RUNTIME_DIR = runtimeDir;
+  } catch (_) {}
+}
+
+refreshLinuxXWaylandEnvironment();
+
 if (isDev) {
   if (!process.env.CYRENE_USER_DATA_DIR && !process.env.CYRENE_BASE_DIR) {
     try {
@@ -244,6 +284,25 @@ if (isDev) {
 // user explicitly enables or starts speech, so allow the delayed playback and
 // automatic-read setting to produce sound reliably.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
+// Chromium's Wayland ScreenCast portal always requires an interactive screen
+// sharing confirmation.  Cyrene already authenticates and indicates active
+// remote sessions itself, so prefer the session's authenticated XWayland
+// display for unattended desktop capture when it is available.  Mutter's
+// RemoteDesktop D-Bus API remains responsible for native Wayland input.
+// Set CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE=1 to retain the portal picker.
+if (
+  isLinux
+  && process.env.CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE !== '1'
+  && process.env.DISPLAY
+  && process.env.XAUTHORITY
+) {
+  try {
+    if (fs.existsSync(process.env.XAUTHORITY)) {
+      app.commandLine.appendSwitch('ozone-platform', 'x11');
+    }
+  } catch (_) {}
+}
 
 // Chromium aborts with SIGTRAP when its Linux SUID sandbox helper exists but
 // is not root-owned with mode 4755. deb/rpm installers repair that permission;
@@ -286,6 +345,7 @@ let pythonProcess = null;
 let isBackendRestarting = false;
 let backendPort = null;
 const backendPortWaiters = createBackendPortWaiters(() => backendPort);
+const mainWindowCreation = createSingleFlight();
 let isShuttingDown = false;
 let isQuitting = false;
 let quitExtensionCheckInFlight = false;
@@ -309,6 +369,20 @@ const agentCursorRunningSources = new Map();
 let electronRpcServer = null;
 let electronRpcPort = null;
 let hostControl = null;
+let remoteDesktopManager = null;
+
+function showNativeNotification({ title, body }) {
+  if (!Notification.isSupported()) {
+    return { ok: false, error: 'notifications_unsupported' };
+  }
+  const icon = getNotificationIconPath();
+  new Notification({
+    title: String(title || APP_NAME),
+    body: String(body || ''),
+    ...(icon ? { icon } : {}),
+  }).show();
+  return { ok: true };
+}
 
 function getHostControl() {
   if (!hostControl) {
@@ -321,10 +395,27 @@ function getHostControl() {
       openQuickChat,
       getDesktopSettings,
       updateDesktopSettings: saveDesktopSettings,
+      showNotification: showNativeNotification,
       lifecycleExecutor: executeApprovedLifecycle,
     });
   }
   return hostControl;
+}
+
+function getRemoteDesktopManager() {
+  if (!remoteDesktopManager) {
+    remoteDesktopManager = new RemoteDesktopManager({
+      getMainWindow: () => mainWindow,
+      getAppUseManager,
+      getLanguage: () => getDesktopLanguage(readDesktopSettings()),
+      clipboardRoot: path.join(
+        process.env.CYRENE_BASE_DIR || getCyreneUserDataDir(),
+        'data', 'plugins', 'cyrene_remote_desktop', 'clipboard'
+      ),
+    });
+    remoteDesktopManager.installIpc();
+  }
+  return remoteDesktopManager;
 }
 
 function executeApprovedLifecycle(actionId, action, receipt) {
@@ -1369,6 +1460,69 @@ class BrowserTabManager {
     this.latestSnapshot = null;
   }
 
+  _framePath(frame, mainFrame) {
+    const path = [];
+    let current = frame;
+    while (current && current !== mainFrame) {
+      const parent = current.parent;
+      if (!parent) return null;
+      const index = Array.from(parent.frames || []).findIndex((candidate) => (
+        candidate === current || candidate.frameTreeNodeId === current.frameTreeNodeId
+      ));
+      if (index < 0) return null;
+      path.unshift(index);
+      current = parent;
+    }
+    return current === mainFrame ? path : null;
+  }
+
+  async _frameTransform(frame, mainFrame) {
+    let offsetX = 0;
+    let offsetY = 0;
+    let scaleX = 1;
+    let scaleY = 1;
+    let current = frame;
+    while (current && current !== mainFrame) {
+      const parent = current.parent;
+      if (!parent || parent.detached || parent.isDestroyed()) return null;
+      const childIndex = Array.from(parent.frames || []).findIndex((candidate) => (
+        candidate === current || candidate.frameTreeNodeId === current.frameTreeNodeId
+      ));
+      if (childIndex < 0) return null;
+      const geometry = await parent.executeJavaScript(
+        browserFrameElementGeometryScript(childIndex), true
+      ).catch(() => null);
+      if (!geometry || geometry.ok !== true) return null;
+      offsetX = Number(geometry.x || 0) + offsetX * Number(geometry.scaleX || 1);
+      offsetY = Number(geometry.y || 0) + offsetY * Number(geometry.scaleY || 1);
+      scaleX *= Number(geometry.scaleX || 1);
+      scaleY *= Number(geometry.scaleY || 1);
+      current = parent;
+    }
+    return current === mainFrame ? { offsetX, offsetY, scaleX, scaleY } : null;
+  }
+
+  _transformFrameInfo(info, transform) {
+    if (!info || !transform) return info;
+    const result = { ...info };
+    if (Number.isFinite(Number(info.x))) result.x = Math.round(transform.offsetX + Number(info.x) * transform.scaleX);
+    if (Number.isFinite(Number(info.y))) result.y = Math.round(transform.offsetY + Number(info.y) * transform.scaleY);
+    if (info.box) {
+      result.box = {
+        x: Math.round(transform.offsetX + Number(info.box.x || 0) * transform.scaleX),
+        y: Math.round(transform.offsetY + Number(info.box.y || 0) * transform.scaleY),
+        w: Math.round(Number(info.box.w || info.box.width || 0) * transform.scaleX),
+        h: Math.round(Number(info.box.h || info.box.height || 0) * transform.scaleY),
+      };
+    }
+    return result;
+  }
+
+  _snapshotRefEntry(ref) {
+    const refs = this.latestSnapshot && this.latestSnapshot.refs;
+    return refs instanceof Map ? refs.get(String(ref || '').toLowerCase()) || null : null;
+  }
+
   async showAgentCursor(tab, x, y, { press = false, moveDurationMs = AGENT_CURSOR_MOVE_MS } = {}) {
     if (
       !tab || tab.id !== this.activeTabId || !this.visible || this.obscured
@@ -1934,6 +2088,23 @@ class BrowserTabManager {
     return frame ? frame.url : '';
   }
 
+  async _frameStateAtPath(tab, framePath = []) {
+    const debug = await this._ensureDebugger(tab);
+    const result = await debug.sendCommand('Page.getFrameTree');
+    let tree = result && result.frameTree;
+    for (const rawIndex of Array.from(framePath || [])) {
+      const index = Number(rawIndex);
+      if (!tree || !Array.isArray(tree.childFrames) || !tree.childFrames[index]) return null;
+      tree = tree.childFrames[index];
+    }
+    if (!tree || !tree.frame) return null;
+    return {
+      id: String(tree.frame.id || ''),
+      url: String(tree.frame.url || ''),
+      loaderId: String(tree.frame.loaderId || ''),
+    };
+  }
+
   async _describeUploadTarget(tab, backendNodeId, { chooserId = '', frameId = '', mode = '' } = {}) {
     const debug = await this._ensureDebugger(tab);
     const described = await debug.sendCommand('DOM.describeNode', {
@@ -2027,6 +2198,37 @@ class BrowserTabManager {
     const normalized = String(ref || '').trim().replace(/^e/i, '');
     if (!/^\d+$/.test(normalized)) throw new Error('Invalid browser element ref.');
     const debug = await this._ensureDebugger(tab);
+    const entry = this._snapshotRefEntry('e' + normalized);
+    if (entry && entry.nested) {
+      let searchId = '';
+      try {
+        const search = await debug.sendCommand('DOM.performSearch', {
+          query: `[data-cyrene-ref="${normalized}"]`,
+          includeUserAgentShadowDOM: true,
+        });
+        searchId = String(search && search.searchId || '');
+        const count = Number(search && search.resultCount || 0);
+        if (!searchId || count !== 1) {
+          throw new Error('Browser file input ref was not found. Take a new browser_snapshot and retry.');
+        }
+        const found = await debug.sendCommand('DOM.getSearchResults', {
+          searchId,
+          fromIndex: 0,
+          toIndex: 1,
+        });
+        const nodeId = Number(found && found.nodeIds && found.nodeIds[0]);
+        if (!Number.isFinite(nodeId) || nodeId <= 0) throw new Error('Unable to resolve browser file input.');
+        const described = await debug.sendCommand('DOM.describeNode', { nodeId, depth: 0, pierce: true });
+        const node = described && described.node;
+        if (!node || !node.backendNodeId) throw new Error('Unable to resolve browser file input.');
+        const frameState = await this._frameStateAtPath(tab, entry.framePath || []);
+        return await this._describeUploadTarget(tab, node.backendNodeId, {
+          frameId: String(frameState && frameState.id || ''),
+        });
+      } finally {
+        if (searchId) debug.sendCommand('DOM.discardSearchResults', { searchId }).catch(() => {});
+      }
+    }
     const expression = `document.querySelector('[data-cyrene-ref="${normalized}"]')`;
     const evaluated = await debug.sendCommand('Runtime.evaluate', {
       expression,
@@ -3416,18 +3618,102 @@ class BrowserTabManager {
     };
   }
 
+  _appendInspectElement(elements, refs, element, frame, framePath) {
+    elements.push(element);
+    refs.set(String(element.ref || '').toLowerCase(), {
+      frame,
+      framePath,
+      nested: true,
+    });
+  }
+
   async inspect({ tabId = '', maxElements = 80, textLimit = 160 } = {}) {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
     const wc = tab.view.webContents;
     try {
+      const mainFrame = wc.mainFrame;
+      const frames = Array.from(mainFrame && mainFrame.framesInSubtree || [mainFrame]).filter((frame) => (
+        frame && !frame.detached && !frame.isDestroyed()
+      ));
+      // Remove stale stamps from every reachable document without changing the
+      // historical top-document collector that runs immediately afterwards.
+      await Promise.all(frames.map((frame) => (
+        frame.executeJavaScript(BROWSER_CLEAR_DEEP_REFS_SCRIPT, true).catch(() => false)
+      )));
       const result = await wc.executeJavaScript(
         `${BROWSER_VISIBLE_ELEMENTS_SCRIPT}(${JSON.stringify(maxElements)}, ${JSON.stringify(textLimit)})`,
         true
       );
+      const elements = Array.isArray(result && result.elements) ? result.elements : [];
+      const refs = new Map();
+      const mainPath = [];
+      for (const element of elements) {
+        refs.set(String(element.ref || '').toLowerCase(), {
+          frame: mainFrame,
+          framePath: mainPath,
+          nested: false,
+        });
+      }
+      let remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
+
+      // Append open-shadow content from the main frame only after the legacy
+      // light-DOM result, preserving every existing ref and ordering decision.
+      if (remaining > 0) {
+        const shadowResult = await mainFrame.executeJavaScript(
+          `${BROWSER_INSPECT_NESTED_SCRIPT}(${JSON.stringify(remaining)}, ${JSON.stringify(textLimit)}, ${JSON.stringify(elements.length)}, false)`,
+          true,
+        ).catch(() => null);
+        for (const element of Array.isArray(shadowResult && shadowResult.elements) ? shadowResult.elements : []) {
+          element.context = {
+            frameDepth: 0,
+            frameUrl: String(mainFrame.url || wc.getURL()),
+            shadowDepth: Number(element.shadowDepth || 1),
+          };
+          this._appendInspectElement(
+            elements, refs, element, mainFrame, mainPath,
+          );
+        }
+        remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
+      }
+
+      // Child WebFrameMain instances are host-owned, so the same script works
+      // for both same-origin and cross-origin frames.
+      for (const frame of frames) {
+        if (remaining <= 0) break;
+        if (frame === mainFrame) continue;
+        const framePath = this._framePath(frame, mainFrame);
+        if (!framePath) continue;
+        const transform = await this._frameTransform(frame, mainFrame);
+        if (!transform) continue;
+        const frameResult = await frame.executeJavaScript(
+          `${BROWSER_INSPECT_NESTED_SCRIPT}(${JSON.stringify(remaining)}, ${JSON.stringify(textLimit)}, ${JSON.stringify(elements.length)}, true)`,
+          true,
+        ).catch(() => null);
+        for (const localElement of Array.isArray(frameResult && frameResult.elements) ? frameResult.elements : []) {
+          const element = this._transformFrameInfo(localElement, transform);
+          element.context = {
+            frameDepth: framePath.length,
+            frameUrl: String(frame.url || ''),
+            shadowDepth: Number(localElement.shadowDepth || 0),
+          };
+          this._appendInspectElement(elements, refs, element, frame, framePath);
+        }
+        remaining = Math.max(0, Math.min(200, Number(maxElements) || 80) - elements.length);
+      }
+      if (result && typeof result === 'object') {
+        result.elements = elements;
+        result.text = String(result.text || '');
+      }
       const snapshotToken = crypto.randomBytes(24).toString('base64url');
       const snapshotUrl = String((result && result.url) || wc.getURL());
-      this.latestSnapshot = { token: snapshotToken, tabId: tab.id, url: snapshotUrl, issuedAt: Date.now() };
+      this.latestSnapshot = {
+        token: snapshotToken,
+        tabId: tab.id,
+        url: snapshotUrl,
+        issuedAt: Date.now(),
+        refs,
+      };
       return { ...(result || {}), ok: true, tabId: tab.id, snapshotToken };
     } catch (err) {
       return { ok: false, error: 'Inspect failed: ' + String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
@@ -3477,6 +3763,47 @@ class BrowserTabManager {
         })()`,
         true
       );
+      if (result && typeof result === 'object' && Array.isArray(result.matches) && result.matches.length) {
+        return result;
+      }
+      const deepMatches = [];
+      for (const frame of Array.from(wc.mainFrame && wc.mainFrame.framesInSubtree || [])) {
+        if (!frame || frame.detached || frame.isDestroyed()) continue;
+        const includeLightDom = frame !== wc.mainFrame;
+        const scan = await frame.executeJavaScript(`(() => {
+          const target = ${JSON.stringify(targetUrl)};
+          let normalizedTarget = '';
+          try { normalizedTarget = new URL(target, location.href).href; } catch (_) { return []; }
+          const roots = [document];
+          for (let index = 0; index < roots.length; index += 1) {
+            for (const node of Array.from(roots[index].querySelectorAll ? roots[index].querySelectorAll('*') : [])) {
+              if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+            }
+          }
+          const selected = ${includeLightDom ? 'roots' : 'roots.slice(1)'};
+          const matches = [];
+          for (const root of selected) {
+            for (const el of Array.from(root.querySelectorAll('a[href]'))) {
+              const style = getComputedStyle(el);
+              const rect = el.getBoundingClientRect();
+              if (!style || style.display === 'none' || style.visibility === 'hidden' || !rect || rect.width <= 0 || rect.height <= 0) continue;
+              let href = '';
+              try { href = new URL(el.getAttribute('href') || '', location.href).href; } catch (_) { continue; }
+              if (href !== normalizedTarget) continue;
+              matches.push({
+                ref: el.getAttribute('data-cyrene-ref') ? 'e' + el.getAttribute('data-cyrene-ref') : '',
+                text: String(el.innerText || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().slice(0, 200),
+                url: href,
+              });
+            }
+          }
+          return matches;
+        })()`, true).catch(() => []);
+        deepMatches.push(...(Array.isArray(scan) ? scan : []));
+      }
+      if (deepMatches.length) {
+        return { ok: true, url: wc.getURL(), targetUrl, matches: deepMatches };
+      }
       return result && typeof result === 'object' ? result : { ok: false, error: 'Visible-link scan failed.', matches: [] };
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err), matches: [] };
@@ -3545,19 +3872,57 @@ class BrowserTabManager {
     return { ok: true, allowed: true, targetUrl: normalizedTarget };
   }
 
-  async _findTarget(wc, { mode = 'selector', value = '', exact = false, visibleOnly = true } = {}) {
-    const script = `${BROWSER_FIND_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'})`;
-    try {
-      const first = await wc.executeJavaScript(script, true);
+  async _findTarget(wc, { mode = 'selector', value = '', exact = false, visibleOnly = true, _frame = null, _nested = null } = {}) {
+    const mainFrame = wc.mainFrame;
+    const refEntry = mode === 'ref' ? this._snapshotRefEntry(value) : null;
+    const explicitFrame = _frame || (refEntry && refEntry.frame) || null;
+    const run = async (frame, nested, includeLightDom) => {
+      const script = nested
+        ? `${BROWSER_FIND_NESTED_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'}, ${includeLightDom ? 'true' : 'false'})`
+        : `${BROWSER_FIND_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'})`;
+      const execute = frame === mainFrame
+        ? (code) => wc.executeJavaScript(code, true)
+        : (code) => frame.executeJavaScript(code, true);
+      const first = await execute(script);
       if (!first || !first.ok) return first;
       // scrollIntoView may trigger sticky headers, virtualized lists, or a
       // framework render. Wait two frames and resolve the target again so the
       // returned center belongs to the settled layout.
-      await wc.executeJavaScript(`new Promise((resolve) => {
+      await execute(`new Promise((resolve) => {
         const frame = window.requestAnimationFrame || ((callback) => setTimeout(callback, 16));
         frame(() => frame(resolve));
-      })`, true);
-      return await wc.executeJavaScript(script, true);
+      })`);
+      const local = await execute(script);
+      if (!local || !local.ok) return local;
+      let result = { ...local, _frame: frame, _nested: nested, _localX: local.x, _localY: local.y };
+      if (frame !== mainFrame) {
+        const transform = await this._frameTransform(frame, mainFrame);
+        if (!transform) return { ok: false, code: 'FRAME_DETACHED', error: 'The target frame is no longer available.' };
+        result = { ...this._transformFrameInfo(result, transform), _frame: frame, _nested: nested, _localX: local.x, _localY: local.y };
+      }
+      return result;
+    };
+    try {
+      if (explicitFrame) {
+        return await run(
+          explicitFrame,
+          explicitFrame !== mainFrame || _nested === true || Boolean(refEntry && refEntry.nested),
+          explicitFrame !== mainFrame,
+        );
+      }
+
+      // The old top-document lookup remains authoritative. Supplemental deep
+      // lookup is attempted only after it reports no usable target.
+      const legacy = await run(mainFrame, false, false);
+      if (legacy && legacy.ok) return legacy;
+      const shadow = await run(mainFrame, true, false);
+      if (shadow && shadow.ok) return shadow;
+      for (const frame of Array.from(mainFrame.framesInSubtree || [])) {
+        if (!frame || frame === mainFrame || frame.detached || frame.isDestroyed()) continue;
+        const nested = await run(frame, true, true);
+        if (nested && nested.ok) return nested;
+      }
+      return legacy || shadow || { ok: false, code: 'TARGET_NOT_FOUND' };
     } catch (err) {
       return { ok: false, error: 'js execution failed: ' + String((err && err.message) || err) };
     }
@@ -3951,7 +4316,7 @@ class BrowserTabManager {
     // sendInputEvent dispatches trusted OS-level events.  Chromium's input
     // pipeline generates the full click chain (pointerdown → mousedown →
     // pointerup → mouseup → click) with isTrusted=true.
-    return this._dispatchClick(tab, info, { mode: 'selector', value: String(selector || '') });
+    return this._dispatchClick(tab, info, { mode: 'selector', value: String(selector || ''), _frame: info._frame || null, _nested: info._nested === true });
   }
 
   async clickRef({ ref, tabId = '' } = {}) {
@@ -3960,7 +4325,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'ref', value: String(ref || '') });
     if (!info || !info.ok) return this._targetFailure(tab, info, 'Element not found.');
-    return this._dispatchClick(tab, info, { mode: 'ref', value: String(ref || '') });
+    return this._dispatchClick(tab, info, { mode: 'ref', value: String(ref || ''), _frame: info._frame || null, _nested: info._nested === true });
   }
 
   async clickText({ text, exact = false, tabId = '' } = {}) {
@@ -3969,7 +4334,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'text', value: String(text || ''), exact: exact === true });
     if (!info || !info.ok) return this._targetFailure(tab, info, 'Element not found.');
-    return this._dispatchClick(tab, info, { mode: 'text', value: String(text || ''), exact: exact === true });
+    return this._dispatchClick(tab, info, { mode: 'text', value: String(text || ''), exact: exact === true, _frame: info._frame || null, _nested: info._nested === true });
   }
 
   async clickAt({ x, y, tabId = '' } = {}) {
@@ -3980,6 +4345,30 @@ class BrowserTabManager {
     const py = Math.round(Number(y));
     if (!Number.isFinite(px) || !Number.isFinite(py)) return { ok: false, error: 'Invalid coordinates.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
     return this._dispatchClick(tab, { x: px, y: py, box: { x: px, y: py, w: 1, h: 1 } });
+  }
+
+  _runTypePageOperation(wc, targetFrame, nestedTarget, { mode, value, text, operation }) {
+    const script = nestedTarget
+      ? buildBrowserDeepTypeTargetScript(
+        BROWSER_FIND_NESTED_TARGET_SCRIPT,
+        BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT,
+        {
+          mode,
+          value,
+          text,
+          operation,
+          includeLightDom: targetFrame !== wc.mainFrame,
+        },
+      )
+      : buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
+        mode,
+        value,
+        text,
+        operation,
+      });
+    return targetFrame === wc.mainFrame
+      ? wc.executeJavaScript(script, true)
+      : targetFrame.executeJavaScript(script, true);
   }
 
   async _typeIntoTarget({ mode = 'selector', value = '', text = '', submit = false, tabId = '' } = {}) {
@@ -3993,14 +4382,10 @@ class BrowserTabManager {
       return { ok: false, error: 'Element ' + ((pointerInfo && pointerInfo.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
     }
     await this.showAgentCursor(tab, pointerInfo.x, pointerInfo.y);
-    const runPageOperation = (operation) => wc.executeJavaScript(
-      buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
-        mode,
-        value,
-        text: desiredText,
-        operation,
-      }),
-      true,
+    const targetFrame = pointerInfo._frame || wc.mainFrame;
+    const nestedTarget = pointerInfo._nested === true;
+    const runPageOperation = (operation) => this._runTypePageOperation(
+      wc, targetFrame, nestedTarget, { mode, value, text: desiredText, operation },
     );
     this._markAgentInput(tab);
     let result = await runPageOperation('set-native');
@@ -4065,7 +4450,7 @@ class BrowserTabManager {
       }
       await this._waitNav(wc);
     }
-    return {
+    const output = {
       ok: true,
       url: wc.getURL(),
       title: wc.getTitle(),
@@ -4073,6 +4458,11 @@ class BrowserTabManager {
       box: result.box,
       strategy,
     };
+    if (targetFrame !== wc.mainFrame && result.box) {
+      const transform = await this._frameTransform(targetFrame, wc.mainFrame);
+      if (transform) output.box = this._transformFrameInfo({ box: result.box }, transform).box;
+    }
+    return output;
   }
 
   async type({ selector, text = '', submit = false, tabId = '' } = {}) {
@@ -4101,6 +4491,31 @@ class BrowserTabManager {
         })()
       `, true).catch((err) => ({ ok: false, error: String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle() }));
       if (result && result.ok) return { ok: true, url: result.url || wc.getURL(), title: result.title || wc.getTitle(), tabId: tab.id };
+      if (selector || text) {
+        const frames = Array.from(wc.mainFrame && wc.mainFrame.framesInSubtree || []);
+        for (const frame of frames) {
+          if (!frame || frame.detached || frame.isDestroyed()) continue;
+          const includeLightDom = frame !== wc.mainFrame;
+          const nested = await frame.executeJavaScript(`(() => {
+            const selector = ${JSON.stringify(String(selector || ''))};
+            const text = ${JSON.stringify(String(text || ''))};
+            const roots = [document];
+            for (let index = 0; index < roots.length; index += 1) {
+              const root = roots[index];
+              for (const node of Array.from(root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+                if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+              }
+            }
+            const selectedRoots = ${includeLightDom ? 'roots' : 'roots.slice(1)'};
+            const selectorOk = !selector || selectedRoots.some((root) => root.querySelector && root.querySelector(selector));
+            const textOk = !text || selectedRoots.some((root) => String(root.textContent || '').includes(text));
+            return { ok: selectorOk && textOk };
+          })()`, true).catch(() => ({ ok: false }));
+          if (nested && nested.ok) {
+            return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+          }
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     return { ok: false, error: 'Timed out waiting for page condition.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
@@ -4212,45 +4627,16 @@ class BrowserTabManager {
     return this.state();
   }
 
-  async scroll({ deltaX = 0, deltaY = 0, x = null, y = null, ref = '', tabId = '' } = {}) {
-    this.invalidateSnapshot();
-    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
-    if (!tab) return { ok: false, error: 'No browser tab is open.' };
-    const wc = tab.view.webContents;
-    const dx = Number(deltaX);
-    const dy = Number(deltaY);
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return { ok: false, error: 'Invalid scroll delta.' };
-
-    let px = x === null || x === undefined ? NaN : Number(x);
-    let py = y === null || y === undefined ? NaN : Number(y);
-    if (String(ref || '').trim()) {
-      const info = await this._findTarget(wc, { mode: 'ref', value: String(ref).trim() });
-      if (!info || !info.ok) {
-        return { ok: false, error: 'Scroll target ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-      }
-      px = info.x;
-      py = info.y;
-    }
-    const bounds = tab.view.getBounds();
-    // Default/clamp bounds are DIP sizes; CSS viewport coordinates are
-    // DIP / zoom, so probe and click coordinates must use the CSS space.
-    const zoom = await this.pageZoomOf(wc, bounds.width);
-    const cssWidth = Math.max(1, bounds.width / zoom);
-    const cssHeight = Math.max(1, bounds.height / zoom);
-    if (!Number.isFinite(px)) px = Math.floor(cssWidth / 2);
-    if (!Number.isFinite(py)) py = Math.floor(cssHeight / 2);
-    px = Math.max(0, Math.min(Math.max(0, cssWidth - 1), Math.round(px)));
-    py = Math.max(0, Math.min(Math.max(0, cssHeight - 1), Math.round(py)));
-    await this.showAgentCursor(tab, px, py);
-
-    // Mark the nearest scrollable ancestor under the pointer so the result can
-    // report whether Chromium actually moved it. The wheel event itself is sent
-    // through Chromium's trusted input pipeline, matching a user's mouse/trackpad
-    // and allowing nested overflow containers to scroll.
-    const probeId = 'scroll_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
-    const before = await wc.executeJavaScript(`(() => {
-      const x = ${JSON.stringify(px)};
-      const y = ${JSON.stringify(py)};
+  async _prepareScrollProbe(wc, refInfo, { ref, dx, dy, px, py, probeId }) {
+    const frame = refInfo && refInfo._nested ? refInfo._frame : wc.mainFrame;
+    const x = refInfo && refInfo._nested ? Number(refInfo._localX) : px;
+    const y = refInfo && refInfo._nested ? Number(refInfo._localY) : py;
+    const execute = (script) => frame === wc.mainFrame
+      ? wc.executeJavaScript(script, true)
+      : frame.executeJavaScript(script, true);
+    const before = await execute(`(() => {
+      const x = ${JSON.stringify(x)};
+      const y = ${JSON.stringify(y)};
       const dx = ${JSON.stringify(dx)};
       const dy = ${JSON.stringify(dy)};
       const probeId = ${JSON.stringify(probeId)};
@@ -4271,7 +4657,9 @@ class BrowserTabManager {
         return canX || canY;
       };
       const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
-      let target = document.elementFromPoint(x, y);
+      let target = ${refInfo && refInfo._nested
+        ? `${BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT}('ref', ${JSON.stringify(String(ref || ''))}, ${frame !== wc.mainFrame ? 'true' : 'false'})`
+        : 'document.elementFromPoint(x, y)'};
       while (target && !canMove(target)) target = parentOf(target);
       if (!target && canMove(root)) target = root;
       if (!target) return { found: false, x, y };
@@ -4286,7 +4674,52 @@ class BrowserTabManager {
         scrollLeft: Number(target.scrollLeft || 0),
         scrollTop: Number(target.scrollTop || 0),
       };
-    })()`, true).catch(() => ({ found: false, x: px, y: py }));
+    })()`).catch(() => ({ found: false, x, y }));
+    return { before, execute };
+  }
+
+  async scroll({ deltaX = 0, deltaY = 0, x = null, y = null, ref = '', tabId = '' } = {}) {
+    this.invalidateSnapshot();
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    const wc = tab.view.webContents;
+    const dx = Number(deltaX);
+    const dy = Number(deltaY);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return { ok: false, error: 'Invalid scroll delta.' };
+
+    let px = x === null || x === undefined ? NaN : Number(x);
+    let py = y === null || y === undefined ? NaN : Number(y);
+    let refInfo = null;
+    if (String(ref || '').trim()) {
+      const info = await this._findTarget(wc, { mode: 'ref', value: String(ref).trim() });
+      if (!info || !info.ok) {
+        return { ok: false, error: 'Scroll target ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+      }
+      refInfo = info;
+      px = info.x;
+      py = info.y;
+    }
+    const bounds = tab.view.getBounds();
+    // Default/clamp bounds are DIP sizes; CSS viewport coordinates are
+    // DIP / zoom, so probe and click coordinates must use the CSS space.
+    const zoom = await this.pageZoomOf(wc, bounds.width);
+    const cssWidth = Math.max(1, bounds.width / zoom);
+    const cssHeight = Math.max(1, bounds.height / zoom);
+    if (!Number.isFinite(px)) px = Math.floor(cssWidth / 2);
+    if (!Number.isFinite(py)) py = Math.floor(cssHeight / 2);
+    px = Math.max(0, Math.min(Math.max(0, cssWidth - 1), Math.round(px)));
+    py = Math.max(0, Math.min(Math.max(0, cssHeight - 1), Math.round(py)));
+    await this.showAgentCursor(tab, px, py);
+
+    // Mark the nearest scrollable ancestor under the pointer so the result can
+    // report whether Chromium actually moved it. The wheel event itself is sent
+    // through Chromium's trusted input pipeline, matching a user's mouse/trackpad
+    // and allowing nested overflow containers to scroll.
+    const probeId = 'scroll_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+    const probe = await this._prepareScrollProbe(
+      wc, refInfo, { ref, dx, dy, px, py, probeId },
+    );
+    const before = probe.before;
 
     this._markAgentInput(tab);
     // Probe coordinates above are CSS pixels; input events are delivered in
@@ -4307,8 +4740,16 @@ class BrowserTabManager {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const after = await wc.executeJavaScript(`(() => {
-      const target = document.querySelector('[data-cyrene-scroll-probe=${JSON.stringify(probeId)}]');
+    const after = await probe.execute(`(() => {
+      const roots = [document];
+      let target = null;
+      for (let index = 0; index < roots.length && !target; index += 1) {
+        const currentRoot = roots[index];
+        target = currentRoot.querySelector('[data-cyrene-scroll-probe=${JSON.stringify(probeId)}]');
+        for (const node of Array.from(currentRoot.querySelectorAll('*'))) {
+          if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+        }
+      }
       if (!target) return { found: false };
       const result = {
         found: true,
@@ -4317,7 +4758,7 @@ class BrowserTabManager {
       };
       target.removeAttribute('data-cyrene-scroll-probe');
       return result;
-    })()`, true).catch(() => ({ found: false }));
+    })()`).catch(() => ({ found: false }));
     const actualDeltaX = before.found && after.found ? after.scrollLeft - before.scrollLeft : 0;
     const actualDeltaY = before.found && after.found ? after.scrollTop - before.scrollTop : 0;
     return {
@@ -4888,6 +5329,10 @@ async function handleHostRpc(method, args) {
   return getHostControl().handle(method, args || {});
 }
 
+async function handleRemoteDesktopRpc(method, args) {
+  return getRemoteDesktopManager().handle(method, args || {});
+}
+
 function startElectronRpcServer() {
   if (electronRpcServer && electronRpcPort) return Promise.resolve(electronRpcPort);
   const MAX_RETRIES = 3;
@@ -4895,7 +5340,7 @@ function startElectronRpcServer() {
     return new Promise((resolve, reject) => {
       const server = http.createServer((req, res) => {
         const rpcPath = String(req.url || '');
-        if (req.method !== 'POST' || !['/browser/rpc', '/app/rpc', '/host/rpc'].includes(rpcPath)) {
+        if (req.method !== 'POST' || !['/browser/rpc', '/app/rpc', '/host/rpc', '/desktop/rpc'].includes(rpcPath)) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'not_found' }));
           return;
@@ -4917,6 +5362,8 @@ function startElectronRpcServer() {
               ? await handleAppUseRpc(String(payload.method || ''), payload.args || {})
               : rpcPath === '/host/rpc'
                 ? await handleHostRpc(String(payload.method || ''), payload.args || {})
+                : rpcPath === '/desktop/rpc'
+                  ? await handleRemoteDesktopRpc(String(payload.method || ''), payload.args || {})
                 : await handleBrowserRpc(
                   String(payload.method || ''),
                   payload.args || {},
@@ -5428,7 +5875,21 @@ function registerQuickChatShortcut(accelerator) {
 
 function getPythonBinaryPath() {
   if (isDev) {
-    return 'uv'; // use the same source entry point as `uv run cyrene`
+    // A desktop app relaunched through systemd/LaunchServices does not
+    // necessarily inherit the shell that installed `uv`.  Once the checkout
+    // has been bootstrapped, its console script is the most reliable entry
+    // point and also avoids an unnecessary resolver process on every launch.
+    const checkoutRoot = path.join(__dirname, '..');
+    const checkoutCommand = isWindows
+      ? path.join(checkoutRoot, '.venv', 'Scripts', 'cyrene.exe')
+      : path.join(checkoutRoot, '.venv', 'bin', 'cyrene');
+    try {
+      if (fs.statSync(checkoutCommand).isFile()) return checkoutCommand;
+    } catch (_) {
+      // An unbootstrapped checkout still falls back to `uv run cyrene` and
+      // receives the normal actionable startup error when uv is unavailable.
+    }
+    return 'uv';
   }
   // In a packaged Electron app, extraResources are in process.resourcesPath
   const base = process.resourcesPath;
@@ -5436,8 +5897,14 @@ function getPythonBinaryPath() {
   return path.join(base, 'python-bundle', name);
 }
 
-function getPythonArgs() {
+function getPythonArgs(binaryPath = getPythonBinaryPath()) {
   if (isDev) {
+    if (path.basename(binaryPath).toLowerCase().startsWith('cyrene')) {
+      return [
+        '--workbench',
+        '--electron-mode',
+      ];
+    }
     return [
       'run',
       'cyrene',
@@ -5470,11 +5937,17 @@ function spawnPython() {
   if (pythonProcess) return;
   clearCliConnection();
   const binaryPath = getPythonBinaryPath();
-  const args = getPythonArgs();
+  const args = getPythonArgs(binaryPath);
   const cwd = isDev ? path.join(__dirname, '..') : undefined;
   const childEnv = {
     ...process.env,
     CYRENE_APP_EXECUTABLE: getCurrentAppExecutablePath(),
+    // The Linux development FreeRDP bridge reuses this Electron runtime to
+    // capture its isolated X11 RDP window and feed the existing WebRTC host.
+    // Production builds still prefer the signed native sidecar.
+    CYRENE_ELECTRON_PATH: process.execPath,
+    CYRENE_ELECTRON_RESOURCES_DIR: __dirname,
+    CYRENE_ELECTRON_DEV: isDev ? '1' : '0',
     CYRENE_AUTH_TOKEN: AUTH_TOKEN,
     CYRENE_ELECTRON_RPC_PORT: electronRpcPort ? String(electronRpcPort) : '',
     CYRENE_ELECTRON_RPC_TOKEN: AUTH_TOKEN,
@@ -5483,7 +5956,13 @@ function spawnPython() {
     // GUI-launched Electron inherits LaunchServices' minimal PATH, which lacks
     // the user's shell-managed runtimes (nvm, Homebrew, ~/.local/bin). Without
     // them the Python backend cannot locate npm/node for managed installs.
-    const userBins = ['/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.local', 'bin')];
+    const userBins = [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/home/linuxbrew/.linuxbrew/bin',
+      path.join(os.homedir(), '.linuxbrew', 'bin'),
+      path.join(os.homedir(), '.local', 'bin'),
+    ];
     const nvmRoot = path.join(os.homedir(), '.nvm', 'versions', 'node');
     let nvmBins = [];
     try {
@@ -5601,6 +6080,7 @@ function restartPythonBackend() {
   }
   isBackendRestarting = true;
   const proc = pythonProcess;
+  mainWindowCreation.invalidate();
   // Recreate renderer surfaces after the backend reports its new port. This
   // also invalidates every old UI tree and ui_instance_id.
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
@@ -6796,23 +7276,27 @@ async function startTerminalLifecycleSoakTest() {
   }
 }
 
-async function createMainWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-    return;
-  }
+function createMainWindow() {
+  return mainWindowCreation.run(async ({ isCurrent }) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      return mainWindow;
+    }
+    return createMainWindowOnce(isCurrent);
+  });
+}
 
-  let port;
+async function resolveMainWindowBackendPort() {
   try {
-    port = await waitForPort(backendStartupTimeoutMs);
+    return await waitForPort(backendStartupTimeoutMs);
   } catch (err) {
     if (isTerminalLifecycleSoakTest) {
       terminalLifecycleSoakFailure(err);
       isQuitting = true;
       app.exit(1);
-      return;
+      return null;
     }
     const settings = readDesktopSettings();
     dialog.showErrorBox(
@@ -6822,20 +7306,11 @@ async function createMainWindow() {
     );
     killPython();
     app.quit();
-    return;
+    return null;
   }
+}
 
-  if (!port) {
-    // Error already handled in spawnPython (port resolve returned null)
-    return;
-  }
-
-  try {
-    await syncBrowserProxyFromBackend(port);
-  } catch (error) {
-    appendErrorLog(`[electron:browser] Failed to apply browser proxy settings: ${String(error && error.stack || error)}\n`);
-  }
-
+function buildMainWindowOptions() {
   // Workbench draws its own top bar and reserves room for the traffic lights.
   // The inset title bar and traffic-light positioning remain macOS-specific.
   // Windows and Linux keep their native frame so close/minimize/maximize
@@ -6866,49 +7341,71 @@ async function createMainWindow() {
     // topbar so its visible center aligns with the brand mark and wordmark.
     windowOptions.trafficLightPosition = { x: 12, y: 21 };
   }
-  mainWindow = new BrowserWindow(windowOptions);
-  installWindowDiagnostics(mainWindow, 'main');
+  return windowOptions;
+}
 
-  mainWindow.once('ready-to-show', () => {
-    if (!launchHidden) {
-      mainWindow.show();
-    }
-    if (isDev) {
-      mainWindow.webContents.openDevTools();
+async function createMainWindowOnce(isCurrent) {
+  const port = await resolveMainWindowBackendPort();
+  // A null port is already handled by spawnPython or the timeout path above.
+  if (!port || !isCurrent()) return;
+
+  try {
+    await syncBrowserProxyFromBackend(port);
+  } catch (error) {
+    appendErrorLog(`[electron:browser] Failed to apply browser proxy settings: ${String(error && error.stack || error)}\n`);
+  }
+  if (!isCurrent()) return;
+
+  const win = new BrowserWindow(buildMainWindowOptions());
+  mainWindow = win;
+  installWindowDiagnostics(win, 'main');
+
+  win.once('ready-to-show', () => {
+    if (mainWindow !== win || win.isDestroyed()) return;
+    if (!launchHidden) win.show();
+    if (isDev && !win.webContents.isDestroyed()) {
+      win.webContents.openDevTools();
     }
   });
 
-  mainWindow.on('close', (event) => {
+  win.on('close', (event) => {
     if (!isQuitting && appStaysResident()) {
       // Stay resident (hide) so the global quick-chat shortcut keeps working and
       // the backend keeps running. Do NOT kill Python here — a lingering hidden
       // quick-chat window would otherwise be left pointing at a dead backend.
       event.preventDefault();
-      mainWindow.hide();
+      win.hide();
       return;
     }
     // Nothing keeps us resident — let the window close; teardown happens in
     // window-all-closed (non-mac quit) or before-quit (explicit quit).
   });
 
-  mainWindow.on('closed', () => {
+  win.on('closed', () => {
     hideAllBrowserSessions();
-    mainWindow = null;
+    if (mainWindow === win) mainWindow = null;
   });
 
   // Navigate to the sole Workbench surface.
   const url = `http://127.0.0.1:${port}`;
   // Force clear cache so the app always loads fresh assets
-  installLocalNavigationGuards(mainWindow, port, { allowLocalPopups: true });
-  await mainWindow.webContents.session.clearCache();
+  installLocalNavigationGuards(win, port, { allowLocalPopups: true });
+  await win.webContents.session.clearCache();
+  if (!isCurrent() || win.isDestroyed()) {
+    if (!win.isDestroyed()) win.destroy();
+    if (mainWindow === win) mainWindow = null;
+    return;
+  }
   try {
-    await mainWindow.loadURL(url);
+    await loadWindowUrl(win, url, { timeoutMs: backendStartupTimeoutMs });
+    if (!isCurrent() || win.isDestroyed()) return;
     if (isTerminalLifecycleSoakTest) {
       await startTerminalLifecycleSoakTest();
     } else if (isDesktopSmokeTest) {
-      await runDesktopSmokeTest(mainWindow);
+      await runDesktopSmokeTest(win);
     }
   } catch (err) {
+    if (!isCurrent() || win.isDestroyed()) return;
     // Some headless Linux desktop-portal combinations report ERR_FAILED after
     // Chromium has already received and rendered the full local page. In smoke
     // mode, trust the stronger DOM, screenshot, semantic-tree, and interaction
@@ -6919,7 +7416,7 @@ async function createMainWindow() {
     }
     if (isDesktopSmokeTest) {
       try {
-        await runDesktopSmokeTest(mainWindow);
+        await runDesktopSmokeTest(win);
         return;
       } catch (smokeErr) {
         const loadDetail = err && err.stack ? err.stack : String(err);
@@ -6945,12 +7442,6 @@ async function createMainWindow() {
 
 async function revealMainWindow() {
   launchHidden = false;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (!mainWindow.isVisible()) mainWindow.show();
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-    return;
-  }
   if (!electronRpcPort) {
     try { await startElectronRpcServer(); } catch (err) {
       console.error('[electron] Failed to start RPC server on reveal:', err);
@@ -7052,6 +7543,7 @@ if (!gotSingleInstanceLock) {
       appendErrorLog(`[electron] Failed to start Electron RPC server: ${err && err.stack ? err.stack : err}\n`);
     }
     getAppUseManager();
+    getRemoteDesktopManager();
     const desktopSettings = readDesktopSettings();
     applyLaunchAtLogin(desktopSettings.launchAtLogin);
     // Only claim the global shortcut when the user has enabled quick chat.
@@ -7230,8 +7722,12 @@ if (!gotSingleInstanceLock) {
       return { ok: true };
     });
     ipcMain.handle('notification:show', (_event, { title, body }) => {
-      const icon = getNotificationIconPath();
-      new Notification({ title, body, ...(icon ? { icon } : {}) }).show();
+      return showNativeNotification({ title, body });
+    });
+    ipcMain.handle('clipboard:read-text', () => clipboard.readText());
+    ipcMain.handle('clipboard:write-text', (_event, info) => {
+      clipboard.writeText(String(info && info.text || ''));
+      return true;
     });
     ipcMain.handle('shell:show-item-in-folder', (_event, info) => {
       const settings = readDesktopSettings();
@@ -7454,6 +7950,7 @@ if (!gotSingleInstanceLock) {
     destroyTray();
     globalShortcut.unregisterAll();
     if (appUseManager) appUseManager.stop();
+    if (remoteDesktopManager) remoteDesktopManager.close().catch(() => {});
     if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) appUsePointerWindow.destroy();
     appUsePointerWindow = null;
     appUsePointerOwnerTargetId = '';

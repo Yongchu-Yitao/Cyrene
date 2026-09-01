@@ -10,8 +10,8 @@ function wbcToolPresentationKind(entry) {
 function wbcToolPresentationText(entry, kind) {
   if (["terminal", "diff", "error"].indexOf(kind) < 0) return "";
   var value = entry && entry.output != null ? entry.output : entry && entry.input;
-  if (typeof value === "string") return value.slice(0, 12000);
-  return wbcStructuredEventSummary(value).slice(0, 12000);
+  var text = typeof value === "string" ? value : wbcStructuredEventSummary(value);
+  return (kind === "error" ? wbcLocalizedToolErrorText(text) : text).slice(0, 12000);
 }
 
 function wbcTraceDedupeKey(trace) {
@@ -184,7 +184,9 @@ function wbcFlattenToolObjectLiterals(value) {
 }
 
 function wbcToolPreviewText(preview) {
-  var text = wbcFlattenToolObjectLiterals(preview);
+  var text = wbcLocalizedToolErrorText(String(preview || ""));
+  if (text !== String(preview || "")) return text;
+  text = wbcFlattenToolObjectLiterals(preview);
   if (!text) return "";
   var operationKeys = {
     discover: "toolOperation.discover",
@@ -223,6 +225,47 @@ function wbcToolPreviewText(preview) {
     var localizedToolName = wbcT("toolName." + token, token);
     return localizedToolName !== token ? localizedToolName : part;
   }).join(", ");
+}
+
+function wbcLocalizedValidationToken(value, kind) {
+  var raw = String(value || "").trim().replace(/^['\"]|['\"]$/g, "");
+  if (!raw) return "";
+  if (kind === "field") return "“" + raw + "”";
+  var key = kind === "operation" ? "toolOperation." + raw : "toolName." + raw;
+  var localized = wbcT(key, raw);
+  if (localized === raw && kind === "operation") localized = wbcT("toolName." + raw, raw);
+  return "“" + localized + "”";
+}
+
+function wbcLocalizedToolErrorText(value) {
+  var text = String(value || "").trim();
+  if (!text) return "";
+  var invalid = text.match(/^(?:插件参数无效：\s*)?Invalid arguments for Plugin\s+['\"][^'\"]+['\"]\s+at\s+([^:]+):\s*(.+)$/i);
+  if (!invalid) return text;
+  var path = String(invalid[1] || "").trim().replace(/^arguments\.?/, "") || "arguments";
+  var reason = String(invalid[2] || "").trim();
+  var required = reason.match(/^['\"]([^'\"]+)['\"] is a required property$/i);
+  if (required) {
+    reason = wbcT("workbenchChat.toolError.missingRequired", "Missing required argument: {field}", {
+      field: wbcLocalizedValidationToken(required[1], "field"),
+    });
+    return reason;
+  }
+  var choice = reason.match(/^(.+?) is not one of \[(.*)\]$/i);
+  if (choice) {
+    var values = String(choice[2] || "").split(/\s*,\s*/).filter(Boolean);
+    var choiceKind = path === "operation" ? "operation" : "tool";
+    reason = wbcT("workbenchChat.toolError.invalidChoice", "{value} is not valid; choose from {choices}", {
+      value: wbcLocalizedValidationToken(choice[1], choiceKind),
+      choices: values.map(function (item) {
+        return wbcLocalizedValidationToken(item, choiceKind);
+      }).join(wbcT("workbenchChat.toolError.choiceSeparator", ", ")),
+    });
+  }
+  return wbcT("workbenchChat.toolError.invalidArgument", "Invalid argument {path}: {reason}", {
+    path: path,
+    reason: reason,
+  });
 }
 
 function wbcToolArgsPreview(args) {

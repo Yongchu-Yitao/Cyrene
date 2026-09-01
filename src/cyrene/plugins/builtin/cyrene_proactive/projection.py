@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,6 +12,7 @@ from cyrene.core.plugin import application_plugin_service
 
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_service import ChatService
+from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.sessions.context_records import append_context_record
 
 
@@ -20,6 +22,10 @@ def _utc_now_iso() -> str:
 
 def _short_id(prefix: str) -> str:
     return f"{str(prefix or 'id')}_{uuid.uuid4().hex[:12]}"
+
+
+def _proactive_title(lang: str) -> str:
+    return "Proactive work" if str(lang or "").lower() == "en" else "主动工作"
 
 
 async def _ensure_proactive_context(
@@ -62,6 +68,15 @@ async def _ensure_proactive_context(
     )
 
 
+async def _project_memory_snapshot(project_id: str) -> dict[str, Any] | None:
+    memory_service = application_plugin_service("memory")
+    snapshot_loader = getattr(memory_service, "current_snapshot", None)
+    if not callable(snapshot_loader):
+        return None
+    loaded = await asyncio.to_thread(snapshot_loader, project_id)
+    return dict(loaded) if isinstance(loaded, dict) else None
+
+
 async def create_proactive_chat(
     db_path: str,
     project_id: str,
@@ -69,6 +84,8 @@ async def create_proactive_chat(
     *,
     chat_id: str,
     model: str = "",
+    usage: Mapping[str, Any] | None = None,
+    latest_request_usage: Mapping[str, Any] | None = None,
     source_chat_id: str = "",
     lang: str = "",
 ) -> dict[str, str] | None:
@@ -108,20 +125,14 @@ async def create_proactive_chat(
             ),
             "title": str(
                 existing.get("title")
-                or ("Proactive work" if str(lang or "").lower() == "en" else "主动工作")
+                or _proactive_title(lang)
             ),
         }
 
-    memory_snapshot = None
-    memory_service = application_plugin_service("memory")
-    snapshot_loader = getattr(memory_service, "current_snapshot", None)
-    if callable(snapshot_loader):
-        loaded = await asyncio.to_thread(snapshot_loader, normalized_project_id)
-        if isinstance(loaded, dict):
-            memory_snapshot = dict(loaded)
+    memory_snapshot = await _project_memory_snapshot(normalized_project_id)
 
     now = _utc_now_iso()
-    title = "Proactive work" if str(lang or "").lower() == "en" else "主动工作"
+    title = _proactive_title(lang)
     message = {
         "id": _short_id("msg"),
         "role": "assistant",
@@ -130,6 +141,7 @@ async def create_proactive_chat(
         "model": str(model or ""),
         "proactive": True,
         "systemInitiated": True,
+        **runtime_usage_message_fields(usage, latest_request_usage),
     }
     chat: dict[str, Any] = service.create_chat(
         normalized_project_id,

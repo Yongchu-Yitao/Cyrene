@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_electron_dev_launcher_is_cross_platform_and_uses_uv_backend():
+def test_electron_dev_launcher_is_cross_platform_and_uses_checkout_backend():
     package = json.loads(
         (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
     )
@@ -17,7 +17,12 @@ def test_electron_dev_launcher_is_cross_platform_and_uses_uv_backend():
     assert package["scripts"]["dev"] == "node dev-launcher.js"
     assert "ELECTRON_DEV: '1'" in launcher
     assert "spawn(electronPath, ['.']" in launcher
+    assert "refreshLinuxXWaylandEnvironment();" in main
+    assert "name.startsWith('.mutter-Xwaylandauth.')" in main
+    assert "process.env.XAUTHORITY = candidates[0].filePath" in main
     assert "return 'uv';" in main
+    assert "'.venv', 'Scripts', 'cyrene.exe'" in main
+    assert "'.venv', 'bin', 'cyrene'" in main
     assert "'run'," in main
     assert "'cyrene'," in main
     assert "cwd: cwd" in main
@@ -128,6 +133,8 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert '@("/S", "/D=$installDir")' in smoke
     assert '"resources\\python-bundle\\Cyrene.exe"' in smoke
     assert 'Arguments @("--desktop-smoke-test")' in smoke
+    assert smoke.count("        -TriggerSecondInstance") == 1
+    assert "second instance did not hand off within 30 seconds" in smoke
     assert 'Arguments @("--terminal-smoke-test")' in smoke
     assert smoke.count('Arguments @("--terminal-lifecycle-soak-test")') == 2
     assert 'SuccessMarker "Cyrene smoke test OK:"' in smoke
@@ -261,5 +268,8 @@ def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
 
     ocr_spec = (ROOT / "build" / "cyrene_ocr_sidecar.spec").read_text(encoding="utf-8")
     search_spec = (ROOT / "build" / "cyrene_simplexng_sidecar.spec").read_text(encoding="utf-8")
+    search_entry = (ROOT / "build" / "run_simplexng_sidecar.py").read_text(encoding="utf-8")
     assert '"shapely", "yaml", "omegaconf", "tqdm", "colorlog", "requests", "six"' in ocr_spec
     assert '"httpx", "httpcore", "httpx_socks", "anyio", "sniffio", "certifi"' in search_spec
+    assert "from cyrene.simplexng_child import main" in search_entry
+    assert "cyrene.plugins" not in search_entry

@@ -110,8 +110,8 @@ def test_browser_manager_can_pin_pages_and_pinned_browser_keeps_its_favicon():
     assert "function browserOwnerSession(page)" in source
     assert "String(page && page.sessionId || \"\")" in source
     assert "bridge.activateTab({ sessionId: page.sessionId, tabId: page.tabId })" in source
-    assert "justify-content: flex-start" in styles.split(".workbench-resource-shelf {", 1)[1].split("}", 1)[0]
-    assert "grid-template-columns: 174px minmax(0, max-content) minmax(34px, 1fr) auto auto;" in styles
+    assert "justify-content: flex-end" in styles.split(".workbench-resource-shelf {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: 174px minmax(96px, 1fr) fit-content(28vw) auto auto;" in styles
 
 
 def test_browser_manager_uses_packaged_tabler_icon_assets_and_i18n():

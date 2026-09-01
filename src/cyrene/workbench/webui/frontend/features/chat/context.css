@@ -23,15 +23,8 @@
   transition: opacity 160ms ease, visibility 0s linear 420ms;
 }
 
-.wbc-side-card {
-  position: relative;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-height: calc(100vh - var(--wbc-card-top-inset) - var(--wbc-card-gutter));
+.wbc-panel-accordion-surface {
   box-sizing: border-box;
-  overflow: visible;
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
   border-radius: 18px;
   background: var(--wbc-panel-surface);
@@ -41,11 +34,21 @@
     inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 18%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(112%);
   backdrop-filter: blur(18px) saturate(112%);
-  container: wbc-side-card / inline-size;
   pointer-events: auto;
 }
 
-html[data-theme="dark"] .wbc-page .wbc-side-card {
+.wbc-side-card {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: calc(100vh - var(--wbc-card-top-inset) - var(--wbc-card-gutter));
+  overflow: visible;
+  container: wbc-side-card / inline-size;
+}
+
+html[data-theme="dark"] .wbc-page .wbc-panel-accordion-surface {
   /* Win over the older composer-glass and floating/split panel variants so
      every conversation detail card resolves to the same opaque surface. */
   background: var(--wbc-panel-surface);
@@ -143,17 +146,10 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   white-space: nowrap;
 }
 
-.wbc-side-accordion {
-  flex: 0 0 auto;
+.wbc-panel-accordion-list {
   min-width: 0;
-  min-height: 0;
-  height: max-content;
-  /* 58px top inset + 46px head + 2px borders + 12px gutter = 118px, landing
-     the panel's bottom edge exactly on the conversation card's baseline. */
-  max-height: calc(100vh - var(--wbc-card-top-inset) - 46px - 2px - var(--wbc-card-gutter));
   width: 100%;
   margin: 0;
-  overflow-y: auto;
   overflow-x: hidden;
   border: 0;
   border-radius: 0;
@@ -162,9 +158,19 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   overscroll-behavior: contain;
 }
 
-.wbc-side-accordion::-webkit-scrollbar {
+.wbc-panel-accordion-list::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+.wbc-side-accordion {
+  flex: 0 0 auto;
+  min-height: 0;
+  height: max-content;
+  /* 58px top inset + 46px head + 2px borders + 12px gutter = 118px, landing
+     the panel's bottom edge exactly on the conversation card's baseline. */
+  max-height: calc(100vh - var(--wbc-card-top-inset) - 46px - 2px - var(--wbc-card-gutter));
+  overflow-y: auto;
 }
 
 .wbc-side-accordion-item {
@@ -267,25 +273,26 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 }
 
 .wbc-side-collapse {
-  display: grid;
-  grid-template-rows: 0fr;
+  interpolate-size: allow-keywords;
+  height: 0;
+  overflow: hidden;
   opacity: 0;
   transform: translateY(-3px);
   transition:
-    grid-template-rows 180ms cubic-bezier(.2, .8, .2, 1),
+    height 180ms cubic-bezier(.2, .8, .2, 1),
     opacity 135ms ease,
     transform 180ms cubic-bezier(.2, .8, .2, 1);
 }
 
 .wbc-side-collapse.open {
-  grid-template-rows: 1fr;
+  height: auto;
   opacity: 1;
   transform: translateY(0);
 }
 
 @starting-style {
   .wbc-side-collapse.open {
-    grid-template-rows: 0fr;
+    height: 0;
     opacity: 0;
     transform: translateY(-3px);
   }
@@ -2296,13 +2303,6 @@ html[data-theme="dark"] .wbc-context-layer-summary {
   border-top: 0;
 }
 
-/* The section boundary already separates tool packages from the inbox above.
-   Keep dividers between subsequent packages without drawing a duplicate rule
-   above the first package. */
-.wbc-context-sections .wbc-plugin-pack-head + .wbc-plugin-pack-row {
-  border-top: 0;
-}
-
 .wbc-context-sections .wbc-inbox-card.title-hidden .wbc-inbox-head {
   min-height: 24px;
   margin-bottom: 10px;
@@ -2349,16 +2349,108 @@ html[data-theme="dark"] .wbc-context-layer-summary {
 
 .wbc-context-empty-head {
   min-height: 24px;
-  margin-bottom: 5px;
+  margin-bottom: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
+.wbc-plugin-pack-list {
+  overflow: hidden;
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 46%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-row-hover-bg) 48%, transparent);
+}
+
+.wbc-side-body .wbc-plugin-pack-list .wbc-plugin-pack-row {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 560;
+}
+
+.wbc-side-body .wbc-plugin-pack-list .wbc-plugin-pack-row + .wbc-plugin-pack-row {
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 52%, transparent);
+}
+
+.wbc-plugin-pack-list .wbc-plugin-pack-row > .workbench-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  box-shadow: none;
+}
+
+.wbc-plugin-pack-list .wbc-plugin-pack-row > span:last-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-muted);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .wbc-context-stats {
+  display: block;
+}
+
+.wbc-context-facts {
+  width: 100%;
+  padding: 0;
   display: grid;
-  gap: 4px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.wbc-context-facts > div {
+  width: 100%;
+  min-width: 0;
+  min-height: 25px;
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.wbc-context-facts span {
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 540;
+  white-space: nowrap;
+}
+
+.wbc-context-facts b {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 590;
+  font-variant-numeric: tabular-nums;
+  justify-self: end;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-theme="dark"] .wbc-plugin-pack-list {
+  border-color: color-mix(in srgb, var(--wb-line-2) 72%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 96%, var(--wb-accent) 4%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .wbc-context-detail {
@@ -3289,7 +3381,8 @@ html[data-theme="dark"] .wbc-overview-token-grid {
   .wbc-pane-card,
   .wbc-pane-card-drop-zone,
   .wbc-pane-card-drop-zone span,
-  .wbc-pane-floating-conversation-panel {
+  .wbc-pane-floating-conversation-panel,
+  .wbc-side-split-grip-menu {
     transition: none;
     animation: none;
   }

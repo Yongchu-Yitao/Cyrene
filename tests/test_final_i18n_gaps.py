@@ -34,8 +34,46 @@ async def test_plugin_argument_validation_follows_invocation_language() -> None:
     )
 
     assert result.success is False
-    assert result.error.startswith("插件参数无效：")
-    assert "'value' is a required property" in result.error
+    assert result.error == "缺少必填参数：value。"
+    assert "required property" not in result.error
+
+
+@pytest.mark.asyncio
+async def test_plugin_enum_validation_is_fully_localized() -> None:
+    async def handler(_arguments, _context):
+        return "ok"
+
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            name="i18n_enum_probe",
+            description="Probe enum localization.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["list", "describe", "invoke"],
+                    },
+                },
+                "required": ["operation"],
+            },
+            handler=handler,
+        ),
+        source="test",
+    )
+
+    result = await PluginRuntime(registry).call(
+        "i18n_enum_probe",
+        {"operation": "browser_snapshot"},
+        PluginContext(data={"language": "zh"}),
+    )
+
+    assert result.error == (
+        "参数 operation 无效：'browser_snapshot' 不是允许的选项；"
+        "可选值：'list'、'describe'、'invoke'。"
+    )
+    assert "is not one of" not in result.error
 
 
 @pytest.mark.asyncio

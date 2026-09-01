@@ -667,7 +667,7 @@ function WbcPaneFiveWayDropSurface({ card, dropKey, replaceConversation, dropTar
   );
 }
 
-function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave }) {
+function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropEnabled, replaceOnly, axisEnabled, replaceConversation, dropTarget, onDropOver, onDrop, onDropLeave, observationState }) {
   var activeEdge = dropTarget && String(dropTarget.dropKey || "") === String(dropKey || "")
     ? dropTarget.edge
     : "";
@@ -676,12 +676,19 @@ function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropE
     : wbcT("workbenchChat.dropPaneReplace", "Release to replace this split");
   return (
     <article
-      className={"wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content")}
+      className={"wbc-pane-card wbc-pane-card-" + String(card && card.kind || "content")
+        + (observationState ? " is-resource-observed" : "")
+        + (observationState && observationState.finishing ? " is-resource-observation-finishing" : "")}
       data-pane-card-id={card && card.id || ""}
       data-pane-semantic-node-id={semanticNodeId || ""}
       data-pane-drop-key={dropKey || card.id}
     >
       {grip ? <div className="wbc-pane-card-grip">{grip}</div> : null}
+      {observationState ? <div className="wbc-resource-observation-indicator" role="status">
+        <span className="wbc-running-dot wbc-resource-observation-dot" aria-hidden="true" />
+        <span>{wbcT("workbenchChat.agentViewing", "Agent is viewing")}</span>
+        {Number(observationState.count || 0) > 1 ? <b>{Number(observationState.count)}</b> : null}
+      </div> : null}
       {children}
       {dropEnabled ? (
         <div className={"wbc-pane-card-drop-layer" + (replaceOnly ? " replace-only" : "") + (axisEnabled ? " axis-enabled" : "")} onDragLeave={onDropLeave}>
@@ -973,10 +980,135 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
 // conversation panel or a new conversation, swap the side/vertical order, or
 // close). Every card exposes one grip; detached chat cards keep their existing
 // internal grip while the shared card frame supplies it for all other kinds.
-function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled }) {
+function WbcSplitSettingSlider({ contribution, selected, onInvokeContribution }) {
+  var options = Array.isArray(contribution && contribution.options) ? contribution.options : [];
+  var selectedValue = String(selected == null ? "" : selected);
+  var selectedIndex = options.findIndex(function (option) {
+    return String(option && option.value || "") === selectedValue;
+  });
+  if (selectedIndex < 0) selectedIndex = 0;
+  var [draftIndex, setDraftIndex] = useWbcState(selectedIndex);
+  var committedValueRef = useWbcRef(selectedValue);
+
+  useWbcEffect(function () {
+    setDraftIndex(selectedIndex);
+    committedValueRef.current = selectedValue;
+  }, [selectedIndex, selectedValue]);
+
+  if (!options.length) return null;
+  var safeDraftIndex = Math.max(0, Math.min(options.length - 1, Number(draftIndex) || 0));
+  var draftOption = options[safeDraftIndex] || options[0];
+  var progress = options.length > 1 ? (safeDraftIndex / (options.length - 1)) * 100 : 0;
+
+  function commit(index) {
+    var nextIndex = Math.max(0, Math.min(options.length - 1, Number(index) || 0));
+    var option = options[nextIndex];
+    var nextValue = String(option && option.value || "");
+    if (contribution.disabled === true || committedValueRef.current === nextValue) return;
+    committedValueRef.current = nextValue;
+    if (onInvokeContribution) {
+      Promise.resolve(onInvokeContribution(contribution, option.value)).catch(function () {
+        committedValueRef.current = selectedValue;
+        setDraftIndex(selectedIndex);
+      });
+    }
+  }
+
+  return <div className="wbc-side-split-grip-setting-slider">
+    <div className="wbc-side-split-grip-setting-heading">
+      <span className="wbc-side-split-grip-setting-label">{String(contribution && contribution.label || contribution && contribution.id || "")}</span>
+      <output>{String(draftOption && draftOption.label || draftOption && draftOption.value || "")}</output>
+    </div>
+    <input
+      type="range"
+      min="0"
+      max={String(Math.max(0, options.length - 1))}
+      step="1"
+      value={String(safeDraftIndex)}
+      disabled={contribution.disabled === true}
+      aria-label={String(contribution && contribution.label || contribution && contribution.id || "")}
+      aria-valuetext={String(draftOption && draftOption.label || draftOption && draftOption.value || "")}
+      style={{ "--wbc-setting-progress": progress + "%" }}
+      onChange={function (event) { setDraftIndex(Number(event.currentTarget.value) || 0); }}
+      onPointerUp={function (event) { commit(event.currentTarget.value); }}
+      onKeyUp={function (event) { commit(event.currentTarget.value); }}
+      onBlur={function (event) { commit(event.currentTarget.value); }}
+    />
+    <div className="wbc-side-split-grip-setting-ticks" style={{ gridTemplateColumns: "repeat(" + options.length + ", minmax(0, 1fr))" }} aria-hidden="true">
+      {options.map(function (option, index) {
+        return <span className={index === safeDraftIndex ? "is-selected" : ""} key={String(option && option.value || index)}>{String(option && option.label || option && option.value || "")}</span>;
+      })}
+    </div>
+  </div>;
+}
+
+function WbcPanelAccordionSurface({ className, role, surfaceRef, style, children }) {
+  return <div ref={surfaceRef} style={style} className={"wbc-panel-accordion-surface" + (className ? " " + className : "")} role={role}>{children}</div>;
+}
+
+function WbcPanelAccordionList({ className, dataTour, children }) {
+  return <div className={"wbc-panel-accordion-list" + (className ? " " + className : "")} data-tour={dataTour}>{children}</div>;
+}
+
+function WbcSplitGripAccordionBody({ expanded, children }) {
+  var [rendered, setRendered] = useWbcState(!!expanded);
+
+  useWbcEffect(function () {
+    if (expanded) {
+      setRendered(true);
+      return undefined;
+    }
+    if (!rendered) return undefined;
+    var hideTimer = window.setTimeout(function () { setRendered(false); }, 190);
+    return function () { window.clearTimeout(hideTimer); };
+  }, [expanded, rendered]);
+
+  if (!rendered) return null;
+  return <div className={"wbc-side-split-grip-expanded-body" + (expanded ? " open" : "")} aria-hidden={expanded ? "false" : "true"}>
+    <div className="wbc-side-split-grip-expanded-content">{children}</div>
+  </div>;
+}
+
+function WbcPanelAccordionSection({ icon, label, meta, expanded, onClick, disabled, role, checked, selected, menuItem, menuBody, bodyFlush, bodyClass, children }) {
+  var expandable = children !== undefined && children !== null;
+  return <section className={"wbc-side-accordion-item" + (expanded ? " expanded" : "")} role="none">
+    <button
+      type="button"
+      className={"wbc-side-accordion-trigger" + (selected ? " is-selected" : "")}
+      role={role || (menuItem ? "menuitem" : undefined)}
+      aria-checked={checked}
+      aria-expanded={expandable ? (expanded ? "true" : "false") : undefined}
+      disabled={disabled === true}
+      onClick={onClick}
+    >
+      <span className="wbc-side-accordion-icon" aria-hidden="true">{icon}</span>
+      <span className="wbc-side-accordion-label">{label}</span>
+      {meta ? <span className="wbc-side-accordion-meta">{meta}</span> : null}
+      <span className="wbc-side-accordion-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
+    </button>
+    {expandable ? (menuBody
+      ? <WbcSplitGripAccordionBody expanded={!!expanded}>{children}</WbcSplitGripAccordionBody>
+      : <WbcSideAccordionBody expanded={!!expanded} flush={!!bodyFlush} bodyClass={bodyClass}>{children}</WbcSideAccordionBody>
+    ) : null}
+  </section>;
+}
+
+function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled, menuContributions, menuState, onInvokeContribution }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
+  var [expandedTab, setExpandedTab] = useWbcState("");
+  var settingsOpen = expandedTab === "settings";
+  var informationOpen = expandedTab !== "settings" ? expandedTab : "";
   var rootRef = useWbcRef(null);
+  var gripRef = useWbcRef(null);
+  var menuRef = useWbcRef(null);
   var pointerDragRef = useWbcRef(null);
+  var [menuPosition, setMenuPosition] = useWbcState({ top: 0, left: 0, portalTheme: {} });
+  var rootMenuContributions = (Array.isArray(menuContributions) ? menuContributions : []).filter(function (contribution) {
+    return String(contribution && contribution.placement || "settings") === "root";
+  });
+  var settingsMenuContributions = (Array.isArray(menuContributions) ? menuContributions : []).filter(function (contribution) {
+    return String(contribution && contribution.placement || "settings") !== "root";
+  });
 
   // Electron's native browser surface is composited above renderer DOM, so a
   // CSS z-index alone cannot keep this menu visible. Reuse the shared overlay
@@ -986,6 +1118,10 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
   useWbcEffect(function () {
     if (menuDisabled && menuOpen) setMenuOpen(false);
   }, [menuDisabled, menuOpen]);
+
+  useWbcEffect(function () {
+    if (!menuOpen && expandedTab) setExpandedTab("");
+  }, [menuOpen, expandedTab]);
 
   useWbcEffect(function () {
     if (!menuOpen) return undefined;
@@ -999,10 +1135,70 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
   useWbcEffect(function () {
     if (!menuOpen) return undefined;
     function closeOutside(event) {
-      if (rootRef.current && !rootRef.current.contains(event.target)) setMenuOpen(false);
+      var insideGrip = rootRef.current && rootRef.current.contains(event.target);
+      var insideMenu = menuRef.current && menuRef.current.contains(event.target);
+      if (!insideGrip && !insideMenu) setMenuOpen(false);
+    }
+    function closeFromPlugin() { setMenuOpen(false); }
+    function closeOnWindowBlur() { setMenuOpen(false); }
+    function closeOnEscape(event) {
+      if (event.key === "Escape") setMenuOpen(false);
     }
     document.addEventListener("pointerdown", closeOutside);
-    return function () { document.removeEventListener("pointerdown", closeOutside); };
+    window.addEventListener("cyrene:plugin-view-interaction", closeFromPlugin);
+    window.addEventListener("blur", closeOnWindowBlur);
+    document.addEventListener("keydown", closeOnEscape);
+    return function () {
+      document.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("cyrene:plugin-view-interaction", closeFromPlugin);
+      window.removeEventListener("blur", closeOnWindowBlur);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
+
+  useWbcLayoutEffect(function () {
+    if (!menuOpen) return undefined;
+    function positionMenu() {
+      var grip = gripRef.current;
+      if (!grip) return;
+      var rect = grip.getBoundingClientRect();
+      // The popup is portalled to document.body to stay out of the Workbench
+      // grid. Bridge the scoped theme tokens across that boundary so the
+      // panel surface and plugin controls keep the conversation card styling.
+      var portalTheme = {};
+      var page = rootRef.current && rootRef.current.closest(".wbc-page");
+      var grid = rootRef.current && rootRef.current.closest(".workbench-grid");
+      [grid, page].forEach(function (scope) {
+        if (!scope || !window.getComputedStyle) return;
+        var computed = window.getComputedStyle(scope);
+        for (var index = 0; index < computed.length; index += 1) {
+          var propertyName = computed[index];
+          if (propertyName.indexOf("--wb-") !== 0 && propertyName.indexOf("--wbc-") !== 0) continue;
+          portalTheme[propertyName] = computed.getPropertyValue(propertyName);
+        }
+      });
+      var card = rootRef.current && rootRef.current.closest(".wbc-pane-card, .wbc-side-card");
+      var cardStyle = card && window.getComputedStyle ? window.getComputedStyle(card) : null;
+      if (cardStyle && cardStyle.backgroundColor && cardStyle.backgroundColor !== "rgba(0, 0, 0, 0)") {
+        portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor;
+      }
+      if (cardStyle && cardStyle.borderRadius) portalTheme["--wbc-split-grip-radius"] = cardStyle.borderRadius;
+      if (cardStyle && cardStyle.boxShadow && cardStyle.boxShadow !== "none") {
+        portalTheme["--wbc-split-grip-shadow"] = cardStyle.boxShadow;
+      }
+      setMenuPosition({
+        top: Math.round(rect.bottom + 4),
+        left: Math.round(rect.left + rect.width / 2),
+        portalTheme: portalTheme
+      });
+    }
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return function () {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
   }, [menuOpen]);
 
   function handleKey(event) {
@@ -1064,9 +1260,15 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     setMenuOpen(false);
     if (onOpenConversationPanel) onOpenConversationPanel();
   }
+  // Keep the fixed popup outside the Workbench's four-column grid. A fixed
+  // element portalled into that grid can still inherit its static grid area in
+  // Electron and stretch to the full row when an accordion section opens.
+  var menuPortalRoot = typeof document !== "undefined" ? document.body : null;
+  var canPortalMenu = menuOpen && !menuDisabled && menuPortalRoot && window.ReactDOM && typeof window.ReactDOM.createPortal === "function";
   return (
     <div className="wbc-split-grip-bar-host" ref={rootRef}>
       <div
+        ref={gripRef}
         className="wbc-side-split-grip-bar"
         role="button"
         tabIndex={0}
@@ -1087,60 +1289,157 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
       >
         <span className="wbc-side-split-grip-bar-visual" aria-hidden="true" />
       </div>
-      {menuOpen && !menuDisabled && (
-        <div className="wbc-side-split-grip-menu" role="menu">
+      {canPortalMenu ? window.ReactDOM.createPortal((
+        <WbcPanelAccordionSurface
+          className={"wbc-side-split-grip-menu" + (Array.isArray(menuContributions) && menuContributions.length ? " has-contributions" : "")}
+          role="menu"
+          surfaceRef={menuRef}
+          style={Object.assign({}, menuPosition.portalTheme, {
+            "--wbc-split-grip-menu-top": menuPosition.top + "px",
+            "--wbc-split-grip-menu-left": menuPosition.left + "px"
+          })}
+        >
+          <WbcPanelAccordionList className="wbc-side-split-grip-accordion">
           {menuType === "content" ? (
-            onNewConversation ? <button
-              type="button"
-              role="menuitem"
+            onNewConversation ? <WbcPanelAccordionSection
+              menuItem={true}
+              icon={WBC_ICONS.plus}
+              label={wbcT("workbenchChat.newConversation", "New conversation")}
               onClick={function () { setMenuOpen(false); onNewConversation(); }}
-            >
-              <span aria-hidden="true">{WBC_ICONS.plus}</span>
-              <span>{wbcT("workbenchChat.newConversation", "New conversation")}</span>
-            </button> : null
+            /> : null
           ) : (
-            <button
-              type="button"
-              role="menuitem"
+            <WbcPanelAccordionSection
+              menuItem={true}
+              icon={WBC_ICONS.sidebar}
+              label={openPanelLabel || wbcT("workbenchChat.detailPanel.openConversationPanel", "Open conversation panel")}
               onClick={openConversationPanel}
-            >
-              <span aria-hidden="true">{WBC_ICONS.sidebar}</span>
-              <span>{openPanelLabel || wbcT("workbenchChat.detailPanel.openConversationPanel", "Open conversation panel")}</span>
-            </button>
+            />
           )}
-          <button
-            type="button"
-            role="menuitem"
+          <WbcPanelAccordionSection
+            menuItem={true}
+            icon={<>{WBC_ICONS.chevronLeft}{WBC_ICONS.chevronRight}</>}
+            label={swapLabel}
             onClick={function () { setMenuOpen(false); if (onToggleSide) onToggleSide(); }}
-          >
-            <span aria-hidden="true">{WBC_ICONS.chevronLeft}{WBC_ICONS.chevronRight}</span>
-            <span>{swapLabel}</span>
-          </button>
+          />
           {onTogglePin ? (
-            <button
-              type="button"
-              role="menuitem"
-              aria-pressed={pinned ? "true" : "false"}
-              onClick={function () { setMenuOpen(false); onTogglePin(!pinned); }}
-            >
-              <span aria-hidden="true">{WBC_ICONS.pin}</span>
-              <span>{pinned
+            <WbcPanelAccordionSection
+              menuItem={true}
+              icon={WBC_ICONS.pin}
+              label={pinned
                 ? wbcT("workbenchChat.surfaceUnpin", "Unpin automatic surface")
-                : wbcT("workbenchChat.surfacePin", "Pin automatic surface")}</span>
-            </button>
+                : wbcT("workbenchChat.surfacePin", "Pin automatic surface")}
+              selected={!!pinned}
+              onClick={function () { setMenuOpen(false); onTogglePin(!pinned); }}
+            />
+          ) : null}
+          {rootMenuContributions.map(function (contribution) {
+            var contributionId = String(contribution && contribution.id || "");
+            var contributionKind = String(contribution && contribution.kind || "action");
+            var contributionIcon = WBC_ICONS[String(contribution && contribution.icon_name || "tool")] || WBC_ICONS.tool;
+            var active = Boolean(menuState && contribution.state_key && menuState[contribution.state_key]);
+            var informationFields = Array.isArray(contribution && contribution.fields) ? contribution.fields : [];
+            var informationDetails = informationFields.filter(function (field) { return String(field && field.group || "") !== "facts"; });
+            var informationFacts = informationFields.filter(function (field) { return String(field && field.group || "") === "facts"; });
+            if (contributionKind === "information") return <WbcPanelAccordionSection
+                menuItem={true}
+                key={contributionId}
+                icon={contributionIcon}
+                label={String(contribution.label || contributionId)}
+                expanded={informationOpen === contributionId}
+                menuBody={true}
+                onClick={function () {
+                  setExpandedTab(function (open) { return open === contributionId ? "" : contributionId; });
+                }}
+              >
+              <div className="wbc-side-split-grip-information">
+                <dl className="wbc-side-split-grip-information-details">
+                  {informationDetails.map(function (field) {
+                    return <div key={String(field && field.state_key || field && field.label || "field")}>
+                      <dt>{String(field && field.label || "")}</dt>
+                      <dd className={field && field.tone ? "is-" + String(field.tone) : ""}>{String(field && field.value || "—")}</dd>
+                    </div>;
+                  })}
+                </dl>
+                {informationFacts.length ? <dl className="wbc-side-split-grip-information-facts">
+                  {informationFacts.map(function (field) {
+                    return <div key={String(field && field.state_key || field && field.label || "field")}>
+                      <dt>{String(field && field.label || "")}</dt>
+                      <dd>{String(field && field.value || "—")}</dd>
+                    </div>;
+                  })}
+                </dl> : null}
+              </div>
+            </WbcPanelAccordionSection>;
+            return <WbcPanelAccordionSection
+              menuItem={true}
+              icon={contributionIcon}
+              label={String(contribution.label || contributionId)}
+              role={contributionKind === "toggle" ? "menuitemcheckbox" : "menuitem"}
+              checked={contributionKind === "toggle" ? (active ? "true" : "false") : undefined}
+              disabled={contribution.disabled === true}
+              selected={active}
+              key={contributionId}
+              onClick={function () {
+                setMenuOpen(false);
+                if (onInvokeContribution) Promise.resolve(onInvokeContribution(contribution, !active)).catch(function () {});
+              }}
+            />;
+          })}
+          {settingsMenuContributions.length ? (
+            <WbcPanelAccordionSection
+                menuItem={true}
+                icon={WBC_ICONS.settings}
+                label={wbcT("workbenchChat.detailPanel.settings", "Settings")}
+                expanded={settingsOpen}
+                menuBody={true}
+                onClick={function () {
+                  setExpandedTab(function (open) { return open === "settings" ? "" : "settings"; });
+                }}
+              >
+              <div className="wbc-side-split-grip-settings" role="group" aria-label={wbcT("workbenchChat.detailPanel.settings", "Settings")}>
+                {settingsMenuContributions.map(function (contribution) {
+                  var stateKey = String(contribution && contribution.state_key || "");
+                  var selected = menuState && menuState[stateKey];
+                  return <div className="wbc-side-split-grip-setting" key={String(contribution && contribution.id || stateKey)}>
+                    {String(contribution && contribution.presentation || "") === "slider" ? <WbcSplitSettingSlider contribution={contribution} selected={selected} onInvokeContribution={onInvokeContribution} /> : <React.Fragment>
+                    <span className="wbc-side-split-grip-setting-label">{String(contribution && contribution.label || contribution && contribution.id || "")}</span>
+                    {String(contribution && contribution.kind || "") === "radio-group" ? <div role="group">
+                      {(Array.isArray(contribution.options) ? contribution.options : []).map(function (option) {
+                        var active = String(selected == null ? "" : selected) === String(option && option.value || "");
+                        return <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={active ? "true" : "false"}
+                          disabled={contribution.disabled === true}
+                          className={active ? "is-selected" : ""}
+                          key={String(option && option.value || "")}
+                          onClick={function () {
+                            if (active) return;
+                            if (onInvokeContribution) Promise.resolve(onInvokeContribution(contribution, option.value)).catch(function () {});
+                          }}
+                        >
+                          <span aria-hidden="true">{active ? WBC_ICONS.check : null}</span>
+                          <span>{String(option && option.label || option && option.value || "")}</span>
+                        </button>;
+                      })}
+                    </div> : null}
+                    </React.Fragment>}
+                  </div>;
+                })}
+              </div>
+            </WbcPanelAccordionSection>
           ) : null}
           {onClose ? (
-            <button
-              type="button"
-              role="menuitem"
+            <WbcPanelAccordionSection
+              menuItem={true}
+              icon={WBC_ICONS.x}
+              label={wbcT("workbenchChat.detailPanel.close", "Close split panel")}
               onClick={function () { setMenuOpen(false); onClose(); }}
-            >
-              <span aria-hidden="true">{WBC_ICONS.x}</span>
-              <span>{wbcT("workbenchChat.detailPanel.close", "Close split panel")}</span>
-            </button>
+            />
           ) : null}
-        </div>
-      )}
+          </WbcPanelAccordionList>
+        </WbcPanelAccordionSurface>
+      ), menuPortalRoot) : null}
     </div>
   );
 }
@@ -1853,7 +2152,7 @@ function WbcSide({
   );
   return (
     <aside className={"wbc-side" + (floating ? " wbc-side-floating" : "")}>
-      <div className="wbc-side-card">
+      <WbcPanelAccordionSurface className="wbc-side-card">
         {widthResizable && React.createElement(
           workbenchServices.shell().ColResizer,
           { trackGutter: true, surfaceId: "conversation" }
@@ -1874,42 +2173,35 @@ function WbcSide({
             {floating ? WBC_ICONS.x : WBC_ICONS.chevronsRight}
           </button>
         </div>
-        <div className="wbc-side-accordion" data-tour="chat_sidebar">
+        <WbcPanelAccordionList className="wbc-side-accordion" dataTour="chat_sidebar">
           {tabs.map(function (item) {
             var opensSplit = item.id === "subagents" || item.id === "browser" || item.id === "workspace";
             var expanded = !opensSplit && activeTab === item.id;
             var meta = sideTabMeta[item.id] || "";
-            return (
-              <section key={item.id} className={"wbc-side-accordion-item" + (expanded ? " expanded" : "")}>
-                <button
-                  type="button"
-                  className="wbc-side-accordion-trigger"
-                  aria-expanded={expanded}
-                  onClick={function () {
-                    if (opensSplit) {
-                      onTabChange("");
-                      if (item.id === "subagents" && onOpenSubagents) onOpenSubagents();
-                      if (item.id === "workspace" && onOpenWorkspace) onOpenWorkspace();
-                      if (item.id === "browser" && onSelectBrowser) {
-                        var currentBrowserTab = browserPanelState && (browserPanelState.activeTabId || browserPanelState.activeTab && browserPanelState.activeTab.id);
-                        onSelectBrowser(currentBrowserTab || "__active__");
-                      }
-                      return;
-                    }
-                    onTabChange(expanded ? "" : item.id);
-                  }}
-                >
-                  <span className="wbc-side-accordion-icon" aria-hidden="true">{WBC_SIDE_TAB_ICONS[item.id] || WBC_SIDE_TAB_ICONS.overview}</span>
-                  <span className="wbc-side-accordion-label">{item.label}</span>
-                  {meta && <span className="wbc-side-accordion-meta">{meta}</span>}
-                  <span className="wbc-side-accordion-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
-                </button>
-                <WbcSideAccordionBody expanded={expanded} flush={flush}>{activeContent}</WbcSideAccordionBody>
-              </section>
-            );
+            return <WbcPanelAccordionSection
+              key={item.id}
+              icon={WBC_SIDE_TAB_ICONS[item.id] || WBC_SIDE_TAB_ICONS.overview}
+              label={item.label}
+              meta={meta}
+              expanded={expanded}
+              bodyFlush={flush}
+              onClick={function () {
+                if (opensSplit) {
+                  onTabChange("");
+                  if (item.id === "subagents" && onOpenSubagents) onOpenSubagents();
+                  if (item.id === "workspace" && onOpenWorkspace) onOpenWorkspace();
+                  if (item.id === "browser" && onSelectBrowser) {
+                    var currentBrowserTab = browserPanelState && (browserPanelState.activeTabId || browserPanelState.activeTab && browserPanelState.activeTab.id);
+                    onSelectBrowser(currentBrowserTab || "__active__");
+                  }
+                  return;
+                }
+                onTabChange(expanded ? "" : item.id);
+              }}
+            >{activeContent}</WbcPanelAccordionSection>;
           })}
-        </div>
-      </div>
+        </WbcPanelAccordionList>
+      </WbcPanelAccordionSurface>
     </aside>
   );
 }

@@ -1,5 +1,6 @@
 """Editable OpenAI Codex OAuth model Plugin."""
 
+from cyrene.plugins.tool_call_parsers import CODEX_OAUTH_TOOL_CALL_PARSER
 from ._shared import ModelProvider, create_model_plugin
 
 CODEX_OAUTH_PROVIDER = ModelProvider(
@@ -11,6 +12,7 @@ CODEX_OAUTH_PROVIDER = ModelProvider(
     auth_type="oauth",
     capabilities=("chat", "vision", "tools", "reasoning"),
     icon="openai",
+    tool_call_parser=CODEX_OAUTH_TOOL_CALL_PARSER,
 )
 CODEX_OAUTH_PLUGIN = create_model_plugin(CODEX_OAUTH_PROVIDER)
 

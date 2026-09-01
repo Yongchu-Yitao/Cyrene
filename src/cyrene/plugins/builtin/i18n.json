@@ -313,6 +313,26 @@
         "description": "操作明确选中的已配对 Cyrene 设备。"
       }
     },
+    "cyrene_remote_desktop": {
+      "en": {
+        "name": "Remote Desktop",
+        "description": "Securely view and control desktops on paired Cyrene devices."
+      },
+      "zh": {
+        "name": "远程桌面",
+        "description": "安全查看和控制已配对 Cyrene 设备的桌面。"
+      }
+    },
+    "pinned_topbar_context": {
+      "en": {
+        "name": "Pinned topbar context",
+        "description": "Mount the latest globally pinned Workbench resources with every new user turn."
+      },
+      "zh": {
+        "name": "顶部固定资源上下文",
+        "description": "每次用户发送新消息时挂载最新的全局固定资源。"
+      }
+    },
     "cyrene_renderer": {
       "en": {
         "name": "Renderer tools",
@@ -393,6 +413,16 @@
       "zh": {
         "name": "AMD GPU Cloud",
         "description": "调用已配置的 AMD GPU Cloud 连接，并发现该连接可用的模型。"
+      }
+    },
+    "AliyunBailian": {
+      "en": {
+        "name": "Alibaba Cloud Model Studio",
+        "description": "Call Alibaba Cloud Model Studio and discover the models available to its configured connection."
+      },
+      "zh": {
+        "name": "阿里云百炼",
+        "description": "调用已配置的阿里云百炼连接，并发现该连接可用的模型。"
       }
     },
     "AnalyzeAttachment": {
@@ -515,6 +545,16 @@
         "description": "运行静态检查、格式检查与结构分析，生成包含问题和建议的代码审查报告。"
       }
     },
+    "CodexOAuthToolCallParser": {
+      "en": {
+        "name": "Codex OAuth tool-call parser",
+        "description": "Parse the canonical structured-action output from Codex OAuth."
+      },
+      "zh": {
+        "name": "Codex OAuth 工具调用解析器",
+        "description": "解析 Codex OAuth 返回的规范化结构化动作。"
+      }
+    },
     "CodexOAuth": {
       "en": {
         "name": "Codex OAuth",
@@ -523,6 +563,16 @@
       "zh": {
         "name": "Codex OAuth",
         "description": "调用已配置的 OpenAI Codex OAuth 连接，并发现该连接可用的模型。"
+      }
+    },
+    "CyreneModelRouter": {
+      "en": {
+        "name": "Cyrene model router",
+        "description": "Route one Agent model call through the configured editable Provider Plugins."
+      },
+      "zh": {
+        "name": "Cyrene 模型路由器",
+        "description": "通过当前配置的可编辑 Provider 插件路由单次 Agent 模型调用。"
       }
     },
     "CyreneAppStatus": {
@@ -785,6 +835,16 @@
         "description": "调用已配置的 GLM 连接，并发现该连接可用的模型。"
       }
     },
+    "GenericToolCallParser": {
+      "en": {
+        "name": "Generic tool-call parser",
+        "description": "Parse standard and OpenAI-compatible Provider Plugin tool calls."
+      },
+      "zh": {
+        "name": "通用工具调用解析器",
+        "description": "解析标准格式及 OpenAI 兼容的 Provider 插件工具调用。"
+      }
+    },
     "Gemini": {
       "en": {
         "name": "Gemini",
@@ -903,6 +963,16 @@
       "zh": {
         "name": "索引代码库",
         "description": "扫描 Python 代码并建立包含符号、调用关系与导入的 SQLite 索引。"
+      }
+    },
+    "InspectRemoteDesktop": {
+      "en": {
+        "name": "View remote desktop",
+        "description": "Get one fresh image of the display currently selected by the user in an authorized Remote Desktop Pane. This V1 tool is view-only and never returns audio or clipboard data."
+      },
+      "zh": {
+        "name": "查看远程桌面",
+        "description": "获取用户已授权远程桌面 Pane 的一张新画面；仅查看，不包含音频或剪贴板。"
       }
     },
     "InstallSkill": {
@@ -1043,6 +1113,16 @@
       "zh": {
         "name": "列出远程设备",
         "description": "列出用户明确添加到当前对话上下文的已配对 Cyrene 设备。"
+      }
+    },
+    "ListRemoteDesktopSessions": {
+      "en": {
+        "name": "List remote desktop sessions",
+        "description": "List connected Remote Desktop sessions that the user has authorized this main conversation to view by placing both cards in the same Pane workspace."
+      },
+      "zh": {
+        "name": "列出可查看的远程桌面",
+        "description": "列出当前主对话通过同一 Pane 分屏获准查看的远程桌面会话。"
       }
     },
     "ListScripts": {
@@ -2623,6 +2703,16 @@
       "zh": {
         "name": "进入计划模式",
         "description": "进入计划模式，分解任务并让用户审核后再执行。"
+      }
+    },
+    "finish_proactive": {
+      "en": {
+        "name": "Finish proactive work",
+        "description": "Required terminal protocol for a scheduler-initiated proactive work cycle. Submit exactly one structured decision after all work is complete. Use deliver with the exact concise user report, or suppress with an empty report when nothing should be shown."
+      },
+      "zh": {
+        "name": "完成主动任务",
+        "description": "结束由调度器发起的主动工作周期，并提交唯一的交付或静默决定。"
       }
     },
     "entity.delete": {

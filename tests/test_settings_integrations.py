@@ -83,7 +83,8 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     assert 'settingsFetch("/api/settings/integrations/test"' in source
     assert 'requestJson("/api/settings/model-config")' in model_source
     assert 'function configPayload(config)' in model_source
-    assert 'body: JSON.stringify(configPayload(draft))' in model_source
+    assert 'method: "PATCH"' in model_source
+    assert 'modelConfigurationPatchOperations(' in model_source
     assert 'embedding: route("embedding")' in model_source
     assert 'var capabilityOptions = ["chat", "vision", "embedding"]' in model_source
     assert 'qwen3-embedding-0.6b' in model_source

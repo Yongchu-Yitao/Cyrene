@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
+import logging
 import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
@@ -28,6 +29,8 @@ from .bridge import (
     WorkbenchSessionBridge,
 )
 from cyrene.localization import app_language
+
+logger = logging.getLogger(__name__)
 
 
 def _accounting_publisher(session_id: str) -> WorkbenchPublisher:
@@ -156,6 +159,7 @@ class ConversationConfig:
     permission_mode: str = "default"
     command: str = ""
     public_user_message: str = ""
+    model_identity: Mapping[str, Any] = field(default_factory=dict)
     attachment_paths: Mapping[str, str] = field(default_factory=dict)
     remote_device_ids: Sequence[str] = ()
     soul_enabled: bool | None = None
@@ -179,6 +183,7 @@ class ConversationConfig:
     plugin_directory: str | Path | None = None
     data_directory: str | Path | None = None
     max_model_calls: int | None = None
+    extra_direct_tool_names: Sequence[str] = ()
     guidance_channel: Any = None
     read_only: bool = False
 
@@ -196,6 +201,7 @@ class ConversationRuntime:
         self._active: dict[str, WorkbenchSessionBridge] = {}
         self._configs: dict[str, ConversationConfig] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._outbox_tasks: dict[str, asyncio.Task[int]] = {}
 
     def configure(self, db_path: str) -> None:
         with self._active_lock:
@@ -359,6 +365,43 @@ class ConversationRuntime:
     def _permission_mode(value: str) -> str:
         return runtime_permission_mode(value)
 
+    @staticmethod
+    def _background_submitter(
+        owner_loop: asyncio.AbstractEventLoop,
+    ) -> Callable[[Awaitable[Any]], Any]:
+        def submit(awaitable: Awaitable[Any]):
+            try:
+                current = asyncio.get_running_loop()
+            except RuntimeError:
+                current = None
+            if current is owner_loop:
+                return owner_loop.create_task(awaitable)
+            return asyncio.run_coroutine_threadsafe(awaitable, owner_loop)
+
+        return submit
+
+    @staticmethod
+    def _owner_caller(owner_loop: asyncio.AbstractEventLoop) -> Callable[[Callable[[], Any]], Any]:
+        def call(callback: Callable[[], Any]) -> Any:
+            try:
+                current = asyncio.get_running_loop()
+            except RuntimeError:
+                current = None
+            if current is owner_loop:
+                return callback()
+            result: concurrent.futures.Future[Any] = concurrent.futures.Future()
+
+            def invoke() -> None:
+                try:
+                    result.set_result(callback())
+                except BaseException as exc:
+                    result.set_exception(exc)
+
+            owner_loop.call_soon_threadsafe(invoke)
+            return result.result(timeout=30)
+
+        return call
+
     def _open_bridge(
         self,
         config: ConversationConfig,
@@ -377,33 +420,6 @@ class ConversationRuntime:
                 owner_loop,
                 raw_publisher,
             )
-
-        def submit_background(awaitable: Awaitable[Any]):
-            try:
-                current = asyncio.get_running_loop()
-            except RuntimeError:
-                current = None
-            if current is owner_loop:
-                return owner_loop.create_task(awaitable)
-            return asyncio.run_coroutine_threadsafe(awaitable, owner_loop)
-
-        def call_on_owner(callback: Callable[[], Any]) -> Any:
-            try:
-                current = asyncio.get_running_loop()
-            except RuntimeError:
-                current = None
-            if current is owner_loop:
-                return callback()
-            result: concurrent.futures.Future[Any] = concurrent.futures.Future()
-
-            def invoke() -> None:
-                try:
-                    result.set_result(callback())
-                except BaseException as exc:
-                    result.set_exception(exc)
-
-            owner_loop.call_soon_threadsafe(invoke)
-            return result.result(timeout=30)
 
         application_host = application_plugin_scope()
         plugin_services = dict(
@@ -443,6 +459,42 @@ class ConversationRuntime:
             run_context["runtime_event_writer"] = worker_publisher
 
         state_root = self._state_root(config)
+        plugin_context_data = {
+            "session_id": str(config.session_id),
+            "context_activations": deepcopy(
+                dict(config.context_activations or {})
+            ),
+            "resolved_context_activations": deepcopy(
+                dict(config.resolved_context_activations or {})
+            ),
+            "project_id": str(config.project_id or ""),
+            "project_memory_snapshot": (
+                deepcopy(dict(config.project_memory_snapshot))
+                if isinstance(config.project_memory_snapshot, Mapping)
+                else None
+            ),
+            "session_title": str(config.session_title or ""),
+            "remote_device_ids": tuple(
+                str(item or "").strip()
+                for item in config.remote_device_ids
+                if str(item or "").strip()
+            ),
+            "soul_enabled": config.soul_enabled,
+            "memory_write_enabled": bool(config.memory_write_enabled),
+            "memory_trigger_enabled": bool(config.memory_trigger_enabled),
+            "memory_archive_enabled": bool(config.memory_archive_enabled),
+            "read_only": bool(config.read_only),
+            "retry": bool(config.retry),
+            "completed_turn_count": max(0, int(config.completed_turn_count or 0)),
+            "background_submitter": self._background_submitter(owner_loop),
+            "owner_call": self._owner_caller(owner_loop),
+            "run_context": run_context,
+        }
+        if config.model_identity:
+            plugin_context_data["model_identity"] = deepcopy(
+                dict(config.model_identity)
+            )
+
         return WorkbenchSessionBridge.open(
             state_root,
             config.workspace_dir,
@@ -457,40 +509,11 @@ class ConversationRuntime:
                 "db_path": str(config.db_path or ""),
                 "notify_state": None,
             },
-            plugin_context_data={
-                "session_id": str(config.session_id),
-                "context_activations": deepcopy(
-                    dict(config.context_activations or {})
-                ),
-                "resolved_context_activations": deepcopy(
-                    dict(config.resolved_context_activations or {})
-                ),
-                "project_id": str(config.project_id or ""),
-                "project_memory_snapshot": (
-                    deepcopy(dict(config.project_memory_snapshot))
-                    if isinstance(config.project_memory_snapshot, Mapping)
-                    else None
-                ),
-                "session_title": str(config.session_title or ""),
-                "remote_device_ids": tuple(
-                    str(item or "").strip()
-                    for item in config.remote_device_ids
-                    if str(item or "").strip()
-                ),
-                "soul_enabled": config.soul_enabled,
-                "memory_write_enabled": bool(config.memory_write_enabled),
-                "memory_trigger_enabled": bool(config.memory_trigger_enabled),
-                "memory_archive_enabled": bool(config.memory_archive_enabled),
-                "read_only": bool(config.read_only),
-                "retry": bool(config.retry),
-                "completed_turn_count": max(0, int(config.completed_turn_count or 0)),
-                "background_submitter": submit_background,
-                "owner_call": call_on_owner,
-                "run_context": run_context,
-            },
+            plugin_context_data=plugin_context_data,
             plugin_services=plugin_services,
             application_scope=application_host,
             max_model_calls=config.max_model_calls,
+            extra_direct_tool_names=config.extra_direct_tool_names,
         )
 
     async def _with_bridge(
@@ -535,6 +558,7 @@ class ConversationRuntime:
         if not normalized_run_id:
             raise ValueError("run_id cannot be empty")
         event_publisher = publish or _accounting_publisher(config.session_id)
+        await self.drain_commit_outbox(config)
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             snapshot = bridge.snapshot()
@@ -560,9 +584,24 @@ class ConversationRuntime:
                     and metadata.get("fork_replay") is True
                 )
             )
+            retry_origin: Mapping[str, str] = {}
             if retry_branch:
-                bridge.prepare_retry()
+                retry_origin = bridge.prepare_retry()
             turn_metadata = dict(metadata or {})
+            if retry_origin:
+                turn_metadata.update(
+                    {
+                        "retry_of_run_id": str(
+                            retry_origin.get("previous_run_id") or ""
+                        ),
+                        "retry_of_user_node_id": str(
+                            retry_origin.get("user_node_id") or ""
+                        ),
+                        "retry_parent_node_id": str(
+                            retry_origin.get("parent_node_id") or ""
+                        ),
+                    }
+                )
             # Runtime context is a per-turn durable input mounted exclusively
             # by the cyrene_context TurnStart Hook.
             turn_metadata["ephemeral_context"] = str(config.system_extra or "")
@@ -576,6 +615,97 @@ class ConversationRuntime:
 
         return await self._with_bridge(config, operate, publish=event_publisher)
 
+    async def drain_commit_outbox(
+        self,
+        config: ConversationConfig | None = None,
+        *,
+        chat_id: str = "",
+    ) -> int:
+        """Apply durable post-chat-commit work and acknowledge it afterwards."""
+
+        target = str(chat_id or (config.session_id if config is not None else "")).strip()
+        if config is None:
+            with self._active_lock:
+                config = self._configs.get(target)
+        if config is None or not target:
+            return 0
+        from cyrene.workbench.chat.chat_repository import ChatRepository
+
+        repository = ChatRepository(config.db_path)
+        completed = 0
+        for _ in range(20):
+            events = await asyncio.to_thread(
+                repository.pending_commit_events,
+                target,
+                limit=1,
+            )
+            if not events:
+                break
+            event = events[0]
+            event_id = str(event.get("event_id") or "")
+            run_id = str(event.get("run_id") or "")
+            node_id = str(event.get("node_id") or "")
+            try:
+                async def operate(bridge: WorkbenchSessionBridge) -> None:
+                    await bridge.commit_public_turn(
+                        run_id,
+                        node_id,
+                        event,
+                    )
+
+                await self._with_bridge(config, operate, publish=None)
+                await asyncio.to_thread(repository.complete_commit_event, event_id)
+                completed += 1
+            except asyncio.CancelledError:
+                await asyncio.to_thread(
+                    repository.fail_commit_event,
+                    event_id,
+                    "delivery cancelled",
+                )
+                raise
+            except Exception as exc:
+                await asyncio.to_thread(
+                    repository.fail_commit_event,
+                    event_id,
+                    str(exc),
+                )
+                logger.warning(
+                    "Conversation commit delivery failed [chat=%s event=%s]: %s",
+                    target,
+                    event_id,
+                    exc,
+                    exc_info=True,
+                )
+                break
+        return completed
+
+    def kick_commit_outbox(self, chat_id: str) -> None:
+        """Start the durable post-commit consumer without delaying the reply."""
+
+        target = str(chat_id or "").strip()
+        if not target:
+            return
+        current = self._outbox_tasks.get(target)
+        if current is not None and not current.done():
+            return
+        task = asyncio.create_task(self.drain_commit_outbox(chat_id=target))
+        self._outbox_tasks[target] = task
+
+        def forget(completed: asyncio.Task[int]) -> None:
+            if self._outbox_tasks.get(target) is completed:
+                self._outbox_tasks.pop(target, None)
+            try:
+                completed.result()
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception(
+                    "Conversation commit consumer crashed [chat=%s]",
+                    target,
+                )
+
+        task.add_done_callback(forget)
+
     async def answer(
         self,
         config: ConversationConfig,
@@ -585,6 +715,7 @@ class ConversationRuntime:
         publish: WorkbenchPublisher | None = None,
     ) -> WorkbenchChatResult:
         event_publisher = publish or _accounting_publisher(config.session_id)
+        await self.drain_commit_outbox(config)
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             return await bridge.answer_result(
@@ -603,6 +734,7 @@ class ConversationRuntime:
         publish: WorkbenchPublisher | None = None,
     ) -> WorkbenchChatResult:
         event_publisher = publish or _accounting_publisher(config.session_id)
+        await self.drain_commit_outbox(config)
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             return await bridge.resume_result(

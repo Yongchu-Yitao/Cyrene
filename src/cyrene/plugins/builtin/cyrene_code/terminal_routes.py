@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -45,6 +46,12 @@ class TerminalLayoutRequest(BaseModel):
 class TerminalActivateRequest(BaseModel):
     projectId: str = Field(min_length=1)
     terminalId: str | None = None
+
+
+class TerminalAgentEventRequest(BaseModel):
+    agentId: str = Field(min_length=1, max_length=60)
+    event: str = Field(min_length=1, max_length=100)
+    payload: dict = Field(default_factory=dict)
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -200,6 +207,29 @@ def register_terminal_routes(router: APIRouter) -> None:
             raise _http_error(exc) from exc
         return {"terminal": result["terminal"]}
 
+    @router.post("/api/terminals/{terminal_id}/read")
+    async def mark_terminal_read(terminal_id: str):
+        try:
+            result = await client.mark_read(terminal_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"terminal": result["terminal"]}
+
+    @router.post("/api/terminals/{terminal_id}/agent-events")
+    async def report_terminal_agent_event(
+        terminal_id: str, payload: TerminalAgentEventRequest,
+    ):
+        try:
+            result = await client.agent_event(
+                terminal_id,
+                agent_id=payload.agentId,
+                event=payload.event,
+                payload=payload.payload,
+            )
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"terminal": result["terminal"]}
+
     @router.get("/api/terminals/{terminal_id}/screen")
     async def terminal_screen(terminal_id: str):
         try:
@@ -224,6 +254,13 @@ def register_terminal_routes(router: APIRouter) -> None:
         except Exception as exc:
             raise _http_error(exc) from exc
 
+    _register_terminal_socket_route(router, client)
+
+
+__all__ = ["register_terminal_routes"]
+
+
+def _register_terminal_socket_route(router: APIRouter, client: Any) -> None:
     @router.websocket("/ws/terminals/{terminal_id}")
     async def terminal_socket(websocket: WebSocket, terminal_id: str):
         await websocket.accept()
@@ -272,6 +309,3 @@ def register_terminal_routes(router: APIRouter) -> None:
                     await websocket.close(
                         code=1013, reason="terminal daemon disconnected"
                     )
-
-
-__all__ = ["register_terminal_routes"]

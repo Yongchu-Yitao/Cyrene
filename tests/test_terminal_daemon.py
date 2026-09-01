@@ -378,7 +378,7 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert "background: var(--wbc-terminal-background);" in terminal_frame
     assert "backdrop-filter: none;" in terminal_frame
     terminal_row = workspace_styles.split(
-        ".wbc-project-terminal-list .wbc-terminal-card {", 1
+        ".wbc-project-resource-list .wbc-project-resource-card {", 1
     )[1].split("}", 1)[0]
     assert "min-height: 36px;" in terminal_row
     assert "padding: 0 6px;" in terminal_row
@@ -416,7 +416,6 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'box-shadow: none !important;' in terminal_styles
     assert 'terminal.write("\\u001b[?25h")' in source
     assert 'message.type === "replay_complete"' in source
-    assert 'cursorRef.current = 0;\n    setHasContent(false);' in source
     assert 'if (replayGeometryActive) return;' in source
     assert 'message.terminal.cols || terminal.cols' in source
     assert 'message.terminal.rows || terminal.rows' in source
@@ -471,6 +470,13 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'className={"wbc-terminal-notice " + notice.kind}' not in source
     assert '.wbc-terminal-notice {' not in terminal_styles
     assert 'actionLabel = notice.reconnect' in source
+    assert 'function TerminalSessionPane({ terminalId, onState, active })' in source
+    assert 'cachedTerminalIdsRef.current.concat(activeTerminalId)' in source
+    assert 'active={cachedTerminalId === activeTerminalId}' in source
+    assert '.wbc-terminal-pane.is-cached-hidden {' in terminal_styles
+    assert 'display: none !important;' in terminal_styles
+    assert 'var paneFrameKey = card.kind === "terminal" && singlePane' in chat_source
+    assert 'key={paneFrameKey}' in chat_source
     assert '"terminal.restart": "重启"' in zh_catalog
     assert 'var [railMode, setRailMode] = useWbcState("chat")' in chat_source
     assert 'railMode={railMode}' in chat_source

@@ -430,6 +430,12 @@ def stop_searxng() -> None:
 class WebSearchService:
     """Plugin-owned web-search facade and local backend lifecycle."""
 
+    def __init__(self) -> None:
+        from .search_backend import ProviderHealthRegistry
+
+        self._provider_health = ProviderHealthRegistry()
+        self._startup_error = ""
+
     @property
     def manager(self) -> SearXNGManager:
         return get_manager()
@@ -437,7 +443,21 @@ class WebSearchService:
     async def search(self, topic: str, **options: object) -> str:
         from .search_backend import deep_search
 
-        return await deep_search(str(topic), **options)
+        return await deep_search(
+            str(topic),
+            provider_health=self._provider_health,
+            **options,
+        )
+
+    def provider_health(self, providers: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+        return self._provider_health.snapshots(providers)
+
+    def reset_provider_health(self) -> None:
+        self._provider_health.reset()
+
+    @property
+    def startup_error(self) -> str:
+        return self._startup_error
 
     async def startup(
         self,
@@ -446,20 +466,42 @@ class WebSearchService:
     ) -> str:
         if not SEARXNG_AUTO_START:
             return ""
-        return await start_searxng(
+        url = await start_searxng(
             int(SEARXNG_PORT if port is None else port),
             str(SEARXNG_HOST if host is None else host),
         )
+        self.reset_provider_health()
+        return url
+
+    async def startup_best_effort(self) -> str:
+        """Start local search without disabling unrelated content capabilities."""
+        try:
+            url = await self.startup()
+        except Exception as exc:
+            self._startup_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "SimpleXNG startup failed; continuing without local search: %s",
+                exc,
+                exc_info=True,
+            )
+            return ""
+        self._startup_error = ""
+        return url
 
     async def restart(self, port: int, host: str) -> str:
         await asyncio.to_thread(self.manager.stop)
-        return await start_searxng(int(port), str(host))
+        url = await start_searxng(int(port), str(host))
+        self.reset_provider_health()
+        return url
 
     async def settings_changed(
         self,
         _namespace: str,
         changed: tuple[str, ...],
     ) -> None:
+        # Configuration revisions are the recovery boundary for credential and
+        # provider-selection circuits. Never carry stale health across them.
+        self.reset_provider_health()
         proxy_keys = {
             "external_agent_proxy_enabled",
             "external_agent_proxy_url",

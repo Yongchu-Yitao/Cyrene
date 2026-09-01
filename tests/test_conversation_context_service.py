@@ -7,6 +7,7 @@ from cyrene.workbench.chat.conversation_context_service import (
     ConversationContextQueryService,
     ConversationContextUpdateError,
     ConversationInboxQueryService,
+    _agent_effective_timeline,
     _agent_path_messages,
     _agent_path_usage,
     _agent_path_plugin_usage,
@@ -123,6 +124,75 @@ def test_agent_path_messages_preserve_each_turn_suffix_and_stable_system_prefix(
         {"role": "user", "content": "first\n\ndynamic-1"},
         {"role": "assistant", "content": "answer-1"},
         {"role": "user", "content": "second\n\ndynamic-2"},
+    ]
+
+
+def test_agent_effective_timeline_replaces_stable_snapshots_without_reordering_turns():
+    timeline = [
+        {"id": "root", "role": "system"},
+        {"id": "user-1", "role": "user"},
+        {
+            "id": "stable-1",
+            "role": "context",
+            "contextKind": "memory",
+            "lifecycle": "session",
+        },
+        {
+            "id": "turn-1",
+            "role": "context",
+            "contextKind": "composer_context",
+            "lifecycle": "turn",
+        },
+        {"id": "assistant-1", "role": "assistant"},
+        {"id": "user-2", "role": "user"},
+        {
+            "id": "stable-2",
+            "role": "context",
+            "contextKind": "memory",
+            "lifecycle": "session",
+            "content": "updated memory",
+        },
+        {
+            "id": "turn-2",
+            "role": "context",
+            "contextKind": "composer_context",
+            "lifecycle": "turn",
+        },
+    ]
+    mounts = [
+        {
+            "id": "stable-2",
+            "kind": "memory",
+            "lifecycle": "session",
+        },
+        {
+            "id": "turn-2",
+            "kind": "composer_context",
+            "lifecycle": "turn",
+        },
+    ]
+
+    effective = _agent_effective_timeline(timeline, mounts)
+
+    assert [item["id"] for item in effective] == [
+        "root",
+        "stable-2",
+        "user-1",
+        "turn-1",
+        "assistant-1",
+        "user-2",
+        "turn-2",
+    ]
+    assert effective[1]["content"] == "updated memory"
+    assert [item["id"] for item in timeline] == [
+        "root",
+        "user-1",
+        "stable-1",
+        "turn-1",
+        "assistant-1",
+        "user-2",
+        "stable-2",
+        "turn-2",
     ]
 
 
@@ -499,14 +569,11 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
     assert blocks["selectedModel"] == "selected-model"
     assert blocks["actualModel"] == "actual-model"
     assert blocks["modelIdentity"]["candidateId"] == "actual-candidate"
-    assert blocks["chronology"] == "ascending"
+    assert blocks["chronology"] == "model_input"
     assert [item["id"] for item in blocks["timeline"]] == [
-        "root", "user", "context", "assistant_1", "tools", "assistant_2",
+        "root", "context", "user", "assistant_1", "tools", "assistant_2",
     ]
-    assert [item["createdAt"] for item in blocks["timeline"]] == sorted(
-        item["createdAt"] for item in blocks["timeline"]
-    )
-    assert blocks["timeline"][2]["contextKind"] == "project_memory"
+    assert blocks["timeline"][1]["contextKind"] == "project_memory"
     assert blocks["timeline"][3]["technical"]["tool_calls"][0] == {
         "id": "call_1",
         "name": "toolbox",
@@ -536,8 +603,8 @@ async def test_new_agent_context_tree_drives_summary_blocks_and_plugin_usage(tmp
         "lifecycle": "",
         "tokensEst": 14,
         "chars": 14,
-        "createdAt": blocks["timeline"][2]["createdAt"],
-        "updatedAt": blocks["timeline"][2]["updatedAt"],
+        "createdAt": blocks["timeline"][1]["createdAt"],
+        "updatedAt": blocks["timeline"][1]["updatedAt"],
         "metadata": {},
         "order": 0,
     }]
@@ -667,7 +734,7 @@ async def test_timeline_exposes_mount_state_and_all_node_content_for_editing(tmp
     )
 
     before = await service.blocks("chat_1")
-    root, user_block, prompt_block, tools_block = before["timeline"]
+    root, prompt_block, user_block, tools_block = before["timeline"]
 
     assert root["role"] == "system"
     assert root["chars"] == 0
@@ -696,7 +763,7 @@ async def test_timeline_exposes_mount_state_and_all_node_content_for_editing(tmp
     )
     after = await service.blocks("chat_1")
 
-    assert after["timeline"][1]["content"] == ""
+    assert after["timeline"][2]["content"] == ""
     assert '"after"' in after["timeline"][3]["content"]
     with pytest.raises(ConversationContextUpdateError):
         await service.update_node_content(

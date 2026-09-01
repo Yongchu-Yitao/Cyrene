@@ -25,12 +25,6 @@ from openai_codex.generated.v2_all import (
 )
 from pydantic import BaseModel
 
-from cyrene.core.plugin.validation import (
-    PluginInputValidationError,
-    PluginSchemaError,
-    normalize_plugin_arguments,
-    validate_plugin_arguments,
-)
 from cyrene.model import codex_cli
 
 logger = logging.getLogger(__name__)
@@ -1571,13 +1565,6 @@ def _normalize_provider_action(
         for tool in tools
         if str((tool.get("function") or {}).get("name") or "").strip()
     }
-    parameter_schemas = {
-        str((tool.get("function") or {}).get("name") or "").strip(): (
-            (tool.get("function") or {}).get("parameters") or {}
-        )
-        for tool in tools
-        if str((tool.get("function") or {}).get("name") or "").strip()
-    }
     raw_calls = payload.get("tool_calls")
     if not isinstance(raw_calls, list):
         raise CodexProtocolError("Codex action envelope tool_calls must be an array")
@@ -1599,29 +1586,12 @@ def _normalize_provider_action(
             raise CodexProtocolError(
                 f"Codex arguments for {name} must be a JSON object"
             )
-        try:
-            arguments = normalize_plugin_arguments(
-                arguments,
-                parameter_schemas.get(name) or {},
-            ).arguments
-            validate_plugin_arguments(
-                name,
-                arguments,
-                parameter_schemas.get(name) or {},
-            )
-        except (PluginInputValidationError, PluginSchemaError) as exc:
-            raise CodexProtocolError(
-                f"Codex returned invalid arguments for tool {name}: {exc}"
-            ) from exc
         tool_calls.append(
             {
                 "index": len(tool_calls),
                 "id": f"call_codex_{uuid.uuid4().hex[:16]}",
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": json.dumps(arguments, ensure_ascii=False),
-                },
+                "name": name,
+                "arguments": arguments,
             }
         )
 

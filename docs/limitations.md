@@ -19,6 +19,14 @@ open bugs.
   session can discover its index and may read it through normal file tools.
 - A Browser pinned by another session is read-only at Cyrene's tool layer, but
   all Electron Browser sessions still share the same local cookie partition.
+- Browser navigation blocks direct access to loopback, private, link-local,
+  cloud-metadata, and reserved networks, but it is not a complete per-request
+  network sandbox. Page subresources, script navigation, and Electron redirects
+  must not be treated as network-isolated.
+- Browser clicks, typing, and Enter submission do not automatically receive the
+  human-only confirmation used for file uploads. High-impact web actions such as
+  purchases, publishing, deletion, and account changes still depend on the user
+  request, agent policy, and normal permission judgment.
 
 ## Models, integrations, and budgets
 
@@ -62,6 +70,15 @@ open bugs.
 - Pull-request CI covers the full Python suite, WebUI build, and Electron App
   Use tests on Linux. Packaged, visual, upgrade, and credentialed integration
   checks remain release or manual gates.
+- Python and Electron browser tests primarily cover protocols, state machines,
+  security checks, and isolated JavaScript behavior. Many use fake pages, mock
+  locators, or source contracts; complex live sites, OAuth/CAPTCHA, cross-origin
+  iframes, shadow DOM, and native window flows on every platform still require
+  release or manual integration testing.
+- Browser snapshot, ref targeting, and wait behavior primarily cover the current
+  top-level DOM. Iframes, shadow DOM, Canvas/WebGL, and complex editors do not
+  have a unified recursive semantic model. The network log is also a Resource
+  Performance view rather than a complete DevTools trace.
 
 See [Development](development.md) for the exact validation baseline and
 [Development Status](../project-notes/README.md) for

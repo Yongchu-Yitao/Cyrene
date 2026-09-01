@@ -17,10 +17,12 @@ from typing import Any
 from uuid import uuid4
 
 from ..observability import log_operation, operation
+from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from .errors import HookAwaitingUser, HookBlocked, HookError
 from .hook import (
     CONTEXT_CHANGE,
     CONTEXT_USED,
+    CONVERSATION_TURN_COMMITTED,
     HOOK_EVENTS,
     POST_TOOL_USE,
     PRE_TOOL_USE,
@@ -87,7 +89,7 @@ def _hook_with_configured_override(hook: Hook) -> Hook:
             enabled=bool(raw.get("enabled", hook.enabled)),
             created_at=created_at,
         )
-    except Exception:
+    except PLUGIN_BOUNDARY_ERRORS:
         logger.warning(
             "Ignoring invalid configured Hook override for %s",
             hook.id,
@@ -315,8 +317,14 @@ class HookSet:
             self._ensure_open()
             if hook.id in self._hooks:
                 raise HookError(f"Hook id already exists in tree {self.tree_id}: {hook.id}")
+            previous_plugin = self._plugins.resolve(normalized_plugin_id)
             self._plugins.register(normalized_plugin_id, plugin)
-            self._persistence.save_hook(hook)
+            try:
+                self._persistence.save_hook(hook)
+            except Exception:
+                if previous_plugin is None:
+                    self._plugins.unregister(normalized_plugin_id)
+                raise
             self._hooks[hook.id] = hook
             requeued = self._persistence.requeue_blocked(hook.plugin_id)
         if requeued:
@@ -393,7 +401,27 @@ class HookSet:
                     f"Hook id does not exist in tree {self.tree_id}: {normalized_id}"
                 )
             updated = replace(hook, config=normalized_config)
-            self._persistence.save_hook(updated)
+            self._persistence.update_hook(updated)
+            self._hooks[normalized_id] = updated
+
+    def update_failure_policy(self, hook_id: str, failure_policy: str) -> None:
+        """Update a durable Hook policy without replacing queued deliveries."""
+
+        normalized_id = str(hook_id)
+        normalized_policy = str(failure_policy or "").strip()
+        if normalized_policy not in {"open", "block", "closed"}:
+            raise ValueError("failure_policy must be 'open', 'block', or 'closed'")
+        with self._lock:
+            self._ensure_open()
+            hook = self._hooks.get(normalized_id)
+            if hook is None:
+                raise HookError(
+                    f"Hook id does not exist in tree {self.tree_id}: {normalized_id}"
+                )
+            if normalized_policy == "block" and hook.event != PRE_TOOL_USE:
+                raise ValueError("only PreToolUse Hooks may block on failure")
+            updated = replace(hook, failure_policy=normalized_policy)
+            self._persistence.update_hook(updated)
             self._hooks[normalized_id] = updated
 
     def unregister(self, hook_id: str) -> bool:
@@ -523,7 +551,7 @@ class HookSet:
         if action_provider is not None:
             try:
                 plugin = action_provider(hook)
-            except Exception:
+            except PLUGIN_BOUNDARY_ERRORS:
                 logger.warning(
                     "Ignoring invalid configured action for Hook %s",
                     hook.id,
@@ -613,7 +641,7 @@ class HookSet:
                     results.append(await self._call(hook, event))
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
                     if hook.failure_policy == "closed":
                         log_operation(
                             logger,
@@ -736,7 +764,7 @@ class HookSet:
                     raise
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
                     if hook.failure_policy == "block":
                         log_operation(
                             logger,
@@ -860,7 +888,7 @@ class HookSet:
                     outputs = await self._call_batch(hook, events)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except PLUGIN_BOUNDARY_ERRORS as exc:
                     for index in indices:
                         if hook.failure_policy == "block":
                             results[index] = HookBlocked(f"{hook.id}: {exc}")
@@ -914,7 +942,7 @@ class HookSet:
                             tool=calls[index][0],
                             reason=exc,
                         )
-                    except Exception as exc:
+                    except PLUGIN_BOUNDARY_ERRORS as exc:
                         if hook.failure_policy == "block":
                             results[index] = HookBlocked(f"{hook.id}: {exc}")
                         log_operation(
@@ -1010,7 +1038,7 @@ class HookSet:
                     released=True,
                 )
                 raise
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 failed += 1
                 self._persistence.fail(delivery.sequence, str(exc))
                 log_operation(
@@ -1349,6 +1377,7 @@ class HookSet:
         *,
         success: bool,
         error: str = "",
+        failure: Mapping[str, Any] | None = None,
         time: datetime | None = None,
     ) -> tuple[Any, ...]:
         return await self.dispatch(
@@ -1362,6 +1391,11 @@ class HookSet:
                         "success": bool(success),
                         "value": result,
                         "error": str(error or ""),
+                        **(
+                            {"failure": dict(failure)}
+                            if isinstance(failure, Mapping)
+                            else {}
+                        ),
                     },
                 },
             )
@@ -1452,7 +1486,7 @@ class HookSet:
                 value = provider(event)
                 if inspect.isawaitable(value):
                     value = await value
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 value = {
                     "error": type(exc).__name__,
                     "message": str(exc),
@@ -1524,6 +1558,25 @@ class HookSet:
                 time or _utc_now(),
                 payload=dict(details or {}),
                 node_id=self.root_id,
+                is_root=True,
+            )
+        )
+
+    async def conversation_turn_committed(
+        self,
+        details: Mapping[str, Any],
+        *,
+        time: datetime | None = None,
+    ) -> tuple[Any, ...]:
+        """Dispatch host-confirmed turn effects after the public write commits."""
+
+        return await self.dispatch(
+            HookEvent(
+                CONVERSATION_TURN_COMMITTED,
+                self.tree_id,
+                time or _utc_now(),
+                payload=dict(details),
+                node_id=str(details.get("node_id") or self.root_id),
                 is_root=True,
             )
         )

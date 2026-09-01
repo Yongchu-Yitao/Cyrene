@@ -14,6 +14,7 @@ function emptyPluginSnapshot() {
     standalonePlugins: [],
     frontendViews: [],
     projectTools: [],
+    workbenchEntries: [],
     workbenchSurfaces: [],
     workspaceFileTypes: [],
     workspaceActions: [],
@@ -38,6 +39,7 @@ function normalizePluginSnapshot(payload, pending) {
     standalonePlugins: Array.isArray(payload.standalone_plugins) ? payload.standalone_plugins : [],
     frontendViews: Array.isArray(payload.frontend_views) ? payload.frontend_views : [],
     projectTools: Array.isArray(payload.project_tools) ? payload.project_tools : [],
+    workbenchEntries: Array.isArray(payload.workbench_entries) ? payload.workbench_entries : [],
     workbenchSurfaces: Array.isArray(payload.workbench_surfaces) ? payload.workbench_surfaces : [],
     workspaceFileTypes: Array.isArray(payload.workspace_file_types) ? payload.workspace_file_types : [],
     workspaceActions: Array.isArray(payload.workspace_actions) ? payload.workspace_actions : [],
@@ -94,6 +96,35 @@ function pluginSnapshotActionsFor(snapshot, resource) {
     return (!!fileTypeId && fileTypes.indexOf(fileTypeId) >= 0)
       || extensions.some(function (extension) { return path.endsWith(String(extension || "").toLowerCase()) })
   })
+}
+
+function requestWorkbenchEntryVisibility(packId, entryId, visible) {
+  var api = workbenchServices.api()
+  var path = "/api/plugins/workbench-entries/"
+    + encodeURIComponent(String(packId || "")) + "/"
+    + encodeURIComponent(String(entryId || ""))
+  return api.json(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visible: visible === true }),
+    toast: false,
+  })
+}
+
+function callPluginFrontend(packId, method, args, projectId) {
+  return workbenchServices.api().json(
+    "/api/plugins/packs/" + encodeURIComponent(String(packId || "")) + "/call",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        method: String(method || ""),
+        args: args == null ? {} : args,
+        project_id: String(projectId || ""),
+      }),
+      toast: false,
+    }
+  ).then(function (response) { return response && response.result })
 }
 
 var PluginFrontendService = (function () {
@@ -169,6 +200,16 @@ var PluginFrontendService = (function () {
     })
   }
 
+  function setWorkbenchEntryVisible(packId, entryId, visible) {
+    return requestWorkbenchEntryVisibility(packId, entryId, visible).then(function (response) {
+      return commit(normalizePluginSnapshot(response, "workbench-entry-visibility"))
+    })
+  }
+
+  function call(packId, method, args, projectId) {
+    return callPluginFrontend(packId, method, args, projectId)
+  }
+
   function subscribe(listener) {
     if (typeof listener !== "function") return function () {}
     listeners.push(listener)
@@ -184,11 +225,13 @@ var PluginFrontendService = (function () {
     reload: reload,
     updateTool: function (canonicalId, payload) { return mutateTool(canonicalId, payload, false) },
     deleteTool: function (canonicalId) { return mutateTool(canonicalId, null, true) },
+    setWorkbenchEntryVisible: setWorkbenchEntryVisible,
     snapshot: snapshot,
     subscribe: subscribe,
     surface: function (surfaceId) { return pluginSnapshotSurface(state, surfaceId) },
     fileTypeFor: function (path, mime) { return pluginSnapshotFileTypeFor(state, path, mime) },
     actionsFor: function (resource) { return pluginSnapshotActionsFor(state, resource) },
+    call: call,
   }
 })()
 
@@ -231,13 +274,64 @@ function PluginView(props) {
       var frame = iframeRef.current
       if (frame && frame.contentWindow) frame.contentWindow.postMessage(message, "*")
     }
+    function currentTheme() {
+      return document.documentElement.dataset.theme === "light" ? "light" : "dark"
+    }
+    function postTheme() {
+      post({ source: "cyrene-host", type: "theme", theme: currentTheme() })
+    }
     function onMessage(event) {
       var frame = iframeRef.current
       if (!frame || event.source !== frame.contentWindow) return
       if (event.origin !== window.location.origin && event.origin !== "null") return
       var message = event.data && typeof event.data === "object" ? event.data : {}
-      if (message.source !== "cyrene-plugin" || message.type !== "call") return
+      if (message.source !== "cyrene-plugin") return
+      if (message.type === "interaction") {
+        window.dispatchEvent(new CustomEvent("cyrene:plugin-view-interaction", {
+          detail: { packId: packId, viewId: viewId, instanceId: instanceId },
+        }))
+        return
+      }
+      if (message.type === "state") {
+        if (typeof props.onStateChange === "function") props.onStateChange(message.state)
+        return
+      }
+      if (message.type === "host-call") {
+        var hostRequestId = String(message.requestId || "")
+        var hostCapabilities = Array.isArray(view && view.host_capabilities)
+          ? view.host_capabilities.map(String) : []
+        var hostMethod = String(message.method || "")
+        var hostResult
+        try {
+          if (hostCapabilities.indexOf("clipboard_text") < 0) throw new Error("Plugin host capability denied.")
+          if (hostMethod === "clipboard.readText") {
+            if (!window.cyrene || typeof window.cyrene.readClipboardText !== "function") throw new Error("Clipboard host unavailable.")
+            hostResult = window.cyrene.readClipboardText()
+          } else if (hostMethod === "clipboard.writeText") {
+            if (!window.cyrene || typeof window.cyrene.writeClipboardText !== "function") throw new Error("Clipboard host unavailable.")
+            hostResult = window.cyrene.writeClipboardText(String(message.args && message.args.text || "").slice(0, 1024 * 1024))
+          } else {
+            throw new Error("Plugin host method is not supported.")
+          }
+        } catch (error) {
+          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: false, error: String(error && error.message || error) })
+          return
+        }
+        Promise.resolve(hostResult).then(function (value) {
+          var result = hostMethod === "clipboard.readText"
+            ? String(value || "").slice(0, 1024 * 1024) : value
+          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: true, result: result })
+        }).catch(function (error) {
+          post({ source: "cyrene-host", type: "host-response", requestId: hostRequestId, ok: false, error: String(error && error.message || error) })
+        })
+        return
+      }
+      if (message.type !== "call") return
       var requestId = String(message.requestId || "")
+      var requestedTimeout = Number(message.timeoutMs)
+      var requestTimeout = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+        ? Math.max(1000, Math.min(300000, Math.round(requestedTimeout)))
+        : undefined
       workbenchServices.api().json(
         "/api/plugins/packs/" + encodeURIComponent(packId) + "/call",
         {
@@ -249,16 +343,44 @@ function PluginView(props) {
             project_id: projectId,
           }),
           toast: false,
+          timeout: requestTimeout,
         }
       ).then(function (response) {
         post({ source: "cyrene-host", type: "response", requestId: requestId, ok: true, result: response && response.result })
       }).catch(function (error) {
-        post({ source: "cyrene-host", type: "response", requestId: requestId, ok: false, error: workbenchServices.api().errorText(error) })
+        post({
+          source: "cyrene-host",
+          type: "response",
+          requestId: requestId,
+          ok: false,
+          error: workbenchServices.api().errorText(error),
+          code: String(error && error.code || ""),
+          status: Number(error && error.status || 0),
+        })
       })
     }
     window.addEventListener("message", onMessage)
-    return function () { window.removeEventListener("message", onMessage) }
-  }, [packId, projectId, instanceId])
+    var themeObserver = new MutationObserver(postTheme)
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+    return function () {
+      window.removeEventListener("message", onMessage)
+      themeObserver.disconnect()
+    }
+  }, [packId, projectId, instanceId, props.onStateChange, view])
+
+  var pluginViewCommand = payload.state && payload.state.pluginViewCommand
+  var pluginViewCommandId = String(pluginViewCommand && pluginViewCommand.id || "")
+  useEffect(function () {
+    if (!pluginViewCommandId || !iframeRef.current || !iframeRef.current.contentWindow) return
+    iframeRef.current.contentWindow.postMessage({
+      source: "cyrene-host",
+      type: "command",
+      command: pluginViewCommand,
+    }, "*")
+    if (typeof props.onStateChange === "function") {
+      window.setTimeout(function () { props.onStateChange({ pluginViewCommand: null }) }, 0)
+    }
+  }, [pluginViewCommandId])
 
   if (registry.loading && !registry.loaded) {
     return <div className="wbc-plugin-view-state" role="status">{pluginLocalizedField({ title: "Loading Plugin…", i18n: { zh: { title: "正在加载插件…" } } }, "title")}</div>
@@ -272,12 +394,15 @@ function PluginView(props) {
   var entry = String(view.entry || "")
   var src = "/api/plugins/packs/" + encodeURIComponent(packId) + "/assets/"
     + entry.split("/").map(encodeURIComponent).join("/")
+  var iframeAllow = (Array.isArray(view.iframe_permissions) ? view.iframe_permissions : [])
+    .map(String).filter(Boolean).join("; ")
   return <iframe
     ref={iframeRef}
     className="wbc-plugin-view-frame"
     src={src}
     title={pluginLocalizedField(view, "title") || viewId || packId}
     sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"
+    allow={iframeAllow || undefined}
     onLoad={function () {
       if (!iframeRef.current || !iframeRef.current.contentWindow) return
       iframeRef.current.contentWindow.postMessage({
@@ -288,6 +413,8 @@ function PluginView(props) {
           projectId: projectId,
           viewId: viewId,
           instanceId: instanceId,
+          language: String(document.documentElement.lang || navigator.language || "en"),
+          theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
           state: payload.state == null ? null : payload.state,
         },
       }, "*")

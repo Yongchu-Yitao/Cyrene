@@ -7,6 +7,16 @@ from fastapi.responses import FileResponse, HTMLResponse
 from cyrene.workbench.artifacts.presentation_service import PresentationQueryService
 
 _APP_DIR = Path(__file__).resolve().parents[2] / "webui" / "static" / "app"
+_WORKBENCH_CSP = (
+    "default-src 'self'; "
+    "base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "font-src 'self' data:; img-src 'self' data: blob: https:; "
+    "media-src 'self' data: blob: https:; "
+    "connect-src 'self' ws: wss:; worker-src 'self' blob:; "
+    "frame-src 'self' data: blob:; form-action 'self'"
+)
 
 
 def register_shell_routes(
@@ -24,6 +34,7 @@ def register_shell_routes(
                 "Cache-Control": "no-store, no-cache, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0",
+                "Content-Security-Policy": _WORKBENCH_CSP,
             },
         )
 

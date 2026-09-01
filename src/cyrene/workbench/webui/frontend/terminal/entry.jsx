@@ -138,6 +138,12 @@ var TerminalClient = {
       body: JSON.stringify({ projectId: projectId, terminalId: terminalId || null }),
     }).then(function (response) { return response.ok ? response.json() : terminalError(response); });
   },
+  markRead: function (terminalId) {
+    return fetch("/api/terminals/" + encodeURIComponent(terminalId) + "/read", {
+      method: "POST",
+    }).then(function (response) { return response.ok ? response.json() : terminalError(response); })
+      .then(function (payload) { return payload.terminal; });
+  },
   searchHistory: function (projectId, query, options) {
     var params = new URLSearchParams({ projectId: projectId || "", q: query || "" });
     if (options && options.terminalId) params.set("terminalId", options.terminalId);
@@ -276,7 +282,7 @@ function showTerminalExitToast(terminal, onRestart) {
   )) shownTerminalExitNotices.add(key);
 }
 
-function TerminalPane({ terminalId, onState }) {
+function TerminalSessionPane({ terminalId, onState, active }) {
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
   var pluginModules = Array.isArray(dataStore.state.pluginModules)
@@ -293,6 +299,8 @@ function TerminalPane({ terminalId, onState }) {
   var reconnectRef = React.useRef(0);
   var retryNowRef = React.useRef(null);
   var statusToastRef = React.useRef(0);
+  var activeRef = React.useRef(Boolean(active));
+  activeRef.current = Boolean(active);
   var [connection, setConnection] = React.useState("connecting");
   var [fullscreen, setFullscreen] = React.useState(false);
   var [reconnectAttempt, setReconnectAttempt] = React.useState(0);
@@ -790,6 +798,9 @@ function TerminalPane({ terminalId, onState }) {
               if (cursorRef.current >= replayTarget) refreshInteractiveScreen();
             }
             if (onState) onState(message.terminal);
+            if (activeRef.current && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: "read" }));
+            }
             if (message.reason === "metadata") return;
             if (
               message.type === "state" && statusRef.current === "running"
@@ -837,6 +848,9 @@ function TerminalPane({ terminalId, onState }) {
         setHasContent(true);
         if (cursorRef.current > start) bytes = bytes.slice(cursorRef.current - start);
         cursorRef.current = end;
+        if (activeRef.current && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "read" }));
+        }
         terminal.write(bytes, function () {
           updateTailSpacer();
           if (replaySettled || replayTarget === null || end < replayTarget) return;
@@ -978,6 +992,13 @@ function TerminalPane({ terminalId, onState }) {
     };
   }, [terminalId, codeAvailable]);
 
+  React.useEffect(function () {
+    if (!active || !codeAvailable || !terminalId) return;
+    TerminalClient.markRead(terminalId).then(function (terminal) {
+      if (onState) onState(terminal);
+    }).catch(function () {});
+  }, [active, terminalId, codeAvailable]);
+
   function restartTerminal() {
     if (!codeAvailable || restartBusy) return;
     setRestartBusy(true);
@@ -999,7 +1020,7 @@ function TerminalPane({ terminalId, onState }) {
   }
 
   var notice = null;
-  if (!codeAvailable) {
+  if (!active || !codeAvailable) {
     notice = null;
   } else if (restartError) {
     notice = { kind: "error", title: terminalT("terminal.recoveryFailed", "Terminal recovery failed"), detail: restartError, retry: true };
@@ -1042,7 +1063,7 @@ function TerminalPane({ terminalId, onState }) {
         onAction: onAction,
       },
     );
-  }, [terminalId, connection, reconnectAttempt, restartError, restartBusy, codeAvailable]);
+  }, [terminalId, connection, reconnectAttempt, restartError, restartBusy, codeAvailable, active]);
 
   React.useEffect(function () {
     return function () {
@@ -1061,15 +1082,39 @@ function TerminalPane({ terminalId, onState }) {
 
   return <section
     ref={paneRef}
-    className={"wbc-terminal-pane" + (fullscreen ? " is-fullscreen" : "")}
+    className={"wbc-terminal-pane"
+      + (fullscreen ? " is-fullscreen" : "")
+      + (active ? "" : " is-cached-hidden")}
     data-terminal-id={String(terminalId || "")}
     data-connection={connection}
     data-has-content={hasContent ? "true" : "false"}
+    aria-hidden={active ? undefined : "true"}
   >
     <div ref={hostRef} className="wbc-terminal-host" onMouseDown={function () {
       if (terminalRef.current) terminalRef.current.focus();
     }} />
   </section>;
+}
+
+function TerminalPane({ terminalId, onState }) {
+  var activeTerminalId = String(terminalId || "");
+  var cachedTerminalIdsRef = React.useRef([]);
+  if (
+    activeTerminalId
+    && cachedTerminalIdsRef.current.indexOf(activeTerminalId) < 0
+  ) {
+    cachedTerminalIdsRef.current = cachedTerminalIdsRef.current.concat(activeTerminalId);
+  }
+  return <React.Fragment>
+    {cachedTerminalIdsRef.current.map(function (cachedTerminalId) {
+      return <TerminalSessionPane
+        key={cachedTerminalId}
+        terminalId={cachedTerminalId}
+        onState={onState}
+        active={cachedTerminalId === activeTerminalId}
+      />;
+    })}
+  </React.Fragment>;
 }
 
 window.CyreneUI.terminal = window.CyreneUI.register("terminal", {

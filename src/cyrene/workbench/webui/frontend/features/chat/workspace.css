@@ -391,7 +391,7 @@ html[data-performance-mode="on"] {
   grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  margin: 6px 0 10px;
+  margin: 6px auto 10px;
   padding: 9px 10px;
   border: 1px solid var(--wb-line);
   border-radius: 9px;
@@ -859,7 +859,8 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 
 /* Plugin launchers are pane-capable resources, so present them with the same
    card shell, focus treatment and drag affordance as conversation rows. */
-.wbc-plugin-project-tools > .wbc-project-plugin-tool {
+.wbc-plugin-project-tools > .wbc-project-plugin-tool,
+.wbc-plugin-tool-collection-items > .wbc-project-plugin-tool {
   min-height: 44px;
   cursor: grab;
   touch-action: manipulation;
@@ -869,21 +870,25 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   gap: 3px;
 }
 
-.wbc-plugin-project-tools > .wbc-project-plugin-tool:active {
+.wbc-plugin-project-tools > .wbc-project-plugin-tool:active,
+.wbc-plugin-tool-collection-items > .wbc-project-plugin-tool:active {
   cursor: grabbing;
 }
 
-.wbc-plugin-project-tools > .wbc-project-plugin-tool[aria-disabled="true"] {
+.wbc-plugin-project-tools > .wbc-project-plugin-tool[aria-disabled="true"],
+.wbc-plugin-tool-collection-items > .wbc-project-plugin-tool[aria-disabled="true"] {
   opacity: .46;
   cursor: default;
 }
 
-.wbc-plugin-project-tools .wbc-chat-card-top {
+.wbc-plugin-project-tools .wbc-chat-card-top,
+.wbc-plugin-tool-collection-items .wbc-chat-card-top {
   min-height: 44px;
   grid-template-columns: 28px minmax(0, 1fr) 18px;
 }
 
-.wbc-plugin-project-tools .wbc-project-plugin-tool-icon {
+.wbc-plugin-project-tools .wbc-project-plugin-tool-icon,
+.wbc-plugin-tool-collection-items .wbc-project-plugin-tool-icon {
   width: 28px;
   height: 28px;
   border-radius: 8px;
@@ -893,14 +898,16 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   font-weight: 680;
 }
 
-.wbc-plugin-project-tools .wbc-chat-card-title {
+.wbc-plugin-project-tools .wbc-chat-card-title,
+.wbc-plugin-tool-collection-items .wbc-chat-card-title {
   align-items: flex-start;
   flex-direction: column;
   justify-content: center;
   gap: 1px;
 }
 
-.wbc-plugin-project-tools .wbc-project-plugin-tool-subtitle {
+.wbc-plugin-project-tools .wbc-project-plugin-tool-subtitle,
+.wbc-plugin-tool-collection-items .wbc-project-plugin-tool-subtitle {
   max-width: 100%;
   overflow: hidden;
   color: var(--wb-faint);
@@ -919,6 +926,75 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   display: none;
 }
 
+.wbc-plugin-tool-collection {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.wbc-plugin-tool-collection-toggle {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-plugin-tool-collection-toggle:hover,
+.wbc-plugin-tool-collection-toggle:focus-visible {
+  background: var(--wb-row-hover-bg);
+  outline: 0;
+}
+
+.wbc-plugin-tool-collection.is-expanded .wbc-plugin-tool-collection-toggle .wbc-project-tool-chevron svg {
+  transform: rotate(90deg);
+}
+
+.wbc-plugin-tool-collection-items {
+  min-width: 0;
+  min-height: 0;
+  max-height: min(248px, 34vh);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.wbc-plugin-tool-collection-items[hidden] {
+  display: none;
+}
+
+.wbc-plugin-tool-collection-items::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.wbc-plugin-collection-status {
+  width: 7px;
+  height: 7px;
+  justify-self: end;
+  border-radius: 50%;
+  background: var(--wb-faint);
+  opacity: .42;
+}
+
+.wbc-plugin-collection-card.is-online .wbc-plugin-collection-status {
+  background: var(--wb-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-green) 12%, transparent);
+  opacity: 1;
+}
+
 .wbc-project-tools.has-expanded-tool > header {
   position: sticky;
   z-index: 3;
@@ -935,6 +1011,10 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 
 .wbc-project-tools.expanded-file > .wbc-project-terminal-expand,
 .wbc-project-tools.expanded-terminal > .wbc-project-file-expand {
+  display: none;
+}
+
+.wbc-project-tools.has-expanded-tool > .wbc-project-tool-expand:not(.is-expanded) {
   display: none;
 }
 
@@ -1154,7 +1234,8 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 }
 
 .wbc-project-tools.has-expanded-tool .wbc-project-file-list,
-.wbc-project-tools.has-expanded-tool .wbc-project-terminal-list {
+.wbc-project-tools.has-expanded-tool .wbc-project-terminal-list,
+.wbc-project-tools.has-expanded-tool .wbc-plugin-tool-collection-items {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
@@ -1224,49 +1305,48 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   font-size: calc(11px * var(--wb-ui-font-scale, 1));
 }
 
-/* Terminals are project resources in this panel, not conversations. Keep
-   their status and actions while matching the adjacent file rows' density,
-   geometry and interaction surface. */
-.wbc-project-terminal-list .wbc-terminal-card {
+/* Compact project resources share one card geometry and interaction surface.
+   Terminal rows keep their own actions and device rows keep their own status. */
+.wbc-project-resource-list .wbc-project-resource-card {
   min-height: 36px;
   padding: 0 6px;
   border-radius: 9px;
 }
 
-.wbc-project-terminal-list .wbc-terminal-card:hover,
-.wbc-project-terminal-list .wbc-terminal-card:focus,
-.wbc-project-terminal-list .wbc-terminal-card:focus-visible {
+.wbc-project-resource-list .wbc-project-resource-card:hover,
+.wbc-project-resource-list .wbc-project-resource-card:focus,
+.wbc-project-resource-list .wbc-project-resource-card:focus-visible {
   transform: none;
   background: var(--wb-row-hover-bg);
   box-shadow: none;
 }
 
-.wbc-project-terminal-list .wbc-terminal-card.active,
-.wbc-project-terminal-list .wbc-terminal-card.menu-open,
-.wbc-project-terminal-list .wbc-terminal-card.active:hover,
-.wbc-project-terminal-list .wbc-terminal-card.active:focus,
-.wbc-project-terminal-list .wbc-terminal-card.active:focus-visible {
+.wbc-project-resource-list .wbc-project-resource-card.active,
+.wbc-project-resource-list .wbc-project-resource-card.menu-open,
+.wbc-project-resource-list .wbc-project-resource-card.active:hover,
+.wbc-project-resource-list .wbc-project-resource-card.active:focus,
+.wbc-project-resource-list .wbc-project-resource-card.active:focus-visible {
   background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-row-hover-bg));
   box-shadow: none;
 }
 
-.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-card-top {
+.wbc-project-resource-list .wbc-project-resource-card .wbc-chat-card-top {
   min-height: 36px;
   grid-template-columns: 18px minmax(0, 1fr) auto;
   gap: 9px;
 }
 
-.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-row-icon {
+.wbc-project-resource-list .wbc-project-resource-card .wbc-chat-row-icon {
   width: 18px;
   height: 18px;
 }
 
-.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-card-top b {
+.wbc-project-resource-list .wbc-project-resource-card .wbc-chat-card-top b {
   font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
   font-weight: 560;
 }
 
-.wbc-project-terminal-list .wbc-terminal-card .wbc-chat-card-right {
+.wbc-project-resource-list .wbc-project-resource-card .wbc-chat-card-right {
   min-width: 38px;
 }
 
@@ -1481,9 +1561,12 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 }
 
 .wbc-pane-card > .wbc-workspace-surface {
-  /* The host owns a 34px draggable grip. Native workspace surfaces reserve
-     the same protected band as file, browser, and Plugin panes. */
-  padding-top: 34px;
+  /* The 4px grip is vertically centred in the host's 34px drag band, so its
+     lower edge sits at 19px. Keep the toolbar controls the same distance from
+     that edge and the divider below instead of stacking a full grip band on
+     top of the toolbar's own padding. */
+  --wbc-workspace-toolbar-clearance: 12px;
+  padding-top: 0;
 }
 
 .wbc-workspace-chrome {
@@ -1500,6 +1583,12 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   align-items: center;
   gap: 6px;
   padding: 5px 12px 4px;
+}
+
+.wbc-pane-card > .wbc-workspace-surface .wbc-workspace-toolbar {
+  min-height: calc(19px + var(--wbc-workspace-toolbar-clearance) + 32px + var(--wbc-workspace-toolbar-clearance));
+  box-sizing: border-box;
+  padding: calc(19px + var(--wbc-workspace-toolbar-clearance)) 12px var(--wbc-workspace-toolbar-clearance);
 }
 
 .wbc-workspace-action-picker {

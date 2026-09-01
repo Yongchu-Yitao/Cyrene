@@ -7,23 +7,39 @@ from dataclasses import replace
 from typing import Any
 
 from .model_router import MODEL_ROUTER_PLUGIN, create_model_router_plugin
+from .tool_call_parsers import (
+    CODEX_OAUTH_TOOL_CALL_PARSER_PLUGIN,
+    GENERIC_TOOL_CALL_PARSER_PLUGIN,
+)
 from cyrene.core.plugin.plugin import PluginContext
 from cyrene.core.plugin.registry import PluginRegistry, PluginRegistryError
 from cyrene.core.plugin.runtime import PluginRuntime
 
 
 def ensure_model_router(registry: PluginRegistry) -> None:
-    """Install the core model router once while rejecting user shadowing."""
+    """Install the model router and its parser Plugins as one core boundary."""
 
-    try:
-        registered = next(item for item in registry.list_plugins() if item.plugin.name == MODEL_ROUTER_PLUGIN)
-    except StopIteration:
-        registry.register_plugin(create_model_router_plugin(), source="core")
-        return
-    if registered.source != "core":
-        raise PluginRegistryError(f"Core model router is shadowed by {registered.source}: {MODEL_ROUTER_PLUGIN}")
-    if registered.plugin.kind != "model":
-        raise PluginRegistryError(f"Core model router is not a model Plugin: {MODEL_ROUTER_PLUGIN}")
+    required = (
+        GENERIC_TOOL_CALL_PARSER_PLUGIN,
+        CODEX_OAUTH_TOOL_CALL_PARSER_PLUGIN,
+        create_model_router_plugin(),
+    )
+    registered_by_name = {
+        item.plugin.name: item for item in registry.list_plugins()
+    }
+    for plugin in required:
+        registered = registered_by_name.get(plugin.name)
+        if registered is None:
+            registry.register_plugin(plugin, source="core")
+            continue
+        if registered.source != "core":
+            raise PluginRegistryError(
+                f"Core model Plugin is shadowed by {registered.source}: {plugin.name}"
+            )
+        if registered.plugin.kind != plugin.kind:
+            raise PluginRegistryError(
+                f"Core model Plugin has the wrong kind: {plugin.name}"
+            )
 
 
 class PluginModelGateway:

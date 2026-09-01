@@ -119,6 +119,16 @@ WebUI and Electron lockfiles. The required checks are the complete Python
 suite, Ruff, Python bytecode compilation, a production WebUI build, all WebUI
 tests, all Electron tests, generated-WebUI cleanliness, and whitespace checks.
 
+Browser automation has an additional validation boundary. The Python suite
+widely covers RPC routing, initial/redirect SSRF checks, snapshot credentials,
+upload binding, takeover, and lifecycle behavior. Electron tests cover target
+selection, popup policy, context menus, and source contracts. Many cases still
+use fake pages, mock locators, or isolated VM scripts rather than launching real
+Electron against sites with OAuth/CAPTCHA, cross-origin iframes, shadow DOM, and
+native windows on every platform. Those flows belong in the release/manual
+integration matrix; a passing unit suite alone does not establish universal
+site compatibility.
+
 During the documentation audit, the OpenAPI test initially failed because its
 hash had been captured with an ambient Python 3.13.12 environment using FastAPI
 0.115.8 / Pydantic 2.12.5 rather than the versions already recorded in

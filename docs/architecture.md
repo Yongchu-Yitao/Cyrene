@@ -355,6 +355,27 @@ profile as agent actions. Packaged desktop builds therefore exclude Playwright a
 its separate Chromium download. Non-Electron Web UI/CLI runs retain Playwright as
 an optional extra, with text-only `httpx` navigation as the final fallback.
 
+The browser surface exposes 17 main-agent-only operations that execute in order
+by default. Snapshot injects a DOM projection into the current top-level
+document and assigns short-lived refs to visible, hit-testable elements. After
+cursor movement and press animation, Electron resolves a click target again,
+checks hit testing, obstruction, and coordinate stability, then sends trusted
+input through `sendInputEvent`. Wait and Network Log also run in the current page
+context; Network Log reads only Resource Performance entries. There is no one
+recursive projection for iframes and shadow DOM.
+
+Before initial navigation, the Python entry point resolves the hostname and
+rejects loopback, private, link-local, cloud-metadata, and reserved addresses;
+the `httpx` redirect hook checks each Location again. Electron does not currently
+apply the same IP policy to every browser request, and Playwright checks a final
+redirect URL after the browser has established the connection. This is therefore
+an agent-observation guard, not a strict network sandbox. Browser pages enable
+context isolation and sandboxing, disable Node integration, and deny camera,
+microphone, location, and capture permissions by default. File upload adds a
+separate human-only, single-use destination/file-hash binding and pre-execution
+revalidation; ordinary click and type/submit operations do not inherit that
+confirmation boundary.
+
 ### Search
 
 Built-in search uses [SimpleXNG](https://github.com/jlevy/simplexng) — no Docker required. The manager auto-generates `data/simplexng_settings.yml`, auto-starts on port 8888, and handles proxy discovery. The deep research pipeline uses query generation → parallel search → filtering → synthesis.

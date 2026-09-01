@@ -1,20 +1,52 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { useWbcState, wbcErrorText, wbcNormalizePaneLayout, wbcPaneCardLocation, wbcT } from "../../workbench-chat.jsx"
 
+function wbcSubscribeTerminalRefresh(projectId, refreshTerminals) {
+  var frame = 0;
+  function refresh() { refreshTerminals({ background: true }); }
+  function schedule() {
+    if (frame) return;
+    frame = window.requestAnimationFrame(function () {
+      frame = 0;
+      refresh();
+    });
+  }
+  function onTerminalListChanged(event) {
+    if (!event || event.type !== "terminal_list_changed") return;
+    var eventProjectId = String(event.project_id || "");
+    if (!eventProjectId || eventProjectId === String(projectId)) schedule();
+  }
+  function onVisibility() { if (!document.hidden) schedule(); }
+  var unsubscribe = workbenchServices.events().subscribe(onTerminalListChanged);
+  window.addEventListener("focus", schedule);
+  document.addEventListener("visibilitychange", onVisibility);
+  return function () {
+    if (frame) window.cancelAnimationFrame(frame);
+    unsubscribe();
+    window.removeEventListener("focus", schedule);
+    document.removeEventListener("visibilitychange", onVisibility);
+  };
+}
+
 function useWbcTerminalCatalog(projectId, enabled) {
   var terminalClient = workbenchServices.terminal().Client;
   var [terminals, setTerminals] = useWbcState([]);
   var [terminalsLoading, setTerminalsLoading] = useWbcState(false);
   var [activeTerminalId, setActiveTerminalId] = useWbcState("");
+  var [loadedProjectId, setLoadedProjectId] = useWbcState("");
 
   function refresh(options) {
     if (!enabled || !projectId) {
       setTerminals([]);
       setTerminalsLoading(false);
       setActiveTerminalId("");
+      setLoadedProjectId(String(projectId || ""));
       return Promise.resolve([]);
     }
-    if (!(options && options.background)) setTerminalsLoading(true);
+    if (!(options && options.background)) {
+      setTerminalsLoading(true);
+      setLoadedProjectId("");
+    }
     return terminalClient.list(projectId).then(function (payload) {
       var items = Array.isArray(payload && payload.terminals) ? payload.terminals : [];
       setTerminals(items);
@@ -24,6 +56,7 @@ function useWbcTerminalCatalog(projectId, enabled) {
       setActiveTerminalId(items.some(function (item) {
         return String(item.id) === activeId;
       }) ? activeId : "");
+      setLoadedProjectId(String(projectId));
       return items;
     }).catch(function (err) {
       if (!(options && options.background)) workbenchServices.feedback().showToast(wbcErrorText(err), "error");
@@ -68,6 +101,7 @@ function useWbcTerminalCatalog(projectId, enabled) {
     terminals: terminals,
     setTerminals: setTerminals,
     loading: terminalsLoading,
+    hydrated: loadedProjectId === String(projectId || ""),
     setLoading: setTerminalsLoading,
     activeId: activeTerminalId,
     setActiveId: setActiveTerminalId,
@@ -212,6 +246,7 @@ function wbcDeleteTerminal(context, terminalId) {
 
 export {
   useWbcTerminalCatalog,
+  wbcSubscribeTerminalRefresh,
   wbcCreateTerminal,
   wbcDeleteTerminal,
   wbcOpenTerminal,

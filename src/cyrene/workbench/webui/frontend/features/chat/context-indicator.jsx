@@ -534,8 +534,8 @@ function WbcContextTimeline({ data, chatId, onReload }) {
   var [selectedKey, setSelectedKey] = useWbcState("");
   return (
     <WbcContextAuditSection
-      title={wbcT("workbenchChat.contextAuditTimeline", "Chronological context path")}
-      hint={wbcT("workbenchChat.contextAuditOldestFirst", "Oldest to newest")}
+      title={wbcT("workbenchChat.contextAuditTimeline", "Effective model context")}
+      hint={wbcT("workbenchChat.contextAuditOldestFirst", "Model input order")}
     >
       {timeline.length ? <ol className="wbc-context-timeline">{timeline.map(function (item, index) {
         var toolPresentation = wbcToolResultPresentation(item);
@@ -712,25 +712,39 @@ function useWbcContextSummary(chatId, updatedAt, contextRevision, running) {
 }
 
 function useWbcContextDetails(chatId, open, running, onSummary) {
-  var [details, setDetails] = useWbcState(null);
+  var [snapshot, setSnapshot] = useWbcState({ chatId: "", data: null });
   var [loading, setLoading] = useWbcState(false);
-  var [error, setError] = useWbcState(false);
+  var [errorChatId, setErrorChatId] = useWbcState("");
   var requestRevisionRef = useWbcRef(0);
+  var snapshotRef = useWbcRef(snapshot);
+  snapshotRef.current = snapshot;
+
+  var currentDetails = snapshot.chatId === chatId ? snapshot.data : null;
+  var currentError = errorChatId === chatId;
 
   function load() {
     if (!chatId) return;
     var revision = ++requestRevisionRef.current;
-    setLoading(true);
-    setError(false);
+    var current = snapshotRef.current;
+    var hasCurrentDetails = !!(current && current.chatId === chatId && current.data);
+    // Polling is a background refresh once a snapshot is visible. Replacing
+    // the body with a spinner would remount the scroll container and jump the
+    // inspector back to the top on every refresh.
+    if (!hasCurrentDetails) setLoading(true);
+    setErrorChatId("");
     Promise.all([
       wbcFetchContextJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context"),
       wbcFetchContextJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context-blocks"),
     ]).then(function (payloads) {
       if (revision !== requestRevisionRef.current) return;
+      var nextSnapshot = { chatId: chatId, data: payloads[1] };
+      snapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
       onSummary(payloads[0]);
-      setDetails(payloads[1]);
     }).catch(function () {
-      if (revision === requestRevisionRef.current) setError(true);
+      // Keep a previously rendered snapshot in place when a background poll
+      // fails. The blocking error state is only for an initial load failure.
+      if (revision === requestRevisionRef.current && !hasCurrentDetails) setErrorChatId(chatId);
     }).finally(function () {
       if (revision === requestRevisionRef.current) setLoading(false);
     });
@@ -745,7 +759,12 @@ function useWbcContextDetails(chatId, open, running, onSummary) {
       requestRevisionRef.current += 1;
     };
   }, [open, !!running, chatId]);
-  return { data: details, loading: loading, error: error, retry: load };
+  return {
+    data: currentDetails,
+    loading: loading || (!!open && !currentDetails && !currentError),
+    error: currentError,
+    retry: load,
+  };
 }
 
 function WbcComposerContextIndicator({ chat, runtime, running }) {

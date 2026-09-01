@@ -15,6 +15,7 @@ from cyrene.core.plugin import (
     PluginContext,
     PluginPack,
     PluginRegistry,
+    PluginRegistryError,
     PluginSetupContext,
     resource_effect_input_schema,
     resolve_resource_effect_values,
@@ -50,13 +51,39 @@ from cyrene.plugins.builtin.cyrene_plugin_development.tools import (
 )
 from cyrene.workbench.chat.conversation_context_service import AgentContextRepository
 from cyrene.workbench.http.workbench.chat_routes.detail_routes import _normalize_active_plan
-from cyrene.workbench.http.plugins import plugin_registry_status, register_plugin_routes
+from cyrene.workbench.http.plugins import (
+    _frontend_call_error,
+    plugin_registry_status,
+    register_plugin_routes,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_plugin_frontend_error_preserves_typed_remote_transport_status() -> None:
+    class RemoteUnavailable(ConnectionError):
+        code = "remote_device_unreachable"
+        status_code = 503
+
+    try:
+        try:
+            raise RemoteUnavailable("private endpoint detail")
+        except RemoteUnavailable as cause:
+            raise PluginRegistryError("frontend method failed") from cause
+    except PluginRegistryError as error:
+        assert _frontend_call_error(error) == (
+            "The remote device is unavailable.",
+            "远端设备当前不可用。",
+            503,
+            "remote_device_unreachable",
+        )
+
+
 def test_builtin_dynamic_workspace_contributions_are_plugin_owned() -> None:
+    assert {
+        item["id"] for item in code_plugin_pack.metadata["workbench_entries"]
+    } == {"files", "terminal"}
     code_surfaces = [
         contribution.value
         for contribution in code_plugin_pack.contributions
@@ -412,7 +439,23 @@ def test_plugin_resource_effects_are_validated_and_resolved_without_path_access(
         )
 
 
-def test_plugin_pack_frontend_view_rpc_asset_and_registry_routes(tmp_path) -> None:
+def test_plugin_pack_frontend_view_rpc_asset_and_registry_routes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from cyrene.platform import settings_store
+
+    saved_settings: dict[str, object] = {}
+    monkeypatch.setattr(
+        settings_store,
+        "get",
+        lambda key, default=None: saved_settings.get(key, default),
+    )
+    monkeypatch.setattr(
+        settings_store,
+        "set_",
+        lambda key, value: saved_settings.__setitem__(key, value),
+    )
     package = tmp_path / "plugin_impl" / "dashboard"
     (package / "ui").mkdir(parents=True)
     (package / "ui" / "index.html").write_text("<h1>dashboard</h1>", encoding="utf-8")
@@ -508,6 +551,25 @@ def test_plugin_pack_frontend_view_rpc_asset_and_registry_routes(tmp_path) -> No
             status = client.get("/api/plugins").json()
             assert status["frontend_views"][0]["id"] == "main"
             assert status["project_tools"][0]["pack_id"] == "dashboard"
+            assert status["workbench_entries"] == [{
+                "id": "main",
+                "key": "dashboard/main",
+                "pack_id": "dashboard",
+                "kind": "project_tool",
+                "title": "Dashboard",
+                "description": "",
+                "i18n": {"zh": {"title": "仪表盘"}},
+                "configured_visible": True,
+            }]
+            hidden = client.put(
+                "/api/plugins/workbench-entries/dashboard/main",
+                json={"visible": False},
+            )
+            assert hidden.status_code == 200
+            assert hidden.json()["workbench_entries"][0]["configured_visible"] is False
+            assert saved_settings["workbench_entry_visibility"] == {
+                "dashboard/main": False,
+            }
             assert status["workbench_surfaces"][0]["renderer"] == {
                 "kind": "plugin_view",
                 "id": "main",
@@ -672,9 +734,13 @@ def test_plugin_center_marks_unmanaged_user_sources_for_top_section(tmp_path) ->
     packs = {item["id"]: item for item in status["packs"]}
     standalone = {item["name"]: item for item in status["standalone_plugins"]}
     assert packs["builtin_pack"]["user_created"] is False
+    assert packs["builtin_pack"]["source"] == "builtin"
     assert packs["my_pack"]["user_created"] is True
+    assert packs["my_pack"]["source"] == "user"
     assert standalone["BuiltinTool"]["user_created"] is False
+    assert standalone["BuiltinTool"]["source"] == "builtin"
     assert standalone["MyTool"]["user_created"] is True
+    assert standalone["MyTool"]["source"] == "user"
 
     frontend = (ROOT / "src/cyrene/workbench/webui/frontend/features/settings/custom-plugins.jsx").read_text(encoding="utf-8")
     assert frontend.index("UserCreatedPluginsSection") < frontend.index("PluginPacksSection, { controller: c }")

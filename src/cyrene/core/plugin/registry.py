@@ -20,6 +20,7 @@ from uuid import uuid4
 from cyrene.path_policy import user_data_dir
 
 from ..observability import log_operation
+from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from .activation import (
     PluginActivationState,
     active_plugin_activation_state,
@@ -409,12 +410,53 @@ class PluginRegistry:
 
     def _localized_plugin(self, plugin: Plugin) -> Plugin:
         metadata = dict(plugin.metadata)
+        authored_i18n = metadata.get("_authored_i18n", metadata.get("i18n"))
+        metadata["_authored_i18n"] = {
+            str(locale): dict(fields)
+            for locale, fields in authored_i18n.items()
+            if isinstance(fields, Mapping)
+        } if isinstance(authored_i18n, Mapping) else {}
         metadata["i18n"] = self._complete_i18n(
             section="plugins",
             identity=plugin.name,
-            authored=metadata.get("i18n"),
+            authored=metadata["_authored_i18n"],
         )
         return dataclass_replace(plugin, metadata=metadata)
+
+    def _relocalize_standalone_core_plugins(self) -> None:
+        """Apply a newly loaded catalog to core Plugins registered earlier."""
+
+        with self._lock:
+            candidates = tuple(
+                (name, registered)
+                for name, registered in self._plugins.items()
+                if registered.source == "core" and registered.pack_id is None
+            )
+        replacements: list[tuple[str, RegisteredPlugin, RegisteredPlugin]] = []
+        for name, registered in candidates:
+            localized = self._localized_plugin(registered.plugin)
+            if localized != registered.plugin:
+                replacements.append(
+                    (
+                        name,
+                        registered,
+                        RegisteredPlugin(
+                            plugin=localized,
+                            pack_id=None,
+                            source=registered.source,
+                        ),
+                    )
+                )
+        if not replacements:
+            return
+        with self._lock:
+            changed = False
+            for name, previous, replacement in replacements:
+                if self._plugins.get(name) is previous:
+                    self._plugins[name] = replacement
+                    changed = True
+            if changed:
+                self._bump_revision_locked()
 
     def _localized_pack(self, pack: PluginPack) -> PluginPack:
         metadata = dict(pack.metadata)
@@ -452,6 +494,7 @@ class PluginRegistry:
                     source="core",
                     replace=True,
                 )
+            self._relocalize_standalone_core_plugins()
         except Exception as exc:
             with self._lock:
                 if previous is None:
@@ -1529,7 +1572,7 @@ class PluginRegistry:
                     kind=contribution_kind,
                     replace=replace,
                 )
-            except Exception as exc:
+            except PLUGIN_BOUNDARY_ERRORS as exc:
                 if module_name:
                     self._unload_module_tree(module_name)
                 if replace:

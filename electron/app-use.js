@@ -1,7 +1,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
+const { StringDecoder } = require('string_decoder');
 
 const MANIFEST_VERSION = 'app-use-schemes-v3';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
@@ -16,6 +17,9 @@ const SEMANTIC_MODE_CAPABILITIES = new Set([
 const VISUAL_MODE_CAPABILITIES = new Set([
   'click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at',
   'key_chord', 'key_sequence', 'visual_describe', 'focus_window', 'restore_previous_focus',
+]);
+const WINDOWS_LOW_LATENCY_CAPABILITIES = new Set([
+  'pointer_event', 'right_click', 'scroll_at', 'key_sequence',
 ]);
 
 const CAPABILITIES = Object.freeze([
@@ -204,6 +208,104 @@ function runCommand(command, args, { timeout = 15000, maxBuffer = 12 * 1024 * 10
   });
 }
 
+class WindowsPowerShellWorker {
+  constructor(scriptPath, { spawnImpl = spawn } = {}) {
+    this.scriptPath = scriptPath;
+    this.spawnImpl = spawnImpl;
+    this.child = null;
+    this.pending = [];
+    this.stdoutBuffer = '';
+    this.stderrBuffer = '';
+    this.decoder = new StringDecoder('utf8');
+  }
+
+  _rejectAll(error) {
+    const pending = this.pending.splice(0);
+    for (const request of pending) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+  }
+
+  _stop(error, child = this.child) {
+    if (child && this.child !== child) return;
+    this.child = null;
+    if (child) {
+      try { child.kill(); } catch (_) {}
+    }
+    this._rejectAll(error || new AppUseError('provider_error', 'Windows input worker stopped.'));
+  }
+
+  _acceptLine(line) {
+    const request = this.pending.shift();
+    if (!request) return;
+    clearTimeout(request.timer);
+    try {
+      request.resolve(JSON.parse(line));
+    } catch (_) {
+      request.reject(new AppUseError('provider_error', `Invalid Windows input response: ${line.slice(0, 500)}`));
+    }
+  }
+
+  _start() {
+    if (this.child) return this.child;
+    const child = this.spawnImpl('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', this.scriptPath, '-Worker',
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    this.child = child;
+    this.stdoutBuffer = '';
+    this.stderrBuffer = '';
+    this.decoder = new StringDecoder('utf8');
+    child.stdout.on('data', (chunk) => {
+      this.stdoutBuffer += this.decoder.write(chunk);
+      const lines = this.stdoutBuffer.split(/\r?\n/);
+      this.stdoutBuffer = lines.pop() || '';
+      for (const line of lines) {
+        const value = line.trim();
+        if (value) this._acceptLine(value);
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      this.stderrBuffer = (this.stderrBuffer + String(chunk || '')).slice(-4000);
+    });
+    child.once('error', (error) => {
+      this._stop(new AppUseError('provider_error', String(error && error.message || error)), child);
+    });
+    child.once('exit', (code) => {
+      const detail = this.stderrBuffer.trim();
+      this._stop(new AppUseError(
+        'provider_error',
+        detail || `Windows input worker exited with code ${Number(code || 0)}.`,
+      ), child);
+    });
+    return child;
+  }
+
+  request(payload, timeout = 15000) {
+    return new Promise((resolve, reject) => {
+      let child;
+      try { child = this._start(); } catch (error) { reject(error); return; }
+      const request = { resolve, reject, timer: null };
+      request.timer = setTimeout(() => {
+        this._stop(new AppUseError('timeout', `Windows input worker timed out after ${timeout} ms.`), child);
+      }, timeout);
+      this.pending.push(request);
+      const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+      child.stdin.write(`${encoded}\n`, (error) => {
+        if (error) this._stop(new AppUseError('provider_error', String(error.message || error)), child);
+      });
+    });
+  }
+
+  close() {
+    this._stop(new AppUseError('provider_stopped', 'Windows input worker stopped.'));
+  }
+}
+
 const PROVIDER_SCRIPT_NAMES = Object.freeze({
   darwin: 'app-use-macos.jxa',
   win32: 'app-use-windows.ps1',
@@ -276,11 +378,14 @@ class CommandPlatformProvider {
     baseDir = __dirname,
     resourcesPath = process.resourcesPath || '',
     existsSync = fs.existsSync,
+    spawnImpl = spawn,
   } = {}) {
     this.platform = platform;
     this.baseDir = baseDir;
     this.resourcesPath = resourcesPath;
     this.existsSync = existsSync;
+    this.spawnImpl = spawnImpl;
+    this.windowsInputWorker = null;
     if (platform === 'linux') {
       // Load the optional D-Bus dependency only on Linux. Unit tests and
       // non-Linux packages must not require Electron production dependencies.
@@ -309,12 +414,22 @@ class CommandPlatformProvider {
         }
       } else if (this.platform === 'win32') {
         const scriptPath = resolveProviderScriptPath(this);
-        const encoded = Buffer.from(JSON.stringify(request), 'utf8').toString('base64');
-        result = await runCommand('powershell.exe', [
-          '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-          '-File', scriptPath,
-          '-PayloadBase64', encoded,
-        ], { timeout });
+        const lowLatency = ['list_targets', 'focus'].includes(operation)
+          || (operation === 'perform'
+            && WINDOWS_LOW_LATENCY_CAPABILITIES.has(String(payload.capability || '')));
+        if (lowLatency) {
+          if (!this.windowsInputWorker || this.windowsInputWorker.scriptPath !== scriptPath) {
+            this.windowsInputWorker = new WindowsPowerShellWorker(scriptPath, { spawnImpl: this.spawnImpl });
+          }
+          result = await this.windowsInputWorker.request(request, timeout);
+        } else {
+          const encoded = Buffer.from(JSON.stringify(request), 'utf8').toString('base64');
+          result = await runCommand('powershell.exe', [
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', scriptPath,
+            '-PayloadBase64', encoded,
+          ], { timeout });
+        }
       } else {
         throw new AppUseError('unsupported_platform', `App Use is not implemented for ${this.platform}.`);
       }
@@ -338,6 +453,11 @@ class CommandPlatformProvider {
       );
     }
     return result;
+  }
+
+  stop() {
+    if (this.windowsInputWorker) this.windowsInputWorker.close();
+    this.windowsInputWorker = null;
   }
 
   async listTargets(exclusions = {}) {
@@ -454,6 +574,7 @@ class AppUseManager {
     }
     this.sessions.clear();
     this.targets.clear();
+    if (this.provider && typeof this.provider.stop === 'function') this.provider.stop();
   }
 
   async refreshTargets() {
@@ -1036,6 +1157,91 @@ class AppUseManager {
     return result || { ok: true };
   }
 
+  async remoteDesktopInput(sessionId, capability, parameters = {}) {
+    const requestedSessionId = String(sessionId || '');
+    this._expireSessions();
+    let session = this.sessions.get(requestedSessionId);
+    if (!session) throw new AppUseError('stale_session', 'The Remote Desktop input session expired.');
+    if (session.mode !== 'visual' || !['darwin', 'win32'].includes(String(session.target.platform || process.platform))) {
+      throw new AppUseError('unsupported_capability', 'Native remote desktop input is unavailable for this target.');
+    }
+    const name = String(capability || '');
+    if (!['pointer_event', 'right_click', 'scroll_at', 'key_sequence'].includes(name)) {
+      throw new AppUseError('unsupported_capability', `Unsupported remote desktop input capability: ${name || '(empty)'}.`);
+    }
+    const effective = parameters && typeof parameters === 'object' && !Array.isArray(parameters)
+      ? { ...parameters } : {};
+    const focusTarget = effective.focus_target === true;
+    const desktopBounds = effective.desktop_bounds;
+    delete effective.focus_target;
+    delete effective.desktop_bounds;
+    if (focusTarget) {
+      session = await this._getSession(requestedSessionId);
+      await this._focusSessionTarget(session);
+    } else {
+      session.lastUsedAt = Date.now();
+    }
+    let target = session.target;
+    if (desktopBounds && typeof desktopBounds === 'object') {
+      const bounds = {
+        x: Number(desktopBounds.x),
+        y: Number(desktopBounds.y),
+        width: Number(desktopBounds.width),
+        height: Number(desktopBounds.height),
+      };
+      if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+          || bounds.width <= 0 || bounds.height <= 0) {
+        throw new AppUseError('invalid_arguments', 'Remote desktop input requires valid display bounds.');
+      }
+      target = { ...session.target, bounds };
+    }
+    if (name === 'pointer_event') {
+      const action = String(effective.action || 'move');
+      const button = String(effective.button || 'left');
+      if (!['move', 'button_down', 'button_up'].includes(action) || !['left', 'right'].includes(button)) {
+        throw new AppUseError('invalid_arguments', 'pointer_event requires a valid action and button.');
+      }
+      this._coordinatePoint({ target }, effective);
+    }
+    return this.provider.perform(target, name, '', effective);
+  }
+
+  async remoteDesktopGlobalInput(capability, parameters = {}) {
+    const providerPlatform = String(this.provider && this.provider.platform || process.platform);
+    if (providerPlatform !== 'win32') {
+      throw new AppUseError('unsupported_capability', 'Global Remote Desktop input is available only on Windows.');
+    }
+    const name = String(capability || '');
+    if (!['pointer_event', 'right_click', 'scroll_at', 'key_sequence'].includes(name)) {
+      throw new AppUseError('unsupported_capability', `Unsupported global Remote Desktop input capability: ${name || '(empty)'}.`);
+    }
+    const effective = parameters && typeof parameters === 'object' && !Array.isArray(parameters)
+      ? { ...parameters } : {};
+    const desktopBounds = effective.desktop_bounds;
+    delete effective.focus_target;
+    delete effective.desktop_bounds;
+    const bounds = {
+      x: Number(desktopBounds && desktopBounds.x),
+      y: Number(desktopBounds && desktopBounds.y),
+      width: Number(desktopBounds && desktopBounds.width),
+      height: Number(desktopBounds && desktopBounds.height),
+    };
+    if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+        || bounds.width <= 0 || bounds.height <= 0) {
+      throw new AppUseError('invalid_arguments', 'Global Remote Desktop input requires valid display bounds.');
+    }
+    const target = { platform: 'win32', bounds };
+    if (name === 'pointer_event') {
+      const action = String(effective.action || 'move');
+      const button = String(effective.button || 'left');
+      if (!['move', 'button_down', 'button_up'].includes(action) || !['left', 'right'].includes(button)) {
+        throw new AppUseError('invalid_arguments', 'pointer_event requires a valid action and button.');
+      }
+    }
+    if (name !== 'key_sequence') this._coordinatePoint({ target }, effective);
+    return this.provider.perform(target, name, '', effective);
+  }
+
   async _restoreFocus(session) {
     if (session.previousFocusWasHost && typeof this.focusHost === 'function') {
       await this.focusHost();
@@ -1269,6 +1475,7 @@ module.exports = {
   DARWIN_PID_TYPE_CAPABILITY,
   capabilitiesForTarget,
   CommandPlatformProvider,
+  WindowsPowerShellWorker,
   MANIFEST_VERSION,
   resolveProviderScriptPath,
   resolveDarwinHitTestHelperPath,

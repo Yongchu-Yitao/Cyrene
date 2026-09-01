@@ -87,12 +87,12 @@ function WbcPaneSemanticController({ active, layout, rootRef, chats, terminals, 
       handlers: {
         open_chat: function (input) {
           var id = ensureCatalogItem("chat", input && input.chat_id);
-          onOpenPane("chat", id, { side: normalizeSide(input) });
+          onOpenPane("chat", id, { side: normalizeSide(input), origin: "agent" });
           return { kind: "chat", id: id, side: normalizeSide(input) };
         },
         open_terminal: function (input) {
           var id = ensureCatalogItem("terminal", input && input.terminal_id);
-          onOpenPane("terminal", id, { side: normalizeSide(input) });
+          onOpenPane("terminal", id, { side: normalizeSide(input), origin: "agent" });
           return { kind: "terminal", id: id, side: normalizeSide(input) };
         },
       },

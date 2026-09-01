@@ -101,7 +101,7 @@
     </nav>
 
     <div class="sidebar-footer">
-      <div class="sidebar-version">v0.9.0-beta4</div>
+      <div class="sidebar-version">v0.9.0-beta5</div>
     </div>
     </div>
   </aside>
@@ -1723,7 +1723,10 @@ cyrene stop</code></pre></div>
           <li><strong>Electron 桌面版</strong>——原生 <code>WebContentsView</code> 标签页直接嵌入 Workbench，用户和代理操作同一个持久浏览器分区，无需 Playwright。</li>
           <li><strong>非桌面 Playwright 模式</strong>——配置文件在 <code>&lt;DATA_DIR&gt;/browser_profile</code> 持久化，CDP screencast 通过 <code>/ws/browser</code> 推送实时画面。</li>
           <li><strong>登录接管</strong>——桌面版直接在内嵌标签页登录；非桌面模式可切换到真实有头 Chromium 窗口，完成后继续同一会话。</li>
+          <li><strong>可验证交互</strong>——Snapshot 为当前可见元素生成短期 Ref；Electron Click 会在发送可信 Chromium Input 前重新定位目标，并拒绝被遮挡或持续移动的元素。</li>
+          <li><strong>受控文件上传</strong>——文件输入由专用工具设置，每次绑定站点、页面/Frame、Input 和文件 Hash，并要求一次性用户批准；工具不会额外点击 Submit。</li>
         </ul>
+        <div class="note"><strong>当前边界：</strong>Snapshot、Ref 和 Wait 主要覆盖 Top-level DOM，不完整递归 Iframe、Shadow DOM、Canvas/WebGL 或复杂 Editor。Network Log 只提供 Resource Performance Entry，不是完整 DevTools Trace。Browser URL 检查会阻止直接访问保留网络，但不构成覆盖所有子资源、脚本导航和 Electron Redirect 的逐 Request 网络 Sandbox。Click、Type 和 Enter Submit 也不会自动获得 File Upload 的 Human-only Confirmation。</div>
       </section>
 
       <section data-topic="setup">
@@ -1750,6 +1753,7 @@ playwright install chromium</code></pre></div>
           <div class="step"><div class="step-number">4</div><div><strong>代理继续</strong>——浏览器以<strong>无头模式</strong>在同一配置（已认证）上重启。代理自动恢复轮次。</div></div>
         </div>
         <p>因为配置文件是持久化的，对于大多数网站，接管只需要在首次登录时出现一次。</p>
+        <p>Snapshot Ref 是页面状态凭据而不是永久 Selector。导航、滚动或明显重排后应重新 Snapshot；购买、发布、删除、账号修改等高影响网页动作仍必须由调用方依据用户请求和 Permission Policy 控制。</p>
       </section>
 
       <section data-topic="configuration">
@@ -1778,9 +1782,16 @@ playwright install chromium</code></pre></div>
             <thead><tr><th>工具</th><th>用途</th></tr></thead>
             <tbody>
               <tr><td><code>browser_navigate</code></td><td>打开 URL，返回可读文本</td></tr>
+              <tr><td><code>browser_snapshot</code></td><td>返回当前可见元素的 Ref、文本、链接、选择器和位置</td></tr>
               <tr><td><code>browser_screenshot</code></td><td>截取当前页面为临时 PNG</td></tr>
               <tr><td><code>browser_click</code></td><td>按 CSS 选择器点击元素</td></tr>
+              <tr><td><code>browser_click_ref</code></td><td>点击 Snapshot 返回的元素 Ref</td></tr>
+              <tr><td><code>browser_click_at</code></td><td>点击视口坐标</td></tr>
               <tr><td><code>browser_type</code></td><td>在输入框中输入文本（可选按回车提交）</td></tr>
+              <tr><td><code>browser_type_ref</code></td><td>向 Snapshot 返回的可编辑元素输入</td></tr>
+              <tr><td><code>browser_upload_files</code></td><td>经一次性用户批准设置确切本地文件</td></tr>
+              <tr><td><code>browser_wait</code></td><td>等待 URL、文本或选择器条件</td></tr>
+              <tr><td><code>browser_network_log</code></td><td>读取页面 Resource Performance Entry</td></tr>
               <tr><td><code>browser_scroll</code></td><td>滚动页面</td></tr>
               <tr><td><code>browser_tab_list</code></td><td>列出所有打开的标签页</td></tr>
               <tr><td><code>browser_tab_new</code></td><td>打开新标签页</td></tr>
@@ -1804,7 +1815,10 @@ playwright install chromium</code></pre></div>
           <li><strong>Electron desktop</strong> — native <code>WebContentsView</code> tabs are embedded in Workbench. You and the agent use the same persistent browser partition, with no Playwright install.</li>
           <li><strong>Non-desktop Playwright mode</strong> — the profile persists at <code>&lt;DATA_DIR&gt;/browser_profile</code>, and a CDP screencast streams frames through <code>/ws/browser</code>.</li>
           <li><strong>Login takeover</strong> — sign in directly in the embedded desktop tab, or switch non-desktop mode to a real headed Chromium window and continue the same session afterward.</li>
+          <li><strong>Verified interaction</strong> — snapshots assign short-lived refs to currently visible elements; Electron resolves a click target again before sending trusted Chromium input and refuses obscured or persistently moving targets.</li>
+          <li><strong>Controlled file upload</strong> — the dedicated tool binds every upload to the site, page/frame, input, and file hashes, requires single-use user approval, and never clicks a separate submit control.</li>
         </ul>
+        <div class="note"><strong>Current boundaries:</strong> Snapshot, ref, and wait behavior primarily cover the top-level DOM; they do not recursively model every iframe, shadow DOM, Canvas/WebGL control, or complex editor. Network Log exposes Resource Performance entries rather than a full DevTools trace. URL validation blocks direct reserved-network targets but is not a per-request sandbox for every subresource, script navigation, or Electron redirect. Click, type, and Enter submission also do not automatically receive the human-only confirmation used for file upload.</div>
       </section>
       <section data-topic="setup">
         <h2>Setup</h2>
@@ -1824,6 +1838,7 @@ playwright install chromium</code></pre></div>
           <div class="step"><div class="step-number">4</div><div><strong>The agent resumes</strong> — the browser restarts headlessly with the same authenticated profile and the agent resumes its round automatically.</div></div>
         </div>
         <p>Because the profile persists, most sites need takeover only for the first login.</p>
+        <p>Snapshot refs are page-state credentials rather than permanent selectors. Take a new snapshot after navigation, scrolling, or substantial layout changes. Callers must still apply the user's request and permission policy before purchases, publishing, deletion, account changes, or other high-impact web actions.</p>
       </section>
       <section data-topic="configuration">
         <h2>Configuration</h2>
@@ -1847,9 +1862,16 @@ playwright install chromium</code></pre></div>
           <thead><tr><th>Tool</th><th>Purpose</th></tr></thead>
           <tbody>
             <tr><td><code>browser_navigate</code></td><td>Open a URL and return readable text</td></tr>
+            <tr><td><code>browser_snapshot</code></td><td>Return refs, text, links, selectors, and boxes for visible elements</td></tr>
             <tr><td><code>browser_screenshot</code></td><td>Capture the current page as a temporary PNG</td></tr>
             <tr><td><code>browser_click</code></td><td>Click an element by CSS selector</td></tr>
+            <tr><td><code>browser_click_ref</code></td><td>Click an element ref returned by a snapshot</td></tr>
+            <tr><td><code>browser_click_at</code></td><td>Click viewport coordinates</td></tr>
             <tr><td><code>browser_type</code></td><td>Enter text in a field, optionally submitting with Enter</td></tr>
+            <tr><td><code>browser_type_ref</code></td><td>Type into an editable element returned by a snapshot</td></tr>
+            <tr><td><code>browser_upload_files</code></td><td>Attach exact local files after single-use user approval</td></tr>
+            <tr><td><code>browser_wait</code></td><td>Wait for URL, text, or selector conditions</td></tr>
+            <tr><td><code>browser_network_log</code></td><td>Read page Resource Performance entries</td></tr>
             <tr><td><code>browser_scroll</code></td><td>Scroll the page</td></tr>
             <tr><td><code>browser_tab_list</code></td><td>List open tabs</td></tr>
             <tr><td><code>browser_tab_new</code></td><td>Open a new tab</td></tr>

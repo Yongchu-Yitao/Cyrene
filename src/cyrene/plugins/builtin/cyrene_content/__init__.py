@@ -20,7 +20,7 @@ from .tool_result_store import get_tool_result_store
 def setup(context: PluginSetupContext) -> None:
     missing = [
         name
-        for name in ("content", "web_search", "tool_results")
+        for name in ("web_search", "tool_results")
         if context.services.get(name) is None
     ]
     if missing:
@@ -39,10 +39,9 @@ def application_setup(context: PluginApplicationContext) -> None:
     from .search_settings import install_search_settings
 
     search_service = get_search_service()
-    context.provide("content", search_service)
     context.provide("web_search", search_service)
     context.provide("tool_results", get_tool_result_store())
-    context.on_startup(search_service.startup)
+    context.on_startup(search_service.startup_best_effort)
     context.on_shutdown(search_service.shutdown)
     register_pdf_routes(context.router)
     register_search_routes(

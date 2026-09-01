@@ -600,20 +600,32 @@ function WbcModelStatusMessage({ msg }) {
     : {};
   var model = String(status.model || "").trim();
   if (!model) return null;
-  var switched = String(status.status || "") === "switched";
+  var statusName = String(status.status || "");
+  var switched = statusName === "switched";
+  var switching = statusName === "switching";
+  var recovered = statusName === "recovered";
+  var failed = statusName === "failed";
   var retryCount = Math.max(0, Number(status.retryCount || 0));
   var retryLimit = Math.max(0, Number(status.retryLimit || 0));
-  var text = switched
-    ? wbcT("workbenchChat.modelSwitchedCard", "Switched to {model}", { model: model })
-    : (retryCount > 0 && retryLimit > 0
+  var text = switching
+    ? wbcT("workbenchChat.modelSwitchingCard", "Switching to {model}", { model: model })
+    : switched
+      ? wbcT("workbenchChat.modelSwitchedCard", "Switched to {model}", { model: model })
+      : recovered
+        ? wbcT("workbenchChat.modelRecoveredCard", "Connection restored for {model}", { model: model })
+        : failed
+          ? wbcT("workbenchChat.modelFailedCard", "Model call failed: {model}", { model: model })
+          : (retryCount > 0 && retryLimit > 0
       ? wbcT("workbenchChat.modelRetryCountCard", "Retrying {model} ({count}/{limit})", {
           model: model,
           count: retryCount,
           limit: retryLimit,
         })
       : wbcT("workbenchChat.modelRetryCard", "Retrying {model}", { model: model }));
+  var stateClass = failed ? "is-failed"
+    : (switched || recovered ? "is-complete" : "is-pending");
   return (
-    <div className={"wbc-model-status-message " + (switched ? "is-switched" : "is-retrying")} role="status" aria-live="polite">
+    <div className={"wbc-model-status-message " + stateClass} role="status" aria-live="polite">
       <div className="wbc-model-status-card">
         <span className="wbc-model-status-copy">{text}</span>
       </div>
@@ -839,6 +851,10 @@ function wbcTraceActionKind(entry) {
 
 function wbcTraceActionLabel(entry) {
   var raw = String(entry && (entry.text || entry.tool) || "").trim();
+  var normalized = wbcTraceNormalizeName(raw);
+  if (normalized === "toolbox_list") return wbcT("workbenchChat.traceAction.listedTools", "Listed available tools");
+  if (normalized === "toolbox_describe") return wbcT("workbenchChat.traceAction.inspectedTool", "Inspected tool details");
+  if (normalized === "toolbox_invoke") return wbcT("workbenchChat.traceAction.invokedTool", "Invoked a tool");
   var kind = wbcTraceActionKind(entry);
   if (kind === "edit") return wbcT("workbenchChat.traceAction.edited", "Edited files");
   if (kind === "write") return wbcT("workbenchChat.traceAction.wrote", "Wrote files");

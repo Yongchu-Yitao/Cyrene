@@ -5,12 +5,17 @@ Architecture:
   SimpleXNG Searcher --> parallel Fetch --> Evidence
 """
 
+from __future__ import annotations
+
 import asyncio
 import ipaddress
 import logging
 import os
 import re
+import threading
 import time
+from collections.abc import Mapping
+from copy import deepcopy
 from urllib.parse import urlparse
 
 import httpx
@@ -30,7 +35,203 @@ logger = logging.getLogger(__name__)
 
 
 class SearchBackendUnavailable(RuntimeError):
-    """The configured search service could not execute the query."""
+    """A classified provider or aggregate search failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        error_code: str = "search_provider_unavailable",
+        retryable: bool = True,
+        retry_scope: str = "after_delay",
+        retry_after_ms: int | None = 30_000,
+        affects_health: bool = True,
+        circuit_scope: str = "run_plugin",
+        provider_health: tuple[Mapping[str, object], ...] = (),
+    ) -> None:
+        super().__init__(str(message or error_code))
+        self.provider = str(provider or "").strip()
+        self.error_code = str(error_code or "search_provider_unavailable")
+        self.retryable = bool(retryable)
+        self.retry_scope = str(retry_scope or "never")
+        self.retry_after_ms = (
+            max(0, int(retry_after_ms)) if retry_after_ms is not None else None
+        )
+        self.affects_health = bool(affects_health)
+        self.circuit_scope = str(circuit_scope or "none")
+        self.provider_health = tuple(
+            deepcopy(dict(item))
+            for item in provider_health
+            if isinstance(item, Mapping)
+        )
+
+    def for_provider(self, provider: str) -> SearchBackendUnavailable:
+        return SearchBackendUnavailable(
+            str(self),
+            provider=self.provider or provider,
+            error_code=self.error_code,
+            retryable=self.retryable,
+            retry_scope=self.retry_scope,
+            retry_after_ms=self.retry_after_ms,
+            affects_health=self.affects_health,
+            circuit_scope=self.circuit_scope,
+            provider_health=self.provider_health,
+        )
+
+
+class ProviderHealthRegistry:
+    """Application-owned circuit state for individual search providers."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._health: dict[str, dict[str, object]] = {}
+
+    @staticmethod
+    def _closed(provider: str) -> dict[str, object]:
+        return {
+            "provider": provider,
+            "state": "closed",
+            "error_code": "",
+            "retryable": True,
+            "retry_scope": "after_delay",
+            "retry_after_ms": None,
+            "consecutive_failures": 0,
+        }
+
+    def reset(self) -> None:
+        with self._lock:
+            self._health.clear()
+
+    def before_call(self, provider: str) -> SearchBackendUnavailable | None:
+        normalized = str(provider or "").strip()
+        now = time.monotonic()
+        with self._lock:
+            record = self._health.get(normalized)
+            if not record or record.get("state") == "closed":
+                return None
+            if record.get("state") == "half_open" and record.get("probe_inflight"):
+                return SearchBackendUnavailable(
+                    "Search provider circuit is waiting for its half-open probe.",
+                    provider=normalized,
+                    error_code="provider_probe_inflight",
+                    retryable=True,
+                    retry_scope="after_delay",
+                    retry_after_ms=1_000,
+                    affects_health=False,
+                    circuit_scope="run_plugin",
+                )
+            opened_until = record.get("opened_until")
+            if isinstance(opened_until, (int, float)) and now >= float(opened_until):
+                record["state"] = "half_open"
+                record["probe_inflight"] = True
+                return None
+            retry_after_ms = None
+            if isinstance(opened_until, (int, float)):
+                retry_after_ms = max(0, int((float(opened_until) - now) * 1000))
+            return SearchBackendUnavailable(
+                "Search provider circuit is open.",
+                provider=normalized,
+                error_code=str(record.get("error_code") or "provider_circuit_open"),
+                retryable=record.get("retryable") is True,
+                retry_scope=str(record.get("retry_scope") or "never"),
+                retry_after_ms=retry_after_ms,
+                affects_health=False,
+                circuit_scope="run_plugin",
+            )
+
+    def record_failure(self, failure: SearchBackendUnavailable) -> None:
+        provider = str(failure.provider or "").strip()
+        if not provider or not failure.affects_health:
+            return
+        with self._lock:
+            previous = self._health.get(provider) or self._closed(provider)
+            failures = int(previous.get("consecutive_failures") or 0) + 1
+            opened_until = (
+                None
+                if failure.retry_scope == "after_config_change"
+                else time.monotonic() + max(1, failure.retry_after_ms or 30_000) / 1000
+            )
+            self._health[provider] = {
+                "provider": provider,
+                "state": "open",
+                "error_code": failure.error_code,
+                "retryable": failure.retryable,
+                "retry_scope": failure.retry_scope,
+                "retry_after_ms": failure.retry_after_ms,
+                "opened_until": opened_until,
+                "consecutive_failures": failures,
+            }
+
+    def record_success(self, provider: str) -> None:
+        normalized = str(provider or "").strip()
+        if not normalized:
+            return
+        with self._lock:
+            self._health[normalized] = self._closed(normalized)
+
+    def snapshots(self, providers: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+        now = time.monotonic()
+        snapshots: list[dict[str, object]] = []
+        with self._lock:
+            for provider in providers:
+                record = deepcopy(self._health.get(provider) or self._closed(provider))
+                opened_until = record.pop("opened_until", None)
+                record.pop("probe_inflight", None)
+                if isinstance(opened_until, (int, float)):
+                    record["retry_after_ms"] = max(
+                        0,
+                        int((float(opened_until) - now) * 1000),
+                    )
+                snapshots.append(record)
+        return tuple(snapshots)
+
+
+def _provider_request_failure(
+    provider: str,
+    exc: Exception,
+) -> SearchBackendUnavailable:
+    """Classify transport failures without exposing credentials or response bodies."""
+
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in {401, 403}:
+        return SearchBackendUnavailable(
+            f"{provider} rejected its configured credentials.",
+            provider=provider,
+            error_code="credentials_invalid",
+            retryable=False,
+            retry_scope="after_config_change",
+            retry_after_ms=None,
+        )
+    if status_code == 429:
+        retry_after_ms = 60_000
+        headers = getattr(response, "headers", {})
+        raw_retry_after = headers.get("Retry-After") if isinstance(headers, Mapping) else None
+        try:
+            retry_after_ms = max(1_000, int(float(raw_retry_after) * 1000))
+        except (TypeError, ValueError):
+            pass
+        return SearchBackendUnavailable(
+            f"{provider} rate limit was reached.",
+            provider=provider,
+            error_code="rate_limited",
+            retryable=True,
+            retry_scope="after_delay",
+            retry_after_ms=retry_after_ms,
+        )
+    if isinstance(exc, (requests.Timeout, httpx.TimeoutException)):
+        error_code = "provider_timeout"
+    else:
+        error_code = "provider_request_failed"
+    return SearchBackendUnavailable(
+        f"{provider} request failed ({exc.__class__.__name__}).",
+        provider=provider,
+        error_code=error_code,
+        retryable=True,
+        retry_scope="after_delay",
+        retry_after_ms=30_000,
+    )
 
 
 def _proxied_session() -> requests.Session:
@@ -106,7 +307,12 @@ async def _search_simplexng(query: str, *, max_results: int = 5) -> list[dict]:
     """Search via the built-in SimpleXNG SearXNG-compatible API."""
     base_url = _get_simplexng_url()
     if not base_url:
-        raise SearchBackendUnavailable("Web search backend is not running or configured.")
+        raise SearchBackendUnavailable(
+            "Web search backend is not running or configured.",
+            error_code="provider_not_running",
+            retryable=True,
+            retry_scope="after_delay",
+        )
     url = f"{base_url.rstrip('/')}/search"
     search_language = _simplexng_language()
     headers = {
@@ -142,7 +348,10 @@ async def _search_simplexng(query: str, *, max_results: int = 5) -> list[dict]:
                 engine_list = ", ".join(failed_engines)
                 raise SearchBackendUnavailable(
                     "Web search backend could not obtain results because search "
-                    f"engines were unreachable: {engine_list}."
+                    f"engines were unreachable: {engine_list}.",
+                    error_code="upstream_unreachable",
+                    retryable=True,
+                    retry_scope="after_delay",
                 )
             return raw_results
 
@@ -152,9 +361,7 @@ async def _search_simplexng(query: str, *, max_results: int = 5) -> list[dict]:
         raise
     except Exception as exc:
         logger.warning("SimpleXNG search failed: %s", exc)
-        raise SearchBackendUnavailable(
-            f"SimpleXNG request failed ({exc.__class__.__name__})."
-        ) from exc
+        raise _provider_request_failure("simplexng", exc) from exc
 
     results = []
     for r in raw_results:
@@ -377,7 +584,13 @@ def _normalized_api_results(
 async def _search_tavily(topic: str, *, max_results: int = 5) -> str:
     api_key = provider_api_key("tavily")
     if not api_key:
-        raise SearchBackendUnavailable("Tavily API key is not configured.")
+        raise SearchBackendUnavailable(
+            "Tavily API key is not configured.",
+            error_code="credentials_missing",
+            retryable=False,
+            retry_scope="after_config_change",
+            retry_after_ms=None,
+        )
 
     def _request() -> list[dict]:
         with _proxied_session() as session:
@@ -407,18 +620,30 @@ async def _search_tavily(topic: str, *, max_results: int = 5) -> str:
             max_results=max_results,
         )
     except Exception as exc:
-        raise SearchBackendUnavailable(
-            f"Tavily search request failed: {exc.__class__.__name__}."
-        ) from exc
+        raise _provider_request_failure("tavily", exc) from exc
     if not results:
-        raise SearchBackendUnavailable("Tavily returned no usable search content.")
+        raise SearchBackendUnavailable(
+            "Tavily returned no usable search content.",
+            error_code="no_results",
+            retryable=True,
+            retry_scope="different_arguments",
+            retry_after_ms=None,
+            affects_health=False,
+            circuit_scope="none",
+        )
     return _self_contained_search_result(results, [item["snippet"] for item in results])
 
 
 async def _search_brave(topic: str, *, max_results: int = 5) -> str:
     api_key = provider_api_key("brave")
     if not api_key:
-        raise SearchBackendUnavailable("Brave Search API key is not configured.")
+        raise SearchBackendUnavailable(
+            "Brave Search API key is not configured.",
+            error_code="credentials_missing",
+            retryable=False,
+            retry_scope="after_config_change",
+            retry_after_ms=None,
+        )
 
     def _request() -> list[dict]:
         with _proxied_session() as session:
@@ -447,17 +672,57 @@ async def _search_brave(topic: str, *, max_results: int = 5) -> str:
             max_results=max_results,
         )
     except Exception as exc:
-        raise SearchBackendUnavailable(
-            f"Brave Search request failed: {exc.__class__.__name__}."
-        ) from exc
+        raise _provider_request_failure("brave", exc) from exc
     if not results:
-        raise SearchBackendUnavailable("Brave Search returned no usable search content.")
+        raise SearchBackendUnavailable(
+            "Brave Search returned no usable search content.",
+            error_code="no_results",
+            retryable=True,
+            retry_scope="different_arguments",
+            retry_after_ms=None,
+            affects_health=False,
+            circuit_scope="none",
+        )
     return _self_contained_search_result(results, [item["snippet"] for item in results])
 
 
 # ---------------------------------------------------------------------------
 # Main entry: deep_search
 # ---------------------------------------------------------------------------
+
+
+async def _simplexng_preview_result(fetch_targets: list[dict]) -> str:
+    started = time.perf_counter()
+    fetched_results = await _fetch_preview_pages(fetch_targets)
+    fetch_ms = (time.perf_counter() - started) * 1000
+    for index, result_item in enumerate(fetch_targets):
+        result_item["fetched_content"] = fetched_results[index]
+    logger.info(
+        "Preview fetch complete: %d URLs fetched (%.0f ms)",
+        sum(1 for item in fetched_results if item),
+        fetch_ms,
+    )
+    preview_contents = [
+        result.get("fetched_content", "") or result.get("snippet", "")
+        for result in fetch_targets
+    ]
+    if not any(str(content or "").strip() for content in preview_contents):
+        raise SearchBackendUnavailable(
+            "SimpleXNG returned previews without usable content.",
+            error_code="no_results",
+            retryable=True,
+            retry_scope="different_arguments",
+            retry_after_ms=None,
+            affects_health=False,
+            circuit_scope="none",
+        )
+    result = _preview_search_result(fetch_targets, preview_contents)
+    logger.info(
+        "WebSearch preview result generated (%d chars, %d sources)",
+        len(result),
+        len(fetch_targets),
+    )
+    return result
 
 
 async def _deep_search_simplexng(
@@ -507,7 +772,15 @@ async def _deep_search_simplexng(
     logger.info("Stage 2 search complete: %d raw results (SimpleXNG)", len(all_results))
 
     if not all_results:
-        raise SearchBackendUnavailable("SimpleXNG returned no usable search results.")
+        raise SearchBackendUnavailable(
+            "SimpleXNG returned no usable search results.",
+            error_code="no_results",
+            retryable=True,
+            retry_scope="different_arguments",
+            retry_after_ms=None,
+            affects_health=False,
+            circuit_scope="none",
+        )
 
     # Deduplicate by URL (keep first occurrence)
     seen_urls: set[str] = set()
@@ -525,31 +798,7 @@ async def _deep_search_simplexng(
     fetch_targets = deduped[:3] if detail == "preview" else deduped
 
     if detail == "preview":
-        started = time.perf_counter()
-        fetched_results = await _fetch_preview_pages(fetch_targets)
-        fetch_ms = (time.perf_counter() - started) * 1000
-        for index, result_item in enumerate(fetch_targets):
-            result_item["fetched_content"] = fetched_results[index]
-        logger.info(
-            "Preview fetch complete: %d URLs fetched (%.0f ms)",
-            sum(1 for item in fetched_results if item),
-            fetch_ms,
-        )
-        preview_contents = [
-            r.get("fetched_content", "") or r.get("snippet", "")
-            for r in fetch_targets
-        ]
-        if not any(str(content or "").strip() for content in preview_contents):
-            raise SearchBackendUnavailable(
-                "SimpleXNG returned previews without usable content."
-            )
-        result = _preview_search_result(fetch_targets, preview_contents)
-        logger.info(
-            "WebSearch preview result generated (%d chars, %d sources)",
-            len(result),
-            len(fetch_targets),
-        )
-        return result
+        return await _simplexng_preview_result(fetch_targets)
 
     # requests.Session is not thread-safe. Each concurrent fetch owns its
     # session instead of sharing one across asyncio.to_thread workers.
@@ -594,7 +843,15 @@ async def _deep_search_simplexng(
 
     fetched_contents = [r.get("fetched_content", "") or r.get("snippet", "") for r in deduped]
     if not any(str(content or "").strip() for content in fetched_contents):
-        raise SearchBackendUnavailable("SimpleXNG returned results without usable content.")
+        raise SearchBackendUnavailable(
+            "SimpleXNG returned results without usable content.",
+            error_code="no_results",
+            retryable=True,
+            retry_scope="different_arguments",
+            retry_after_ms=None,
+            affects_health=False,
+            circuit_scope="none",
+        )
     result = _self_contained_search_result(deduped, fetched_contents)
     logger.info(
         "WebSearch evidence result generated (%d chars, %d sources)",
@@ -608,7 +865,13 @@ async def _deep_search_deepseek(topic: str) -> str:
     """Native DeepSeek Responses-API web search."""
     candidate = find_official_deepseek_search_candidate()
     if candidate is None:
-        raise DeepSeekWebSearchError("no official DeepSeek account configured")
+        raise SearchBackendUnavailable(
+            "no official DeepSeek account configured",
+            error_code="credentials_missing",
+            retryable=False,
+            retry_scope="after_config_change",
+            retry_after_ms=None,
+        )
     async with trace_span(
         "search_stage",
         "deepseek_pipeline",
@@ -643,16 +906,85 @@ async def _run_search_provider(
             return await _search_tavily(topic, max_results=max_results)
         if provider == "brave":
             return await _search_brave(topic, max_results=max_results)
-        raise SearchBackendUnavailable(f"Unknown search provider: {provider}.")
-    except SearchBackendUnavailable:
-        raise
+        raise SearchBackendUnavailable(
+            f"Unknown search provider: {provider}.",
+            error_code="provider_unknown",
+            retryable=False,
+            retry_scope="after_config_change",
+            retry_after_ms=None,
+        )
+    except SearchBackendUnavailable as exc:
+        raise exc.for_provider(provider) from exc
     except DeepSeekWebSearchError as exc:
-        raise SearchBackendUnavailable(str(exc)) from exc
+        status_match = re.search(r"HTTP\s+(\d{3})", str(exc))
+        status_code = int(status_match.group(1)) if status_match else None
+        if status_code in {401, 403}:
+            raise SearchBackendUnavailable(
+                "DeepSeek rejected its configured credentials.",
+                provider=provider,
+                error_code="credentials_invalid",
+                retryable=False,
+                retry_scope="after_config_change",
+                retry_after_ms=None,
+            ) from exc
+        if status_code == 429:
+            raise SearchBackendUnavailable(
+                "DeepSeek rate limit was reached.",
+                provider=provider,
+                error_code="rate_limited",
+                retryable=True,
+                retry_scope="after_delay",
+                retry_after_ms=60_000,
+            ) from exc
+        raise SearchBackendUnavailable(
+            str(exc),
+            provider=provider,
+            error_code="provider_request_failed",
+            retryable=True,
+            retry_scope="after_delay",
+        ) from exc
     except Exception as exc:
         logger.exception("Search provider %s failed unexpectedly", provider)
         raise SearchBackendUnavailable(
-            f"{provider} failed ({exc.__class__.__name__})."
+            f"{provider} failed ({exc.__class__.__name__}).",
+            provider=provider,
+            error_code="provider_internal_error",
+            retryable=False,
+            retry_scope="new_run",
+            retry_after_ms=None,
         ) from exc
+
+
+def _search_failure_policy(
+    failures: list[SearchBackendUnavailable],
+) -> tuple[str, str, str, int | None]:
+    """Collapse provider failures into one public retry policy."""
+    only_no_results = bool(failures) and all(
+        failure.error_code == "no_results" for failure in failures
+    )
+    retry_after_values = [
+        failure.retry_after_ms
+        for failure in failures
+        if failure.retry_after_ms is not None
+    ]
+    if only_no_results:
+        return "search_no_results", "different_arguments", "none", None
+    if retry_after_values:
+        return (
+            "search_providers_unavailable",
+            "after_delay",
+            "run_plugin",
+            min(retry_after_values),
+        )
+    retry_scope = (
+        "after_config_change"
+        if failures
+        and all(
+            failure.retry_scope == "after_config_change" for failure in failures
+        )
+        else "new_run"
+    )
+    return "search_providers_unavailable", retry_scope, "run_plugin", None
 
 
 async def _deep_search_impl(
@@ -663,16 +995,36 @@ async def _deep_search_impl(
     round_id: str = "",
     detail: str = "content",
     max_results: int = 5,
+    provider_health: ProviderHealthRegistry | None = None,
 ) -> str:
     """Try enabled search providers in user-configured order."""
     del db_path, session_id, round_id
     settings = runtime_settings()
     if not settings.enabled:
-        raise SearchBackendUnavailable("Web search is disabled in Settings.")
+        raise SearchBackendUnavailable(
+            "Web search is disabled in Settings.",
+            error_code="search_disabled",
+            retryable=False,
+            retry_scope="after_config_change",
+            retry_after_ms=None,
+        )
     if not settings.providers:
-        raise SearchBackendUnavailable("No search provider is enabled in Settings.")
+        raise SearchBackendUnavailable(
+            "No search provider is enabled in Settings.",
+            error_code="no_provider_enabled",
+            retryable=False,
+            retry_scope="after_config_change",
+            retry_after_ms=None,
+        )
+    health = provider_health or ProviderHealthRegistry()
     failures: list[str] = []
+    classified_failures: list[SearchBackendUnavailable] = []
     for provider in settings.providers:
+        blocked = health.before_call(provider)
+        if blocked is not None:
+            classified_failures.append(blocked)
+            failures.append(f"{provider}: {blocked}")
+            continue
         try:
             async with trace_span(
                 "search_stage",
@@ -688,13 +1040,37 @@ async def _deep_search_impl(
                     )
                 ).strip()
             if not result:
-                raise SearchBackendUnavailable("provider returned empty content")
+                raise SearchBackendUnavailable(
+                    "provider returned empty content",
+                    provider=provider,
+                    error_code="no_results",
+                    retryable=True,
+                    retry_scope="different_arguments",
+                    retry_after_ms=None,
+                    affects_health=False,
+                    circuit_scope="none",
+                )
+            health.record_success(provider)
             return result
         except SearchBackendUnavailable as exc:
-            failures.append(f"{provider}: {exc}")
-            logger.warning("Search provider %s unavailable: %s", provider, exc)
+            classified = exc.for_provider(provider)
+            health.record_failure(classified)
+            classified_failures.append(classified)
+            failures.append(f"{provider}: {classified}")
+            logger.warning("Search provider %s unavailable: %s", provider, classified)
+    retryable = any(failure.retryable for failure in classified_failures)
+    error_code, retry_scope, circuit_scope, retry_after_ms = _search_failure_policy(
+        classified_failures
+    )
     raise SearchBackendUnavailable(
-        "All enabled search providers failed. " + " | ".join(failures)
+        "All enabled search providers failed. " + " | ".join(failures),
+        error_code=error_code,
+        retryable=retryable,
+        retry_scope=retry_scope,
+        retry_after_ms=retry_after_ms,
+        affects_health=False,
+        circuit_scope=circuit_scope,
+        provider_health=health.snapshots(settings.providers),
     )
 
 
@@ -706,6 +1082,7 @@ async def deep_search(
     round_id: str = "",
     detail: str = "content",
     max_results: int = 5,
+    provider_health: ProviderHealthRegistry | None = None,
 ) -> str:
     """Run one search under a stable, query-free trace identifier."""
     search_id = new_trace_id("search")
@@ -723,6 +1100,7 @@ async def deep_search(
             round_id=round_id,
             detail=detail,
             max_results=max_results,
+            provider_health=provider_health,
         )
         search_span.set_attribute("answer_chars", len(result))
         return result

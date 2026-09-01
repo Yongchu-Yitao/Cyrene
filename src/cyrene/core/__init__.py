@@ -16,6 +16,7 @@ from .context import (
 from .hook import (
     CONTEXT_CHANGE,
     CONTEXT_USED,
+    CONVERSATION_TURN_COMMITTED,
     HOOK_EVENTS,
     POST_TOOL_USE,
     PRE_TOOL_USE,
@@ -42,6 +43,7 @@ __all__ = [
     "AgentSessionEvent",
     "CONTEXT_CHANGE",
     "CONTEXT_USED",
+    "CONVERSATION_TURN_COMMITTED",
     "ContextChange",
     "ContextError",
     "ContextNode",

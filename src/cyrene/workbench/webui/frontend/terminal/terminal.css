@@ -10,6 +10,13 @@
   background: var(--wbc-terminal-background);
 }
 
+/* Terminal switching keeps each visited xterm and WebSocket alive. Only the
+   selected terminal participates in layout; showing it again lets the same
+   renderer resume immediately without replaying its retained output. */
+.wbc-terminal-pane.is-cached-hidden {
+  display: none !important;
+}
+
 .wbc-terminal-pane.is-fullscreen {
   position: fixed;
   z-index: 10000;

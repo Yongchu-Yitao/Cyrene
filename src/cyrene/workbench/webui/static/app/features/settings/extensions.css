@@ -44,8 +44,15 @@
 }
 
 .wb-registry-pack-card {
+  position: relative;
+  z-index: 0;
+  overflow: visible;
   cursor: pointer;
   transition: border-color 180ms ease;
+}
+
+.wb-registry-pack-card:has(.wb-tool-menu) {
+  z-index: 1;
 }
 
 .wb-registry-pack-card:hover {
@@ -450,6 +457,20 @@
 .wb-registry-member-copy { min-width: 0; display: grid; gap: 3px; }
 .wb-registry-member-copy strong { overflow-wrap: anywhere; color: var(--wb-text); font-size: calc(11.5px * var(--wb-ui-font-scale, 1)); }
 .wb-registry-member-copy code { overflow-wrap: anywhere; color: var(--wb-faint); font-size: calc(10px * var(--wb-ui-font-scale, 1)); }
+.wb-registry-entry-member { background: color-mix(in srgb, var(--wb-panel-bg) 60%, transparent); }
+.wb-registry-entry-member .wb-registry-member-copy { gap: 2px; }
+.wb-registry-entry-member .wb-registry-member-copy small {
+  color: var(--wb-muted);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
+}
+.wb-registry-entry-eyebrow {
+  color: var(--accent, var(--wb-muted));
+  font-size: calc(9px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
 
 .wb-tool-menu-wrap { position: relative; flex: 0 0 auto; }
 .wb-tool-menu-trigger {

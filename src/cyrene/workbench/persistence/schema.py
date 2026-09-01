@@ -32,6 +32,22 @@ CREATE TABLE IF NOT EXISTS workbench_chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_workbench_chat_messages_id
     ON workbench_chat_messages(chat_id, message_id);
+CREATE TABLE IF NOT EXISTS workbench_conversation_commit_outbox (
+    event_id TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL DEFAULT '',
+    run_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'running', 'completed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_workbench_commit_outbox_pending
+    ON workbench_conversation_commit_outbox(status, created_at, event_id);
 CREATE TABLE IF NOT EXISTS workbench_chat_change_sets (
     change_set_id TEXT PRIMARY KEY,
     chat_id TEXT NOT NULL,
@@ -205,6 +221,19 @@ def ensure_schema(db_path: str | Path) -> None:
                             "ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'"
                         )
                     _ensure_inbox_schema(conn)
+                    conn.execute(
+                        "UPDATE workbench_conversation_commit_outbox "
+                        "SET status = 'pending' WHERE status = 'running'"
+                    )
+                    outbox_cutoff = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=_INBOX_DURABLE_RETENTION_DAYS)
+                    ).isoformat()
+                    conn.execute(
+                        "DELETE FROM workbench_conversation_commit_outbox "
+                        "WHERE status = 'completed' AND completed_at < ?",
+                        (outbox_cutoff,),
+                    )
                     conn.commit()
                 break
             except sqlite3.OperationalError as exc:
