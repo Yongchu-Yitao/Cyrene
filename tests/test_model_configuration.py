@@ -470,6 +470,99 @@ def test_version_10_configuration_adds_bailian_once_and_respects_later_deletion(
     assert normalize_model_configuration(deleted)["connections"] == []
 
 
+def test_v12_upgrade_repairs_sparse_onboarding_provider_graph(
+    isolated_model_store,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        CONFIG_VERSION,
+        get_model_configuration,
+        save_model_configuration,
+    )
+    from cyrene.plugins.model_catalog import model_plugin_catalog
+
+    isolated_model_store.set_setting("model_configuration", {
+        "version": 11,
+        "connections": [
+            {
+                "id": "aliyun_bailian",
+                "name": "Alibaba Cloud Model Studio",
+                "adapter": "openai",
+                "enabled": True,
+                "use_proxy": False,
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "api_key": "",
+                "options": {"provider_preset": "aliyun_bailian"},
+            },
+            {
+                "id": "onboarding-openai-compatible",
+                "name": "MiniMax",
+                "adapter": "openai",
+                "enabled": True,
+                "use_proxy": False,
+                "base_url": "https://api.minimaxi.com/v1",
+                "api_key": "minimax-secret",
+                "options": {"provider_preset": "minimax"},
+            },
+        ],
+        "profiles": [{
+            "id": "onboarding-primary",
+            "connection_id": "onboarding-openai-compatible",
+            "model": "MiniMax-M2.7",
+            "name": "MiniMax-M2.7",
+            "enabled": True,
+            "capabilities": ["chat"],
+        }],
+        "routes": {
+            "primary": ["onboarding-primary"],
+            "secondary": [],
+            "vision": [],
+            "embedding": [],
+        },
+    })
+
+    migrated = get_model_configuration()
+    connection_by_id = {
+        connection["id"]: connection for connection in migrated["connections"]
+    }
+    represented_provider_ids = {
+        str((connection.get("options") or {}).get("provider_preset") or "")
+        for connection in migrated["connections"]
+    }
+    builtin_provider_ids = {
+        str(provider["id"])
+        for provider in model_plugin_catalog()
+        if provider.get("pack_id") == "cyrene_model"
+    }
+
+    assert migrated["version"] == CONFIG_VERSION
+    assert builtin_provider_ids <= represented_provider_ids
+    assert (
+        connection_by_id["onboarding-openai-compatible"]["api_key"]
+        == "minimax-secret"
+    )
+    assert migrated["routes"]["primary"] == ["onboarding-primary"]
+    assert migrated["routes"]["embedding"] == ["local_onnx:qwen3-embedding-0.6b"]
+    assert (
+        isolated_model_store.get_setting("model_configuration")["version"]
+        == CONFIG_VERSION
+    )
+    assert [item["id"] for item in get_model_configuration()["connections"]] == [
+        item["id"] for item in migrated["connections"]
+    ]
+
+    without_deepseek = {
+        **migrated,
+        "connections": [
+            item for item in migrated["connections"] if item["id"] != "deepseek"
+        ],
+    }
+    save_model_configuration(without_deepseek)
+    assert all(
+        item["id"] != "deepseek"
+        for item in get_model_configuration()["connections"]
+    )
+
+
 def test_default_provider_connections_include_managed_local_provider(
     isolated_model_store,
 ):

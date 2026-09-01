@@ -38,6 +38,7 @@ This release adds cross-device Remote Desktop directly to Workbench and complete
 
 ### Model selection, configuration, and error messages
 
+- Fixed an upgrade and reinstall issue, especially visible on Windows, where an old empty or partial model graph could leave Model Services showing only the onboarding provider and Alibaba Cloud Model Studio. The next launch restores missing services from the complete built-in model plugin catalog while preserving credentials, profiles, routes, and subsequent explicit deletions.
 - Rapid model switching now accepts only the latest server-confirmed selection, so an older request cannot overwrite a newer choice. Invalid or unknown models are rejected without changing the current working model.
 - New model connections, service addresses, and profile edits remain drafts until explicitly saved. Missing preset values no longer make an untouched page appear to have unsaved changes.
 - Custom OpenAI-compatible models remain selectable without a separate provider label and preserve request token and cache usage during streaming replies.

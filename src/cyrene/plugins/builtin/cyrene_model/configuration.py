@@ -25,8 +25,9 @@ from cyrene.model.transcript_policy import (
 from cyrene.platform import config_store
 
 
-CONFIG_VERSION = 11
+CONFIG_VERSION = 12
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
+_BUILTIN_MODEL_PLUGIN_PACK = "cyrene_model"
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _CONNECTION_PATCH_FIELDS = frozenset({
     "name", "adapter", "enabled", "use_proxy", "base_url", "api_key",
@@ -367,12 +368,19 @@ def normalize_model_configuration(
     }
 
 
-def _plugin_seed_configuration() -> dict[str, Any]:
+def _plugin_seed_configuration(*, builtin_only: bool = False) -> dict[str, Any]:
     """Build the one-time initial graph from editable Model Plugin metadata."""
 
     from cyrene.plugins.model_catalog import model_plugin_catalog
 
     catalog = model_plugin_catalog()
+    if builtin_only:
+        catalog = [
+            provider
+            for provider in catalog
+            if str(provider.get("pack_id") or "").strip()
+            == _BUILTIN_MODEL_PLUGIN_PACK
+        ]
     if not catalog:
         raise RuntimeError("no Model Provider Plugins are available to seed settings")
     connections: list[dict[str, Any]] = []
@@ -413,13 +421,135 @@ def _plugin_seed_configuration() -> dict[str, Any]:
     })
 
 
+def _configuration_version(raw: dict[str, Any]) -> int:
+    version = raw.get("version")
+    if isinstance(version, int) and not isinstance(version, bool) and version >= 0:
+        return version
+    return 0
+
+
+def _migrate_plugin_seed_connections(raw: dict[str, Any]) -> dict[str, Any]:
+    """Restore built-in providers omitted by pre-v12 configuration graphs.
+
+    Version 10 made the persisted connection graph authoritative, but did not
+    reconcile an existing empty or partial graph with the newly plugin-owned
+    provider catalog.  Onboarding then appended only the selected provider;
+    the version 11 migration independently added Bailian.  Affected installs
+    consequently exposed exactly those two services even though every built-in
+    provider Plugin was loaded.
+
+    Repair the graph once during the v12 upgrade.  Existing connections remain
+    authoritative for their represented provider, so onboarding credentials,
+    custom ids, profiles, and routes are preserved.  Once the migrated graph is
+    saved at v12, later user deletions remain intentional and are not revived.
+    """
+
+    migrated = deepcopy(raw)
+    seeded = _plugin_seed_configuration(builtin_only=True)
+    raw_connections = migrated.get("connections")
+    raw_profiles = migrated.get("profiles")
+    raw_routes = migrated.get("routes")
+    if not isinstance(raw_connections, list):
+        return migrated
+    if not isinstance(raw_profiles, list):
+        return migrated
+    if not isinstance(raw_routes, dict):
+        return migrated
+
+    seeded_connections = {
+        str(connection.get("id") or "").strip().lower(): connection
+        for connection in seeded["connections"]
+        if isinstance(connection, dict)
+    }
+    represented: set[str] = set()
+    used_connection_ids: set[str] = set()
+    for connection in raw_connections:
+        if not isinstance(connection, dict):
+            continue
+        connection_id = str(connection.get("id") or "").strip()
+        if connection_id:
+            used_connection_ids.add(connection_id)
+            if connection_id.lower() in seeded_connections:
+                represented.add(connection_id.lower())
+        options = connection.get("options")
+        preset = str(
+            options.get("provider_preset") if isinstance(options, dict) else ""
+        ).strip().lower()
+        if preset in seeded_connections:
+            represented.add(preset)
+
+    added_connection_ids: set[str] = set()
+    for provider_id, connection in seeded_connections.items():
+        if provider_id in represented:
+            continue
+        connection_id = str(connection.get("id") or "")
+        if not connection_id or connection_id in used_connection_ids:
+            continue
+        raw_connections.append(deepcopy(connection))
+        represented.add(provider_id)
+        used_connection_ids.add(connection_id)
+        added_connection_ids.add(connection_id)
+
+    used_profile_ids = {
+        str(profile.get("id") or "")
+        for profile in raw_profiles
+        if isinstance(profile, dict)
+    }
+    added_profile_ids: set[str] = set()
+    for profile in seeded["profiles"]:
+        profile_id = str(profile.get("id") or "")
+        if (
+            str(profile.get("connection_id") or "") not in added_connection_ids
+            or not profile_id
+            or profile_id in used_profile_ids
+        ):
+            continue
+        raw_profiles.append(deepcopy(profile))
+        used_profile_ids.add(profile_id)
+        added_profile_ids.add(profile_id)
+
+    for route_name in ROUTE_NAMES:
+        route = raw_routes.get(route_name)
+        if not isinstance(route, list):
+            continue
+        for profile_id in seeded["routes"][route_name]:
+            if profile_id in added_profile_ids and profile_id not in route:
+                route.append(profile_id)
+
+    migrated["version"] = CONFIG_VERSION
+    return migrated
+
+
+def _normalize_stored_configuration(raw: dict[str, Any]) -> dict[str, Any]:
+    source = (
+        _migrate_plugin_seed_connections(raw)
+        if _configuration_version(raw) < CONFIG_VERSION
+        else raw
+    )
+    return normalize_model_configuration(source, previous=raw)
+
+
 def get_model_configuration(*, persist_seed: bool = True) -> dict[str, Any]:
-    """Read the canonical graph, seeding Plugin connections only when absent."""
+    """Read the canonical graph, seeding or upgrading Plugin connections."""
 
     revision = config_store.get_settings_revision()
     raw = config_store.get_setting("model_configuration", None)
     if isinstance(raw, dict):
-        return normalize_model_configuration(raw, previous=raw)
+        configured = _normalize_stored_configuration(raw)
+        if _configuration_version(raw) >= CONFIG_VERSION or not persist_seed:
+            return configured
+        try:
+            config_store.update_settings_atomic(
+                {"model_configuration": configured},
+                expected_revision=revision,
+            )
+            invalidate_model_runtime_caches()
+        except config_store.SettingsRevisionConflict:
+            latest = config_store.get_setting("model_configuration", None)
+            if isinstance(latest, dict):
+                return _normalize_stored_configuration(latest)
+            raise
+        return configured
 
     seeded = _plugin_seed_configuration()
     if not persist_seed:
