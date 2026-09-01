@@ -46,7 +46,10 @@ TOOL_PACK_IDS = frozenset(
         "cyrene_subagent",
     }
 )
-MODEL_VISIBLE_PACK_IDS = TOOL_PACK_IDS - {"cyrene_image"}
+MODEL_VISIBLE_PACK_IDS = TOOL_PACK_IDS - {
+    "cyrene_image",
+    "cyrene_remote_desktop",
+}
 CONTEXT_PACK_IDS = frozenset({
     "cyrene_composer_context",
     "cyrene_context",
