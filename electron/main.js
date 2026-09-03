@@ -285,23 +285,16 @@ if (isDev) {
 // automatic-read setting to produce sound reliably.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
-// Chromium's Wayland ScreenCast portal always requires an interactive screen
-// sharing confirmation.  Cyrene already authenticates and indicates active
-// remote sessions itself, so prefer the session's authenticated XWayland
-// display for unattended desktop capture when it is available.  Mutter's
-// RemoteDesktop D-Bus API remains responsible for native Wayland input.
-// Set CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE=1 to retain the portal picker.
+// Keep the main window on the compositor used by the graphical session.  The
+// remote-desktop RDP sidecar selects X11 for its own isolated capture window;
+// forcing the whole application onto XWayland can leave a healthy Electron
+// process running without a mapped window after a Wayland session restart.
 if (
   isLinux
-  && process.env.CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE !== '1'
-  && process.env.DISPLAY
-  && process.env.XAUTHORITY
+  && String(process.env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland'
+  && process.env.WAYLAND_DISPLAY
 ) {
-  try {
-    if (fs.existsSync(process.env.XAUTHORITY)) {
-      app.commandLine.appendSwitch('ozone-platform', 'x11');
-    }
-  } catch (_) {}
+  app.commandLine.appendSwitch('ozone-platform', 'wayland');
 }
 
 // Chromium aborts with SIGTRAP when its Linux SUID sandbox helper exists but
@@ -7399,6 +7392,15 @@ async function createMainWindowOnce(isCurrent) {
   try {
     await loadWindowUrl(win, url, { timeoutMs: backendStartupTimeoutMs });
     if (!isCurrent() || win.isDestroyed()) return;
+    // `ready-to-show` is an optimization, not a reliable visibility boundary:
+    // some Linux compositor/GPU combinations finish navigation without ever
+    // emitting it.  A successful main-frame load is a second authoritative
+    // point at which an interactive launch must reveal the window.
+    if (!launchHidden) {
+      win.show();
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    }
     if (isTerminalLifecycleSoakTest) {
       await startTerminalLifecycleSoakTest();
     } else if (isDesktopSmokeTest) {

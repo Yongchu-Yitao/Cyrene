@@ -399,8 +399,11 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "remoteDesktop.credentials.request') return 185_000" in plugin_ui
     assert "Acknowledge ipcRenderer.invoke" in electron_host
     assert "remote-desktop-rdp-sidecar.js" in packaged_files
-    assert "CYRENE_REMOTE_DESKTOP_PORTAL_CAPTURE" in electron_main
-    assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" in electron_main
+    assert "app.commandLine.appendSwitch('ozone-platform', 'wayland')" in electron_main
+    assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" not in electron_main
+    assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" in (
+        root / "electron" / "remote-desktop-rdp-sidecar.js"
+    ).read_text(encoding="utf-8")
     assert "remote-audio" in plugin_ui
     assert "getUserMedia({ audio: true" in plugin_ui
     assert "remoteDesktop.display.select" in plugin_ui

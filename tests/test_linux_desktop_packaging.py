@@ -187,6 +187,24 @@ def test_linux_desktop_uses_gpu_by_default_with_explicit_software_fallback():
     assert "Date.now() - startedAt >= ${renderTimeoutMs}" in main
     assert "nonWhitePixels < 100" in main
     assert "Post-load smoke validation failed" in main
+
+
+def test_linux_desktop_follows_wayland_and_reveals_after_navigation():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+
+    assert "String(process.env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland'" in main
+    assert "process.env.WAYLAND_DISPLAY" in main
+    assert "app.commandLine.appendSwitch('ozone-platform', 'wayland')" in main
+    assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" not in main
+
+    loaded = main.split(
+        "await loadWindowUrl(win, url, { timeoutMs: backendStartupTimeoutMs });",
+        1,
+    )[1].split("if (isTerminalLifecycleSoakTest)", 1)[0]
+    assert "if (!launchHidden)" in loaded
+    assert "win.show()" in loaded
+    assert "if (win.isMinimized()) win.restore()" in loaded
+    assert "win.focus()" in loaded
     assert main.count("await runDesktopSmokeTest(win);") == 2
     window_options = main.split("const windowOptions = {", 1)[1].split(
         "const win = new BrowserWindow(windowOptions);", 1

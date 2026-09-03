@@ -155,6 +155,7 @@
         "libatspi2.0-0",
         "libuuid1",
         "libsecret-1-0",
+        "at-spi2-core",
         "freerdp3-x11 | freerdp2-x11",
         "xvfb",
         "xdotool"
