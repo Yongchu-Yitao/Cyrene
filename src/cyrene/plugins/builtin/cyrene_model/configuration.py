@@ -602,6 +602,7 @@ def candidate_for_profile(
         "model": profile["model"],
         "name": profile["name"],
         "provider": runtime_provider,
+        "provider_preset": provider_preset_for_connection(connection),
         "adapter": adapter,
         "reasoning_effort": profile.get("reasoning_effort", ""),
         "vision_capable": "vision" in profile.get("capabilities", []),

@@ -185,7 +185,13 @@ def candidate_provider_id(candidate: Mapping[str, Any]) -> str:
 
     options = candidate.get("options")
     options = options if isinstance(options, Mapping) else {}
-    return str(candidate.get("provider_preset") or options.get("provider_preset") or candidate.get("provider") or "").strip().lower()
+    if "provider_preset" in candidate:
+        value = candidate.get("provider_preset")
+    elif "provider_preset" in options:
+        value = options.get("provider_preset")
+    else:
+        value = candidate.get("provider")
+    return str(value or "").strip().lower()
 
 
 def resolve_registered_model_plugin(

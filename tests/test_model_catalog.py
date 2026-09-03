@@ -163,6 +163,45 @@ def _provider(name: str = "ProviderOne") -> Plugin:
     )
 
 
+def test_openai_adapter_without_provider_preset_uses_compatible_plugin():
+    compatible = Plugin(
+        name="OpenAICompatible",
+        description="generic OpenAI-compatible provider",
+        input_schema={"type": "object", "additionalProperties": True},
+        handler=lambda _arguments, _context: {},
+        kind="model",
+        metadata={
+            "provider": {
+                "id": "openai_compatible",
+                "name": "OpenAI Compatible",
+            }
+        },
+    )
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(compatible, source="test")
+    candidate = {
+        "provider": "openai",
+        "provider_preset": "",
+        "adapter": "openai",
+    }
+
+    provider_id = model_catalog.candidate_provider_id(candidate)
+    resolved = model_catalog.resolve_registered_model_plugin(
+        registry,
+        provider_id,
+        candidate["adapter"],
+    )
+
+    assert provider_id == ""
+    assert resolved is not None
+    assert resolved.name == "OpenAICompatible"
+    assert resolved.metadata["provider"]["id"] == "openai_compatible"
+    assert model_catalog.candidate_provider_id({
+        "provider": "openai",
+        "adapter": "openai",
+    }) == "openai"
+
+
 def test_model_catalog_uses_active_registry_and_honors_provider_activation(tmp_path):
     registry = PluginRegistry(include_core=False)
     registry.register_pack(

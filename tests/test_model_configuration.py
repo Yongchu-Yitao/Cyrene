@@ -87,10 +87,33 @@ def test_runtime_candidate_merges_connection_and_profile_transport_options():
     )
 
     assert candidate is not None
+    assert candidate["provider_preset"] == "custom"
     assert candidate["options"] == {
         "provider_preset": "custom",
         "prompt_cache_key_supported": True,
     }
+
+
+def test_runtime_candidate_marks_missing_provider_preset_for_adapter_fallback():
+    from cyrene.plugins.model_catalog import candidate_provider_id
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        candidate_for_profile,
+        normalize_model_configuration,
+    )
+
+    raw = _configuration()
+    raw["connections"][0]["adapter"] = "openai"
+    raw["connections"][0]["options"] = {}
+
+    candidate = candidate_for_profile(
+        "qwen-next",
+        normalize_model_configuration(raw),
+    )
+
+    assert candidate is not None
+    assert candidate["provider"] == "openai"
+    assert candidate["provider_preset"] == ""
+    assert candidate_provider_id(candidate) == ""
 
 
 def test_model_connection_proxy_opt_in_survives_normalization_and_runtime_projection():
