@@ -18,6 +18,25 @@ def _prepare_settings() -> int:
     settings["server"]["port"] = int(request["port"])
     settings["server"]["bind_address"] = str(request["host"])
     settings["server"]["secret_key"] = str(request["secret_key"])
+    engines = settings.setdefault("engines", [])
+    if not isinstance(engines, list):
+        engines = []
+        settings["engines"] = engines
+    by_name = {
+        str(item.get("name") or ""): item
+        for item in engines
+        if isinstance(item, dict)
+    }
+    for override in request.get("engine_overrides") or []:
+        if not isinstance(override, dict) or not override.get("name"):
+            continue
+        name = str(override["name"])
+        existing = by_name.get(name)
+        if existing is None:
+            existing = {}
+            engines.append(existing)
+            by_name[name] = existing
+        existing.update(override)
     formats = settings.setdefault("search", {}).setdefault("formats", [])
     if "json" not in formats:
         formats.append("json")

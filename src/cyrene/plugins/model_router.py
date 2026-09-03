@@ -548,8 +548,6 @@ async def route_model_call(
             )
         except Exception as exc:
             error = f"invalid Provider Plugin result: {exc}"
-            failures.append(f"{provider.name}({candidate.get('model')}): {error}")
-            public_failures.append(classify_model_error(error))
             await _publish_llm_event(
                 context,
                 messages=model_messages,
@@ -561,8 +559,26 @@ async def route_model_call(
                 status="failed",
                 error=error,
             )
-            await _publish_next_fallback(context, candidate, eligible, index)
-            continue
+            await _persist_fallback_result(
+                context,
+                candidate,
+                status="failed",
+            )
+            logger.warning(
+                "Model Provider Plugin returned a protocol-invalid result: %s(%s): %s",
+                provider.name,
+                candidate.get("model"),
+                error,
+            )
+            # The Provider was reachable and returned a response.  A failure
+            # while normalizing that response (for example, requesting a tool
+            # that is not in the current schema) is a protocol error, not
+            # evidence that this model candidate is unavailable.  Falling back
+            # here can duplicate generation and lets a shared parser failure
+            # poison otherwise healthy fallback candidates.
+            raise ModelCallError(
+                classify_model_error("invalid Provider Plugin result")
+            ) from exc
         await _publish_llm_event(
             context,
             messages=model_messages,

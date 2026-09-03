@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from cyrene.platform.subprocess_environment import external_process_environment
+
 from ..plugin import Plugin, PluginContext
 from .permission_boundaries import bash_boundary
 
@@ -32,6 +34,7 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
         if callable(environment_builder)
         else dict(os.environ)
     )
+    environment = external_process_environment(environment)
 
     process = await asyncio.create_subprocess_shell(
         command,

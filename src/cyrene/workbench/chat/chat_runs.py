@@ -870,7 +870,12 @@ class ChatRun:
             if completed:
                 self._open_reply_text = completed
 
-    async def _seal_open_reply(self, *, opens_activity: bool) -> None:
+    async def _seal_open_reply(
+        self,
+        *,
+        opens_activity: bool,
+        recovered_after_failure: bool = False,
+    ) -> None:
         content = self._open_reply_text
         if not content.strip():
             self._reset_open_reply()
@@ -894,6 +899,12 @@ class ChatRun:
         }
         if opens_activity:
             message["opensActivity"] = True
+        if recovered_after_failure:
+            # A Provider can finish streaming useful prose and then fail while
+            # validating tool calls or finalizing the model result.  Preserve
+            # that already-delivered text without counting the failed run as a
+            # completed assistant turn.
+            message["recoveredAfterFailure"] = True
         self._reset_open_reply()
         await self._publish_one({"type": "intermediate_message", "message": message})
 
@@ -983,6 +994,14 @@ class ChatRun:
                 await self._seal_open_reply(opens_activity=False)
             elif self._is_visible_tool_start(value):
                 await self._seal_open_reply(opens_activity=True)
+            elif event_type in {"run.failed", "error"}:
+                # ``reply_done`` may precede a Provider post-processing error.
+                # Checkpoint the completed stream before the terminal failure
+                # so reconnects and page reloads do not lose useful output.
+                await self._seal_open_reply(
+                    opens_activity=False,
+                    recovered_after_failure=True,
+                )
 
             self._observe_reply_event(value)
             await self._publish_one(value)
