@@ -708,12 +708,12 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 .wbc-subagent-page {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   height: 100%;
   min-height: 0;
 }
 
-/* Header bar — round title + live/complete pill. */
+/* Single panel header — identity, roster summary, state, and close affordance. */
 .wbc-subagent-bar {
   flex: 0 0 auto;
   display: flex;
@@ -732,7 +732,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .wbc-subagent-bar-main b {
@@ -744,12 +744,20 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   white-space: nowrap;
 }
 
-.wbc-subagent-eyebrow {
-  color: var(--wb-accent);
+.wbc-subagent-summary {
+  overflow: hidden;
+  color: var(--wb-faint);
   font-size: calc(10px * var(--wb-ui-font-scale, 1));
-  font-weight: 760;
-  letter-spacing: .08em;
-  text-transform: uppercase;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-subagent-bar-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .wbc-subagent-livepill {
@@ -791,10 +799,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 /* Round switcher (multi-round chats only). */
 .wbc-subagent-round {
   flex: 0 0 auto;
-  border: 1px solid var(--wb-line);
-  border-radius: 10px;
-  background: var(--wb-card-bg);
-  padding: 8px 10px;
+  padding: 4px 2px;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -828,6 +833,9 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 }
 
 .wbc-subagent-chip {
+  min-width: 0;
+  min-height: 36px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -841,6 +849,11 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
 }
 
 .wbc-subagent-chip:hover { background: var(--wb-row-hover-bg); }
+
+.wbc-subagent-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-agent-color, var(--wb-accent)) 58%, transparent);
+  outline-offset: 1px;
+}
 
 .wbc-subagent-chip.active {
   border-color: var(--wb-agent-color, var(--wb-active-border));
@@ -936,12 +949,10 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   color: var(--wb-blue);
 }
 
-/* Spotlight — the focused agent's assignment brief and result. */
+/* Focused-agent details are a section, not another nested card. */
 .wbc-subagent-spotlight {
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--wb-agent-color, var(--wb-accent)) 34%, var(--wb-line));
-  border-radius: 12px;
-  background: var(--wb-card-bg);
+  border-block: 1px solid var(--wb-line);
   overflow: hidden;
 }
 
@@ -949,9 +960,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--wb-line);
-  background: color-mix(in srgb, var(--wb-agent-color, var(--wb-accent)) 9%, var(--wb-card-bg));
+  padding: 9px 2px 7px;
 }
 
 .wbc-subagent-spotlight-id {
@@ -991,7 +1000,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 10px;
+  padding: 4px 2px 10px;
 }
 
 .wbc-subagent-spotlight-body label {
@@ -1031,10 +1040,7 @@ body.wb-col-resizing .wb-col-resizer.track-gutter:not(.is-resizing)::after {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  border: 1px solid var(--wb-line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--wb-line) 14%, transparent);
-  padding: 10px;
+  padding: 8px 2px 2px;
   scrollbar-width: thin;
 }
 

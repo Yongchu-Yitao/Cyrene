@@ -5353,6 +5353,10 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     assert 'toolCallId: String(event.tool_call_id || "")' in runtime
     assert 'status: (toolStarted || toolProgress) ? "running" : "completed"' in runtime
     assert 'progressCurrent: toolProgress ?' in runtime
+    assert 'event.analytics_only === true' in runtime
+    assert 'event.type === "tool_call"' in runtime
+    assert 'event.args == null' in runtime
+    assert 'event.result == null' in runtime
     assert "wbcMergeToolOccurrence(items, entry, terminalToolEvent)" in runtime
     assert "progress: mergeToolProgress(activity && activity.progress)" in runtime
     assert "matchedToolCall" in runtime
@@ -9028,17 +9032,24 @@ def test_workbench_chat_subagent_page_is_independent_and_localized():
     assert ".agent-chat-" not in styles.split("/* Workbench-only subagent page.", 1)[1].split("/* 计划 tab", 1)[0]
     assert not classic_chat.exists()
 
+    subagent_view = source.split("function WbcSubagentsTab", 1)[1].split("// Prefer the durable chat plan.", 1)[0]
+    assert "activeRound.title" not in subagent_view
+    assert 'wbcT("workbenchChat.subagent.roundNumber", "Round {n}"' in subagent_view
+    assert 'className="wbc-subagent-bar-actions"' in subagent_view
+    assert 'onClose={onClose}' in subagent_view
+
     result = _run_workbench_i18n_js(
         """
 [
   window.WorkbenchI18n.t("workbenchChat.subagents"),
   window.WorkbenchI18n.t("workbenchChat.subagent.title"),
+  window.WorkbenchI18n.t("workbenchChat.subagent.roundNumber", {n: 2}),
   window.WorkbenchI18n.t("workbenchChat.subagent.status.running"),
   window.WorkbenchI18n.t("workbenchChat.subagent.result")
 ]
 """
     )
-    assert result == ["子代理", "子代理执行", "执行中", "执行结果"]
+    assert result == ["子代理", "子代理执行", "第 2 轮", "执行中", "执行结果"]
 
 
 def test_workbench_chat_quick_actions_include_manual_context_compaction():

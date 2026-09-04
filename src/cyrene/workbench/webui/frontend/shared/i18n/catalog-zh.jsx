@@ -3032,6 +3032,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "workbenchChat.subagent.result": "执行结果",
     "workbenchChat.subagent.resultPending": "尚未产生结果。",
     "workbenchChat.subagent.round": "执行轮次",
+    "workbenchChat.subagent.roundNumber": "第 {n} 轮",
     "workbenchChat.subagent.status.done": "已完成",
     "workbenchChat.subagent.status.resumed": "已恢复",
     "workbenchChat.subagent.status.running": "执行中",

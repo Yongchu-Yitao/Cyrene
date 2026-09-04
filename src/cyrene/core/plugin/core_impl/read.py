@@ -26,15 +26,40 @@ def read_permission_boundary(
 
 async def read(arguments: dict[str, Any], context: PluginContext) -> str:
     path = _resolve_path(arguments.get("path"), context)
-    return await asyncio.to_thread(path.read_text, encoding="utf-8")
+    content = await asyncio.to_thread(path.read_text, encoding="utf-8")
+    start_line = arguments.get("start_line")
+    end_line = arguments.get("end_line")
+    if start_line is None and end_line is None:
+        return content
+
+    start = int(start_line or 1)
+    end = int(end_line) if end_line is not None else None
+    if end is not None and end < start:
+        raise ValueError("end_line must be greater than or equal to start_line")
+    return "".join(content.splitlines(keepends=True)[start - 1:end])
 
 
 READ_PLUGIN = Plugin(
     name="Read",
-    description="Read a UTF-8 text file.",
+    description=(
+        "Read a UTF-8 text file, optionally selecting a 1-based inclusive "
+        "line range."
+    ),
     input_schema={
         "type": "object",
-        "properties": {"path": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string"},
+            "start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "First line to return (1-based, inclusive).",
+            },
+            "end_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Last line to return (1-based, inclusive).",
+            },
+        },
         "required": ["path"],
         "additionalProperties": False,
     },

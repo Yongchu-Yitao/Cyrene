@@ -91,6 +91,10 @@ plugin = Plugin(
     },
     handler=edit,
     metadata={
+        "argument_aliases": {
+            "old_text": "old_string",
+            "new_text": "new_string",
+        },
         "resource_effects": ({
             "argument_path": ("path",),
             "kind": "file",

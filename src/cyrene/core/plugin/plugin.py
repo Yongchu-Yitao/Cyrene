@@ -191,6 +191,35 @@ class Plugin:
             raise ValueError(
                 "Plugin metadata.agent_exposure must be direct, discoverable, or hidden"
             )
+        argument_aliases = metadata.get("argument_aliases", {})
+        if not isinstance(argument_aliases, Mapping) or any(
+            not isinstance(alias, str)
+            or not alias.strip()
+            or not isinstance(target, str)
+            or not target.strip()
+            for alias, target in argument_aliases.items()
+        ):
+            raise TypeError(
+                "Plugin metadata.argument_aliases must map non-empty strings "
+                "to non-empty strings"
+            )
+        properties = schema.get("properties")
+        schema_properties = properties if isinstance(properties, Mapping) else {}
+        unknown_alias_targets = {
+            str(target).strip()
+            for target in argument_aliases.values()
+            if str(target).strip() not in schema_properties
+        }
+        if unknown_alias_targets:
+            raise ValueError(
+                "Plugin metadata.argument_aliases targets unknown input fields: "
+                + ", ".join(sorted(unknown_alias_targets))
+            )
+        if argument_aliases:
+            metadata["argument_aliases"] = {
+                str(alias).strip(): str(target).strip()
+                for alias, target in argument_aliases.items()
+            }
         translations = metadata.get("i18n", {})
         if not isinstance(translations, Mapping) or any(
             not isinstance(value, Mapping) for value in translations.values()
@@ -255,6 +284,15 @@ class Plugin:
         if not self.model_visible:
             return "hidden"
         return str(self.metadata.get("agent_exposure") or "discoverable")
+
+    @property
+    def argument_aliases(self) -> dict[str, str]:
+        """Declared top-level input aliases normalized before validation."""
+
+        aliases = self.metadata.get("argument_aliases", {})
+        if not isinstance(aliases, Mapping):
+            return {}
+        return {str(alias): str(target) for alias, target in aliases.items()}
 
     @property
     def resource_effects(self) -> tuple[PluginResourceEffect, ...]:

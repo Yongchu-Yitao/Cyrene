@@ -10,10 +10,20 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 
 _STATUS_RE = re.compile(r"(?:http(?:statuserror)?[^\d]{0,20}|status(?:_code)?[^\d]{0,8})\b([1-5]\d\d)\b", re.I)
+
+
+ModelRetryScope: TypeAlias = Literal[
+    "never",
+    "immediate",
+    "different_arguments",
+    "after_delay",
+    "after_config_change",
+    "new_run",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +32,7 @@ class ModelErrorDetails:
     message_en: str
     message_zh: str
     retryable: bool
+    retry_scope: ModelRetryScope = "never"
     status_code: int = 0
 
     def as_dict(self) -> dict[str, Any]:
@@ -31,6 +42,7 @@ class ModelErrorDetails:
             "message_en": self.message_en,
             "message_zh": self.message_zh,
             "retryable": self.retryable,
+            "retry_scope": self.retry_scope,
         }
         if self.status_code:
             result["status_code"] = self.status_code
@@ -197,9 +209,48 @@ def _status_code(exc: BaseException, text: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def _details(code: str, retryable: bool, status_code: int) -> ModelErrorDetails:
+def _retry_scope(
+    value: Any,
+    *,
+    retryable: bool,
+    default: ModelRetryScope,
+) -> ModelRetryScope:
+    if not retryable:
+        return "never"
+    normalized = str(value or "").strip()
+    if normalized in {
+        "never",
+        "immediate",
+        "different_arguments",
+        "after_delay",
+        "after_config_change",
+        "new_run",
+    }:
+        return normalized  # type: ignore[return-value]
+    return default
+
+
+def _details(
+    code: str,
+    retryable: bool,
+    status_code: int,
+    *,
+    retry_scope: ModelRetryScope | None = None,
+) -> ModelErrorDetails:
     message_en, message_zh = _ERROR_MESSAGES[code]
-    return ModelErrorDetails(code, message_en, message_zh, retryable, status_code)
+    scope = retry_scope or (
+        "immediate"
+        if retryable and code == "model_response_invalid"
+        else "new_run" if retryable else "never"
+    )
+    return ModelErrorDetails(
+        code,
+        message_en,
+        message_zh,
+        retryable,
+        scope,
+        status_code,
+    )
 
 
 def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
@@ -215,9 +266,15 @@ def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
         "protocol_invalid_json",
         "protocol_invalid_event",
         "upstream_incomplete",
-        "invalid_tool_arguments",
     }:
         return _details("model_response_invalid", True, status)
+    if stream_kind == "invalid_tool_arguments":
+        return _details(
+            "model_response_invalid",
+            True,
+            status,
+            retry_scope="different_arguments",
+        )
 
     if re.search(r"no model is configured|model is not configured|model configuration is missing", signature):
         return _details("model_not_configured", False, status)
@@ -248,7 +305,14 @@ def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
         return _details("model_connection_failed", True, status)
     if status >= 500 or re.search(r"overloaded|service unavailable|bad gateway|upstream unavailable", signature):
         return _details("model_service_unavailable", True, status)
-    if re.search(r"invalid (?:json|response|provider plugin result)|no (?:assistant )?(?:message|response|result)|empty response|decode", signature):
+    if re.search(r"invalid provider plugin result", signature):
+        return _details(
+            "model_response_invalid",
+            True,
+            status,
+            retry_scope="different_arguments",
+        )
+    if re.search(r"invalid (?:json|response)|no (?:assistant )?(?:message|response|result)|empty response|decode", signature):
         return _details("model_response_invalid", True, status)
     return _details("model_call_failed", True, status)
 
@@ -267,18 +331,34 @@ def details_from_mapping(value: Any) -> ModelErrorDetails | None:
         return None
     code = str(value.get("code") or value.get("error_code") or "")
     if code == "plugin_timeout":
+        retryable = bool(value.get("retryable", True))
         return _details(
             "model_timeout",
-            bool(value.get("retryable", True)),
+            retryable,
             int(value.get("status_code") or 0),
+            retry_scope=_retry_scope(
+                value.get("retry_scope"),
+                retryable=retryable,
+                default="after_delay",
+            ),
         )
     if code not in _DETAIL_KEYS:
         return None
+    retryable = bool(value.get("retryable", True))
     return ModelErrorDetails(
         code,
         str(value.get("message_en") or "The model call failed."),
         str(value.get("message_zh") or "模型调用失败。"),
-        bool(value.get("retryable", True)),
+        retryable,
+        _retry_scope(
+            value.get("retry_scope"),
+            retryable=retryable,
+            default=(
+                "immediate"
+                if code == "model_response_invalid"
+                else "new_run"
+            ),
+        ),
         int(value.get("status_code") or 0),
     )
 
@@ -310,6 +390,7 @@ def preferred_model_error(values: list[ModelErrorDetails]) -> ModelErrorDetails:
 __all__ = [
     "ModelCallError",
     "ModelErrorDetails",
+    "ModelRetryScope",
     "classify_model_error",
     "details_from_mapping",
     "error_details_from_exception",

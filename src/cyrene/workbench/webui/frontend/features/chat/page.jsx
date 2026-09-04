@@ -3232,8 +3232,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         />;
       } else if (card.kind === "subagents") {
         content = <aside className="wbc-side-agent-split wbc-subagents-split" aria-label={wbcT("workbenchChat.subagents", "Subagents")}>
-          <header className="wbc-side-agent-split-head wbc-static-split-head"><span className="wbc-side-agent-split-title"><span>{wbcT("workbenchChat.subagents", "Subagents")}</span></span><button type="button" className="wbc-side-agent-split-close" onClick={close} aria-label={wbcT("workbenchChat.closeSubagents", "Close subagents")}>{WBC_ICONS.x}</button></header>
-          <div className="wbc-resource-split-body wbc-subagents-split-body"><WbcSubagentsTab data={subagentData} loading={subagentLoading} onSelectRound={function (roundId) { loadSubagents(card.ownerChatId || activeChatId, roundId); }} /></div>
+          <div className="wbc-resource-split-body wbc-subagents-split-body"><WbcSubagentsTab data={subagentData} loading={subagentLoading} onSelectRound={function (roundId) { loadSubagents(card.ownerChatId || activeChatId, roundId); }} onClose={close} /></div>
         </aside>;
       } else if (card.kind === "terminal") {
         var TerminalPane = terminalModule.Pane;

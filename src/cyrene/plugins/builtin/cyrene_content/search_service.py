@@ -54,9 +54,10 @@ _CHINA_SEARCH_ENGINE_OVERRIDES: tuple[dict[str, object], ...] = (
         "name": "bing",
         "disabled": False,
         "timeout": 10.0,
-        # SimpleXNG 0.1.x vendors a Bing engine whose base_url is the complete
-        # search endpoint rather than only the origin.
-        "base_url": "https://cn.bing.com/search",
+        # cn.bing.com now redirects automated search requests to the Bing
+        # homepage and silently yields zero results.  Keep the complete search
+        # endpoint expected by SimpleXNG 0.1.x, but use Bing's canonical host.
+        "base_url": "https://www.bing.com/search",
     },
 )
 

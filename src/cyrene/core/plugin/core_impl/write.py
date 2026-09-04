@@ -9,16 +9,24 @@ from ..plugin import Plugin, PluginContext
 from .permission_boundaries import path_boundary, resolved_path
 
 
+_MAX_WRITE_CHARS = 8_000
+
+
 async def write(arguments: dict[str, Any], context: PluginContext) -> str:
     path = resolved_path(arguments.get("path"), context)
     content = str(arguments.get("content", ""))
+    mode = str(arguments.get("mode") or "overwrite")
 
     def write_file() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "append":
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(content)
+            return
         path.write_text(content, encoding="utf-8")
 
     await asyncio.to_thread(write_file)
-    return f"Wrote {path}"
+    return f"{'Appended to' if mode == 'append' else 'Wrote'} {path}"
 
 
 def write_permission_boundary(
@@ -35,12 +43,29 @@ def write_permission_boundary(
 
 WRITE_PLUGIN = Plugin(
     name="Write",
-    description="Write a UTF-8 text file.",
+    description=(
+        "Write one UTF-8 text chunk of at most 8,000 characters. For a larger "
+        "file, overwrite with the first chunk, then append later chunks in "
+        "separate tool-call turns."
+    ),
     input_schema={
         "type": "object",
         "properties": {
             "path": {"type": "string"},
-            "content": {"type": "string"},
+            "content": {
+                "type": "string",
+                "maxLength": _MAX_WRITE_CHARS,
+                "description": "One complete chunk, at most 8,000 characters.",
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["overwrite", "append"],
+                "default": "overwrite",
+                "description": (
+                    "Use overwrite for a complete small file or the first "
+                    "chunk; use append for each later chunk."
+                ),
+            },
         },
         "required": ["path", "content"],
         "additionalProperties": False,

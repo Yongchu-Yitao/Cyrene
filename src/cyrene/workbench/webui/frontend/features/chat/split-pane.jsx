@@ -71,7 +71,7 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
 function WbcSubagentsSplitHost({ open, data, loading, width, onSelectRound, onResize, onClose, splitSide, onToggleSide, onSplitDragStart, onSplitDragEnd }) {
   return (
        <WbcResourceSplitHost openKey={open ? "subagents" : ""} width={width} onResize={onResize} splitSide={splitSide} onToggleSide={onToggleSide} onClose={onClose} onSplitDragStart={onSplitDragStart} onSplitDragEnd={onSplitDragEnd}>
-      {open ? <aside className="wbc-side-agent-split wbc-subagents-split" aria-label={wbcT("workbenchChat.subagents", "Subagents")}><header className="wbc-side-agent-split-head wbc-static-split-head"><span className="wbc-side-agent-split-title"><span>{wbcT("workbenchChat.subagents", "Subagents")}</span><b>{data && Array.isArray(data.agents) ? wbcT("workbenchChat.subagent.count", "{n} agents", { n: data.agents.length }) : ""}</b></span><button type="button" className="wbc-side-agent-split-close" onClick={onClose} aria-label={wbcT("workbenchChat.closeSubagents", "Close subagents")}>{WBC_ICONS.x}</button></header><div className="wbc-resource-split-body wbc-subagents-split-body"><WbcSubagentsTab data={data} loading={loading} onSelectRound={onSelectRound} /></div></aside> : null}
+      {open ? <aside className="wbc-side-agent-split wbc-subagents-split" aria-label={wbcT("workbenchChat.subagents", "Subagents")}><div className="wbc-resource-split-body wbc-subagents-split-body"><WbcSubagentsTab data={data} loading={loading} onSelectRound={onSelectRound} onClose={onClose} /></div></aside> : null}
     </WbcResourceSplitHost>
   );
 }
@@ -2289,7 +2289,7 @@ function WbcChangesTab({ chatId, changesState, onSelectChange }) {
 // agent's delegated subagents appear as roster members; their inter-agent
 // messages and results stream as chat bubbles. Observational only — the
 // Workbench has no user→subagent send endpoint, so there is no composer.
-function WbcSubagentsTab({ data, loading, onSelectRound }) {
+function WbcSubagentsTab({ data, loading, onSelectRound, onClose }) {
   var rounds = data && Array.isArray(data.rounds) ? data.rounds : [];
   var agents = data && Array.isArray(data.agents) ? data.agents : [];
   var messages = data && Array.isArray(data.messages) ? data.messages : [];
@@ -2304,53 +2304,44 @@ function WbcSubagentsTab({ data, loading, onSelectRound }) {
   var activeCount = agents.filter(function (agent) {
     return ["running", "resumed", "waiting"].indexOf(String(agent.status || "")) >= 0;
   }).length;
-  var activeRound = rounds.find(function (round) { return round.id === activeRoundId; }) || rounds[0] || null;
-
   function focusAgent(id) {
     setSelectedAgentId(id === selectedAgentId ? "" : id);
   }
 
   if (loading && !rounds.length && !agents.length) {
     return (
-      <div className="wbc-subagent-empty">
-        <span className="wbc-spinner" aria-hidden="true"></span>
-        <p>{wbcT("workbenchChat.subagent.loading", "Loading subagents...")}</p>
+      <div className="wbc-subagent-page">
+        <WbcSubagentHeader agentCount={0} activeCount={0} loading={true} onClose={onClose} />
+        <div className="wbc-subagent-empty">
+          <span className="wbc-spinner" aria-hidden="true"></span>
+          <p>{wbcT("workbenchChat.subagent.loading", "Loading subagents...")}</p>
+        </div>
       </div>
     );
   }
   if (!rounds.length && !agents.length) {
     return (
-      <div className="wbc-subagent-empty">
-        <span className="wbc-subagent-empty-glyph" aria-hidden="true">⠿</span>
-        <b>{wbcT("workbenchChat.subagent.emptyTitle", "No subagents in this chat")}</b>
-        <p>{wbcT("workbenchChat.subagent.emptyBody", "When the main agent delegates work, subagents and their results will appear here.")}</p>
+      <div className="wbc-subagent-page">
+        <WbcSubagentHeader agentCount={0} activeCount={0} onClose={onClose} />
+        <div className="wbc-subagent-empty">
+          <span className="wbc-subagent-empty-glyph" aria-hidden="true">⠿</span>
+          <b>{wbcT("workbenchChat.subagent.emptyTitle", "No subagents in this chat")}</b>
+          <p>{wbcT("workbenchChat.subagent.emptyBody", "When the main agent delegates work, subagents and their results will appear here.")}</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="wbc-subagent-page">
-      <header className="wbc-subagent-bar">
-        <div className="wbc-subagent-bar-main">
-          <span className="wbc-subagent-eyebrow">{wbcT("workbenchChat.subagent.title", "Subagent activity")}</span>
-          <b title={activeRound ? activeRound.title : ""}>
-            {(activeRound && activeRound.title) || wbcT("workbenchChat.subagents", "Subagents")}
-          </b>
-        </div>
-        <span className={"wbc-subagent-livepill " + (activeCount ? "live" : "idle")}>
-          <i aria-hidden="true"></i>
-          {activeCount
-            ? wbcT("workbenchChat.subagent.liveCount", "{n} working", { n: activeCount })
-            : wbcT("workbenchChat.subagent.complete", "Complete")}
-        </span>
-      </header>
+      <WbcSubagentHeader agentCount={agents.length} activeCount={activeCount} onClose={onClose} />
 
       {rounds.length > 1 ? (
         <label className="wbc-subagent-round">
           <span>{wbcT("workbenchChat.subagent.round", "Round")}</span>
           <select value={activeRoundId} onChange={function (event) { onSelectRound && onSelectRound(event.target.value); }}>
-            {rounds.map(function (round) {
-              return <option key={round.id} value={round.id}>{round.title}</option>;
+            {rounds.map(function (round, index) {
+              return <option key={round.id} value={round.id}>{wbcT("workbenchChat.subagent.roundNumber", "Round {n}", { n: index + 1 })}</option>;
             })}
           </select>
         </label>
@@ -2373,6 +2364,32 @@ function WbcSubagentsTab({ data, loading, onSelectRound }) {
   );
 }
 
+function WbcSubagentHeader({ agentCount, activeCount, loading, onClose }) {
+  return (
+    <header className="wbc-subagent-bar">
+      <div className="wbc-subagent-bar-main">
+        <b>{wbcT("workbenchChat.subagents", "Subagents")}</b>
+        <span className="wbc-subagent-summary">
+          {wbcT("workbenchChat.subagent.count", "{n} agents", { n: agentCount })}
+        </span>
+      </div>
+      <div className="wbc-subagent-bar-actions">
+        {!loading ? (
+          <span className={"wbc-subagent-livepill " + (activeCount ? "live" : "idle")} role="status">
+            <i aria-hidden="true"></i>
+            {activeCount
+              ? wbcT("workbenchChat.subagent.liveCount", "{n} working", { n: activeCount })
+              : wbcT("workbenchChat.subagent.complete", "Complete")}
+          </span>
+        ) : null}
+        {onClose ? (
+          <button type="button" className="wbc-side-agent-split-close" onClick={onClose} aria-label={wbcT("workbenchChat.closeSubagents", "Close subagents")}>{WBC_ICONS.x}</button>
+        ) : null}
+      </div>
+    </header>
+  );
+}
+
 // Horizontal avatar strip of the round's subagents — the chat room's member list.
 function WbcSubagentRoster({ agents, selectedId, onSelect }) {
   return (
@@ -2388,6 +2405,7 @@ function WbcSubagentRoster({ agents, selectedId, onSelect }) {
             className={"wbc-subagent-chip" + (agent.id === selectedId ? " active" : "")}
             style={{ "--wb-agent-color": color }}
             onClick={function () { onSelect(agent.id); }}
+            aria-pressed={agent.id === selectedId}
             title={name + " · " + wbcSubagentStatusText(agent.status)}
           >
             <span className="wbc-subagent-avatar" style={{ background: color }}>

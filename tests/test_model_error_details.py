@@ -80,6 +80,27 @@ def test_model_call_error_exports_only_content_free_stream_diagnostics() -> None
     assert "must-not-leak" not in str(exported)
 
 
+def test_tool_argument_stream_error_requires_changed_arguments() -> None:
+    details = classify_model_error(
+        ModelStreamError(
+            "invalid_tool_arguments",
+            "tool arguments were incomplete",
+            {},
+        )
+    )
+
+    assert details.code == "model_response_invalid"
+    assert details.retryable is True
+    assert details.retry_scope == "different_arguments"
+
+
+def test_invalid_json_response_allows_immediate_recovery() -> None:
+    details = classify_model_error("invalid JSON response")
+
+    assert details.retry_scope == "immediate"
+    assert details.as_dict()["retry_scope"] == "immediate"
+
+
 @pytest.mark.asyncio
 async def test_plugin_runtime_preserves_only_explicit_public_error_details() -> None:
     async def failing_model(_arguments, _context):

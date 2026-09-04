@@ -3024,6 +3024,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "workbenchChat.subagent.result": "Result",
     "workbenchChat.subagent.resultPending": "No result yet.",
     "workbenchChat.subagent.round": "Round",
+    "workbenchChat.subagent.roundNumber": "Round {n}",
     "workbenchChat.subagent.status.done": "Done",
     "workbenchChat.subagent.status.resumed": "Resumed",
     "workbenchChat.subagent.status.running": "Running",

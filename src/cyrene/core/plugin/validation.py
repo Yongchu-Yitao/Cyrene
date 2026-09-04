@@ -117,6 +117,45 @@ def _schema_accepts(value: Any, schema: Mapping[str, Any]) -> bool:
         return False
 
 
+def _canonical_property_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).casefold())
+
+
+def _normalize_declared_aliases(
+    value: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    aliases: Mapping[str, str],
+    repairs: list[PluginArgumentRepair],
+) -> dict[str, Any]:
+    """Apply schema-scoped aliases without guessing semantic equivalence."""
+
+    properties = schema.get("properties")
+    property_schemas = properties if isinstance(properties, Mapping) else {}
+    canonical_aliases: dict[str, str] = {}
+    for alias, target in aliases.items():
+        normalized_alias = _canonical_property_name(alias)
+        normalized_target = str(target).strip()
+        if normalized_alias and normalized_target in property_schemas:
+            canonical_aliases[normalized_alias] = normalized_target
+
+    result = {str(key): deepcopy(item) for key, item in value.items()}
+    for source_key in tuple(result):
+        if source_key in property_schemas:
+            continue
+        target_key = canonical_aliases.get(_canonical_property_name(source_key))
+        if target_key is None or target_key in result:
+            continue
+        result[target_key] = result.pop(source_key)
+        repairs.append(
+            PluginArgumentRepair(
+                f"arguments.{source_key}",
+                "normalize_property_alias",
+                detail=f"{source_key}->{target_key}",
+            )
+        )
+    return result
+
+
 def _normalize_object_fields(
     value: Mapping[str, Any],
     schema: Mapping[str, Any],
@@ -129,7 +168,7 @@ def _normalize_object_fields(
     property_schemas = properties if isinstance(properties, Mapping) else {}
     canonical_properties: dict[str, list[str]] = {}
     for property_name in property_schemas:
-        canonical = re.sub(r"[^a-z0-9]+", "", str(property_name).casefold())
+        canonical = _canonical_property_name(property_name)
         if canonical:
             canonical_properties.setdefault(canonical, []).append(
                 str(property_name)
@@ -140,7 +179,7 @@ def _normalize_object_fields(
         target_key = source_key
         child_schema = property_schemas.get(source_key)
         if not isinstance(child_schema, Mapping):
-            canonical = re.sub(r"[^a-z0-9]+", "", source_key.casefold())
+            canonical = _canonical_property_name(source_key)
             matches = canonical_properties.get(canonical, ())
             if (
                 len(matches) == 1
@@ -487,6 +526,8 @@ def _normalize_value(
 def normalize_plugin_arguments(
     arguments: Mapping[str, Any],
     schema: Mapping[str, Any],
+    *,
+    property_aliases: Mapping[str, str] | None = None,
 ) -> PluginArgumentNormalization:
     """Repair only unambiguous model argument shapes using the resolved schema.
 
@@ -496,8 +537,14 @@ def normalize_plugin_arguments(
 
     check_input_schema(schema)
     repairs: list[PluginArgumentRepair] = []
+    normalized_input = _normalize_declared_aliases(
+        arguments,
+        schema,
+        property_aliases or {},
+        repairs,
+    )
     normalized = _normalize_value(
-        dict(arguments),
+        normalized_input,
         dict(schema),
         "arguments",
         repairs,

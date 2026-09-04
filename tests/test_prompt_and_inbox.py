@@ -45,6 +45,9 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
     assert "treat the edit as a successful idempotent no-op" in prompt
     assert "Still complete the display obligation" in prompt
     assert "An argument error does not mean the tool is unavailable" in prompt
+    assert "Write accepts at most 8,000 characters per call" in prompt
+    assert "mode=append" in prompt
+    assert "never use overwrite to continue a file" in prompt
 
 
 def test_default_prompt_keeps_internal_work_out_of_user_facing_messages():

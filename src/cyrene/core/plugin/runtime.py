@@ -319,6 +319,7 @@ class PluginRuntime:
             normalization = normalize_plugin_arguments(
                 call.arguments,
                 plugin.input_schema,
+                property_aliases=plugin.argument_aliases,
             )
             arguments = normalization.arguments
             repairs += tuple(repair.as_dict() for repair in normalization.repairs)
@@ -352,6 +353,7 @@ class PluginRuntime:
                     nested = normalize_plugin_arguments(
                         nested_arguments,
                         effective_plugin.input_schema,
+                        property_aliases=effective_plugin.argument_aliases,
                     )
                     effective_arguments = nested.arguments
                     repairs += tuple(repair.as_dict() for repair in nested.repairs)

@@ -44,6 +44,10 @@ async def publish_usage_event(
             return
         accounting_event = {
             "type": "tool_call",
+            # This is an accounting projection, not a second executable tool
+            # lifecycle event.  Realtime consumers use the marker to keep it
+            # out of the conversation activity timeline.
+            "analytics_only": True,
             "timestamp": str(event.get("timestamp") or ""),
             "round_id": str(event.get("runId") or event.get("run_id") or ""),
             "session_id": str(

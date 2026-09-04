@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from dataclasses import replace
 
 from cyrene.core.session import AgentSession
 from cyrene.core.hook import (
@@ -219,6 +220,55 @@ def test_invalid_model_response_retry_is_bounded(tmp_path):
     assert output is not None
     assert output["error"] is True
     assert output["failure_kind"] == "model_response_invalid"
+    session.close()
+
+
+def test_invalid_tool_call_response_is_not_blindly_retried(tmp_path):
+    model_calls = 0
+
+    async def invalid_tool_call(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        raise ModelCallError(replace(
+            classify_model_error("invalid Provider Plugin result"),
+            retry_scope="different_arguments",
+        ))
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (
+                Plugin(
+                    "MiniMax",
+                    "fake",
+                    {"type": "object"},
+                    invalid_tool_call,
+                    kind="model",
+                ),
+            ),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+
+    session.submit("hello", run_id="invalid-tool-call-no-retry")
+    run(session.drain())
+
+    assert model_calls == 1
+    output = session.final_output("invalid-tool-call-no-retry")
+    assert output is not None
+    assert output["error"] is True
+    assert output["failure_kind"] == "model_response_invalid"
+    assert output["retry_scope"] == "different_arguments"
     session.close()
 
 

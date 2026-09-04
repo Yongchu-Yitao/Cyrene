@@ -1508,6 +1508,20 @@ var WorkbenchChatRuntimes = (function () {
     // The event bridge is process-wide. Ignore warnings and progress for
     // sessions this client is not currently tracking.
     if (!chatId || !runtimes[chatId]) return;
+    // ``tool.started`` is also projected onto the process-wide event bus as a
+    // minimal ``tool_call`` record for usage accounting. It has no lifecycle
+    // identity or details and must not become a second, empty activity row.
+    // Keep the shape check for compatibility with servers predating the
+    // explicit marker while preserving full legacy ``tool_call`` events.
+    if (
+      event.analytics_only === true
+      || (
+        event.type === "tool_call"
+        && !String(event.tool_call_id || "")
+        && event.args == null
+        && event.result == null
+      )
+    ) return;
     if (event.type === "budget_warning") {
       var warningError = new Error(String(event.message || ""));
       warningError.code = String(event.code || "");

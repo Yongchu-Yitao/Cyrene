@@ -102,6 +102,9 @@ def _model_failure_projection(
         "detail_params": dict(details.get("detail_params") or {}),
         "retryable": bool(details.get("retryable", True)),
     }
+    retry_scope = str(details.get("retry_scope") or "").strip()
+    if retry_scope:
+        metadata["retry_scope"] = retry_scope
     status_code = int(details.get("status_code") or 0)
     if status_code:
         metadata["status_code"] = status_code
@@ -3797,6 +3800,7 @@ class AgentSession:
         if (
             str(details.get("code") or "") != "model_response_invalid"
             or details.get("retryable") is False
+            or str(details.get("retry_scope") or "") != "immediate"
         ):
             return False
 

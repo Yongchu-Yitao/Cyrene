@@ -114,7 +114,7 @@ def test_managed_settings_enable_mainland_no_key_engines(monkeypatch, tmp_path):
     assert engines["sogou"]["timeout"] == 10.0
     assert engines["bing"]["disabled"] is False
     assert engines["bing"]["timeout"] == 10.0
-    assert engines["bing"]["base_url"] == "https://cn.bing.com/search"
+    assert engines["bing"]["base_url"] == "https://www.bing.com/search"
     assert "proxies" not in settings["outgoing"]
 
 
@@ -139,7 +139,7 @@ def test_china_engine_overrides_preserve_existing_engine_settings():
     }
     assert engines["custom"] == {"name": "custom", "disabled": False}
     assert engines["sogou"]["disabled"] is False
-    assert engines["bing"]["base_url"] == "https://cn.bing.com/search"
+    assert engines["bing"]["base_url"] == "https://www.bing.com/search"
 
 
 def test_build_env_applies_proxy_to_every_standard_variable(monkeypatch, tmp_path):
@@ -220,7 +220,7 @@ def test_windows_arm_settings_request_includes_mainland_engines(monkeypatch, tmp
     engines = {engine["name"]: engine for engine in captured["engine_overrides"]}
     assert engines["baidu"]["disabled"] is False
     assert engines["sogou"]["disabled"] is False
-    assert engines["bing"]["base_url"] == "https://cn.bing.com/search"
+    assert engines["bing"]["base_url"] == "https://www.bing.com/search"
 
 
 def test_windows_arm_does_not_fall_back_to_in_process_simplexng(monkeypatch):

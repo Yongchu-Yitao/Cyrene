@@ -143,6 +143,9 @@ def _failed_run_payload(data: Mapping[str, Any]) -> dict[str, Any]:
         "detail_params": dict(data.get("detail_params") or {}),
         "retryable": bool(data.get("retryable", True)),
     }
+    retry_scope = str(data.get("retry_scope") or "").strip()
+    if retry_scope:
+        payload["retry_scope"] = retry_scope
     if data.get("status_code"):
         payload["status_code"] = int(data["status_code"])
     return payload

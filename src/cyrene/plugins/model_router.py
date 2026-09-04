@@ -10,7 +10,11 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from cyrene.core.plugin.execution import invoke_plugin, require_plugin_execution
+from cyrene.core.plugin.execution import (
+    PluginInvocationError,
+    invoke_plugin,
+    require_plugin_execution,
+)
 from .tool_call_parsers import GENERIC_TOOL_CALL_PARSER
 from .model_catalog import (
     candidate_identity,
@@ -32,6 +36,28 @@ from cyrene.model.status import publish_context_model_status
 MODEL_ROUTER_PLUGIN = "CyreneModelRouter"
 EXACT_MODEL_UNAVAILABLE = "Requested exact model identity is no longer configured"
 logger = logging.getLogger(__name__)
+_TRUNCATED_FINISH_REASONS = frozenset({
+    "length",
+    "max_tokens",
+    "max_tokens_reached",
+    "max_output_tokens",
+})
+
+
+def _invalid_provider_result_details(exc: BaseException) -> ModelErrorDetails:
+    """Preserve nested parser retry semantics at the model boundary."""
+
+    details = classify_model_error("invalid Provider Plugin result")
+    if not isinstance(exc, PluginInvocationError):
+        return details
+    failure = exc.result.failure
+    if failure is None:
+        return details
+    return replace(
+        details,
+        retryable=failure.retryable,
+        retry_scope=failure.retry_scope,
+    )
 
 
 def _tool_call_parser(plugin: Plugin) -> str:
@@ -217,6 +243,16 @@ async def _normalized_provider_result(
     provider_plugin: Plugin,
     tools: Any,
 ) -> dict[str, Any]:
+    finish_reason = str(value.get("finish_reason") or "").strip().lower()
+    raw_tool_calls = value.get("tool_calls")
+    if (
+        finish_reason in _TRUNCATED_FINISH_REASONS
+        and isinstance(raw_tool_calls, list)
+        and raw_tool_calls
+    ):
+        raise ValueError(
+            "Provider Plugin returned tool calls from a truncated response"
+        )
     content = value.get("content")
     reasoning = value.get("reasoning")
     if not isinstance(reasoning, str):
@@ -648,9 +684,7 @@ async def route_model_call(
             # evidence that this model candidate is unavailable.  Falling back
             # here can duplicate generation and lets a shared parser failure
             # poison otherwise healthy fallback candidates.
-            raise ModelCallError(
-                classify_model_error("invalid Provider Plugin result")
-            ) from exc
+            raise ModelCallError(_invalid_provider_result_details(exc)) from exc
         await _publish_llm_event(
             context,
             messages=model_messages,

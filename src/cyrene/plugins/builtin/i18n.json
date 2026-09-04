@@ -1918,11 +1918,11 @@
     "Read": {
       "en": {
         "name": "Read",
-        "description": "Read a UTF-8 text file."
+        "description": "Read a UTF-8 text file, optionally selecting a 1-based inclusive line range."
       },
       "zh": {
         "name": "读取文件",
-        "description": "读取 UTF-8 文本文件。"
+        "description": "读取 UTF-8 文本文件，并可选择从 1 开始计数的首尾行范围（含首尾行）。"
       }
     },
     "ReadChatGroupSessions": {
@@ -2208,11 +2208,11 @@
     "Write": {
       "en": {
         "name": "Write",
-        "description": "Write a UTF-8 text file."
+        "description": "Write one UTF-8 text chunk of at most 8,000 characters. For a larger file, overwrite with the first chunk, then append later chunks in separate tool-call turns."
       },
       "zh": {
         "name": "写入文件",
-        "description": "写入 UTF-8 文本文件。"
+        "description": "写入一个不超过 8,000 字符的 UTF-8 文本块。大文件先覆盖写入首块，再在后续工具调用轮次中追加其余块。"
       }
     },
     "app_use": {

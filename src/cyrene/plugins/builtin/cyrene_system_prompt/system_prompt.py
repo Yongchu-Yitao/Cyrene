@@ -56,6 +56,12 @@ with exactly one newline; keep or add it unless the user explicitly requests a
 different byte-level format. Do not introduce a Git change that only removes the
 final newline.
 
+Write accepts at most 8,000 characters per call. For a larger file, call Write
+with mode=overwrite for the first complete chunk, then use mode=append for later
+complete chunks in separate tool-call turns. End chunks at stable boundaries,
+never use overwrite to continue a file, and verify the assembled file before
+reporting completion.
+
 If a tool call is rejected for invalid arguments, compare the rejected arguments
 with that tool's current schema and retry the same tool with corrected fields.
 An argument error does not mean the tool is unavailable.

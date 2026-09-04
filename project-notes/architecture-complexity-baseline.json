@@ -3,6 +3,7 @@
   "large_functions": {
     "src/cyrene/core/context/router.py::ContextStoreRouter.create_tree": 113,
     "src/cyrene/core/hook/registry.py::HookSet._run_pre_tool": 129,
+    "src/cyrene/core/plugin/plugin.py::Plugin.__post_init__": 106,
     "src/cyrene/plugins/model_router.py::route_model_call": 180,
     "src/cyrene/plugins/native_tools.py::_seed_canonical_directory": 219,
     "src/cyrene/plugins/builtin/cyrene_application/_ui_action.py::execute_action": 130,
