@@ -479,7 +479,7 @@ _AUTO_CONTEXT_START_PERCENT = 20
 _AUTO_CONTEXT_STEP_PERCENT = 10
 _AUTO_CONTEXT_FINAL_PERCENT = 70
 
-_STRUCTURED_CONTEXT_START_PERCENT = 10
+_STRUCTURED_CONTEXT_START_PERCENT = 5
 _STRUCTURED_CONTEXT_STEP_PERCENT = 5
 _STRUCTURED_CONTEXT_FINAL_PERCENT = 70
 
@@ -516,7 +516,7 @@ def pending_structured_memory_threshold(
     ctx_limit: int | None = None,
     observed_percent: int | None = None,
 ) -> int | None:
-    """Return an unprocessed 10%..70% structured-memory threshold."""
+    """Return an unprocessed 5%..70% structured-memory threshold."""
 
     from cyrene.plugins.model_catalog import configured_context_limit
 

@@ -2,6 +2,58 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta7] - 2026-09-05
+
+Beta7 brings together every user-visible change since beta6 across model connections, streaming replies, per-conversation memory controls, attachment understanding, the browser, search, workspace change tracking, terminals, and Linux startup. The focus is preserving useful results through malformed model responses, transport interruptions, page reconnects, and continuous project work, while giving users explicit control over the memories used by each conversation and making live answers smoother and more stable.
+
+### Model connections, discovery, and selection
+
+- Model settings now distinguish a missing API key, an invalid or unauthorized key, a missing model-list endpoint, a timeout, an unparseable response, a connection failure, and a temporarily unavailable service instead of presenting them as the same discovery failure.
+- The API-key field clearly shows whether no key is configured, a saved key is hidden, or a new key is waiting to be saved. Existing keys stay hidden and leaving the field blank keeps the saved value, reducing accidental replacement and repeated entry.
+- When model discovery fails, users can copy secret-free technical details for troubleshooting the service address, permission, or upstream status while retaining a concise localized explanation in the interface.
+- Custom compatible models, generic OpenAI-compatible connections, and connections with provider presets now retain the identity of the service that actually answered. Reopening, retrying, or restoring a conversation more reliably returns to the selected model instead of matching a similarly named connection.
+- Invalid model responses are now recognized explicitly. Recoverable failures receive one bounded automatic retry and cannot loop indefinitely. When useful output was already received, Cyrene no longer blindly switches models and creates a duplicate answer because later response parsing failed.
+
+### Streaming replies, recovery, and conversation flow
+
+- Completed paragraphs, lists, and code blocks in a streaming answer now remain mounted while only the active final block updates. Existing content no longer repeatedly reflows as each batch of text arrives, making long answers, text selection, scrolling, and code reading more stable.
+- Newly arrived text uses a lighter, continuous fade. Fast models no longer create dense flashing while slower models still show progress promptly; the animation is disabled automatically when the system prefers reduced motion.
+- If a model has already produced readable text but fails while finalizing tool arguments or the response ending, the visible text is saved and remains available after reconnecting or reopening the page, while the run is still honestly shown as incomplete.
+- Incomplete events, invalid data, abnormal endings, and interrupted transports now receive more accurate error categories and recovery guidance. Multi-line streaming events are also combined correctly instead of silently losing valid fragments.
+- Sending another message, answering a question, or retrying no longer waits for the previous turn's durable bookkeeping; queued conversation results finish reliably in the background, and shutdown waits for already queued results to settle, reducing the chance that a visible reply is missing from history.
+- Activity cards summarize completed work as “Executed N tool calls.” Labels for understanding, thinking, and execution are simpler, and completed tools no longer continue to look active.
+
+### Per-conversation memory controls
+
+- The conversation content menu now includes independent Short-term memory and Project memory switches. Users can decide whether the next reply receives recent context carried across conversations, durable memories for the current project, both, or neither.
+- Both switches preserve the existing enabled-by-default behavior and are saved independently on the current conversation. New, updated, and forked conversations, follow-up answers, and Side Agent runs consistently use the selected preferences without requiring per-turn changes.
+- Turning off a memory source only stops injecting that source into future replies; it does not delete saved memories. Either source can be enabled again at any time, and a failed preference update restores the visible switch and shows a clear error.
+- Structured project-memory learning now begins when a conversation has used roughly 5% of its context, allowing preferences, project facts, and key decisions to be retained earlier and making persistent project memory more useful in shorter conversations.
+
+### Image attachments, browser, and live interface
+
+- When no dedicated Vision route is configured, image attachments can now use the user-selected primary model for that conversation when it is confirmed to support images. Model choices and analysis caches remain isolated between conversations.
+- Attachment analysis follows the actual conversation context and model identity, so switching models does not reuse analysis produced by a different model. Existing local recognition and guidance remain available when no image-capable model can be used.
+- When an Agent opens a browser page, the browser surface appears as soon as that conversation owns a page. Slow or still-navigating pages no longer remain hidden merely because a later browser event has not arrived.
+- First-content display, follow-scroll behavior, and live interface updates are steadier, with fewer unnecessary redraws and jumps during fast continuous output.
+
+### Workspace changes and project files
+
+- Workspace files are now watched continuously, allowing each run to obtain the latest state immediately at its boundaries. Large projects and consecutive runs no longer need a complete rescan every time, so change summaries become available sooner.
+- Writes, renames, and deletions that happen around run startup are included in the correct change result. Multiple conversations or overlapping runs using the same workspace no longer overwrite each other's view of the latest files.
+- Workspace changes now honor `.gitignore` rules at the root and in nested directories, including directory-scoped rules and re-inclusion exceptions. Dependencies, build output, caches, and files users explicitly ignored stay out of visible change summaries.
+- When `.gitignore` changes during a run, subsequent tracking refreshes to the new rules and newly ignored content does not remain in the visible result.
+
+### Search, terminals, and desktop startup
+
+- Built-in web search now enables Baidu, Sogou, and China Bing as keyless sources for mainland China networks while retaining the existing global source pool.
+- If the system retains a stale proxy that is no longer usable, the search service no longer inherits and repeatedly retries it. An explicitly configured working proxy continues to be applied normally.
+- Deleted or closed terminals no longer reappear in the terminal list or return as the project's active terminal. Stale selections left by an interrupted shutdown are repaired automatically.
+- Terminal recovery and connection-restored notices now appear only for the visible, still-running session that has just recovered. Opening an old terminal or leaving one in the background no longer produces stale success notices; shortcuts, input, history, and Agent status are unchanged.
+- System commands launched from the Terminal, code tools, or extensions in packaged Linux builds no longer load Cyrene's bundled system libraries by mistake, reducing startup failures and abnormal exits in Git, shells, CLI Agents, and plugins.
+- Linux packages now include the desktop accessibility runtime needed for semantic desktop reading and actions, avoiding an extra manual dependency step before Agents can use those capabilities.
+- Linux Wayland keeps the application's main window on the current desktop session while remote-desktop compatibility is scoped to the component that needs it. On desktop combinations that omit the usual ready-to-show event, the main window is still revealed and focused reliably after its page loads.
+
 ## [0.9.0-beta6] - 2026-09-02
 
 Beta6 focuses on model availability after upgrades, reliable long-running replies, clearer Agent tool discovery, and more readable Workbench lists. It restores built-in model services omitted by older settings, keeps each conversation on the model the user explicitly selected, and helps the Agent find persistent terminals, remote-device operations, knowledge, Goals, and plugin-development capabilities. Cross-device Remote Desktop is now enabled only when requested.

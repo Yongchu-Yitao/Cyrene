@@ -135,7 +135,7 @@ def test_structured_memory_claims_five_percent_thresholds_once(monkeypatch):
         "cyrene.core.context.compaction.message_token_estimate",
         lambda message: int(message.get("tokens") or 0),
     )
-    messages = [{"role": "user", "tokens": 99}]
+    messages = [{"role": "user", "tokens": 49}]
     memory_prompt.persist_tree_context_snapshot(
         "chat-structured",
         "project-structured",
@@ -148,7 +148,7 @@ def test_structured_memory_claims_five_percent_thresholds_once(monkeypatch):
         "chat-structured", messages, ctx_limit=1000
     ) is None
 
-    messages[0]["tokens"] = 101
+    messages[0]["tokens"] = 51
     memory_prompt.persist_tree_context_snapshot(
         "chat-structured",
         "project-structured",
@@ -159,7 +159,7 @@ def test_structured_memory_claims_five_percent_thresholds_once(monkeypatch):
     )
     assert memory_prompt.claim_structured_memory_threshold(
         "chat-structured", messages, ctx_limit=1000
-    ) == 10
+    ) == 5
     assert memory_prompt.claim_structured_memory_threshold(
         "chat-structured", messages, ctx_limit=1000
     ) is None
