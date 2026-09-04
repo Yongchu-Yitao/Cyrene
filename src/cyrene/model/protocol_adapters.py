@@ -449,6 +449,40 @@ def _anthropic_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[
     return "\n\n".join(part for part in system_parts if part), converted
 
 
+def _with_anthropic_cache_breakpoint(block: dict[str, Any]) -> dict[str, Any]:
+    """Return one Anthropic content block marked as an explicit cache boundary."""
+
+    return {**block, "cache_control": {"type": "ephemeral"}}
+
+
+def _anthropic_cached_prompt(
+    system: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> tuple[str | list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Place cache breakpoints on protocol content blocks, never at request root."""
+
+    cached_tools = [dict(tool) for tool in tools]
+    if cached_tools:
+        cached_tools[-1] = _with_anthropic_cache_breakpoint(cached_tools[-1])
+
+    cached_system: str | list[dict[str, Any]] = system
+    if system:
+        cached_system = [
+            _with_anthropic_cache_breakpoint({"type": "text", "text": system})
+        ]
+
+    cached_messages = [
+        {**message, "content": [dict(block) for block in message.get("content") or []]}
+        for message in messages
+    ]
+    if cached_messages and cached_messages[-1]["content"]:
+        cached_messages[-1]["content"][-1] = _with_anthropic_cache_breakpoint(
+            cached_messages[-1]["content"][-1]
+        )
+    return cached_system, cached_messages, cached_tools
+
+
 def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for message in messages:
@@ -561,20 +595,25 @@ def prepare_request(
     tool_defs = _tool_definitions(tools)
     if adapter == "anthropic":
         system, converted = _anthropic_messages(messages)
+        anthropic_tools = [
+            {"name": item["name"], "description": item["description"], "input_schema": item["parameters"]}
+            for item in tool_defs
+        ]
+        system, converted, anthropic_tools = _anthropic_cached_prompt(
+            system,
+            converted,
+            anthropic_tools,
+        )
         payload: dict[str, Any] = {
             "model": model,
             "messages": converted,
             "max_tokens": max(1, int(max_tokens or 4096)),
             "stream": bool(stream),
-            "cache_control": {"type": "ephemeral"},
         }
         if system:
             payload["system"] = system
-        if tool_defs:
-            payload["tools"] = [
-                {"name": item["name"], "description": item["description"], "input_schema": item["parameters"]}
-                for item in tool_defs
-            ]
+        if anthropic_tools:
+            payload["tools"] = anthropic_tools
             # Anthropic's native Messages API has no schema-preserving "none"
             # mode. Keep the definitions stable and rely on the explicit final
             # synthesis instruction when callers disable tool selection.
@@ -1020,10 +1059,28 @@ async def handle_stream(
                     finish = str((data.get("delta") or {}).get("stop_reason") or finish)
                     raw_usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
                     if raw_usage:
-                        current = {"usage": raw_usage}
-                        next_usage = _usage(adapter, current)
-                        usage["completion_tokens"] = next_usage["completion_tokens"]
-                        usage["total_tokens"] = int(usage.get("prompt_tokens") or 0) + next_usage["completion_tokens"]
+                        next_usage = _usage(adapter, {"usage": raw_usage})
+                        if any(
+                            key in raw_usage
+                            for key in (
+                                "input_tokens",
+                                "cache_creation_input_tokens",
+                                "cache_read_input_tokens",
+                            )
+                        ):
+                            usage["prompt_tokens"] = next_usage["prompt_tokens"]
+                            for key in (
+                                "prompt_cache_hit_tokens",
+                                "prompt_cache_miss_tokens",
+                            ):
+                                if key in next_usage:
+                                    usage[key] = next_usage[key]
+                        if "output_tokens" in raw_usage:
+                            usage["completion_tokens"] = next_usage["completion_tokens"]
+                        usage["total_tokens"] = (
+                            int(usage.get("prompt_tokens") or 0)
+                            + int(usage.get("completion_tokens") or 0)
+                        )
             elif adapter == "openai_responses":
                 event_type = str(data.get("type") or "")
                 if event_type == "response.output_text.delta":

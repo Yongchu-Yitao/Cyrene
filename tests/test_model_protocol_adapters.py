@@ -335,10 +335,14 @@ def test_prepare_anthropic_request_converts_system_images_tools_and_auth() -> No
         "x-api-key": "ant-key",
         "anthropic-version": "2023-06-01",
     }
-    assert request.payload["system"] == "Be concise."
+    assert request.payload["system"] == [{
+        "type": "text",
+        "text": "Be concise.",
+        "cache_control": {"type": "ephemeral"},
+    }]
     assert request.payload["max_tokens"] == 512
     assert request.payload["stream"] is True
-    assert request.payload["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in request.payload
     assert request.payload["messages"][0] == {
         "role": "user",
         "content": [
@@ -358,7 +362,12 @@ def test_prepare_anthropic_request_converts_system_images_tools_and_auth() -> No
     assert request.payload["messages"][2] == {
         "role": "user",
         "content": [
-            {"type": "tool_result", "tool_use_id": "toolu_weather", "content": '{"temp":21}'}
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_weather",
+                "content": '{"temp":21}',
+                "cache_control": {"type": "ephemeral"},
+            }
         ],
     }
     assert request.payload["tools"] == [
@@ -366,6 +375,7 @@ def test_prepare_anthropic_request_converts_system_images_tools_and_auth() -> No
             "name": "weather",
             "description": "Read the weather",
             "input_schema": TOOLS[0]["function"]["parameters"],
+            "cache_control": {"type": "ephemeral"},
         }
     ]
 
@@ -866,6 +876,52 @@ async def test_anthropic_sse_accumulates_text_tool_arguments_usage_and_finish() 
             }
         ],
         "finish_reason": "tool_use",
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_sse_accepts_complete_usage_in_message_delta() -> None:
+    events = [
+        {
+            "type": "message_start",
+            "message": {"usage": {"output_tokens": 0}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 15,
+                "output_tokens": 7,
+                "cache_read_input_tokens": 40,
+                "cache_creation_input_tokens": 5,
+            },
+        },
+    ]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return _sse_response(events)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        parsed = await handle_stream(
+            "anthropic",
+            client,
+            "https://api.minimax.test/anthropic/v1/messages",
+            PreparedRequest({"stream": True}, {"x-api-key": "key"}),
+            None,
+        )
+
+    parsed.pop("stream_diagnostics")
+    assert parsed["usage"] == {
+        "prompt_tokens": 60,
+        "completion_tokens": 7,
+        "total_tokens": 67,
+        "prompt_cache_hit_tokens": 40,
+        "prompt_cache_miss_tokens": 20,
     }
 
 
