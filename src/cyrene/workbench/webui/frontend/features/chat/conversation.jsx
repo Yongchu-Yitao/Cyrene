@@ -2017,7 +2017,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       el.scrollTop = el.scrollHeight;
       scheduleStickyViewportRestore();
     }
-  }, [messages.length, runtime && runtime.text, runtime && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, runtime && runtime.segments && runtime.segments.length]);
+  }, [messages.length, runtime && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, runtime && runtime.segments && runtime.segments.length]);
 
   useWbcEffect(function () {
     stickRef.current = true;
@@ -2125,7 +2125,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
 
   useWbcEffect(function () {
     scheduleBrowserAvoidance();
-  }, [messages.length, runtime && runtime.text, runtime && runtime.progress && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, browserVisible, browserWindowMode, sideVisible]);
+  }, [messages.length, runtime && runtime.progress && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, browserVisible, browserWindowMode, sideVisible]);
 
   useWbcEffect(function () {
     var thread = scrollRef.current;

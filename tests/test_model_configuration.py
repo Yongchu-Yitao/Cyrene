@@ -1,6 +1,9 @@
 """Focused coverage for plugin-oriented model configuration."""
 
 from __future__ import annotations
+
+import json
+
 from conftest import (
     workbench_chat_source,
     workbench_i18n_source,
@@ -159,6 +162,7 @@ def test_save_redacts_secrets_and_persists_only_the_canonical_graph(
     for adapter_id in ("anthropic", "openai", "openai_responses", "gemini"):
         assert adapters[adapter_id]["user_selectable"] is True
         assert adapters[adapter_id]["category"] == "remote"
+        assert adapters[adapter_id]["auth_type"] == "api_key"
     for adapter_id in ("openai_compatible", "codex_oauth", "ollama", "local_onnx"):
         assert adapters[adapter_id]["user_selectable"] is False
     assert adapters["anthropic"]["wire_protocol"] == "anthropic_messages"
@@ -198,6 +202,22 @@ def test_blank_secret_is_retained_and_clear_is_explicit(isolated_model_store):
     blank["connections"][0]["clear_api_key"] = True
     save_model_configuration(blank)
     assert get_model_configuration()["connections"][0]["api_key"] == ""
+
+
+def test_protocol_switch_retains_connection_secret(isolated_model_store):
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        get_model_configuration,
+        save_model_configuration,
+    )
+
+    save_model_configuration(_configuration())
+    switched = _configuration(api_key="")
+    switched["connections"][0]["adapter"] = "anthropic"
+    save_model_configuration(switched)
+
+    connection = get_model_configuration()["connections"][0]
+    assert connection["adapter"] == "anthropic"
+    assert connection["api_key"] == "sk-private"
 
 
 def test_user_model_plugin_is_projected_as_an_editable_provider_connection():
@@ -1084,6 +1104,46 @@ async def test_model_discovery_restores_structured_plugin_connection_error(monke
     assert captured.value.details.code == "model_connection_failed"
 
 
+def test_model_discovery_errors_are_context_specific_and_safe_to_copy():
+    import httpx
+
+    from cyrene.model.error_details import ModelCallError, classify_model_error
+    from cyrene.plugins.builtin.cyrene_model.routes import (
+        _model_discovery_error_response,
+    )
+
+    missing = _model_discovery_error_response(
+        ModelCallError(classify_model_error("MiniMax API key is not configured"))
+    )
+    missing_payload = json.loads(missing.body)
+    assert missing.status_code == 400
+    assert missing_payload["code"] == "model_discovery_credentials_missing"
+    assert missing_payload["error"] in {
+        "No API key is configured for this model service.",
+        "尚未配置 API 密钥。",
+    }
+    assert missing_payload["diagnostic"] == {
+        "operation": "model_discovery",
+        "code": "model_discovery_credentials_missing",
+        "cause": "model_credentials_missing",
+        "retryable": False,
+    }
+
+    request = httpx.Request("GET", "https://provider.invalid/v1/models")
+    upstream = httpx.Response(404, request=request)
+    not_found = _model_discovery_error_response(
+        ModelCallError(classify_model_error(httpx.HTTPStatusError(
+            "secret response body must not escape",
+            request=request,
+            response=upstream,
+        )))
+    )
+    not_found_payload = json.loads(not_found.body)
+    assert not_found_payload["code"] == "model_discovery_catalog_not_found"
+    assert not_found_payload["diagnostic"]["upstream_status"] == 404
+    assert "secret response body" not in not_found.body.decode()
+
+
 def test_frontend_registers_split_pages_and_live_context_contract():
     root = Path(__file__).resolve().parents[1]
     settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
@@ -1111,6 +1171,12 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert '"settings.fetchingProviderModels": "Fetching models from the provider…"' in i18n
     assert '"settings.fetchingProviderModels": "正在从提供商获取模型…"' in i18n
     assert "localizedModelConfigurationError(error, props)" in settings
+    assert '"model_discovery_credentials_missing"' in settings
+    assert '"model_discovery_authentication_failed"' in settings
+    assert '"model_discovery_catalog_not_found"' in settings
+    assert '"model_discovery_response_invalid"' in settings
+    assert "modelConfigurationTechnicalDetail(error)" in settings
+    assert "copyModelTechnicalDetail(v.discovery.technicalDetail, v.props)" in settings
     assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list"))' in settings
     assert "档案描述一个可被多个用途引用的远端模型。" not in settings
     assert "连接配置与模型档案" not in settings
@@ -1271,6 +1337,24 @@ def test_model_service_credentials_are_agent_write_only_and_r3():
     assert '"aria-label": v.label(v.props, "settings.connectionName", "Connection name")' in settings
     assert 'label(props, "settings.modelId", "Model ID")' in settings
     assert '"aria-label": v.label(v.props, "settings.modelServiceApiEndpoint", "Model service API endpoint")' in settings
+
+
+def test_switching_model_protocol_does_not_manage_connection_credentials():
+    root = Path(__file__).resolve().parents[1]
+    settings = (
+        root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx"
+    ).read_text()
+    adapter_transition = settings.split('if (key === "adapter") {', 1)[1].split(
+        'if (key === "secret"', 1
+    )[0]
+
+    assert 'next[key] = value;' in settings
+    assert 'next.secret = ""' not in adapter_transition
+    assert "next.secret_configured = false" not in adapter_transition
+    assert "next.clear_api_key" not in adapter_transition
+    assert '"data-secret-state": selected.secret_configured ? "configured" : "unconfigured"' in settings
+    assert 'settings.apiKeySavedPlaceholder' in settings
+    assert 'settings.apiKeyNotConfigured' in settings
 
 
 def test_model_service_api_row_has_per_connection_proxy_switch():

@@ -1490,6 +1490,34 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     return function () { cancelled = true; };
   }, [activeChatId, browserAvailable]);
 
+  // Agent navigation creates its Electron tab before the page finishes
+  // loading. Observe the manager-level state as well as browser_frame SSE
+  // events so a slow or stalled navigation still mounts the visible browser
+  // surface immediately. The viewport subscription is installed only after
+  // this flag is set, so relying on browser:state here would create a cycle:
+  // no mounted viewport -> no active session -> no browser:state delivery.
+  useWbcEffect(function () {
+    if (!browserAvailable) return undefined;
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || typeof bridge.onManagerState !== "function") return undefined;
+    var chatId = String(activeChatId || "");
+    if (!chatId) return undefined;
+    function revealOwnedBrowser(state) {
+      var pages = Array.isArray(state && state.pages) ? state.pages : [];
+      if (!pages.some(function (page) { return String(page && page.sessionId || "") === chatId; })) return;
+      setBrowserActiveByChat(function (prev) {
+        return prev[chatId] ? prev : { ...prev, [chatId]: true };
+      });
+      setBrowserWindowModeByChat(function (prev) {
+        return prev[chatId] ? prev : { ...prev, [chatId]: "pip" };
+      });
+    }
+    if (typeof bridge.getManagerState === "function") {
+      bridge.getManagerState().then(revealOwnedBrowser).catch(function () {});
+    }
+    return bridge.onManagerState(revealOwnedBrowser);
+  }, [activeChatId, browserAvailable]);
+
   useWbcEffect(function () {
     if (!knowledgeAvailable) {
       knowledgeReadControllersRef.current.forEach(function (controller) { controller.abort(); });

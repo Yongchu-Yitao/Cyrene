@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from cyrene.core.plugin import ApplicationPluginScope, PluginRegistry
 from cyrene.core.session import AgentSession, AgentSessionEvent
+from cyrene.model.protocol_trace import create_model_protocol_trace
 
 WorkbenchPublisher: TypeAlias = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 
@@ -618,6 +619,14 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
         return stream_projection
     if event.type == "input.accepted":
         return (_envelope(event, "run.started", event_id, {"status": "running"}),)
+    if event.type == "model.requested":
+        return (
+            {
+                **_envelope(event, "chat_timing", event_id),
+                "type": "chat_timing",
+                "stage": "provider_request_sent",
+            },
+        )
     if event.type == "guidance.applied":
         return (
             _envelope(
@@ -897,6 +906,18 @@ class WorkbenchSessionBridge:
         max_model_calls: int | None = None,
         extra_direct_tool_names: Sequence[str] = (),
     ) -> WorkbenchSessionBridge:
+        resolved_services = dict(plugin_services or {})
+        if "model_protocol_trace" not in resolved_services:
+            protocol_trace = create_model_protocol_trace(
+                data_directory,
+                session_id=str(chat_id),
+            )
+            if protocol_trace is not None:
+                resolved_services["model_protocol_trace"] = protocol_trace
+                logger.warning(
+                    "Raw model protocol tracing is enabled; the dedicated "
+                    "owner-only trace may contain private conversation content."
+                )
         return cls(
             AgentSession(
                 data_directory,
@@ -908,7 +929,7 @@ class WorkbenchSessionBridge:
                 tree_id=str(chat_id),
                 host_context=host_context,
                 plugin_context_data=plugin_context_data,
-                plugin_services=plugin_services,
+                plugin_services=resolved_services,
                 application_scope=application_scope,
                 max_model_calls=max_model_calls,
                 extra_direct_tool_names=extra_direct_tool_names,

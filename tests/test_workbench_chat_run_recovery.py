@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+import time
 from types import SimpleNamespace
 
 
@@ -538,3 +539,35 @@ async def test_chat_run_storage_setup_runs_off_the_event_loop(monkeypatch, tmp_p
     release.set()
     await asyncio.wait_for(run.done.wait(), timeout=2)
     assert ran.is_set()
+
+
+async def test_chat_run_records_server_stages_and_first_stream_delta_once():
+    from cyrene.workbench.chat.chat_runs import ChatRun
+
+    run = ChatRun(
+        "chat_timing",
+        {
+            "type": "ack",
+            "clientRequestId": "request_1",
+            "_timingEnabled": True,
+            "_latencyStartedMonotonic": time.monotonic(),
+            "timing": [
+                {"stage": "server_received", "serverElapsedMs": 0.0},
+                {"stage": "ack", "serverElapsedMs": 0.1},
+            ],
+        },
+    )
+    await run.mark_timing("snapshot_complete")
+    await run.publish({"type": "reasoning_delta", "delta": "thinking"})
+    await run.publish({"type": "reply_delta", "delta": "answer"})
+
+    assert "_latencyStartedMonotonic" not in run.events[0]
+    stages = [
+        event.get("stage")
+        for event in run.events
+        if event.get("type") == "chat_timing"
+    ]
+    assert stages == ["snapshot_complete", "first_delta"]
+    first_delta = next(event for event in run.events if event.get("stage") == "first_delta")
+    assert first_delta["clientRequestId"] == "request_1"
+    assert first_delta["serverElapsedMs"] >= 0

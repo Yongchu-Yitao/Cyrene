@@ -12,6 +12,13 @@ var MODEL_CONFIGURATION_ERROR_KEYS = {
   "model discovery is unavailable": ["settings.modelDiscoveryUnavailable", "Model discovery is currently unavailable."],
 };
 var MODEL_CONFIGURATION_ERROR_CODE_KEYS = {
+  "model_discovery_credentials_missing": ["settings.modelDiscoveryCredentialsMissing", "No API key is configured."],
+  "model_discovery_authentication_failed": ["settings.modelDiscoveryAuthenticationFailed", "The API key is invalid or lacks permission to list models."],
+  "model_discovery_catalog_not_found": ["settings.modelDiscoveryCatalogNotFound", "The model-list endpoint does not exist."],
+  "model_discovery_timeout": ["settings.modelDiscoveryConnectionTimedOut", "The connection timed out."],
+  "model_discovery_response_invalid": ["settings.modelDiscoveryResponseInvalid", "The model service returned data that could not be parsed."],
+  "model_discovery_connection_failed": ["settings.modelDiscoveryConnectionFailed", "Could not connect to the model service."],
+  "model_discovery_service_unavailable": ["settings.modelDiscoveryServiceUnavailable", "The model service is temporarily unavailable."],
   "model_connection_failed": ["settings.modelConnectionFailed", "Model connection failed."],
   "model_tls_failed": ["settings.modelConnectionFailed", "Model connection failed."],
   "model_timeout": ["settings.modelConnectionTimedOut", "Model connection timed out."],
@@ -103,10 +110,22 @@ function renderModelDetailPane(v) {
             h(v.Toggle, { checked: selected.use_proxy === true, label: selected.use_proxy ? v.label(v.props, "settings.disableNamedProxy", "Disable proxy for {name}", { name: selected.name }) : v.label(v.props, "settings.enableNamedProxy", "Enable proxy for {name}", { name: selected.name }), onChange: function (value) { v.updateConnection("use_proxy", value); } })
           )
         )) : null,
-        !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, { label: v.label(v.props, "settings.apiKey", "API key"), wide: true, hint: selected.secret_configured && !selected.secret ? v.label(v.props, "settings.savedKeyLeaveBlank", "A key is saved; leave this blank to keep it unchanged.") : v.label(v.props, "settings.localApiKeyHint", "The key is sent only to the local configuration API.") }, h("input", {
+        !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, {
+          label: v.label(v.props, "settings.apiKey", "API key"),
+          wide: true,
+          hint: selected.secret_configured && !selected.secret
+            ? v.label(v.props, "settings.savedKeyLeaveBlank", "API key saved and hidden; leave this blank to keep it unchanged.")
+            : String(selected.secret || "").trim()
+              ? v.label(v.props, "settings.apiKeyPendingSave", "This API key will be stored in the local configuration.")
+              : v.label(v.props, "settings.apiKeyNotConfigured", "No API key is configured. The value you enter is sent only to the local configuration API."),
+        }, h("input", {
           className: "wb-input", type: "password", value: selected.secret,
           onChange: function (event) { v.updateConnection("secret", event.target.value); },
-          placeholder: selected.secret_configured ? v.label(v.props, "settings.configured", "Configured") : "sk-…", autoComplete: "new-password",
+          placeholder: selected.secret_configured
+            ? v.label(v.props, "settings.apiKeySavedPlaceholder", "Saved key (hidden)")
+            : v.label(v.props, "settings.apiKeyPlaceholder", "Enter API key"),
+          autoComplete: "new-password",
+          "data-secret-state": selected.secret_configured ? "configured" : "unconfigured",
           "aria-label": v.label(v.props, "settings.apiKeyWriteOnly", "API key (write only)"), "data-cyrene-agent-secret-input": "true", "data-cyrene-risk": "R3",
         })) : null
       )
@@ -117,7 +136,14 @@ function renderModelDetailPane(v) {
       h("div", { className: "wb-mcfg-section-head" },
         h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list")),
         h("div", { className: "wb-mcfg-section-actions" },
-          v.discovery && v.discovery.error ? h("span", { className: "wb-mcfg-discovery-error", title: v.discovery.error }, v.label(v.props, "settings.fetchModelsFailed", "Could not fetch models")) : null,
+          v.discovery && v.discovery.error ? h("span", { className: "wb-mcfg-discovery-error", title: v.discovery.error },
+            h("span", null, v.discovery.error),
+            v.discovery.technicalDetail ? h("button", {
+              type: "button",
+              className: "wb-mcfg-copy-diagnostic",
+              onClick: function () { v.copyModelTechnicalDetail(v.discovery.technicalDetail, v.props); },
+            }, v.label(v.props, "settings.copyTechnicalDetails", "Copy technical details")) : null
+          ) : null,
           h("button", {
             type: "button",
             className: "wb-btn",
@@ -247,6 +273,28 @@ function useConnectionMenuLifecycle(v) {
     var summary = String(error && (error.summary || error.message) || error || "").trim();
     var translation = MODEL_CONFIGURATION_ERROR_KEYS[summary.toLowerCase()];
     return translation ? label(props, translation[0], translation[1]) : summary;
+  }
+
+  function modelConfigurationTechnicalDetail(error) {
+    var diagnostic = error && error.diagnostic && typeof error.diagnostic === "object"
+      ? Object.assign({}, error.diagnostic)
+      : {};
+    if (error && error.status) diagnostic.http_status = Number(error.status);
+    if (!diagnostic.code && error && error.code) diagnostic.code = String(error.code);
+    return Object.keys(diagnostic).length ? JSON.stringify(diagnostic, null, 2) : "";
+  }
+
+  function copyModelTechnicalDetail(detail, props) {
+    var text = String(detail || "");
+    if (!text || !navigator.clipboard || !navigator.clipboard.writeText) {
+      showSettingsToast(label(props, "settings.copyTechnicalDetailsFailed", "Could not copy technical details."), "error");
+      return;
+    }
+    navigator.clipboard.writeText(text).then(function () {
+      showSettingsToast(label(props, "settings.technicalDetailsCopied", "Technical details copied."), "success");
+    }).catch(function () {
+      showSettingsToast(label(props, "settings.copyTechnicalDetailsFailed", "Could not copy technical details."), "error");
+    });
   }
 
   function browserIcon(name, size) {
@@ -635,6 +683,9 @@ function useConnectionMenuLifecycle(v) {
       requestError.code = String(payload.code || "");
       requestError.summary = String(payload.error || payload.message || "");
       requestError.detail = String(payload.detail || "");
+      requestError.diagnostic = payload.diagnostic && typeof payload.diagnostic === "object"
+        ? payload.diagnostic
+        : null;
       throw requestError;
     }
     return payload;
@@ -1404,9 +1455,6 @@ function useConnectionMenuLifecycle(v) {
                 || String(next.base_url || "").replace(/\/$/, "") === String(previousAdapter.default_base_url || "").replace(/\/$/, "")) {
               next.base_url = String(replacementAdapter.default_base_url || "");
             }
-            next.secret = "";
-            next.secret_configured = false;
-            if (connection.secret_configured || String(connection.secret || "").trim()) next.clear_api_key = true;
           }
           if (key === "secret" && String(value || "").trim()) {
             delete next.clear_api_key;
@@ -1672,7 +1720,7 @@ function useConnectionMenuLifecycle(v) {
         if (requestVersion !== discoveryRequestVersions.current[connectionId]) return models;
         setModelDiscovery(function (previous) {
           var next = Object.assign({}, previous);
-          next[connectionId] = { loading: false, error: "", loaded: true, models: models };
+          next[connectionId] = { loading: false, error: "", technicalDetail: "", loaded: true, models: models };
           return next;
         });
         if (options.notify) showSettingsToast(label(props, "settings.fetchedModelCount", "Available models fetched: {count}.", { count: models.length }), "success");
@@ -1682,7 +1730,13 @@ function useConnectionMenuLifecycle(v) {
         var message = localizedModelConfigurationError(error, props);
         setModelDiscovery(function (previous) {
           var next = Object.assign({}, previous);
-          next[connectionId] = Object.assign({}, previous[connectionId] || {}, { loading: false, loaded: true, error: message, models: [] });
+          next[connectionId] = Object.assign({}, previous[connectionId] || {}, {
+            loading: false,
+            loaded: true,
+            error: message,
+            technicalDetail: modelConfigurationTechnicalDetail(error),
+            models: [],
+          });
           return next;
         });
         if (options.notify) showSettingsToast(message, "error");
@@ -1953,6 +2007,7 @@ function useConnectionMenuLifecycle(v) {
       : connectionMenuNode;
     var modelView = {
       h: h, props: props, label: label, browserIcon: browserIcon, searchIcon: searchIcon,
+      copyModelTechnicalDetail: copyModelTechnicalDetail,
       config: config, store: store, query: query, setQuery: setQuery,
       filtered: filtered, adapters: adapters, selectableAdapters: selectableAdapters,
       selected: selected, selectedId: selectedId, setSelectedId: setSelectedId,

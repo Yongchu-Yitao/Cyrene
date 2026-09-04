@@ -260,6 +260,10 @@ class _SendOperation:
         self.message = str(body.get("message") or "").strip()
         self.public_message = self.message
         self.client_request_id = str(body.get("clientRequestId") or "").strip()
+        try:
+            self.client_send_epoch_ms = float(body.get("clientSendEpochMs") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            self.client_send_epoch_ms = 0.0
         self.ui_instance_id = str(body.get("uiInstanceId") or "").strip()
         self.conversation_source = str(
             body.get("conversationSource") or ""
@@ -1332,6 +1336,7 @@ class _SendOperation:
             self.workspace_dir,
             run.run_id,
         )
+        await run.mark_timing("snapshot_complete")
         try:
             result = await self._run_turn(run)
             run.status = "finishing"
@@ -1449,7 +1454,32 @@ class _SendOperation:
         )
 
     async def _dispatch_builtin(self):
-        ack: dict[str, Any] = {"type": "ack", "chatId": self.chat_id}
+        ack_elapsed_ms = max(
+            0.0,
+            (time.monotonic() - self.processing_started_at) * 1000,
+        )
+        client_to_server_ms = (
+            max(0.0, time.time() * 1000 - self.client_send_epoch_ms)
+            if self.client_send_epoch_ms > 0
+            else None
+        )
+        server_received_timing: dict[str, Any] = {
+            "stage": "server_received",
+            "serverElapsedMs": 0.0,
+        }
+        if client_to_server_ms is not None:
+            server_received_timing["clientElapsedMs"] = round(client_to_server_ms, 3)
+        ack: dict[str, Any] = {
+            "type": "ack",
+            "chatId": self.chat_id,
+            "clientRequestId": self.client_request_id,
+            "_timingEnabled": True,
+            "_latencyStartedMonotonic": self.processing_started_at,
+            "timing": [
+                server_received_timing,
+                {"stage": "ack", "serverElapsedMs": round(ack_elapsed_ms, 3)},
+            ],
+        }
         if self.retry:
             ack.update(
                 {

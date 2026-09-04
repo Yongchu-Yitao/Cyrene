@@ -62,6 +62,43 @@ def register_run_stream_routes(
             "chatId": str(chat_id),
         }
 
+    @router.post("/api/workbench/chats/{chat_id}/runs/{run_id}/timing")
+    async def api_workbench_chat_timing(
+        chat_id: str,
+        run_id: str,
+        body_model: api_models.ChatTimingBody,
+    ):
+        """Attach the browser's paint boundary to the durable run timeline."""
+        body = api_models.body_dict(body_model)
+        run = run_manager.get_replayable_by_run_id(str(run_id))
+        if run is None or run.chat_id != str(chat_id):
+            return localized_error_response(
+                "Chat run not found.", "未找到对话运行。", 404, "chat_run_not_found"
+            )
+        allowed = {
+            "click_send", "ack_received", "first_delta_received", "first_dom_paint",
+        }
+        raw_stages = body.get("stages") if isinstance(body.get("stages"), dict) else {}
+        stages: dict[str, float] = {}
+        for name, value in raw_stages.items():
+            if str(name) not in allowed:
+                continue
+            try:
+                stages[str(name)] = max(0.0, round(float(value), 3))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        await run.publish(
+            {
+                "type": "chat_timing",
+                "stage": "first_dom_paint",
+                "source": "client",
+                "serverElapsedMs": None,
+                "clientRequestId": str(body.get("clientRequestId") or "")[:200],
+                "clientStagesMs": stages,
+            }
+        )
+        return {"ok": True}
+
     @router.post("/api/workbench/chats/{chat_id}/guidance")
     async def api_workbench_chat_guidance(
         chat_id: str,

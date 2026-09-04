@@ -7,6 +7,7 @@ import concurrent.futures
 import inspect
 import logging
 import threading
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -528,22 +529,50 @@ class ConversationRuntime:
             raise ValueError("session_id cannot be empty")
         owner_loop = asyncio.get_running_loop()
         async with self._chat_lock(chat_id):
+            open_started = time.perf_counter()
             bridge = await asyncio.to_thread(
                 self._open_bridge,
                 config,
                 owner_loop=owner_loop,
                 raw_publisher=publish,
             )
+            open_duration_ms = max(
+                0.0,
+                (time.perf_counter() - open_started) * 1000,
+            )
             with self._active_lock:
                 self._configs[chat_id] = config
                 self._active[chat_id] = bridge
             try:
+                if publish is not None:
+                    marked = publish(
+                        {
+                            "type": "chat_timing",
+                            "stage": "agent_bridge_open",
+                            "durationMs": round(open_duration_ms, 3),
+                        }
+                    )
+                    if inspect.isawaitable(marked):
+                        await marked
                 return await operation(bridge)
             finally:
                 with self._active_lock:
                     if self._active.get(chat_id) is bridge:
                         self._active.pop(chat_id, None)
+                close_started = time.perf_counter()
                 await asyncio.to_thread(bridge.close)
+                close_duration_ms = max(
+                    0.0,
+                    (time.perf_counter() - close_started) * 1000,
+                )
+                if publish is not None:
+                    marked = publish({
+                        "type": "chat_timing",
+                        "stage": "agent_bridge_close",
+                        "durationMs": round(close_duration_ms, 3),
+                    })
+                    if inspect.isawaitable(marked):
+                        await marked
 
     async def send(
         self,
@@ -558,7 +587,6 @@ class ConversationRuntime:
         if not normalized_run_id:
             raise ValueError("run_id cannot be empty")
         event_publisher = publish or _accounting_publisher(config.session_id)
-        await self.drain_commit_outbox(config)
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             snapshot = bridge.snapshot()
@@ -613,7 +641,10 @@ class ConversationRuntime:
                 cancel_on_caller_cancel=False,
             )
 
-        return await self._with_bridge(config, operate, publish=event_publisher)
+        try:
+            return await self._with_bridge(config, operate, publish=event_publisher)
+        finally:
+            self.kick_commit_outbox(config.session_id)
 
     async def drain_commit_outbox(
         self,
@@ -632,51 +663,58 @@ class ConversationRuntime:
         from cyrene.workbench.chat.chat_repository import ChatRepository
 
         repository = ChatRepository(config.db_path)
+        events = await asyncio.to_thread(
+            repository.pending_commit_events,
+            target,
+            limit=1,
+        )
+        if not events:
+            return 0
         completed = 0
-        for _ in range(20):
-            events = await asyncio.to_thread(
-                repository.pending_commit_events,
-                target,
-                limit=1,
-            )
-            if not events:
-                break
-            event = events[0]
-            event_id = str(event.get("event_id") or "")
-            run_id = str(event.get("run_id") or "")
-            node_id = str(event.get("node_id") or "")
-            try:
-                async def operate(bridge: WorkbenchSessionBridge) -> None:
+
+        async def operate(bridge: WorkbenchSessionBridge) -> None:
+            nonlocal completed, events
+            while events:
+                event = events[0]
+                event_id = str(event.get("event_id") or "")
+                run_id = str(event.get("run_id") or "")
+                node_id = str(event.get("node_id") or "")
+                try:
                     await bridge.commit_public_turn(
                         run_id,
                         node_id,
                         event,
                     )
-
-                await self._with_bridge(config, operate, publish=None)
-                await asyncio.to_thread(repository.complete_commit_event, event_id)
-                completed += 1
-            except asyncio.CancelledError:
-                await asyncio.to_thread(
-                    repository.fail_commit_event,
-                    event_id,
-                    "delivery cancelled",
-                )
-                raise
-            except Exception as exc:
-                await asyncio.to_thread(
-                    repository.fail_commit_event,
-                    event_id,
-                    str(exc),
-                )
-                logger.warning(
-                    "Conversation commit delivery failed [chat=%s event=%s]: %s",
+                    await asyncio.to_thread(repository.complete_commit_event, event_id)
+                    completed += 1
+                except asyncio.CancelledError:
+                    await asyncio.to_thread(
+                        repository.fail_commit_event,
+                        event_id,
+                        "delivery cancelled",
+                    )
+                    raise
+                except Exception as exc:
+                    await asyncio.to_thread(
+                        repository.fail_commit_event,
+                        event_id,
+                        str(exc),
+                    )
+                    logger.warning(
+                        "Conversation commit delivery failed [chat=%s event=%s]: %s",
+                        target,
+                        event_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    return
+                events = await asyncio.to_thread(
+                    repository.pending_commit_events,
                     target,
-                    event_id,
-                    exc,
-                    exc_info=True,
+                    limit=1,
                 )
-                break
+
+        await self._with_bridge(config, operate, publish=None)
         return completed
 
     def kick_commit_outbox(self, chat_id: str) -> None:
@@ -715,7 +753,6 @@ class ConversationRuntime:
         publish: WorkbenchPublisher | None = None,
     ) -> WorkbenchChatResult:
         event_publisher = publish or _accounting_publisher(config.session_id)
-        await self.drain_commit_outbox(config)
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             return await bridge.answer_result(
@@ -725,7 +762,10 @@ class ConversationRuntime:
                 cancel_on_caller_cancel=False,
             )
 
-        return await self._with_bridge(config, operate, publish=event_publisher)
+        try:
+            return await self._with_bridge(config, operate, publish=event_publisher)
+        finally:
+            self.kick_commit_outbox(config.session_id)
 
     async def resume(
         self,
@@ -734,7 +774,6 @@ class ConversationRuntime:
         publish: WorkbenchPublisher | None = None,
     ) -> WorkbenchChatResult:
         event_publisher = publish or _accounting_publisher(config.session_id)
-        await self.drain_commit_outbox(config)
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             return await bridge.resume_result(
@@ -742,7 +781,17 @@ class ConversationRuntime:
                 cancel_on_caller_cancel=False,
             )
 
-        return await self._with_bridge(config, operate, publish=event_publisher)
+        try:
+            return await self._with_bridge(config, operate, publish=event_publisher)
+        finally:
+            self.kick_commit_outbox(config.session_id)
+
+    async def shutdown(self) -> None:
+        """Finish durable commit consumers without putting them on a chat path."""
+        tasks = [task for task in self._outbox_tasks.values() if not task.done()]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._outbox_tasks.clear()
 
     async def compact(
         self,

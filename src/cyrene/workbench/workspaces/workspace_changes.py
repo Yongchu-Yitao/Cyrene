@@ -7,9 +7,11 @@ run-scoped change set outside the public chat transcript.
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import uuid
@@ -18,9 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pathspec import GitIgnoreSpec
+from watchfiles import awatch
+
 from cyrene.platform.paths import CYRENE_DIR_NAME
 from cyrene.workbench.persistence.store import ensure_schema
 
+logger = logging.getLogger(__name__)
 
 _IGNORED_DIRS = {
     ".git", ".hg", ".svn", ".idea", ".pytest_cache", ".mypy_cache",
@@ -78,6 +84,210 @@ class WorkspaceSnapshot:
     captured_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class _IgnoreRuleSet:
+    base: str
+    spec: GitIgnoreSpec
+
+
+class WorkspaceIgnoreMatcher:
+    """Apply Git-compatible ignore files relative to their owning directory."""
+
+    def __init__(self, root: Path, rules: tuple[_IgnoreRuleSet, ...]) -> None:
+        self.root = root
+        self.rules = rules
+
+    @classmethod
+    def load(cls, root: Path) -> "WorkspaceIgnoreMatcher":
+        rules: list[_IgnoreRuleSet] = []
+        for current, dirnames, filenames in os.walk(root):
+            dirnames[:] = [name for name in dirnames if name not in _IGNORED_DIRS]
+            current_path = Path(current)
+            try:
+                relative_dir = current_path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if relative_dir == ".":
+                relative_dir = ""
+                dirnames[:] = [
+                    name for name in dirnames
+                    if name not in _CYRENE_MANAGED_ROOT_DIRS
+                ]
+            ignore_file = current_path / ".gitignore"
+            if ".gitignore" in filenames:
+                try:
+                    lines = ignore_file.read_text(encoding="utf-8").splitlines()
+                except (OSError, UnicodeError):
+                    lines = []
+                if lines:
+                    rules.append(
+                        _IgnoreRuleSet(
+                            base=relative_dir,
+                            spec=GitIgnoreSpec.from_lines(lines),
+                        )
+                    )
+            matcher = cls(root, tuple(rules))
+            dirnames[:] = [
+                name for name in dirnames
+                if not matcher.is_ignored(
+                    (current_path / name).relative_to(root).as_posix(),
+                    is_dir=True,
+                )
+            ]
+        return cls(root, tuple(rules))
+
+    def is_ignored(self, relative: str, *, is_dir: bool = False) -> bool:
+        normalized = relative.strip("/").replace("\\", "/")
+        if not normalized:
+            return False
+        parts = normalized.split("/")
+        if parts[0] in _CYRENE_MANAGED_ROOT_DIRS or any(
+            part in _IGNORED_DIRS for part in parts
+        ):
+            return True
+        ignored = False
+        candidate = normalized + ("/" if is_dir else "")
+        for rule_set in self.rules:
+            base = rule_set.base
+            if base:
+                if normalized == base:
+                    scoped = ""
+                elif normalized.startswith(base + "/"):
+                    scoped = candidate[len(base) + 1 :]
+                else:
+                    continue
+            else:
+                scoped = candidate
+            result = rule_set.spec.check_file(scoped)
+            if result.include is not None:
+                ignored = bool(result.include)
+        return ignored
+
+
+class WorkspaceSnapshotIndex:
+    """Long-lived immutable snapshot maintained from filesystem events."""
+
+    def __init__(self, workspace_root: str | Path) -> None:
+        self.root = Path(workspace_root).expanduser().resolve()
+        self._snapshot: WorkspaceSnapshot | None = None
+        self._matcher: WorkspaceIgnoreMatcher | None = None
+        self._ready = asyncio.Event()
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[Any] | None = None
+        self._snapshot_lock = asyncio.Lock()
+        self._initial_error: BaseException | None = None
+
+    def start(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(
+                self._watch(),
+                name=f"workspace-snapshot:{self.root.name}",
+            )
+
+    async def snapshot(self, *, settle: bool = True) -> WorkspaceSnapshot | None:
+        self.start()
+        await self._ready.wait()
+        if self._initial_error is not None:
+            return None
+        # Let the low-latency watcher deliver writes made immediately before a
+        # run boundary, then wait for any in-flight incremental application.
+        if settle:
+            await asyncio.sleep(0.02)
+        async with self._snapshot_lock:
+            return self._snapshot
+
+    async def close(self) -> None:
+        self._stop.set()
+        task = self._task
+        if task is not None and not task.done():
+            task.cancel()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        self._task = None
+
+    def _watch_filter(self, _change: Any, raw_path: str) -> bool:
+        path = Path(raw_path)
+        try:
+            relative = path.relative_to(self.root).as_posix()
+        except ValueError:
+            return False
+        if path.name == ".gitignore":
+            return True
+        matcher = self._matcher
+        return matcher is None or not matcher.is_ignored(
+            relative,
+            is_dir=path.is_dir(),
+        )
+
+    async def _watch(self) -> None:
+        watcher = awatch(
+            self.root,
+            watch_filter=self._watch_filter,
+            debounce=10,
+            step=5,
+            stop_event=self._stop,
+            ignore_permission_denied=True,
+        )
+        next_changes: asyncio.Task[Any] | None = None
+        try:
+            # Arm the native watcher before the initial walk. Events arriving
+            # during that walk are replayed onto its result, closing the usual
+            # scan-then-subscribe race.
+            next_changes = asyncio.create_task(anext(watcher))
+            await asyncio.sleep(0)
+            matcher = await asyncio.to_thread(WorkspaceIgnoreMatcher.load, self.root)
+            initial = await asyncio.to_thread(
+                capture_workspace_snapshot,
+                self.root,
+                ignore_matcher=matcher,
+            )
+            async with self._snapshot_lock:
+                self._matcher = matcher
+                self._snapshot = initial
+            self._ready.set()
+            while True:
+                changes = await next_changes
+                next_changes = asyncio.create_task(anext(watcher))
+                paths = {path for _change, path in changes}
+                ignore_changed = any(Path(path).name == ".gitignore" for path in paths)
+                async with self._snapshot_lock:
+                    previous = self._snapshot
+                    if ignore_changed:
+                        matcher = await asyncio.to_thread(
+                            WorkspaceIgnoreMatcher.load,
+                            self.root,
+                        )
+                        updated = await asyncio.to_thread(
+                            capture_workspace_snapshot,
+                            self.root,
+                            previous=previous,
+                            ignore_matcher=matcher,
+                        )
+                        self._matcher = matcher
+                    elif previous is not None:
+                        updated = await asyncio.to_thread(
+                            capture_workspace_snapshot,
+                            self.root,
+                            previous=previous,
+                            changed_paths=paths,
+                            ignore_matcher=matcher,
+                        )
+                    else:
+                        updated = None
+                    self._snapshot = updated
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            self._initial_error = exc
+            logger.exception("Workspace snapshot watcher failed for %s", self.root)
+        finally:
+            if next_changes is not None and not next_changes.done():
+                next_changes.cancel()
+                await asyncio.gather(next_changes, return_exceptions=True)
+            await watcher.aclose()
+            self._ready.set()
+
+
 def _read_file_state(
     path: Path,
     *,
@@ -119,6 +329,7 @@ def capture_workspace_snapshot(
     *,
     previous: WorkspaceSnapshot | None = None,
     changed_paths: set[str] | None = None,
+    ignore_matcher: WorkspaceIgnoreMatcher | None = None,
 ) -> WorkspaceSnapshot | None:
     """Capture a bounded snapshot, reusing unchanged state when available.
 
@@ -136,25 +347,29 @@ def capture_workspace_snapshot(
         return None
     if previous is None or previous.root != root:
         previous = None
+    matcher = ignore_matcher or WorkspaceIgnoreMatcher.load(root)
     if previous is not None and changed_paths is not None:
-        return _capture_incremental_snapshot(root, previous, changed_paths)
+        return _capture_incremental_snapshot(root, previous, changed_paths, matcher)
 
     files: dict[str, WorkspaceFileState] = {}
     captured_text_bytes = 0
     captured_text_files = 0
     try:
         for current, dirnames, filenames in os.walk(root):
-            dirnames[:] = [name for name in dirnames if name not in _IGNORED_DIRS]
             current_path = Path(current)
-            if current_path == root:
-                dirnames[:] = [
-                    name for name in dirnames
-                    if name not in _CYRENE_MANAGED_ROOT_DIRS
-                ]
+            dirnames[:] = [
+                name for name in dirnames
+                if not matcher.is_ignored(
+                    (current_path / name).relative_to(root).as_posix(),
+                    is_dir=True,
+                )
+            ]
             for filename in filenames:
                 target = current_path / filename
                 try:
                     rel = target.relative_to(root).as_posix()
+                    if matcher.is_ignored(rel):
+                        continue
                     stat = target.stat()
                     size = stat.st_size
                 except (OSError, ValueError):
@@ -194,12 +409,13 @@ def _capture_incremental_snapshot(
     root: Path,
     previous: WorkspaceSnapshot,
     changed_paths: set[str],
+    ignore_matcher: WorkspaceIgnoreMatcher,
 ) -> WorkspaceSnapshot:
     """Apply watcher-reported paths to an immutable prior snapshot.
 
     Directory events are rescanned recursively, while file events touch only
-    that file. A watcher failure never calls this path; callers fall back to a
-    complete walk so missed events cannot hide user-visible changes.
+    that file. The long-lived index serializes these applications so immutable
+    snapshots can be shared safely by overlapping chat runs.
     """
     files = dict(previous.files)
     captured_text_files = sum(1 for state in files.values() if state.text is not None)
@@ -232,7 +448,7 @@ def _capture_incremental_snapshot(
         except ValueError:
             return
         prior = files.get(relative)
-        if is_cyrene_managed_workspace_path(relative, root):
+        if ignore_matcher.is_ignored(relative):
             remove_relative(relative)
             return
         try:
@@ -284,14 +500,17 @@ def _capture_incremental_snapshot(
             continue
         if target.is_dir():
             remove_relative(relative)
+            if ignore_matcher.is_ignored(relative, is_dir=True):
+                continue
             for current, dirnames, filenames in os.walk(target):
-                dirnames[:] = [name for name in dirnames if name not in _IGNORED_DIRS]
                 current_path = Path(current)
-                if current_path == root:
-                    dirnames[:] = [
-                        name for name in dirnames
-                        if name not in _CYRENE_MANAGED_ROOT_DIRS
-                    ]
+                dirnames[:] = [
+                    name for name in dirnames
+                    if not ignore_matcher.is_ignored(
+                        (current_path / name).relative_to(root).as_posix(),
+                        is_dir=True,
+                    )
+                ]
                 for filename in filenames:
                     capture_file(current_path / filename)
             continue

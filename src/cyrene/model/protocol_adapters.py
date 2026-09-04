@@ -47,6 +47,20 @@ class PreparedRequest:
     headers: dict[str, str]
 
 
+class ModelStreamError(RuntimeError):
+    """A failed streaming response with content-free protocol diagnostics."""
+
+    def __init__(
+        self,
+        kind: str,
+        message: str,
+        diagnostics: Mapping[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.kind = str(kind)
+        self.diagnostics = dict(diagnostics)
+
+
 def runtime_adapter_for_provider(
     adapter_id: str,
     model: str,
@@ -276,7 +290,9 @@ def parse_discovery_response(
     preset = str(provider_preset or "").strip().lower()
     if preset == "aliyun_bailian":
         return _parse_aliyun_bailian_models(payload)
-    source = payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        raise ValueError("invalid response: expected a model discovery object")
+    source = payload
     raw_items: Any
     if adapter == "ollama":
         raw_items = source.get("models")
@@ -284,8 +300,10 @@ def parse_discovery_response(
         raw_items = source.get("models")
     else:
         raw_items = source.get("data")
+    if not isinstance(raw_items, list):
+        raise ValueError("invalid response: expected a model array")
     result: list[dict[str, Any]] = []
-    for item in raw_items if isinstance(raw_items, list) else []:
+    for item in raw_items:
         if not isinstance(item, dict):
             continue
         model_id = str(
@@ -842,35 +860,134 @@ def parse_response(adapter_id: str, data: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
+def _decode_stream_payload(
+    value: str,
+    diagnostics: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if diagnostics is not None:
+        diagnostics["data_chunk_count"] = int(
+            diagnostics.get("data_chunk_count") or 0
+        ) + 1
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError as exc:
+        if diagnostics is not None:
+            diagnostics["invalid_json_line_count"] = int(
+                diagnostics.get("invalid_json_line_count") or 0
+            ) + 1
+            diagnostics["termination_reason"] = "invalid_sse_json"
+            diagnostics["stream_completed"] = False
+        raise ModelStreamError(
+            "protocol_invalid_json",
+            "The model stream contained an invalid JSON event.",
+            diagnostics or {},
+        ) from exc
+    if not isinstance(data, dict):
+        if diagnostics is not None:
+            diagnostics["termination_reason"] = "invalid_sse_event"
+            diagnostics["stream_completed"] = False
+        raise ModelStreamError(
+            "protocol_invalid_event",
+            "The model stream contained a non-object JSON event.",
+            diagnostics or {},
+        )
+    if diagnostics is not None:
+        diagnostics["event_count"] = int(
+            diagnostics.get("event_count") or 0
+        ) + 1
+        diagnostics["last_event_type"] = str(data.get("type") or "")
+    return data
+
+
 async def _stream_payloads(
     response: httpx.Response,
     diagnostics: dict[str, Any] | None = None,
+    protocol_trace: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ):
-    async for raw_line in response.aiter_lines():
+    data_lines: list[str] = []
+    try:
+        async for raw_line in response.aiter_lines():
+            if diagnostics is not None:
+                diagnostics["line_count"] = int(diagnostics.get("line_count") or 0) + 1
+            line = str(raw_line or "").strip()
+            if protocol_trace is not None and line:
+                try:
+                    await protocol_trace({
+                        "type": "response_line",
+                        "sequence": int((diagnostics or {}).get("line_count") or 0),
+                        "line": line,
+                    })
+                except Exception:
+                    # Developer tracing is observational and must never affect a call.
+                    pass
+            if not line:
+                if data_lines:
+                    yield _decode_stream_payload("\n".join(data_lines), diagnostics)
+                    data_lines.clear()
+                continue
+            if line.startswith(":") or line.startswith(("event:", "id:", "retry:")):
+                continue
+            if line.startswith("data:"):
+                value = line[5:].lstrip()
+                if value == "[DONE]":
+                    if data_lines:
+                        yield _decode_stream_payload("\n".join(data_lines), diagnostics)
+                        data_lines.clear()
+                    if diagnostics is not None:
+                        diagnostics["saw_done_marker"] = True
+                    continue
+                data_lines.append(value)
+                continue
+            if data_lines:
+                yield _decode_stream_payload("\n".join(data_lines), diagnostics)
+                data_lines.clear()
+            yield _decode_stream_payload(line, diagnostics)
+        if data_lines:
+            yield _decode_stream_payload("\n".join(data_lines), diagnostics)
+    except ModelStreamError:
+        raise
+    except (httpx.TransportError, TimeoutError, OSError) as exc:
         if diagnostics is not None:
-            diagnostics["line_count"] = int(diagnostics.get("line_count") or 0) + 1
-        line = str(raw_line or "").strip()
-        value = line[5:].strip() if line.startswith("data:") else line
-        if value == "[DONE]":
-            if diagnostics is not None:
-                diagnostics["saw_done_marker"] = True
-            continue
-        if not value:
-            continue
+            diagnostics["termination_reason"] = "transport_interrupted"
+            diagnostics["stream_completed"] = False
+            diagnostics["transport_error_type"] = type(exc).__name__
+        raise ModelStreamError(
+            "transport_interrupted",
+            "The model stream ended because its transport was interrupted.",
+            diagnostics or {},
+        ) from exc
+
+
+def _tool_stream_diagnostics(
+    tool_calls: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for key, value in sorted(tool_calls.items(), key=lambda item: item[0]):
+        arguments = str(value.get("arguments") or "")
+        validation = "valid_object"
         try:
-            data = json.loads(value)
+            decoded = json.loads(arguments or "{}")
+            if not isinstance(decoded, dict):
+                validation = "not_object"
         except json.JSONDecodeError:
-            if diagnostics is not None:
-                diagnostics["invalid_json_line_count"] = int(
-                    diagnostics.get("invalid_json_line_count") or 0
-                ) + 1
-            continue
-        if isinstance(data, dict):
-            if diagnostics is not None:
-                diagnostics["event_count"] = int(
-                    diagnostics.get("event_count") or 0
-                ) + 1
-            yield data
+            validation = "invalid_json"
+        calls.append({
+            "index": key,
+            "name": str(value.get("name") or ""),
+            "arguments_length": len(arguments),
+            "arguments_sha256": hashlib.sha256(
+                arguments.encode("utf-8")
+            ).hexdigest(),
+            "arguments_validation": validation,
+        })
+    return calls
+
+
+def _update_tool_stream_diagnostics(
+    diagnostics: dict[str, Any],
+    tool_calls: Mapping[str, Mapping[str, Any]],
+) -> None:
+    diagnostics["tool_calls"] = _tool_stream_diagnostics(tool_calls)
 
 
 async def _openai_chat_stream_event(
@@ -959,22 +1076,11 @@ def _completed_stream_message(
     if returned_model:
         message["model"] = returned_model
     if stream_diagnostics is not None:
-        calls: list[dict[str, Any]] = []
-        for key, value in sorted(tool_calls.items(), key=lambda item: item[0]):
-            arguments = str(value.get("arguments") or "")
-            calls.append({
-                "index": key,
-                "name": str(value.get("name") or ""),
-                "arguments_length": len(arguments),
-                "arguments_sha256": hashlib.sha256(
-                    arguments.encode("utf-8")
-                ).hexdigest(),
-            })
         message["stream_diagnostics"] = {
             **dict(stream_diagnostics),
             "finish_reason": str(message.get("finish_reason") or ""),
             "stream_completed": True,
-            "tool_calls": calls,
+            "tool_calls": _tool_stream_diagnostics(tool_calls),
         }
     return message
 
@@ -986,6 +1092,7 @@ async def handle_stream(
     request: PreparedRequest,
     callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
     timing: dict[str, float] | None = None,
+    protocol_trace: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     adapter = str(adapter_id or "").strip().lower()
     target = endpoint
@@ -1002,9 +1109,14 @@ async def handle_stream(
     stream_diagnostics: dict[str, Any] = {
         "adapter": adapter,
         "line_count": 0,
+        "data_chunk_count": 0,
         "event_count": 0,
         "invalid_json_line_count": 0,
         "saw_done_marker": False,
+        "http_status": 0,
+        "terminal_event_seen": False,
+        "stream_completed": False,
+        "termination_reason": "",
     }
     started = False
     reasoning_started = False
@@ -1021,10 +1133,24 @@ async def handle_stream(
             await callback({"type": "reply_delta", "delta": text})
 
     async with client.stream("POST", target, json=request.payload, headers=request.headers) as response:
+        stream_diagnostics["http_status"] = int(response.status_code)
         if timing is not None:
             timing["response_headers_ms"] = (time.monotonic() - request_started) * 1000
         response.raise_for_status()
-        async for data in _stream_payloads(response, stream_diagnostics):
+        if protocol_trace is not None:
+            try:
+                await protocol_trace({
+                    "type": "response_start",
+                    "adapter": adapter,
+                    "status_code": int(response.status_code),
+                })
+            except Exception:
+                pass
+        async for data in _stream_payloads(
+            response,
+            stream_diagnostics,
+            protocol_trace,
+        ):
             if timing is not None and "ttft_ms" not in timing:
                 timing["ttft_ms"] = (time.monotonic() - request_started) * 1000
             response_id = str(data.get("id") or response_id)
@@ -1081,6 +1207,8 @@ async def handle_stream(
                             int(usage.get("prompt_tokens") or 0)
                             + int(usage.get("completion_tokens") or 0)
                         )
+                elif event_type == "message_stop":
+                    stream_diagnostics["terminal_event_seen"] = True
             elif adapter == "openai_responses":
                 event_type = str(data.get("type") or "")
                 if event_type == "response.output_text.delta":
@@ -1103,6 +1231,7 @@ async def handle_stream(
                     key = str(data.get("output_index") or 0)
                     tool_calls.setdefault(key, {"id": str(data.get("item_id") or f"call_{uuid.uuid4().hex}"), "name": str(data.get("name") or ""), "arguments": ""})["arguments"] += str(data.get("delta") or "")
                 elif event_type == "response.completed":
+                    stream_diagnostics["terminal_event_seen"] = True
                     completed = data.get("response") if isinstance(data.get("response"), dict) else {}
                     usage.update(_usage(adapter, completed))
                     finish = str(completed.get("status") or finish)
@@ -1143,6 +1272,62 @@ async def handle_stream(
                 )
                 finish = event_finish or finish
 
+            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+
+    normalized_finish = (
+        "length"
+        if finish.lower() in {"max_tokens", "max_tokens_reached"}
+        else finish.lower()
+    )
+    stream_diagnostics["finish_reason"] = normalized_finish
+    terminal_seen = bool(
+        normalized_finish
+        or stream_diagnostics.get("saw_done_marker")
+        or stream_diagnostics.get("terminal_event_seen")
+    )
+    if not terminal_seen:
+        stream_diagnostics["termination_reason"] = "eof_without_terminal_event"
+        _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+        raise ModelStreamError(
+            "upstream_incomplete",
+            "The model stream ended before a terminal event was received.",
+            stream_diagnostics,
+        )
+    invalid_calls = [
+        item
+        for item in _tool_stream_diagnostics(tool_calls)
+        if item["arguments_validation"] != "valid_object"
+    ]
+    if invalid_calls:
+        stream_diagnostics["termination_reason"] = (
+            "output_limit_with_invalid_tool_arguments"
+            if normalized_finish == "length"
+            else "invalid_tool_arguments"
+        )
+        _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+        raise ModelStreamError(
+            "invalid_tool_arguments",
+            "The model stream ended with invalid tool arguments.",
+            stream_diagnostics,
+        )
+    stream_diagnostics["stream_completed"] = True
+    stream_diagnostics["termination_reason"] = (
+        "provider_finish_reason"
+        if normalized_finish
+        else "provider_terminal_event"
+        if stream_diagnostics.get("terminal_event_seen")
+        else "done_marker"
+    )
+    if protocol_trace is not None:
+        try:
+            await protocol_trace({
+                "type": "response_end",
+                "status": "completed",
+                "diagnostics": dict(stream_diagnostics),
+            })
+        except Exception:
+            pass
+
     if not started and callback:
         await callback({"type": "reply_start"})
     if reasoning_started and callback:
@@ -1158,6 +1343,7 @@ async def handle_stream(
 __all__ = [
     "NATIVE_PROTOCOL_ADAPTERS",
     "OPENAI_CHAT_ADAPTERS",
+    "ModelStreamError",
     "PreparedRequest",
     "discovery_request",
     "handle_stream",

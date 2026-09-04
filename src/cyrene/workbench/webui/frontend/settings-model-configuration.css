@@ -500,11 +500,30 @@
 }
 
 .wb-mcfg-discovery-error {
-  max-width: 150px;
-  overflow: hidden;
+  display: inline-flex;
+  max-width: 360px;
+  align-items: center;
+  gap: 7px;
   color: var(--wb-error-text, var(--wb-red));
   font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wb-mcfg-discovery-error > span {
+  max-width: 210px;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-mcfg-copy-diagnostic {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
   white-space: nowrap;
 }
 

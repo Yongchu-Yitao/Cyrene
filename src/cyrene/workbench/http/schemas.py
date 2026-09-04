@@ -195,6 +195,7 @@ class ChatGroupsReplaceBody(APIBody):
 class ChatMessageBody(APIBody):
     message: str | None = Field(default=None, max_length=200_000)
     clientRequestId: str | None = Field(default=None, max_length=200)
+    clientSendEpochMs: float | None = Field(default=None, ge=0)
     attachments: list[Any] = Field(default_factory=list, max_length=100)
     command: str | None = Field(default=None, max_length=20_000)
     model: str | None = Field(default=None, max_length=500)
@@ -218,6 +219,11 @@ class ChatGuidanceBody(APIBody):
     message: str = Field(min_length=1, max_length=200_000)
     clientRequestId: str | None = Field(default=None, max_length=200)
     uiInstanceId: str | None = Field(default=None, max_length=200)
+
+
+class ChatTimingBody(APIBody):
+    clientRequestId: str | None = Field(default=None, max_length=200)
+    stages: dict[str, float] = Field(default_factory=dict, max_length=8)
 
 
 class ChatActionBody(APIBody):

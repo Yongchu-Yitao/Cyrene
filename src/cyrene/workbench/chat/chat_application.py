@@ -34,8 +34,8 @@ from cyrene.workbench.chat.chat_usage import (
 )
 from cyrene.workbench.workspaces.workspace_changes import (
     WorkspaceSnapshot,
+    WorkspaceSnapshotIndex,
     build_change_set,
-    capture_workspace_snapshot,
     list_chat_change_sets,
     save_change_set,
 )
@@ -1158,8 +1158,14 @@ class WorkspaceChangeService:
         self.repository = repository
         self._lock = asyncio.Lock()
         self._active: dict[str, dict[str, WorkspaceChangesBaseline]] = {}
-        self._prewarmed: dict[str, WorkspaceSnapshot] = {}
-        self._prewarm_tasks: set[asyncio.Task[Any]] = set()
+        self._indexes: dict[str, WorkspaceSnapshotIndex] = {}
+
+    def _index(self, workspace_key: str) -> WorkspaceSnapshotIndex:
+        index = self._indexes.get(workspace_key)
+        if index is None:
+            index = WorkspaceSnapshotIndex(workspace_key)
+            self._indexes[workspace_key] = index
+        return index
 
     def prewarm(self, workspace_dir: str | Path | None) -> None:
         if not workspace_dir:
@@ -1169,22 +1175,7 @@ class WorkspaceChangeService:
             asyncio.get_running_loop()
         except (OSError, RuntimeError):
             return
-        if key in self._prewarmed:
-            return
-        task = asyncio.create_task(self._prewarm(key))
-        self._prewarm_tasks.add(task)
-        task.add_done_callback(self._prewarm_tasks.discard)
-
-    async def _prewarm(self, workspace_key: str) -> None:
-        try:
-            snapshot = await asyncio.to_thread(
-                capture_workspace_snapshot,
-                workspace_key,
-            )
-            if snapshot is not None:
-                self._prewarmed[workspace_key] = snapshot
-        except Exception:
-            logger.debug("Workspace snapshot prewarm failed", exc_info=True)
+        self._index(key).start()
 
     async def capture(
         self,
@@ -1198,11 +1189,7 @@ class WorkspaceChangeService:
         except OSError:
             return WorkspaceChangesBaseline(None)
         normalized_run_id = str(run_id or f"snapshot_{uuid.uuid4().hex}")
-        snapshot = await asyncio.to_thread(
-            capture_workspace_snapshot,
-            key,
-            previous=self._prewarmed.get(key),
-        )
+        snapshot = await self._index(key).snapshot()
         baseline = WorkspaceChangesBaseline(snapshot, key, normalized_run_id)
         if snapshot is None:
             return baseline
@@ -1227,13 +1214,7 @@ class WorkspaceChangeService:
         if before is None or before.snapshot is None or before.released:
             return None
         try:
-            after = await asyncio.to_thread(
-                capture_workspace_snapshot,
-                workspace_dir,
-                previous=before.snapshot,
-            )
-            if after is not None:
-                self._prewarmed[before.workspace_key] = after
+            after = await self._index(before.workspace_key).snapshot()
             overlaps = sorted(before.overlapping_run_ids)
             change_set = await asyncio.to_thread(
                 build_change_set,
@@ -1336,12 +1317,12 @@ class WorkspaceChangeService:
         self.repository.mutate_one(chat_id, update)
 
     async def shutdown(self) -> None:
-        tasks = list(self._prewarm_tasks)
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._prewarm_tasks.clear()
+        indexes = list(self._indexes.values())
+        self._indexes.clear()
+        await asyncio.gather(
+            *(index.close() for index in indexes),
+            return_exceptions=True,
+        )
 
 
 _BUTTON_BLOCK_RE = re.compile(

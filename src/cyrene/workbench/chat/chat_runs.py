@@ -35,6 +35,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
@@ -497,6 +498,12 @@ class ChatRun:
             WorkbenchGuidanceChannel,
         )
 
+        ack = dict(ack_event)
+        self._timing_enabled = bool(ack.pop("_timingEnabled", False))
+        self._latency_started_monotonic = float(
+            ack.pop("_latencyStartedMonotonic", time.monotonic())
+        )
+        self._first_delta_timed = False
         self.chat_id = str(chat_id)
         self.run_id = f"run_{uuid4().hex}"
         self.created_at = datetime.now(timezone.utc).isoformat()
@@ -515,7 +522,7 @@ class ChatRun:
         # Event 1 is always the ack so a fresh attach (cursor 0) replays the
         # whole exchange from the top.
         self.events: list[dict[str, Any]] = [
-            {"_seq": 1, "runId": self.run_id, **dict(ack_event)}
+            {"_seq": 1, "runId": self.run_id, **ack}
         ]
         self.subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self.done = asyncio.Event()
@@ -586,7 +593,28 @@ class ChatRun:
         run.termination_reason = str(termination_reason)
         run.outcome = {"kind": str(outcome_kind)} if outcome_kind else None
         run.settler = None
+        run._latency_started_monotonic = time.monotonic()
+        run._timing_enabled = False
+        run._first_delta_timed = True
         return run
+
+    def _timing_event(self, stage: str, **attributes: Any) -> dict[str, Any]:
+        return {
+            "type": "chat_timing",
+            "stage": str(stage),
+            "source": "server",
+            "serverElapsedMs": round(
+                max(0.0, time.monotonic() - self._latency_started_monotonic) * 1000,
+                3,
+            ),
+            "clientRequestId": str(
+                (self.events[0] if self.events else {}).get("clientRequestId") or ""
+            ),
+            **attributes,
+        }
+
+    async def mark_timing(self, stage: str, **attributes: Any) -> None:
+        await self.publish(self._timing_event(stage, **attributes))
 
     async def configure_event_store(self, store: ChatRunEventStore) -> None:
         await asyncio.to_thread(store.create, self)
@@ -976,6 +1004,29 @@ class ChatRun:
         value = dict(event)
         async with self._publish_lock:
             event_type = str(value.get("type") or "")
+            if event_type == "chat_timing" and "serverElapsedMs" not in value:
+                value = self._timing_event(
+                    str(value.get("stage") or "unknown"),
+                    **{
+                        key: item
+                        for key, item in value.items()
+                        if key not in {"type", "stage", "source", "serverElapsedMs"}
+                    },
+                )
+                event_type = "chat_timing"
+            if (
+                not self._first_delta_timed
+                and self._timing_enabled
+                and (
+                    self._visible_reply_delta(value)
+                    or (
+                        event_type == "reasoning_delta"
+                        and str(value.get("delta") or "")
+                    )
+                )
+            ):
+                self._first_delta_timed = True
+                await self._publish_one(self._timing_event("first_delta"))
             if event_type == "intermediate_message":
                 message = value.get("message")
                 incoming = (
@@ -1777,6 +1828,7 @@ class ChatRunManager:
         if self._cleanup_tasks:
             await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
         self._cleanup_tasks.clear()
+        await self.conversation_runtime.shutdown()
 
 
 # Detached post-reply bookkeeping (workspace-changes finalize, structured

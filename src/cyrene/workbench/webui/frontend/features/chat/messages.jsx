@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
+import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
 import { WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm } from "./conversation.jsx"
 import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag, wbcStartFilePointerDrag, wbcUsesFilePointerDrag } from "./file-resources.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
@@ -930,6 +930,10 @@ function wbcTraceActionIcon(entry) {
   return WBC_ICONS.tool;
 }
 
+function wbcIsToolTraceEntry(entry) {
+  return !!(entry && (entry.kind === "tool" || entry.tool));
+}
+
 function wbcActivityGroupRunningLabel(messages) {
   var list = Array.isArray(messages) ? messages : [];
   for (var messageIndex = list.length - 1; messageIndex >= 0; messageIndex--) {
@@ -958,7 +962,13 @@ function wbcActivityGroupRunningLabel(messages) {
 }
 
 function wbcTraceCollapsedSummary(entries, fallback) {
-  var phase1Entry = (Array.isArray(entries) ? entries : []).find(function (entry) {
+  var traceEntries = Array.isArray(entries) ? entries : [];
+  var toolEntries = traceEntries.filter(wbcIsToolTraceEntry);
+  if (toolEntries.length) return {
+    label: wbcT("workbenchChat.traceSummary", "Executed {count} tool calls", { count: toolEntries.length }),
+    icon: toolEntries.length === 1 ? wbcTraceActionIcon(toolEntries[0]) : WBC_ICONS.layers,
+  };
+  var phase1Entry = traceEntries.find(function (entry) {
     return entry && entry.kind === "phase1";
   });
   if (phase1Entry) return {
@@ -967,7 +977,7 @@ function wbcTraceCollapsedSummary(entries, fallback) {
   };
   var actions = [];
   var seen = new Set();
-  (Array.isArray(entries) ? entries : []).forEach(function (entry) {
+  traceEntries.forEach(function (entry) {
     var label = wbcTraceActionLabel(entry);
     var key = wbcTraceActionKind(entry) + "\n" + label;
     if (!label || seen.has(key)) return;
@@ -1216,11 +1226,20 @@ function WbcAssistantMessageFooter({ copied, msg, onCopy, onRetryMessage, voiceS
   </div>;
 }
 
+var WbcStreamingStableBlock = React.memo(function WbcStreamingStableBlock({ source }) {
+  var html = useWbcMemo(function () {
+    return wbcRenderMarkdown(source, { interactive: false });
+  }, [source]);
+  return html
+    ? <div className={"wbc-stream-stable-block" + (/^\s*<p(?:\s|>)/.test(html) ? " paragraph" : "")} dangerouslySetInnerHTML={{ __html: html }} />
+    : null;
+});
+
 function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
   msg = msg || {};
   var live = !!liveRuntime;
   var sourceText = live ? String(liveRuntime.text || "") : String(msg.content || "");
-  var renderedText = wbcUseThrottledLiveText(
+  var renderedText = wbcUseBufferedLiveText(
     sourceText,
     !live || !!liveRuntime.streamDone
   );
@@ -1229,15 +1248,41 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   var referenceAttachments = Array.isArray(msg.referenceAttachments)
     ? msg.referenceAttachments
     : (Array.isArray(msg.reference_attachments) ? msg.reference_attachments : []);
-  // Parse each finalized message's markdown once and reuse it: the whole thread
-  // re-renders on every streaming frame, so without this every prior message
-  // would be re-parsed + re-sanitized per frame.
+  // A live reply has an immutable Markdown prefix and one active block. Only
+  // the active block is reparsed while tokens arrive; completed paragraphs and
+  // code fences keep their DOM identity for the rest of the stream.
+  var streamingPartsRef = useWbcRef(null);
+  var streamingParts = useWbcMemo(function () {
+    if (!live) {
+      streamingPartsRef.current = null;
+      return { source: "", stable: "", stableBlocks: [], active: "" };
+    }
+    var parts = workbenchServices.markdown().splitStableBlocks(renderedText, streamingPartsRef.current);
+    streamingPartsRef.current = parts;
+    return parts;
+  }, [renderedText, live]);
+  var activeBodyHtml = useWbcMemo(function () {
+    return streamingParts.active
+      ? wbcRenderMarkdown(streamingParts.active, { interactive: false })
+      : "";
+  }, [streamingParts.active]);
   var bodyHtml = useWbcMemo(function () {
-    return live
-      ? wbcRenderMarkdown(renderedText, { interactive: false })
-      : wbcRenderMarkdown(renderedText);
+    return live ? "" : wbcRenderMarkdown(renderedText);
   }, [renderedText, live]);
   var bodyRef = useWbcRef(null);
+  var activeBodyRef = useWbcRef(null);
+  var previousLiveTextLengthRef = useWbcRef(0);
+  useWbcLayoutEffect(function () {
+    if (!live || !activeBodyRef.current) {
+      previousLiveTextLengthRef.current = 0;
+      return;
+    }
+    var previousLength = Number(previousLiveTextLengthRef.current || 0);
+    previousLiveTextLengthRef.current = renderedText.length;
+    var addedCharacterCount = renderedText.length - previousLength;
+    if (addedCharacterCount <= 0) return;
+    wbcFadeInStreamingTail(activeBodyRef.current, addedCharacterCount);
+  }, [activeBodyHtml, live, renderedText.length]);
   useWbcEffect(function () {
     return WbcVoice.subscribe(setVoiceSnapshot);
   }, []);
@@ -1314,12 +1359,16 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   return (
     <div className="wbc-msg assistant">
       {!live && msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
-      {sourceText ? <div
-        key="body"
-        className={"wbc-msg-body markdown" + (live ? " streaming" : "")}
-        ref={bodyRef}
-        dangerouslySetInnerHTML={{ __html: bodyHtml }}
-      /> : null}
+      {sourceText ? (live ? (
+        <div key="streaming-body" className="wbc-msg-body markdown streaming" ref={bodyRef}>
+          {(streamingParts.stableBlocks || []).map(function (block, index) {
+            return <WbcStreamingStableBlock key={index} source={block} />;
+          })}
+          {activeBodyHtml ? <div className="wbc-stream-active" ref={activeBodyRef} dangerouslySetInnerHTML={{ __html: activeBodyHtml }} /> : null}
+        </div>
+      ) : (
+        <div key="body" className="wbc-msg-body markdown" ref={bodyRef} dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+      )) : null}
       {live
         ? <WbcLiveAgentArtifacts files={liveRuntime.artifacts} onOpenFile={onOpenFile} />
         : <React.Fragment>
@@ -1432,12 +1481,6 @@ function WbcLiveActivityCard({ activity, active, hasReplyText, live }) {
       status: phase1Running ? "running" : "completed",
     }].concat(entries);
   }
-  var hasRunningTools = entries.some(function (entry) {
-    return entry && entry.kind === "tool" && entry.status === "running";
-  });
-  var toolCount = entries.filter(function (entry) {
-    return entry && entry.kind === "tool";
-  }).length;
   var hasReasoning = !!String(item.reasoning || "").trim();
   var isCodexProvider = String(item.provider || "") === "codex_oauth";
   var phase1Detail = hasReasoning
@@ -1445,17 +1488,13 @@ function WbcLiveActivityCard({ activity, active, hasReplyText, live }) {
     : wbcPhase1ProgressDetail(visibleEntries);
   var visibleReasoning = !isCodexProvider && (hasReasoning || isPhase1) ? phase1Detail : "";
 
-  var label = toolCount
-    ? (hasRunningTools && !hasReplyText
-      ? wbcT("workbenchChat.toolRunning", "Calling tools...")
-      : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: toolCount }))
-    : (isPhase1
+  var label = isPhase1
       ? wbcT("workbenchChat.phase1Card", "Execution · Phase 1")
       : hasReasoning
       ? (active
         ? wbcT("workbenchChat.traceIdle", "Thinking...")
         : wbcT("workbenchChat.thinkingProcess", "Thinking process"))
-      : wbcT("workbenchChat.traceLabel", "Execution"));
+      : wbcT("workbenchChat.traceLabel", "Execution");
 
   return (
     <WbcTraceCard
@@ -1535,37 +1574,97 @@ function WbcActivityGroup({ group }) {
   );
 }
 
-var WBC_LIVE_MARKDOWN_INTERVAL_MS = 120;
+// Network deltas and visual frames are separate concerns. Token arrival only
+// updates a ref; one animation-frame scheduler publishes the newest buffered
+// text at a bounded cadence, so fast providers cannot force React/layout work
+// for every token and slow providers remain responsive.
+var WBC_LIVE_FRAME_INTERVAL_MS = 48;
+var WBC_LIVE_FADE_MAX_CHARACTERS = 96;
 
-function wbcUseThrottledLiveText(text, flush) {
+function wbcFadeInStreamingTail(body, addedCharacterCount) {
+  if (!body || typeof document === "undefined") return;
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  Array.from(body.querySelectorAll(".wbc-stream-fade")).forEach(function (existingFade) {
+    var parent = existingFade.parentNode;
+    if (!parent) return;
+    while (existingFade.firstChild) parent.insertBefore(existingFade.firstChild, existingFade);
+    parent.removeChild(existingFade);
+    parent.normalize();
+  });
+  var budget = Math.min(
+    WBC_LIVE_FADE_MAX_CHARACTERS,
+    Math.max(1, Number(addedCharacterCount) || 0)
+  );
+  var walker = document.createTreeWalker(body, 4);
+  var textNodes = [];
+  var collectedCharacters = 0;
+  var node = walker.lastChild();
+  while (node && collectedCharacters < WBC_LIVE_FADE_MAX_CHARACTERS) {
+    var nodeText = String(node.nodeValue || "");
+    if (nodeText.trim()) {
+      textNodes.push(node);
+      collectedCharacters += nodeText.length;
+    }
+    node = walker.previousNode();
+  }
+  for (var index = 0; index < textNodes.length && budget > 0; index += 1) {
+    var textNode = textNodes[index];
+    var value = String(textNode.nodeValue || "");
+    var take = Math.min(value.length, budget);
+    var start = value.length - take;
+    // Reveal complete words when the provider boundary lands mid-word. Keep
+    // the look-back bounded so an unusually long token cannot dim a whole line.
+    var lookbackFloor = Math.max(0, start - 16);
+    while (start > lookbackFloor && !/\s/.test(value.charAt(start - 1))) start -= 1;
+    var suffix = value.slice(start);
+    if (!suffix) continue;
+    var fade = document.createElement("span");
+    fade.className = "wbc-stream-fade";
+    fade.textContent = suffix;
+    textNode.nodeValue = value.slice(0, start);
+    textNode.parentNode.insertBefore(fade, textNode.nextSibling);
+    budget -= take;
+  }
+}
+
+function wbcUseBufferedLiveText(text, flush) {
   var source = String(text || "");
   var [renderedText, setRenderedText] = useWbcState(source);
   var latestTextRef = useWbcRef(source);
-  var renderTimerRef = useWbcRef(null);
-  var lastRenderAtRef = useWbcRef(source ? Date.now() : 0);
+  var renderedTextRef = useWbcRef(source);
+  var renderFrameRef = useWbcRef(0);
+  var lastRenderAtRef = useWbcRef(0);
   latestTextRef.current = source;
 
   useWbcEffect(function () {
     if (flush || !source) {
-      if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
-      renderTimerRef.current = null;
-      lastRenderAtRef.current = Date.now();
+      if (renderFrameRef.current) cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = 0;
+      renderedTextRef.current = source;
       setRenderedText(source);
       return;
     }
-    if (renderTimerRef.current) return;
-    var elapsed = Date.now() - Number(lastRenderAtRef.current || 0);
-    var delay = Math.max(0, WBC_LIVE_MARKDOWN_INTERVAL_MS - elapsed);
-    renderTimerRef.current = setTimeout(function () {
-      renderTimerRef.current = null;
-      lastRenderAtRef.current = Date.now();
-      setRenderedText(latestTextRef.current);
-    }, delay);
+    if (renderFrameRef.current || renderedTextRef.current === source) return;
+    function publishFrame(now) {
+      var elapsed = now - Number(lastRenderAtRef.current || 0);
+      if (elapsed < WBC_LIVE_FRAME_INTERVAL_MS) {
+        renderFrameRef.current = requestAnimationFrame(publishFrame);
+        return;
+      }
+      renderFrameRef.current = 0;
+      lastRenderAtRef.current = now;
+      var nextText = latestTextRef.current;
+      if (renderedTextRef.current !== nextText) {
+        renderedTextRef.current = nextText;
+        setRenderedText(nextText);
+      }
+    }
+    renderFrameRef.current = requestAnimationFrame(publishFrame);
   }, [source, flush]);
 
   useWbcEffect(function () {
     return function () {
-      if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
+      if (renderFrameRef.current) cancelAnimationFrame(renderFrameRef.current);
     };
   }, []);
   // A terminal reply is already authoritative. Return it in the same render

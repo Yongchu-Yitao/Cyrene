@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
 from cyrene.model.error_details import (
     ModelCallError,
+    classify_model_error,
     details_from_mapping,
 )
 from cyrene.plugins.model_catalog import (
@@ -123,6 +124,70 @@ def _model_error_response(exc: ModelCallError) -> JSONResponse:
         status,
         retryable=details.retryable,
         **({"upstream_status": details.status_code} if details.status_code else {}),
+    )
+
+
+def _model_discovery_error_response(exc: ModelCallError) -> JSONResponse:
+    """Translate provider failures at the discovery boundary without guessing in UI."""
+
+    details = exc.details
+    if details.code == "model_credentials_missing":
+        code, status = "model_discovery_credentials_missing", 400
+        en, zh = (
+            "No API key is configured for this model service.",
+            "尚未配置 API 密钥。",
+        )
+    elif details.code == "model_authentication_failed":
+        code, status = "model_discovery_authentication_failed", 401
+        en, zh = (
+            "The API key is invalid or is not authorized to list models.",
+            "API 密钥无效或没有获取模型列表的权限。",
+        )
+    elif details.status_code == 404 or details.code == "model_unavailable":
+        code, status = "model_discovery_catalog_not_found", 502
+        en, zh = (
+            "The model-list endpoint does not exist.",
+            "模型列表地址不存在。",
+        )
+    elif details.code == "model_timeout":
+        code, status = "model_discovery_timeout", 504
+        en, zh = "The connection timed out.", "连接超时。"
+    elif details.code == "model_response_invalid":
+        code, status = "model_discovery_response_invalid", 502
+        en, zh = (
+            "The model service returned data that could not be parsed.",
+            "模型服务返回了无法解析的数据。",
+        )
+    elif details.code == "model_connection_failed":
+        code, status = "model_discovery_connection_failed", 502
+        en, zh = (
+            "Could not connect to the model service.",
+            "无法连接到模型服务。",
+        )
+    elif details.code == "model_service_unavailable":
+        code, status = "model_discovery_service_unavailable", 503
+        en, zh = (
+            "The model service is temporarily unavailable.",
+            "模型服务暂时不可用。",
+        )
+    else:
+        code, status = "model_discovery_failed", 502
+        en, zh = "Model discovery failed.", "获取模型列表失败。"
+    diagnostic = {
+        "operation": "model_discovery",
+        "code": code,
+        "cause": details.code,
+        "retryable": details.retryable,
+    }
+    if details.status_code:
+        diagnostic["upstream_status"] = details.status_code
+    return _error(
+        en,
+        zh,
+        code,
+        status,
+        retryable=details.retryable,
+        diagnostic=diagnostic,
     )
 
 
@@ -643,39 +708,29 @@ def _register_model_discovery_route(
                 exc.details.code,
                 exc_info=True,
             )
-            return _model_error_response(exc)
+            return _model_discovery_error_response(exc)
         except (TimeoutError, httpx.TimeoutException):
             logger.info("Model discovery timed out", exc_info=True)
-            return _error(
-                "model discovery timed out",
-                "模型发现超时。",
-                "model_discovery_timeout",
-                504,
+            return _model_discovery_error_response(
+                ModelCallError(classify_model_error("model discovery timeout"))
             )
         except httpx.HTTPStatusError as exc:
             logger.info("Model discovery was rejected", exc_info=True)
-            return _error(
-                "model discovery was rejected",
-                "模型服务拒绝了模型发现请求。",
-                "model_discovery_rejected",
-                502,
-                upstream_status=exc.response.status_code,
+            return _model_discovery_error_response(
+                ModelCallError(classify_model_error(exc))
             )
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             logger.info("Model discovery request failed", exc_info=True)
-            return _error(
-                "model discovery failed",
-                "模型发现失败。",
-                "model_discovery_failed",
-                502,
+            return _model_discovery_error_response(
+                ModelCallError(classify_model_error(exc))
             )
-        except (RuntimeError, OSError):
+        except (RuntimeError, OSError) as exc:
             logger.info("Model discovery is unavailable", exc_info=True)
-            return _error(
-                "model discovery is unavailable",
-                "模型发现当前不可用。",
-                "model_discovery_unavailable",
-                503,
+            classified = classify_model_error(exc)
+            if "invalid model catalog" in str(exc).lower():
+                classified = classify_model_error("invalid provider plugin result")
+            return _model_discovery_error_response(
+                ModelCallError(classified)
             )
         except (TypeError, ValueError) as exc:
             return _validation_error(

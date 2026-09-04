@@ -399,6 +399,34 @@ def model_registry(handler) -> PluginRegistry:
     return registry
 
 
+def test_bridge_injects_explicit_model_protocol_trace(monkeypatch, tmp_path) -> None:
+    trace_directory = tmp_path / "protocol-traces"
+    monkeypatch.setenv("CYRENE_MODEL_PROTOCOL_TRACE", str(trace_directory))
+    plugin_directory = tmp_path / "plugin_impl"
+    workspace = tmp_path / "workspace"
+    plugin_directory.mkdir()
+    workspace.mkdir()
+
+    async def model(_arguments, _context):
+        return {"content": "ok", "tool_calls": []}
+
+    bridge = WorkbenchSessionBridge.open(
+        tmp_path / "agent-state",
+        workspace,
+        plugin_directory,
+        registry=model_registry(model),
+        load_plugins=False,
+        model_plugin="MiniMax",
+        chat_id="wbchat_protocol_trace",
+    )
+    trace = bridge.session.plugin_services.get("model_protocol_trace")
+
+    assert callable(trace)
+    run(trace({"type": "response_start", "status_code": 200}))
+    assert (trace_directory / "wbchat_protocol_trace.jsonl").exists()
+    bridge.session.close()
+
+
 def replace_model(registry: PluginRegistry, handler) -> None:
     registry.register_pack(
         PluginPack(

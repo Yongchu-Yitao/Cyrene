@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -235,6 +236,50 @@ def test_watcher_incremental_snapshot_only_refreshes_dirty_paths(tmp_path):
         "deleted.txt",
         "nested/created.txt",
     }
+
+
+async def test_workspace_snapshot_index_honors_nested_gitignore_and_stays_hot(tmp_path):
+    from cyrene.workbench.workspaces.workspace_changes import WorkspaceSnapshotIndex
+
+    (tmp_path / ".gitignore").write_text("cache/\n*.log\n", encoding="utf-8")
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "large.bin").write_bytes(b"x" * 100_000)
+    nested = tmp_path / "src"
+    nested.mkdir()
+    (nested / ".gitignore").write_text("*.tmp\n!keep.tmp\n", encoding="utf-8")
+    (nested / "app.py").write_text("before\n", encoding="utf-8")
+    (nested / "drop.tmp").write_text("ignored\n", encoding="utf-8")
+    (nested / "keep.tmp").write_text("kept\n", encoding="utf-8")
+    (tmp_path / "debug.log").write_text("ignored\n", encoding="utf-8")
+
+    index = WorkspaceSnapshotIndex(tmp_path)
+    try:
+        before = await index.snapshot(settle=False)
+        assert before is not None
+        assert set(before.files) == {
+            ".gitignore", "src/.gitignore", "src/app.py", "src/keep.tmp",
+        }
+
+        (nested / "app.py").write_text("after\n", encoding="utf-8")
+        deadline = time.monotonic() + 2
+        after = before
+        while time.monotonic() < deadline:
+            after = await index.snapshot()
+            if after is not None and after.files["src/app.py"].text == "after\n":
+                break
+        assert after is not None
+        assert after.files["src/app.py"].text == "after\n"
+        assert after.files["src/keep.tmp"] is before.files["src/keep.tmp"]
+
+        samples = []
+        for _ in range(20):
+            started = time.perf_counter()
+            await index.snapshot()
+            samples.append((time.perf_counter() - started) * 1000)
+        p95 = sorted(samples)[int(len(samples) * 0.95) - 1]
+        assert p95 < 100
+    finally:
+        await index.close()
 
 
 def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):

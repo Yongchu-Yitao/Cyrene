@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from cyrene.model.protocol_adapters import (
+    ModelStreamError,
     PreparedRequest,
     discovery_request,
     handle_stream,
@@ -173,6 +174,9 @@ def test_minimax_openai_discovery_uses_models_endpoint_and_bearer_auth() -> None
         "name": "MiniMax-M2.7",
         "capabilities": ["chat"],
     }]
+
+    with pytest.raises(ValueError, match="expected a model array"):
+        parse_discovery_response("openai", {"error": "upstream proxy page"})
 
 
 def test_aliyun_bailian_discovery_uses_catalog_api_and_normalizes_models() -> None:
@@ -770,9 +774,14 @@ async def test_openai_chat_sse_accumulates_content_reasoning_tools_and_usage() -
     assert diagnostics == {
         "adapter": "openai_compatible",
         "line_count": 10,
+        "data_chunk_count": 4,
         "event_count": 4,
         "invalid_json_line_count": 0,
         "saw_done_marker": True,
+        "http_status": 200,
+        "terminal_event_seen": False,
+        "last_event_type": "",
+        "termination_reason": "provider_finish_reason",
         "finish_reason": "tool_calls",
         "stream_completed": True,
         "tool_calls": [{
@@ -782,6 +791,7 @@ async def test_openai_chat_sse_accumulates_content_reasoning_tools_and_usage() -
             "arguments_sha256": hashlib.sha256(
                 b'{"city":"Paris"}'
             ).hexdigest(),
+            "arguments_validation": "valid_object",
         }],
     }
     assert parsed == {
@@ -804,6 +814,130 @@ async def test_openai_chat_sse_accumulates_content_reasoning_tools_and_usage() -
         "response_id": "chatcmpl_1",
         "model": "MiniMax-M2.1",
     }
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_clean_eof_without_provider_terminal_signal() -> None:
+    body = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ModelStreamError) as captured:
+            await handle_stream(
+                "openai_compatible",
+                client,
+                "https://provider.test/v1/chat/completions",
+                PreparedRequest({"stream": True}, {}),
+                None,
+            )
+
+    assert captured.value.kind == "upstream_incomplete"
+    assert captured.value.diagnostics["http_status"] == 200
+    assert captured.value.diagnostics["event_count"] == 1
+    assert captured.value.diagnostics["stream_completed"] is False
+    assert captured.value.diagnostics["termination_reason"] == "eof_without_terminal_event"
+
+
+@pytest.mark.asyncio
+async def test_stream_distinguishes_local_protocol_decode_failure() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b"data: {not-json}\n\n",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ModelStreamError) as captured:
+            await handle_stream(
+                "openai_compatible",
+                client,
+                "https://provider.test/v1/chat/completions",
+                PreparedRequest({"stream": True}, {}),
+                None,
+            )
+
+    assert captured.value.kind == "protocol_invalid_json"
+    assert captured.value.diagnostics["termination_reason"] == "invalid_sse_json"
+    assert captured.value.diagnostics["invalid_json_line_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_malformed_tool_arguments_with_safe_diagnostics() -> None:
+    events = [{
+        "choices": [{
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {"name": "weather", "arguments": '{"city"'},
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }],
+    }]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return _sse_response(events)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ModelStreamError) as captured:
+            await handle_stream(
+                "openai_compatible",
+                client,
+                "https://provider.test/v1/chat/completions",
+                PreparedRequest({"stream": True}, {}),
+                None,
+            )
+
+    assert captured.value.kind == "invalid_tool_arguments"
+    diagnostics = captured.value.diagnostics
+    assert diagnostics["finish_reason"] == "tool_calls"
+    assert diagnostics["termination_reason"] == "invalid_tool_arguments"
+    assert diagnostics["tool_calls"] == [{
+        "index": "0",
+        "name": "weather",
+        "arguments_length": 7,
+        "arguments_sha256": hashlib.sha256(b'{"city"').hexdigest(),
+        "arguments_validation": "invalid_json",
+    }]
+    assert '{"city"' not in json.dumps(diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_developer_protocol_trace_is_explicit_and_observational() -> None:
+    events = [{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}]
+    trace: list[dict[str, object]] = []
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return _sse_response(events)
+
+    async def record(event: dict[str, object]) -> None:
+        trace.append(event)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await handle_stream(
+            "openai_compatible",
+            client,
+            "https://provider.test/v1/chat/completions",
+            PreparedRequest({"stream": True}, {}),
+            None,
+            protocol_trace=record,
+        )
+
+    assert trace[0] == {
+        "type": "response_start",
+        "adapter": "openai_compatible",
+        "status_code": 200,
+    }
+    assert any(item.get("type") == "response_line" for item in trace)
+    assert trace[-1]["type"] == "response_end"
 
 
 async def _record_event(

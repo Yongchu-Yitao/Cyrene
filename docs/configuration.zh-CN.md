@@ -42,6 +42,18 @@ Portable Backup ZIP 不由 Cyrene 加密。为了让 Restore 能用目标 Instal
 Provider Plugin 连接、模型 Profile，以及独立的 primary、secondary、vision、
 embedding 路由。模型目录与推理操作由可编辑的 Model Plugin 提供。
 
+### 模型协议诊断（仅开发者）
+
+普通日志只保留不含正文的流诊断信息，包括 HTTP 状态、事件数量、终止原因，
+以及工具参数的长度、校验状态和 SHA-256 哈希。如需在短期诊断中捕获 Provider
+返回的原始响应行，请在启动 Cyrene 前设置 `CYRENE_MODEL_PROTOCOL_TRACE=1`。
+也可以用目录路径代替 `1`；默认目录为 `data/logs/model-protocol`。跟踪文件权限
+为 `0600`，默认达到 32 MiB 后停止写入，可通过
+`CYRENE_MODEL_PROTOCOL_TRACE_MAX_BYTES` 调整上限。
+
+原始跟踪可能包含完整的私密对话和工具内容。日常使用时应保持关闭，并在诊断
+完成后删除跟踪文件。
+
 ### Agent
 
 | 变量 | 说明 | 默认 |

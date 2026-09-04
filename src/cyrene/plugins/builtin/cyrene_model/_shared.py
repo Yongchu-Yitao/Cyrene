@@ -489,7 +489,11 @@ async def discover_models(
     base_url = _provider_value({}, context, provider, "base_url").rstrip("/")
     api_key = _provider_value({}, context, provider, "api_key")
     if provider.auth_type == "api_key" and not api_key:
-        raise ValueError(f"{provider.name} API key is not configured")
+        from cyrene.model.error_details import ModelCallError, classify_model_error
+
+        raise ModelCallError(
+            classify_model_error(f"{provider.name} API key is not configured")
+        )
     endpoint, headers = discovery_request(
         adapter,
         base_url,
@@ -568,6 +572,7 @@ def _log_completed_stream(
     endpoint: str,
     timing: Mapping[str, float],
     started: float,
+    diagnostics: Mapping[str, Any] | None = None,
 ) -> None:
     log_operation(
         logger,
@@ -580,6 +585,7 @@ def _log_completed_stream(
         response_headers_ms=round(float(timing.get("response_headers_ms") or 0.0), 3),
         ttft_ms=round(float(timing.get("ttft_ms") or 0.0), 3),
         duration_ms=round((time.perf_counter() - started) * 1000, 3),
+        diagnostics=dict(diagnostics or {}),
     )
 
 
@@ -601,6 +607,11 @@ def _finalize_stream_result(
         endpoint=endpoint,
         timing=timing,
         started=started,
+        diagnostics=(
+            message.get("stream_diagnostics")
+            if isinstance(message.get("stream_diagnostics"), Mapping)
+            else None
+        ),
     )
     return _normalized_result(
         dict(message),
@@ -627,7 +638,7 @@ async def _complete_stream_endpoint(
     has_fallback: bool,
     retry_state: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    from cyrene.model.protocol_adapters import handle_stream
+    from cyrene.model.protocol_adapters import ModelStreamError, handle_stream
 
     attempt_streamed = False
     attempt_emitted = False
@@ -643,9 +654,12 @@ async def _complete_stream_endpoint(
             await stream_callback(event)
 
     timing: dict[str, float] = {}
+    protocol_trace = context.services.get("model_protocol_trace")
+    if not callable(protocol_trace):
+        protocol_trace = None
     while True:
         try:
-            message = await handle_stream(
+            stream_arguments = (
                 adapter,
                 client,
                 endpoint,
@@ -653,11 +667,54 @@ async def _complete_stream_endpoint(
                 publish_stream if stream_callback is not None else None,
                 timing,
             )
+            message = (
+                await handle_stream(
+                    *stream_arguments,
+                    protocol_trace=protocol_trace,
+                )
+                if protocol_trace is not None
+                else await handle_stream(*stream_arguments)
+            )
             break
         except Exception as exc:
+            diagnostics = getattr(exc, "diagnostics", None)
+            if not isinstance(diagnostics, Mapping):
+                response = getattr(exc, "response", None)
+                diagnostics = {
+                    "adapter": adapter,
+                    "http_status": int(getattr(response, "status_code", 0) or 0),
+                    "stream_completed": False,
+                    "termination_reason": (
+                        "http_rejected" if response is not None else "request_failed"
+                    ),
+                }
+            log_operation(
+                logger,
+                "model.provider",
+                "stream",
+                phase="failed",
+                provider=provider.id,
+                model=model,
+                endpoint=endpoint,
+                error_type=type(exc).__name__,
+                diagnostics=dict(diagnostics),
+            )
+            if protocol_trace is not None:
+                try:
+                    await protocol_trace({
+                        "type": "response_end",
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "diagnostics": dict(diagnostics),
+                    })
+                except Exception:
+                    pass
             transient = isinstance(
                 exc,
                 (httpx.TransportError, TimeoutError, OSError),
+            ) or (
+                isinstance(exc, ModelStreamError)
+                and exc.kind == "transport_interrupted"
             )
             retry_count = int(status_state.get("count") or 0)
             if (
@@ -1063,9 +1120,10 @@ def create_model_plugin(provider: ModelProvider) -> Plugin:
             ModelCallError,
             classify_model_error,
         )
+        from cyrene.model.protocol_adapters import ModelStreamError
 
+        operation = str(arguments.get("operation") or "complete")
         try:
-            operation = str(arguments.get("operation") or "complete")
             if operation == "list_models":
                 return await discover_models(provider, context)
             if operation == "embed":
@@ -1073,7 +1131,16 @@ def create_model_plugin(provider: ModelProvider) -> Plugin:
             return await complete_model(arguments, context, provider)
         except ModelCallError:
             raise
+        except ModelStreamError as exc:
+            raise ModelCallError(
+                classify_model_error(exc),
+                diagnostics=exc.diagnostics,
+            ) from exc
         except (httpx.HTTPError, TimeoutError, OSError) as exc:
+            raise ModelCallError(classify_model_error(exc)) from exc
+        except (TypeError, ValueError) as exc:
+            if operation != "list_models":
+                raise
             raise ModelCallError(classify_model_error(exc)) from exc
 
     return Plugin(

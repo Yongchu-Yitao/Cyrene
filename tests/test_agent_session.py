@@ -122,6 +122,106 @@ def test_model_failure_mounts_structured_public_error_metadata(tmp_path):
     session.close()
 
 
+def test_invalid_model_response_retries_same_node_through_context_hook(tmp_path):
+    model_calls = 0
+
+    async def flaky_model(_arguments, context):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            await context.services["model_stream"]({
+                "type": "reply_delta",
+                "delta": "partial",
+            })
+            raise ModelCallError(classify_model_error("invalid JSON response"))
+        return {"content": "recovered", "tool_calls": []}
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, flaky_model, kind="model"),),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+    observed_events = []
+    session.subscribe(observed_events.append)
+
+    session.submit("hello", run_id="invalid-response-retry")
+    run(session.drain())
+
+    assert model_calls == 2
+    output = session.final_output("invalid-response-retry")
+    assert output is not None
+    assert output["content"] == "recovered"
+    assert output.get("error") is not True
+    user = next(
+        node["value"]
+        for node in session.snapshot()["nodes"]
+        if node["value"].get("role") == "user"
+    )
+    assert user["_model_response_retry"] == {
+        "code": "model_response_invalid",
+        "attempts": 1,
+        "limit": 1,
+    }
+    reset_events = [
+        event
+        for event in observed_events
+        if event.type == "assistant.stream.started"
+        and event.data.get("reset") is True
+    ]
+    assert len(reset_events) == 1
+    assert reset_events[0].data["recovery"] == "model_response_invalid"
+    session.close()
+
+
+def test_invalid_model_response_retry_is_bounded(tmp_path):
+    model_calls = 0
+
+    async def invalid_model(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        raise ModelCallError(classify_model_error("invalid JSON response"))
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, invalid_model, kind="model"),),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+
+    session.submit("hello", run_id="invalid-response-bounded")
+    run(session.drain())
+
+    assert model_calls == 2
+    output = session.final_output("invalid-response-bounded")
+    assert output is not None
+    assert output["error"] is True
+    assert output["failure_kind"] == "model_response_invalid"
+    session.close()
+
+
 def test_workspace_file_boundary_matches_v0713_review_scope(tmp_path):
     reviewed_requests = []
 

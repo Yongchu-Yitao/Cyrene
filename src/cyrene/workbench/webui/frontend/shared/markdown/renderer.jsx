@@ -316,13 +316,15 @@
   // reply_done replaces the live message. Code fences are tracked in both the
   // visible text and hidden blocks so a standalone `:::` inside code is never
   // mistaken for a directive boundary.
-  function stripInteractiveBlocks(value) {
+  function analyzeInteractiveBlocks(value) {
     var source = String(value == null ? "" : value).replace(/\r\n?/g, "\n");
     var lines = source.split("\n");
     var visible = [];
     var interactive = false;
+    var interactiveStart = -1;
     var depth = 0;
     var fence = null;
+    var sourceOffset = 0;
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       if (fence) {
@@ -333,6 +335,7 @@
           && fenceClose[1].charAt(0) === fence.character
           && fenceClose[1].length >= fence.length
         ) fence = null;
+        sourceOffset += line.length + (i < lines.length - 1 ? 1 : 0);
         continue;
       }
 
@@ -340,6 +343,7 @@
       if (fenceOpen) {
         fence = { character: fenceOpen[1].charAt(0), length: fenceOpen[1].length };
         if (!interactive) visible.push(line);
+        sourceOffset += line.length + (i < lines.length - 1 ? 1 : 0);
         continue;
       }
 
@@ -348,21 +352,34 @@
           depth -= 1;
           if (depth <= 0) {
             interactive = false;
+            interactiveStart = -1;
             depth = 0;
           }
         } else if (/^ {0,3}:::(?:details|card|chart|button|actions|grid)(?:[ \t]+[^\n]*)?[ \t]*$/.test(line)) {
           depth += 1;
         }
+        sourceOffset += line.length + (i < lines.length - 1 ? 1 : 0);
         continue;
       }
       if (/^ {0,3}:::(?:details|card|chart|button|actions|grid)(?:[ \t]+[^\n]*)?[ \t]*$/.test(line)) {
         interactive = true;
+        interactiveStart = sourceOffset;
         depth = 1;
+        sourceOffset += line.length + (i < lines.length - 1 ? 1 : 0);
         continue;
       }
       visible.push(line);
+      sourceOffset += line.length + (i < lines.length - 1 ? 1 : 0);
     }
-    return visible.join("\n");
+    return {
+      normalizedSource: source,
+      visible: visible.join("\n"),
+      openInteractiveStart: interactive ? interactiveStart : -1,
+    };
+  }
+
+  function stripInteractiveBlocks(value) {
+    return analyzeInteractiveBlocks(value).visible;
   }
 
   function render(value, options) {
@@ -395,6 +412,71 @@
     }
   }
 
+  function splitStableBlocks(value, previous) {
+    var source = String(value == null ? "" : value);
+    var prior = previous && typeof previous === "object" ? previous : null;
+    var canReuse = !!(
+      prior
+      && typeof prior.source === "string"
+      && typeof prior.stable === "string"
+      && Array.isArray(prior.stableBlocks)
+      && source.startsWith(prior.source)
+      && source.startsWith(prior.stable)
+    );
+    var baseStable = canReuse ? prior.stable : "";
+    var baseBlocks = canReuse ? prior.stableBlocks.slice() : [];
+    var pendingSource = source.slice(baseStable.length);
+    function pendingResult() {
+      return { source: source, stable: baseStable, stableBlocks: baseBlocks, active: pendingSource };
+    }
+    if (!pendingSource || !root.marked || typeof root.marked.lexer !== "function") return pendingResult();
+    try {
+      var interactiveAnalysis = analyzeInteractiveBlocks(pendingSource);
+      // Preserve the caller's exact source offsets. CRLF input is uncommon in
+      // model deltas; keeping it as one active block is safer than slicing at
+      // offsets from the normalized scanner.
+      if (interactiveAnalysis.normalizedSource !== pendingSource) return pendingResult();
+      var tokens = root.marked.lexer(pendingSource);
+      if (!Array.isArray(tokens) || tokens.length < 2) return pendingResult();
+      var rawParts = tokens.map(function (token) { return String(token && token.raw || ""); });
+      var reconstructed = rawParts.join("");
+      // A tokenizer extension that does not preserve `raw` cannot safely take
+      // part in incremental rendering. Fall back to one active block rather
+      // than splitting the source at a guessed character offset.
+      if (reconstructed !== pendingSource) return pendingResult();
+      var lastToken = tokens[tokens.length - 1] || {};
+      var stableLength = String(lastToken.type || "") === "space"
+        ? pendingSource.length
+        : rawParts.slice(0, -1).reduce(function (total, raw) { return total + raw.length; }, 0);
+      if (interactiveAnalysis.openInteractiveStart >= 0) {
+        stableLength = Math.min(stableLength, interactiveAnalysis.openInteractiveStart);
+      }
+      if (stableLength <= 0 || stableLength > pendingSource.length) return pendingResult();
+      var stableAddition = pendingSource.slice(0, stableLength);
+      var stableTokens = root.marked.lexer(stableAddition);
+      var stableBlocks = baseBlocks.slice();
+      stableTokens.forEach(function (token) {
+        var raw = String(token && token.raw || "");
+        if (!raw) return;
+        if (String(token.type || "") === "space" && stableBlocks.length) {
+          stableBlocks[stableBlocks.length - 1] += raw;
+        } else {
+          stableBlocks.push(raw);
+        }
+      });
+      var stable = baseStable + stableAddition;
+      if (stableBlocks.join("") !== stable) return pendingResult();
+      return {
+        source: source,
+        stable: stable,
+        stableBlocks: stableBlocks,
+        active: pendingSource.slice(stableLength),
+      };
+    } catch (error) {
+      return pendingResult();
+    }
+  }
+
   var service = {
     escapeHtml: escapeHtml,
     render: render,
@@ -407,6 +489,7 @@
       });
     },
     sanitizeHtml: sanitizeHtml,
+    splitStableBlocks: splitStableBlocks,
     stripInteractiveBlocks: stripInteractiveBlocks,
   };
   root.CyreneUI.markdown = root.CyreneUI.register("markdown", service);

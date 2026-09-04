@@ -293,6 +293,7 @@ import { wbcErrorText } from "./errors.jsx"
       // untouched so the built-in runtime keeps its exact historical behavior.
       if (wbcRouteAgentEvent(type, event, handlers)) return;
       if (type === "ack" && handlers.onAck) handlers.onAck(event);
+      else if (type === "chat_timing" && handlers.onTiming) handlers.onTiming(event);
       else if (type === "intermediate_message" && handlers.onIntermediateMessage) handlers.onIntermediateMessage(event);
       else if (type === "reasoning_start" && handlers.onReasoningStart) handlers.onReasoningStart(event);
       else if (type === "reasoning_delta" && handlers.onReasoningDelta) handlers.onReasoningDelta(event.delta || "", event);
@@ -354,6 +355,7 @@ import { wbcErrorText } from "./errors.jsx"
     var body = {
       message: input.message || "",
       clientRequestId: input.clientRequestId || "",
+      clientSendEpochMs: Number(input.clientSendEpochMs || Date.now()),
       attachments: input.attachments || [],
       mode: input.mode || "default",
       command: input.command || "",
@@ -401,6 +403,20 @@ import { wbcErrorText } from "./errors.jsx"
     }).then(function (response) {
       return consumeEventStream(response, handlers);
     });
+  }
+
+  function recordChatTiming(chatId, runId, payload) {
+    if (!chatId || !runId) return Promise.resolve(null);
+    return fetch(
+      "/api/workbench/chats/" + encodeURIComponent(chatId)
+        + "/runs/" + encodeURIComponent(runId) + "/timing",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {}),
+        keepalive: true,
+      }
+    ).catch(function () { return null; });
   }
 
   function sendGuidance(chatId, message, clientRequestId) {
@@ -495,6 +511,7 @@ import { wbcErrorText } from "./errors.jsx"
     interrupt: interrupt,
     uploadFiles: uploadFiles,
     sendMessage: sendMessage,
+    recordChatTiming: recordChatTiming,
     sendGuidance: sendGuidance,
     reconnectRun: reconnectRun,
     answerChat: answerChat,

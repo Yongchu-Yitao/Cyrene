@@ -40,16 +40,77 @@ class ModelErrorDetails:
 class ModelCallError(RuntimeError):
     """A model failure with safe details for callers outside the Provider."""
 
-    def __init__(self, details: ModelErrorDetails) -> None:
+    def __init__(
+        self,
+        details: ModelErrorDetails,
+        *,
+        diagnostics: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(details.message_en)
         self.details = details
+        self.diagnostics = _public_stream_diagnostics(diagnostics)
 
     def as_error_details(self) -> dict[str, Any]:
-        return self.details.as_dict()
+        result = self.details.as_dict()
+        if self.diagnostics:
+            result["stream_diagnostics"] = dict(self.diagnostics)
+        return result
+
+
+_PUBLIC_STREAM_FIELDS = frozenset({
+    "adapter",
+    "data_chunk_count",
+    "event_count",
+    "finish_reason",
+    "http_status",
+    "invalid_json_line_count",
+    "last_event_type",
+    "line_count",
+    "saw_done_marker",
+    "stream_completed",
+    "terminal_event_seen",
+    "termination_reason",
+    "transport_error_type",
+})
+_PUBLIC_TOOL_DIAGNOSTIC_FIELDS = frozenset({
+    "arguments_length",
+    "arguments_sha256",
+    "arguments_validation",
+    "index",
+    "name",
+})
+
+
+def _public_stream_diagnostics(value: Any) -> dict[str, Any]:
+    """Keep only content-free protocol evidence at public boundaries."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    result = {
+        str(key): item
+        for key, item in value.items()
+        if str(key) in _PUBLIC_STREAM_FIELDS
+        and isinstance(item, (str, int, float, bool))
+    }
+    calls: list[dict[str, Any]] = []
+    raw_calls = value.get("tool_calls")
+    for raw_call in raw_calls if isinstance(raw_calls, list) else ():
+        if not isinstance(raw_call, Mapping):
+            continue
+        calls.append({
+            str(key): item
+            for key, item in raw_call.items()
+            if str(key) in _PUBLIC_TOOL_DIAGNOSTIC_FIELDS
+            and isinstance(item, (str, int, float, bool))
+        })
+    if calls:
+        result["tool_calls"] = calls
+    return result
 
 
 _DETAIL_KEYS = {
     "model_not_configured": "modelNotConfigured",
+    "model_credentials_missing": "modelAuthenticationFailed",
     "model_authentication_failed": "modelAuthenticationFailed",
     "model_quota_exhausted": "modelQuotaExhausted",
     "model_rate_limited": "modelRateLimited",
@@ -68,6 +129,10 @@ _ERROR_MESSAGES = {
     "model_not_configured": (
         "No model is configured for this conversation.",
         "当前对话尚未配置可用模型。",
+    ),
+    "model_credentials_missing": (
+        "No API key is configured for the model service.",
+        "模型服务尚未配置 API 密钥。",
     ),
     "model_authentication_failed": (
         "The model service rejected the configured credentials.",
@@ -143,8 +208,25 @@ def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
     signature = f"{type(exc).__name__} {text}".lower()
     status = _status_code(exc, signature)
 
+    stream_kind = str(getattr(exc, "kind", "") or "")
+    if stream_kind == "transport_interrupted":
+        return _details("model_connection_failed", True, status)
+    if stream_kind in {
+        "protocol_invalid_json",
+        "protocol_invalid_event",
+        "upstream_incomplete",
+        "invalid_tool_arguments",
+    }:
+        return _details("model_response_invalid", True, status)
+
     if re.search(r"no model is configured|model is not configured|model configuration is missing", signature):
         return _details("model_not_configured", False, status)
+
+    if re.search(
+        r"api[-_ ]?key (?:is )?not configured|missing api[-_ ]?key|credentials? (?:are |is )?not configured",
+        signature,
+    ):
+        return _details("model_credentials_missing", False, status)
 
     if status in {401, 403} or re.search(r"invalid api key|authentication|unauthori[sz]ed|forbidden|credential", signature):
         return _details("model_authentication_failed", False, status)
@@ -208,6 +290,7 @@ def preferred_model_error(values: list[ModelErrorDetails]) -> ModelErrorDetails:
         return classify_model_error("")
     priority = {
         "model_not_configured": 0,
+        "model_credentials_missing": 0,
         "model_authentication_failed": 1,
         "model_quota_exhausted": 2,
         "model_request_too_large": 2,

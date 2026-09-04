@@ -46,6 +46,19 @@ stores one canonical graph of Provider Plugin connections, model profiles, and
 independent primary, secondary, vision, and embedding routes. Provider catalogs
 and inference operations are supplied by editable Model Plugins.
 
+### Model protocol diagnostics (developer-only)
+
+Normal logs retain only content-free stream diagnostics such as HTTP status,
+event counts, termination reason, and tool-argument length, validation state,
+and SHA-256 hash. To capture raw provider response lines for a short diagnostic
+session, set `CYRENE_MODEL_PROTOCOL_TRACE=1` before starting Cyrene. A directory
+path may be supplied instead of `1`; the default directory is
+`data/logs/model-protocol`. Trace files use mode `0600` and stop at 32 MiB by
+default. Override the limit with `CYRENE_MODEL_PROTOCOL_TRACE_MAX_BYTES`.
+
+Raw traces can contain complete private conversation and tool content. Keep the
+feature disabled during ordinary use and delete diagnostic traces after use.
+
 ### Agent
 
 | Variable | Description | Default |

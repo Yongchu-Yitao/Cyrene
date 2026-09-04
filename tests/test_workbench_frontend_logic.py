@@ -4010,6 +4010,23 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert "browser-status-dot running" not in source.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
 
 
+def test_workbench_chat_reveals_browser_from_manager_state_before_navigation_finishes():
+    source = workbench_chat_source()
+
+    manager_state_block = source.split(
+        "function revealOwnedBrowser(state)", 1
+    )[1].split(
+        "}, [activeChatId, browserAvailable]);", 1
+    )[0]
+    assert 'typeof bridge.onManagerState !== "function"' in source
+    assert "bridge.getManagerState().then(revealOwnedBrowser)" in source
+    assert "bridge.onManagerState(revealOwnedBrowser)" in source
+    assert 'String(page && page.sessionId || "") === chatId' in manager_state_block
+    assert "setBrowserActiveByChat" in manager_state_block
+    assert "setBrowserWindowModeByChat" in manager_state_block
+    assert '"pip"' in manager_state_block
+
+
 def test_browser_floating_surfaces_use_pointer_shelf_hit_testing_and_favicon_state():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
@@ -7086,6 +7103,8 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert "height: calc(18.17px * var(--wb-ui-font-scale, 1));" in reasoning_icon_rule
     assert "align-items: center;" in reasoning_icon_rule
     assert "function wbcTraceCollapsedSummary(entries, fallback)" in source
+    assert "var toolEntries = traceEntries.filter(wbcIsToolTraceEntry);" in source
+    assert 'wbcT("workbenchChat.traceSummary", "Executed {count} tool calls", { count: toolEntries.length })' in source
     assert "icon: WBC_ICONS.brain" in source
     assert 'entry && entry.kind === "phase1"' in source
     assert "if (phase1Entry) return" in source
@@ -7142,10 +7161,11 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert '"workbenchChat.traceAction.usedSkill": "使用了技能工具"' in i18n
     assert '"workbenchChat.traceAction.usedTool": "使用了{tool}"' in i18n
     assert '"workbenchChat.traceAction.conjunction": "并"' in i18n
+    assert '"workbenchChat.traceSummary": "执行了 {count} 次工具调用"' in i18n
     assert '"workbenchChat.traceAction.executed"' not in i18n
 
 
-def test_workbench_trace_summary_adds_a_verb_before_named_application_tools():
+def test_workbench_trace_summary_counts_tools_instead_of_concatenating_names():
     source = workbench_chat_source()
     helpers = "function wbcTraceNormalizeName(" + source.split(
         "function wbcTraceNormalizeName(", 1
@@ -7153,6 +7173,7 @@ def test_workbench_trace_summary_adds_a_verb_before_named_application_tools():
     script = f"""
 const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
 const messages = {{
+  "workbenchChat.traceSummary": "执行了 {{count}} 次工具调用",
   "workbenchChat.traceAction.browsed": "操作了浏览器",
   "workbenchChat.traceAction.usedTool": "使用了{{tool}}",
   "workbenchChat.traceAction.conjunction": "并",
@@ -7182,7 +7203,7 @@ process.stdout.write(summary.label);
         ["node", "-e", script], check=True, capture_output=True, text=True
     )
 
-    assert completed.stdout == "操作了浏览器并使用了Cyrene 应用工具"
+    assert completed.stdout == "执行了 2 次工具调用"
 
 
 def test_workbench_trace_summary_labels_guidance_as_steering():
@@ -7735,7 +7756,7 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
     css = workbench_style_source()
     i18n = workbench_i18n_source()
     group_component = chat.split("function WbcActivityGroup", 1)[1].split(
-        "var WBC_LIVE_MARKDOWN_INTERVAL_MS", 1
+        "var WBC_LIVE_FRAME_INTERVAL_MS", 1
     )[0]
     assert "wbcGroupConsecutiveActivityMessages(messages, runtime)" in chat
     assert "displayMessages.map(function (msg)" in chat
@@ -10208,6 +10229,49 @@ process.stdout.write(JSON.stringify({{
     assert "wbc-card" not in result["streamingHtml"]
 
 
+def test_markdown_streaming_split_uses_parser_block_boundaries():
+    root = Path(__file__).resolve().parent.parent
+    renderer_path = root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
+    marked_path = root / "src" / "cyrene" / "workbench" / "webui" / "static" / "app" / "marked.min.js"
+    script = f"""
+const fs = require("fs");
+const vm = require("vm");
+const marked = require({json.dumps(str(marked_path))});
+const services = {{}};
+const window = {{
+  marked,
+  DOMPurify: {{ sanitize: (html) => html }},
+  CyreneUI: {{ register: (name, service) => (services[name] = service) }},
+}};
+vm.runInNewContext(fs.readFileSync({json.dumps(str(renderer_path))}, "utf8"), {{ window }});
+const paragraph = "First paragraph.\\n\\nSecond paragraph is active.";
+const list = "Introduction.\\n\\n- first line\\n\\n  continuation stays in the list";
+const fence = "Introduction.\\n\\n```text\\nfirst\\n\\nsecond";
+const directive = "Introduction.\\n\\n:::details Work\\nfirst\\n\\nsecond";
+process.stdout.write(JSON.stringify({{
+  paragraph: services.markdown.splitStableBlocks(paragraph),
+  list: services.markdown.splitStableBlocks(list),
+  fence: services.markdown.splitStableBlocks(fence),
+  directive: services.markdown.splitStableBlocks(directive),
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result["paragraph"] == {
+        "source": "First paragraph.\n\nSecond paragraph is active.",
+        "stable": "First paragraph.\n\n",
+        "stableBlocks": ["First paragraph.\n\n"],
+        "active": "Second paragraph is active.",
+    }
+    assert result["list"]["stable"] == "Introduction.\n\n"
+    assert result["list"]["active"] == "- first line\n\n  continuation stays in the list"
+    assert result["fence"]["stable"] == "Introduction.\n\n"
+    assert result["fence"]["active"] == "```text\nfirst\n\nsecond"
+    assert result["directive"]["stable"] == "Introduction.\n\n"
+    assert result["directive"]["active"] == ":::details Work\nfirst\n\nsecond"
+
+
 def test_markdown_streaming_strip_preserves_directives_inside_code_fences():
     root = Path(__file__).resolve().parent.parent
     renderer_path = root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
@@ -10268,9 +10332,16 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     contract = (root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("var WBC_HEARTBEAT_STALL_MS", 1)[0]
-    assert "WBC_LIVE_MARKDOWN_INTERVAL_MS = 120" in chat
+    assert "WBC_LIVE_FRAME_INTERVAL_MS = 48" in chat
+    assert "wbcUseBufferedLiveText" in assistant_message
+    assert "workbenchServices.markdown().splitStableBlocks(renderedText, streamingPartsRef.current)" in assistant_message
+    assert "wbcFadeInStreamingTail(activeBodyRef.current, addedCharacterCount)" in assistant_message
+    assert 'fade.className = "wbc-stream-fade"' in chat
+    assert ".wbc-stream-fade" in styles
+    assert "animation: wbc-stream-tail-in 100ms" in styles
+    assert "opacity: 0.58" in styles
     assert "!live || !!liveRuntime.streamDone" in assistant_message
-    assert "wbcRenderMarkdown(renderedText, { interactive: false })" in assistant_message
+    assert "wbcRenderMarkdown(streamingParts.active, { interactive: false })" in assistant_message
     assert "wbcRenderMarkdown(renderedText)" in assistant_message
     assert "return flush ? source : renderedText;" in chat
     assert ".wbc-fold > summary:focus-visible" in styles

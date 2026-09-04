@@ -78,6 +78,8 @@ from .localization import localized, normalize_language, system_language
 logger = logging.getLogger(__name__)
 _DEFAULT_INITIAL_ROOT = object()
 _AGENT_LIFECYCLE_STATE_ID = "agent.lifecycle"
+_MODEL_RESPONSE_INVALID_RETRY_LIMIT = 1
+_MODEL_RESPONSE_RETRY_STATE_KEY = "_model_response_retry"
 
 
 def _l(en: str, zh: str, **values: Any) -> str:
@@ -3772,6 +3774,96 @@ class AgentSession:
         if failure is not None:
             await self._finish_terminal(failure, status="failed")
 
+    async def _retry_invalid_model_response(
+        self,
+        trigger: ContextNode,
+        result: PluginCallResult,
+        run_id: str,
+        transition_key: str,
+    ) -> bool:
+        """Retry one protocol-invalid model result through ContextChange Hooks.
+
+        Updating the original trigger gives the retry a new transition key and
+        lets the durable ``agent-session-transition`` Hook schedule it.  The
+        retry marker lives on that node so restarts and duplicate deliveries
+        cannot turn a malformed Provider response into an unbounded loop.
+        """
+
+        details = (
+            result.error_details
+            if isinstance(result.error_details, Mapping)
+            else {}
+        )
+        if (
+            str(details.get("code") or "") != "model_response_invalid"
+            or details.get("retryable") is False
+        ):
+            return False
+
+        with self._linearized_context_commit():
+            if self._closed or run_id in self._cancelled_run_ids:
+                return False
+            latest = self.store.get_node(self.tree.id, trigger.id)
+            if self._transition_key(latest) != transition_key:
+                # Another ContextChange already superseded this attempt.  Its
+                # Hook delivery owns the next transition, so do not mount a
+                # terminal failure for the stale result.
+                return True
+            value = dict(latest.value) if isinstance(latest.value, Mapping) else {}
+            raw_state = value.get(_MODEL_RESPONSE_RETRY_STATE_KEY)
+            state = dict(raw_state) if isinstance(raw_state, Mapping) else {}
+            try:
+                attempts = max(0, int(state.get("attempts") or 0))
+            except (TypeError, ValueError):
+                attempts = 0
+            if attempts >= _MODEL_RESPONSE_INVALID_RETRY_LIMIT:
+                return False
+            attempt = attempts + 1
+            value[_MODEL_RESPONSE_RETRY_STATE_KEY] = {
+                "code": "model_response_invalid",
+                "attempts": attempt,
+                "limit": _MODEL_RESPONSE_INVALID_RETRY_LIMIT,
+            }
+            retrying_state = self._set_state_locked(
+                "queued",
+                _l(
+                    "Retrying invalid model response ({attempt}/{limit})",
+                    "正在重试无效模型响应（{attempt}/{limit}）",
+                    attempt=attempt,
+                    limit=_MODEL_RESPONSE_INVALID_RETRY_LIMIT,
+                ),
+                leaf_id=latest.id,
+            )
+            with self._state_lock:
+                streamed = transition_key in self._streamed_transition_keys
+                self._streamed_transition_keys.discard(transition_key)
+            self.store.update_node(self.tree.id, latest.id, value)
+        if streamed:
+            self._emit_event(
+                "assistant.stream.started",
+                run_id=run_id,
+                node_id=trigger.id,
+                data={
+                    "reset": True,
+                    "recovery": "model_response_invalid",
+                    "attempt": attempt,
+                },
+            )
+        self._emit_state_snapshot(retrying_state)
+        log_operation(
+            logger,
+            "cyrene.core.session",
+            "retry_model_response",
+            phase="queued",
+            tree_id=self.tree.id,
+            run_id=run_id,
+            node_id=trigger.id,
+            failure_kind="model_response_invalid",
+            attempt=attempt,
+            limit=_MODEL_RESPONSE_INVALID_RETRY_LIMIT,
+        )
+        return True
+
     async def _advance(self, trigger: ContextNode) -> None:
         run_id = self._node_run_id(trigger)
         if self._is_cancelled(run_id):
@@ -3876,6 +3968,12 @@ class AgentSession:
             ),
             services=model_services,
         )
+        self._emit_event(
+            "model.requested",
+            run_id=run_id,
+            node_id=trigger.id,
+            data={"model": self.model_plugin, "call": count},
+        )
         model_task = asyncio.create_task(
             self.runtime.call(self.model_plugin, arguments, model_context)
         )
@@ -3924,6 +4022,13 @@ class AgentSession:
         if self._is_cancelled(run_id):
             return
         if not result.success or not isinstance(result.value, Mapping):
+            if await self._retry_invalid_model_response(
+                trigger,
+                result,
+                run_id,
+                transition_key,
+            ):
+                return
             await self._finish_model_failure(trigger, result, run_id)
             return
         output = dict(result.value)

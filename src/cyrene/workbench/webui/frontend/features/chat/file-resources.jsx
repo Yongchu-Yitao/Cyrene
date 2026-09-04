@@ -1017,7 +1017,43 @@ var WorkbenchChatRuntimes = (function () {
     fire("onAgentRequestResolved", chatId, event);
   }
 
-  function streamHandlers(chatId, generation) {
+  function recordFirstClientPaint(chatId, model) {
+    var shouldSchedule = false;
+    update(chatId, function (cur) {
+      if (!cur || cur.firstDomPaintScheduled) return cur;
+      var timing = { ...(cur.timing || {}) };
+      if (!Object.prototype.hasOwnProperty.call(timing, "first_delta_received")) {
+        timing.first_delta_received = Math.max(0, performance.now() - Number(cur.startedPerf || 0));
+      }
+      shouldSchedule = true;
+      return { ...cur, timing: timing, firstDomPaintScheduled: true };
+    }, true);
+    if (!shouldSchedule || typeof requestAnimationFrame !== "function") return;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        var current = get(chatId);
+        if (!current || current.firstDomPaintRecorded) return;
+        var stages = { ...(current.timing || {}) };
+        stages.first_dom_paint = Math.max(0, performance.now() - Number(current.startedPerf || 0));
+        update(chatId, { ...current, timing: stages, firstDomPaintRecorded: true }, true);
+        try {
+          performance.measure("cyrene.chat.click-to-first-dom-paint", {
+            start: Number(current.startedPerf || 0),
+            end: performance.now(),
+            detail: { chatId: chatId, runId: current.runId || "" },
+          });
+        } catch (_e) {}
+        if (model && model.recordChatTiming) {
+          model.recordChatTiming(chatId, current.runId, {
+            clientRequestId: current.clientRequestId || "",
+            stages: stages,
+          });
+        }
+      });
+    });
+  }
+
+  function streamHandlers(chatId, generation, model) {
     var handlers = {
       onEventCursor: function (cursor) {
         update(chatId, function (cur) {
@@ -1041,10 +1077,31 @@ var WorkbenchChatRuntimes = (function () {
         fire("onAgentSessionUpdated", chatId, wbcAgentSessionPayload(event || {}));
       },
       onAck: function (event) {
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          var timing = { ...(cur.timing || {}) };
+          timing.ack_received = Math.max(0, performance.now() - Number(cur.startedPerf || 0));
+          (Array.isArray(event.timing) ? event.timing : []).forEach(function (item) {
+            if (item && item.stage) timing[String(item.stage)] = Number(item.serverElapsedMs || 0);
+          });
+          return { ...cur, runId: String(event.runId || ""), timing: timing };
+        });
         wbcHandleRuntimeAck(event, {
           chatId: chatId, fire: fire, get: get,
           recordUserMessage: recordUserMessage, update: update,
         });
+      },
+      onTiming: function (event) {
+        if (!event || event.source === "client") return;
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          var timing = { ...(cur.timing || {}) };
+          timing[String(event.stage || "unknown")] = Number(event.serverElapsedMs || 0);
+          return { ...cur, timing: timing };
+        }, true);
+        if (String(event.stage || "") === "first_delta") {
+          recordFirstClientPaint(chatId, model);
+        }
       },
       onReplyStart: function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
@@ -1145,8 +1202,12 @@ var WorkbenchChatRuntimes = (function () {
         });
       },
       onReplyDelta: function (delta) {
-        var next = update(chatId, function (cur) { return cur ? { ...cur, replying: true, streamDone: false, text: cur.text + delta, lastEventAt: Date.now() } : null; }, true);
+        var next = update(chatId, function (cur) {
+          if (!cur) return null;
+          return { ...cur, replying: true, streamDone: false, text: cur.text + delta, lastEventAt: Date.now() };
+        }, true);
         if (next) fire("onReplyStream", chatId, { text: next.text, start: false, done: false });
+        recordFirstClientPaint(chatId, model);
       },
       onReplyDone: function (text) {
         var next = update(chatId, function (cur) { return cur ? { ...cur, streamDone: true, text: text || cur.text, lastEventAt: Date.now() } : null; });
@@ -1356,11 +1417,12 @@ var WorkbenchChatRuntimes = (function () {
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
     var startedAt = Date.now();
+    var startedPerf = typeof performance !== "undefined" ? performance.now() : 0;
     var clientRequestId = String(input.clientRequestId || ("send_" + startedAt + "_" + Math.random().toString(36).slice(2, 9)));
     var generation = "stream_" + clientRequestId;
     var replyRenderKey = "reply_" + generation;
     streamGenerations[chatId] = generation;
-    input = { ...input, clientRequestId: clientRequestId };
+    input = { ...input, clientRequestId: clientRequestId, clientSendEpochMs: startedAt };
     var retryTruncateAfterMessageId = input.retry
       ? String(input.retryTruncateAfterMessageId || "") : "";
     var optimisticUserMessage = null;
@@ -1391,6 +1453,8 @@ var WorkbenchChatRuntimes = (function () {
       eventCursor: 0,
       reconnectAttempts: 0,
       startedAt: startedAt,
+      startedPerf: startedPerf,
+      timing: { click_send: 0 },
       lastEventAt: startedAt,
       replying: false,
       optimisticUserMessageId: optimisticUserMessage ? optimisticUserMessage.id : "",
@@ -1403,7 +1467,7 @@ var WorkbenchChatRuntimes = (function () {
     return ownStream(
       chatId,
       generation,
-      model.sendMessage(chatId, input, streamHandlers(chatId, generation), ac ? ac.signal : undefined),
+      model.sendMessage(chatId, input, streamHandlers(chatId, generation, model), ac ? ac.signal : undefined),
       ac,
       model
     );
@@ -1429,7 +1493,7 @@ var WorkbenchChatRuntimes = (function () {
     return ownStream(
       chatId,
       generation,
-      model.reconnectRun(chatId, streamHandlers(chatId, generation), ac ? ac.signal : undefined, cursor),
+      model.reconnectRun(chatId, streamHandlers(chatId, generation, model), ac ? ac.signal : undefined, cursor),
       ac,
       model
     );

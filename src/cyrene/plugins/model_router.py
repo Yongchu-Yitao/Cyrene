@@ -587,13 +587,19 @@ async def route_model_call(
                 # model_call_failed error.
                 public_failure = details_from_mapping(result.failure.as_dict())
             public_failures.append(public_failure or classify_model_error(error))
+            stream_diagnostics = result.error_details.get("stream_diagnostics")
+            failed_response = (
+                {"stream_diagnostics": dict(stream_diagnostics)}
+                if isinstance(stream_diagnostics, Mapping)
+                else None
+            )
             await _publish_llm_event(
                 context,
                 messages=model_messages,
                 tools=tools if isinstance(tools, list) else None,
                 candidate=candidate,
                 provider_plugin=provider.name,
-                response=None,
+                response=failed_response,
                 duration_ms=elapsed_ms,
                 status="failed",
                 error=error,
