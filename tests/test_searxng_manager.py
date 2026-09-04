@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import types
 
 import pytest
+import yaml
 
 
 class _FakeProcess:
@@ -60,6 +62,84 @@ def test_build_env_records_parent_pid(monkeypatch, tmp_path):
     env = manager_module._build_simplexng_env(tmp_path / "settings.yml")
 
     assert env["CYRENE_SIMPLEXNG_PARENT_PID"] == str(os.getpid())
+
+
+def test_build_env_removes_rejected_inherited_proxy(monkeypatch, tmp_path):
+    from cyrene.plugins.builtin.cyrene_content import search_service as manager_module
+
+    proxy_keys = (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    )
+    for key in proxy_keys:
+        monkeypatch.setenv(key, "http://127.0.0.1:6578")
+    monkeypatch.setattr(manager_module, "_get_effective_search_proxy", lambda: "")
+
+    env = manager_module._build_simplexng_env(tmp_path / "settings.yml")
+
+    assert all(key not in env for key in proxy_keys)
+
+
+def test_managed_settings_enable_mainland_no_key_engines(monkeypatch, tmp_path):
+    from cyrene.plugins.builtin.cyrene_content import search_service as manager_module
+    import simplexng.settings as simplexng_settings
+
+    template = tmp_path / "template.yml"
+    template.write_text(
+        yaml.safe_dump(
+            {
+                "use_default_settings": True,
+                "general": {},
+                "search": {"formats": ["html"]},
+                "server": {},
+                "outgoing": {},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "simplexng_settings.yml"
+    monkeypatch.setattr(simplexng_settings, "get_bundled_template", lambda: template)
+    monkeypatch.setattr(manager_module, "_SIMPLEXNG_SETTINGS_PATH", output)
+    monkeypatch.setattr(manager_module, "_get_effective_search_proxy", lambda: "")
+    monkeypatch.setattr(manager_module, "_is_windows_arm", lambda: False)
+
+    assert manager_module._write_simplexng_settings(8888, "127.0.0.1") == output
+
+    settings = yaml.safe_load(output.read_text(encoding="utf-8"))
+    engines = {engine["name"]: engine for engine in settings["engines"]}
+    assert engines["baidu"]["disabled"] is False
+    assert engines["baidu"]["timeout"] == 10.0
+    assert engines["sogou"]["disabled"] is False
+    assert engines["sogou"]["timeout"] == 10.0
+    assert engines["bing"]["disabled"] is False
+    assert engines["bing"]["timeout"] == 10.0
+    assert engines["bing"]["base_url"] == "https://cn.bing.com/search"
+    assert "proxies" not in settings["outgoing"]
+
+
+def test_china_engine_overrides_preserve_existing_engine_settings():
+    from cyrene.plugins.builtin.cyrene_content import search_service as manager_module
+
+    settings = {
+        "engines": [
+            {"name": "baidu", "weight": 9, "disabled": True},
+            {"name": "custom", "disabled": False},
+        ]
+    }
+
+    manager_module._enable_china_search_engines(settings)
+
+    engines = {engine["name"]: engine for engine in settings["engines"]}
+    assert engines["baidu"] == {
+        "name": "baidu",
+        "timeout": 10.0,
+        "weight": 9,
+        "disabled": False,
+    }
+    assert engines["custom"] == {"name": "custom", "disabled": False}
+    assert engines["sogou"]["disabled"] is False
+    assert engines["bing"]["base_url"] == "https://cn.bing.com/search"
 
 
 def test_build_env_applies_proxy_to_every_standard_variable(monkeypatch, tmp_path):
@@ -116,6 +196,31 @@ def test_windows_arm_launches_only_the_x64_simplexng_sidecar(monkeypatch, tmp_pa
         str(sidecar), "-p", "8888", "-H", "127.0.0.1",
         "--settings", str(tmp_path / "settings.yml"),
     ]
+
+
+def test_windows_arm_settings_request_includes_mainland_engines(monkeypatch, tmp_path):
+    from cyrene.plugins.builtin.cyrene_content import search_service as manager_module
+
+    sidecar = tmp_path / "CyreneSimpleXNG.exe"
+    sidecar.touch()
+    output = tmp_path / "simplexng_settings.yml"
+    captured = {}
+
+    def fake_run(*args, **kwargs):
+        captured.update(json.loads(kwargs["input"]))
+        output.write_text("server: {}\n", encoding="utf-8")
+        return types.SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(manager_module, "_SIMPLEXNG_SETTINGS_PATH", output)
+    monkeypatch.setattr(manager_module, "_woa_simplexng_sidecar", lambda: sidecar)
+    monkeypatch.setattr(manager_module, "_get_effective_search_proxy", lambda: "")
+    monkeypatch.setattr(manager_module.subprocess, "run", fake_run)
+
+    assert manager_module._write_simplexng_settings(8888, "127.0.0.1") == output
+    engines = {engine["name"]: engine for engine in captured["engine_overrides"]}
+    assert engines["baidu"]["disabled"] is False
+    assert engines["sogou"]["disabled"] is False
+    assert engines["bing"]["base_url"] == "https://cn.bing.com/search"
 
 
 def test_windows_arm_does_not_fall_back_to_in_process_simplexng(monkeypatch):

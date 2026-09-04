@@ -403,6 +403,53 @@ async def test_terminal_timeline_uses_run_event_when_live_checkpoint_failed():
     assert run.terminal_timeline_messages([]) == [message]
 
 
+async def test_terminal_failure_checkpoints_completed_stream_before_error():
+    from cyrene.workbench.chat.chat_runs import ChatRun
+
+    checkpointed = []
+    run = ChatRun(
+        "chat_failed_after_reply",
+        {"type": "ack", "chatId": "chat_failed_after_reply"},
+        persist_live_message=lambda chat_id, message: checkpointed.append(
+            (chat_id, dict(message))
+        ),
+    )
+
+    await run.publish({
+        "type": "reply_delta",
+        "delta": "已生成的正文。",
+        "timestamp": "2026-09-03T11:29:18+00:00",
+    })
+    await run.publish({
+        "type": "reply_done",
+        "response": "已生成的完整正文。",
+        "timestamp": "2026-09-03T11:29:19+00:00",
+    })
+    await run.publish({
+        "type": "run.failed",
+        "payload": {"code": "model_response_invalid"},
+    })
+
+    assert [event["type"] for event in run.events] == [
+        "ack",
+        "reply_delta",
+        "reply_done",
+        "intermediate_message",
+        "run.failed",
+    ]
+    recovered = run.events[-2]["message"]
+    assert recovered["content"] == "已生成的完整正文。"
+    assert recovered["createdAt"] == "2026-09-03T11:29:18+00:00"
+    assert recovered["intermediate"] is True
+    assert recovered["recoveredAfterFailure"] is True
+    assert checkpointed == [("chat_failed_after_reply", recovered)]
+    assert run.terminal_timeline_messages([]) == [recovered]
+
+    # A later generic error must not duplicate the recovered body.
+    await run.publish({"type": "error", "code": "agent_run_failed"})
+    assert [event["type"] for event in run.events].count("intermediate_message") == 1
+
+
 async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, tmp_path):
     from cyrene.workbench.chat.chat_runs import ChatRun, ChatRunEventStore
 

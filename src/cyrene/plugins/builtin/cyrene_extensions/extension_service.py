@@ -584,7 +584,9 @@ def agent_process_environment(base: dict[str, str] | None = None) -> dict[str, s
     are not copied here. Managed command paths are appended so an existing
     system executable always keeps precedence over the Cyrene fallback.
     """
-    env = dict(os.environ if base is None else base)
+    from cyrene.platform.subprocess_environment import external_process_environment
+
+    env = external_process_environment(base)
     try:
         cli_enabled, extensions_enabled = _agent_environment_pack_state()
         if not cli_enabled and not extensions_enabled:

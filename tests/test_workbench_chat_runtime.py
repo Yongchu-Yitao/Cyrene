@@ -388,6 +388,119 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     assert result.value["provider_plugin"] == "ProviderTwo"
 
 
+def test_model_router_does_not_fallback_on_provider_protocol_error(monkeypatch):
+    calls = []
+    fallbacks = []
+    route_statuses = []
+
+    async def protocol_invalid(_arguments, _context):
+        calls.append("primary")
+        return {
+            "content": "",
+            "model": "primary",
+            "tool_calls": [{
+                "id": "call-bash",
+                "name": "Bash",
+                "arguments": {"command": "pwd"},
+            }],
+            "usage": {},
+        }
+
+    async def fallback(_arguments, _context):
+        calls.append("fallback")
+        return {"content": "must not run", "model": "fallback", "usage": {}}
+
+    candidates = [
+        {
+            "id": "primary",
+            "provider": "openai",
+            "adapter": "openai",
+            "model": "primary",
+            "options": {"provider_preset": "provider_one"},
+        },
+        {
+            "id": "fallback",
+            "provider": "openai",
+            "adapter": "openai",
+            "model": "fallback",
+            "options": {"provider_preset": "provider_two"},
+        },
+    ]
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda _session, **_kwargs: candidates,
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    async def capture_fallback(_context, failed_candidate, fallback_candidate):
+        fallbacks.append((failed_candidate["id"], fallback_candidate["id"]))
+
+    async def capture_route_status(_context, candidate, *, status):
+        route_statuses.append((candidate["id"], status))
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    monkeypatch.setattr(model_router, "_publish_fallback", capture_fallback)
+    monkeypatch.setattr(
+        model_router,
+        "_persist_fallback_result",
+        capture_route_status,
+    )
+    registry = PluginRegistry(include_core=False)
+    for name, provider_id, handler in (
+        ("ProviderOne", "provider_one", protocol_invalid),
+        ("ProviderTwo", "provider_two", fallback),
+    ):
+        registry.register_plugin(
+            Plugin(
+                name=name,
+                description=name,
+                input_schema={"type": "object"},
+                handler=handler,
+                kind="model",
+                metadata={"provider": {"id": provider_id, "name": name}},
+            ),
+            source="test",
+        )
+    ensure_model_router(registry)
+
+    result = run(
+        PluginRuntime(registry).call(
+            model_router.MODEL_ROUTER_PLUGIN,
+            {
+                "messages": [{"role": "user", "content": "continue"}],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "Read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }],
+            },
+            PluginContext(
+                data={
+                    "session_id": "chat-protocol-error",
+                    "run_id": "run-protocol-error",
+                }
+            ),
+        )
+    )
+
+    assert result.success is False
+    assert result.error_details["code"] == "model_response_invalid"
+    assert result.error_details["detail_key"] == "workbenchChat.error.modelResponseInvalid"
+    assert calls == ["primary"]
+    assert fallbacks == []
+    assert route_statuses == [("primary", "failed")]
+
+
 def test_model_router_preserves_public_failure_after_all_fallbacks(monkeypatch):
     route_statuses = []
 

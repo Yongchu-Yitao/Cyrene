@@ -36,6 +36,30 @@ _HEALTH_CHECK_TIMEOUT = 30.0
 _HEALTH_CHECK_INTERVAL = 0.5
 _SIMPLEXNG_SETTINGS_PATH = DATA_DIR / "simplexng_settings.yml"
 
+# Keep the built-in global engines, but also enable search engines whose public
+# web endpoints are normally reachable from mainland China without an API key.
+# These entries are merged into SimpleXNG's vendored SearXNG defaults by name.
+_CHINA_SEARCH_ENGINE_OVERRIDES: tuple[dict[str, object], ...] = (
+    {
+        "name": "baidu",
+        "disabled": False,
+        "timeout": 10.0,
+    },
+    {
+        "name": "sogou",
+        "disabled": False,
+        "timeout": 10.0,
+    },
+    {
+        "name": "bing",
+        "disabled": False,
+        "timeout": 10.0,
+        # SimpleXNG 0.1.x vendors a Bing engine whose base_url is the complete
+        # search endpoint rather than only the origin.
+        "base_url": "https://cn.bing.com/search",
+    },
+)
+
 
 def _is_windows_arm() -> bool:
     return sys.platform == "win32" and platform_machine() in {"arm64", "aarch64"}
@@ -211,6 +235,28 @@ def get_manager() -> SearXNGManager:
     return _manager
 
 
+def _enable_china_search_engines(settings: dict[str, object]) -> None:
+    """Enable the no-key mainland search pool in a SearXNG settings mapping."""
+    configured = settings.setdefault("engines", [])
+    if not isinstance(configured, list):
+        configured = []
+        settings["engines"] = configured
+
+    by_name = {
+        str(item.get("name") or ""): item
+        for item in configured
+        if isinstance(item, dict)
+    }
+    for override in _CHINA_SEARCH_ENGINE_OVERRIDES:
+        name = str(override["name"])
+        existing = by_name.get(name)
+        if existing is None:
+            existing = {}
+            configured.append(existing)
+            by_name[name] = existing
+        existing.update(override)
+
+
 def _write_simplexng_settings(port: int, host: str) -> Path:
     """Write the SimpleXNG settings file managed by Cyrene."""
     proxy_url = _get_effective_search_proxy()
@@ -225,6 +271,7 @@ def _write_simplexng_settings(port: int, host: str) -> Path:
                 "host": host,
                 "secret_key": secrets.token_hex(16),
                 "proxy_url": proxy_url,
+                "engine_overrides": list(_CHINA_SEARCH_ENGINE_OVERRIDES),
             }),
             capture_output=True,
             text=True,
@@ -251,6 +298,8 @@ def _write_simplexng_settings(port: int, host: str) -> Path:
     settings["server"]["port"] = port
     settings["server"]["bind_address"] = host
     settings["server"]["secret_key"] = secrets.token_hex(16)
+
+    _enable_china_search_engines(settings)
 
     formats = settings.setdefault("search", {}).setdefault("formats", [])
     if "json" not in formats:
@@ -282,13 +331,19 @@ def _build_simplexng_env(settings_path: Path) -> dict[str, str]:
     env["SEARXNG_SETTINGS_PATH"] = str(settings_path)
     env["CYRENE_SIMPLEXNG_PARENT_PID"] = str(os.getpid())
     proxy_url = _get_effective_search_proxy()
+    proxy_keys = (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    )
     if proxy_url:
-        env["HTTP_PROXY"] = proxy_url
-        env["HTTPS_PROXY"] = proxy_url
-        env["ALL_PROXY"] = proxy_url
-        env["http_proxy"] = proxy_url
-        env["https_proxy"] = proxy_url
-        env["all_proxy"] = proxy_url
+        for key in proxy_keys:
+            env[key] = proxy_url
+    else:
+        # getproxies() may discover an inherited desktop proxy that is no
+        # longer reachable.  Once it has been rejected above, do not let the
+        # child process accidentally inherit and keep using it.
+        for key in proxy_keys:
+            env.pop(key, None)
     env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY") or env.get("no_proxy") or "")
     env["no_proxy"] = env["NO_PROXY"]
     return env
