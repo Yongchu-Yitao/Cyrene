@@ -1271,17 +1271,19 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   }, [renderedText, live]);
   var bodyRef = useWbcRef(null);
   var activeBodyRef = useWbcRef(null);
-  var previousLiveTextLengthRef = useWbcRef(0);
+  var previousLiveVisibleTextLengthRef = useWbcRef(0);
   useWbcLayoutEffect(function () {
-    if (!live || !activeBodyRef.current) {
-      previousLiveTextLengthRef.current = 0;
+    if (!live || !bodyRef.current) {
+      previousLiveVisibleTextLengthRef.current = 0;
       return;
     }
-    var previousLength = Number(previousLiveTextLengthRef.current || 0);
-    previousLiveTextLengthRef.current = renderedText.length;
-    var addedCharacterCount = renderedText.length - previousLength;
-    if (addedCharacterCount <= 0) return;
-    wbcFadeInStreamingTail(activeBodyRef.current, addedCharacterCount);
+    if (activeBodyRef.current) wbcClearStreamingFades(activeBodyRef.current);
+    var visibleTextLength = String(bodyRef.current.textContent || "").length;
+    var previousLength = Number(previousLiveVisibleTextLengthRef.current || 0);
+    previousLiveVisibleTextLengthRef.current = visibleTextLength;
+    var addedVisibleCharacterCount = visibleTextLength - previousLength;
+    if (addedVisibleCharacterCount <= 0 || !activeBodyRef.current) return;
+    wbcFadeInStreamingTail(activeBodyRef.current, addedVisibleCharacterCount);
   }, [activeBodyHtml, live, renderedText.length]);
   useWbcEffect(function () {
     return WbcVoice.subscribe(setVoiceSnapshot);
@@ -1581,9 +1583,8 @@ function WbcActivityGroup({ group }) {
 var WBC_LIVE_FRAME_INTERVAL_MS = 48;
 var WBC_LIVE_FADE_MAX_CHARACTERS = 96;
 
-function wbcFadeInStreamingTail(body, addedCharacterCount) {
+function wbcClearStreamingFades(body) {
   if (!body || typeof document === "undefined") return;
-  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   Array.from(body.querySelectorAll(".wbc-stream-fade")).forEach(function (existingFade) {
     var parent = existingFade.parentNode;
     if (!parent) return;
@@ -1591,6 +1592,11 @@ function wbcFadeInStreamingTail(body, addedCharacterCount) {
     parent.removeChild(existingFade);
     parent.normalize();
   });
+}
+
+function wbcFadeInStreamingTail(body, addedCharacterCount) {
+  if (!body || typeof document === "undefined") return;
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   var budget = Math.min(
     WBC_LIVE_FADE_MAX_CHARACTERS,
     Math.max(1, Number(addedCharacterCount) || 0)
@@ -1612,10 +1618,6 @@ function wbcFadeInStreamingTail(body, addedCharacterCount) {
     var value = String(textNode.nodeValue || "");
     var take = Math.min(value.length, budget);
     var start = value.length - take;
-    // Reveal complete words when the provider boundary lands mid-word. Keep
-    // the look-back bounded so an unusually long token cannot dim a whole line.
-    var lookbackFloor = Math.max(0, start - 16);
-    while (start > lookbackFloor && !/\s/.test(value.charAt(start - 1))) start -= 1;
     var suffix = value.slice(start);
     if (!suffix) continue;
     var fade = document.createElement("span");

@@ -19,7 +19,12 @@ async def _tool_analyze_attachment(args: dict[str, Any], context: PluginContext)
     prompt = str(args.get("prompt", "") or "")
     force_refresh = bool(args.get("force_refresh", False))
     try:
-        result = await analyze_attachment(str(path), prompt=prompt, force_refresh=force_refresh)
+        result = await analyze_attachment(
+            str(path),
+            prompt=prompt,
+            force_refresh=force_refresh,
+            context=context,
+        )
     except FileNotFoundError:
         return json_result({
             "error": "attachment_unavailable",

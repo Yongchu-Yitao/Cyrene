@@ -654,6 +654,7 @@ def test_permission_model_usage_does_not_report_agent_context():
     )
 
     assert result["content"] == "allowed"
+    assert result["model_identity"]["provider"] == "test"
     assert reported == []
 
 

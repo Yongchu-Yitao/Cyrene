@@ -145,10 +145,12 @@ def test_candidate_identity_never_exposes_credentials_or_paths():
             "options": {"provider_preset": "openai"},
         },
         endpoint="https://user:secret@example.test/private/v1/responses?token=secret",
+        provider_id="OpenAI_Compatible",
     )
 
     assert identity["baseUrl"] == "https://example.test"
     assert identity["endpoint"] == "https://example.test"
+    assert identity["provider"] == "openai_compatible"
     assert "secret" not in str(identity)
 
 
@@ -200,6 +202,47 @@ def test_openai_adapter_without_provider_preset_uses_compatible_plugin():
         "provider": "openai",
         "adapter": "openai",
     }) == "openai"
+
+
+def test_exact_candidate_accepts_runtime_provider_for_adapter_fallback(monkeypatch):
+    candidate = {
+        "id": "openai-profile",
+        "profile_id": "openai-profile",
+        "provider": "openai",
+        "provider_preset": "",
+        "adapter": "openai",
+        "model": "compatible-model",
+        "base_url": "http://model.example/v1",
+        "capabilities": ["chat"],
+    }
+
+    class ModelConfigurationService:
+        @staticmethod
+        def get_model_configuration():
+            return {"profiles": [{"id": "openai-profile"}]}
+
+        @staticmethod
+        def candidate_for_profile(profile_id, _configuration):
+            return candidate if profile_id == "openai-profile" else None
+
+    monkeypatch.setattr(
+        model_catalog,
+        "_model_configuration_port",
+        lambda: ModelConfigurationService,
+    )
+    identity = {
+        "candidateId": "openai-profile",
+        "adapter": "openai",
+        "provider": "openai_compatible",
+        "model": "compatible-model",
+        "baseUrl": "http://model.example",
+    }
+
+    assert model_catalog.resolve_exact_model_candidate(identity) == candidate
+    assert model_catalog.resolve_exact_model_candidate({
+        **identity,
+        "provider": "unrelated_provider",
+    }) is None
 
 
 def test_model_catalog_uses_active_registry_and_honors_provider_activation(tmp_path):

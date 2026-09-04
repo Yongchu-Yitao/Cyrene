@@ -2271,19 +2271,6 @@ button.wbc-attach-file:focus-visible {
   .wbc-grid { grid-template-columns: 1fr !important; }
 }
 
-.wbc-caret,
-.wbc-msg-body.streaming::after {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 15px;
-  margin-left: 2px;
-  vertical-align: -2px;
-  background: var(--wb-accent);
-  border-radius: 2px;
-  animation: wbc-blink 0.9s steps(2) infinite;
-}
-
 /* Completed Markdown blocks retain their DOM for the whole stream. Only the
    active block is replaced, and only its newly appended phrase fades in. */
 .wbc-stream-stable-block.paragraph {
@@ -2291,20 +2278,16 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-stream-fade {
-  animation: wbc-stream-tail-in 100ms cubic-bezier(.16, 1, .3, 1) both;
+  animation: wbc-stream-tail-in 180ms cubic-bezier(.2, .8, .2, 1) both;
 }
 
 @keyframes wbc-stream-tail-in {
   from {
-    opacity: 0.58;
+    opacity: 0.72;
   }
   to {
     opacity: 1;
   }
-}
-
-@keyframes wbc-blink {
-  50% { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

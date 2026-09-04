@@ -267,6 +267,92 @@ async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_p
     vision.assert_awaited_once()
 
 
+async def test_vision_chat_falls_back_to_selected_vision_capable_primary(
+    monkeypatch,
+):
+    import cyrene.core.plugin
+    from cyrene.core.plugin import PluginContext
+    from cyrene.platform import attachments
+
+    gateway = SimpleNamespace(
+        complete=AsyncMock(
+            return_value={"model": "selected-vlm", "content": "I can see it."}
+        )
+    )
+    configuration = SimpleNamespace(candidates_for_route=lambda _route: [])
+    selected = {
+        "id": "profile-selected-vlm",
+        "adapter": "openai",
+        "provider": "openai",
+        "model": "selected-vlm",
+        "base_url": "https://example.test/v1",
+        "capabilities": ["chat", "vision"],
+    }
+
+    def application_service(name):
+        return gateway if name == "model" else configuration
+
+    monkeypatch.setattr(
+        cyrene.core.plugin,
+        "application_plugin_service",
+        application_service,
+    )
+    monkeypatch.setattr(
+        attachments,
+        "_vision_fallback_candidate",
+        lambda session_id="": selected if session_id == "chat-selected" else None,
+    )
+
+    result = await attachments.run_vision_chat(
+        [{"type": "text", "text": "Describe it"}],
+        context=PluginContext(data={"session_id": "chat-selected"}),
+    )
+
+    assert result == {
+        "vision_model": "selected-vlm",
+        "vision_prompt": "",
+        "vision_text": "I can see it.",
+    }
+    call = gateway.complete.await_args
+    assert call.kwargs["route"] == "primary"
+    assert call.kwargs["session_id"] == "chat-selected"
+    assert call.kwargs["model_identity"]["candidateId"] == "profile-selected-vlm"
+
+
+async def test_vision_chat_keeps_configured_vision_route(monkeypatch):
+    import cyrene.core.plugin
+    from cyrene.platform import attachments
+
+    gateway = SimpleNamespace(
+        complete=AsyncMock(return_value={"model": "vision-route", "content": "ok"})
+    )
+    configuration = SimpleNamespace(
+        candidates_for_route=lambda route: (
+            [{"id": "vision-profile", "capabilities": ["vision"]}]
+            if route == "vision"
+            else []
+        )
+    )
+
+    def application_service(name):
+        return gateway if name == "model" else configuration
+
+    monkeypatch.setattr(
+        cyrene.core.plugin,
+        "application_plugin_service",
+        application_service,
+    )
+    fallback = MagicMock()
+    monkeypatch.setattr(attachments, "_vision_fallback_candidate", fallback)
+
+    await attachments.run_vision_chat([{"type": "text", "text": "Describe it"}])
+
+    call = gateway.complete.await_args
+    assert call.kwargs["route"] == "vision"
+    assert call.kwargs["model_identity"] is None
+    fallback.assert_not_called()
+
+
 async def test_analyze_attachment_reports_missing_file(tmp_path):
     from cyrene.platform import attachments
 

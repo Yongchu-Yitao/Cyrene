@@ -403,6 +403,7 @@ def _normalized_result(
             candidate,
             model=model,
             endpoint=endpoint,
+            provider_id=provider.id,
         )
     except Exception:
         model_identity = {
@@ -414,7 +415,6 @@ def _normalized_result(
             "endpoint": endpoint,
             "reasoningEffort": str(candidate.get("reasoning_effort") or ""),
         }
-    model_identity["provider"] = provider.id
     normalized_usage = usage_observation(usage)
     result = {
         "content": content if isinstance(content, str) else "",

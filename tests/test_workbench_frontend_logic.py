@@ -10335,11 +10335,16 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     assert "WBC_LIVE_FRAME_INTERVAL_MS = 48" in chat
     assert "wbcUseBufferedLiveText" in assistant_message
     assert "workbenchServices.markdown().splitStableBlocks(renderedText, streamingPartsRef.current)" in assistant_message
-    assert "wbcFadeInStreamingTail(activeBodyRef.current, addedCharacterCount)" in assistant_message
+    assert "previousLiveVisibleTextLengthRef" in assistant_message
+    assert 'String(bodyRef.current.textContent || "").length' in assistant_message
+    assert "wbcClearStreamingFades(activeBodyRef.current)" in assistant_message
+    assert "wbcFadeInStreamingTail(activeBodyRef.current, addedVisibleCharacterCount)" in assistant_message
     assert 'fade.className = "wbc-stream-fade"' in chat
     assert ".wbc-stream-fade" in styles
-    assert "animation: wbc-stream-tail-in 100ms" in styles
-    assert "opacity: 0.58" in styles
+    assert "animation: wbc-stream-tail-in 180ms" in styles
+    assert "opacity: 0.72" in styles
+    assert ".wbc-msg-body.streaming::after" not in styles
+    assert "@keyframes wbc-blink" not in styles
     assert "!live || !!liveRuntime.streamDone" in assistant_message
     assert "wbcRenderMarkdown(streamingParts.active, { interactive: false })" in assistant_message
     assert "wbcRenderMarkdown(renderedText)" in assistant_message

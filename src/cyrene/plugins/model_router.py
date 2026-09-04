@@ -225,8 +225,12 @@ async def _normalized_provider_result(
     usage = value.get("usage")
     model = str(value.get("model") or candidate.get("model") or "")
     endpoint = str(value.get("endpoint") or "")
-    identity = candidate_identity(candidate, model=model, endpoint=endpoint)
-    identity["provider"] = _provider_id(provider_plugin, candidate)
+    identity = candidate_identity(
+        candidate,
+        model=model,
+        endpoint=endpoint,
+        provider_id=_provider_id(provider_plugin, candidate),
+    )
     try:
         latency_ms = max(0.0, float(value.get("latency_ms") or 0.0))
     except (TypeError, ValueError):

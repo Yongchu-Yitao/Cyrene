@@ -1,4 +1,5 @@
 import base64
+from collections.abc import Mapping
 import hashlib
 import io
 import json
@@ -64,7 +65,7 @@ def _file_content_hash(path: Path) -> str:
     return sha256_file(path)
 
 
-def _vision_model_fingerprint() -> str:
+def _vision_model_fingerprint(session_id: str = "") -> str:
     """A stable, secret-free fingerprint of models that may receive images."""
     try:
         from cyrene.core.plugin import application_plugin_service
@@ -73,10 +74,12 @@ def _vision_model_fingerprint() -> str:
         if service is None:
             return ""
 
-        candidates = [
-            *service.candidates_for_route("primary"),
-            *service.candidates_for_route("vision"),
-        ]
+        primary = list(service.candidates_for_route("primary"))
+        if session_id:
+            from cyrene.plugins.model_catalog import configured_model_candidates
+
+            primary = configured_model_candidates(session_id, route="primary")
+        candidates = [*primary, *service.candidates_for_route("vision")]
         public = [
             {
                 "id": item.get("id"),
@@ -106,7 +109,7 @@ def _local_ocr_fingerprint() -> str:
         return "unavailable:0"
 
 
-def _analysis_cache_key(path: Path, prompt: str) -> str:
+def _analysis_cache_key(path: Path, prompt: str, session_id: str = "") -> str:
     """Cache key from file content, prompt, vision-model config, and parser version.
 
     Any change to one of these yields a different key, so a stale analysis is
@@ -116,7 +119,11 @@ def _analysis_cache_key(path: Path, prompt: str) -> str:
         _ANALYSIS_PARSER_VERSION,
         _file_content_hash(path),
         prompt or "",
-        _vision_model_fingerprint(),
+        (
+            _vision_model_fingerprint(session_id)
+            if session_id
+            else _vision_model_fingerprint()
+        ),
         _local_ocr_fingerprint(),
     ])
     return hashlib.sha256(parts.encode("utf-8")).hexdigest()
@@ -222,17 +229,46 @@ def is_image_path(path: Path) -> bool:
     return bool(guessed and guessed.startswith("image/"))
 
 
-def model_supports_multimodal(model: str | None = None) -> bool:
+def _vision_fallback_candidate(session_id: str = "") -> dict[str, Any] | None:
+    """Return the conversation's first confirmed vision-capable primary model."""
+
+    try:
+        from cyrene.plugins.model_catalog import configured_model_candidates
+
+        return next(
+            (
+                candidate
+                for candidate in configured_model_candidates(
+                    session_id,
+                    route="primary",
+                )
+                if {"chat", "vision"}.issubset(
+                    set(candidate.get("capabilities") or [])
+                )
+            ),
+            None,
+        )
+    except Exception:
+        return None
+
+
+def model_supports_multimodal(
+    model: str | None = None,
+    *,
+    session_id: str = "",
+) -> bool:
     if model is None:
         try:
             from cyrene.core.plugin import application_plugin_service
 
             service = application_plugin_service("model_configuration")
             vision = service.candidates_for_route("vision") if service is not None else []
-            return bool(
+            if bool(
                 vision
                 and "vision" in set(vision[0].get("capabilities") or [])
-            )
+            ):
+                return True
+            return _vision_fallback_candidate(session_id) is not None
         except Exception:
             return False
     model_name = str(model or "").strip().lower()
@@ -617,7 +653,12 @@ def _image_metadata(path: Path) -> dict[str, Any]:
         }
 
 
-async def _vision_analysis(path: Path, prompt: str = "") -> dict[str, Any]:
+async def _vision_analysis(
+    path: Path,
+    prompt: str = "",
+    *,
+    context: Any = None,
+) -> dict[str, Any]:
     mime_type = mimetypes.guess_type(str(path))[0] or "image/png"
     image_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
     content_prompt = prompt.strip() or "Describe this image in detail and extract any visible text."
@@ -625,12 +666,35 @@ async def _vision_analysis(path: Path, prompt: str = "") -> dict[str, Any]:
         {"type": "text", "text": content_prompt},
         {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
     ]
-    return await run_vision_chat(content, content_prompt=content_prompt)
+    return await run_vision_chat(
+        content,
+        content_prompt=content_prompt,
+        context=context,
+    )
 
 
-async def vision_analysis(path: Path, prompt: str = "") -> dict[str, Any]:
+async def vision_analysis(
+    path: Path,
+    prompt: str = "",
+    *,
+    context: Any = None,
+) -> dict[str, Any]:
     """Public primary-model vision boundary for Knowledge ingestion."""
-    return await _vision_analysis(path, prompt)
+    return await _vision_analysis(path, prompt, context=context)
+
+
+def _vision_session_id(context: Any) -> str:
+    data = getattr(context, "data", None)
+    if not isinstance(data, Mapping):
+        return ""
+    run_context = data.get("run_context")
+    run_context = run_context if isinstance(run_context, Mapping) else {}
+    return str(
+        data.get("session_id")
+        or run_context.get("session_id")
+        or getattr(context, "tree_id", "")
+        or ""
+    ).strip()
 
 
 async def run_vision_chat(
@@ -640,6 +704,7 @@ async def run_vision_chat(
     max_tokens: int | None = None,
     timeout: float = 120.0,
     record_latency: bool = False,
+    context: Any = None,
 ) -> dict[str, Any]:
     """Run a vision-capable LLM call with image content."""
     # Vision analysis is an optional high-level execution path. Keep its model
@@ -650,12 +715,34 @@ async def run_vision_chat(
     gateway = application_plugin_service("model")
     if gateway is None:
         raise RuntimeError("Model Provider Plugins are not available")
+    session_id = _vision_session_id(context)
+    model_identity = None
+    route = "vision"
+    try:
+        configuration = application_plugin_service("model_configuration")
+        vision_candidates = (
+            configuration.candidates_for_route("vision")
+            if configuration is not None
+            else []
+        )
+    except Exception:
+        vision_candidates = []
+    if not vision_candidates:
+        fallback = _vision_fallback_candidate(session_id)
+        if fallback is not None:
+            from cyrene.plugins.model_catalog import candidate_identity
+
+            route = "primary"
+            model_identity = candidate_identity(fallback)
+
     result = await gateway.complete(
         [{"role": "user", "content": content}],
-        route="vision",
+        route=route,
         max_tokens=max_tokens,
         caller="vision",
-        session_id="vision-analysis",
+        session_id=session_id or "vision-analysis",
+        model_identity=model_identity,
+        context=context,
     )
     vision_text = assistant_text(result) or ""
     return {
@@ -665,11 +752,18 @@ async def run_vision_chat(
     }
 
 
-async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: bool = False) -> dict[str, Any]:
+async def analyze_attachment(
+    path_str: str,
+    prompt: str = "",
+    force_refresh: bool = False,
+    *,
+    context: Any = None,
+) -> dict[str, Any]:
     path = Path(path_str).resolve()
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(f"Attachment file not found: {path}")
-    cache_key = _analysis_cache_key(path, prompt)
+    session_id = _vision_session_id(context)
+    cache_key = _analysis_cache_key(path, prompt, session_id=session_id)
     cached = None if force_refresh else _read_cache(cache_key)
     if cached:
         return cached
@@ -685,7 +779,11 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
     elif is_image_path(path):
         payload["kind"] = "image"
         payload["image_meta"] = _image_metadata(path)
-        payload["multimodal_model"] = model_supports_multimodal()
+        payload["multimodal_model"] = (
+            model_supports_multimodal(session_id=session_id)
+            if session_id
+            else model_supports_multimodal()
+        )
         recognized = ""
         try:
             from cyrene.core.plugin import application_plugin_service
@@ -709,7 +807,9 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
         needs_vision = len(recognized) < 30 or bool(prompt.strip())
         if needs_vision:
             try:
-                payload.update(await _vision_analysis(path, prompt=prompt))
+                payload.update(
+                    await _vision_analysis(path, prompt=prompt, context=context)
+                )
             except Exception:
                 if payload["multimodal_model"] and not payload.get("ocr_text"):
                     raise

@@ -194,6 +194,16 @@ def candidate_provider_id(candidate: Mapping[str, Any]) -> str:
     return str(value or "").strip().lower()
 
 
+def _fallback_provider_id(adapter_id: Any) -> str:
+    """Return the generic runtime Provider used when no preset is selected."""
+
+    normalized_adapter = str(adapter_id or "").strip().lower()
+    return {
+        "openai": "openai_compatible",
+        "openai_responses": "openai",
+    }.get(normalized_adapter, normalized_adapter)
+
+
 def resolve_registered_model_plugin(
     registry: PluginRegistry,
     provider_id: str,
@@ -225,10 +235,7 @@ def resolve_registered_model_plugin(
 
     catalog = registered_model_plugin_catalog(registry)
     by_id = {str(item.get("id") or ""): item for item in catalog}
-    fallback_id = {
-        "openai": "openai_compatible",
-        "openai_responses": "openai",
-    }.get(normalized_adapter, normalized_adapter)
+    fallback_id = _fallback_provider_id(normalized_adapter)
     item = by_id.get(fallback_id)
     return registry.resolve(str(item["plugin_name"])) if item is not None else None
 
@@ -441,8 +448,22 @@ def resolve_exact_model_candidate(identity: Mapping[str, Any]) -> dict[str, Any]
             continue
         if provider:
             candidate_provider = candidate_provider_id(candidate)
-            runtime_provider = str(candidate.get("provider") or "")
-            if provider not in {candidate_provider, runtime_provider}:
+            configured_provider = str(candidate.get("provider") or "").strip().lower()
+            runtime_provider = (
+                candidate_provider
+                or _fallback_provider_id(candidate_adapter)
+            )
+            # ``provider`` in a persisted response identity names the Provider
+            # Plugin that actually handled the request.  A candidate without
+            # an explicit preset therefore round-trips through the generic
+            # adapter fallback (for example openai -> openai_compatible).  Keep
+            # accepting the configured provider for identities written before
+            # runtime Provider identities were recorded.
+            if provider.lower() not in {
+                candidate_provider,
+                configured_provider,
+                runtime_provider,
+            }:
                 continue
         if model and str(candidate.get("model") or "") != model:
             continue
@@ -530,13 +551,14 @@ def candidate_identity(
     *,
     model: str = "",
     endpoint: str = "",
+    provider_id: str = "",
 ) -> dict[str, str]:
     """Build the secret-free identity of the Provider that actually replied."""
 
     return {
         "candidateId": str(candidate.get("id") or ""),
         "adapter": str(candidate.get("adapter") or candidate.get("provider") or ""),
-        "provider": candidate_provider_id(candidate),
+        "provider": str(provider_id or candidate_provider_id(candidate)).strip().lower(),
         "model": str(model or candidate.get("model") or ""),
         "baseUrl": public_base_url(candidate.get("base_url")),
         "endpoint": (public_base_url(endpoint) if endpoint.startswith(("http://", "https://")) else str(endpoint or "")),
