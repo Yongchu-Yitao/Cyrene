@@ -80,6 +80,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     ? dataStore.state.pluginModules : [];
   var composerContextAvailable = pluginModules.indexOf("composer_context") >= 0;
   var soulMarkerAvailable = composerContextAvailable && pluginModules.indexOf("soul") >= 0;
+  var memoryMarkerAvailable = composerContextAvailable && pluginModules.indexOf("memory") >= 0;
   var agentsAvailable = pluginModules.indexOf("agents") >= 0;
   var remoteMarkerAvailable = composerContextAvailable && pluginModules.indexOf("remote") >= 0;
   var mcpMarkerAvailable = composerContextAvailable && pluginModules.indexOf("mcp") >= 0;
@@ -145,6 +146,12 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [workspaceActive, setWorkspaceActive] = useWbcState(function () {
     return chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true;
   });
+  var [shortTermMemoryActive, setShortTermMemoryActive] = useWbcState(function () {
+    return chat && typeof chat.shortTermMemoryActive === "boolean" ? chat.shortTermMemoryActive : true;
+  });
+  var [projectMemoryActive, setProjectMemoryActive] = useWbcState(function () {
+    return chat && typeof chat.projectMemoryActive === "boolean" ? chat.projectMemoryActive : true;
+  });
   var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
     return String(chat && chat.workspaceOverride || "").trim()
       || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
@@ -188,6 +195,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }) || null;
   var effectiveAgentName = wbcAgentDisplayName(effectiveCatalogAgent || effectiveAgent);
   var builtinContextCapabilities = wbcIsBuiltinAgent(effectiveAgent);
+  var memoryAvailable = memoryMarkerAvailable && builtinContextCapabilities;
   // Probe/auth/settings changes refresh the installed catalog. Overlay that
   // current snapshot so an open composer is never gated by stale capabilities
   // captured when the chat was first created.
@@ -471,6 +479,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         ? chat.soulActive : contextOptions.soul.selected === true));
       setWorkspaceActive(workspaceAvailable && (chat && typeof chat.workspaceActive === "boolean"
         ? chat.workspaceActive : contextOptions.workspace.selected === true));
+      setShortTermMemoryActive(chat && typeof chat.shortTermMemoryActive === "boolean"
+        ? chat.shortTermMemoryActive : true);
+      setProjectMemoryActive(chat && typeof chat.projectMemoryActive === "boolean"
+        ? chat.projectMemoryActive : true);
       setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());
       var nextContextActivations = wbcNormalizeContextActivations(chat && chat.contextActivations);
       if (!mcpAvailable) nextContextActivations.mcpServers = [];
@@ -620,6 +632,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       payload.workspaceOverride = workspaceOverride;
       payload.workspaceActive = workspaceOn;
     }
+    if (memoryAvailable) {
+      payload.shortTermMemoryActive = shortTermMemoryOn;
+      payload.projectMemoryActive = projectMemoryOn;
+    }
     if (composerContextAvailable) {
       payload.remoteDeviceIds = remoteAvailable ? remoteDeviceIdsRef.current.slice() : [];
       payload.contextActivations = submittedContextActivations;
@@ -742,10 +758,14 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var currentMode = wbcModeMeta(mode);
   var personaOn = soulAvailable && soulActive !== false;
   var workspaceOn = workspaceAvailable && workspaceActive !== false;
+  var shortTermMemoryOn = memoryAvailable && shortTermMemoryActive !== false;
+  var projectMemoryOn = memoryAvailable && projectMemoryActive !== false;
   var activeContextCapabilityCount = WBC_CONTEXT_ACTIVATION_KEYS.reduce(function (count, key) {
     return count + contextActivations[key].length;
   }, 0);
-  var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0) + remoteDeviceIds.length + activeContextCapabilityCount;
+  var enabledContentCount = (personaOn ? 1 : 0) + (workspaceOn ? 1 : 0)
+    + (shortTermMemoryOn ? 1 : 0) + (projectMemoryOn ? 1 : 0)
+    + remoteDeviceIds.length + activeContextCapabilityCount;
   var contextCapabilityCategories = [
     mcpAvailable && { key: "mcpServers", label: wbcT("workbenchChat.contextMcp", "MCP servers"), icon: WBC_ICONS.layers, items: contextCatalog.mcpServers },
     skillsAvailable && { key: "skills", label: wbcT("workbenchChat.contextSkills", "Skills"), icon: WBC_ICONS.book, items: contextCatalog.skills },
@@ -834,6 +854,19 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         setSoulActive(previous);
         workbenchServices.api().toastError(err, wbcT("workbenchChat.personaFailed", "Failed to toggle persona: "));
       }).catch(function () {});
+  }
+
+  function wbcToggleMemoryPreference(field, active, setter) {
+    if (!memoryAvailable) return;
+    var next = !active;
+    setter(next);
+    if (!chatId) return;
+    model.updateChatPreferences(chatId, { [field]: next }).then(function (nextChat) {
+      if (chat && nextChat) Object.assign(chat, nextChat);
+    }, function (err) {
+      setter(active);
+      workbenchServices.api().toastError(err, wbcT("workbenchChat.memoryInjectionFailed", "Failed to update memory injection: "));
+    }).catch(function () {});
   }
 
   function wbcAddWorkspace(path) {
@@ -1210,6 +1243,22 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                           <small>{wbcT("workbenchChat.personaDescription", "Cyrene persona settings")}</small>
                         </span>
                         {personaOn ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                      </button> : null}
+                      {memoryAvailable ? <button type="button" className={"wbc-tools-enabled-row" + (shortTermMemoryOn ? " active" : "")} role="menuitemcheckbox" aria-checked={shortTermMemoryOn} onClick={function () { wbcToggleMemoryPreference("shortTermMemoryActive", shortTermMemoryOn, setShortTermMemoryActive); }}>
+                        <span className="wbc-tools-row-icon">{WBC_ICONS.brain}</span>
+                        <span className="wbc-tools-row-copy">
+                          <span>{wbcT("workbenchChat.shortTermMemory", "Short-term memory")}</span>
+                          <small>{wbcT("workbenchChat.shortTermMemoryDescription", "Recent context carried across conversations")}</small>
+                        </span>
+                        {shortTermMemoryOn ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
+                      </button> : null}
+                      {memoryAvailable ? <button type="button" className={"wbc-tools-enabled-row" + (projectMemoryOn ? " active" : "")} role="menuitemcheckbox" aria-checked={projectMemoryOn} onClick={function () { wbcToggleMemoryPreference("projectMemoryActive", projectMemoryOn, setProjectMemoryActive); }}>
+                        <span className="wbc-tools-row-icon">{WBC_ICONS.database}</span>
+                        <span className="wbc-tools-row-copy">
+                          <span>{wbcT("workbenchChat.projectMemory", "Project memory")}</span>
+                          <small>{wbcT("workbenchChat.projectMemoryDescription", "Durable memories for this project")}</small>
+                        </span>
+                        {projectMemoryOn ? <span className="wbc-tools-row-check">{WBC_ICONS.check}</span> : null}
                       </button> : null}
                       {workspaceAvailable && workspaceOptions.map(function (option) {
                         var selected = workspaceOn && option.path === wsDir;

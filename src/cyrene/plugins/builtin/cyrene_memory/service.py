@@ -145,17 +145,29 @@ class MemoryService:
         parts: list[str] = []
         run_data = self.run_data
         language = self.language
+        include_short_term = _bool(
+            self.data,
+            run_data,
+            "memory_short_term_enabled",
+            True,
+        )
+        include_project = _bool(
+            self.data,
+            run_data,
+            "memory_project_enabled",
+            True,
+        )
         raw_snapshot = self.data.get("project_memory_snapshot")
         snapshot = (
             copy.deepcopy(dict(raw_snapshot))
             if isinstance(raw_snapshot, Mapping)
             else None
         )
-        if snapshot is not None and "shortTermContext" in snapshot:
+        if include_short_term and snapshot is not None and "shortTermContext" in snapshot:
             short = str(snapshot.get("shortTermContext") or "").strip()
             if short:
                 parts.append(short)
-        else:
+        elif include_short_term:
             try:
                 from .short_term import get_context
 
@@ -173,7 +185,7 @@ class MemoryService:
                 logger.exception("Failed to render short-term memory")
 
         project_id = self.project_id
-        if project_id:
+        if project_id and include_project:
             self.configure_stores()
             if snapshot is not None and "structuredContext" in snapshot:
                 structured = str(snapshot.get("structuredContext") or "").strip()
@@ -430,6 +442,18 @@ class MemoryService:
                     self.data,
                     self.run_data,
                     "memory_trigger_enabled",
+                    True,
+                ),
+                "memory_short_term_enabled": _bool(
+                    self.data,
+                    self.run_data,
+                    "memory_short_term_enabled",
+                    True,
+                ),
+                "memory_project_enabled": _bool(
+                    self.data,
+                    self.run_data,
+                    "memory_project_enabled",
                     True,
                 ),
                 "snapshot": {

@@ -17,6 +17,8 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
     service = context.service
     _chat_soul_active = service.chat_soul_active
     _chat_workspace_active = service.chat_workspace_active
+    _chat_short_term_memory_active = service.chat_short_term_memory_active
+    _chat_project_memory_active = service.chat_project_memory_active
     _find_chat = service.repository.find
     _new_chat = service.create_chat
     _public_chat_full = service.public_chat_full
@@ -70,6 +72,8 @@ def register_side_agents_routes(router: APIRouter, context: ChatRouteContext) ->
                 agent["workspaceOverride"] = str(parent["workspaceOverride"])
             agent["soulActive"] = _chat_soul_active(parent)
             agent["workspaceActive"] = _chat_workspace_active(parent)
+            agent["shortTermMemoryActive"] = _chat_short_term_memory_active(parent)
+            agent["projectMemoryActive"] = _chat_project_memory_active(parent)
             agent["contextActivations"] = dict(
                 parent.get("contextActivations") or {}
             )

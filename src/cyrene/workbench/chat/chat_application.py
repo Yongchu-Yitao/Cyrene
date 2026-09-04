@@ -158,6 +158,8 @@ def new_chat(
     capabilities: Mapping[str, Any] | None = None,
     soul_active: bool | None = None,
     workspace_active: bool | None = None,
+    short_term_memory_active: bool | None = None,
+    project_memory_active: bool | None = None,
     reasoning_effort: str = "",
 ) -> dict[str, Any]:
     now = utc_now_iso()
@@ -184,6 +186,12 @@ def new_chat(
         "completedTurnCount": 0,
         "soulActive": bool(soul_active),
         "workspaceActive": bool(workspace_active),
+        "shortTermMemoryActive": (
+            True if short_term_memory_active is None else bool(short_term_memory_active)
+        ),
+        "projectMemoryActive": (
+            True if project_memory_active is None else bool(project_memory_active)
+        ),
     }
     fields = _builtin_agent_fields(model)
     if isinstance(agent, Mapping):
@@ -232,6 +240,16 @@ def chat_workspace_active(
         return bool(chat["workspaceActive"])
     resolved = defaults or _composer_context_service().default_input_context()
     return bool(resolved["workspaceActive"])
+
+
+def chat_short_term_memory_active(chat: Mapping[str, Any]) -> bool:
+    value = chat.get("shortTermMemoryActive")
+    return bool(value) if isinstance(value, bool) else True
+
+
+def chat_project_memory_active(chat: Mapping[str, Any]) -> bool:
+    value = chat.get("projectMemoryActive")
+    return bool(value) if isinstance(value, bool) else True
 
 
 def resolve_composer_input_context(
@@ -678,6 +696,8 @@ def public_chat_light(
         "workspaceOverride": str(chat.get("workspaceOverride") or ""),
         "soulActive": chat_soul_active(chat, defaults=defaults),
         "workspaceActive": chat_workspace_active(chat, defaults=defaults),
+        "shortTermMemoryActive": chat_short_term_memory_active(chat),
+        "projectMemoryActive": chat_project_memory_active(chat),
         "contextActivations": composer.normalize(
             chat.get("contextActivations")
         ),
@@ -1384,8 +1404,10 @@ __all__ = [
     "WorkspaceChangesBaseline",
     "agent_fields",
     "chat_error_metadata",
+    "chat_project_memory_active",
     "chat_preview",
     "chat_run_error_message",
+    "chat_short_term_memory_active",
     "chat_soul_active",
     "chat_workspace_active",
     "clear_fork_metadata",

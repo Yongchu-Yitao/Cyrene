@@ -378,6 +378,12 @@ import { wbcErrorText } from "./errors.jsx"
     if (Object.prototype.hasOwnProperty.call(input, "workspaceActive")) {
       body.workspaceActive = !!input.workspaceActive;
     }
+    if (Object.prototype.hasOwnProperty.call(input, "shortTermMemoryActive")) {
+      body.shortTermMemoryActive = !!input.shortTermMemoryActive;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, "projectMemoryActive")) {
+      body.projectMemoryActive = !!input.projectMemoryActive;
+    }
     if (Object.prototype.hasOwnProperty.call(input, "remoteDeviceIds")) {
       body.remoteDeviceIds = Array.isArray(input.remoteDeviceIds) ? input.remoteDeviceIds : [];
     }

@@ -14,6 +14,8 @@ var TERMINAL_LINE_HEIGHT = 1.14;
 var TERMINAL_CURSOR_HEIGHT_RATIO = 0.74;
 var TERMINAL_TAIL_COMPACT_LINES = 1;
 var TERMINAL_SCROLLBACK_LINES = 100000;
+var TERMINAL_RECOVERY_STARTUP_GRACE_MS = 30 * 1000;
+var terminalPageStartedAt = Date.now();
 
 function terminalT(key, fallback, params) {
   return workbenchServices.i18n().t(key, params || null, fallback);
@@ -247,10 +249,18 @@ function showTerminalToast(message, type, options) {
   return false;
 }
 
-function showTerminalRecoveryToast(terminal) {
+function showTerminalRecoveryToast(terminal, active) {
   var recoveredAt = String(terminal && terminal.recoveredAt || "");
   var message = terminalRecoveryMessage(terminal);
-  if (!recoveredAt || !message) return;
+  var recoveredTime = Date.parse(recoveredAt);
+  if (
+    !active
+    || String(terminal && terminal.status || "") !== "running"
+    || !recoveredAt
+    || !message
+    || !Number.isFinite(recoveredTime)
+    || recoveredTime < terminalPageStartedAt - TERMINAL_RECOVERY_STARTUP_GRACE_MS
+  ) return;
   var key = String(terminal && terminal.id || "") + ":" + recoveredAt;
   if (shownTerminalRecoveryNotices.has(key)) return;
   if (showTerminalToast(terminalT("terminal.recovered", "Terminal recovered"), "success", { duration: 5200 })) {
@@ -295,6 +305,7 @@ function TerminalSessionPane({ terminalId, onState, active }) {
   var socketRef = React.useRef(null);
   var cursorRef = React.useRef(0);
   var statusRef = React.useRef("starting");
+  var terminalStateRef = React.useRef(null);
   var inputReadyRef = React.useRef(false);
   var reconnectRef = React.useRef(0);
   var retryNowRef = React.useRef(null);
@@ -691,7 +702,10 @@ function TerminalSessionPane({ terminalId, onState, active }) {
         terminal.write("\u001b[?25h");
         terminal.refresh(0, terminal.rows - 1);
         var interactive = statusRef.current === "running";
-        if (interactive && reconnectRef.current > 0) {
+        if (interactive) {
+          showTerminalRecoveryToast(terminalStateRef.current, activeRef.current);
+        }
+        if (interactive && activeRef.current && reconnectRef.current > 0) {
           showTerminalToast(
             terminalT("terminal.connectionRecovered", "The terminal connection was restored and output from the interruption has been replayed."),
             "success",
@@ -776,8 +790,8 @@ function TerminalSessionPane({ terminalId, onState, active }) {
         if (message.type === "snapshot" || message.type === "state") {
           if (message.terminal) {
             trackAgentInputBoundary(message.terminal, message.type);
+            terminalStateRef.current = message.terminal;
             statusRef.current = String(message.terminal.status || "exited");
-            showTerminalRecoveryToast(message.terminal);
             showTerminalExitToast(message.terminal, restartTerminal);
             if (statusRef.current !== "running") inputReadyRef.current = false;
             var oldest = Number(message.terminal.oldestSeq || 0);

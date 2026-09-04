@@ -583,6 +583,12 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
             chat["soulActive"] = bool(body.get("soulActive"))
         if "workspaceActive" in body:
             chat["workspaceActive"] = bool(body.get("workspaceActive"))
+        if "shortTermMemoryActive" in body:
+            chat["shortTermMemoryActive"] = bool(
+                body.get("shortTermMemoryActive")
+            )
+        if "projectMemoryActive" in body:
+            chat["projectMemoryActive"] = bool(body.get("projectMemoryActive"))
         workspace_error = _apply_workspace_preferences(
             chat,
             body,

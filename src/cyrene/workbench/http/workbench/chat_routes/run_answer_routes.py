@@ -373,6 +373,12 @@ class _AnswerOperation:
             memory_write_enabled=not self.is_side_agent,
             memory_trigger_enabled=not self.is_side_agent,
             memory_archive_enabled=True,
+            memory_short_term_enabled=self.service.chat_short_term_memory_active(
+                self.chat
+            ),
+            memory_project_enabled=self.service.chat_project_memory_active(
+                self.chat
+            ),
             retry=self.retry,
             completed_turn_count=self.service.next_completed_turn_count(
                 {

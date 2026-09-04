@@ -210,6 +210,11 @@ def test_split_chat_run_route_contract_is_stable():
     }
     assert _route_contract(route_dir, modules) == {
         ("get", "/api/workbench/chats/{chat_id}/run-stream", "api_workbench_chat_run_stream"),
+        (
+            "post",
+            "/api/workbench/chats/{chat_id}/runs/{run_id}/timing",
+            "api_workbench_chat_timing",
+        ),
         ("post", "/api/workbench/chats/{chat_id}/interrupt", "api_workbench_chat_interrupt"),
         ("post", "/api/workbench/chats/{chat_id}/guidance", "api_workbench_chat_guidance"),
         ("post", "/api/workbench/chats/{chat_id}/messages", "api_workbench_chat_send"),

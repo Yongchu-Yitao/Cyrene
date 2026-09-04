@@ -3928,6 +3928,10 @@ class TerminalManager:
             for session in self._sessions.values()
             if not project_id or session.project_id == project_id
             if owner_chat_id is None or session.owner_chat_id == str(owner_chat_id or "")
+            # Closed sessions are deletion tombstones, not terminals a user can
+            # reopen.  Old databases can retain one when shutdown interrupted
+            # deletion, so keep the catalog defensive as well as the delete path.
+            if session.status != "closed"
         ]
         sessions.sort(key=lambda item: (not bool(item.get("pinned")), int(item.get("orderIndex") or 0)))
         return sessions
@@ -4116,7 +4120,7 @@ class TerminalManager:
         normalized = str(terminal_id or "").strip() or None
         if normalized is not None:
             session = self.get(normalized)
-            if session.project_id != project_id:
+            if session.project_id != project_id or session.status == "closed":
                 raise LookupError("terminal not found")
             self.mark_read(normalized)
         if self._db is not None:
@@ -4140,7 +4144,17 @@ class TerminalManager:
         ).fetchone()
         terminal_id = str(row[0] or "") if row else ""
         session = self._sessions.get(terminal_id)
-        return terminal_id if session and session.project_id == project_id else None
+        if session and session.project_id == project_id and session.status != "closed":
+            return terminal_id
+        if terminal_id:
+            # Repair durable selection left behind by an interrupted delete.
+            self._db.execute(
+                "UPDATE terminal_projects SET active_terminal_id = NULL, updated_at = ? "
+                "WHERE project_id = ? AND active_terminal_id = ?",
+                (_now_iso(), str(project_id or ""), terminal_id),
+            )
+            self._db.commit()
+        return None
 
     async def interrupt(self, terminal_id: str) -> None:
         session = self.get(terminal_id)

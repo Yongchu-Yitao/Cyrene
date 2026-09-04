@@ -440,6 +440,14 @@ class _SendOperation:
             self.chat["soulActive"] = bool(self.body.get("soulActive"))
         if "workspaceActive" in self.body:
             self.chat["workspaceActive"] = bool(self.body.get("workspaceActive"))
+        if "shortTermMemoryActive" in self.body:
+            self.chat["shortTermMemoryActive"] = bool(
+                self.body.get("shortTermMemoryActive")
+            )
+        if "projectMemoryActive" in self.body:
+            self.chat["projectMemoryActive"] = bool(
+                self.body.get("projectMemoryActive")
+            )
         if "remoteDeviceIds" in self.body:
             self.chat["remoteDeviceIds"] = list(
                 self.body.get("remoteDeviceIds") or ()
@@ -880,6 +888,12 @@ class _SendOperation:
             memory_write_enabled=not self.is_side_agent,
             memory_trigger_enabled=not self.is_side_agent,
             memory_archive_enabled=True,
+            memory_short_term_enabled=self.service.chat_short_term_memory_active(
+                self.chat
+            ),
+            memory_project_enabled=self.service.chat_project_memory_active(
+                self.chat
+            ),
             retry=self.retry,
             completed_turn_count=next_completed_turn_count(
                 {

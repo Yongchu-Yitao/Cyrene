@@ -454,7 +454,9 @@ def test_terminal_frontend_exposes_recovery_controls_and_input_cursor() -> None:
     assert 'Math.min(15000, 400 * Math.pow(2' in source
     assert 'window.addEventListener("online", handleOnline)' in source
     assert "workbenchServices.feedback()" in source
-    assert 'showTerminalRecoveryToast(message.terminal)' in source
+    assert 'showTerminalRecoveryToast(terminalStateRef.current, activeRef.current)' in source
+    assert 'String(terminal && terminal.status || "") !== "running"' in source
+    assert 'recoveredTime < terminalPageStartedAt - TERMINAL_RECOVERY_STARTUP_GRACE_MS' in source
     assert 'showTerminalExitToast(message.terminal, restartTerminal)' in source
     assert 'String(terminal.launchMode || "") === "one_shot"' in source
     assert 'terminalT("terminal.exitedWithReason"' in source

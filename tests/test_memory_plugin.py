@@ -309,6 +309,57 @@ def test_memory_context_uses_chat_snapshot_instead_of_live_project_store(
     assert "live structured memory" not in context
 
 
+def test_memory_context_respects_per_chat_injection_switches(monkeypatch, tmp_path):
+    from cyrene.plugins.builtin.cyrene_memory import project_memory
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
+
+    monkeypatch.setattr(
+        project_memory,
+        "build_main_agent_suffix",
+        lambda *_args, **_kwargs: "project prompt",
+    )
+    snapshot = {
+        "shortTermContext": "short-term memory",
+        "structuredContext": "durable project memory",
+    }
+
+    short_only = MemoryService(
+        workspace=tmp_path,
+        tree=None,
+        tree_id="chat-short-only",
+        data={
+            "project_id": "project-switches",
+            "project_memory_snapshot": snapshot,
+            "memory_project_enabled": False,
+        },
+    )
+    project_only = MemoryService(
+        workspace=tmp_path,
+        tree=None,
+        tree_id="chat-project-only",
+        data={
+            "project_id": "project-switches",
+            "project_memory_snapshot": snapshot,
+            "memory_short_term_enabled": False,
+        },
+    )
+    neither = MemoryService(
+        workspace=tmp_path,
+        tree=None,
+        tree_id="chat-no-memory",
+        data={
+            "project_id": "project-switches",
+            "project_memory_snapshot": snapshot,
+            "memory_short_term_enabled": False,
+            "memory_project_enabled": False,
+        },
+    )
+
+    assert short_only.context_block() == "short-term memory"
+    assert project_only.context_block() == "durable project memory\n\nproject prompt"
+    assert neither.context_block() == ""
+
+
 def test_memory_transcript_uses_the_shared_context_lifecycle_projection(tmp_path):
     from types import SimpleNamespace
 

@@ -859,6 +859,8 @@ def test_send_operation_uses_session_route_instead_of_exact_model_identity():
     operation.service = SimpleNamespace(
         chat_soul_active=lambda _chat: True,
         chat_workspace_active=lambda _chat: True,
+        chat_short_term_memory_active=lambda _chat: True,
+        chat_project_memory_active=lambda _chat: True,
     )
 
     config = operation._conversation_config(
@@ -996,12 +998,23 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     operation.retry = False
     operation.fork_replay = False
     operation.completed_turn_count_before = 2
-    operation.chat = {"projectMemorySnapshot": {}, "title": "Route chat"}
+    operation.chat = {
+        "projectMemorySnapshot": {},
+        "title": "Route chat",
+        "shortTermMemoryActive": False,
+        "projectMemoryActive": False,
+    }
     operation.context = SimpleNamespace(bot=object(), db_path=str(tmp_path / "db.sqlite3"))
     operation.routes = SimpleNamespace(chat_id="host-route")
     operation.service = SimpleNamespace(
         chat_soul_active=lambda _chat: True,
         chat_workspace_active=lambda _chat: False,
+        chat_short_term_memory_active=lambda chat: chat.get(
+            "shortTermMemoryActive", True
+        ),
+        chat_project_memory_active=lambda chat: chat.get(
+            "projectMemoryActive", True
+        ),
         ensure_chat_memory_snapshot=lambda chat: chat.get("projectMemorySnapshot"),
         run_manager=SimpleNamespace(
             conversation_runtime=SimpleNamespace(send=fake_runtime),
@@ -1041,6 +1054,8 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     assert config.memory_write_enabled is True
     assert config.memory_trigger_enabled is True
     assert config.memory_archive_enabled is True
+    assert config.memory_short_term_enabled is False
+    assert config.memory_project_enabled is False
     assert config.completed_turn_count == 3
 
 
@@ -1238,6 +1253,8 @@ def test_retry_question_identity_survives_resume_without_incrementing_turn_count
     operation.conversation_source = "desktop_local"
     operation.service = SimpleNamespace(
         ensure_chat_memory_snapshot=lambda _chat: {},
+        chat_short_term_memory_active=lambda _chat: True,
+        chat_project_memory_active=lambda _chat: True,
         resolve_composer_input_context=lambda *_args, **_kwargs: {
             "remoteDeviceIds": [],
             "soulActive": True,

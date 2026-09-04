@@ -42,6 +42,7 @@ CYRENE_TOP_LEVEL_FILES = {
 # boundary closed to every other platform import.
 CORE_PLATFORM_IMPORT_ALLOWLIST = {
     "src/cyrene/core/session.py: cyrene.platform.settings_store",
+    "src/cyrene/core/plugin/core_impl/bash.py: cyrene.platform.subprocess_environment",
     "src/cyrene/core/plugin/core_impl/permission_boundaries.py: cyrene.platform.paths",
 }
 

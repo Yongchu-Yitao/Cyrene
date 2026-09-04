@@ -66,6 +66,8 @@ def _build_fork_chat(service, chat: dict[str, Any], message_id: str, new_content
         new_chat["workspaceOverride"] = str(chat["workspaceOverride"])
     new_chat["soulActive"] = service.chat_soul_active(chat)
     new_chat["workspaceActive"] = service.chat_workspace_active(chat)
+    new_chat["shortTermMemoryActive"] = service.chat_short_term_memory_active(chat)
+    new_chat["projectMemoryActive"] = service.chat_project_memory_active(chat)
     new_chat["contextActivations"] = dict(
         chat.get("contextActivations") or {}
     )

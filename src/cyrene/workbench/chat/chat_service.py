@@ -19,6 +19,8 @@ from cyrene.workbench.chat.chat_application import (
     chat_preview,
     chat_run_error_message,
     chat_soul_active,
+    chat_short_term_memory_active,
+    chat_project_memory_active,
     chat_workspace_active,
     clear_fork_metadata,
     completed_turn_count,
@@ -155,6 +157,8 @@ class ChatService:
                 capabilities=request.get("capabilities"),
                 soul_active=request.get("soul_active"),
                 workspace_active=request.get("workspace_active"),
+                short_term_memory_active=request.get("short_term_memory_active"),
+                project_memory_active=request.get("project_memory_active"),
                 reasoning_effort=request.get("reasoning_effort", ""),
             ),
         )
@@ -177,6 +181,8 @@ class ChatService:
                 capabilities=options.get("capabilities"),
                 soul_active=options.get("soul_active"),
                 workspace_active=options.get("workspace_active"),
+                short_term_memory_active=options.get("short_term_memory_active"),
+                project_memory_active=options.get("project_memory_active"),
                 reasoning_effort=str(options.get("reasoning_effort") or ""),
             )
         )
@@ -291,6 +297,12 @@ class ChatService:
 
     def chat_workspace_active(self, chat: Mapping[str, Any]) -> bool:
         return chat_workspace_active(chat)
+
+    def chat_short_term_memory_active(self, chat: Mapping[str, Any]) -> bool:
+        return chat_short_term_memory_active(chat)
+
+    def chat_project_memory_active(self, chat: Mapping[str, Any]) -> bool:
+        return chat_project_memory_active(chat)
 
     def clear_fork_metadata(self, chat: dict[str, Any]) -> bool:
         return clear_fork_metadata(chat)

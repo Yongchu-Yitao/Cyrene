@@ -49,6 +49,8 @@ class ChatDetailDTO(ChatSummaryDTO, total=False):
     completedTurnCount: int
     soulActive: bool
     workspaceActive: bool
+    shortTermMemoryActive: bool
+    projectMemoryActive: bool
     reasoningEffort: str
     workspaceOverride: str
     agent: dict[str, Any]
@@ -70,6 +72,8 @@ class ChatCreateDTO(TypedDict):
     capabilities: NotRequired[dict[str, Any] | None]
     soul_active: NotRequired[bool | None]
     workspace_active: NotRequired[bool | None]
+    short_term_memory_active: NotRequired[bool | None]
+    project_memory_active: NotRequired[bool | None]
     reasoning_effort: NotRequired[str]
 
 

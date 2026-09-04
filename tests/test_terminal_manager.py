@@ -571,6 +571,32 @@ async def test_terminal_metadata_and_scrollback_survive_manager_restart(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
+async def test_closed_terminal_is_hidden_and_cannot_remain_active(
+    tmp_path: Path,
+) -> None:
+    manager = TerminalManager(output_limit=64 * 1024, state_dir=tmp_path / "state")
+    terminal = await manager.create_resolved(
+        "project-1", cwd=str(tmp_path), shell="sh", argv=["/bin/sh"]
+    )
+    manager.set_active("project-1", terminal["id"])
+
+    await manager.close(terminal["id"])
+
+    assert manager.list("project-1") == []
+    assert manager.active_terminal_id("project-1") is None
+    row = manager._db.execute(
+        "SELECT active_terminal_id FROM terminal_projects WHERE project_id = ?",
+        ("project-1",),
+    ).fetchone()
+    assert row is not None
+    assert row[0] is None
+    with pytest.raises(LookupError, match="terminal not found"):
+        manager.set_active("project-1", terminal["id"])
+    manager.close_store()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY behavior")
 async def test_pending_history_pages_fully_then_segment_retention_advances_cursor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

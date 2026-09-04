@@ -5357,8 +5357,8 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     assert "progress: mergeToolProgress(activity && activity.progress)" in runtime
     assert "matchedToolCall" in runtime
     assert '(entry.toolCallId || "trace") + ":" + i' in source
-    assert 'entry.kind === "tool" && entry.status === "running"' in activity_card
-    assert "hasRunningTools && !hasReplyText" in activity_card
+    assert "<WbcTraceCard" in activity_card
+    assert "running={isPhase1 ? phase1Running : active}" in activity_card
     assert 'type === "run_finalizing" && handlers.onFinalizing' in source
     assert "wbcFinalizeRuntime(cur)" in source
     assert 'type === "tool_call_started" && handlers.onToolStarted' in stream
@@ -8905,6 +8905,11 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'wbcT("workbenchChat.contentItems", "Content")' in chat
     assert 'className="wbc-tools-content-list"' in chat
     assert 'wbcT("workbenchChat.chooseDirectory", "Choose directory…")' in chat
+    assert 'wbcT("workbenchChat.shortTermMemory", "Short-term memory")' in chat
+    assert 'wbcT("workbenchChat.projectMemory", "Project memory")' in chat
+    assert 'role="menuitemcheckbox" aria-checked={shortTermMemoryOn}' in chat
+    assert 'role="menuitemcheckbox" aria-checked={projectMemoryOn}' in chat
+    assert 'model.updateChatPreferences(chatId, { [field]: next })' in chat
     assert "remoteDevices.map(function (device)" in chat
     assert "setToolsPanel" not in chat
     assert "function WbcCtxPicker" not in chat

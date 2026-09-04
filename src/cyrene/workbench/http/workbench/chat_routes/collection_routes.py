@@ -240,6 +240,8 @@ def _register_create_route(router: APIRouter, context: ChatRouteContext):
             capabilities=capabilities_snapshot,
             soul_active=body.get("soulActive"),
             workspace_active=body.get("workspaceActive"),
+            short_term_memory_active=body.get("shortTermMemoryActive"),
+            project_memory_active=body.get("projectMemoryActive"),
             reasoning_effort=str(body.get("reasoningEffort") or ""),
         )
         chat["contextActivations"] = context_activations

@@ -176,6 +176,8 @@ class ConversationConfig:
     memory_write_enabled: bool = True
     memory_trigger_enabled: bool = True
     memory_archive_enabled: bool = True
+    memory_short_term_enabled: bool = True
+    memory_project_enabled: bool = True
     retry: bool = False
     completed_turn_count: int = 0
     response_capabilities: Sequence[str] = ()
@@ -484,6 +486,8 @@ class ConversationRuntime:
             "memory_write_enabled": bool(config.memory_write_enabled),
             "memory_trigger_enabled": bool(config.memory_trigger_enabled),
             "memory_archive_enabled": bool(config.memory_archive_enabled),
+            "memory_short_term_enabled": bool(config.memory_short_term_enabled),
+            "memory_project_enabled": bool(config.memory_project_enabled),
             "read_only": bool(config.read_only),
             "retry": bool(config.retry),
             "completed_turn_count": max(0, int(config.completed_turn_count or 0)),
