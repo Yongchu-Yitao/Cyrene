@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -251,12 +252,73 @@ async def _normalized_provider_result(
         "endpoint": endpoint,
         "provider_plugin": provider_plugin.name,
     }
+    stream_diagnostics = value.get("stream_diagnostics")
+    if isinstance(stream_diagnostics, Mapping):
+        result["stream_diagnostics"] = dict(stream_diagnostics)
     completion_tokens = result["usage"].get("completion_tokens") or result["usage"].get("output_tokens")
     try:
         result["output_tokens_per_second"] = max(0, int(completion_tokens or 0)) / (latency_ms / 1000.0) if latency_ms > 0 else 0.0
     except (TypeError, ValueError):
         result["output_tokens_per_second"] = 0.0
     return result
+
+
+def _failed_provider_response(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve the Provider result that failed router normalization.
+
+    Successful LLM accounting events already retain tool arguments. Keeping the
+    same evidence for failed calls makes malformed streamed arguments
+    diagnosable instead of replacing the response with an empty object.
+    """
+
+    snapshot: dict[str, Any] = {}
+    for key in (
+        "content",
+        "reasoning",
+        "reasoning_details",
+        "tool_calls",
+        "finish_reason",
+        "usage",
+        "usage_observation",
+        "model",
+        "model_identity",
+        "response_id",
+        "observation_node_id",
+        "latency_ms",
+        "endpoint",
+        "stream_diagnostics",
+    ):
+        if key in value:
+            snapshot[key] = value[key]
+
+    diagnostics: list[dict[str, Any]] = []
+    raw_calls = value.get("tool_calls")
+    for index, raw_call in enumerate(raw_calls if isinstance(raw_calls, list) else ()):
+        if not isinstance(raw_call, Mapping):
+            diagnostics.append({"index": index, "invalid_call_type": True})
+            continue
+        function = raw_call.get("function")
+        source = function if isinstance(function, Mapping) else raw_call
+        arguments = source.get("arguments")
+        if isinstance(arguments, str):
+            serialized = arguments
+        else:
+            try:
+                serialized = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                serialized = repr(arguments)
+        diagnostics.append({
+            "index": index,
+            "id": str(raw_call.get("id") or ""),
+            "name": str(source.get("name") or ""),
+            "arguments_length": len(serialized),
+            "arguments_sha256": hashlib.sha256(
+                serialized.encode("utf-8")
+            ).hexdigest(),
+        })
+    snapshot["normalization_failed"] = True
+    snapshot["tool_call_diagnostics"] = diagnostics
+    return snapshot
 
 
 async def _publish_llm_event(
@@ -556,7 +618,7 @@ async def route_model_call(
                 tools=tools if isinstance(tools, list) else None,
                 candidate=candidate,
                 provider_plugin=provider.name,
-                response=None,
+                response=_failed_provider_response(result.value),
                 duration_ms=elapsed_ms,
                 status="failed",
                 error=error,

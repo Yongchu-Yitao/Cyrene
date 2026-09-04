@@ -431,6 +431,9 @@ def _normalized_result(
         "latency_ms": max(0.0, float(latency_ms)),
         "endpoint": str(endpoint or ""),
     }
+    stream_diagnostics = message.get("stream_diagnostics")
+    if isinstance(stream_diagnostics, Mapping):
+        result["stream_diagnostics"] = dict(stream_diagnostics)
     completion_tokens = int(normalized_usage.get("completion_tokens") or 0)
     result["output_tokens_per_second"] = (
         completion_tokens / (float(latency_ms) / 1000.0)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import httpx
@@ -755,6 +756,24 @@ async def test_openai_chat_sse_accumulates_content_reasoning_tools_and_usage() -
         {"type": "reasoning_done", "response": "Think"},
         {"type": "reply_done", "response": "Hello"},
     ]
+    diagnostics = parsed.pop("stream_diagnostics")
+    assert diagnostics == {
+        "adapter": "openai_compatible",
+        "line_count": 10,
+        "event_count": 4,
+        "invalid_json_line_count": 0,
+        "saw_done_marker": True,
+        "finish_reason": "tool_calls",
+        "stream_completed": True,
+        "tool_calls": [{
+            "index": "0",
+            "name": "weather",
+            "arguments_length": 16,
+            "arguments_sha256": hashlib.sha256(
+                b'{"city":"Paris"}'
+            ).hexdigest(),
+        }],
+    }
     assert parsed == {
         "role": "assistant",
         "content": "Hello",
@@ -823,6 +842,7 @@ async def test_anthropic_sse_accumulates_text_tool_arguments_usage_and_finish() 
             record_callback,
         )
 
+    parsed.pop("stream_diagnostics")
     assert callbacks == [
         {"type": "reply_start"},
         {"type": "reply_delta", "delta": "Hello"},
@@ -879,6 +899,7 @@ async def test_openai_responses_sse_uses_named_events_and_accumulates_tool_argum
             None,
         )
 
+    parsed.pop("stream_diagnostics")
     assert parsed == {
         "role": "assistant",
         "content": "Hello",
@@ -921,6 +942,7 @@ async def test_gemini_sse_requests_stream_route_and_accumulates_chunks() -> None
             None,
         )
 
+    parsed.pop("stream_diagnostics")
     assert parsed == {
         "role": "assistant",
         "content": "Hello",

@@ -9,11 +9,12 @@ Chat Completions for the editable model Provider Plugins.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -802,17 +803,34 @@ def parse_response(adapter_id: str, data: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
-async def _stream_payloads(response: httpx.Response):
+async def _stream_payloads(
+    response: httpx.Response,
+    diagnostics: dict[str, Any] | None = None,
+):
     async for raw_line in response.aiter_lines():
+        if diagnostics is not None:
+            diagnostics["line_count"] = int(diagnostics.get("line_count") or 0) + 1
         line = str(raw_line or "").strip()
         value = line[5:].strip() if line.startswith("data:") else line
-        if not value or value == "[DONE]":
+        if value == "[DONE]":
+            if diagnostics is not None:
+                diagnostics["saw_done_marker"] = True
+            continue
+        if not value:
             continue
         try:
             data = json.loads(value)
         except json.JSONDecodeError:
+            if diagnostics is not None:
+                diagnostics["invalid_json_line_count"] = int(
+                    diagnostics.get("invalid_json_line_count") or 0
+                ) + 1
             continue
         if isinstance(data, dict):
+            if diagnostics is not None:
+                diagnostics["event_count"] = int(
+                    diagnostics.get("event_count") or 0
+                ) + 1
             yield data
 
 
@@ -877,6 +895,7 @@ def _completed_stream_message(
     finish: str,
     response_id: str,
     returned_model: str,
+    stream_diagnostics: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     message: dict[str, Any] = {
         "role": "assistant",
@@ -900,6 +919,24 @@ def _completed_stream_message(
         message["response_id"] = response_id
     if returned_model:
         message["model"] = returned_model
+    if stream_diagnostics is not None:
+        calls: list[dict[str, Any]] = []
+        for key, value in sorted(tool_calls.items(), key=lambda item: item[0]):
+            arguments = str(value.get("arguments") or "")
+            calls.append({
+                "index": key,
+                "name": str(value.get("name") or ""),
+                "arguments_length": len(arguments),
+                "arguments_sha256": hashlib.sha256(
+                    arguments.encode("utf-8")
+                ).hexdigest(),
+            })
+        message["stream_diagnostics"] = {
+            **dict(stream_diagnostics),
+            "finish_reason": str(message.get("finish_reason") or ""),
+            "stream_completed": True,
+            "tool_calls": calls,
+        }
     return message
 
 
@@ -923,6 +960,13 @@ async def handle_stream(
     finish = ""
     response_id = ""
     returned_model = ""
+    stream_diagnostics: dict[str, Any] = {
+        "adapter": adapter,
+        "line_count": 0,
+        "event_count": 0,
+        "invalid_json_line_count": 0,
+        "saw_done_marker": False,
+    }
     started = False
     reasoning_started = False
 
@@ -941,7 +985,7 @@ async def handle_stream(
         if timing is not None:
             timing["response_headers_ms"] = (time.monotonic() - request_started) * 1000
         response.raise_for_status()
-        async for data in _stream_payloads(response):
+        async for data in _stream_payloads(response, stream_diagnostics):
             if timing is not None and "ttft_ms" not in timing:
                 timing["ttft_ms"] = (time.monotonic() - request_started) * 1000
             response_id = str(data.get("id") or response_id)
@@ -1050,7 +1094,7 @@ async def handle_stream(
         await callback({"type": "reply_done", "response": "".join(text_parts)})
     return _completed_stream_message(
         text_parts, reasoning_parts, tool_calls, usage, finish,
-        response_id, returned_model,
+        response_id, returned_model, stream_diagnostics,
     )
 
 
