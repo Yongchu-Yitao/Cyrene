@@ -599,7 +599,10 @@ class ConversationRuntime:
             if status == "awaiting_user":
                 if restored_run_id == normalized_run_id:
                     return bridge.pending_result(restored_run_id)
-                raise RuntimeError("the conversation is awaiting a user answer")
+                if not str(text or "").strip():
+                    raise ValueError("Message cannot be empty.")
+                await bridge.reject_pending_for_new_message()
+                status = "idle"
             if status == "idle" and restored_run_id == normalized_run_id:
                 return bridge.current_result(restored_run_id)
             if status != "idle":

@@ -7443,6 +7443,87 @@ def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
     assert "clearFailure(chatId);" in start_run
 
 
+def test_builtin_permission_notification_waits_for_persisted_question():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  return ["pendingQuestion", "pending_question"].map(key => {
+    const chatId = "permission-" + key;
+    let handlers;
+    let answers = [];
+    let saved = [];
+    let settled = 0;
+    WorkbenchChatRuntimes.setHooks({
+      onAwaitingUser: (_id, question) => answers.push(question.id),
+      onAssistantSaved: (_id, messages) => saved.push(...messages.map(m => m.id)),
+      onSettled: () => settled++
+    });
+    WorkbenchChatRuntimes.start(chatId, { message: "inspect" }, {
+      sendMessage: (_id, _input, callbacks) => {
+        handlers = callbacks;
+        return new Promise(() => {});
+      }
+    });
+    const question = { id: "permission-1", kind: "destructive_confirmation",
+      text: "Delete old screenshot?", options: ["Allow once", "Deny"], allowCustom: false };
+    handlers.onAwaitingUser({ type: "awaiting_user", payload: { [key]: question } });
+    const beforeCommit = {
+      pending: WorkbenchChatRuntimes.get(chatId)?.pendingQuestion?.id,
+      answers: answers.length, settled
+    };
+    // A malformed notification must neither erase the question nor end the stream.
+    handlers.onAwaitingUser({ type: "awaiting_user", payload: {} });
+    const retained = WorkbenchChatRuntimes.get(chatId)?.pendingQuestion?.id;
+    handlers.onAwaitingUser({ type: "awaiting_user", [key]: question,
+      assistantMessages: [{ id: "question-message", questionPrompt: true, questionId: question.id }] });
+    const afterCommit = { active: !!WorkbenchChatRuntimes.get(chatId), answers, saved, settled };
+    // Replayed terminal notifications cannot display or settle twice.
+    handlers.onAwaitingUser({ type: "awaiting_user", [key]: question });
+    return { beforeCommit, retained, afterCommit, finalSettled: settled };
+  });
+})()
+"""
+    )
+    assert result == [{
+        "beforeCommit": {"pending": "permission-1", "answers": 0, "settled": 0},
+        "retained": "permission-1",
+        "afterCommit": {
+            "active": False, "answers": ["permission-1"],
+            "saved": ["question-message"], "settled": 1,
+        },
+        "finalSettled": 1,
+    }] * 2
+
+
+def test_external_permission_requests_keep_stream_available_for_answer():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  return ["permission.requested", "elicitation.requested"].map(kind => {
+    let handlers;
+    let answers = 0;
+    let settled = 0;
+    WorkbenchChatRuntimes.setHooks({
+      onAwaitingUser: () => answers++, onSettled: () => settled++
+    });
+    WorkbenchChatRuntimes.start(kind, { message: "inspect" }, {
+      sendMessage: (_id, _input, callbacks) => {
+        handlers = callbacks;
+        return new Promise(() => {});
+      }
+    });
+    handlers.onAwaitingUser({ id: "external-question", kind, options: [] });
+    const runtime = WorkbenchChatRuntimes.get(kind);
+    const result = { pending: runtime?.pendingQuestion?.id, answers, settled };
+    WorkbenchChatRuntimes.clear(kind);
+    return result;
+  });
+})()
+"""
+    )
+    assert result == [{"pending": "external-question", "answers": 1, "settled": 0}] * 2
+
+
 def test_late_terminal_event_from_completed_stream_cannot_fail_next_turn():
     result = _run_workbench_runtime_js(
         """
@@ -9321,14 +9402,15 @@ def test_project_memory_failed_status_shows_attempt_details():
     assert ".workbench-project-memory-learning-status small {" in styles
 
 
-def test_pending_question_disables_chat_composer_controls():
+def test_external_pending_question_disables_chat_composer_controls():
     chat = workbench_chat_source()
     chat_composer = chat.split("function WbcComposer(", 1)[1].split(
         "function wbcClearComposerDraft", 1
     )[0]
     chat_attachments = frontend_module_source("features/chat/composer-attachments.jsx")
 
-    assert "var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id);" in chat_composer
+    assert "var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id)" in chat_composer
+    assert "&& !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));" in chat_composer
     assert "if (awaitingAnswer) return;" in chat_composer
     assert "var sendDisabled = awaitingAnswer ||" in chat_composer
     assert "disabled={awaitingAnswer || !capText" in chat_composer

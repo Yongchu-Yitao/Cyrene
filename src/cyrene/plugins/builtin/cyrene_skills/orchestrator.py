@@ -374,7 +374,7 @@ def _capture_service() -> CaptureService:
     ))
 
 
-async def _persist_image_artifacts(turn_id: str, value: Any) -> str:
+async def _persist_image_artifacts(turn_id: str, value: Any) -> list[dict[str, str]]:
     return await _capture_service()._persist_image_artifacts(turn_id, value)
 
 

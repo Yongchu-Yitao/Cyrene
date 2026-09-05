@@ -86,7 +86,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var mcpMarkerAvailable = composerContextAvailable && pluginModules.indexOf("mcp") >= 0;
   var skillsMarkerAvailable = composerContextAvailable && pluginModules.indexOf("skills") >= 0;
   var chatId = chat ? chat.id : "";
-  var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id);
+  // A fresh built-in Agent message denies the pending operation server-side.
+  // External Agents still require their protocol-specific answer flow.
+  var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id)
+    && !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));
   var projectId = (project && project.id) || "";
   var projectWorkspacePath = (project && project.workspacePath) || "";
   // Surface-scoped storage prefix (empty for the main chat). The quick-chat

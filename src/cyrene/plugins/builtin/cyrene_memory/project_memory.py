@@ -1081,8 +1081,21 @@ async def _learn_prompt(
     }
 
     async def complete(request_messages: list[dict[str, Any]]) -> dict[str, Any]:
-        from cyrene.plugins.model_router import EXACT_MODEL_UNAVAILABLE
+        from cyrene.plugins.model_router import EXACT_MODEL_UNAVAILABLE, request_token_estimate
+        from cyrene.platform.config_store import effective_ctx_limit_for_model
+        from cyrene.model.error_details import ModelCallError, classify_model_error
 
+        # Check the complete learning request, including the appended instruction
+        # and submission schema (and the repair instruction on a second attempt).
+        # The gateway still enforces its resolved candidate/output-token budget.
+        model_key = str(identity.get("candidateId") or identity.get("model") or identity.get("id") or "")
+        limit = effective_ctx_limit_for_model(model_key)
+        required = request_token_estimate(request_messages, call_kwargs["tools"])
+        if limit and required > limit:
+            raise ModelCallError(classify_model_error(
+                f"Model request exceeds all configured context windows; "
+                f"requires about {required} tokens; configured limits: {model_key}={limit}"
+            ))
         try:
             return await model_gateway.complete(request_messages, **call_kwargs)
         except RuntimeError as exc:

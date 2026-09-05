@@ -344,7 +344,7 @@ def _turn_plan(snapshot: Mapping[str, Any], run_id: str) -> Any:
         plan = dict(pending["plan"])
         if str(pending.get("status") or "") == "answered":
             answer = str(pending.get("answer") or "").strip().lower()
-            rejected = answer in {"拒绝", "不同意", "reject", "no", "cancel", "取消"}
+            rejected = answer in {"拒绝", "不同意", "reject", "deny", "no", "cancel", "取消"}
             plan["status"] = "rejected" if rejected else "active"
         candidates.append((str(item.get("updated_at") or item.get("created_at") or ""), plan))
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
@@ -1231,6 +1231,15 @@ class WorkbenchSessionBridge:
 
     async def cancel(self, reason: str = "user_cancelled") -> bool:
         return await self.session.cancel(reason)
+
+    async def reject_pending_for_new_message(self) -> None:
+        """Deny the pending operation, then settle it before a fresh turn."""
+
+        pending = self.session.pending_output()
+        if pending is None:
+            raise AgentSessionRunError("Agent session is awaiting input without a pending question")
+        self.session.reject_pending_answer(str(pending.get("id") or ""))
+        await self.session.cancel("pending_confirmation_denied_by_new_message")
 
     def close(self) -> None:
         self.session.close()

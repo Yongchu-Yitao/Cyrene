@@ -16,15 +16,13 @@ from typing import Any, Mapping
 
 from cyrene.localization import localized
 
+from .artifacts import structured_paths
+
 logger = logging.getLogger(__name__)
 
 _IMAGE_ARTIFACT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _MAX_IMAGE_ARTIFACT_BYTES = 20 * 1024 * 1024
 _MAX_IMAGE_ARTIFACTS_PER_ACTION = 8
-_IMAGE_ARTIFACT_PATH_RE = re.compile(
-    r"(?P<path>(?:/[^\s\"'<>]+|[A-Za-z]:\\[^\s\"'<>]+)\.(?:png|jpg|jpeg|webp|gif))",
-    re.IGNORECASE,
-)
 
 
 def _truncate(value: Any, limit: int) -> str:
@@ -69,6 +67,7 @@ class ActionCapture:
         requires_llm: int,
         caller: str,
         duration_ms: float,
+        artifacts: list[dict[str, str]] | None = None,
     ) -> ActionCapture:
         metadata = {
             "caller": str(caller or "unknown"),
@@ -76,6 +75,7 @@ class ActionCapture:
             "duration_ms": round(float(duration_ms or 0), 2),
             "raw_args": dict(args),
             "action_domain": domain,
+            "artifacts": list(artifacts or []),
         }
         return cls(
             action_id=action_id,
@@ -179,6 +179,7 @@ SENSITIVE_BROWSER_TERMS = frozenset({
 def chain_item_from_action(row: Mapping[str, Any]) -> dict[str, Any]:
     metadata = row.get("metadata_json") or {}
     return {
+        **({"artifacts": metadata["artifacts"]} if "artifacts" in metadata else {}),
         "id": str(row.get("action_id") or ""), "source": "agent",
         "index": int(row.get("action_index") or 0),
         "tool": str(row.get("tool_name") or ""),
@@ -345,23 +346,11 @@ class CaptureService:
     def __init__(self, ports: CapturePorts):
         self.ports = ports
 
-    async def _persist_image_artifacts(self, turn_id: str, value: Any) -> str:
-        """Copy tool-produced images out of the expiring temp directory.
-    
-        Behavior chains keep a textual tool result. Replacing temporary paths with
-        durable, per-turn artifact paths lets the Workbench preview those images
-        after a restart or temporary-cache cleanup.
-        """
-        text = str(value or '')
-        if not text or not turn_id:
-            return text
-        matches = []
-        for match in _IMAGE_ARTIFACT_PATH_RE.finditer(text):
-            path = match.group('path').rstrip('.,);')
-            if path and path not in matches:
-                matches.append(path)
-        if not matches:
-            return text
+    async def _persist_image_artifacts(self, turn_id: str, value: Any) -> list[dict[str, str]]:
+        """Preserve explicit image references and return a durable manifest."""
+        matches = structured_paths(value)
+        if not turn_id:
+            return [{"path": path} for path in matches]
         artifact_root = (self.ports.data_dir or self.ports.default_data_dir) / 'behavior-media' / str(turn_id)
         replacements: dict[str, str] = {}
         for index, raw_path in enumerate(matches[:_MAX_IMAGE_ARTIFACTS_PER_ACTION]):
@@ -372,14 +361,12 @@ class CaptureService:
                 if source.stat().st_size > _MAX_IMAGE_ARTIFACT_BYTES:
                     continue
                 artifact_root.mkdir(parents=True, exist_ok=True)
-                target = artifact_root / f'{index:02d}-{uuid4().hex[:8]}-{source.name}'
+                target = artifact_root / f'{index:02d}-{uuid4().hex}{source.suffix.lower()}'
                 await asyncio.to_thread(shutil.copy2, source, target)
                 replacements[raw_path] = str(target.resolve())
             except OSError:
                 logger.debug('Unable to preserve image artifact %s', raw_path, exc_info=True)
-        for raw_path, stored_path in replacements.items():
-            text = text.replace(raw_path, stored_path)
-        return text
+        return [{"path": replacements.get(path, path)} for path in matches]
 
     async def _project_scope_for_turn(self, turn_id: str) -> dict[str, str]:
         async with self.ports.connect() as conn:
@@ -580,8 +567,10 @@ class CaptureService:
         now = self.ports.now_iso()
         action_id = self.ports.new_id('action')
         domain, action_type, action_subtype, requires_llm = self._map_tool_to_action(tool_name)
-        persisted_result = await self._persist_image_artifacts(turn_id, result)
-        capture = ActionCapture.create(action_id=action_id, turn_id=turn_id, session_id=session_id, round_id=str(round_id or self.ports.current_round_id.get()), created_at=now, domain=domain, action_type=action_type, action_subtype=action_subtype, tool_name=tool_name, args=args or {}, result=persisted_result, success=success, error=error, requires_llm=requires_llm, caller=caller, duration_ms=duration_ms)
+        artifacts = await self._persist_image_artifacts(turn_id, result)
+        result_paths = set(structured_paths(result))
+        artifacts.extend({"path": path} for path in structured_paths(args) if path not in result_paths)
+        capture = ActionCapture.create(action_id=action_id, turn_id=turn_id, session_id=session_id, round_id=str(round_id or self.ports.current_round_id.get()), created_at=now, domain=domain, action_type=action_type, action_subtype=action_subtype, tool_name=tool_name, args=args or {}, result=result, artifacts=artifacts, success=success, error=error, requires_llm=requires_llm, caller=caller, duration_ms=duration_ms)
         try:
             async with self.ports.connect() as conn:
                 cursor = await conn.execute('SELECT COALESCE(MAX(action_index), -1) AS max_idx FROM behavior_actions WHERE turn_id = ?', (turn_id,))

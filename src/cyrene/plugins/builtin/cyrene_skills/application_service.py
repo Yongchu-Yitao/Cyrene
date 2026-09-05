@@ -13,23 +13,10 @@ from urllib.parse import quote
 from cyrene.localization import localized
 
 from . import orchestrator as learning
+from .artifacts import local_file_path, step_artifact_paths, structured_paths
 
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-_FILE_EXTENSIONS = (
-    r"(?:png|jpg|jpeg|webp|gif|pdf|md|txt|json|csv|tsv|xlsx|docx|pptx|"
-    r"py|js|jsx|ts|tsx|css|html)"
-)
-_QUOTED_FILE_PATH_PATTERN = re.compile(
-    rf'(?:"(?P<double>(?:/(?!/)|[A-Za-z]:[\\/])[^"<>\r\n]+?\.{_FILE_EXTENSIONS})"'
-    rf"|'(?P<single>(?:/(?!/)|[A-Za-z]:[\\/])[^'<>\r\n]+?\.{_FILE_EXTENSIONS})')",
-    re.IGNORECASE,
-)
-_BARE_FILE_PATH_PATTERN = re.compile(
-    rf"(?P<path>(?<![A-Za-z0-9_:/\\\"'])(?:/(?!/)|[A-Za-z]:[\\/])"
-    rf"[^\s\"'<>\r\n]+?\.{_FILE_EXTENSIONS})",
-    re.IGNORECASE,
-)
 
 
 class LearningApplicationError(RuntimeError):
@@ -69,8 +56,14 @@ class MediaRepository:
         self.media_root = (data_dir / "behavior-media").resolve()
 
     def resolve(self, raw_path: str) -> Path:
-        raw = str(raw_path or "").strip()
-        direct = Path(raw).expanduser()
+        raw = local_file_path(raw_path)
+        if raw is None:
+            raise LearningApplicationError(
+                localized("Invalid local file reference.", "无效的本地文件引用。"),
+                400,
+                "invalid_file_reference",
+            )
+        direct = Path(raw)
         if direct.exists():
             return direct.resolve()
         normalized = raw.replace("\\", "/")
@@ -87,29 +80,7 @@ class MediaRepository:
 
     @staticmethod
     def extract_paths(value: Any) -> list[str]:
-        paths: list[str] = []
-        if isinstance(value, dict):
-            for item in value.values():
-                paths.extend(MediaRepository.extract_paths(item))
-            return paths
-        if isinstance(value, list):
-            for item in value:
-                paths.extend(MediaRepository.extract_paths(item))
-            return paths
-        text = str(value or "")
-        matches = (
-            (
-                match.group("double") or match.group("single")
-                for match in _QUOTED_FILE_PATH_PATTERN.finditer(text)
-            ),
-            (match.group("path") for match in _BARE_FILE_PATH_PATTERN.finditer(text)),
-        )
-        for group in matches:
-            for candidate in group:
-                path = candidate.rstrip(".,);]")
-                if path and path not in paths:
-                    paths.append(path)
-        return paths
+        return structured_paths(value)
 
     async def authorized_image(self, raw_path: str) -> tuple[Path, str] | None:
         target = self.resolve(raw_path)
@@ -122,16 +93,10 @@ class MediaRepository:
             for step in chain.get("chain") or []:
                 if not isinstance(step, dict):
                     continue
-                values = (
-                    step.get("args") or {},
-                    step.get("input_summary") or "",
-                    step.get("output_summary") or "",
-                )
-                for value in values:
-                    for candidate in self.extract_paths(value):
-                        if self.resolve(candidate) == target:
-                            media_type = mimetypes.guess_type(str(target))[0] or "image/png"
-                            return target, media_type
+                for candidate in step_artifact_paths(step):
+                    if self.resolve(candidate) == target:
+                        media_type = mimetypes.guess_type(str(target))[0] or "image/png"
+                        return target, media_type
         return None
 
 
@@ -163,14 +128,7 @@ class ToolChainProjection:
         for step in chain.get("chain") or []:
             if not isinstance(step, dict):
                 continue
-            candidates: list[str] = []
-            for value in (
-                step.get("args") or {},
-                step.get("input_summary") or "",
-                step.get("output_summary") or "",
-            ):
-                candidates.extend(self.media.extract_paths(value))
-            for raw_path in candidates:
+            for raw_path in step_artifact_paths(step):
                 if raw_path in seen:
                     continue
                 seen.add(raw_path)

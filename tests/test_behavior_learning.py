@@ -25,7 +25,7 @@ def test_behavior_media_path_extraction_requires_local_path_boundaries(tmp_path)
     assert media.extract_paths(console_output) == []
 
 
-def test_behavior_media_path_extraction_supports_quoted_spaces_and_bare_paths(tmp_path):
+def test_behavior_media_path_extraction_requires_structured_fields(tmp_path):
     from cyrene.plugins.builtin.cyrene_skills.application_service import (
         MediaRepository,
     )
@@ -37,7 +37,8 @@ def test_behavior_media_path_extraction_supports_quoted_spaces_and_bare_paths(tm
     assert media.extract_paths(quoted) == [
         "/Users/demo/Application Support/Cyrene/capture.png"
     ]
-    assert media.extract_paths(bare) == ["/tmp/cyrene/report.json"]
+    assert media.extract_paths(bare) == []
+    assert media.extract_paths({"path": "/tmp/cyrene/report.json"}) == ["/tmp/cyrene/report.json"]
 
 
 def test_behavior_media_route_serves_plugin_owned_path_with_spaces(

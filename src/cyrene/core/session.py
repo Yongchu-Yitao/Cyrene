@@ -33,8 +33,7 @@ from .context.compaction import (
     replace_compacted_summary,
 )
 from .context.projection import (
-    project_context_message,
-    selected_context_node_ids,
+    project_model_messages,
 )
 from .hook import (
     CONTEXT_CHANGE,
@@ -3042,6 +3041,15 @@ class AgentSession:
     def answer(self, question_id: str, answer: str) -> ContextNode:
         """Resolve one durable pending Plugin result and continue the same run."""
 
+        return self._answer(question_id, answer, resume=True)
+
+    def reject_pending_answer(self, question_id: str) -> ContextNode:
+        """Record denial without scheduling the old run's next model call."""
+
+        return self._answer(question_id, "deny", resume=False)
+
+    def _answer(self, question_id: str, answer: str, *, resume: bool) -> ContextNode:
+
         self.reconcile_plugins()
         normalized_question_id = str(question_id or "").strip()
         normalized_answer = str(answer or "").strip()
@@ -3090,7 +3098,7 @@ class AgentSession:
                             self._persist_session_permission_grant(fingerprint)
                         else:
                             self._permission_once_grants.add(fingerprint)
-            elif str(pending.get("kind") or "") == "clarification":
+            elif resume and str(pending.get("kind") or "") == "clarification":
                 self._append_clarification_authorization(run_id, normalized_answer)
 
             matched = False
@@ -3137,7 +3145,7 @@ class AgentSession:
                 "answer": normalized_answer,
                 "answered_at": datetime.now(timezone.utc).isoformat(),
             }
-            value["trigger_model"] = True
+            value["trigger_model"] = resume
             node = self.store.update_node(self.tree.id, node.id, value)
             answered_state = self._set_state_locked(
                 "queued",
@@ -4937,156 +4945,10 @@ class AgentSession:
         self.store.update_node(self.tree.id, leaf_id, value)
 
     def _messages(self, node_id: str) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
-        path = self.store.get_path(self.tree.id, node_id)
-        current_run_id = next(
-            (
-                str(node.value.get("run_id") or "")
-                for node in reversed(path)
-                if isinstance(node.value, Mapping)
-                and node.value.get("role") == "user"
-            ),
-            "",
+        return project_model_messages(
+            self.store.get_path(self.tree.id, node_id),
+            observation_services=tuple(self._plugin_services().values()),
         )
-        active_context_ids = selected_context_node_ids(path, current_run_id)
-        root_value = (
-            path[0].value
-            if path and isinstance(path[0].value, Mapping)
-            else {}
-        )
-        base_system_content = str(root_value.get("content") or "")
-        for node in path:
-            value = node.value if isinstance(node.value, Mapping) else {}
-            role = str(value.get("role") or "")
-            if role in {"context_compaction", "context_reflection"}:
-                compacted = value.get("messages")
-                if isinstance(compacted, list) and all(
-                    isinstance(message, Mapping) for message in compacted
-                ):
-                    messages = [deepcopy(dict(message)) for message in compacted]
-                    if str(value.get("run_id") or "") != current_run_id:
-                        system = next(
-                            (
-                                message
-                                for message in messages
-                                if str(message.get("role") or "") == "system"
-                                and message.get("compacted_block") is not True
-                            ),
-                            None,
-                        )
-                        if system is None and base_system_content:
-                            messages.insert(
-                                0,
-                                {
-                                    "role": "system",
-                                    "content": base_system_content,
-                                },
-                            )
-                        elif system is not None:
-                            system["content"] = base_system_content
-                continue
-            if role in {"system", "user"}:
-                content = str(value.get("content") or "")
-                messages.append({"role": role, "content": content})
-            elif role == "context":
-                if node.id not in active_context_ids:
-                    continue
-                content = str(value.get("content") or "").strip()
-                if not content:
-                    continue
-                project_context_message(messages, value)
-            elif role == "assistant":
-                message: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": str(value.get("content") or ""),
-                }
-                calls = value.get("tool_calls")
-                if isinstance(calls, list) and calls:
-                    message["tool_calls"] = [
-                        {
-                            "id": str(call.get("id") or ""),
-                            "type": "function",
-                            "function": {
-                                "name": str(call.get("name") or ""),
-                                "arguments": json.dumps(
-                                    call.get("arguments") or {},
-                                    ensure_ascii=False,
-                                    default=str,
-                                ),
-                            },
-                        }
-                        for call in calls
-                        if isinstance(call, Mapping)
-                    ]
-                    reasoning_details = value.get("reasoning_details")
-                    if isinstance(reasoning_details, list) and reasoning_details:
-                        message["reasoning_details"] = reasoning_details
-                messages.append(message)
-            elif role == "tool_results":
-                results = value.get("results")
-                observations: list[dict[str, Any]] = []
-                for result in results if isinstance(results, list) else ():
-                    if not isinstance(result, Mapping):
-                        continue
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": str(result.get("call_id") or ""),
-                            "name": str(result.get("name") or ""),
-                            "content": json.dumps(
-                                {
-                                    "success": bool(result.get("success")),
-                                    "value": result.get("value"),
-                                    "error": str(result.get("error") or ""),
-                                    **(
-                                        {"failure": result.get("failure")}
-                                        if isinstance(result.get("failure"), Mapping)
-                                        else {}
-                                    ),
-                                },
-                                ensure_ascii=False,
-                                default=str,
-                            ),
-                        }
-                    )
-                    observation = None
-                    # Application services may contribute a managed multimodal
-                    # result adapter. The first service that recognizes this
-                    # tool value owns materialization. This keeps binary pixels
-                    # out of the durable Plugin result while allowing MCP and
-                    # user-authorized live resources to share the model path.
-                    for observation_service in self._plugin_services().values():
-                        builder = getattr(
-                            observation_service,
-                            "build_observation_content",
-                            None,
-                        )
-                        if not callable(builder):
-                            continue
-                        observation = builder(
-                            result.get("value"),
-                            tool_name=str(result.get("name") or ""),
-                        )
-                        if not observation:
-                            continue
-                        materialize = getattr(
-                            observation_service,
-                            "materialize_content_block",
-                            None,
-                        )
-                        if callable(materialize):
-                            observation = [materialize(block) for block in observation]
-                        break
-                    if observation:
-                        observations.append(
-                            {
-                                "role": "user",
-                                "content": observation,
-                                "ephemeral_model_observation": True,
-                            }
-                        )
-                messages.extend(observations)
-        return messages
 
     def _persist_auxiliary_model_usage(
         self,

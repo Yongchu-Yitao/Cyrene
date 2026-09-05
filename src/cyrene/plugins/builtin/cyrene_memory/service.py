@@ -23,8 +23,7 @@ from cyrene.core.hook import (
     HookEvent,
 )
 from cyrene.core.context.projection import (
-    project_context_message,
-    selected_context_node_ids,
+    project_model_messages,
 )
 from cyrene.core.plugin import PluginContext, PluginSetupContext
 from cyrene.localization import app_language, localized
@@ -254,86 +253,10 @@ class MemoryService:
         *,
         include_anchor: bool = True,
     ) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
         path = self._path(node_id)
         if not include_anchor and path and path[-1].id == node_id:
             path = path[:-1]
-        current_user = next(
-            (
-                node
-                for node in reversed(path)
-                if isinstance(node.value, Mapping)
-                and node.value.get("role") in {"user", "context_reflection"}
-            ),
-            None,
-        )
-        current_run_id = str(current_user.value.get("run_id") if current_user is not None and isinstance(current_user.value, Mapping) else "")
-        active_context_ids = selected_context_node_ids(path, current_run_id)
-        for node in path:
-            value = node.value if isinstance(node.value, Mapping) else {}
-            role = str(value.get("role") or "")
-            if role == "context_reflection":
-                reflected = value.get("messages")
-                if isinstance(reflected, list) and all(
-                    isinstance(message, Mapping) for message in reflected
-                ):
-                    messages = [copy.deepcopy(dict(message)) for message in reflected]
-                continue
-            if role in {"system", "user"}:
-                messages.append({"role": role, "content": str(value.get("content") or "")})
-            elif role == "context":
-                if node.id not in active_context_ids:
-                    continue
-                project_context_message(messages, value)
-            elif role == "assistant":
-                message: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": str(value.get("content") or ""),
-                }
-                calls = value.get("tool_calls")
-                if isinstance(calls, list) and calls:
-                    message["tool_calls"] = [
-                        {
-                            "id": str(call.get("id") or ""),
-                            "type": "function",
-                            "function": {
-                                "name": str(call.get("name") or ""),
-                                "arguments": json.dumps(
-                                    call.get("arguments") or {},
-                                    ensure_ascii=False,
-                                    default=str,
-                                ),
-                            },
-                        }
-                        for call in calls
-                        if isinstance(call, Mapping)
-                    ]
-                    reasoning_details = value.get("reasoning_details")
-                    if isinstance(reasoning_details, list) and reasoning_details:
-                        message["reasoning_details"] = copy.deepcopy(reasoning_details)
-                messages.append(message)
-            elif role == "tool_results":
-                results = value.get("results")
-                for result in results if isinstance(results, list) else ():
-                    if not isinstance(result, Mapping):
-                        continue
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": str(result.get("call_id") or ""),
-                            "name": str(result.get("name") or ""),
-                            "content": json.dumps(
-                                {
-                                    "success": bool(result.get("success")),
-                                    "value": result.get("value"),
-                                    "error": str(result.get("error") or ""),
-                                },
-                                ensure_ascii=False,
-                                default=str,
-                            ),
-                        }
-                    )
-        return messages
+        return project_model_messages(path)
 
     def verified_evidence(self, node_id: str, *, max_chars: int = 6000) -> str:
         names: dict[str, str] = {}

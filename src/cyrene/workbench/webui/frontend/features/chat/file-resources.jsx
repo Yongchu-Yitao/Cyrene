@@ -1263,13 +1263,27 @@ var WorkbenchChatRuntimes = (function () {
       },
       onAwaitingUser: function (event) {
         // The run paused for a permission / clarification answer.
+        var payload = event && event.payload || {};
+        var pending = event.pending_question || event.pendingQuestion
+          || payload.pending_question || payload.pendingQuestion
+          || (event && event.kind ? event : null);
+        if (!pending || !pending.id) return;
+        // The core notification precedes the persisted Workbench outcome.
+        // Retain the stream until that outcome supplies the transcript and
+        // answerable question; settling here drops its later callbacks and
+        // can hydrate the chat before pendingQuestion has been committed.
+        if (event.type === "awaiting_user" && event.payload
+          && !event.pending_question && !event.pendingQuestion) {
+          update(chatId, function (cur) {
+            return cur ? { ...cur, pendingQuestion: pending, lastEventAt: Date.now() } : null;
+          });
+          return;
+        }
         if (event.retry) {
           fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
         }
         var awaitingMessages = Array.isArray(event.assistantMessages) ? event.assistantMessages : [];
         if (awaitingMessages.length) fire("onAssistantSaved", chatId, awaitingMessages);
-        var pending = event.pending_question || event.pendingQuestion
-          || (event && event.kind ? event : null);
         update(chatId, function (cur) {
           return cur ? { ...cur, pendingQuestion: pending || null, lastEventAt: Date.now() } : null;
         });
