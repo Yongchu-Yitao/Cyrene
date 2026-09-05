@@ -119,7 +119,7 @@ class WorkbenchChatApplicationPort:
 
     async def update(self, chat_id: str, command: Any) -> dict[str, Any]:
         values = _body(command)
-        chat = await asyncio.to_thread(self.service.repository.get, chat_id)
+        chat = await asyncio.to_thread(self.service.repository.get_metadata, chat_id)
         if not chat:
             raise ControlServiceError("chat not found", status_code=404)
         base = copy.deepcopy(chat)
@@ -127,9 +127,11 @@ class WorkbenchChatApplicationPort:
             chat["title"] = str(values.get("title") or "").strip()[:60] or chat.get("title")
             chat["titleLocked"] = True
         chat["updatedAt"] = self.service.utc_now_iso()
-        await asyncio.to_thread(self.service.repository.write_one, chat, base_chat=base)
+        chat = await asyncio.to_thread(self.service.repository.write_metadata, chat, base_metadata=base)
+        if chat is None:
+            raise ControlServiceError("chat not found", status_code=404)
         await publish_chat_changed(chat_id, str(chat.get("projectId") or ""), "updated")
-        return {"ok": True, "chat": self.service.public_chat_full(chat)}
+        return {"ok": True, "chat": self.service.public_chat_light(chat)}
 
     async def delete(self, chat_id: str) -> dict[str, Any]:
         payload = await asyncio.to_thread(self.service.repository.read)

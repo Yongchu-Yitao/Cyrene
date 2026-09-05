@@ -11,11 +11,15 @@ from typing import Any, cast
 
 from cyrene.workbench.chat.chat_dto import ChatDetailDTO, ChatStoreDTO
 from cyrene.workbench.persistence.store import (
+    chat_has_messages,
     mutate_chat,
+    mutate_chat_metadata,
     read_chat,
+    read_chat_metadata,
     read_chat_summaries,
     read_document,
     write_chat,
+    write_chat_metadata,
     write_document,
 )
 from cyrene.workbench.persistence.schema import connect
@@ -93,6 +97,23 @@ class ChatRepository:
                     "_workbench_versions",
                     {},
                 )
+
+    def get_metadata(self, chat_id: str) -> dict[str, Any] | None:
+        """Return metadata and the persisted summary, without messages."""
+        return read_chat_metadata(self._database(), chat_id)
+
+    def has_messages(self, chat_id: str) -> bool:
+        return chat_has_messages(self._database(), chat_id)
+
+    def mutate_metadata(
+        self, chat_id: str, mutation: Callable[[dict[str, Any]], Any],
+    ) -> dict[str, Any] | None:
+        return mutate_chat_metadata(self._database(), chat_id, mutation)
+
+    def write_metadata(
+        self, metadata: dict[str, Any], *, base_metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        return write_chat_metadata(self._database(), metadata, base_metadata=base_metadata)
 
     def write_one(
         self,

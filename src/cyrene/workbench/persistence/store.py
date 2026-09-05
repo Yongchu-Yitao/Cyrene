@@ -190,6 +190,22 @@ def read_chat_summaries(db_path: str | Path, default_factory: Callable[[], dict[
     return _chat_repository().read_chat_summaries(db_path, default_factory)
 
 
+def read_chat_metadata(db_path: str | Path, chat_id: str) -> dict[str, Any] | None:
+    return _chat_repository().read_chat_metadata(db_path, chat_id)
+
+
+def chat_has_messages(db_path: str | Path, chat_id: str) -> bool:
+    return _chat_repository().chat_has_messages(db_path, chat_id)
+
+
+def mutate_chat_metadata(db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any]) -> dict[str, Any] | None:
+    return _chat_repository().mutate_chat_metadata(db_path, chat_id, mutation)
+
+
+def write_chat_metadata(db_path: str | Path, metadata: dict[str, Any], *, base_metadata: dict[str, Any]) -> dict[str, Any] | None:
+    return _chat_repository().write_chat_metadata(db_path, metadata, base_metadata=base_metadata)
+
+
 def mutate_chat(db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]], *, commit_event: dict[str, Any] | None = None) -> dict[str, Any] | None:
     return _chat_repository().mutate_chat(
         db_path,

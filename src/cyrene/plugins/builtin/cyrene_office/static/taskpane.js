@@ -283,21 +283,20 @@
     return null;
   }
 
-  async function reconcileMutationSignatures(result) {
-    const selected = await getSelection();
-    const slideIds = new Set(selected.selectedSlides || []);
-    const deletedSlideIds = new Set(((result && result.deleted) || []).map(String));
-    if (result && result.slideId) slideIds.add(result.slideId);
+  function invalidateMutationSignatures(result) {
+    const slideIds = new Set();
+    if (state.selectedSlideId) slideIds.add(String(state.selectedSlideId));
+    if (result && result.slideId) slideIds.add(String(result.slideId));
     for (const item of (result && result.created) || []) {
-      if (item && item.slideId) slideIds.add(item.slideId);
+      if (item && item.slideId) slideIds.add(String(item.slideId));
     }
     for (const slideId of (result && result.deleted) || []) {
-      state.slideSignatures.delete(String(slideId));
-      state.shapeRefs.delete(String(slideId));
+      const deletedSlideId = String(slideId);
+      slideIds.add(deletedSlideId);
+      state.shapeRefs.delete(deletedSlideId);
     }
     for (const slideId of slideIds) {
-      if (deletedSlideIds.has(String(slideId))) continue;
-      await rememberSlideSignature(slideId);
+      state.slideSignatures.delete(slideId);
     }
   }
 
@@ -377,13 +376,10 @@
             throw error;
           }
           const result = await handler(message.params || {});
-          if (isMutation) await reconcileMutationSignatures(result);
+          if (isMutation) invalidateMutationSignatures(result);
           socket.send(JSON.stringify({ type: "response", id: message.id, ok: true, result: result }));
         } catch (error) {
-          if (isMutation) {
-            try { await reconcileMutationSignatures({}); }
-            catch (_) { /* Preserve the original mutation error. */ }
-          }
+          if (isMutation) invalidateMutationSignatures({});
           socket.send(JSON.stringify({ type: "response", id: message.id, ok: false, error: asError(error) }));
         } finally {
           if (isMutation) state.mutationInFlight = false;
@@ -886,7 +882,7 @@
     return PowerPoint.run(async (context) => {
       const slide = getSlide(context, params);
       slide.load("id");
-      const image = slide.getImageAsBase64({ width: params.width || 1440 });
+      const image = slide.getImageAsBase64({ width: params.width || 960 });
       await context.sync();
       return { status: "success", revision: state.revision, slideId: slide.id, mimeType: "image/png", imageBase64: image.value };
     });

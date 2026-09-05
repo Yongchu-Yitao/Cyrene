@@ -51,3 +51,29 @@ Waiting, reconnecting and terminal states do not show this indicator.
 Old persisted messages remain readable without inventing precise missing timing
 or changing their IDs. Legacy stream handlers exist for pre-timeline transports;
 current timeline events bypass their independent transcript reducers.
+
+## Streaming transport and replay
+
+Timeline wire version 2 preserves the existing record identities and presentation
+model. Record creation, structural changes and completion carry full `messages`.
+Text growth carries `updates`: each operation names a record, its `baseRevision`,
+text fields to `append`, metadata to `set`, and fields to `unset`. The receiver
+assembles the record locally and rejects operations without their exact base.
+Repeated/stale timeline revisions are ignored. Version 1 full-record logs remain
+readable. `snapshot: true` replaces the entire run projection.
+
+The renderer still receives the complete current message, retaining its 48 ms
+buffered cadence, stable Markdown blocks and tail fade. Network delta size no
+longer grows with the accumulated reply or reasoning trace.
+
+Streams own a cursor and a wake signal, rather than private event queues. All
+clients read the shared replay history, limited to 6,000 events and an 8 MiB
+serialized-size budget (ack plus the newest event are always retained, even if
+one event exceeds that budget). A lagging cursor receives the current snapshot
+and retained terminal events. Consumers never block the producer or accumulate
+an unbounded private backlog.
+
+Before SQLite evicts a replay prefix, it folds those operations into the ack's
+baseline snapshot in the same transaction. `replay_base_seq` prevents retried
+flushes from resurrecting already-compacted operations. Restart recovery loads
+the baseline and replays the retained suffix, including unfinished partial text.

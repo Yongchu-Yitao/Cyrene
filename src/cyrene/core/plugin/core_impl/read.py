@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 from typing import Any
 
-from ..plugin import Plugin, PluginContext
+from ..context import plugin_localized
+from ..plugin import Plugin, PluginContext, PluginExecutionError, PluginFailure
 from .permission_boundaries import path_boundary, resolved_path
 
 
@@ -26,7 +28,33 @@ def read_permission_boundary(
 
 async def read(arguments: dict[str, Any], context: PluginContext) -> str:
     path = _resolve_path(arguments.get("path"), context)
-    content = await asyncio.to_thread(path.read_text, encoding="utf-8")
+    try:
+        content = await asyncio.to_thread(path.read_text, encoding="utf-8")
+        if "\x00" in content:
+            raise UnicodeError("File contains NUL bytes")
+    except UnicodeError as exc:
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        message = plugin_localized(
+            context,
+            "Read only supports UTF-8 text. This file could not be read as UTF-8 text "
+            "(inferred type: {media_type}). For images, PDFs, or other attachments, "
+            "use AnalyzeAttachment with the same path; use toolbox to discover or "
+            "activate it if needed. For text in another encoding, decode it using "
+            "the correct encoding. Retrying Read or re-uploading the same file will "
+            "not fix this format mismatch.",
+            "Read 仅支持 UTF-8 文本，无法将此文件作为 UTF-8 文本读取"
+            "（推测类型：{media_type}）。图片、PDF 等附件请使用 AnalyzeAttachment，"
+            "传入相同 path；如工具未加载，请通过 toolbox 查找或激活。"
+            "其他编码的文本请使用正确编码解码。重试 Read 或重新上传相同文件"
+            "无法解决此格式不匹配问题。",
+            media_type=media_type,
+        )
+        raise PluginExecutionError(PluginFailure(
+            error_code="read_unsupported_format",
+            message=message,
+            details={"path": str(path), "inferred_media_type": media_type,
+                     "suggested_tool": "AnalyzeAttachment"},
+        )) from exc
     start_line = arguments.get("start_line")
     end_line = arguments.get("end_line")
     if start_line is None and end_line is None:
@@ -43,7 +71,8 @@ READ_PLUGIN = Plugin(
     name="Read",
     description=(
         "Read a UTF-8 text file, optionally selecting a 1-based inclusive "
-        "line range."
+        "line range. Does not read images, PDFs, or binary files; use "
+        "AnalyzeAttachment for those (discover it through toolbox if needed)."
     ),
     input_schema={
         "type": "object",

@@ -298,8 +298,8 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
     return api_workbench_get_chat
 
 
-async def _apply_agent_binding(chat: dict[str, Any], body: dict[str, Any], default_model: str):
-    if chat.get("messages"):
+async def _apply_agent_binding(chat: dict[str, Any], body: dict[str, Any], default_model: str, *, has_messages: bool):
+    if has_messages:
         return localized_error_response(
             "The Agent binding can only be changed in an empty chat.",
             "只能在空对话中更改 Agent 绑定。",
@@ -532,10 +532,10 @@ def _apply_workspace_preferences(
 def _register_update_route(router: APIRouter, context: ChatRouteContext):
     service = context.service
     _routes = context.runtime
-    _public_chat_full = service.public_chat_full
-    _get_workbench_chat = service.repository.get
+    _public_chat_light = service.public_chat_light
+    _get_workbench_chat = service.repository.get_metadata
     _utc_now_iso = service.utc_now_iso
-    _write_chat_store = service.repository.write_one
+    _write_chat_store = service.repository.write_metadata
 
     @router.patch("/api/workbench/chats/{chat_id}")
     async def api_workbench_update_chat(chat_id: str, body_model: api_models.ChatUpdateBody):
@@ -561,7 +561,8 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
             chat["title"] = str(body.get("title") or "").strip()[:60] or chat.get("title")
             chat["titleLocked"] = True
         if "agent" in body:
-            error = await _apply_agent_binding(chat, body, R.get_model())
+            has_messages = await asyncio.to_thread(service.repository.has_messages, chat_id)
+            error = await _apply_agent_binding(chat, body, R.get_model(), has_messages=has_messages)
             if error is not None:
                 return error
         if "agentConfigValues" in body:
@@ -756,13 +757,19 @@ def _register_update_route(router: APIRouter, context: ChatRouteContext):
                 )
             chat["activePlan"] = active_plan
         chat["updatedAt"] = _utc_now_iso()
-        await asyncio.to_thread(_write_chat_store, chat, base_chat=base_chat)
+        chat = await asyncio.to_thread(_write_chat_store, chat, base_metadata=base_chat)
+        if chat is None:
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
         await publish_chat_changed(
             chat_id,
             str(chat.get("projectId") or ""),
             "updated",
         )
-        return {"ok": True, "chat": _public_chat_full(chat)}
+        # PATCH returns metadata only. Clients merge it into their loaded
+        # detail; GET owns transcript hydration and file delivery.
+        return {"ok": True, "chat": _public_chat_light(chat)}
 
     return api_workbench_update_chat
 

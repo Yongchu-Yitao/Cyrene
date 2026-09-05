@@ -173,7 +173,7 @@ def test_terminal_failure_transfers_visible_records_before_clearing_runtime():
 @pytest.mark.parametrize("protocol", ["legacy", "versioned"])
 def test_guidance_during_reply_preserves_stream_identity_and_intermediate_marker(source_id, protocol):
     timeline = RunTimeline("guided-reply")
-    delivered = {}
+    delivered = RunTimeline(timeline.run_id)
     events = []
     names = ("reply_start", "reply_delta", "reply_done") if protocol == "legacy" else ("message.started", "message.delta", "message.completed")
 
@@ -181,8 +181,8 @@ def test_guidance_during_reply_preserves_stream_identity_and_intermediate_marker
         item = event(kind, second, **({"payload": payload} if protocol == "versioned" else payload))
         events.append(item)
         patch = timeline.apply(item)
-        delivered.update({record["id"]: record for record in patch["messages"]})
-        assert delivered == timeline.records
+        delivered.ingest(patch)
+        assert delivered.records == timeline.records
         return patch
 
     source = {"sourceId": source_id} if source_id else {}
@@ -216,14 +216,14 @@ def test_guidance_during_reply_preserves_stream_identity_and_intermediate_marker
 @pytest.mark.parametrize("protocol", ["legacy", "versioned"])
 def test_guidance_keeps_reasoning_owner_when_new_tool_opens_another_card(source_id, protocol):
     timeline = RunTimeline("guided-reasoning")
-    delivered = {}
+    delivered = RunTimeline(timeline.run_id)
     names = ("reasoning_start", "reasoning_delta", "reasoning_done") if protocol == "legacy" else ("reasoning.started", "reasoning.delta", "reasoning.completed")
 
     def publish(kind, second, **payload):
         item = event(kind, second, **({"payload": payload} if protocol == "versioned" else payload))
         patch = timeline.apply(item)
-        delivered.update({record["id"]: record for record in patch["messages"]})
-        assert delivered == timeline.records
+        delivered.ingest(patch)
+        assert delivered.records == timeline.records
         return patch
 
     source = {"sourceId": source_id} if source_id else {}

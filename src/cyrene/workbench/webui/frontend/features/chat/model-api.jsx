@@ -283,10 +283,11 @@ import { wbcErrorText } from "./errors.jsx"
       var event;
       try { event = JSON.parse(line); } catch (e) { return; }
       var eventCursor = Number(event._seq || 0);
+      if (event.timeline && handlers.onTimeline) handlers.onTimeline(event.timeline);
+      // A cursor acknowledges an applied projection, not just parsed bytes.
       if (eventCursor > 0 && handlers.onEventCursor) {
         handlers.onEventCursor(eventCursor);
       }
-      if (event.timeline && handlers.onTimeline) handlers.onTimeline(event.timeline);
       var type = String(event.type || "");
       if (event.timeline && handlers.onTimeline && /^(reply_|reasoning_|message\.|reasoning\.|tool\.|tool_call_|intermediate_message$|artifact\.|notification\.)/.test(type)) return;
       var eventId = String(event.eventId || event.event_id || "");

@@ -221,7 +221,7 @@ def test_durable_events_are_compressed_and_trimmed_like_live_buffer(monkeypatch,
             "WHERE run_id=? ORDER BY seq",
             (run.run_id,),
         ).fetchall()
-    assert rows == [(1, "text"), (7, "blob"), (8, "blob"), (9, "blob"), (10, "blob")]
+    assert rows == [(1, "blob"), (7, "blob"), (8, "blob"), (9, "blob"), (10, "blob")]
     restored = store.load_by_run_id(run.run_id)
     assert restored is not None
     assert [event["_seq"] for event in restored.events] == [1, 7, 8, 9, 10]
@@ -442,8 +442,8 @@ async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, t
     store = ChatRunEventStore(str(tmp_path / "locked-events.sqlite3"))
     run = ChatRun("chat_locked", {"type": "ack", "chatId": "chat_locked"})
     await run.configure_event_store(store)
-    queue = asyncio.Queue()
-    run.subscribers.add(queue)
+    changed = asyncio.Event()
+    run.subscribers.add(changed)
 
     def locked_append_many(_run_id, _events):
         raise sqlite3.OperationalError("database is locked")
@@ -454,7 +454,8 @@ async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, t
         run.publish({"type": "reply_done", "response": "completed"}),
         timeout=0.2,
     )
-    projected = await asyncio.wait_for(queue.get(), timeout=0.2)
+    await asyncio.wait_for(changed.wait(), timeout=0.2)
+    projected = run.events[-1]
     assert projected["type"] == "reply_done"
     assert projected["response"] == "completed"
 

@@ -253,6 +253,98 @@ class ChatRepository:
         finally:
             conn.close()
 
+    def _load_metadata(self, conn: sqlite3.Connection, chat_id: str) -> dict[str, Any] | None:
+        row = conn.execute(
+            'SELECT payload_json, summary_json FROM workbench_chats WHERE chat_id = ?',
+            (chat_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        metadata = json.loads(row[0])
+        metadata['id'] = chat_id
+        metadata['_messageProjection'] = json.loads(row[1])
+        return metadata
+
+    def read_chat_metadata(self, db_path: str | Path, chat_id: str) -> dict[str, Any] | None:
+        """Read metadata and its stored summary without hydrating messages."""
+        conn = _connect(db_path)
+        try:
+            return self._load_metadata(conn, str(chat_id or '').strip())
+        finally:
+            conn.close()
+
+    def chat_has_messages(self, db_path: str | Path, chat_id: str) -> bool:
+        """Check binding eligibility using one indexed existence lookup."""
+        conn = _connect(db_path)
+        try:
+            return conn.execute(
+                'SELECT 1 FROM workbench_chat_messages WHERE chat_id = ? LIMIT 1',
+                (chat_id,),
+            ).fetchone() is not None
+        finally:
+            conn.close()
+
+    def mutate_chat_metadata(
+        self, db_path: str | Path, chat_id: str,
+        mutation: Callable[[dict[str, Any]], Any],
+    ) -> dict[str, Any] | None:
+        """Atomically change metadata; transcript, summary and ordering are read-only.
+
+        The callback sees the latest metadata under the same write transaction
+        as message commits. It must not introduce transcript/projection fields.
+        Advancing updated_at keeps existing bundle three-way merges coherent.
+        """
+        target = str(chat_id or '').strip()
+        with self.ports.document_write_lock:
+            conn = _connect(db_path)
+            try:
+                conn.execute('BEGIN IMMEDIATE')
+                current = self._load_metadata(conn, target)
+                if current is None:
+                    conn.rollback()
+                    return None
+                projection = current.pop('_messageProjection')
+                before = _plain(current)
+                changed = mutation(current)
+                if changed is not False:
+                    if self._chat_id(current) != target:
+                        raise ValueError('Workbench chat mutation cannot change id')
+                    if 'messages' in current or '_messageProjection' in current:
+                        raise ValueError('Chat metadata cannot contain messages or their projection')
+                    conn.execute(
+                        'UPDATE workbench_chats SET payload_json = ?, updated_at = ? WHERE chat_id = ?',
+                        (json.dumps(current, ensure_ascii=False), datetime.now(timezone.utc).isoformat(), target),
+                    )
+                    conn.commit()
+                else:
+                    conn.rollback()
+                    return {**before, '_messageProjection': projection}
+                return {**current, '_messageProjection': projection}
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def write_chat_metadata(
+        self, db_path: str | Path, metadata: dict[str, Any], *, base_metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Merge an edited metadata snapshot with concurrent metadata changes."""
+        if 'messages' in metadata or 'messages' in base_metadata:
+            raise ValueError('Use the transcript repository to write messages')
+        target = self._chat_id(metadata)
+        if target != self._chat_id(base_metadata):
+            raise ValueError('Workbench chat mutation cannot change id')
+        local = {key: _plain(value) for key, value in metadata.items() if key != '_messageProjection'}
+        base = {key: _plain(value) for key, value in base_metadata.items() if key != '_messageProjection'}
+
+        def merge(current: dict[str, Any]) -> None:
+            merged = _three_way_merge(base, local, current, ('chats', target))
+            current.clear()
+            current.update(merged)
+
+        return self.mutate_chat_metadata(db_path, target, merge)
+
     def mutate_chat(self, db_path: str | Path, chat_id: str, mutation: Callable[[dict[str, Any]], Any], default_factory: Callable[[], dict[str, Any]], *, commit_event: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Mutate one chat atomically without hydrating sibling transcripts."""
         target = str(chat_id or '').strip()

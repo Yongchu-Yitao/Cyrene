@@ -318,12 +318,24 @@ function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
 
 // One projection for all surfaces. Server identities survive hydration and save.
 function wbcApplyTimeline(runtime, patch) {
-  if (!patch || patch.version !== 1) return runtime;
+  if (!patch || (patch.version !== 1 && patch.version !== 2)) return runtime;
   var current = runtime || {};
   if (current.timeline && current.timeline.runId === patch.runId && current.timeline.revision >= patch.revision) return current;
-  var prior = current.timeline && current.timeline.runId === patch.runId ? current.timeline.messages : [];
+  var prior = !patch.snapshot && current.timeline && current.timeline.runId === patch.runId ? current.timeline.messages : [];
   var byId = new Map((prior || []).map(function (message) { return [message.id, message]; }));
   (patch.messages || []).forEach(function (message) { byId.set(message.id, message); });
+  (patch.updates || []).forEach(function (update) {
+    var previous = byId.get(update.id);
+    if (!previous || Number(previous.timelineRevision || 0) !== update.baseRevision) {
+      throw new Error("Timeline text update is missing its base revision");
+    }
+    var message = { ...previous, ...update.set };
+    Object.keys(update.append || {}).forEach(function (field) {
+      message[field] = String(previous[field] || "") + update.append[field];
+    });
+    (update.unset || []).forEach(function (field) { delete message[field]; });
+    byId.set(update.id, message);
+  });
   var messages = Array.from(byId.values()).sort(function (a, b) { return a.timelineOrder - b.timelineOrder; });
   var lastReply = messages.filter(function (message) { return !message.activityCard && !message.intermediate && !message.notificationCard; }).slice(-1)[0];
   // These are read-only summaries for the composer/browser/resource shelf.

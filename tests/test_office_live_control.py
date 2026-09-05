@@ -68,6 +68,35 @@ async def test_office_bridge_serializes_parallel_requests_per_session():
 
 
 @pytest.mark.asyncio
+async def test_office_bridge_allows_parallel_read_requests_per_session():
+    from cyrene.plugins.builtin.cyrene_office.protocol import expected_handshake
+    from cyrene.plugins.builtin.cyrene_office.service import OfficeBridgeService
+
+    service = OfficeBridgeService()
+    socket = FakeWebSocket()
+    session = await service.register(socket, {
+        "host": "powerpoint",
+        "document": {"name": "demo.pptx"},
+        **expected_handshake(),
+    })
+
+    first = asyncio.create_task(service.call(session.session_id, "ppt.render_slide", {"slideIndex": 0}))
+    second = asyncio.create_task(service.call(session.session_id, "ppt.render_slide", {"slideIndex": 1}))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert len(socket.sent) == 2
+
+    for request in reversed(socket.sent):
+        service.receive(session, {
+            "type": "response",
+            "id": request["id"],
+            "ok": True,
+            "result": {"status": "success", "slideId": str(request["params"]["slideIndex"])},
+        })
+    assert {result["slideId"] for result in await asyncio.gather(first, second)} == {"0", "1"}
+
+
+@pytest.mark.asyncio
 async def test_office_bridge_routes_one_live_session_and_tracks_revision():
     from cyrene.plugins.builtin.cyrene_office.protocol import expected_handshake
     from cyrene.plugins.builtin.cyrene_office.service import OfficeBridgeService
@@ -407,7 +436,7 @@ def test_powerpoint_canonical_request_preflight_and_image_pipeline(
 
 
 @pytest.mark.asyncio
-async def test_create_slides_routes_simple_pages_in_progressive_stages(monkeypatch):
+async def test_create_slides_routes_simple_pages_atomically_by_default(monkeypatch):
     from cyrene.plugins.builtin.cyrene_office import kit
 
     calls = []
@@ -425,16 +454,14 @@ async def test_create_slides_routes_simple_pages_in_progressive_stages(monkeypat
     payload = json.loads(await kit._create_slides_handler({
         "expectedRevision": 10,
         "idempotencyKey": "deck",
-        "commitMode": "atomic",
-        "progressiveGranularity": "stage",
         "slideSpecs": [{"elements": []}, {"elements": []}],
     }))
     assert payload["status"] == "applied"
     assert payload["revision"] == 12
     assert [call[0]["expectedRevision"] for call in calls] == [10, 11]
     assert [call[0]["idempotencyKey"] for call in calls] == ["deck:slide:1", "deck:slide:2"]
-    assert all(call[0]["commitMode"] == "progressive" for call in calls)
-    assert all(call[0]["progressiveGranularity"] == "stage" for call in calls)
+    assert all(call[0]["commitMode"] == "atomic" for call in calls)
+    assert all("progressiveGranularity" not in call[0] for call in calls)
     assert [item["current"] for item in progress] == [0, 1, 2]
 
 
@@ -469,7 +496,7 @@ async def test_create_slides_routes_template_pages_through_template_composer(mon
 
 
 @pytest.mark.asyncio
-async def test_live_slide_spec_defaults_to_staged_preview_but_file_mode_stays_atomic(monkeypatch):
+async def test_live_slide_spec_defaults_to_atomic_and_preserves_explicit_progressive(monkeypatch):
     from cyrene.plugins.builtin.cyrene_office import kit
 
     calls = []
@@ -495,11 +522,20 @@ async def test_live_slide_spec_defaults_to_staged_preview_but_file_mode_stays_at
         "commitMode": "progressive",
         "slideSpec": {"elements": []},
     }, PluginContext())
+    await kit._method_handler("ppt.create_slide", {
+        "sessionId": "live-session",
+        "expectedRevision": 1,
+        "idempotencyKey": "live-progressive-slide",
+        "commitMode": "progressive",
+        "slideSpec": {"elements": []},
+    }, PluginContext())
 
-    assert calls[0][0]["commitMode"] == "progressive"
-    assert calls[0][0]["progressiveGranularity"] == "stage"
+    assert calls[0][0]["commitMode"] == "atomic"
+    assert "progressiveGranularity" not in calls[0][0]
     assert calls[0][3]["timeout"] == 300
     assert calls[1][0]["commitMode"] == "atomic"
+    assert calls[2][0]["commitMode"] == "progressive"
+    assert calls[2][0]["progressiveGranularity"] == "stage"
 
 
 @pytest.mark.asyncio
@@ -592,8 +628,9 @@ def test_powerpoint_addin_uses_typed_dispatch_without_eval():
     assert "state.mutationQueue.then(executeRequest, executeRequest)" in source
     assert "if (isMutation) state.mutationInFlight = true;" in source
     assert "if (isMutation) state.mutationInFlight = false;" in source
-    assert "if (isMutation) await reconcileMutationSignatures(result);" in source
-    assert "try { await reconcileMutationSignatures({}); }" in source
+    assert "if (isMutation) invalidateMutationSignatures(result);" in source
+    assert "if (isMutation) invalidateMutationSignatures({});" in source
+    assert "async function reconcileMutationSignatures" not in source
     assert 'requireApi("1.8", "Snapshot-backed automatic rollback for batch edits")' in source
     assert "const restoredSlideIds = await restoreSlideSnapshot(automaticRollback);" in source
     assert "await rollbackCreatedSlide(slideId);" in source

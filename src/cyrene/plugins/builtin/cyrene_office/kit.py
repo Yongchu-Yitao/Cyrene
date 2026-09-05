@@ -283,11 +283,17 @@ async def _method_handler(
         return await insert_slides_handler(args, context)
     request = deepcopy(args)
     if method in {"ppt.create_slide", "ppt.apply_slide_spec", "ppt.relayout_slide", "ppt.create_from_template", "ppt.replace_slide"}:
-        if str(request.get("mode") or "") == "file" or request.get("filePath"):
-            request["commitMode"] = "atomic"
-        else:
-            request["commitMode"] = "progressive"
+        file_mode = str(request.get("mode") or "") == "file" or bool(request.get("filePath"))
+        requested_commit_mode = str(request.get("commitMode") or "").strip()
+        request["commitMode"] = (
+            "atomic"
+            if file_mode or requested_commit_mode != "progressive"
+            else "progressive"
+        )
+        if request["commitMode"] == "progressive":
             request["progressiveGranularity"] = request.get("progressiveGranularity") or "stage"
+        else:
+            request.pop("progressiveGranularity", None)
     if method in {"ppt.relayout_slide", "ppt.replace_slide"}:
         request["replaceExisting"] = True
     return await execute_powerpoint_request(
@@ -433,7 +439,12 @@ async def _create_slides_handler(
     revision = args.get("expectedRevision")
     key = str(args.get("idempotencyKey") or "")
     file_mode = str(args.get("mode") or "") == "file" or bool(args.get("filePath"))
-    commit_mode = "atomic" if file_mode else "progressive"
+    requested_commit_mode = str(args.get("commitMode") or "").strip()
+    commit_mode = (
+        "atomic"
+        if file_mode or requested_commit_mode != "progressive"
+        else "progressive"
+    )
     if file_mode:
         args["commitMode"] = "atomic"
         return await execute_powerpoint_request(
@@ -463,8 +474,11 @@ async def _create_slides_handler(
             "expectedRevision": revision,
             "idempotencyKey": f"{key}:slide:{index + 1}",
             "commitMode": commit_mode,
-            "progressiveGranularity": request.get("progressiveGranularity") or "stage",
         })
+        if commit_mode == "progressive":
+            request["progressiveGranularity"] = request.get("progressiveGranularity") or "stage"
+        else:
+            request.pop("progressiveGranularity", None)
         method = "ppt.create_from_template" if template_slide_id else "ppt.create_slide"
         if template_slide_id:
             request["templateSlideId"] = template_slide_id
@@ -533,7 +547,16 @@ async def _create_slides_handler(
         "undoToken": None,
         "undoTokens": [item["undoToken"] for item in completed if item.get("undoToken")],
         "renderId": None,
-        "audit": {"action": "create_slides", "slideCount": len(completed), "commitMode": commit_mode, "progressiveGranularity": args.get("progressiveGranularity") or "stage"},
+        "audit": {
+            "action": "create_slides",
+            "slideCount": len(completed),
+            "commitMode": commit_mode,
+            "progressiveGranularity": (
+                args.get("progressiveGranularity") or "stage"
+                if commit_mode == "progressive"
+                else None
+            ),
+        },
     }, ensure_ascii=False)
 
 
@@ -598,7 +621,7 @@ def register_all(tool_defs: list[dict[str, Any]], tool_handlers: dict[str, Any],
         tool_handlers[name] = _bind(_edit_handler, op)
         tool_metadata[name] = office_tool_metadata(read_only=False)
     for name, method, description in COMPOSE:
-        props = {**_mutation_props(), "slideSpec": SLIDE_SPEC, "templateSlideId": {"type": "string"}, "replaceExisting": {"type": "boolean"}, "targetIndex": {"type": "integer", "minimum": 0}, "commitMode": {"type": "string", "enum": ["atomic", "progressive"], "description": "File mode writes atomically. Live composition uses the connected PowerPoint add-in and normally publishes a few logical stages."}, "progressiveGranularity": {"type": "string", "enum": ["stage", "element"], "description": "stage batches compatible Office.js operations to reduce round trips; element is reserved for an explicitly visible step-by-step build."}}
+        props = {**_mutation_props(), "slideSpec": SLIDE_SPEC, "templateSlideId": {"type": "string"}, "replaceExisting": {"type": "boolean"}, "targetIndex": {"type": "integer", "minimum": 0}, "commitMode": {"type": "string", "enum": ["atomic", "progressive"], "description": "Omit for the fast atomic default. Use progressive only when the user explicitly asks to watch a step-by-step build."}, "progressiveGranularity": {"type": "string", "enum": ["stage", "element"], "description": "Only used with explicit progressive mode. stage is faster than element."}}
         if method == "ppt.create_slides":
             props.pop("slideSpec", None)
             props["slideSpecs"] = {"type": "array", "items": SLIDE_SPEC, "minItems": 1, "maxItems": 100}

@@ -80,10 +80,68 @@ _DEFAULT_INITIAL_ROOT = object()
 _AGENT_LIFECYCLE_STATE_ID = "agent.lifecycle"
 _MODEL_RESPONSE_INVALID_RETRY_LIMIT = 1
 _MODEL_RESPONSE_RETRY_STATE_KEY = "_model_response_retry"
+_MODEL_TOOL_CALL_CORRECTION_TYPE = "cyrene.tool_call_correction"
 
 
 def _l(en: str, zh: str, **values: Any) -> str:
     return localized(en, zh, **values)
+
+
+def _tool_call_correction_payload(
+    details: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build a content-free recovery instruction for malformed tool calls."""
+
+    tool_calls: list[dict[str, Any]] = []
+    diagnostics = details.get("stream_diagnostics")
+    raw_calls = (
+        diagnostics.get("tool_calls")
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+    for raw_call in raw_calls if isinstance(raw_calls, list) else ():
+        if not isinstance(raw_call, Mapping):
+            continue
+        call: dict[str, Any] = {}
+        index = raw_call.get("index")
+        if isinstance(index, (str, int)):
+            call["index"] = index
+        name = str(raw_call.get("name") or "").strip()
+        if name and len(name) <= 128 and all(
+            character.isalnum() or character in "_.:-"
+            for character in name
+        ):
+            call["name"] = name
+        validation = str(raw_call.get("arguments_validation") or "").strip()
+        if validation in {"invalid_json", "not_object", "valid_object"}:
+            call["arguments_validation"] = validation
+        if call:
+            tool_calls.append(call)
+        if len(tool_calls) >= 32:
+            break
+
+    previous_attempt: dict[str, Any] = {
+        "status": "rejected",
+        "error_code": "model_response_invalid",
+        "retry_scope": "different_arguments",
+        "tool_calls_executed": False,
+    }
+    if tool_calls:
+        previous_attempt["tool_calls"] = tool_calls
+    return {
+        "type": _MODEL_TOOL_CALL_CORRECTION_TYPE,
+        "version": 1,
+        "previous_attempt": previous_attempt,
+        "required_action": {
+            "action": "regenerate_tool_calls",
+            "instructions": [
+                "Regenerate every required tool call with complete JSON object arguments.",
+                "Match the available tool schema exactly.",
+                "Do not assume that any tool call from the rejected attempt ran.",
+                "Return corrected tool calls instead of merely explaining the error.",
+            ],
+        },
+    }
 
 
 def _model_failure_projection(
@@ -3338,6 +3396,29 @@ class AgentSession:
             self._model_tools = self._direct_model_tool_definitions()
             tools = deepcopy(list(self._model_tools))
             messages = self._messages(trigger.id)
+            latest_trigger = self.store.get_node(self.tree.id, trigger.id)
+            latest_value = (
+                latest_trigger.value
+                if isinstance(latest_trigger.value, Mapping)
+                else {}
+            )
+            raw_retry_state = latest_value.get(_MODEL_RESPONSE_RETRY_STATE_KEY)
+            retry_state = (
+                raw_retry_state
+                if isinstance(raw_retry_state, Mapping)
+                else {}
+            )
+            correction = retry_state.get("correction")
+            if isinstance(correction, Mapping):
+                messages.append({
+                    "role": "user",
+                    "content": json.dumps(
+                        dict(correction),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                })
             message_tokens = messages_token_estimate(messages)
             tool_tokens = (
                 message_token_estimate({"role": "system", "tools": tools})
@@ -3806,10 +3887,11 @@ class AgentSession:
             if isinstance(result.error_details, Mapping)
             else {}
         )
+        retry_scope = str(details.get("retry_scope") or "")
         if (
             str(details.get("code") or "") != "model_response_invalid"
             or details.get("retryable") is False
-            or str(details.get("retry_scope") or "") != "immediate"
+            or retry_scope not in {"immediate", "different_arguments"}
         ):
             return False
 
@@ -3832,11 +3914,15 @@ class AgentSession:
             if attempts >= _MODEL_RESPONSE_INVALID_RETRY_LIMIT:
                 return False
             attempt = attempts + 1
-            value[_MODEL_RESPONSE_RETRY_STATE_KEY] = {
+            retry_state: dict[str, Any] = {
                 "code": "model_response_invalid",
                 "attempts": attempt,
                 "limit": _MODEL_RESPONSE_INVALID_RETRY_LIMIT,
+                "retry_scope": retry_scope,
             }
+            if retry_scope == "different_arguments":
+                retry_state["correction"] = _tool_call_correction_payload(details)
+            value[_MODEL_RESPONSE_RETRY_STATE_KEY] = retry_state
             retrying_state = self._set_state_locked(
                 "queued",
                 _l(
@@ -3872,6 +3958,7 @@ class AgentSession:
             run_id=run_id,
             node_id=trigger.id,
             failure_kind="model_response_invalid",
+            retry_scope=retry_scope,
             attempt=attempt,
             limit=_MODEL_RESPONSE_INVALID_RETRY_LIMIT,
         )

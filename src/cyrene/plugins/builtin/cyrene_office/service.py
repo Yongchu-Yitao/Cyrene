@@ -241,7 +241,8 @@ class OfficeBridgeService:
         request_id = secrets.token_urlsafe(14)
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
-        async with session.lock:
+
+        async def send_request() -> None:
             session.pending[request_id] = future
             try:
                 await session.websocket.send_json({
@@ -260,8 +261,10 @@ class OfficeBridgeService:
                         "无法向 PowerPoint 发送请求。",
                     ),
                 ) from exc
+
+        async def wait_for_response() -> dict[str, Any]:
             try:
-                payload = await asyncio.wait_for(future, timeout=timeout)
+                return await asyncio.wait_for(future, timeout=timeout)
             except TimeoutError as exc:
                 session.pending.pop(request_id, None)
                 raise OfficeBridgeError(
@@ -274,6 +277,19 @@ class OfficeBridgeService:
             except asyncio.CancelledError:
                 session.pending.pop(request_id, None)
                 raise
+
+        if method in READ_ONLY_METHODS:
+            # Wait for any active mutation before taking a snapshot, but do not
+            # hold the mutation lock while PowerPoint performs an expensive
+            # read such as slide rendering. Independent reads can then finish
+            # concurrently instead of accumulating each other's full latency.
+            async with session.lock:
+                await send_request()
+            payload = await wait_for_response()
+        else:
+            async with session.lock:
+                await send_request()
+                payload = await wait_for_response()
 
         if payload.get("ok") is not True:
             error = payload.get("error") if isinstance(payload.get("error"), dict) else {}

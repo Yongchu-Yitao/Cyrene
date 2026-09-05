@@ -157,7 +157,7 @@ def _public_message(message: Any) -> Any:
     return payload
 
 
-def _public_chat_full(chat: Mapping[str, Any]) -> dict[str, Any]:
+def _public_chat_light(chat: Mapping[str, Any]) -> dict[str, Any]:
     payload = {
         key: deepcopy(value)
         for key, value in chat.items()
@@ -172,6 +172,11 @@ def _public_chat_full(chat: Mapping[str, Any]) -> dict[str, Any]:
         })
     else:
         payload["projectMemoryEnabled"] = False
+    return payload
+
+
+def _public_chat_full(chat: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _public_chat_light(chat)
     public_messages = [
         public
         for item in chat.get("messages") or ()
@@ -385,10 +390,10 @@ def rename_chat(chat_id: str, title: str) -> dict[str, Any]:
         chat["titleLocked"] = True
         chat["updatedAt"] = _utc_now_iso()
 
-    chat = _chat_repository().mutate_one(chat_id, rename)
+    chat = _chat_repository().mutate_metadata(chat_id, rename)
     if not chat:
         raise LookupError(localized("Conversation not found.", "未找到对话。"))
-    return _public_chat_full(chat)
+    return _public_chat_light(chat)
 
 
 async def compact_chat(chat_id: str) -> dict[str, Any]:

@@ -105,7 +105,7 @@ class ChatSendController:
         )
         self.session_naming = ChatSessionNamingApplicationService(
             ChatSessionNamingDependencies(
-                mutate_chat=service.repository.mutate_one,
+                mutate_metadata=service.repository.mutate_metadata,
                 utc_now_iso=service.utc_now_iso,
             )
         )

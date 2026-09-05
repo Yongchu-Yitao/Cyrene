@@ -56,7 +56,14 @@ OFFICE_RESOURCE_METADATA = {
 
 
 def office_tool_metadata(*, read_only: bool) -> dict[str, Any]:
-    return {**OFFICE_RESOURCE_METADATA, "read_only": read_only}
+    return {
+        **OFFICE_RESOURCE_METADATA,
+        "read_only": read_only,
+        # The outer Plugin deadline must outlive the bridge deadline. Mutations
+        # can include image insertion and multi-slide composition; reads use a
+        # shorter budget but still leave room for PowerPoint's renderer.
+        "timeout_seconds": 120.0 if read_only else 600.0,
+    }
 
 STYLE_SCHEMA = {
     "type": "object",
@@ -179,7 +186,7 @@ APPLY_BATCH_DEF = tool_def(
 )
 RENDER_SLIDE_DEF = tool_def(
     "PowerPointRenderSlide",
-    "Render the actual live slide through PowerPoint and save the PNG locally for visual inspection.",
+    "Render the actual live slide through PowerPoint and save the PNG locally for visual inspection. Omit width for the fast 960 px default; request a larger render only when needed.",
     {**SESSION_PROPERTY, **SLIDE_PROPERTIES, "width": {"type": "integer", "minimum": 320, "maximum": 3840}},
 )
 VERIFY_SLIDE_DEF = tool_def(
@@ -960,7 +967,7 @@ async def render_slide_handler(
     params.pop("mode", None)
     session_id = str(params.pop("sessionId", "") or "") or None
     try:
-        result = await get_office_bridge().call(session_id, "ppt.render_slide", params, timeout=60)
+        result = await get_office_bridge().call(session_id, "ppt.render_slide", params, timeout=90)
         raw = str(result.pop("imageBase64", "") or "")
         if not raw:
             raise OfficeBridgeError("empty_render", "PowerPoint returned an empty slide render.")

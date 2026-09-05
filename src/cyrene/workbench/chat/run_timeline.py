@@ -191,12 +191,9 @@ class RunTimeline:
         else:
             identity = None
         if delta_kind and identity in self.records:
-            before = dict(self.records)
-            before[identity] = copy.deepcopy(before[identity])
-        else:
-            # Allocating a stream can also close older memberships and mark
-            # the preceding reply intermediate; include those changes too.
-            before = copy.deepcopy(self.records)
+            return self._append_text(identity, kind, payload)
+        # Structural events may close memberships or settle several records.
+        before = copy.deepcopy(self.records)
         if kind in {"reply_start", "message.started"}:
             self._reply(at, source, new=True)
         elif kind in {"reply_delta", "message.delta", "reply_done", "message.completed"}:
@@ -247,12 +244,55 @@ class RunTimeline:
             record["timelineRevision"] = self.revision
         return self.patch(changed)
 
+    def _append_text(self, identity: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Publish only the appended text, never the accumulated stream/trace."""
+        record = self.records[identity]
+        field = "content" if kind in {"reply_delta", "message.delta"} else "reasoning"
+        delta = str(payload.get("delta") or payload.get("text") or "")
+        previous = record.get("timelineRevision", 0)
+        record[field] += delta
+        fields: dict[str, Any] = {}
+        removed: list[str] = []
+        if field == "reasoning":
+            record["reasoningActive"] = True
+            record["status"] = "running"
+            record.pop("endedAt", None)
+            fields.update(reasoningActive=True, status="running")
+            removed.append("endedAt")
+        self.revision += 1
+        record["timelineRevision"] = self.revision
+        fields["timelineRevision"] = self.revision
+        patch = self.patch([])
+        patch["updates"] = [{"id": identity, "baseRevision": previous,
+                              "append": {field: delta}, "set": fields, "unset": removed}]
+        return patch
+
+    def ingest(self, patch: dict[str, Any]) -> None:
+        """Replay wire records/operations, including legacy full-record patches."""
+        if patch.get("snapshot"):
+            self.records.clear()
+            self.counter = 0
+        for message in patch.get("messages", []):
+            self.records[message["id"]] = copy.deepcopy(message)
+            self.counter = max(self.counter, int(message.get("timelineOrder") or 0))
+        for update in patch.get("updates", []):
+            record = self.records.get(update["id"])
+            if record is None or record.get("timelineRevision", 0) != update["baseRevision"]:
+                raise ValueError("Timeline text update is missing its base revision")
+            for field, text in update.get("append", {}).items():
+                record[field] = str(record.get(field) or "") + text
+            record.update(copy.deepcopy(update.get("set", {})))
+            for field in update.get("unset", []):
+                record.pop(field, None)
+        self.revision = int(patch.get("revision") or 0)
+        self.status = str(patch.get("status") or self.status)
+
     def patch(self, records: list[dict[str, Any]]) -> dict[str, Any]:
-        return {"version": 1, "runId": self.run_id, "revision": self.revision,
+        return {"version": 2, "runId": self.run_id, "revision": self.revision,
                 "status": self.status, "messages": copy.deepcopy(records)}
 
     def snapshot(self) -> dict[str, Any]:
-        return self.patch(list(self.records.values()))
+        return {**self.patch(list(self.records.values())), "snapshot": True}
 
     def messages(self) -> list[dict[str, Any]]:
         return copy.deepcopy(list(self.records.values()))

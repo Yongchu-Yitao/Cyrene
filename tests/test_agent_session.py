@@ -174,6 +174,7 @@ def test_invalid_model_response_retries_same_node_through_context_hook(tmp_path)
         "code": "model_response_invalid",
         "attempts": 1,
         "limit": 1,
+        "retry_scope": "immediate",
     }
     reset_events = [
         event
@@ -233,16 +234,33 @@ def test_invalid_model_response_retry_is_bounded(tmp_path):
     session.close()
 
 
-def test_invalid_tool_call_response_is_not_blindly_retried(tmp_path):
+def test_invalid_tool_call_response_retries_with_structured_correction(tmp_path):
     model_calls = 0
+    model_messages = []
+    invalid_arguments = '{"path":"secret.txt","content":"private fragment"'
 
-    async def invalid_tool_call(_arguments, _context):
+    async def invalid_tool_call(arguments, _context):
         nonlocal model_calls
         model_calls += 1
-        raise ModelCallError(replace(
-            classify_model_error("invalid Provider Plugin result"),
-            retry_scope="different_arguments",
-        ))
+        model_messages.append(arguments["messages"])
+        if model_calls == 1:
+            raise ModelCallError(
+                replace(
+                    classify_model_error("invalid Provider Plugin result"),
+                    retry_scope="different_arguments",
+                ),
+                diagnostics={
+                    "adapter": "anthropic",
+                    "tool_calls": [{
+                        "index": "0",
+                        "name": "Write",
+                        "arguments_length": len(invalid_arguments),
+                        "arguments_sha256": "not-forwarded-to-model",
+                        "arguments_validation": "invalid_json",
+                    }],
+                },
+            )
+        return {"content": "recovered", "tool_calls": []}
 
     registry = PluginRegistry()
     registry.register_pack(
@@ -270,11 +288,71 @@ def test_invalid_tool_call_response_is_not_blindly_retried(tmp_path):
         registry=registry,
     )
 
-    session.submit("hello", run_id="invalid-tool-call-no-retry")
+    session.submit("hello", run_id="invalid-tool-call-correction")
     run(session.drain())
 
-    assert model_calls == 1
-    output = session.final_output("invalid-tool-call-no-retry")
+    assert model_calls == 2
+    assert len(model_messages[1]) == len(model_messages[0]) + 1
+    correction = json.loads(model_messages[1][-1]["content"])
+    assert correction["type"] == "cyrene.tool_call_correction"
+    assert correction["version"] == 1
+    assert correction["previous_attempt"] == {
+        "status": "rejected",
+        "error_code": "model_response_invalid",
+        "retry_scope": "different_arguments",
+        "tool_calls_executed": False,
+        "tool_calls": [{
+            "index": "0",
+            "name": "Write",
+            "arguments_validation": "invalid_json",
+        }],
+    }
+    assert correction["required_action"]["action"] == "regenerate_tool_calls"
+    serialized_correction = model_messages[1][-1]["content"]
+    assert invalid_arguments not in serialized_correction
+    assert "private fragment" not in serialized_correction
+    assert "not-forwarded-to-model" not in serialized_correction
+    output = session.final_output("invalid-tool-call-correction")
+    assert output is not None
+    assert output["content"] == "recovered"
+    assert output.get("error") is not True
+    session.close()
+
+
+def test_invalid_tool_call_correction_retry_is_bounded(tmp_path):
+    model_calls = 0
+
+    async def invalid_tool_call(_arguments, _context):
+        nonlocal model_calls
+        model_calls += 1
+        raise ModelCallError(replace(
+            classify_model_error("invalid Provider Plugin result"),
+            retry_scope="different_arguments",
+        ))
+
+    registry = PluginRegistry()
+    registry.register_pack(
+        PluginPack(
+            "model",
+            "model",
+            (Plugin("MiniMax", "fake", {"type": "object"}, invalid_tool_call, kind="model"),),
+        ),
+        source="test",
+    )
+    plugin_directory = tmp_path / "plugin_impl"
+    plugin_directory.mkdir()
+    session = AgentSession(
+        tmp_path / "data",
+        tmp_path / "workspace",
+        plugin_directory,
+        registry=registry,
+    )
+
+    session.submit("hello", run_id="invalid-tool-call-bounded")
+    run(session.drain())
+
+    assert model_calls == 2
+    output = session.final_output("invalid-tool-call-bounded")
     assert output is not None
     assert output["error"] is True
     assert output["failure_kind"] == "model_response_invalid"

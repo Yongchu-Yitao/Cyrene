@@ -29,7 +29,7 @@ SQLite, so accepted guidance remains session-isolated and idempotent.
 from __future__ import annotations
 
 import asyncio
-import copy
+from bisect import bisect_right
 import json
 import logging
 import sqlite3
@@ -53,17 +53,14 @@ from cyrene.workbench.chat.run_timeline import RunTimeline
 
 logger = logging.getLogger(__name__)
 
-# How long an attached stream blocks on the queue before re-checking whether the
+# How long an attached stream waits for a change before re-checking whether the
 # run has finished. Small enough that termination is snappy, large enough that an
 # idle attached client is not a busy-loop.
 _STREAM_POLL_SECONDS = 0.25
-# Upper bound on buffered events for one run. A single reply streamed token by
-# token can emit thousands of ``reply_delta`` events; this caps memory while a
-# run is live. On overflow the OLDEST non-ack events are dropped — a reconnect
-# from before the trim still converges because ``reply_done`` carries the full
-# text and ``saved`` carries the persisted messages. For a normal exchange the
-# buffer never trims.
+# Shared replay history is bounded by count and serialized size. A subscriber
+# behind the retained cursor receives the authoritative timeline snapshot.
 _MAX_BUFFER_EVENTS = 6000
+_MAX_BUFFER_BYTES = 8 * 1024 * 1024
 # Keep a finished run in the registry this long so a client that reconnects just
 # after completion can still replay the terminal events (``saved`` etc.) before
 # falling back to a transcript re-pull.
@@ -158,6 +155,32 @@ def _trim_durable_events(
     cutoff = int(last_seq) - (_MAX_BUFFER_EVENTS - 1)
     if cutoff < 2:
         return
+    rows = conn.execute(
+        "SELECT seq, event_json FROM workbench_chat_run_events WHERE run_id = ? AND seq <= ? ORDER BY seq",
+        (str(run_id), cutoff),
+    ).fetchall()
+    if any(int(row["seq"]) > 1 for row in rows):
+        baseline = RunTimeline(str(run_id))
+        ack: dict[str, Any] | None = None
+        for row in rows:
+            item = _decode_durable_event(row["event_json"])
+            if int(row["seq"]) == 1:
+                ack = item
+            patch = item.get("timeline")
+            if isinstance(patch, dict) and patch.get("version") in {1, 2}:
+                baseline.ingest(patch)
+            else:
+                baseline.apply(item)
+        if ack is not None:
+            ack = {**ack, "timeline": baseline.snapshot()}
+            conn.execute(
+                "UPDATE workbench_chat_run_events SET event_json = ? WHERE run_id = ? AND seq = 1",
+                (_encode_durable_event(ack), str(run_id)),
+            )
+    conn.execute(
+        "UPDATE workbench_chat_runs SET replay_base_seq = MAX(replay_base_seq, ?) WHERE run_id = ?",
+        (cutoff, str(run_id)),
+    )
     conn.execute(
         """
         DELETE FROM workbench_chat_run_events
@@ -203,7 +226,8 @@ class ChatRunEventStore:
                     completed_at TEXT NOT NULL DEFAULT '',
                     termination_reason TEXT NOT NULL DEFAULT '',
                     outcome_kind TEXT NOT NULL DEFAULT '',
-                    last_seq INTEGER NOT NULL DEFAULT 0
+                    last_seq INTEGER NOT NULL DEFAULT 0,
+                    replay_base_seq INTEGER NOT NULL DEFAULT 1
                 );
                 CREATE INDEX IF NOT EXISTS idx_workbench_chat_runs_chat
                     ON workbench_chat_runs(chat_id, created_at DESC);
@@ -218,6 +242,9 @@ class ChatRunEventStore:
                 );
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(workbench_chat_runs)")}
+            if "replay_base_seq" not in columns:
+                conn.execute("ALTER TABLE workbench_chat_runs ADD COLUMN replay_base_seq INTEGER NOT NULL DEFAULT 1")
             cutoff = (
                 datetime.now(timezone.utc)
                 - timedelta(days=_DURABLE_RETENTION_DAYS)
@@ -286,6 +313,12 @@ class ChatRunEventStore:
         if not events:
             return
         with self._lock, self._connect() as conn:
+            base = conn.execute("SELECT replay_base_seq FROM workbench_chat_runs WHERE run_id = ?", (str(run_id),)).fetchone()
+            # Cancelled thread flushes may have committed before being retried.
+            # Never resurrect operations already folded into the baseline.
+            events = [event for event in events if int(event.get("_seq") or 0) > (int(base[0]) if base else 1)]
+            if not events:
+                return
             rows = [
                 (
                     str(run_id),
@@ -517,20 +550,22 @@ class ChatRun:
             self.chat_id, db_path=db_path, run_id=self.run_id
         )
         self.guidance_channel = WorkbenchGuidanceChannel(self.inbox)
-        self.max_buffer = int(max_buffer)
+        self.max_buffer = max(2, int(max_buffer))
         self.seq = 1
         # Event 1 is always the ack so a fresh attach (cursor 0) replays the
         # whole exchange from the top.
         self.events: list[dict[str, Any]] = [
             {"_seq": 1, "runId": self.run_id, **ack}
         ]
-        self.subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
+        self.subscribers: set[asyncio.Event] = set()
         self.done = asyncio.Event()
         self.ready = asyncio.Event()
         self.task: asyncio.Task[Any] | None = None
         self.saw_reply_events = False
         self.timeline = RunTimeline(self.run_id)
         self.events[0]["timeline"] = self.timeline.snapshot()
+        self._event_sizes = [len(_ndjson_line(self.events[0]).encode("utf-8"))]
+        self._buffer_bytes = sum(self._event_sizes)
         self.status = "running"
         self.termination_reason = ""
         # Result for non-streaming callers, set by the runner:
@@ -570,6 +605,8 @@ class ChatRun:
         run.max_buffer = max(_MAX_BUFFER_EVENTS, len(events))
         run.seq = int(last_seq)
         run.events = list(events)
+        run._event_sizes = [len(_ndjson_line(event).encode("utf-8")) for event in events]
+        run._buffer_bytes = sum(run._event_sizes)
         run.subscribers = set()
         run.done = asyncio.Event()
         run.ready = asyncio.Event()
@@ -584,11 +621,8 @@ class ChatRun:
         run.timeline = RunTimeline(run.run_id)
         for event in events:
             patch = event.get("timeline")
-            if isinstance(patch, dict) and patch.get("version") == 1:
-                for message in patch.get("messages", []):
-                    run.timeline.records[message["id"]] = copy.deepcopy(message)
-                run.timeline.revision = int(patch.get("revision") or 0)
-                run.timeline.status = str(patch.get("status") or status)
+            if isinstance(patch, dict) and patch.get("version") in {1, 2}:
+                run.timeline.ingest(patch)
             else:
                 run.timeline.apply(event)
         run.timeline.counter = max((int(message.get("timelineOrder") or 0)
@@ -740,7 +774,10 @@ class ChatRun:
                 exc_info=True,
             )
         if self._persist_live_message is not None:
-            for message in (event.get("timeline") or {}).get("messages", []):
+            patch = event.get("timeline") or {}
+            changed_messages = [*patch.get("messages", []),
+                                *(self.timeline.records[update["id"]] for update in patch.get("updates", []))]
+            for message in changed_messages:
                 if message.get("status") == "running":
                     continue
                 try:
@@ -750,6 +787,9 @@ class ChatRun:
         self.seq += 1
         stored = {"_seq": self.seq, "runId": self.run_id, **dict(event)}
         self.events.append(stored)
+        size = len(_ndjson_line(stored).encode("utf-8"))
+        self._event_sizes.append(size)
+        self._buffer_bytes += size
         if self._event_store is not None:
             self._event_store_pending.append(stored)
             event_type = str(event.get("type") or "")
@@ -758,17 +798,19 @@ class ChatRun:
                 or len(self._event_store_pending) >= _DURABLE_EVENT_BATCH_MAX
             )
             self._schedule_event_store_flush(immediate=flush_immediately)
-        if len(self.events) > self.max_buffer:
-            # Keep the ack (events[0]); drop the oldest events after it.
-            overflow = len(self.events) - self.max_buffer
+        overflow = max(0, len(self.events) - self.max_buffer)
+        removed_bytes = sum(self._event_sizes[1:1 + overflow])
+        while self._buffer_bytes - removed_bytes > _MAX_BUFFER_BYTES and len(self.events) - overflow > 2:
+            removed_bytes += self._event_sizes[1 + overflow]
+            overflow += 1
+        if overflow:
             del self.events[1:1 + overflow]
+            del self._event_sizes[1:1 + overflow]
+            self._buffer_bytes -= removed_bytes
         if str(event.get("type") or "").startswith(_REPLY_EVENT_PREFIX):
             self.saw_reply_events = True
-        for queue in list(self.subscribers):
-            try:
-                queue.put_nowait(stored)
-            except Exception:
-                pass
+        for signal in self.subscribers:
+            signal.set()
 
     async def publish(self, event: dict[str, Any]) -> None:
         """Project once, then deliver the same records to storage and clients."""
@@ -952,11 +994,8 @@ class ChatRunManager:
                     logger.exception("Failed to close deleted chat inbox %s", target)
                 run.ready.set()
                 run.done.set()
-                for queue in list(run.subscribers):
-                    try:
-                        queue.put_nowait(None)
-                    except Exception:
-                        pass
+                for signal in run.subscribers:
+                    signal.set()
             if self.runs.get(target) is run:
                 self.runs.pop(target, None)
             lease = self._leases.pop(run.run_id, None)
@@ -1218,11 +1257,8 @@ class ChatRunManager:
                     )
             # Nudge attached streams so they re-check ``done`` immediately rather
             # than waiting out the poll timeout.
-            for queue in list(run.subscribers):
-                try:
-                    queue.put_nowait(None)
-                except Exception:
-                    pass
+            for signal in run.subscribers:
+                signal.set()
             self._schedule_cleanup(run)
 
     def _schedule_cleanup(self, run: ChatRun) -> None:
@@ -1260,38 +1296,38 @@ class ChatRunManager:
         event can slip through the gap; a ``_seq`` high-water mark dedupes the
         boundary defensively.
         """
-        cursor = int(cursor or 0)
-        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-        backlog = [event for event in run.events if int(event.get("_seq") or 0) > cursor]
-        retained = [int(event.get("_seq") or 0) for event in run.events if int(event.get("_seq") or 0) > 1]
-        if retained and cursor < min(retained) - 1:
-            terminal = [event for event in backlog if event.get("type") in {"saved", "error", "interrupted", "awaiting_user"}]
-            snapshot = {"type": "timeline_snapshot", "_seq": run.seq, "runId": run.run_id,
-                        "timeline": run.timeline.snapshot()}
-            backlog = [run.events[0], snapshot, *terminal]
-
-        run.subscribers.add(queue)
+        last = int(cursor or 0)
+        changed = asyncio.Event()
+        run.subscribers.add(changed)
         try:
-            last = cursor
-            for event in backlog:
-                last = max(last, int(event.get("_seq") or 0))
-                yield _ndjson_line(event)
             while True:
-                if run.done.is_set() and queue.empty():
+                # No await between clearing the signal and taking the replay
+                # view: publications cannot fall between subscription and read.
+                changed.clear()
+                start = bisect_right(run.events, last, key=lambda event: int(event.get("_seq") or 0))
+                backlog = run.events[start:]
+                first_retained = int(run.events[1]["_seq"]) if len(run.events) > 1 else run.seq + 1
+                if run.seq > 1 and last < first_retained - 1:
+                    terminal = [event for event in backlog if event.get("type") in {"saved", "error", "interrupted", "awaiting_user"}]
+                    snapshot = {"type": "timeline_snapshot", "_seq": run.seq, "runId": run.run_id,
+                                "timeline": run.timeline.snapshot()}
+                    backlog = ([run.events[0]] if last == 0 else []) + [snapshot, *terminal]
+                for event in backlog:
+                    last = max(last, int(event.get("_seq") or 0))
+                    yield _ndjson_line(event)
+                # Release the bounded replay view before waiting. A subscriber
+                # owns a cursor and signal, never an accumulating event queue.
+                backlog.clear()
+                if run.done.is_set() and last >= run.seq:
                     break
+                if last < run.seq:
+                    continue
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=_STREAM_POLL_SECONDS)
+                    await asyncio.wait_for(changed.wait(), timeout=_STREAM_POLL_SECONDS)
                 except asyncio.TimeoutError:
                     continue
-                if event is None:  # wakeup nudge from _drive — re-check done at top
-                    continue
-                seq = int(event.get("_seq") or 0)
-                if seq <= last:
-                    continue
-                last = seq
-                yield _ndjson_line(event)
         finally:
-            run.subscribers.discard(queue)
+            run.subscribers.discard(changed)
 
     async def persist_model_status_message(
         self,

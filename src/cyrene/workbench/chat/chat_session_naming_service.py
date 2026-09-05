@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class ChatSessionNamingDependencies:
-    mutate_chat: Callable[[str, Callable[[dict[str, Any]], Any]], Any]
+    mutate_metadata: Callable[[str, Callable[[dict[str, Any]], Any]], Any]
     utc_now_iso: Callable[[], str]
 
 
@@ -89,7 +89,7 @@ class ChatSessionNamingApplicationService:
                 chat["titleNamingStatus"] = "locked" if bool(chat.get("titleLocked")) else "failed"
             return True
 
-        self.dependencies.mutate_chat(chat_id, update)
+        self.dependencies.mutate_metadata(chat_id, update)
         return changed
 
 
