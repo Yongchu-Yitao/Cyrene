@@ -173,3 +173,9 @@ File Upload 更严格：
 | `browser_tab_close` | 关闭指定或活动 Tab |
 | `browser_scroll` | 以可信 Wheel Input 滚动 Page 或 Nested Scroll Container |
 | `browser_request_takeover` | 打开 Native Window，等待用户登录后继续 |
+
+### 本地 HTML 交互预览
+
+桌面端 Agent 可调用 `browser_open_file({"path": "demo/index.html"})`，在内置浏览器的独立预览标签页打开当前工作区内的 HTML。随后可使用现有的快照、截图、点击和输入工具检查页面。再次调用会替换上一个本地预览；修改后也可使用浏览器刷新按钮加载最新内容。
+
+支持 HTML 同目录及其子目录内的相对 CSS、JavaScript、图片、字体等资源，以及隔离的 localStorage/sessionStorage。预览不共享普通浏览器的登录信息，关闭后清理临时资源。依赖需要保存在本地：外部网络、弹窗、隐藏文件及目录外资源均不开放。普通 `browser_navigate` 的公网 URL 校验保持不变；非 Electron 环境会明确返回不支持本地预览。

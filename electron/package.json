@@ -182,6 +182,7 @@
       "development-data-migration.js",
       "host-control.js",
       "browser-input.js",
+      "browser-local-preview.js",
       "browser-deep-dom.js",
       "browser-context-menu.js",
       "browser-popup-policy.js",

@@ -216,3 +216,9 @@ changed source file; the snapshot is removed after at most 15 minutes.
 | `browser_tab_close` | Close a specified or active browser tab. |
 | `browser_scroll` | Send trusted wheel input to the page or a nested scroll container. |
 | `browser_request_takeover` | Open a real window for the user to log in, pause, then resume authenticated. |
+
+### Interactive local HTML previews
+
+Desktop agents can call `browser_open_file({"path": "demo/index.html"})` to open workspace HTML in an isolated embedded browser tab, then use the existing snapshot, screenshot, click and type tools. Calling it again replaces the previous local preview; the browser reload button also picks up edits.
+
+Relative CSS, JavaScript, images, fonts and other web assets in the HTML directory and its descendants are supported, with isolated localStorage/sessionStorage. Preview sessions do not share normal browsing credentials and release temporary resources on close. Bundle dependencies locally: external networking, popups, hidden files and resources outside the HTML directory are blocked. Normal `browser_navigate` URL validation is unchanged. Non-Electron environments return an explicit unsupported result.

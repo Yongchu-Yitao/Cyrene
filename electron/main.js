@@ -51,6 +51,7 @@ const {
 } = require('./browser-popup-policy');
 const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
+const { createLocalPreview } = require('./browser-local-preview');
 const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
 const { createBackendPortWaiters } = require('./backend-port-waiters');
 const { createSingleFlight, loadWindowUrl } = require('./main-window-lifecycle');
@@ -1822,10 +1823,10 @@ class BrowserTabManager {
     });
   }
 
-  createView() {
+  createView(partition = this.partition) {
     const view = new WebContentsView({
       webPreferences: {
-        partition: this.partition,
+        partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -2506,14 +2507,23 @@ class BrowserTabManager {
     return this.createTab({ url, activate: true });
   }
 
-  async createTab({ url = 'about:blank', activate = true, agentOwnerRoundId = '' } = {}) {
+  async createTab({ url = 'about:blank', activate = true, agentOwnerRoundId = '', preview = null, partition = this.partition } = {}) {
     if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
     // Warm the tiny picker renderer alongside the first page so opening the
     // menu never waits for a new preload/data-document navigation.
     try { this.ensureTabPickerView(); } catch (_) {}
     const id = `tab_${this.nextTabId++}`;
-    const view = this.createView();
+    const view = this.createView(partition);
+    if (preview) {
+      view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      view.webContents.once('destroyed', () => {
+        preview.close();
+        session.fromPartition(partition).clearStorageData().catch(() => {});
+        guardedBrowserPartitions.delete(partition);
+      });
+    }
     const tab = {
+      preview,
       id,
       view,
       url: normalizeBrowserUrl(url),
@@ -3516,13 +3526,36 @@ class BrowserTabManager {
     return this.state();
   }
 
+  async openLocalFile({ path: filePath, workspace, maxChars = 8000, agentOwnerRoundId = '' } = {}) {
+    const preview = await createLocalPreview(filePath, workspace);
+    const partition = `cyrene-preview-${crypto.randomUUID()}`;
+    installBrowserSessionGuards(partition);
+    const previewSession = session.fromPartition(partition);
+    previewSession.webRequest.onBeforeRequest((details, callback) => {
+      callback({ cancel: !preview.allows(details.url) });
+    });
+    try {
+      const previous = [...this.tabs.values()].filter(tab => tab.preview);
+      const tab = await this.createTab({ preview, partition, agentOwnerRoundId });
+      for (const old of previous) this.closeTab(old.id);
+      return await this.navigate({ url: preview.url, tabId: tab.id, maxChars, agentOwnerRoundId });
+    } catch (error) {
+      preview.close();
+      throw error;
+    }
+  }
+
   async navigate({ url, tabId = '', maxChars = 8000, agentOwnerRoundId = '' } = {}) {
     this.invalidateSnapshot();
     const targetUrl = normalizeBrowserUrl(url);
     const ownerRoundId = String(agentOwnerRoundId || '').trim();
     let tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (tab && tab.preview && !tab.preview.allows(targetUrl)) {
+      if (tabId) return { ok: false, error: 'Use a regular browser tab for external navigation.' };
+      tab = null;
+    }
     if (!tabId && ownerRoundId && (!tab || tab.agentCreated !== true)) {
-      const reusable = this._agentTabs().slice(-1)[0];
+      const reusable = this._agentTabs().filter(item => !item.preview).slice(-1)[0];
       tab = reusable || await this.createTab({
         url: 'about:blank',
         activate: true,
@@ -5264,6 +5297,11 @@ async function handleBrowserRpc(method, args, context = {}) {
       return manager.activateTab(args && args.tabId);
     case 'closeTab':
       return manager.closeTab(args && args.tabId);
+    case 'openLocalFile':
+      return manager.openLocalFile({
+        ...(args || {}),
+        agentOwnerRoundId: agentRequest ? roundId : '',
+      });
     case 'navigate':
       return manager.navigate({
         ...(args || {}),

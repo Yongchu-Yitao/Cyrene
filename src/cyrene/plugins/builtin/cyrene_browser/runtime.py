@@ -2985,6 +2985,28 @@ async def end_browser_takeover(url: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 
+async def open_local_file(path: str, workspace: str) -> dict[str, Any]:
+    """Use a dedicated RPC rather than relaxing public URL validation."""
+    if not electron_browser_available():
+        return _browser_failure(
+            "LOCAL_PREVIEW_UNAVAILABLE",
+            "Local HTML preview requires the Electron desktop app.",
+            "本地 HTML 预览需要 Electron 桌面应用。",
+        )
+    try:
+        result = _sanitize_browser_result(
+            await _electron_browser_rpc("openLocalFile", {"path": path, "workspace": workspace}),
+            "The local HTML preview could not be opened.",
+            "无法打开本地 HTML 预览。",
+        )
+        if result.get("ok") is not False:
+            await _emit_electron_frame("navigate", result)
+        return result
+    except Exception as exc:
+        logger.warning("Local HTML preview failed: %s", exc)
+        return _electron_browser_failure(exc)
+
+
 async def navigate(
     url: str,
     *,

@@ -15,6 +15,7 @@ from . import (
     browser_click_at,
     browser_click_ref,
     browser_navigate,
+    browser_open_file,
     browser_network_log,
     browser_request_takeover,
     browser_screenshot,
@@ -62,6 +63,7 @@ plugin_pack = PluginPack(
     description="Navigate and interact with browser sessions.",
     plugins=tuple(_plugin(module) for module in (
         browser_navigate,
+        browser_open_file,
         browser_snapshot,
         browser_screenshot,
         browser_click,
