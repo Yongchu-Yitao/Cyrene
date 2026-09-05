@@ -386,6 +386,7 @@ class CommandPlatformProvider {
     this.existsSync = existsSync;
     this.spawnImpl = spawnImpl;
     this.windowsInputWorker = null;
+    this.macWindowWorker = null;
     if (platform === 'linux') {
       // Load the optional D-Bus dependency only on Linux. Unit tests and
       // non-Linux packages must not require Electron production dependencies.
@@ -458,6 +459,21 @@ class CommandPlatformProvider {
   stop() {
     if (this.windowsInputWorker) this.windowsInputWorker.close();
     this.windowsInputWorker = null;
+    if (this.macWindowWorker) this.macWindowWorker.close();
+    this.macWindowWorker = null;
+  }
+
+  _windowWorker() {
+    if (!this.macWindowWorker) {
+      const { MacWindowWorker } = require('./app-use-macos-worker');
+      this.macWindowWorker = new MacWindowWorker(resolveDarwinHitTestHelperPath(this), { spawnImpl: this.spawnImpl });
+    }
+    return this.macWindowWorker;
+  }
+
+  watchTargets(listener) {
+    if (this.platform !== 'darwin') return null;
+    return this._windowWorker().watch(listener);
   }
 
   async listTargets(exclusions = {}) {
@@ -466,7 +482,9 @@ class CommandPlatformProvider {
       catch (error) { throw new AppUseError('provider_error', String(error.message || error), { retryable: true }); }
     }
     const normalized = typeof exclusions === 'number' ? { excludePid: exclusions } : exclusions;
-    const result = await this.request('list_targets', normalized, 20000);
+    const result = this.platform === 'darwin'
+      ? await this._windowWorker().request({ operation: 'list_targets', ...normalized })
+      : await this.request('list_targets', normalized, 20000);
     return Array.isArray(result.targets) ? result.targets : [];
   }
 
@@ -555,18 +573,52 @@ class AppUseManager {
     this.lastExternalTargetId = '';
     this.quickChatOriginTargetId = '';
     this.trackerTimer = null;
+    this.stopTracking = null;
+    this.tracking = false;
     this.refreshPromise = null;
   }
 
   start() {
-    if (this.trackerTimer) return;
-    const tick = () => this.refreshTargets().catch(() => {});
+    if (this.tracking) return;
+    this.tracking = true;
+    const tick = () => {
+      this.targetRefreshRequested = true;
+      if (this.targetRefreshRunning) return;
+      this.targetRefreshRunning = true;
+      (async () => {
+        try {
+          do {
+            this.targetRefreshRequested = false;
+            await this.refreshTargets().catch(() => {});
+          } while (this.targetRefreshRequested && this.tracking);
+        } finally { this.targetRefreshRunning = false; }
+      })();
+    };
+    this.stopTracking = this.provider.watchTargets?.(tick) || null;
     tick();
-    this.trackerTimer = setInterval(tick, this.pollIntervalMs);
-    if (typeof this.trackerTimer.unref === 'function') this.trackerTimer.unref();
+    if (!this.stopTracking) {
+      this.trackerTimer = setInterval(tick, this.pollIntervalMs);
+      this.trackerTimer.unref?.();
+    }
+  }
+
+  _scheduleActiveTracking() {
+    if (!this.tracking || !this.stopTracking || this.trackerTimer || !this.sessions.size) return;
+    // Window movement/minimization within the same app does not necessarily
+    // emit an NSWorkspace notification. Preserve checks during control sessions.
+    this.trackerTimer = setTimeout(() => {
+      this.trackerTimer = null;
+      this._expireSessions();
+      this._scheduleActiveTracking();
+      if (this.sessions.size) this.refreshTargets().catch(() => {});
+    }, this.pollIntervalMs);
+    this.trackerTimer.unref?.();
   }
 
   stop() {
+    this.tracking = false;
+    if (this.stopTracking) this.stopTracking();
+    this.stopTracking = null;
     if (this.trackerTimer) clearInterval(this.trackerTimer);
     this.trackerTimer = null;
     if (typeof this.hideVirtualPointer === 'function') {
@@ -728,6 +780,7 @@ class AppUseManager {
       semanticProbeStartedAt: Date.now(),
     };
     this.sessions.set(sessionId, session);
+    this._scheduleActiveTracking();
     let semanticProfile = null;
     if (mode === 'semantic') {
       semanticProfile = {

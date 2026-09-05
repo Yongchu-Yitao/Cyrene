@@ -834,6 +834,86 @@ func run(_ payload: [String: Any]) throws -> [String: Any] {
     return result
 }
 
+// WindowServer enumeration mirrors the JXA provider's target schema, without
+// creating an AppleScript process for every observation.
+func nativeWindowTargets(_ payload: [String: Any]) -> [String: Any] {
+    let workspace = NSWorkspace.shared
+    let frontmost = workspace.frontmostApplication?.processIdentifier ?? 0
+    let excludePid = (payload["excludePid"] as? NSNumber)?.int32Value ?? 0
+    let excludedIds = Set((payload["excludeApplicationIds"] as? [String] ?? []).map { $0.lowercased() })
+    let excludedNames = Set((payload["excludeAppNames"] as? [String] ?? []).map { $0.lowercased() })
+    let apps = Dictionary(uniqueKeysWithValues: workspace.runningApplications.map { ($0.processIdentifier, $0) })
+    let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+    let visible = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
+    let onscreen = Set(visible.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue })
+    var seen = Set<Int>()
+    var indexes: [pid_t: Int] = [:]
+    var targets: [[String: Any]] = []
+    for row in windows {
+        guard let pid = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+              let windowId = (row[kCGWindowNumber as String] as? NSNumber)?.intValue,
+              pid > 0, windowId > 0, pid != excludePid,
+              (row[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+              let app = apps[pid], app.activationPolicy == .regular,
+              let bounds = row[kCGWindowBounds as String] as? [String: Any],
+              let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+              let height = (bounds["Height"] as? NSNumber)?.doubleValue,
+              width >= 60, height >= 60, seen.insert(windowId).inserted else { continue }
+        let name = app.localizedName ?? (row[kCGWindowOwnerName as String] as? String ?? "")
+        let appId = app.bundleIdentifier ?? ""
+        if excludedIds.contains(appId.lowercased()) || excludedNames.contains(name.lowercased()) { continue }
+        let index = indexes[pid, default: 0]
+        indexes[pid] = index + 1
+        targets.append([
+            "platform": "darwin", "pid": Int(pid), "processStartTime": "",
+            "appName": name, "applicationId": appId, "windowId": String(windowId),
+            "windowIndex": index, "windowTitle": row[kCGWindowName as String] as? String ?? "",
+            "foreground": pid == frontmost, "minimized": !onscreen.contains(windowId),
+            "bounds": ["x": bounds["X"] ?? 0, "y": bounds["Y"] ?? 0, "width": width, "height": height]
+        ])
+    }
+    return ["ok": true, "targets": targets]
+}
+
+func runWindowWorker() -> Never {
+    let center = NSWorkspace.shared.notificationCenter
+    let notifications: [Notification.Name] = [
+        NSWorkspace.didActivateApplicationNotification, NSWorkspace.didLaunchApplicationNotification,
+        NSWorkspace.didTerminateApplicationNotification, NSWorkspace.didHideApplicationNotification,
+        NSWorkspace.didUnhideApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification,
+        NSWorkspace.didWakeNotification
+    ]
+    for notification in notifications {
+        _ = center.addObserver(forName: notification, object: nil, queue: .main) { _ in
+            jsonOutput(["event": "targets_changed"])
+        }
+    }
+    DispatchQueue.global().async {
+        while let line = readLine() {
+            DispatchQueue.main.sync {
+                do {
+                    guard let data = line.data(using: .utf8),
+                          let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { return }
+                    var result = nativeWindowTargets(payload)
+                    result["requestId"] = payload["requestId"]
+                    jsonOutput(result)
+                } catch {
+                    jsonOutput(["ok": false, "error": String(describing: error)])
+                }
+            }
+        }
+        exit(0)
+    }
+    RunLoop.main.run()
+    exit(0)
+}
+
+if CommandLine.arguments.dropFirst().first == "--window-worker" {
+    runWindowWorker()
+}
+
+
 do {
     guard CommandLine.arguments.count == 2,
           let data = CommandLine.arguments[1].data(using: .utf8),

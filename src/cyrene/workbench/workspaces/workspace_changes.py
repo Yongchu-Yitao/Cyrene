@@ -16,6 +16,8 @@ import os
 import sqlite3
 import uuid
 from dataclasses import dataclass
+from collections.abc import Mapping
+from .file_index import FileIndex, FileIndexEdit
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -80,8 +82,14 @@ class WorkspaceFileState:
 @dataclass(frozen=True)
 class WorkspaceSnapshot:
     root: Path
-    files: dict[str, WorkspaceFileState]
+    files: Mapping[str, WorkspaceFileState]
     captured_at: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.files, FileIndexEdit):
+            object.__setattr__(self, "files", self.files.freeze())
+        elif not isinstance(self.files, FileIndex):
+            object.__setattr__(self, "files", FileIndex(self.files))
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,11 +425,9 @@ def _capture_incremental_snapshot(
     that file. The long-lived index serializes these applications so immutable
     snapshots can be shared safely by overlapping chat runs.
     """
-    files = dict(previous.files)
-    captured_text_files = sum(1 for state in files.values() if state.text is not None)
-    captured_text_bytes = sum(
-        state.size for state in files.values() if state.text is not None
-    )
+    files = previous.files.edit()
+    captured_text_files = files.text_count
+    captured_text_bytes = files.text_bytes
 
     def remove_relative(relative: str) -> None:
         nonlocal captured_text_bytes, captured_text_files
@@ -434,6 +440,8 @@ def _capture_incremental_snapshot(
         if removed is not None and removed.text is not None:
             captured_text_files -= 1
             captured_text_bytes -= removed.size
+        if removed is not None:
+            return  # A known regular file cannot contain indexed descendants.
         prefix = relative.rstrip("/") + "/"
         for stored_path in [path for path in files if path.startswith(prefix)]:
             removed = files.pop(stored_path, None)

@@ -1818,7 +1818,7 @@
     "PowerPointRenderSlide": {
       "en": {
         "name": "Render PowerPoint slide",
-        "description": "Render the actual live slide through PowerPoint and save the PNG locally for visual inspection."
+        "description": "Render the actual live slide through PowerPoint and save the PNG locally for visual inspection. Omit width for the fast 960 px default; request a larger render only when needed."
       },
       "zh": {
         "name": "渲染 PowerPoint 页面",
@@ -1918,7 +1918,7 @@
     "Read": {
       "en": {
         "name": "Read",
-        "description": "Read a UTF-8 text file, optionally selecting a 1-based inclusive line range."
+        "description": "Read a UTF-8 text file, optionally selecting a 1-based inclusive line range. Does not read images, PDFs, or binary files; use AnalyzeAttachment for those (discover it through toolbox if needed)."
       },
       "zh": {
         "name": "读取文件",
@@ -2523,6 +2523,16 @@
       "zh": {
         "name": "浏览器导航",
         "description": "将当前标签页导航到网址，并返回页面文本、链接与可点击引用。"
+      }
+    },
+    "browser_open_file": {
+      "en": {
+        "name": "Open local web page",
+        "description": "Open a local .html/.htm file inside the active workspace in the embedded Electron browser. Uses an isolated preview tab, replacing the previous local preview. Relative CSS, JS, images and other web assets in the HTML's directory and subdirectories are supported. External network resources, parent directories, hidden files and popups are blocked; bundle dependencies locally. Use existing browser_snapshot, browser_screenshot and browser click/type tools to inspect and test the result. Call again after editing to refresh the preview. Requires the desktop app; do not use browser_navigate with file:// or localhost."
+      },
+      "zh": {
+        "name": "打开本地网页",
+        "description": "在隔离的嵌入式浏览器预览中打开工作区 HTML 文件，并加载本地资源以供检查和测试。"
       }
     },
     "browser_network_log": {

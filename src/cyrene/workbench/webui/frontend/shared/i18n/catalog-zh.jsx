@@ -3509,6 +3509,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "toolName.AppUIScroll": "滚动应用组件",
     "toolName.AppUIDrag": "拖动应用组件",
     "toolName.browser_navigate": "浏览器导航",
+    "toolName.browser_open_file": "打开本地网页",
     "toolName.browser_snapshot": "检查页面",
     "toolName.browser_click": "浏览器点击",
     "toolName.browser_click_ref": "点击引用元素",

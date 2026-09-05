@@ -207,6 +207,7 @@
       "browser-chat-overlay-preload.js",
       "browser-tab-picker-preload.js",
       "app-use.js",
+      "app-use-macos-worker.js",
       "app-use-linux.js",
       "package.json"
     ]

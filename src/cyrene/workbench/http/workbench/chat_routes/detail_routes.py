@@ -285,7 +285,7 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
 
     @router.get("/api/workbench/chats/{chat_id}/plan")
     async def api_workbench_get_chat_plan(chat_id: str):
-        chat = await asyncio.to_thread(_get_workbench_chat, chat_id)
+        chat = await asyncio.to_thread(service.repository.get_metadata, chat_id)
         if not chat:
             return localized_error_response(
                 "Chat not found.", "未找到对话。", 404, "chat_not_found"

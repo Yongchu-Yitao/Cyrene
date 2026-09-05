@@ -3501,6 +3501,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "toolName.AppUIScroll": "Scroll application component",
     "toolName.AppUIDrag": "Drag application component",
     "toolName.browser_navigate": "Navigate",
+    "toolName.browser_open_file": "Open local web page",
     "toolName.browser_snapshot": "Inspect page",
     "toolName.browser_click": "Click",
     "toolName.browser_click_ref": "Click ref",

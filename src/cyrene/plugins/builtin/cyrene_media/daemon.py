@@ -8,6 +8,9 @@ import os
 from typing import Any
 from uuid import uuid4
 
+from cyrene.platform.file_change_feed import FileChangeFeed
+from cyrene.platform.config_store import DATA_DIR
+
 from .manager import MediaJobManager
 from .settings import get_media_settings
 from .worker import MediaWorker
@@ -17,6 +20,7 @@ class MediaDaemon:
     def __init__(self, manager: MediaJobManager) -> None:
         self.manager = manager
         self._stop = asyncio.Event()
+        self._resize_requested = None
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._workers: dict[str, MediaWorker] = {}
         self._supervisor: asyncio.Task[Any] | None = None
@@ -48,9 +52,16 @@ class MediaDaemon:
         self._workers = {}
 
     async def _supervise(self) -> None:
-        while True:
-            await asyncio.sleep(1.5)
-            await self._resize()
+        settings_changes = FileChangeFeed([DATA_DIR / "config.enc"])
+        async with settings_changes.listen() as changed:
+            self._resize_requested = changed
+            try:
+                while True:
+                    changed.clear()
+                    await self._resize()
+                    await settings_changes.wait(changed)
+            finally:
+                self._resize_requested = None
 
     async def _resize(self) -> None:
         for worker_id, task in list(self._tasks.items()):
@@ -64,12 +75,16 @@ class MediaDaemon:
         )
         while len(self._workers) < target:
             worker_id = f"{self._instance_id}-{uuid4().hex[:6]}"
-            worker = MediaWorker(self.manager, worker_id)
+            def request_resize(_task=None):
+                if self._resize_requested:
+                    self._resize_requested.set()
+            worker = MediaWorker(self.manager, worker_id, on_idle=request_resize)
             self._workers[worker_id] = worker
             self._tasks[worker_id] = asyncio.create_task(
                 worker.run(self._stop),
                 name=f"cyrene-{worker_id}",
             )
+            self._tasks[worker_id].add_done_callback(request_resize)
         excess = len(self._workers) - target
         if excess <= 0:
             return

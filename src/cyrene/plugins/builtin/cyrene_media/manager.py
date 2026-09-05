@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
+from cyrene.platform.file_change_feed import FileChangeFeed
+
 from .models import MEDIA_KINDS, TERMINAL_JOB_STATUSES
 
 
@@ -53,6 +55,14 @@ def _safe_error_code(value: Any) -> str:
     ).strip("_.-")[:120]
 
 
+class _MediaConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 class MediaJobManager:
     """Transactional source of truth for background media generation.
 
@@ -65,10 +75,13 @@ class MediaJobManager:
         self.db_path = Path(db_path)
         self._schema_lock = threading.RLock()
         self._schema_ready = False
+        self.changes = FileChangeFeed(
+            [self.db_path, Path(str(self.db_path) + "-wal")], keepalive=self._connect,
+        )
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn = sqlite3.connect(self.db_path, timeout=5.0, check_same_thread=False, factory=_MediaConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -711,6 +724,24 @@ class MediaJobManager:
             updated = conn.execute("SELECT * FROM media_wakes WHERE wake_id=?", (str(wake_id),)).fetchone()
             conn.commit()
         return self._wake(updated) if updated else {}
+
+    def next_job_delay(self) -> float | None:
+        """Wake at the first available job, abandoned lease, or delivery retry."""
+        with self._connect() as conn:
+            row = conn.execute("""SELECT MIN(deadline) FROM (
+                SELECT available_at AS deadline FROM media_jobs WHERE status='queued'
+                UNION ALL SELECT lease_until FROM media_jobs WHERE status='claimed'
+            )""").fetchone()
+            pending = conn.execute("""SELECT 1 FROM media_jobs
+                WHERE status IN ('succeeded','failed','cancelled') AND reported_at='' LIMIT 1""").fetchone()
+        delay = max(0.001, float(row[0]) - time.time() + 0.001) if row[0] is not None else None
+        return min(delay, 0.8) if pending and delay is not None else 0.8 if pending else delay
+
+    def next_wake_delay(self) -> float | None:
+        with self._connect() as conn:
+            row = conn.execute("""SELECT MIN(CASE WHEN status='ready' THEN 0 ELSE lease_until END)
+                FROM media_wakes WHERE status IN ('ready','claimed')""").fetchone()
+        return max(0.001, float(row[0]) - time.time() + 0.001) if row[0] is not None else None
 
     def counts(self) -> dict[str, int]:
         with self._connect() as conn:

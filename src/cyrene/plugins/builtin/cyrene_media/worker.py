@@ -45,34 +45,37 @@ class _LeaseLost(RuntimeError):
 class MediaWorker:
     """Claims one durable job at a time and executes it outside the Agent run."""
 
-    def __init__(self, manager: MediaJobManager, worker_id: str) -> None:
+    def __init__(self, manager: MediaJobManager, worker_id: str, *, on_idle=None) -> None:
         self.manager = manager
+        self.on_idle = on_idle
         self.worker_id = str(worker_id)
         self.delivery = MediaDelivery(manager)
         self.current_job_id = ""
 
     async def run(self, stop: asyncio.Event) -> None:
-        while not stop.is_set():
-            try:
-                await self._reconcile_reports()
-                jobs = await asyncio.to_thread(
-                    self.manager.claim_jobs,
-                    self.worker_id,
-                    limit=1,
-                    lease_seconds=180.0,
-                )
-                if not jobs:
-                    try:
-                        await asyncio.wait_for(stop.wait(), timeout=0.8)
-                    except asyncio.TimeoutError:
-                        pass
-                    continue
-                await self._process(jobs[0])
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("media worker %s iteration failed", self.worker_id)
-                await asyncio.sleep(1.0)
+        async with self.manager.changes.listen() as changed:
+            while not stop.is_set():
+                try:
+                    changed.clear()
+                    await self._reconcile_reports()
+                    jobs = await asyncio.to_thread(
+                        self.manager.claim_jobs,
+                        self.worker_id,
+                        limit=1,
+                        lease_seconds=180.0,
+                    )
+                    if not jobs:
+                        delay = await asyncio.to_thread(self.manager.next_job_delay)
+                        await self.manager.changes.wait(changed, timeout=delay, stop=stop)
+                        continue
+                    await self._process(jobs[0])
+                    if self.on_idle:
+                        self.on_idle()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("media worker %s iteration failed", self.worker_id)
+                    await asyncio.sleep(1.0)
 
     async def _reconcile_reports(self) -> None:
         for job in await asyncio.to_thread(self.manager.pending_reports, limit=20):

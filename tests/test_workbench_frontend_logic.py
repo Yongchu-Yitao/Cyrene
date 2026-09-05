@@ -4404,7 +4404,7 @@ def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui(
     browser_view = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
     styles = workbench_style_source()
 
-    create_view = main.split("  createView() {", 1)[1].split("\n  setContext(", 1)[0]
+    create_view = main.split("  createView(", 1)[1].split("\n  setContext(", 1)[0]
     assert "disableHtmlFullscreenWindowResize: true" in create_view
     assert "wc.on('enter-html-full-screen'" in create_view
     assert "this.enterVideoFullscreen(view)" in create_view
@@ -4421,7 +4421,7 @@ def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui(
     assert "this._mainFullscreenLeaveHandler" in enter_fullscreen
     assert "this.requestVideoFullscreenExit()" in enter_fullscreen
 
-    finish_fullscreen = main.split("  finishVideoFullscreen(view) {", 1)[1].split("\n  createView()", 1)[0]
+    finish_fullscreen = main.split("  finishVideoFullscreen(view) {", 1)[1].split("\n  createView(", 1)[0]
     assert "!this._mainWindowWasFullScreen" in finish_fullscreen
     assert "mainWindow.setFullScreen(false)" in finish_fullscreen
     assert "mainWindow.removeListener('leave-full-screen', this._mainFullscreenLeaveHandler)" in finish_fullscreen
@@ -8794,7 +8794,8 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
     assert "const browserTabManagers = new Map();" in main
     assert "new BrowserTabManager(normalized)" in main
     assert "this.partition = BROWSER_PARTITION;" in main
-    assert "partition: this.partition" in main
+    assert "createView(partition = this.partition)" in main
+    assert "partition," in main
     assert "sessionId: this.sessionId" in main
     assert "this.sessionId !== activeBrowserSessionId" in main
     assert "closeBrowserSession" in main

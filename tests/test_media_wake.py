@@ -11,9 +11,14 @@ from cyrene.plugins.builtin.cyrene_media.wake import MediaWakeBridge
 
 class _WakeManager:
     def __init__(self) -> None:
+        from cyrene.platform.file_change_feed import FileChangeFeed
+        self.changes = FileChangeFeed([])
         self.claim_count = 0
         self.settled: list[tuple[str, str, str]] = []
         self.heartbeats: list[tuple[str, str, float]] = []
+
+    def next_wake_delay(self):
+        return None
 
     def claim_wake(self, _consumer_id: str, *, lease_seconds: float) -> dict[str, Any] | None:
         self.claim_count += 1
