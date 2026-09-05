@@ -14,8 +14,6 @@ from typing import Any
 from cyrene.core.plugin import plugin_public_session_snapshot
 from cyrene.core.context.projection import (
     context_is_turn,
-    project_context_message,
-    selected_context_node_ids,
 )
 from cyrene.localization import localized
 
@@ -75,81 +73,8 @@ def _agent_active_context_nodes(nodes: list[Any]) -> list[Any]:
 def _agent_path_messages(nodes: list[Any]) -> list[dict[str, Any]]:
     """Project one ContextTree path into the messages sent to the model."""
 
-    messages: list[dict[str, Any]] = []
-    current_run_id = _agent_current_run_id(nodes)
-    active_context_ids = selected_context_node_ids(nodes, current_run_id)
-    for node in nodes:
-        value = node.value if isinstance(node.value, Mapping) else {}
-        role = str(value.get("role") or "")
-        if role in {"context_compaction", "context_reflection"}:
-            compacted = value.get("messages")
-            if isinstance(compacted, list):
-                messages = [
-                    dict(message)
-                    for message in compacted
-                    if isinstance(message, Mapping)
-                ]
-            continue
-        if role in {"system", "user"}:
-            messages.append({"role": role, "content": str(value.get("content") or "")})
-            continue
-        if role == "context":
-            if node.id not in active_context_ids:
-                continue
-            content = str(value.get("content") or "").strip()
-            if not content:
-                continue
-            project_context_message(messages, value)
-            continue
-        if role == "assistant":
-            message: dict[str, Any] = {
-                "role": "assistant",
-                "content": str(value.get("content") or ""),
-            }
-            calls = value.get("tool_calls")
-            if isinstance(calls, list) and calls:
-                message["tool_calls"] = [
-                    {
-                        "id": str(call.get("id") or ""),
-                        "type": "function",
-                        "function": {
-                            "name": str(call.get("name") or ""),
-                            "arguments": json.dumps(
-                                call.get("arguments") or {},
-                                ensure_ascii=False,
-                                default=str,
-                            ),
-                        },
-                    }
-                    for call in calls
-                    if isinstance(call, Mapping)
-                ]
-                reasoning_details = value.get("reasoning_details")
-                if isinstance(reasoning_details, list) and reasoning_details:
-                    message["reasoning_details"] = reasoning_details
-            messages.append(message)
-            continue
-        if role != "tool_results":
-            continue
-        results = value.get("results")
-        for result in results if isinstance(results, list) else ():
-            if not isinstance(result, Mapping):
-                continue
-            messages.append({
-                "role": "tool",
-                "tool_call_id": str(result.get("call_id") or ""),
-                "name": str(result.get("name") or ""),
-                "content": json.dumps(
-                    {
-                        "success": bool(result.get("success")),
-                        "value": result.get("value"),
-                        "error": str(result.get("error") or ""),
-                    },
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            })
-    return messages
+    from cyrene.core.context.projection import project_model_messages
+    return project_model_messages(nodes)
 
 
 def _agent_path_usage(nodes: list[Any]) -> dict[str, int]:

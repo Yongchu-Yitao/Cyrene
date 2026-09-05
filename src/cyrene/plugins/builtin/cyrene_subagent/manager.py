@@ -274,6 +274,11 @@ class SubagentManager:
         initial_root_value = without_plugin_session_state(
             self.owner.initial_root_value
         )
+        # Children have independent tasks/shared documents, even when the parent
+        # was reopened with durable task state in its initial root snapshot.
+        from cyrene.core.context.tasks import STATE_KEY
+        if isinstance(initial_root_value, dict):
+            initial_root_value.pop(STATE_KEY, None)
         plugin_context_data = self.owner.plugin_context_data
         plugin_context_data.update({
             "subagent_mode": record.mode,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import logging
 import sqlite3
 import threading
@@ -525,6 +526,10 @@ class ContextStoreRouter:
         )
         return tree
 
+    def artifact_directory(self, tree_id: str) -> Path:
+        """Artifacts share the tree's lifetime, outside temporary-file cleanup."""
+        return (self.directory / self._relative_database_path(tree_id)).with_suffix(".artifacts")
+
     def delete_tree(self, tree_id: str) -> None:
         tree_id = str(tree_id)
         deleted_at = self._now()
@@ -585,6 +590,7 @@ class ContextStoreRouter:
             self._condition.notify_all()
 
         self._remove_database_files(database)
+        shutil.rmtree(self.artifact_directory(tree_id), ignore_errors=True)
         change = ContextChange(
             tree_id,
             root_id,

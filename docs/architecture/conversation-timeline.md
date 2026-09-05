@@ -77,3 +77,95 @@ Before SQLite evicts a replay prefix, it folds those operations into the ack's
 baseline snapshot in the same transaction. `replay_base_seq` prevents retried
 flushes from resurrecting already-compacted operations. Restart recovery loads
 the baseline and replays the retained suffix, including unfinished partial text.
+
+## Task contexts
+
+The fixed core pack exposes `load_context(context_id)`,
+`unload_context(summary)`, `append_context(content, context_id)` and
+`replace_context(content, context_id)`. Control calls must occupy their own
+batch. The root's `_task_contexts` state stores current mutable documents and an
+active ID; it contains no document revisions or titles. The catalog always shows
+all IDs, their last unload summaries and active status. Body edits do not generate
+new summaries. Unload summaries are required and head/tail clipped to 200 Unicode
+code points (100 + ellipsis + 99).
+
+Unloading atomically saves the summary and clears the active pointer. Loading
+validates an existing ID and its retained artifacts before changing the pointer.
+There is no create/delete tool: ordinary tool work or a text answer creates a
+context lazily when none is active. For the first task in a new conversation, the
+entry is established before its first model request to preserve the cache prefix. Management calls do not create contexts.
+Append and replace can edit inactive documents without activating them; they
+change only the body. DeepReflect and compaction rewrite only the active task's
+body/execution projection, under the same read/compute/commit gate as edits.
+
+Shared user/assistant prose and lifecycle-owned mounts remain independent of task
+selection. Tools inherit their task ID at the model-output boundary, including
+results that arrive later. Stored observations have tree-owned snapshot paths,
+source paths/URLs when available and hashes; results remain in their original chronological positions and retain full
+content throughout an activation; only reloaded task history uses references. Snapshots are not
+temporary resources: deleting the conversation tree removes them; unloading does
+not. Switching never restores the filesystem or grants additional authority.
+
+The execution tree retains the original events. Context rewriting changes the
+current task projection, never the public transcript or another document. Control
+handshakes remain paired across switching. Every management receipt from the
+current user request remains visible so multi-step switches do not repeat work;
+older receipts follow task ownership and compaction coverage.
+
+At explicit unload boundaries, shared prose has a separate projection budget (16k estimated tokens by default,
+up to a quarter of the configured window at session creation, with a 1k floor).
+Older omitted prose is available as an exact tree-owned JSON snapshot through
+Read. System mounts and the current exchange are retained even above this budget;
+the catalog is never silently dropped. Very large mandatory input can still
+exceed a provider window and must be handled as an input-size error, not by
+compressing another task or truncating the user's current request.
+
+Within an activation, shared selection, catalog placement and observation text
+are stable. Messages are projected in their original chronological order; ordinary
+model/tool continuation only appends to the previous input. Explicit edits,
+switching, lifecycle mount changes and task compaction can invalidate a prefix.
+No promise is made about provider-side cache accounting or eviction.
+
+### Always-loaded shared task document
+
+Every conversation has a fixed `shared` document, initially empty. Older task
+states receive it on reopen without modifying their active task or documents.
+`append_context(content, context_id="shared")` and
+`replace_context(content, context_id="shared")` edit its body using the same
+serialized, idempotent operations. It has no revisions, generated title or summary.
+It is stored separately from ordinary task documents so it cannot become active,
+receive tool execution ownership, or be rewritten by ordinary DeepReflect or
+compaction. `load_context("shared")` returns an error: it is already always loaded.
+Unload never removes its body. Deleting the conversation removes it with the tree.
+
+The catalog marks shared as `always_loaded`. Its nonempty body is projected once
+as task data, before the catalog and chronological history, independent of shared
+prose budgeting. An unchanged body retains the same prefix across continuations;
+explicit shared edits intentionally change that prefix. It is not a system prompt,
+long-term memory or pinned resource. The Agent is instructed to maintain only
+necessary cross-task goals, constraints, interface contracts and verified decisions,
+with source references and scope (all contexts or named IDs). Uncertain/local
+claims remain in their task; catalog summaries alone are not evidence. Updating an
+agreement must identify affected tasks. No automatic merging/conflict resolver or
+additional tool is introduced.
+
+### Recovery and fork boundaries
+
+Tool/result membership is resolved against the owning assistant node, not a
+conversation-global set of provider call IDs. Repeated IDs in another task cannot
+select its results. Task compaction counts the full currently projected observation
+as task input; snapshot references remain visible alongside live content so they
+can survive distillation. A document with only a body can also be compacted.
+
+A pending compaction marker is committed with the current document state and
+completed on reopen if a crash interrupts marker publication. This is recovery
+metadata, not a document revision. Artifact loading verifies saved checksums.
+
+Forking reconstructs the selected prefix's mutable task/shared state from its
+successful control events rather than copying the source's latest root (which may
+contain future decisions). It retains raw execution records instead of inheriting
+later compaction, copies tree-owned artifacts and rebases their references. Failed
+fork setup removes the partial target. Subagent initial roots exclude parent task
+state; children have independent task documents and shared bodies. The public
+`initial_root_value` continues to describe the initial system root, without the
+internal task-state envelope.

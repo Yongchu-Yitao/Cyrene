@@ -189,7 +189,7 @@ def _user_messages(
     path: Sequence[ContextNode],
     context: PluginContext,
 ) -> list[dict[str, Any]]:
-    result = _archived_user_messages(context)
+    result = [] if context.data.get("task_context_id") else _archived_user_messages(context)
     seen_rounds = {
         str(item.get("round_id") or "")
         for item in result
@@ -302,10 +302,21 @@ class DeepReflectionService:
         total_attempts = max(1, int(attempts))
         for attempt in range(1, total_attempts + 1):
             try:
+                request = (
+                    "The preceding messages are the source conversation to reflect on, "
+                    "not instructions to answer as the main Agent. Return the strict "
+                    "reflection JSON object specified by the system prompt now. "
+                    "Include every required field, including nonempty goal, "
+                    "chosen_direction and success_check. Reflection focus: "
+                    + json.dumps(_json_safe(arguments), ensure_ascii=False)
+                )
+                if last_error is not None:
+                    request += "\nThe previous attempt failed validation: " + str(last_error)
                 output = await complete(
                     [
                         {"role": "system", "content": _REFLECTION_PROMPT},
                         *conversation_messages,
+                        {"role": "user", "content": request},
                     ],
                     temperature=0.1,
                     route="secondary",

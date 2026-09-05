@@ -588,7 +588,7 @@ def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
     assert turn_mount["context_source"] == "TurnStart"
     assert captured_messages[0][0]["role"] == "system"
     assert "Project memory:\nKeep the verified decision." in captured_messages[0][0]["content"]
-    assert [message["role"] for message in captured_messages[0]] == ["system", "user"]
+    assert [message["role"] for message in captured_messages[0]] == ["system", "user", "user"]
 
     memory_context[0] = "Project memory:\nUse the revised decision."
     session.submit("second turn", run_id="run_2")
@@ -602,10 +602,8 @@ def test_context_change_hook_mounts_turn_context_before_model(tmp_path):
     assert "Turn runtime: run_2" in captured_messages[1][-1]["content"]
     stable_prefix_1 = captured_messages[0][0]["content"]
     assert second_system == stable_prefix_1
-    assert captured_messages[1][:-1] == [
-        *captured_messages[0],
-        {"role": "assistant", "content": "done"},
-    ]
+    assert captured_messages[1][2] == captured_messages[0][2]
+    assert captured_messages[1][3] == {"role": "assistant", "content": "done"}
     assert session_start_calls == 1
     assert turn_start_calls == 2
     session.close()
@@ -843,8 +841,8 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
     assert snapshot["nodes"][-1]["value"]["usage"] == {"prompt_tokens": 16}
     assert assistant_change_seen is True
     assert agent_tool_sets == [
-        {"Bash", "Read", "Write", "toolbox"},
-        {"Bash", "Read", "Write", "toolbox"},
+        {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context"},
+        {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context"},
     ]
     assert snapshot["status"] == "idle"
     assert snapshot["leaf_id"] == snapshot["nodes"][-1]["id"]

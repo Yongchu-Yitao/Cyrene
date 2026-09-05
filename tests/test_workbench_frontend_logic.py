@@ -2092,6 +2092,7 @@ def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
     assert 'var isNewConversation = card.kind === "chat"' in pane_card_renderer
     assert 'String(card.id || "") === "new-conversation"' in pane_card_renderer
     assert "var isActiveConversation = isNewConversation || (" in pane_card_renderer
+    assert "var singlePane = isNewConversation || paneCardCount === 1;" in pane_card_renderer
     assert pane_card_renderer.index("if (isActiveConversation && singlePane)") < pane_card_renderer.index(
         '} else if (card.kind === "chat")'
     )

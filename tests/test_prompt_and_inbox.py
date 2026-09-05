@@ -122,7 +122,8 @@ def test_reopened_tree_mounts_system_prompt_from_required_plugin(tmp_path):
         assert context.startswith(SYSTEM_PROMPT.strip())
         assert reopened.initial_root_value == {"role": "system", "content": ""}
         root = reopened.store.get_node(reopened.tree.id, reopened.tree.root_id)
-        assert root.value == {"role": "system", "content": ""}
+        assert {key: value for key, value in root.value.items() if key != "_task_contexts"} == {"role": "system", "content": ""}
+        assert root.value["_task_contexts"]["shared"] == {"body": ""}
     finally:
         reopened.close()
 

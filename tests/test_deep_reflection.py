@@ -173,7 +173,9 @@ def test_reflection_uses_only_visible_conversation_messages_and_preserves_user_o
         "user",
         "assistant",
         "assistant",
+        "user",
     ]
+    assert "previous attempt failed validation" in submitted_messages[-1]["content"]
     submitted_content = json.dumps(submitted_messages, ensure_ascii=False)
     assert long_user_text in submitted_content
     assert "答" * 20_000 in submitted_content
@@ -212,7 +214,7 @@ def test_deep_reflect_tool_rewrites_context_then_continues_without_changing_ui(
 
     async def model(arguments, _context):
         model_inputs.append(arguments["messages"])
-        if any(message.get("reflect_pack") is True for message in arguments["messages"]):
+        if "[Cyrene Reflect Pack]" in str(arguments["messages"]):
             return {"content": "final answer from better direction", "tool_calls": []}
         return {
             "content": "visible pre-reflection reply",
@@ -272,6 +274,9 @@ def test_deep_reflect_tool_rewrites_context_then_continues_without_changing_ui(
         plugin_services={"model": gateway},
     )
     session._configured_compaction_limit = lambda: 0
+    shared = "Interface contract; source: spec.md; scope: all contexts"
+    run(session.task_contexts.execute("replace_context", {"context_id": "shared", "content": shared}, "shared"))
+    active = session.task_contexts.ensure("reflection-test")
     original = session.submit(
         "internal prompt",
         run_id="run-reflect",
@@ -280,24 +285,21 @@ def test_deep_reflect_tool_rewrites_context_then_continues_without_changing_ui(
     run(session.drain())
 
     nodes = session.store.get_subtree(session.tree.id, session.tree.root_id)
-    assert [node.value.get("role") for node in nodes] == [
-        "system",
-        "context_reflection",
-        "assistant",
-    ]
-    reflected = nodes[1]
-    assert reflected.id == original.id
-    assert reflected.value["model_context"]["user_messages"][-1]["content"] == (
-        "exact visible user message"
-    )
-    assert reflected.value["reflection_attempts"] == 2
+    assert session.store.get_node(session.tree.id, original.id).value["role"] == "user"
+    assert not any(n.value.get("role") == "context_reflection" for n in nodes)
+    document = session.task_contexts.read()["documents"][active]
+    assert "[Cyrene Reflect Pack]" in document["body"]
+    assert "exact visible user message" in document["body"]
     assert nodes[-1].value["content"] == "final answer from better direction"
     assert len(model_inputs) == 2
-    assert [message["role"] for message in model_inputs[-1]] == ["system", "user"]
-    assert model_inputs[-1][-1]["reflect_pack"] is True
+    assert "[Cyrene Reflect Pack]" in str(model_inputs[-1])
+    assert "visible pre-reflection reply" in str(model_inputs[-1])
+    assert len(gateway.calls) == 2
+    assert session.task_contexts.read()["shared"]["body"] == shared
+    assert all(sum(shared in str(m.get("content", "")) for m in messages) == 1 for messages in model_inputs)
 
     transcript = ContextTreeTranscript(str(tmp_path / "workbench.sqlite3"))
-    visible = transcript.messages("chat")
+    visible = [m for m in transcript.messages("chat") if m.get("role") != "tool_results"]
     assert [message.get("role") for message in visible] == [
         "user",
         "assistant",

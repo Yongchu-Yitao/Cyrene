@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import logging
+import shutil
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cyrene.core.context import ContextError, ContextStoreRouter, TreeNotFoundError
+from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
 from cyrene.core.permission import runtime_permission_mode
 from cyrene.core.plugin import application_plugin_scope, default_plugin_impl_directory
 from cyrene.plugins import resolve_plugin_registry
@@ -262,6 +263,7 @@ class ConversationRuntime:
             raise ValueError("user_ordinal must be at least one")
 
         router = ContextStoreRouter(self._state_root() / "context")
+        target_created = False
         try:
             source = router.get_tree(source_id)
             nodes = router.get_subtree(source.id, source.root_id)
@@ -297,19 +299,38 @@ class ConversationRuntime:
             if cutoff < 0:
                 raise LookupError("source user turn was not found")
 
+            from cyrene.core.context.tasks import STATE_KEY, fork_task_state
             root_value = without_plugin_session_state(path[0].value)
+            task_state = fork_task_state(path[:cutoff])
+            if task_state is not None:
+                root_value[STATE_KEY] = task_state
+            source_artifacts = router.artifact_directory(source_id)
+            target_artifacts = router.artifact_directory(target_id)
+
+            def rebase_artifacts(value):
+                if isinstance(value, str):
+                    return value.replace(str(source_artifacts) + "/", str(target_artifacts) + "/")
+                if isinstance(value, list):
+                    return [rebase_artifacts(item) for item in value]
+                if isinstance(value, dict):
+                    return {key: rebase_artifacts(item) for key, item in value.items()}
+                return value
+
             target = router.create_tree(
-                root_value,
+                rebase_artifacts(root_value),
                 tree_id=target_id,
                 root_id=path[0].id,
             )
+            target_created = True
+            if source_artifacts.exists():
+                shutil.copytree(source_artifacts, target_artifacts)
             parent_id = target.root_id
             copied = 0
             for node in path[1:cutoff]:
                 router.mount(
                     target.id,
                     parent_id,
-                    deepcopy(node.value),
+                    rebase_artifacts(deepcopy(node.value)),
                     node_id=node.id,
                 )
                 parent_id = node.id
@@ -321,7 +342,9 @@ class ConversationRuntime:
                 "copied_nodes": copied,
                 "user_ordinal": ordinal,
             }
-        except ContextError:
+        except Exception:
+            if target_created:
+                router.delete_tree(target_id)
             raise
         finally:
             router.close()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..plugin import PluginPack
+from .context import CONTEXT_PLUGINS
 from .bash import BASH_PLUGIN
 from .permission import (
     PERMISSION_BATCH_DECIDE_TOOL,
@@ -35,6 +36,7 @@ def create_core_plugin_pack(registry: PluginRegistry) -> PluginPack:
         id="core",
         description="Fixed tools required by the agent kernel.",
         plugins=(
+            *CONTEXT_PLUGINS,
             BASH_PLUGIN,
             READ_PLUGIN,
             WRITE_PLUGIN,

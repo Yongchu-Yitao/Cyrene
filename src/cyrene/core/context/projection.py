@@ -89,6 +89,10 @@ def project_model_messages(
     durable consumers share the same projection without storing binary content.
     """
 
+    from .tasks import state_from, project_tasks
+    task_state = state_from(path)
+    if task_state is not None:
+        return project_tasks(path, task_state, observation_services=observation_services)
     messages: list[dict[str, Any]] = []
     current_run_id = next(
         (
@@ -187,6 +191,7 @@ def project_model_messages(
                         "content": json.dumps(
                             {
                                 "success": bool(result.get("success")),
+                                **({"reference": result["task_reference"]} if result.get("task_reference") else {}),
                                 "value": result.get("value"),
                                 "error": str(result.get("error") or ""),
                                 **(

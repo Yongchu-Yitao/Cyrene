@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .context.tasks import TaskContexts, TOOLS as TASK_CONTEXT_TOOLS, task_messages, task_nodes, context_catalog, STATE_KEY as TASK_STATE_KEY
+
 import asyncio
 import hashlib
 import json
@@ -506,6 +508,11 @@ class AgentSession:
             )
         root_node = self.store.get_node(self.tree.id, self.tree.root_id)
         self._initial_root_value = deepcopy(root_node.value)
+        if isinstance(self._initial_root_value, dict):
+            self._initial_root_value.pop(TASK_STATE_KEY, None)
+        self.task_contexts = TaskContexts(self)
+        self.task_contexts.initialize()
+        self._plugin_service_values["task_contexts"] = self.task_contexts
         self.hooks = self.store.hooks_for(self.tree.id)
         existing_hooks = {hook.id for hook in self.hooks.list()}
         if "agent-session-context-mount" in existing_hooks:
@@ -559,6 +566,7 @@ class AgentSession:
             self._context_output_changed,
             tree_id=self.tree.id,
         )
+        self.task_contexts.recover_compaction()
         self._restore()
         log_operation(
             logger,
@@ -3403,6 +3411,11 @@ class AgentSession:
             self._ensure_required_session_packs()
             self._model_tools = self._direct_model_tool_definitions()
             tools = deepcopy(list(self._model_tools))
+            # A brand-new conversation has no context to resume. Establish its
+            # first catalog entry before the first request to keep that prefix
+            # unchanged for subsequent tool/model calls.
+            if not self.task_contexts.read()["documents"]:
+                self.task_contexts.ensure(trigger.id)
             messages = self._messages(trigger.id)
             latest_trigger = self.store.get_node(self.tree.id, trigger.id)
             latest_value = (
@@ -3536,7 +3549,13 @@ class AgentSession:
             )
             return messages, False, str(exc)[:500]
 
-    async def _compact_at_node(
+    async def _compact_at_node(self, trigger, **kwargs):
+        async with self.task_contexts.serial():
+            if not self.task_contexts.read()["active"]:
+                return None, {"compacted": False, "reason": "no_active_context", "before": 0, "after": 0}
+            return await self._compact_task_at_node(trigger, **kwargs)
+
+    async def _compact_task_at_node(
         self,
         trigger: ContextNode,
         *,
@@ -3567,6 +3586,7 @@ class AgentSession:
                 (
                     trigger.id,
                     trigger.updated_at.isoformat(),
+                    json.dumps(self.task_contexts.read()["documents"][self.task_contexts.read()["active"]], sort_keys=True, ensure_ascii=False),
                     str(limit),
                     reason,
                 )
@@ -3590,8 +3610,13 @@ class AgentSession:
                 "distilled": bool(stored.get("distilled")),
             }
 
+        # A task body is replaceable even without tool episodes. The current
+        # user request is outside this document and remains exact in shared prose.
+        compact_input = messages
+        if len(messages) == 1 and messages[0].get("role") == "user":
+            compact_input = [*messages, {"role": "assistant", "content": ""}]
         compacted = compact_messages(
-            messages,
+            compact_input,
             context_limit=limit,
             force=force,
             reserved_tokens=reserved_tokens,
@@ -3605,7 +3630,8 @@ class AgentSession:
             )
             return None, base_result
 
-        projected = [dict(message) for message in compacted.messages]
+        projected = [dict(message) for message in compacted.messages
+                     if message.get("role") != "assistant" or message.get("content") or message.get("tool_calls")]
         distilled = False
         distillation_error = ""
         if compacted.needs_distillation:
@@ -3650,16 +3676,19 @@ class AgentSession:
                     "before_tokens": before,
                     "after_tokens": after,
                     "distilled": distilled,
-                    "messages": projected,
+                    "task_context_id": self.task_contexts.read()["active"],
                 }
+                state = self.task_contexts.read()
+                doc = state["documents"][state["active"]]
+                path = self.store.get_path(self.tree.id, trigger.id)
+                doc["covered"] = list(dict.fromkeys([*doc["covered"], *(n.id for n in task_nodes(path, state, state["active"]))]))
+                doc["body"] = ""
+                doc["messages"] = [{**m, "role": "user"} if m.get("compacted_block") else m for m in projected]
                 if distillation_error:
                     payload["distillation_error"] = distillation_error
-                node = self.store.mount(
-                    self.tree.id,
-                    trigger.id,
-                    payload,
-                    node_id=compaction_key,
-                )
+                state["pending_compaction"] = {"node_id": compaction_key, "parent_id": trigger.id, "value": payload}
+                self.task_contexts.write(state)
+                node = self.task_contexts.recover_compaction()
             self._leaf_id = node.id
         return node, {
             "compacted": True,
@@ -3679,7 +3708,12 @@ class AgentSession:
         model_input = prepared or self._prepare_model_input(trigger)
         if model_input.trigger_id != trigger.id:
             raise ValueError("prepared model input does not match compaction trigger")
-        return model_input.messages, model_input.tool_tokens, model_input.compaction_tokens
+        path = self.store.get_path(self.tree.id, trigger.id)
+        state = self.task_contexts.read()
+        active = state["active"]
+        selected = task_messages(path, state, active, live=True) if active else []
+        reserved = model_input.tool_tokens + max(0, model_input.message_tokens - messages_token_estimate(selected))
+        return selected, reserved, messages_token_estimate(selected) + reserved
 
     async def compact_context(
         self,
@@ -4182,16 +4216,19 @@ class AgentSession:
             transition_key
             + json.dumps(calls, ensure_ascii=False, sort_keys=True, default=str),
         )
+        control_batch = any(call.get("name") in TASK_CONTEXT_TOOLS for call in calls) or self._reflection_call(calls) is not None
+        owner = (self.task_contexts.read()["active"] if control_batch
+                 else self.task_contexts.ensure(transition_key))
         with self._linearized_context_commit():
             if self._closed or run_id in self._cancelled_run_ids:
                 return
             assistant = self.store.mount(
                 self.tree.id,
                 trigger.id,
-                self._assistant_model_value(
+                {**self._assistant_model_value(
                     output, calls, streamed=streamed, transition_key=transition_key,
                     run_id=run_id, batch_key=batch_key,
-                ),
+                ), "task_context_id": owner, "task_control": control_batch},
                 node_id=self._stable_id("assistant", transition_key),
             )
             assistant_state = self._set_state_locked(
@@ -4555,116 +4592,67 @@ class AgentSession:
                 return raw_call
         return None
 
-    async def _continue_reflection(
-        self,
-        assistant: ContextNode,
-        call: Mapping[str, Any],
-    ) -> None:
-        """Build a Reflect Pack asynchronously, then atomically rewrite the tree."""
+    def _context_control_error(self, assistant, calls, message):
+        self.store.update_node(self.tree.id, assistant.id, {**assistant.value, "task_control": True})
+        node = self.store.mount(self.tree.id, assistant.id, {
+            "role": "tool_results", "run_id": self._node_run_id(assistant),
+            "trigger_model": True, "task_control": True,
+            "task_context_id": assistant.value.get("task_context_id"),
+            "results": [{"call_id": c.get("id"), "name": c.get("name"),
+                         "success": False, "error": message, "value": None} for c in calls],
+        }, node_id=self._stable_id("tool_results", str(assistant.value.get("batch_key"))))
+        self._set_state("model", message, leaf_id=node.id)
 
-        run_id = self._node_run_id(assistant)
-        path = self.store.get_path(self.tree.id, assistant.id)
-        start_index = next(
-            (
-                index
-                for index, node in enumerate(path[1:], start=1)
-                if isinstance(node.value, Mapping)
-                and node.value.get("role") in {"user", "context_reflection"}
-            ),
-            -1,
-        )
-        if start_index < 0:
-            raise RuntimeError("deep reflection has no replaceable conversation path")
-        source_path = path[start_index:]
-        start = source_path[0]
-        expected_node_ids = tuple(
-            node.id for node in self.store.get_subtree(self.tree.id, start.id)
-        )
-        services = self._plugin_services()
-        service = services.get("deep_reflection")
-        reflect = getattr(service, "reflect", None)
-        if not callable(reflect):
-            raise RuntimeError("DeepReflect Plugin service is unavailable")
-
-        effective_messages = self._messages(assistant.id)
-        stable_system_messages = [
-            deepcopy(dict(message))
-            for message in effective_messages
-            if isinstance(message, Mapping)
-            and str(message.get("role") or "") == "system"
-        ]
-        with self._state_lock:
-            if self._closed or run_id in self._cancelled_run_ids:
+    async def _continue_reflection(self, assistant, call):
+        """Use the existing reflection service, replacing only the active document."""
+        from dataclasses import replace
+        async with self.task_contexts.serial():
+            state = self.task_contexts.read()
+            active = state["active"]
+            if not active:
+                self._context_control_error(assistant, [call], "No active task context to reflect")
                 return
-            reflecting_state = self._set_state_locked(
-                "reflecting",
-                _l("Rewriting conversation context", "正在重写对话上下文"),
-                leaf_id=assistant.id,
-            )
-        self._emit_state_snapshot(reflecting_state)
-
-        plugin_context = PluginContext(
-            workspace=self.workspace,
-            tree=self.store,
-            tree_id=self.tree.id,
-            node_id=assistant.id,
-            hooks=self.hooks,
-            data=self._plugin_data(
-                run_id=run_id,
-                model_call_kind="deep_reflection",
-                user_request=self.current_user_request,
-            ),
-            services=services,
-        )
-        pack = await reflect(
-            source_path,
-            dict(call.get("arguments") or {}),
-            plugin_context,
-        )
-        if self._is_cancelled(run_id):
-            return
-        batch_key = str(
-            (assistant.value if isinstance(assistant.value, Mapping) else {}).get(
-                "batch_key"
-            )
-            or self._stable_id("batch", assistant.id)
-        )
-        payload = {
-            "role": "context_reflection",
-            "run_id": run_id,
-            "authorization_request": self.permission_user_request,
-            "caused_by": batch_key,
-            "trigger_model": True,
-            "resume_model": True,
-            "reflection_tool_call_id": str(call.get("id") or ""),
-            **dict(pack),
-            "messages": [
-                *stable_system_messages,
-                {
-                    "role": "user",
-                    "content": str(pack.get("rendered_model_context") or ""),
-                    "reflect_pack": True,
-                },
-            ],
-        }
-        with self._linearized_context_commit():
-            if self._closed or run_id in self._cancelled_run_ids:
-                return
-            rewritten, _deleted = self.store.replace_subtree(
-                self.tree.id,
-                start.id,
-                payload,
-                expected_node_ids=expected_node_ids,
-            )
-            rewritten_state = self._set_state_locked(
-                "model",
-                _l(
-                    "Reflect Pack committed; waiting for model",
-                    "Reflect Pack 已提交，正在等待模型",
-                ),
-                leaf_id=rewritten.id,
-            )
-        self._emit_state_snapshot(rewritten_state)
+            run_id = self._node_run_id(assistant)
+            path = self.store.get_path(self.tree.id, assistant.id)
+            owned = [n for n in path if n.value.get("task_context_id") == active]
+            runs = {n.value.get("run_id") for n in owned}
+            source = [n for n in path if n in owned or
+                      (n.value.get("role") == "user" and n.value.get("run_id") in runs)]
+            doc = state["documents"][active]
+            task_text = json.dumps(task_messages(path, state, active), ensure_ascii=False)
+            source.append(replace(assistant, id=assistant.id + ":task-data", value={
+                "role": "assistant", "content": "[Current task data]\n" + task_text}))
+            services = self._plugin_services()
+            service = services.get("deep_reflection")
+            if not callable(getattr(service, "reflect", None)):
+                raise RuntimeError("DeepReflect Plugin service is unavailable")
+            self._set_state("reflecting", _l("Reflecting on task context", "正在反思任务上下文"), leaf_id=assistant.id)
+            receipt = "reflect:" + assistant.id
+            if receipt not in state["receipts"]:
+                pack = await service.reflect(source, dict(call.get("arguments") or {}), PluginContext(
+                    workspace=self.workspace, tree=self.store, tree_id=self.tree.id,
+                    node_id=assistant.id, hooks=self.hooks,
+                    data={**self._plugin_data(run_id=run_id, model_call_kind="deep_reflection",
+                                             user_request=self.current_user_request), "task_context_id": active},
+                    services=services))
+                if self._is_cancelled(run_id):
+                    return
+                doc["body"] = str(pack.get("rendered_model_context") or "")
+                doc["messages"] = []
+                doc["covered"] = list(dict.fromkeys([*doc["covered"], *(n.id for n in owned)]))
+                state["receipts"][receipt] = {"context_id": active}
+                self.task_contexts.write(state)
+                self._persist_auxiliary_model_usage(assistant.id, {"usage": pack.get("reflection_usage", {})})
+            # Keep an ordinary tool handshake; never replace the public tree.
+            updated = self.store.get_node(self.tree.id, assistant.id)
+            self.store.update_node(self.tree.id, assistant.id, {**updated.value, "task_control": True})
+            node = self.store.mount(self.tree.id, assistant.id, {
+                "role": "tool_results", "run_id": run_id, "trigger_model": True,
+                "task_control": True, "task_context_id": active,
+                "results": [{"call_id": call.get("id"), "name": call.get("name"),
+                             "success": True, "value": {"context_id": active, "reflected": True}, "error": ""}],
+            }, node_id=self._stable_id("tool_results", str(assistant.value.get("batch_key"))))
+            self._set_state("model", _l("Task reflection saved", "任务反思已保存"), leaf_id=node.id)
 
     async def _continue_tools(self, assistant: ContextNode) -> None:
         run_id = self._node_run_id(assistant)
@@ -4704,6 +4692,9 @@ class AgentSession:
         calls = calls if isinstance(calls, list) else []
 
         reflection_call = self._reflection_call(calls)
+        if len(calls) != 1 and (reflection_call is not None or any(c.get("name") in TASK_CONTEXT_TOOLS for c in calls)):
+            self._context_control_error(assistant, calls, "Context management and DeepReflect must be called alone; no tools in this batch were executed.")
+            return
         if reflection_call is not None:
             await self._continue_reflection(assistant, reflection_call)
             return
@@ -4817,6 +4808,8 @@ class AgentSession:
                     "run_id": run_id,
                     "caused_by": batch_key,
                     "results": result_values,
+                    "task_context_id": value.get("task_context_id"),
+                    "task_control": value.get("task_control", False),
                     **(
                         {"pending_question": pending_question}
                         if pending_question is not None
@@ -4877,6 +4870,7 @@ class AgentSession:
             )
             if presentation:
                 stored["presentation"] = presentation
+            self.task_contexts.reference(stored, call_by_id.get(item.call_id))
             values.append(stored)
         return values
 
@@ -5384,6 +5378,7 @@ class AgentSession:
             "run_id": run_id,
             "event_sequence": event_sequence,
             "workspace": str(self.workspace),
+            "taskContexts": context_catalog(self.task_contexts.read()),
             "nodes": [
                 {
                     "id": node.id,

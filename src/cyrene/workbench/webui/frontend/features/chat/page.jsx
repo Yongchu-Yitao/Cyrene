@@ -2950,7 +2950,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       card.kind === "chat"
       && String(card.payload || "") === String(activeChatId || "")
     );
-    var singlePane = paneCardCount === 1;
+    var singlePane = isNewConversation || paneCardCount === 1;
     var content = null;
     var grip = null;
     var close = function () { return closePaneCardWithConfirmation(card); };

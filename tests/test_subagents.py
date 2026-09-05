@@ -552,9 +552,11 @@ def test_agent_session_subagent_tree_inbox_and_workbench_output(tmp_path, monkey
             child_tree = session.store.get_tree(record["tree_id"])
             child_root = session.store.get_node(child_tree.id, child_tree.root_id)
             assert (
-                without_plugin_session_state(child_root.value)
+                {key: value for key, value in without_plugin_session_state(child_root.value).items() if key != "_task_contexts"}
                 == session.initial_root_value
             )
+            assert child_root.value["_task_contexts"]["shared"] == {"body": ""}
+            assert child_root.value["_task_contexts"]["active"] != state["nodes"][0]["value"]["_task_contexts"]["active"]
             child_root_children = session.store.get_children(
                 child_tree.id,
                 child_tree.root_id,
