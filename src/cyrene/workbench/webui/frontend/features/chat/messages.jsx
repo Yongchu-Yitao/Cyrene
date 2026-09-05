@@ -961,20 +961,31 @@ function wbcIsToolTraceEntry(entry) {
   return !!(entry && (entry.kind === "tool" || entry.tool));
 }
 
-function wbcActivityGroupRunningLabel(messages) {
+function wbcActivityGroupRunningSummary(messages) {
   var steps = [];
+  var thinkingCount = 0;
   (messages || []).forEach(function (message) {
     var view = wbcActivityMessageView(message);
     if (!view || !view.active) return;
     view.entries.forEach(function (entry) {
-      if (entry.status === "running") steps.push(wbcLocalizedToolName(entry.text || "tool"));
+      if (entry.status === "running") steps.push({
+        label: wbcLocalizedToolName(entry.text || "tool"),
+        icon: wbcTraceActionIcon(entry),
+      });
     });
-    if (view.activity.reasoningActive) steps.push(wbcT("workbenchChat.activityGroup.running.thinking", "Thinking"));
+    if (view.activity.reasoningActive) thinkingCount += 1;
   });
-  if (!steps.length) return wbcT("workbenchChat.activityGroup.running.thinking", "Thinking");
-  return steps.length > 1
-    ? wbcT("workbenchChat.activityGroup.steps", "{step} and {count} active steps", { step: steps[0], count: steps.length })
-    : wbcT("workbenchChat.activityGroup.step", "Running {step}", { step: steps[0] });
+  if (!steps.length) return {
+    label: wbcT("workbenchChat.activityGroup.running.thinking", "Thinking"),
+    icon: WBC_ICONS.brain,
+  };
+  var count = steps.length + thinkingCount;
+  return {
+    label: count > 1
+      ? wbcT("workbenchChat.activityGroup.steps", "{step} ({count} active steps)", { step: steps[0].label, count: count })
+      : steps[0].label,
+    icon: steps[0].icon,
+  };
 }
 
 function wbcTraceCollapsedSummary(entries, fallback) {
@@ -1544,8 +1555,9 @@ function WbcActivityGroup({ group }) {
   var active = !!item.active;
   var [expanded, setExpanded] = wbcUseDisclosure(item.id, activities.map(function (message) { return message.id; }));
   var duration = item.durationMs == null ? "" : wbcFormatProcessingDuration(item.durationMs);
+  var runningSummary = active ? wbcActivityGroupRunningSummary(activities) : null;
   var summary = active
-    ? wbcActivityGroupRunningLabel(activities)
+    ? runningSummary.label
     : (duration
       ? wbcT("workbenchChat.activityGroup.completedDuration", "Processed {duration}", { duration: duration })
       : wbcT("workbenchChat.activityGroup.completed", "Processed"));
@@ -1572,7 +1584,7 @@ function WbcActivityGroup({ group }) {
         }}
       >
         <span className="wbc-activity-group-state" aria-hidden="true">
-          {active ? <span className="wb-spinner small" /> : WBC_ICONS.check}
+          {active ? runningSummary.icon : WBC_ICONS.check}
         </span>
         <b>{summary}</b>
         <span className="wbc-activity-group-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span>
