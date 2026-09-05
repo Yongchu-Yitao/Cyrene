@@ -2,6 +2,42 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta8] - 2026-09-05
+
+Beta8 completes the work since beta7 on live conversation content, tool activity, failure recovery, Side Agents, and Quick Chat, while making project-file operations and malformed model tool requests more reliable. Replies in progress, reasoning, tool operations, user steering, and saved history now share one recoverable timeline: content keeps its order through saving, reconnecting, and switching surfaces, without being duplicated or disappearing, and the main conversation, split conversations, Side Agents, and Quick Chat provide the same reading experience.
+
+### Conversation timeline, live replies, and recovery
+
+- Replies in progress, reasoning, tool operations, attachments, intermediate messages, notifications, and user steering now appear in the order they actually occurred and remain in those positions after the run is saved. Content visible during a run no longer rearranges when the reply finishes, the page refreshes, or the conversation is reopened.
+- The main conversation, conversations in split panes, Side Agents, and Quick Chat now follow the same message presentation rules. The same run shows the same messages, activity cards, completion states, and ordering on every surface, avoiding views that previously showed an extra item, omitted one, or arranged the same work differently.
+- Two consecutive replies with identical text remain two distinct messages instead of one being removed because their content matches. Repeated delivery of the same network update likewise does not create duplicate messages or duplicate tool activity.
+- When a user adds steering while a reply is being generated, the steering remains where it occurred and later reply text continues updating the original answer instead of becoming a duplicate below the steering. Ongoing reasoning and tools that finish later also return to their original activity cards.
+- If the model or connection fails partway through an answer, readable text, completed tool results, and attachments already shown remain available and are saved with the failure state. Reconnecting or restoring the conversation no longer leaves only the error or repeats operations that already completed.
+- After a brief disconnect, a gap in live updates, or a return from the background, the interface retrieves the complete current state. Older updates cannot overwrite newer content, and messages already completed and saved do not revert to an in-progress state.
+- “Continue working” now appears only while the Agent is still running with no reply or activity currently in progress. It disappears as soon as new reasoning, a tool, or a reply starts, and it is not shown while waiting for the user, reconnecting, or after the run has ended.
+- Goal milestones, questions waiting for user input, and attachments produced during a run now follow the unified timeline, preserving their positions and actions across live display, saving, recovery, and the different conversation views.
+
+### Tool activity, progress, and the Side Agent interface
+
+- Consecutive tool and reasoning activity stays grouped with the work it belongs to. A reply or user steering clearly separates earlier and later activity, while a tool that completes late still updates its original group instead of moving beside whatever is currently being generated.
+- A collapsed active group now names the current tool or shows that the Agent is thinking; when several operations are active, it also shows their count. After completion, it reports the real elapsed time from that group's start to finish instead of borrowing the duration of the entire conversation turn.
+- Failed tools remain visible in the activity history while their group can still settle normally instead of appearing to run forever. Background records used only for usage accounting no longer create a second empty tool card.
+- Choices to expand or collapse reasoning, tool details, and activity groups survive new events, activity completion, remounting, and refresh. If individual activity is open when several cards become a group, grouping no longer hides the content being read.
+- The Side Agent panel now uses a simpler single-layer layout. Its header brings together the Side Agent count, number currently working or completion status, and close action; multi-round work uses clear “Round N” labels instead of exposing internal round titles as the page heading.
+- Side Agent selection now has explicit selected and keyboard-focus states. The member strip, task details, results, and message area use fewer repeated borders and nested cards, making the panel more compact and the current selection easier to identify in narrow splits.
+
+### Agent file operations and model tool-call reliability
+
+- When reading a large text file, the Agent can request a specific inclusive line range or continue from a chosen line instead of repeatedly loading the whole file. Omitting a range keeps the existing full-file behavior.
+- Large text writes are now divided into safe chunks: the first chunk creates or replaces the file, later chunks append reliably, and the assembled result is verified afterward. This reduces the risk of a long request being truncated or a later chunk accidentally replacing earlier content.
+- Edit now accepts more common model conventions for naming the old and new text fields. When a supplied field can be mapped unambiguously to the tool's requirement, Cyrene corrects it automatically instead of failing solely because of the naming variation.
+- If a model's tool request was cut off by an output limit, Cyrene stops it before execution rather than treating truncated code, commands, or file content as complete. Any readable reply already produced is still retained by the existing failure-recovery behavior.
+- When tool arguments genuinely need to change, Cyrene no longer retries the same invalid request unchanged; temporary response-format failures can still receive one bounded recovery attempt. Unavailable or hidden tools cannot become callable through argument repair, so existing permissions and tool visibility remain unchanged.
+
+### Web search
+
+- Bing searches on mainland China networks now use the official endpoint that currently returns results, avoiding redirects to the home page that silently produced an empty result set. Baidu, Sogou, and the other existing search sources continue to work as before.
+
 ## [0.9.0-beta7] - 2026-09-05
 
 Beta7 brings together every user-visible change since beta6 across model connections, streaming replies, per-conversation memory controls, attachment understanding, the browser, search, workspace change tracking, terminals, and Linux startup. The focus is preserving useful results through malformed model responses, transport interruptions, page reconnects, and continuous project work, while giving users explicit control over the memories used by each conversation and making live answers smoother and more stable.
