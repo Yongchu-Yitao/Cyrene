@@ -8,6 +8,7 @@ import {
   WbcModelStatusMessage,
   WbcQuestionPrompt,
   WbcRuntimeTranscript,
+  WbcTranscript,
   WbcUserMessage,
 } from "./messages.jsx"
 import { WbcThreadItem } from "./conversation.jsx"
@@ -29,6 +30,7 @@ const chatService = {
   ThreadItem: WbcThreadItem,
   LiveMessage: WbcLiveMessage,
   RuntimeTranscript: WbcRuntimeTranscript,
+  Transcript: WbcTranscript,
   clearComposerDraft: wbcClearComposerDraft,
   DetachedPaneApp: WbcDetachedPaneApp,
   Rail: WbcProjectRail,

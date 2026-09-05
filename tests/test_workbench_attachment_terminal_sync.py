@@ -1,4 +1,4 @@
-def test_run_event_timeline_keeps_intermediate_attachment_at_terminal_boundary():
+async def test_run_event_timeline_keeps_intermediate_attachment_at_terminal_boundary():
     from cyrene.workbench.chat.chat_runs import ChatRun
 
     attachment_message = {
@@ -11,7 +11,7 @@ def test_run_event_timeline_keeps_intermediate_attachment_at_terminal_boundary()
     }
     run = ChatRun("chat_current", {"type": "ack"})
     attachment_message["roundId"] = run.run_id
-    run.events.append({
+    await run.publish({
         "_seq": 2,
         "runId": run.run_id,
         "type": "intermediate_message",
@@ -20,16 +20,18 @@ def test_run_event_timeline_keeps_intermediate_attachment_at_terminal_boundary()
 
     messages = run.terminal_timeline_messages([])
 
-    assert messages == [attachment_message]
+    assert len(messages) == 1
+    assert all(messages[0][key] == value for key, value in attachment_message.items())
+    assert messages == run.events[-1]["timeline"]["messages"]
     assert messages[0] is not attachment_message
     assert messages[0]["attachments"] is not attachment_message["attachments"]
 
 
-def test_terminal_timeline_interleaves_messages_and_activities_by_run_events():
+async def test_terminal_timeline_interleaves_messages_and_activities_by_run_events():
     from cyrene.workbench.chat.chat_runs import ChatRun
 
     run = ChatRun("chat_ordered", {"type": "ack"})
-    run.events.extend([
+    events = [
         {
             "_seq": 2,
             "type": "intermediate_message",
@@ -40,7 +42,6 @@ def test_terminal_timeline_interleaves_messages_and_activities_by_run_events():
                 "createdAt": "2026-08-29T08:00:00+00:00",
                 "intermediate": True,
                 "roundId": run.run_id,
-                "opensActivity": True,
             },
         },
         {
@@ -66,34 +67,21 @@ def test_terminal_timeline_interleaves_messages_and_activities_by_run_events():
             "tool_call_id": "call_test",
             "tool": "Bash",
         },
-    ])
-    activities = [
-        {
-            "id": "activity_read",
-            "role": "assistant",
-            "content": "",
-            "createdAt": "2026-08-29T08:00:01+00:00",
-            "activityCard": True,
-            "intermediate": True,
-            "trace": [{"toolCallId": "call_read", "kind": "tool"}],
-        },
-        {
-            "id": "activity_test",
-            "role": "assistant",
-            "content": "",
-            "createdAt": "2026-08-29T08:00:03+00:00",
-            "activityCard": True,
-            "intermediate": True,
-            "trace": [{"toolCallId": "call_test", "kind": "tool"}],
-        },
     ]
+    for event in events:
+        await run.publish(event)
+    live_records = run.timeline.messages()
+    await run.publish({"type": "run_finalizing"})
 
-    messages = run.terminal_timeline_messages(activities)
+    messages = run.terminal_timeline_messages([])
 
-    assert [message["id"] for message in messages] == [
-        "message_before_first_tool",
-        "activity_read",
-        "message_before_second_tool",
-        "activity_test",
-    ]
-    assert "opensActivity" not in messages[0]
+    assert [message["id"] for message in messages] == [record["id"] for record in live_records]
+    assert len(messages) == 4
+    assert messages[0]["id"] == "message_before_first_tool"
+    assert messages[1]["activityCard"] is True
+    assert messages[1]["trace"][0]["toolCallId"] == "call_read"
+    assert messages[2]["id"] == "message_before_second_tool"
+    assert messages[3]["activityCard"] is True
+    assert messages[3]["trace"][0]["toolCallId"] == "call_test"
+    assert all(message["status"] == "completed" for message in messages)
+    assert messages == run.timeline.messages()

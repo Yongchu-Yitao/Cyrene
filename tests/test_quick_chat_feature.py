@@ -73,7 +73,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'return surface === "quick-chat"' in app
     assert 'var QuickChatApp = window.CyreneUI.require("quickChat").App;' in app
     assert "<QuickChatApp />" in app
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta7">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta8">' in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat
@@ -132,7 +132,7 @@ def test_quick_chat_send_close_and_sync_contract():
     assert "chat_run_in_progress" in quick_chat
     # Renders the shared message cards (not a simplified bubble) inside the
     # shared thread layout.
-    assert "chatService.LiveMessage" in quick_chat
+    assert "chatService.Transcript, { messages: messages, runtime: runtime }" in quick_chat
     assert 'className="wbc-thread wbq-thread"' in quick_chat
     # closeWindow is wired to ESC only, never to a successful send/ack.
     assert "resetAfterSend" not in quick_chat

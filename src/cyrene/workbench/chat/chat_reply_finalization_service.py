@@ -43,6 +43,7 @@ class ChatReplyFinalizationRequest:
     state_ids_before: set[str]
     projection: ExternalTurnProjection
     commit_retry_cut: Callable[[dict[str, Any]], None]
+    timeline: list[dict[str, Any]] | None = None
 
 
 class ChatReplyFinalizationApplicationService:
@@ -73,7 +74,16 @@ class ChatReplyFinalizationApplicationService:
             for entry in timeline:
                 entry.setdefault("model", model)
             assistant = self._assistant_message(request, reply_text, model, usage, files)
-            self._prepend_external_projection(request.projection, timeline, assistant, model)
+            if request.timeline is not None:
+                timeline = copy.deepcopy(request.timeline)
+                final = next((item for item in reversed(timeline)
+                              if item.get("role") == "assistant" and not item.get("activityCard") and not item.get("intermediate")
+                              and not item.get("notificationCard")), None)
+                if final is not None:
+                    assistant = {**assistant, **final, "status": "completed"}
+                    timeline = [item for item in timeline if item["id"] != final["id"]]
+            else:
+                self._prepend_external_projection(request.projection, timeline, assistant, model)
             saved_messages = [*timeline, assistant]
             turn_count = self._update_chat(request, chat, saved_messages, assistant, model)
             self.dependencies.write_chat(chat, base_chat=base_chat)

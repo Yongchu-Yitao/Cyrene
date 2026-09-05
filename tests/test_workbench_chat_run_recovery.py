@@ -300,21 +300,14 @@ async def test_visible_tool_start_seals_streamed_reply_before_tool_event():
     })
 
     assert [event["type"] for event in run.events] == [
-        "ack",
-        "reply_delta",
-        "reply_done",
-        "intermediate_message",
-        "tool.started",
-        "tool.started",
+        "ack", "reply_delta", "reply_done", "tool.started", "tool.started",
     ]
-    intermediate = run.events[3]["message"]
-    assert intermediate["content"] == "好，我先检查代码。"
-    assert intermediate["createdAt"] == "2026-08-29T06:00:00+00:00"
-    assert intermediate["intermediate"] is True
-    assert intermediate["roundId"] == run.run_id
-    assert intermediate["opensActivity"] is True
-    assert run.events[3]["_seq"] < run.events[4]["_seq"]
-    assert checkpointed == [("chat_ordered_preamble", intermediate)]
+    records = run.terminal_timeline_messages([])
+    assert records[0]["content"] == "好，我先检查代码。"
+    assert records[0]["createdAt"] == "2026-08-29T06:00:00+00:00"
+    assert records[1]["activityCard"] is True
+    assert len(records[1]["trace"]) == 2
+    assert checkpointed[0][1]["id"] == records[0]["id"]
 
 
 async def test_core_message_delta_uses_same_tool_boundary_order():
@@ -337,11 +330,9 @@ async def test_core_message_delta_uses_same_tool_boundary_order():
         "payload": {"toolCallId": "call-shell", "name": "Bash"},
     })
 
-    assert [event["type"] for event in run.events[-2:]] == [
-        "intermediate_message",
-        "tool.started",
-    ]
-    assert run.events[-2]["message"]["content"] == "Let me inspect that."
+    records = run.terminal_timeline_messages([])
+    assert records[0]["content"] == "Let me inspect that."
+    assert records[1]["trace"][0]["toolCallId"] == "call-shell"
 
 
 async def test_explicit_intermediate_message_consumes_matching_stream_buffer():
@@ -401,7 +392,10 @@ async def test_terminal_timeline_uses_run_event_when_live_checkpoint_failed():
 
     await run.publish({"type": "intermediate_message", "message": message})
 
-    assert run.terminal_timeline_messages([]) == [message]
+    record = run.terminal_timeline_messages([])[0]
+    assert record["id"] == message["id"]
+    assert record["content"] == message["content"]
+    assert record["timelineVersion"] == 1
 
 
 async def test_terminal_failure_checkpoints_completed_stream_before_error():
@@ -432,23 +426,14 @@ async def test_terminal_failure_checkpoints_completed_stream_before_error():
     })
 
     assert [event["type"] for event in run.events] == [
-        "ack",
-        "reply_delta",
-        "reply_done",
-        "intermediate_message",
-        "run.failed",
+        "ack", "reply_delta", "reply_done", "run.failed",
     ]
-    recovered = run.events[-2]["message"]
+    recovered = run.terminal_timeline_messages([])[0]
     assert recovered["content"] == "已生成的完整正文。"
     assert recovered["createdAt"] == "2026-09-03T11:29:18+00:00"
-    assert recovered["intermediate"] is True
-    assert recovered["recoveredAfterFailure"] is True
     assert checkpointed == [("chat_failed_after_reply", recovered)]
-    assert run.terminal_timeline_messages([]) == [recovered]
-
-    # A later generic error must not duplicate the recovered body.
     await run.publish({"type": "error", "code": "agent_run_failed"})
-    assert [event["type"] for event in run.events].count("intermediate_message") == 1
+    assert run.terminal_timeline_messages([]) == [recovered]
 
 
 async def test_durable_event_lock_cannot_block_or_fail_live_reply(monkeypatch, tmp_path):

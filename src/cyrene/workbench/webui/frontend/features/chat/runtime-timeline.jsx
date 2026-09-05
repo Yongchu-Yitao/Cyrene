@@ -306,32 +306,56 @@ function wbcMergeChronologicalMessages(messages, additions) {
 
 function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
   if (!chat) return chat;
-  var current = Array.isArray(chat.messages) ? chat.messages : [];
-  var renderKeysById = {};
-  (Array.isArray(assistantMessages) ? assistantMessages : []).forEach(function (message) {
-    var id = String(message && message.id || "");
-    var renderKey = String(message && message.replyRenderKey || "");
-    if (id && renderKey) renderKeysById[id] = renderKey;
+  var updates = new Map((assistantMessages || []).filter(Boolean).map(function (message) { return [message.id, message]; }));
+  var current = (chat.messages || []).map(function (message) {
+    var update = updates.get(message.id);
+    updates.delete(message.id);
+    return update ? { ...message, ...update } : message;
   });
-  var currentWithRenderKeys = current.map(function (message) {
-    var renderKey = renderKeysById[String(message && message.id || "")];
-    return renderKey ? { ...message, replyRenderKey: renderKey } : message;
+  return { ...chat, status: "idle", liveAgentArtifacts: [],
+    messages: wbcMergeChronologicalMessages(current, Array.from(updates.values())) };
+}
+
+// One projection for all surfaces. Server identities survive hydration and save.
+function wbcApplyTimeline(runtime, patch) {
+  if (!patch || patch.version !== 1) return runtime;
+  var current = runtime || {};
+  if (current.timeline && current.timeline.runId === patch.runId && current.timeline.revision >= patch.revision) return current;
+  var prior = current.timeline && current.timeline.runId === patch.runId ? current.timeline.messages : [];
+  var byId = new Map((prior || []).map(function (message) { return [message.id, message]; }));
+  (patch.messages || []).forEach(function (message) { byId.set(message.id, message); });
+  var messages = Array.from(byId.values()).sort(function (a, b) { return a.timelineOrder - b.timelineOrder; });
+  var lastReply = messages.filter(function (message) { return !message.activityCard && !message.intermediate && !message.notificationCard; }).slice(-1)[0];
+  // These are read-only summaries for the composer/browser/resource shelf.
+  // The transcript itself is rendered exclusively from timeline.messages.
+  return { ...current, reconnecting: false,
+    text: lastReply ? lastReply.content : "", streamDone: !lastReply || lastReply.status !== "running",
+    artifacts: lastReply && lastReply.attachments || [],
+    activities: messages.filter(function (message) { return message.activityCard; }).map(function (message) {
+      return { ...message, progress: message.trace, createdAt: Date.parse(message.createdAt) };
+    }),
+    timeline: { ...patch, messages: messages } };
+
+}
+
+function wbcProjectTranscript(messages, runtime) {
+  var durable = wbcReconcileLiveUserMessages(messages || [], runtime && runtime.userMessages);
+  if (!runtime || !runtime.timeline) return durable;
+  var patch = runtime.timeline;
+  var liveIds = new Set(patch.messages.map(function (message) { return message.id; }));
+  var saved = new Map(durable.map(function (message) { return [message.id, message]; }));
+  var records = patch.messages.map(function (message) {
+    var historical = saved.get(message.id);
+    return historical && Number(historical.timelineRevision || 0) > Number(message.timelineRevision || 0) ? historical : { ...historical, ...message };
   });
-  var knownIds = new Set(current.map(function (message) {
-    return String(message && message.id || "");
-  }));
-  var additions = (Array.isArray(assistantMessages) ? assistantMessages : []).filter(function (message) {
-    var id = String(message && message.id || "");
-    if (!id || knownIds.has(id)) return false;
-    knownIds.add(id);
-    return true;
+  var merged = wbcMergeChronologicalMessages(durable.filter(function (message) { return !liveIds.has(message.id); }), records);
+  var busy = patch.messages.some(function (message) {
+    return message.status === "running" && (message.activityCard || String(message.content || "").length > 0);
   });
-  return {
-    ...chat,
-    status: "idle",
-    liveAgentArtifacts: [],
-    messages: wbcMergeChronologicalMessages(currentWithRenderKeys, additions),
-  };
+  if (patch.status === "running" && !busy && !runtime.pendingQuestion && !runtime.reconnecting) {
+    merged.push({ id: patch.runId + ":continuation", role: "assistant", runtimeContinuation: true });
+  }
+  return merged;
 }
 
 function wbcRuntimeSegmentMessages(runtime) {
@@ -459,6 +483,7 @@ function wbcCreateDetachedRuntime(startedAt) {
 
 function wbcReduceDetachedRuntime(runtime, action, value, sourceEvent) {
   var current = runtime || wbcCreateDetachedRuntime();
+  if (action === "timeline") return wbcApplyTimeline(current, value);
   var now = Date.now();
   function withActivity(updater) {
     var activities = Array.isArray(current.activities) ? current.activities.slice() : [];
@@ -667,4 +692,4 @@ function wbcPersistDurableTrace(chatId, payload) {
   } catch (e) {}
 }
 
-export { wbcChatCacheState, wbcLastChatByProject, wbcChatCache, wbcRenderMarkdown, wbcRenderMapMarkdown, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, WbcSplitPickerMenu, wbcFormatTime, wbcFormatProcessingDuration, wbcConfirmOptimisticMessage, wbcReconcileLiveUserMessages, wbcRetryTurnSelection, wbcTruncateMessagesAfterUser, wbcClearModelOutputForRetry, wbcPreserveLiveTimelineAnchors, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcFinalizeRuntime, wbcCreateDetachedRuntime, wbcReduceDetachedRuntime, wbcMergeToolLifecycleEntry, wbcToolEntryIsTerminal, wbcToolOccurrenceIndex, wbcMergeToolOccurrence, WBC_DURABLE_TRACE_FIELDS, wbcCleanDurableTraceEntry, wbcDurableTracePayload, wbcPersistDurableTrace }
+export { wbcApplyTimeline, wbcProjectTranscript, wbcChatCacheState, wbcLastChatByProject, wbcChatCache, wbcRenderMarkdown, wbcRenderMapMarkdown, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, WbcSplitPickerMenu, wbcFormatTime, wbcFormatProcessingDuration, wbcConfirmOptimisticMessage, wbcReconcileLiveUserMessages, wbcRetryTurnSelection, wbcTruncateMessagesAfterUser, wbcClearModelOutputForRetry, wbcPreserveLiveTimelineAnchors, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcFinalizeRuntime, wbcCreateDetachedRuntime, wbcReduceDetachedRuntime, wbcMergeToolLifecycleEntry, wbcToolEntryIsTerminal, wbcToolOccurrenceIndex, wbcMergeToolOccurrence, WBC_DURABLE_TRACE_FIELDS, wbcCleanDurableTraceEntry, wbcDurableTracePayload, wbcPersistDurableTrace }

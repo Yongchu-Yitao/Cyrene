@@ -1001,6 +1001,7 @@ class _SendOperation:
         return result
 
     async def _finalize_reply(self, reply_text: str) -> dict[str, Any]:
+        active_run = self.service.run_manager.get_replayable(self.chat_id)
         request = ChatReplyFinalizationRequest(
             chat_id=self.chat_id,
             project_id=self.project_id,
@@ -1015,6 +1016,7 @@ class _SendOperation:
             state_ids_before=self.state_ids_before,
             projection=self.external,
             commit_retry_cut=self._commit_retry_cut,
+            timeline=active_run.timeline.messages() if active_run is not None else None,
         )
         finalized = await asyncio.to_thread(
             self.controller.reply_finalization.finalize,
@@ -1196,6 +1198,37 @@ class _SendOperation:
                 item["createdAt"] = now
         return timeline
 
+    def _builtin_assistant_message(
+        self, result: Any, timeline: list[dict[str, Any]], *,
+        now: str, model: str, run_id: str, node_id: str, turn_id: str,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        assistant = {
+            "id": self.service.short_id("msg"),
+            "role": "assistant",
+            "content": str(getattr(result, "text", "") or ""),
+            "createdAt": now,
+            "model": model,
+            "runId": run_id,
+            "contextNodeId": node_id,
+            "turnId": turn_id,
+            "processingDurationMs": max(
+                0,
+                int(round((time.monotonic() - self.processing_started_at) * 1000)),
+            ),
+            **self._runtime_message_fields(result),
+        }
+        final_record = next((entry for entry in reversed(timeline)
+                             if entry.get("timelineVersion") == 1
+                             and entry.get("role") == "assistant"
+                             and not entry.get("activityCard")
+                             and not entry.get("intermediate")), None)
+        if final_record is not None:
+            assistant = {**assistant, **final_record,
+                         "model": model, **self._runtime_message_fields(result)}
+            assistant["status"] = "completed"
+            timeline = [entry for entry in timeline if entry["id"] != final_record["id"]]
+        return assistant, timeline
+
     def _persist_builtin_result(
         self,
         result: Any,
@@ -1242,21 +1275,10 @@ class _SendOperation:
                 chat["pendingQuestion"] = pending
                 chat["status"] = "idle"
             else:
-                assistant = {
-                    "id": self.service.short_id("msg"),
-                    "role": "assistant",
-                    "content": str(getattr(result, "text", "") or ""),
-                    "createdAt": now,
-                    "model": model,
-                    "runId": run_id,
-                    "contextNodeId": node_id,
-                    "turnId": turn_id,
-                    "processingDurationMs": max(
-                        0,
-                        int(round((time.monotonic() - self.processing_started_at) * 1000)),
-                    ),
-                    **self._runtime_message_fields(result),
-                }
+                assistant, timeline = self._builtin_assistant_message(
+                    result, timeline, now=now, model=model,
+                    run_id=run_id, node_id=node_id, turn_id=turn_id,
+                )
                 additions = [*timeline, assistant]
                 chat["completedTurnCount"] = self.service.next_completed_turn_count(
                     {"completedTurnCount": self.completed_turn_count_before},
@@ -1372,6 +1394,8 @@ class _SendOperation:
                     before=before,
                     status="completed",
                 )
+            if not awaiting:
+                await run.publish({"type": "run_finalizing", "chatId": self.chat_id})
             terminal_timeline = run.terminal_timeline_messages(
                 [
                     copy.deepcopy(dict(item))

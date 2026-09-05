@@ -391,6 +391,8 @@ class AgentSession:
             None if max_model_calls is None else max(1, int(max_model_calls))
         )
         self._streamed_transition_keys: set[str] = set()
+        self._stream_source_ids: dict[str, str] = {}
+        self._stream_attempts: dict[str, int] = {}
         self._session_driver: Any = None
         self._owns_session_driver = False
         self._closed = False
@@ -1174,7 +1176,14 @@ class AgentSession:
         trigger_id: str,
         transition_key: str,
     ) -> Callable[[Mapping[str, Any]], Any]:
-        """Translate Provider stream chunks into transient Agent events."""
+        """Translate Provider chunks with an identity shared by the final node."""
+
+        stream_attempt = self._stream_attempts.get(transition_key, 0)
+        self._stream_attempts[transition_key] = stream_attempt + 1
+        stream_id = self._stable_id("assistant", transition_key)
+        if stream_attempt:
+            stream_id += f":attempt:{stream_attempt}"
+        self._stream_source_ids[transition_key] = stream_id
 
         event_types = {
             "reply_start": "assistant.stream.started",
@@ -1201,7 +1210,7 @@ class AgentSession:
                     key: deepcopy(value)
                     for key, value in event.items()
                     if key != "type"
-                },
+                } | {"sourceId": stream_id},
             )
 
         return publish
@@ -3868,6 +3877,36 @@ class AgentSession:
         )
         return True
 
+    def _assistant_model_value(
+        self, output: Mapping[str, Any], calls: list[Any], *,
+        streamed: bool, transition_key: str, run_id: str, batch_key: str,
+    ) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "content": str(output.get("content") or ""),
+            "reasoning": str(output.get("reasoning") or ""),
+            "reasoning_details": output.get("reasoning_details") or [],
+            "tool_calls": calls,
+            "model": str(output.get("model") or self.model_plugin),
+            "model_identity": self._json_value(
+                output.get("model_identity") or {}
+            ),
+            "usage": self._json_value(output.get("usage") or {}),
+            "model_observation_id": str(
+                output.get("observation_node_id") or ""
+            ),
+            "model_latency_ms": self._json_value(
+                output.get("latency_ms") or 0.0
+            ),
+            "finish_reason": str(output.get("finish_reason") or ""),
+            "response_id": str(output.get("response_id") or ""),
+            "streamed": streamed,
+            "stream_source_id": self._stream_source_ids.get(transition_key, ""),
+            "run_id": run_id,
+            "caused_by": transition_key,
+            "batch_key": batch_key,
+        }
+
     async def _advance(self, trigger: ContextNode) -> None:
         run_id = self._node_run_id(trigger)
         if self._is_cancelled(run_id):
@@ -4054,30 +4093,10 @@ class AgentSession:
             assistant = self.store.mount(
                 self.tree.id,
                 trigger.id,
-                {
-                    "role": "assistant",
-                    "content": str(output.get("content") or ""),
-                    "reasoning": str(output.get("reasoning") or ""),
-                    "reasoning_details": output.get("reasoning_details") or [],
-                    "tool_calls": calls,
-                    "model": str(output.get("model") or self.model_plugin),
-                    "model_identity": self._json_value(
-                        output.get("model_identity") or {}
-                    ),
-                    "usage": self._json_value(output.get("usage") or {}),
-                    "model_observation_id": str(
-                        output.get("observation_node_id") or ""
-                    ),
-                    "model_latency_ms": self._json_value(
-                        output.get("latency_ms") or 0.0
-                    ),
-                    "finish_reason": str(output.get("finish_reason") or ""),
-                    "response_id": str(output.get("response_id") or ""),
-                    "streamed": streamed,
-                    "run_id": run_id,
-                    "caused_by": transition_key,
-                    "batch_key": batch_key,
-                },
+                self._assistant_model_value(
+                    output, calls, streamed=streamed, transition_key=transition_key,
+                    run_id=run_id, batch_key=batch_key,
+                ),
                 node_id=self._stable_id("assistant", transition_key),
             )
             assistant_state = self._set_state_locked(

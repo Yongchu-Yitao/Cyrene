@@ -239,21 +239,23 @@ import { wbcErrorText } from "./errors.jsx"
     });
   }
 
+  function rejectEventStreamResponse(response) {
+    return response.json().catch(function () { return {}; }).then(function (payload) {
+      var err = new Error(payload.error || payload.detail || ("HTTP " + response.status));
+      err.code = payload.code || "";
+      err.detailKey = payload.detail_key || payload.detailKey || "";
+      err.detailParams = payload.detail_params || payload.detailParams || {};
+      err.status = response.status;
+      if (String(err.code || "").startsWith("budget_")) {
+        workbenchServices.feedback().showToast(wbcErrorText(err), "error");
+      }
+      throw err;
+    });
+  }
+
   function consumeEventStream(response, handlers) {
     handlers = handlers || {};
-    if (!response.ok) {
-      return response.json().catch(function () { return {}; }).then(function (payload) {
-        var err = new Error(payload.error || payload.detail || ("HTTP " + response.status));
-        err.code = payload.code || "";
-        err.detailKey = payload.detail_key || payload.detailKey || "";
-        err.detailParams = payload.detail_params || payload.detailParams || {};
-        err.status = response.status;
-        if (String(err.code || "").startsWith("budget_")) {
-          workbenchServices.feedback().showToast(wbcErrorText(err), "error");
-        }
-        throw err;
-      });
-    }
+    if (!response.ok) return rejectEventStreamResponse(response);
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var buffer = "";
@@ -284,7 +286,9 @@ import { wbcErrorText } from "./errors.jsx"
       if (eventCursor > 0 && handlers.onEventCursor) {
         handlers.onEventCursor(eventCursor);
       }
+      if (event.timeline && handlers.onTimeline) handlers.onTimeline(event.timeline);
       var type = String(event.type || "");
+      if (event.timeline && handlers.onTimeline && /^(reply_|reasoning_|message\.|reasoning\.|tool\.|tool_call_|intermediate_message$|artifact\.|notification\.)/.test(type)) return;
       var eventId = String(event.eventId || event.event_id || "");
       if (eventId) {
         if (!rememberEventId(eventId)) return;

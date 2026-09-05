@@ -118,16 +118,13 @@ var QUICK_CHAT_ICON = (
 function quickChatDedupAppend(prev, additions) {
   var list = Array.isArray(additions) ? additions : [];
   if (!list.length) return prev;
-  var seen = {};
-  prev.forEach(function (m) { seen[String((m && m.id) || "")] = true; });
-  var add = [];
-  list.forEach(function (m) {
-    var id = String((m && m.id) || "");
-    if (!id || seen[id]) return;
-    seen[id] = true;
-    add.push(m);
+  var updates = new Map(list.filter(Boolean).map(function (message) { return [message.id, message]; }));
+  var merged = prev.map(function (message) {
+    var update = updates.get(message.id);
+    updates.delete(message.id);
+    return update ? { ...message, ...update } : message;
   });
-  return add.length ? prev.concat(add) : prev;
+  return merged.concat(Array.from(updates.values()));
 }
 
 function quickChatConfirmUserMessage(prev, confirmation) {
@@ -747,20 +744,7 @@ function QuickChatApp() {
                   </p>
                 </div>
               ) : null}
-              {messages.map(function (m) {
-                if (m.modelStatusCard && typeof chatService.ModelStatusMessage === "function") {
-                  return React.createElement(chatService.ModelStatusMessage, { key: m.id, msg: m });
-                }
-                if (m.notificationCard && typeof chatService.AgentNotification === "function") {
-                  return React.createElement(chatService.AgentNotification, { key: m.id, notice: m.notification });
-                }
-                return m.role === "user"
-                  ? React.createElement(chatService.UserMessage, { key: m.id, msg: m })
-                  : React.createElement(chatService.AssistantMessage, { key: m.id, msg: m });
-              })}
-              {runtime && typeof chatService.RuntimeTranscript === "function"
-                ? React.createElement(chatService.RuntimeTranscript, { runtime: runtime })
-                : (runtime ? React.createElement(chatService.LiveMessage, { runtime: runtime }) : null)}
+              {React.createElement(chatService.Transcript, { messages: messages, runtime: runtime })}
               {pendingAgentRequest && typeof chatService.QuestionPrompt === "function"
                 ? (typeof chatService.ThreadItem === "function"
                   ? React.createElement(chatService.ThreadItem, null,

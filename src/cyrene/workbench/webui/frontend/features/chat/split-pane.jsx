@@ -1,3 +1,4 @@
+import { WbcTranscript } from "./messages.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, WbcSplitPickerMenu, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentColor, wbcAgentInitials, wbcAttachmentTypeLabel, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcClampSideSplitWidthForPage, wbcCreateDetachedRuntime, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHighlightMentions, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserLayoutChanged, wbcPreserveLiveTimelineAnchors, wbcReconcileLiveUserMessages, wbcReduceDetachedRuntime, wbcRenderMapMarkdown, wbcRenderMarkdown, wbcSubagentStatusClass, wbcSubagentStatusText, wbcT } from "../../workbench-chat.jsx"
 import { WbcComposer, wbcBranchConnectors, wbcBranchKindLabel, wbcBranchLineage, wbcBranchRows, wbcBrowserStateForChat } from "./composer.jsx"
@@ -506,33 +507,8 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
           <div className="wbc-chat-split-state">{wbcT("workbenchChat.noMessages", "No messages yet")}</div>
         )}
         {errorText && <div className="wbc-side-agent-error" role="alert">{errorText}</div>}
-        {displayMessages.map(function (message) {
-          if (message.activityGroup) {
-            return <WbcThreadItem key={message.id}><WbcActivityGroup group={message} /></WbcThreadItem>;
-          }
-          var isActiveQuestion = !!(
-            message.questionPrompt
-            && displayChat.pendingQuestion
-            && String(displayChat.pendingQuestion.id || "") === String(message.questionId || "")
-          );
-          if (isActiveQuestion) {
-            return <WbcThreadItem key={message.id || message.createdAt}><WbcQuestionPrompt pending={displayChat.pendingQuestion} onAnswer={answerPendingQuestion} busy={running && !wbcIsLiveAgentRequest(displayChat.pendingQuestion)} trace={message.trace} /></WbcThreadItem>;
-          }
-          if (message.modelStatusCard) {
-            return <WbcThreadItem key={message.id || message.createdAt}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
-          }
-          if (message.notificationCard) {
-            return <WbcThreadItem key={message.id || message.createdAt}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
-          }
-          return (
-            <WbcThreadItem key={message.id || message.createdAt}>
-              {message.role === "user"
-                ? <WbcUserMessage msg={message} onOpenFile={openFile} />
-                : <WbcAssistantMessage msg={message} onOpenFile={openFile} chatId={typeof chatId === "string" ? chatId : ""} />}
-            </WbcThreadItem>
-          );
-        })}
-        {running && <WbcRuntimeTranscript runtime={streamRuntime || { ...wbcCreateDetachedRuntime(runStartedAtRef.current), text: streamText, notifications: streamNotifications }} onOpenFile={openFile} />}
+        <WbcTranscript messages={messages} runtime={streamRuntime} onOpenFile={openFile} chatId={chatId}
+          pendingQuestion={displayChat && displayChat.pendingQuestion} onAnswer={answerPendingQuestion} />
         {displayChat && displayChat.pendingQuestion && displayChat.pendingQuestion.id && (!running || wbcIsLiveAgentRequest(displayChat.pendingQuestion)) && !messages.some(function (message) {
           return message.questionPrompt && String(message.questionId || "") === String(displayChat.pendingQuestion.id || "");
         }) && (
@@ -1537,6 +1513,7 @@ function wbcCreateSideAgentStreamHandlers(config) {
   }
 
   return {
+    onTimeline: function (patch) { if (mountedRef.current) config.queueStreamAction("timeline", patch); },
     onReplyStart: function () {
       if (mountedRef.current) config.queueStreamAction("reply_start");
     },
@@ -1803,22 +1780,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
             <p>{wbcT("workbenchChat.sideAgent.askHint", "This agent has its own context and will not interrupt the main conversation.")}</p>
           </div>
         )}
-        {messages.map(function (message) {
-          if (message.modelStatusCard) {
-            return <WbcThreadItem key={message.id || message.createdAt}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
-          }
-          if (message.notificationCard) {
-            return <WbcThreadItem key={message.id || message.createdAt}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
-          }
-          return (
-            <WbcThreadItem key={message.id || message.createdAt}>
-              {message.role === "user"
-                ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
-                : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} chatId={typeof chatId === "string" ? chatId : ""} />}
-            </WbcThreadItem>
-          );
-        })}
-        {running && <WbcRuntimeTranscript runtime={streamRuntime || wbcCreateDetachedRuntime(runStartedAtRef.current)} onOpenFile={onOpenFile} />}
+        <WbcTranscript messages={messages} runtime={streamRuntime} onOpenFile={onOpenFile} chatId={chatId} />
         {agent && agent.pendingQuestion && wbcIsLiveAgentRequest(agent.pendingQuestion) && (
           <WbcThreadItem><WbcQuestionPrompt pending={agent.pendingQuestion} onAnswer={answerPendingQuestion} busy={false} /></WbcThreadItem>
         )}

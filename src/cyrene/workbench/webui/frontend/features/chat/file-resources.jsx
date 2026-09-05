@@ -1,3 +1,4 @@
+import { wbcApplyTimeline } from "./runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_COMMANDS, WBC_ICONS, wbcAgentEventPayload, wbcAgentSessionPayload, wbcAgentToolDisplayName, wbcAttachmentVisual, wbcConfirmOptimisticMessage, wbcDurableTracePayload, wbcErrorText, wbcFileDragPayload, wbcFileViewKind, wbcFinalizeRuntime, wbcMergeToolOccurrence, wbcNotifyResourceShelfPointerDrag, wbcPersistDurableTrace, wbcPointInsideResourceShelf, wbcSetResourceDrag, wbcStructuredEventSummary, wbcSubagentStatusText, wbcT, wbcToolArgsPreview } from "../../workbench-chat.jsx"
 
@@ -334,29 +335,6 @@ function wbcRuntimeToolEvent(event, eventAt) {
   };
 }
 
-function wbcBindSavedReplyRenderKey(messages, renderKey) {
-  var list = Array.isArray(messages) ? messages : [];
-  var key = String(renderKey || "");
-  if (!key) return list;
-  for (var index = list.length - 1; index >= 0; index -= 1) {
-    var message = list[index];
-    var hasVisibleReply = !!String(message && message.content || "").trim()
-      || !!(message && Array.isArray(message.attachments) && message.attachments.length)
-      || !!(message && Array.isArray(message.referenceAttachments) && message.referenceAttachments.length)
-      || !!(message && Array.isArray(message.reference_attachments) && message.reference_attachments.length);
-    if (
-      !message
-      || message.role !== "assistant"
-      || message.intermediate
-      || !hasVisibleReply
-    ) continue;
-    var bound = list.slice();
-    bound[index] = { ...message, replyRenderKey: key };
-    return bound;
-  }
-  return list;
-}
-
 function wbcHandleRuntimeAck(event, context) {
   if (event.retry) {
     var retryTruncateAfterMessageId = String(event.truncateAfterMessageId || "");
@@ -537,6 +515,17 @@ var WorkbenchChatRuntimes = (function () {
 
   function clear(chatId) {
     clearReconnectTimer(chatId);
+    var current = runtimes[chatId];
+    if (current && current.timeline) {
+      var records = current.timeline.messages.map(function (message) {
+        if (message.status !== "running") return message;
+        return { ...message, status: "cancelled", reasoningActive: false,
+          trace: (message.trace || []).map(function (entry) {
+            return entry.status === "running" ? { ...entry, status: "cancelled" } : entry;
+          }) };
+      });
+      fire("onAssistantSaved", chatId, records);
+    }
     update(chatId, null);
   }
 
@@ -566,7 +555,7 @@ var WorkbenchChatRuntimes = (function () {
     // Remove the live runtime before ownStream.finally so it cannot enter the
     // generic re-sync/reconnect branch and replace the durable error with a
     // fresh thinking card.
-    update(chatId, null);
+    clear(chatId);
     publishLifecycle(chatId, "failed", err || {});
     fire("onError", chatId, failures[chatId], { terminal: true });
   }
@@ -1103,6 +1092,9 @@ var WorkbenchChatRuntimes = (function () {
           recordFirstClientPaint(chatId, model);
         }
       },
+      onTimeline: function (patch) {
+        update(chatId, function (cur) { return cur ? wbcApplyTimeline(cur, patch) : null; });
+      },
       onReplyStart: function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
         fire("onReplyStream", chatId, { text: "", start: true, done: false });
@@ -1262,35 +1254,11 @@ var WorkbenchChatRuntimes = (function () {
         var savedMessages = Array.isArray(event.assistantMessages) && event.assistantMessages.length
           ? event.assistantMessages
           : (event.assistantMessage ? [event.assistantMessage] : []);
-        // The live reply and its durable message are one visual entity. Carry
-        // the run-scoped render identity across the persistence boundary so
-        // React updates the existing message instead of replacing its DOM.
-        savedMessages = wbcBindSavedReplyRenderKey(
-          savedMessages,
-          runtimes[chatId] && runtimes[chatId].replyRenderKey
-        );
-        // The client-assembled live trace is the authoritative execution
-        // history: the backend's transcript extraction can drop mid-run tool
-        // calls and drops runtime status fields. Overlay it on the saved cards
-        // before they render, and persist it so a reload sees the same data.
-        // Failure to persist is fine — the backend-extracted trace remains.
-        var durableTrace = wbcDurableTracePayload(chatId, runtimes[chatId], savedMessages);
-        if (durableTrace && savedMessages.length) {
-          var durableByMessageId = {};
-          durableTrace.messageIds.forEach(function (mid, index) {
-            durableByMessageId[String(mid || "")] = durableTrace.traces[index];
-          });
-          savedMessages = savedMessages.map(function (message) {
-            var replacement = message && durableByMessageId[String(message.id || "")];
-            return replacement ? { ...message, trace: replacement } : message;
-          });
-        }
         // Even a terminal event without a returned message must settle the
         // rail; message persistence and status convergence are independent.
         fire("onAssistantSaved", chatId, savedMessages, event);
         publishLifecycle(chatId, "completed", event);
         clear(chatId);
-        if (durableTrace) wbcPersistDurableTrace(chatId, durableTrace);
         fire("onSettled", chatId);
       },
       onAwaitingUser: function (event) {
@@ -1507,7 +1475,7 @@ var WorkbenchChatRuntimes = (function () {
     var chatId = String(event.session_id || "");
     // The event bridge is process-wide. Ignore warnings and progress for
     // sessions this client is not currently tracking.
-    if (!chatId || !runtimes[chatId]) return;
+    if (!chatId || !runtimes[chatId] || runtimes[chatId].timeline) return;
     // ``tool.started`` is also projected onto the process-wide event bus as a
     // minimal ``tool_call`` record for usage accounting. It has no lifecycle
     // identity or details and must not become a second, empty activity row.

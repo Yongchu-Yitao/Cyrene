@@ -553,6 +553,7 @@ def _envelope(
         "runId": event.run_id,
         "type": event_type,
         "timestamp": event.time.isoformat(),
+        "sourceId": str(event.data.get("sourceId") or event.data.get("stream_source_id") or event.node_id or ""),
         "payload": dict(payload or {}),
     }
 
@@ -591,8 +592,6 @@ def _assistant_completed_events(
     data: Mapping[str, Any],
     event_id: str,
 ) -> tuple[dict[str, Any], ...]:
-    if data.get("intermediate") is True:
-        return ()
     content = str(data.get("content") or "")
     completed = {
         **_envelope(event, "reply_done", event_id + ":completed"),
@@ -670,7 +669,7 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
             ),
         )
     if event.type == "assistant.tool_calls":
-        projected = []
+        projected = list(_assistant_completed_events(event, data, event_id)) if str(data.get("content") or "").strip() else []
         for call in data.get("tool_calls") or ():
             if not isinstance(call, Mapping):
                 continue

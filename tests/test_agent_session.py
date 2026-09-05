@@ -183,6 +183,16 @@ def test_invalid_model_response_retries_same_node_through_context_hook(tmp_path)
     ]
     assert len(reset_events) == 1
     assert reset_events[0].data["recovery"] == "model_response_invalid"
+    from cyrene.workbench.chat.run_timeline import RunTimeline
+    from cyrene.workbench.core_adapter.bridge import workbench_events
+
+    timeline = RunTimeline("invalid-response-retry")
+    for observed in observed_events:
+        for projected in workbench_events(observed):
+            timeline.apply(projected)
+    replies = [record for record in timeline.messages() if record.get("content")]
+    assert [record["content"] for record in replies] == ["partial", "recovered"]
+    assert replies[0]["id"] != replies[1]["id"]
     session.close()
 
 

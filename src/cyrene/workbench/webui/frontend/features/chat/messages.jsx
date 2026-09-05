@@ -1,3 +1,4 @@
+import { wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
 import { WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm } from "./conversation.jsx"
@@ -5,6 +6,36 @@ import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag,
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
+var wbcDisclosureListeners = new Set();
+function wbcDisclosureValue(id) {
+  try { var value = localStorage.getItem("cyrene:disclosure:" + id); return value === null ? null : value === "open"; } catch (_) { return null; }
+}
+function wbcUseDisclosure(id, children) {
+  function read() {
+    var saved = wbcDisclosureValue(id);
+    if (saved !== null) return saved;
+    var inherited = (children || []).some(wbcDisclosureValue);
+    if (inherited) { try { localStorage.setItem("cyrene:disclosure:" + id, "open"); } catch (_) {} }
+    return inherited;
+  }
+  var [expanded, setExpanded] = useWbcState(read);
+  useWbcEffect(function () {
+    function sync() { setExpanded(read()); }
+    sync();
+    wbcDisclosureListeners.add(sync);
+    window.addEventListener("storage", sync);
+    return function () { wbcDisclosureListeners.delete(sync); window.removeEventListener("storage", sync); };
+  }, [id, (children || []).join("\0")]);
+  function change(value) {
+    try {
+      localStorage.setItem("cyrene:disclosure:" + id, value ? "open" : "closed");
+    } catch (_) {}
+    setExpanded(value);
+    wbcDisclosureListeners.forEach(function (notify) { notify(); });
+  }
+  return [expanded, change];
+}
+
 function wbcLocalizedToolName(toolName) {
   var raw = String(toolName || "").trim();
   if (!raw) return wbcT("workbenchChat.toolFallback", "Tool");
@@ -718,11 +749,12 @@ function wbcActivityMessageView(message) {
   var activity = message.runtimeActivity || {
     id: message.id,
     reasoning: message.reasoning || "",
+    reasoningActive: !!message.reasoningActive,
     progress: Array.isArray(message.trace) ? message.trace : [],
   };
   var entries = Array.isArray(activity.progress) ? activity.progress : [];
-  var live = !!message.runtimeActivity;
-  var active = !!message.runtimeActivityActive || (live && entries.some(function (entry) {
+  var live = !!message.runtimeActivity || message.timelineVersion === 1 && message.status === "running";
+  var active = !!message.runtimeActivityActive || (message.timelineVersion === 1 && message.status === "running") || (live && entries.some(function (entry) {
     return String(entry && entry.status || "").trim().toLowerCase() === "running";
   }));
   var hasReasoning = !!String(activity.reasoning || "").trim();
@@ -734,29 +766,20 @@ function wbcActivityMessageView(message) {
     hasReplyText: !!message.runtimeActivityHasReplyText,
     // Visibility and liveness are separate: historical reasoning remains
     // readable, while only live entries are allowed to animate.
-    visible: active || entries.length > 0 || hasReasoning,
+    visible: message.timelineVersion === 1 || active || entries.length > 0 || hasReasoning,
   };
 }
 
 function wbcActivityGroupDurationMs(items, nextMessage, runtime) {
-  var explicit = nextMessage && nextMessage.processingDurationMs != null
-    ? Number(nextMessage.processingDurationMs)
-    : NaN;
-  if (Number.isFinite(explicit) && explicit >= 0) return explicit;
   var list = Array.isArray(items) ? items : [];
-  var hasLiveItems = list.some(function (message) { return !!(message && message.runtimeActivity); });
-  var start = hasLiveItems ? Number(runtime && runtime.startedAt) : NaN;
-  if (!Number.isFinite(start)) {
-    start = Date.parse(String(list[0] && (list[0].createdAt || list[0].created_at) || ""));
-  }
-  var end = Date.parse(String(nextMessage && (nextMessage.createdAt || nextMessage.created_at) || ""));
-  if (!Number.isFinite(end) && hasLiveItems) end = Number(runtime && runtime.lastEventAt);
-  if (!Number.isFinite(end)) {
-    var last = list[list.length - 1];
-    end = Date.parse(String(last && (last.createdAt || last.created_at) || ""));
-  }
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
-  return end - start;
+  var starts = list.map(function (message) {
+    return Date.parse(String(message.startedAt || message.createdAt || message.created_at || ""));
+  }).filter(Number.isFinite);
+  var ends = list.map(function (message) {
+    return Date.parse(String(message.endedAt || message.createdAt || message.created_at || ""));
+  }).filter(Number.isFinite);
+  if (!starts.length || !ends.length) return null;
+  return Math.max(0, Math.max.apply(Math, ends) - Math.min.apply(Math, starts));
 }
 
 function wbcGroupConsecutiveActivityMessages(messages, runtime) {
@@ -787,6 +810,10 @@ function wbcGroupConsecutiveActivityMessages(messages, runtime) {
   }
 
   source.forEach(function (message) {
+    if (message.timelineVersion === 1 && !message.activityCard && message.role !== "user"
+      && !message.notificationCard && !message.modelStatusCard && !String(message.content || "").trim()
+      && !(message.attachments && message.attachments.length)
+      && !(message.referenceAttachments && message.referenceAttachments.length)) return;
     var view = wbcActivityMessageView(message);
     if (view) {
       // Tool-free completed placeholders were already visually omitted by the
@@ -935,30 +962,19 @@ function wbcIsToolTraceEntry(entry) {
 }
 
 function wbcActivityGroupRunningLabel(messages) {
-  var list = Array.isArray(messages) ? messages : [];
-  for (var messageIndex = list.length - 1; messageIndex >= 0; messageIndex--) {
-    var view = wbcActivityMessageView(list[messageIndex]);
-    if (!view) continue;
-    for (var entryIndex = view.entries.length - 1; entryIndex >= 0; entryIndex--) {
-      var entry = view.entries[entryIndex];
-      if (String(entry && entry.status || "").trim().toLowerCase() !== "running") continue;
-      var kind = wbcTraceActionKind(entry);
-      if (kind === "command") return wbcT("workbenchChat.activityGroup.running.command", "Running commands");
-      if (kind === "permission") return wbcT("workbenchChat.activityGroup.running.permission", "Reviewing permissions");
-      if (kind === "browser") return wbcT("workbenchChat.activityGroup.running.browser", "Using the browser");
-      if (kind === "search") return wbcT("workbenchChat.activityGroup.running.search", "Searching");
-      if (["edit", "write", "read", "artifact"].indexOf(kind) >= 0) return wbcT("workbenchChat.activityGroup.running.files", "Processing files");
-      if (kind === "subagent") return wbcT("workbenchChat.activityGroup.running.subagent", "Coordinating subagents");
-      return wbcT("workbenchChat.activityGroup.running.tool", "Calling tools");
-    }
-    if (view.active && view.hasReplyText) {
-      return wbcT("workbenchChat.activityGroup.running.reply", "Writing the reply");
-    }
-    if (view.active && String(view.activity.reasoning || "").trim()) {
-      return wbcT("workbenchChat.activityGroup.running.thinking", "Thinking");
-    }
-  }
-  return wbcT("workbenchChat.activityGroup.running", "Working");
+  var steps = [];
+  (messages || []).forEach(function (message) {
+    var view = wbcActivityMessageView(message);
+    if (!view || !view.active) return;
+    view.entries.forEach(function (entry) {
+      if (entry.status === "running") steps.push(wbcLocalizedToolName(entry.text || "tool"));
+    });
+    if (view.activity.reasoningActive) steps.push(wbcT("workbenchChat.activityGroup.running.thinking", "Thinking"));
+  });
+  if (!steps.length) return wbcT("workbenchChat.activityGroup.running.thinking", "Thinking");
+  return steps.length > 1
+    ? wbcT("workbenchChat.activityGroup.steps", "{step} and {count} active steps", { step: steps[0], count: steps.length })
+    : wbcT("workbenchChat.activityGroup.step", "Running {step}", { step: steps[0] });
 }
 
 function wbcTraceCollapsedSummary(entries, fallback) {
@@ -1045,11 +1061,15 @@ function wbcTraceTimelineItems(entries, reasoning) {
   return items;
 }
 
-function WbcTraceCard({ trace, live, running, label, reasoning }) {
+function wbcTraceDedupeKeyForDisclosure(trace) {
+  return (trace || []).map(function (entry) { return entry.toolCallId || entry.text; }).join(":");
+}
+
+function WbcTraceCard({ trace, live, running, label, reasoning, disclosureId }) {
   useWorkbenchI18n(); var entries = Array.isArray(trace) ? trace : [];
-  var [expanded, setExpanded] = useWbcState(false);
+  var [expanded, setExpanded] = wbcUseDisclosure(disclosureId || "trace:" + wbcTraceDedupeKeyForDisclosure(trace));
   var reasoningText = String(reasoning || "");
-  if (!entries.length && !reasoningText.trim() && !live) return null;
+  if (!entries.length && !reasoningText.trim() && !live && !disclosureId) return null;
   var activityRunning = live && running !== false;
   var hasDetails = entries.length > 0 || !!reasoningText.trim();
   var cardClass = "wbc-trace" + (live ? " live" : "") + (expanded ? " expanded" : "");
@@ -1062,7 +1082,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning }) {
   var hasRunningEntries = live && entries.some(function (entry) {
     return String(entry && entry.status || "").trim().toLowerCase() === "running";
   });
-  var summaryRunning = hasRunningEntries || (activityRunning && entries.length === 0);
+  var summaryRunning = hasRunningEntries || activityRunning;
   var timelineItems = wbcTraceTimelineItems(entries, reasoningText);
   return (
     <div className={cardClass} aria-busy={summaryRunning ? "true" : undefined}>
@@ -1235,8 +1255,32 @@ var WbcStreamingStableBlock = React.memo(function WbcStreamingStableBlock({ sour
     : null;
 });
 
+function WbcGoalMilestoneMessage({ msg, chatId }) {
+  var milestone = msg.goalMilestone && typeof msg.goalMilestone === "object"
+    ? msg.goalMilestone : {};
+  var terminalGoal = milestone.status === "completed" || milestone.status === "aborted";
+  return (
+    <article className={"wbc-goal-milestone " + String(milestone.type || "update")}>
+      <span className="wbc-goal-milestone-mark" aria-hidden="true">{WBC_ICONS.phase}</span>
+      <div className="wbc-goal-milestone-body">
+        <header>
+          <small>{wbcT("goal.milestone", "Goal milestone")}</small>
+          {Number(milestone.attempt || 0) > 0 ? <span className="wbc-goal-milestone-attempt">{wbcT("goal.attempt", "Attempt {attempt}", { attempt: Number(milestone.attempt) })}</span> : null}
+        </header>
+        <div className="wbc-goal-milestone-copy">{msg.content}</div>
+      </div>
+      {!terminalGoal ? <button type="button" className="wbc-goal-milestone-action" onClick={function () {
+        window.dispatchEvent(new CustomEvent("workbench:open-goal-tab", { detail: { chatId: String(chatId || "") } }));
+      }}><span>{wbcT("goal.openTab", "Open Goal")}</span>{WBC_ICONS.chevronRight}</button> : null}
+    </article>
+  );
+}
+
 function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
   msg = msg || {};
+  if (!liveRuntime && msg.timelineVersion === 1 && !msg.activityCard && msg.status === "running") {
+    liveRuntime = { text: msg.content, artifacts: msg.attachments || [], streamDone: false };
+  }
   var live = !!liveRuntime;
   var sourceText = live ? String(liveRuntime.text || "") : String(msg.content || "");
   var renderedText = wbcUseBufferedLiveText(
@@ -1333,25 +1377,9 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
     );
   }
   if (!live && String(msg && msg.kind || "") === "goal_milestone") {
-    var milestone = msg.goalMilestone && typeof msg.goalMilestone === "object"
-      ? msg.goalMilestone : {};
-    var terminalGoal = milestone.status === "completed" || milestone.status === "aborted";
-    return (
-      <article className={"wbc-goal-milestone " + String(milestone.type || "update")}>
-        <span className="wbc-goal-milestone-mark" aria-hidden="true">{WBC_ICONS.phase}</span>
-        <div className="wbc-goal-milestone-body">
-          <header>
-            <small>{wbcT("goal.milestone", "Goal milestone")}</small>
-            {Number(milestone.attempt || 0) > 0 ? <span className="wbc-goal-milestone-attempt">{wbcT("goal.attempt", "Attempt {attempt}", { attempt: Number(milestone.attempt) })}</span> : null}
-          </header>
-          <div className="wbc-goal-milestone-copy">{msg.content}</div>
-        </div>
-        {!terminalGoal ? <button type="button" className="wbc-goal-milestone-action" onClick={function () {
-          window.dispatchEvent(new CustomEvent("workbench:open-goal-tab", { detail: { chatId: String(chatId || "") } }));
-        }}><span>{wbcT("goal.openTab", "Open Goal")}</span>{WBC_ICONS.chevronRight}</button> : null}
-      </article>
-    );
+    return <WbcGoalMilestoneMessage msg={msg} chatId={chatId} />;
   }
+
   if (
     !sourceText.trim()
     && !(liveRuntime && Array.isArray(liveRuntime.artifacts) && liveRuntime.artifacts.length)
@@ -1501,6 +1529,7 @@ function WbcLiveActivityCard({ activity, active, hasReplyText, live }) {
   return (
     <WbcTraceCard
       trace={visibleEntries}
+      disclosureId={item.id}
       live={!!live}
       running={isPhase1 ? phase1Running : active}
       reasoning={visibleReasoning}
@@ -1513,19 +1542,14 @@ function WbcActivityGroup({ group }) {
   var item = group || {};
   var activities = Array.isArray(item.activities) ? item.activities : [];
   var active = !!item.active;
-  var [expanded, setExpanded] = useWbcState(false);
-  var wasActiveRef = useWbcRef(active);
+  var [expanded, setExpanded] = wbcUseDisclosure(item.id, activities.map(function (message) { return message.id; }));
   var duration = item.durationMs == null ? "" : wbcFormatProcessingDuration(item.durationMs);
   var summary = active
     ? wbcActivityGroupRunningLabel(activities)
     : (duration
-      ? wbcT("workbenchChat.activityGroup.completedDuration", "Processed ({duration})", { duration: duration })
+      ? wbcT("workbenchChat.activityGroup.completedDuration", "Processed {duration}", { duration: duration })
       : wbcT("workbenchChat.activityGroup.completed", "Processed"));
 
-  useWbcEffect(function () {
-    if (wasActiveRef.current && !active) setExpanded(false);
-    wasActiveRef.current = active;
-  }, [active]);
 
   return (
     <div className={"wbc-activity-group" + (expanded ? " expanded" : "") + (active ? " active" : " completed")} aria-busy={active ? "true" : undefined}>
@@ -1679,8 +1703,23 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
   return <WbcAssistantMessage msg={{ role: "assistant" }} liveRuntime={runtime} onOpenFile={onOpenFile} />;
 }
 
+function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion, onAnswer }) {
+  var timeline = wbcGroupConsecutiveActivityMessages(wbcProjectTranscript(messages || [], runtime), runtime);
+  return <React.Fragment>{timeline.map(function (message) {
+    if (message.questionPrompt && pendingQuestion && message.questionId === pendingQuestion.id) return <WbcThreadItem key={message.id}><WbcQuestionPrompt pending={pendingQuestion} onAnswer={onAnswer} busy={false} /></WbcThreadItem>;
+    if (message.runtimeContinuation) return <WbcThreadItem key={message.id}><WbcContinuationIndicator /></WbcThreadItem>;
+    if (message.activityGroup) return <WbcThreadItem key={message.id}><WbcActivityGroup group={message} /></WbcThreadItem>;
+    if (message.notificationCard) return <WbcThreadItem key={message.id}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
+    if (message.modelStatusCard) return <WbcThreadItem key={message.id}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
+    return <WbcThreadItem key={message.id}>{message.role === "user"
+      ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
+      : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} chatId={chatId} />}</WbcThreadItem>;
+  })}</React.Fragment>;
+}
+
 function WbcRuntimeTranscript({ runtime, onOpenFile }) {
   if (!runtime) return null;
+  if (runtime.timeline) return <WbcTranscript runtime={runtime} onOpenFile={onOpenFile} />;
   var timeline = wbcGroupConsecutiveActivityMessages(
     wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder: true }),
     runtime
@@ -1792,4 +1831,4 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-export { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }
+export { WbcTranscript, WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }

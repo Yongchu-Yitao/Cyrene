@@ -2132,7 +2132,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta7">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta8">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/cyrene/workbench/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -5303,7 +5303,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta8"></script>' in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -7642,7 +7642,7 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "isRunning ? wbcTraceActionIcon(entry) : WBC_ICONS.check" in trace_card
     assert 'isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check' not in trace_card
     assert 'var hasRunningEntries = live && entries.some(function (entry)' in trace_card
-    assert 'var summaryRunning = hasRunningEntries || (activityRunning && entries.length === 0);' in trace_card
+    assert 'var summaryRunning = hasRunningEntries || activityRunning;' in trace_card
     assert 'var isRunning = live && entryStatus === "running";' in trace_card
     assert 'aria-busy={summaryRunning ? "true" : undefined}' in trace_card
     assert '.wbc-trace.live[aria-busy="true"] .wbc-trace-summary b' in css
@@ -7663,7 +7663,8 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "#fff 50%" in css
     assert "from { background-position: -80% 0; }" in css
     assert "to { background-position: 180% 0; }" in css
-    assert 'live={!!msg.runtimeActivity}' in chat
+    assert 'live={activityView.live}' in assistant_message
+    assert 'var live = !!message.runtimeActivity || message.timelineVersion === 1 && message.status === "running";' in chat
     assert 'live={true}' in live_message
     assert 'className="wbc-thinking-detail-text"' in trace_card
     assert "wbc-trace-reasoning-toggle" not in trace_card
@@ -7739,7 +7740,7 @@ process.stdout.write(JSON.stringify({{
             "grouped": True,
             "ids": ["a1", "a2", "a3"],
             "active": False,
-            "durationMs": 4200,
+            "durationMs": 2000,
             "nextId": "reply",
         },
         "live": {"grouped": True, "active": True, "durationMs": None},
@@ -7770,22 +7771,21 @@ def test_workbench_activity_group_has_live_and_completed_disclosure_states():
     assert "{renderedTimeline}" in chat
     assert "if (msg.activityGroup)" in chat
     assert "wbcGroupConsecutiveActivityMessages(messages, streamRuntime)" in split
-    assert "displayMessages.map(function (message)" in split
-    assert "if (message.activityGroup)" in split
-    assert "<WbcActivityGroup group={message} />" in split
+    assert "<WbcTranscript messages={messages} runtime={streamRuntime}" in split
     assert 'className="wbc-activity-group-summary"' in group_component
     assert "aria-expanded={expanded}" in group_component
     assert 'aria-busy={active ? "true" : undefined}' in group_component
-    assert "if (wasActiveRef.current && !active) setExpanded(false);" in group_component
+    assert "wbcUseDisclosure(item.id" in group_component
+    assert "setExpanded(false)" not in group_component
     assert 'workbenchChat.activityGroup.completedDuration' in group_component
     trace_card = chat.split("function WbcTraceCard", 1)[1].split(
         "function WbcAssistantMessage", 1
     )[0]
-    assert 'if (!entries.length && !reasoningText.trim() && !live) return null;' in trace_card
-    assert 'visible: active || entries.length > 0 || hasReasoning' in chat
+    assert 'if (!entries.length && !reasoningText.trim() && !live && !disclosureId) return null;' in trace_card
+    assert 'visible: message.timelineVersion === 1 || active || entries.length > 0 || hasReasoning' in chat
     assert '"workbenchChat.activityGroup.running.command": "正在运行命令"' in i18n
     assert '"workbenchChat.activityGroup.running.reply": "正在生成回复"' in i18n
-    assert '"workbenchChat.activityGroup.completedDuration": "已处理（{duration}）"' in i18n
+    assert '"workbenchChat.activityGroup.completedDuration": "已处理 {duration}"' in i18n
     assert ".wbc-activity-group-collapse.open" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert '.wbc-activity-group.active[aria-busy="true"] .wbc-activity-group-summary b' in css
@@ -8437,7 +8437,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.9.0-beta7" in index
+    assert "workbench.css?v=0.9.0-beta8" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -8480,7 +8480,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta8"></script>' in index
 
 
 def test_desktop_uses_cross_platform_native_directory_picker():
@@ -8948,7 +8948,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta8"></script>' in index
 
 
 def test_workbench_api_timeout_covers_response_body_consumption():
@@ -9015,7 +9015,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert 'requestJson("/api/settings/model-config")' in source
     assert "store.setConfig(snapshot);" in source
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta8"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -10372,43 +10372,20 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
 
 
 def test_workbench_live_reply_preserves_message_identity_when_saved():
-    runtime = frontend_module_source("features/chat/file-resources.jsx")
-    conversation = frontend_module_source("features/chat/conversation.jsx")
-    binder = "function wbcBindSavedReplyRenderKey" + runtime.split(
-        "function wbcBindSavedReplyRenderKey", 1
-    )[1].split("// ---------------------------------------------------------------------------", 1)[0]
-    script = f"""
-eval({json.dumps(binder)});
-const source = [
-  {{ id: "activity", role: "assistant", content: "", trace: [{{ kind: "tool" }}] }},
-  {{ id: "intermediate", role: "assistant", content: "progress", intermediate: true }},
-  {{ id: "final", role: "assistant", content: "done" }}
-];
-const bound = wbcBindSavedReplyRenderKey(source, "reply_stream_request-1");
-process.stdout.write(JSON.stringify({{ source, bound }}));
-"""
-    completed = subprocess.run(
-        ["node", "-e", script], check=True, capture_output=True, text=True
-    )
-    result = json.loads(completed.stdout)
-
-    assert "replyRenderKey" not in result["source"][2]
-    assert result["bound"][0]["id"] == "activity"
-    assert "replyRenderKey" not in result["bound"][1]
-    assert result["bound"][2]["replyRenderKey"] == "reply_stream_request-1"
-    assert 'replyRenderKey: replyRenderKey' in runtime
-    assert 'runtimes[chatId] && runtimes[chatId].replyRenderKey' in runtime
-    assert 'var renderKey = String(msg && (msg.replyRenderKey || msg.id) || "");' in conversation
-    assert '<WbcThreadItem key={String(runtime.replyRenderKey)}>' in conversation
-    live_timeline = conversation.split(
-        "function wbcRenderConversationTimeline(", 1
-    )[1].split("function WbcMain(", 1)[0]
-    assert "<WbcAssistantMessage" in live_timeline
-    assert "<WbcLiveMessage" not in live_timeline
-    assert "{renderedTimeline}" in conversation
-    assert "{renderedHistory}" not in conversation.split(
-        'className="wbc-thread"', 1
-    )[1].split("<WbcConversationNavigator", 1)[0]
+    result = _run_workbench_timeline_js("""
+(() => {
+  const current = { messages: [{id: "reply", role:"assistant", content:"draft", timelineVersion:1}] };
+  const saved = [{id:"reply", role:"assistant", content:"complete", timelineVersion:1, usage:{total_tokens:42}}];
+  const once = wbcMergeSavedAssistantMessages(current, saved);
+  const twice = wbcMergeSavedAssistantMessages(once, saved);
+  return {once:once.messages, twice:twice.messages};
+})()
+""")
+    assert result["once"] == result["twice"]
+    assert len(result["once"]) == 1
+    assert result["once"][0]["id"] == "reply"
+    assert result["once"][0]["content"] == "complete"
+    assert result["once"][0]["usage"]["total_tokens"] == 42
 
 
 def test_workbench_agent_transport_notice_has_structured_event_and_durable_bubble():
@@ -10446,10 +10423,11 @@ def test_quick_chat_renders_live_and_durable_agent_notifications():
 
     assert "AgentNotification: WbcAgentNotification" in chat
     assert "RuntimeTranscript: WbcRuntimeTranscript" in chat
-    assert "m.notificationCard" in quick
-    assert "chatService.AgentNotification" in quick
-    assert "chatService.RuntimeTranscript" in quick
-    assert "runtime && runtime.notifications && runtime.notifications.length" in quick
+    assert "chatService.Transcript, { messages: messages, runtime: runtime }" in quick
+    transcript = chat.split("function WbcTranscript(", 1)[1].split("function WbcRuntimeTranscript", 1)[0]
+    assert "wbcProjectTranscript(messages || [], runtime)" in transcript
+    assert "message.notificationCard" in transcript
+    assert "<WbcAgentNotification notice={message.notification}" in transcript
 
 
 def test_compact_chat_surfaces_share_capability_driven_agent_runtime_ui():
@@ -10458,7 +10436,7 @@ def test_compact_chat_surfaces_share_capability_driven_agent_runtime_ui():
     quick = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-quick-chat.jsx").read_text(encoding="utf-8")
 
     assert "function wbcReduceDetachedRuntime" in chat
-    assert chat.count("<WbcRuntimeTranscript runtime=") >= 2
+    assert chat.count("<WbcTranscript messages={messages} runtime={streamRuntime}") >= 2
     assert "onToolStarted:" in chat
     assert "onArtifactEvent:" in chat
     assert "WorkbenchChatModel.answerAgentRequest(current, questionId, response)" in chat
@@ -10945,7 +10923,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta7">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta8">' in index_html
     entry_html = (root / "src/cyrene/workbench/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html
