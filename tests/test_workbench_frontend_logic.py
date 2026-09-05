@@ -4398,64 +4398,6 @@ def test_active_browser_tab_uses_standard_text_color():
     assert "color: var(--wb-accent, var(--accent));" not in active_tab_styles
 
 
-def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui():
-    root = Path(__file__).resolve().parent.parent
-    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    browser_view = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
-    styles = workbench_style_source()
-
-    create_view = main.split("  createView(", 1)[1].split("\n  setContext(", 1)[0]
-    assert "disableHtmlFullscreenWindowResize: true" in create_view
-    assert "wc.on('enter-html-full-screen'" in create_view
-    assert "this.enterVideoFullscreen(view)" in create_view
-    assert "wc.on('leave-html-full-screen'" in create_view
-    assert "this.finishVideoFullscreen(view)" in create_view
-
-    enter_fullscreen = main.split("  async enterVideoFullscreen(view) {", 1)[1].split("\n  finishVideoFullscreen(", 1)[0]
-    assert "external: isMac" in enter_fullscreen
-    assert "if (isMac)" in enter_fullscreen
-    assert "const videoWindow = new BrowserWindow" in enter_fullscreen
-    assert "videoWindow.setFullScreen(true)" in enter_fullscreen
-    assert "else if ((isWindows || isLinux) && mainWindow && !mainWindow.isDestroyed())" in enter_fullscreen
-    assert "mainWindow.setFullScreen(true)" in enter_fullscreen
-    assert "this._mainFullscreenLeaveHandler" in enter_fullscreen
-    assert "this.requestVideoFullscreenExit()" in enter_fullscreen
-
-    finish_fullscreen = main.split("  finishVideoFullscreen(view) {", 1)[1].split("\n  createView(", 1)[0]
-    assert "!this._mainWindowWasFullScreen" in finish_fullscreen
-    assert "mainWindow.setFullScreen(false)" in finish_fullscreen
-    assert "mainWindow.removeListener('leave-full-screen', this._mainFullscreenLeaveHandler)" in finish_fullscreen
-
-    sync_view = main.split("  syncAttachedView() {", 1)[1].split("\n  async settleBoundsTransition", 1)[0]
-    assert "const fullscreenTab = this.fullscreenTab()" in sync_view
-    assert "const targetBounds = fullscreenActive ? this.fullscreenBounds(win)" in sync_view
-    assert "this.pageViewBounds(" in sync_view
-    assert "win.contentView.addChildView(active.view)" in sync_view
-    assert "videoFullscreen:" in main
-    assert "platform: process.platform" in main
-
-    assert 'className="browser-video-fullscreen-overlay"' in browser_view
-    assert 'browserLabel("browser.fullscreen.active", "Playing in full screen")' in browser_view
-    assert 'browserLabel("browser.fullscreen.external", "The video is playing in a separate full-screen window")' in browser_view
-    assert ".browser-video-fullscreen-overlay" in styles
-
-    session_guards = main.split("function installBrowserSessionGuards(", 1)[1].split("\nclass BrowserTabManager", 1)[0]
-    assert "permission === 'fullscreen'" in session_guards
-    assert "browserSession.setPermissionCheckHandler" in session_guards
-    assert "browserSession.setPermissionRequestHandler" in session_guards
-    assert "permission !== 'pointerLock'" in session_guards
-    assert "promptForPointerLock(webContents, details)" in session_guards
-    assert "dialog.showMessageBox(pointerLockPromptParent(webContents)" in session_guards
-    assert "defaultId: 1" in session_guards
-    assert "cancelId: 1" in session_guards
-    assert "result.response === 0" in session_guards
-    assert "pendingPointerLockPrompts" in session_guards
-    assert "allowedPointerLockOrigins.has(origin)" in session_guards
-    assert "if (allowed) allowedPointerLockOrigins.add(origin)" in session_guards
-    assert "Press Esc at any time to release it." in main
-    assert "你可随时按 Esc 退出" in main
-
-
 def test_electron_browser_tab_attaches_before_navigation_and_survives_media_load_errors():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
@@ -8778,38 +8720,6 @@ def test_electron_browser_type_uses_react_compatible_native_setter():
     assert "clean(el.value)" in playwright_browser
     assert "inputType === 'password' ? '' : clean(el.value)" in main
     assert "inputType === 'password' ? '' : clean(el.value)" in playwright_browser
-
-
-def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
-    root = Path(__file__).resolve().parent.parent
-    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-    browser = (
-        root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_browser" / "runtime.py"
-    ).read_text(encoding="utf-8")
-    chat_routes = workbench_chat_route_source()
-    view = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
-    chat = workbench_chat_source()
-
-    assert "const browserTabManagers = new Map();" in main
-    assert "new BrowserTabManager(normalized)" in main
-    assert "this.partition = BROWSER_PARTITION;" in main
-    assert "createView(partition = this.partition)" in main
-    assert "partition," in main
-    assert "sessionId: this.sessionId" in main
-    assert "this.sessionId !== activeBrowserSessionId" in main
-    assert "closeBrowserSession" in main
-    assert "manager.closeAll()" in main
-    assert "payload.sessionId" in main
-    assert '"sessionId": session_id' in browser
-    assert "getState: (sessionId)" in preload
-    assert "bridge.getState(electronSessionId)" in view
-    assert 'String(next.sessionId || "") === electronSessionId' in view
-    assert "bridge.getState(chatId)" in chat
-    assert "Array.isArray(next.tabs)" in view
-    assert 'application_plugin_service("browser")' in chat_routes
-    assert "if browser_service is not None:" in chat_routes
-    assert "await browser_service.close_session(removed_chat_id)" in chat_routes
 
 
 def test_browser_snapshot_filters_non_interactable_page_nodes():

@@ -163,7 +163,6 @@ def map_tool_to_action(tool_name: str) -> tuple[str, str, str, int]:
 
 
 def _slug(value: str) -> str:
-    import re
     text = re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
     return text or "unknown"
 

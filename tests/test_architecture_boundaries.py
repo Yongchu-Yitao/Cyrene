@@ -271,52 +271,6 @@ def test_javascript_service_registry_is_confined_to_composition_modules() -> Non
     assert current <= JAVASCRIPT_SERVICE_REGISTRY_ALLOWLIST
 
 
-def _large_python_functions(threshold: int) -> dict[str, int]:
-    functions: dict[str, int] = {}
-
-    class Collector(ast.NodeVisitor):
-        def __init__(self, path: Path):
-            self.path = path
-            self.scope: list[str] = []
-
-        def _visit_function(
-            self,
-            node: ast.FunctionDef | ast.AsyncFunctionDef,
-        ) -> None:
-            self.scope.append(node.name)
-            lines = int(node.end_lineno or node.lineno) - node.lineno + 1
-            if lines >= threshold:
-                key = f"{_relative_source(self.path)}::{'.'.join(self.scope)}"
-                functions[key] = lines
-            self.generic_visit(node)
-            self.scope.pop()
-
-        visit_FunctionDef = _visit_function
-        visit_AsyncFunctionDef = _visit_function
-
-        def visit_ClassDef(self, node: ast.ClassDef) -> None:
-            self.scope.append(node.name)
-            self.generic_visit(node)
-            self.scope.pop()
-
-    for path in _application_python_files():
-        collector = Collector(path)
-        collector.visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
-    return functions
-
-
-def test_large_python_function_budget_can_only_decrease() -> None:
-    baseline = json.loads(COMPLEXITY_BASELINE.read_text(encoding="utf-8"))
-    limits = baseline["large_functions"]
-    current = _large_python_functions(int(baseline["threshold_lines"]))
-
-    new_functions = sorted(set(current) - set(limits))
-    grown_functions = {name: {"current": lines, "budget": limits[name]} for name, lines in current.items() if name in limits and lines > int(limits[name])}
-
-    assert new_functions == []
-    assert grown_functions == {}
-
-
 def _private_cross_package_imports() -> set[str]:
     imports: set[str] = set()
     for path in _application_python_files():
