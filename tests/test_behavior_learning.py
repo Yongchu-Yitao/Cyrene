@@ -10,6 +10,34 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
+def test_behavior_media_path_extraction_requires_local_path_boundaries(tmp_path):
+    from cyrene.plugins.builtin.cyrene_skills.application_service import (
+        MediaRepository,
+    )
+
+    media = MediaRepository(tmp_path / "data")
+    console_output = (
+        "{'stdout': '[log] https://phaser.io background: #ff0000\\n"
+        "[pageerror] refreshBody failed\\n"
+        " at create (http://localhost:8899/tools/probe_size.html:26:42)'}"
+    )
+
+    assert media.extract_paths(console_output) == []
+
+
+def test_behavior_media_path_extraction_supports_quoted_spaces_and_bare_paths(tmp_path):
+    from cyrene.plugins.builtin.cyrene_skills.application_service import (
+        MediaRepository,
+    )
+
+    media = MediaRepository(tmp_path / "data")
+    quoted = '{"path":"/Users/demo/Application Support/Cyrene/capture.png"}'
+    bare = "saved to /tmp/cyrene/report.json"
+
+    assert media.extract_paths(quoted) == [
+        "/Users/demo/Application Support/Cyrene/capture.png"
+    ]
+    assert media.extract_paths(bare) == ["/tmp/cyrene/report.json"]
 
 
 def test_behavior_media_route_serves_plugin_owned_path_with_spaces(

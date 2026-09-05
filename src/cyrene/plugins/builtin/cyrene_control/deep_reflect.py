@@ -25,15 +25,16 @@ TOOL_METADATA = {
     "agent_exposure": "direct",
 }
 
-REFLECTION_SCHEMA = "cyrene.reflect_pack.v1"
+REFLECTION_SCHEMA = "cyrene.reflect_pack.v2"
 SERVICE_ID = "deep_reflection"
 
 _REFLECTION_PROMPT = """You are Cyrene's clean-context reflection worker.
 
-You receive the complete, untruncated evidence available for one conversation.
-The user's messages are authoritative and already preserved verbatim; never
-rewrite them. Diagnose why the Agent's current approach is not satisfying the
-user, then produce a compact replacement for Agent replies and tool traces.
+You receive only the user-visible conversation messages between the user and
+the Agent. Tool calls, tool results, and internal reasoning are intentionally
+excluded. The user's messages are authoritative and already preserved verbatim;
+never rewrite them. Diagnose why the Agent's current approach is not satisfying
+the user, then produce a compact replacement for the Agent replies.
 
 Return strict JSON only with this shape:
 {
@@ -54,9 +55,6 @@ Return strict JSON only with this shape:
   "success_check": "an observable completion test",
   "compressed_agent_trace": [
     {"attempt": "what the Agent did", "result": "material outcome", "lesson": "what changes next"}
-  ],
-  "compressed_tool_trace": [
-    {"tool": "tool name", "arguments": {}, "outcome": "material outcome", "material_evidence": "useful evidence"}
   ]
 }
 
@@ -111,7 +109,6 @@ def _normalized_reflection(value: Mapping[str, Any]) -> dict[str, Any]:
         )
     diagnosis = value.get("failure_diagnosis")
     agent_trace = value.get("compressed_agent_trace")
-    tool_trace = value.get("compressed_tool_trace")
     if not isinstance(diagnosis, list) or not all(
         isinstance(item, Mapping) for item in diagnosis
     ):
@@ -120,10 +117,6 @@ def _normalized_reflection(value: Mapping[str, Any]) -> dict[str, Any]:
         isinstance(item, Mapping) for item in agent_trace
     ):
         raise ValueError("deep reflection compressed_agent_trace is invalid")
-    if not isinstance(tool_trace, list) or not all(
-        isinstance(item, Mapping) for item in tool_trace
-    ):
-        raise ValueError("deep reflection compressed_tool_trace is invalid")
     return {
         "goal": goal,
         "hard_constraints": strings("hard_constraints"),
@@ -135,7 +128,6 @@ def _normalized_reflection(value: Mapping[str, Any]) -> dict[str, Any]:
         "next_actions": strings("next_actions"),
         "success_check": success,
         "compressed_agent_trace": [dict(item) for item in agent_trace],
-        "compressed_tool_trace": [dict(item) for item in tool_trace],
     }
 
 
@@ -246,67 +238,40 @@ def _user_messages(
     return result
 
 
-def build_reflection_evidence(
+def build_reflection_messages(
     path: Sequence[ContextNode],
-    arguments: Mapping[str, Any],
-    context: PluginContext,
-) -> dict[str, Any]:
-    agent_trace: list[dict[str, Any]] = []
-    tool_trace: list[dict[str, Any]] = []
-    prior_reflections: list[dict[str, Any]] = []
-    for node in path:
-        value = node.value if isinstance(node.value, Mapping) else {}
+) -> list[dict[str, str]]:
+    conversation_messages: list[dict[str, str]] = []
+    seen_node_ids: set[str] = set()
+    for record in _public_nodes(path):
+        value = record.get("value")
+        if not isinstance(value, Mapping):
+            continue
         role = str(value.get("role") or "")
-        if role == "context_reflection":
-            model_context = value.get("model_context")
-            model_context = (
-                model_context if isinstance(model_context, Mapping) else {}
-            )
-            prior = model_context.get("reflection")
-            if isinstance(prior, Mapping):
-                prior_reflections.append(deepcopy(dict(prior)))
-                agent_trace.extend(
-                    deepcopy(dict(item))
-                    for item in prior.get("compressed_agent_trace") or ()
-                    if isinstance(item, Mapping)
-                )
-                tool_trace.extend(
-                    deepcopy(dict(item))
-                    for item in prior.get("compressed_tool_trace") or ()
-                    if isinstance(item, Mapping)
-                )
-        elif role == "assistant":
-            agent_trace.append(
-                {
-                    "source_node_id": node.id,
-                    "run_id": str(value.get("run_id") or ""),
-                    "content": str(value.get("content") or ""),
-                    "reasoning": str(
-                        value.get("reasoning")
-                        or value.get("reasoning_content")
-                        or ""
-                    ),
-                    "tool_calls": _json_safe(value.get("tool_calls") or []),
-                }
-            )
-        elif role == "tool_results":
-            tool_trace.extend(
-                {
-                    "source_node_id": node.id,
-                    **_json_safe(dict(item)),
-                }
-                for item in value.get("results") or ()
-                if isinstance(item, Mapping)
-            )
-    return {
-        "schema": REFLECTION_SCHEMA,
-        "request": _json_safe(dict(arguments)),
-        "user_messages": _user_messages(path, context),
-        "agent_trace": agent_trace,
-        "tool_trace": tool_trace,
-        "prior_reflections": prior_reflections,
-        "source_node_ids": [node.id for node in path],
-    }
+        if role not in {"user", "assistant"}:
+            continue
+        node_id = str(record.get("id") or "")
+        if node_id and node_id in seen_node_ids:
+            continue
+        metadata = value.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        content = (
+            metadata.get("public_user_message")
+            if role == "user" and "public_user_message" in metadata
+            else value.get("content")
+        )
+        content = str(content or "").strip()
+        if not content:
+            continue
+        if node_id:
+            seen_node_ids.add(node_id)
+        conversation_messages.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+    return conversation_messages
 
 
 class DeepReflectionService:
@@ -324,7 +289,7 @@ class DeepReflectionService:
         complete = getattr(gateway, "complete", None)
         if not callable(complete):
             raise RuntimeError("secondary model gateway is unavailable")
-        evidence = build_reflection_evidence(path, arguments, context)
+        conversation_messages = build_reflection_messages(path)
         # Provider Plugins normally mount a model-observation child through the
         # supplied PluginContext.  Reflection must remain side-effect free until
         # AgentSession atomically commits the completed pack, so its worker call
@@ -340,14 +305,7 @@ class DeepReflectionService:
                 output = await complete(
                     [
                         {"role": "system", "content": _REFLECTION_PROMPT},
-                        {
-                            "role": "user",
-                            "content": json.dumps(
-                                _json_safe(evidence),
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            ),
-                        },
+                        *conversation_messages,
                     ],
                     temperature=0.1,
                     route="secondary",
@@ -370,7 +328,7 @@ class DeepReflectionService:
 
         model_context = {
             "schema": REFLECTION_SCHEMA,
-            "user_messages": deepcopy(evidence["user_messages"]),
+            "user_messages": _user_messages(path, context),
             "reflection": reflection,
         }
         serialized_context = json.dumps(
@@ -422,6 +380,6 @@ __all__ = [
     "TOOL_DEF",
     "TOOL_METADATA",
     "TOOL_NAME",
-    "build_reflection_evidence",
+    "build_reflection_messages",
     "handler",
 ]

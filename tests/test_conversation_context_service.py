@@ -1064,7 +1064,7 @@ async def test_context_compaction_node_replaces_projected_model_history(tmp_path
         {"role": "user", "content": "large old request", "run_id": "run_1"},
         node_id="user",
     )
-    router.mount(
+    first_compaction = router.mount(
         tree.id,
         user.id,
         {
@@ -1087,6 +1087,35 @@ async def test_context_compaction_node_replaces_projected_model_history(tmp_path
         },
         node_id="compaction",
     )
+    follow_up = router.mount(
+        tree.id,
+        first_compaction.id,
+        {"role": "user", "content": "follow-up", "run_id": "run_2"},
+        node_id="follow_up",
+    )
+    router.mount(
+        tree.id,
+        follow_up.id,
+        {
+            "role": "context_compaction",
+            "messages": [
+                {"role": "system", "content": "root system"},
+                {
+                    "role": "system",
+                    "content": "[Compacted earlier context]\nupdated summary",
+                    "compacted_block": True,
+                    "llm_compacted": True,
+                },
+            ],
+            "run_id": "run_2",
+            "trigger_model": False,
+            "before_tokens": 900,
+            "after_tokens": 90,
+            "context_limit": 1_000,
+            "distilled": True,
+        },
+        node_id="second_compaction",
+    )
     router.close()
 
     repository = AgentContextRepository(context_directory)
@@ -1101,18 +1130,20 @@ async def test_context_compaction_node_replaces_projected_model_history(tmp_path
 
     assert [message["content"] for message in state["messages"]] == [
         "root system",
-        "[Compacted earlier context]\nsummary",
+        "[Compacted earlier context]\nupdated summary",
     ]
     assert state["compaction"] == {
         "active": True,
+        "count": 2,
         "blocks": 1,
-        "beforeTokens": 700,
-        "afterTokens": 80,
+        "beforeTokens": 900,
+        "afterTokens": 90,
         "contextLimit": 1_000,
         "distilled": True,
         "updatedAt": state["compaction"]["updatedAt"],
     }
     assert summary["compaction"]["active"] is True
+    assert summary["compaction"]["count"] == 2
     assert summary["compaction"]["blocks"] == 1
     assert summary["compaction"]["distilled"] is True
     assert summary["segments"][0]["key"] == "compacted"

@@ -305,7 +305,7 @@ function WbcContextUsage({ data, compact }) {
           )}
         </div>
         {(compaction.active
-          ? <p className="wbc-ctx-note hot">{wbcT("workbenchChat.ctx.compacted", "Compressed {n} earlier block(s) · {tokens} tok", { n: compaction.blocks, tokens: wbcCompactNumber(compaction.tokens) })}</p>
+          ? <p className="wbc-ctx-note hot">{wbcT("workbenchChat.ctx.compacted", "Compacted {n} times", { n: Number(compaction.count || 0) })}</p>
           : (limit > 0 ? <p className="wbc-ctx-note">{wbcT("workbenchChat.ctx.compactAt", "Compaction triggers at {pct}%", { pct: triggerPct })}</p> : null))}
       </div>
       {legend.length > 0 && !compact && (

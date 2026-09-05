@@ -2425,7 +2425,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "workbenchChat.ctx.empty": "No agent context yet.",
     "workbenchChat.ctx.unknownLimit": "Window size unknown",
     "workbenchChat.ctx.compactAt": "Compaction triggers at {pct}%",
-    "workbenchChat.ctx.compacted": "Compressed {n} earlier {{block|blocks}} · {tokens} tok",
+    "workbenchChat.ctx.compacted": "Compacted {n} times",
     "workbenchChat.ctx.seg.compacted": "Compressed",
     "workbenchChat.ctx.seg.system": "System",
     "workbenchChat.ctx.seg.user": "User",

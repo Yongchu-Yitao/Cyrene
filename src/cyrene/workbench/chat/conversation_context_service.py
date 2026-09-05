@@ -1096,6 +1096,11 @@ class AgentContextRepository:
             "activityMessages": [dict(message) for message in activity_messages],
             "compaction": {
                 "active": bool(compaction_nodes),
+                "count": sum(
+                    1
+                    for node in compaction_nodes
+                    if node.value.get("role") == "context_compaction"
+                ),
                 "blocks": sum(
                     1
                     for message in _agent_path_messages(path)
@@ -1690,6 +1695,7 @@ class ConversationContextQueryService:
             ],
             "compaction": {
                 "active": bool(compaction.get("active")),
+                "count": max(0, int(compaction.get("count") or 0)),
                 "blocks": max(0, int(compaction.get("blocks") or 0)),
                 "tokens": int(segments.get("compacted") or 0),
                 "distilled": bool(compaction.get("distilled")),

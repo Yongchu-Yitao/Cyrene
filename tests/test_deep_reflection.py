@@ -51,7 +51,6 @@ def _valid_reflection() -> dict:
                 "lesson": "switch layers",
             }
         ],
-        "compressed_tool_trace": [],
     }
 
 
@@ -73,7 +72,7 @@ class _RetryingReflectionGateway:
         }
 
 
-def test_reflection_retries_without_truncating_evidence_and_preserves_user_order(
+def test_reflection_uses_only_visible_conversation_messages_and_preserves_user_order(
     tmp_path,
 ):
     archive_session_exchange(
@@ -110,24 +109,57 @@ def test_reflection_retries_without_truncating_evidence_and_preserves_user_order
         {
             "role": "assistant",
             "content": "old response " + ("答" * 20_000),
-            "reasoning": "full reasoning trace",
-            "tool_calls": [],
+            "reasoning": "private-reasoning-must-not-be-sent",
+            "tool_calls": [
+                {
+                    "id": "tool-call",
+                    "name": "SensitiveToolName",
+                    "arguments": {"secret": "tool-arguments-must-not-be-sent"},
+                }
+            ],
             "run_id": "run-3",
         },
         node_id="assistant-3",
+    )
+    tool_results = store.mount(
+        tree.id,
+        assistant.id,
+        {
+            "role": "tool_results",
+            "results": [
+                {
+                    "call_id": "tool-call",
+                    "name": "SensitiveToolName",
+                    "success": True,
+                    "value": "tool-result-must-not-be-sent",
+                }
+            ],
+            "run_id": "run-3",
+        },
+        node_id="tool-results-3",
+    )
+    final_assistant = store.mount(
+        tree.id,
+        tool_results.id,
+        {
+            "role": "assistant",
+            "content": "visible follow-up response",
+            "run_id": "run-3",
+        },
+        node_id="assistant-4",
     )
     gateway = _RetryingReflectionGateway()
     context = PluginContext(
         workspace=tmp_path,
         tree=store,
         tree_id=tree.id,
-        node_id=assistant.id,
+        node_id=final_assistant.id,
         services={"model": gateway},
     )
 
     pack = run(
         DeepReflectionService().reflect(
-            store.get_path(tree.id, assistant.id),
+            store.get_path(tree.id, final_assistant.id),
             {"goal_gap": "the approach is wrong"},
             context,
         )
@@ -135,10 +167,25 @@ def test_reflection_retries_without_truncating_evidence_and_preserves_user_order
 
     assert len(gateway.calls) == 2
     assert all("max_tokens" not in call for call in gateway.calls)
-    submitted_evidence = gateway.calls[-1]["messages"][-1]["content"]
-    assert long_user_text in submitted_evidence
-    assert "答" * 20_000 in submitted_evidence
+    submitted_messages = gateway.calls[-1]["messages"]
+    assert [message["role"] for message in submitted_messages] == [
+        "system",
+        "user",
+        "assistant",
+        "assistant",
+    ]
+    submitted_content = json.dumps(submitted_messages, ensure_ascii=False)
+    assert long_user_text in submitted_content
+    assert "答" * 20_000 in submitted_content
+    assert "visible follow-up response" in submitted_content
+    assert "private-reasoning-must-not-be-sent" not in submitted_content
+    assert "SensitiveToolName" not in submitted_content
+    assert "tool-arguments-must-not-be-sent" not in submitted_content
+    assert "tool-result-must-not-be-sent" not in submitted_content
+    assert "tool_trace" not in submitted_content
+    assert "prior_reflections" not in submitted_content
     assert pack["reflection_attempts"] == 2
+    assert "compressed_tool_trace" not in pack["model_context"]["reflection"]
     assert [
         message["content"]
         for message in pack["model_context"]["user_messages"]
@@ -152,6 +199,8 @@ def test_reflection_retries_without_truncating_evidence_and_preserves_user_order
         "root",
         "user-3",
         "assistant-3",
+        "tool-results-3",
+        "assistant-4",
     ]
     store.close()
 

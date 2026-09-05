@@ -16,9 +16,18 @@ from . import orchestrator as learning
 
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-_FILE_PATH_PATTERN = re.compile(
-    r"(?P<path>(?:/|[A-Za-z]:\\)[^\"'<>\r\n]+?\."
-    r"(?:png|jpg|jpeg|webp|gif|pdf|md|txt|json|csv|tsv|xlsx|docx|pptx|py|js|jsx|ts|tsx|css|html))",
+_FILE_EXTENSIONS = (
+    r"(?:png|jpg|jpeg|webp|gif|pdf|md|txt|json|csv|tsv|xlsx|docx|pptx|"
+    r"py|js|jsx|ts|tsx|css|html)"
+)
+_QUOTED_FILE_PATH_PATTERN = re.compile(
+    rf'(?:"(?P<double>(?:/(?!/)|[A-Za-z]:[\\/])[^"<>\r\n]+?\.{_FILE_EXTENSIONS})"'
+    rf"|'(?P<single>(?:/(?!/)|[A-Za-z]:[\\/])[^'<>\r\n]+?\.{_FILE_EXTENSIONS})')",
+    re.IGNORECASE,
+)
+_BARE_FILE_PATH_PATTERN = re.compile(
+    rf"(?P<path>(?<![A-Za-z0-9_:/\\\"'])(?:/(?!/)|[A-Za-z]:[\\/])"
+    rf"[^\s\"'<>\r\n]+?\.{_FILE_EXTENSIONS})",
     re.IGNORECASE,
 )
 
@@ -87,10 +96,19 @@ class MediaRepository:
             for item in value:
                 paths.extend(MediaRepository.extract_paths(item))
             return paths
-        for match in _FILE_PATH_PATTERN.finditer(str(value or "")):
-            path = match.group("path").rstrip(".,);]")
-            if path and path not in paths:
-                paths.append(path)
+        text = str(value or "")
+        matches = (
+            (
+                match.group("double") or match.group("single")
+                for match in _QUOTED_FILE_PATH_PATTERN.finditer(text)
+            ),
+            (match.group("path") for match in _BARE_FILE_PATH_PATTERN.finditer(text)),
+        )
+        for group in matches:
+            for candidate in group:
+                path = candidate.rstrip(".,);]")
+                if path and path not in paths:
+                    paths.append(path)
         return paths
 
     async def authorized_image(self, raw_path: str) -> tuple[Path, str] | None:

@@ -2433,7 +2433,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "workbenchChat.ctx.empty": "暂无上下文数据",
     "workbenchChat.ctx.unknownLimit": "窗口大小未知",
     "workbenchChat.ctx.compactAt": "压缩触发于 {pct}%",
-    "workbenchChat.ctx.compacted": "已压缩 {n} 段历史 · {tokens} tok",
+    "workbenchChat.ctx.compacted": "已压缩 {n} 次",
     "workbenchChat.ctx.seg.compacted": "压缩历史",
     "workbenchChat.ctx.seg.system": "系统",
     "workbenchChat.ctx.seg.user": "用户",
