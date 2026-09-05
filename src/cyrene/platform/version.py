@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import importlib.metadata
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
 
 
 def _public_version(value: str) -> str:
-    """Map PEP 440 local build metadata to Cyrene's public release label."""
+    """Map normalized package metadata to Cyrene's public release label."""
+    value = re.sub(
+        r"^(\d+(?:\.\d+)*)(a|b|rc)(\d+)(?=$|[.+])",
+        lambda match: (
+            f"{match[1]}-" + {"a": "alpha", "b": "beta", "rc": "rc"}[match[2]] + match[3]
+        ),
+        value,
+    )
     if value.endswith("+fix"):
         return value[:-4] + "-fix"
     return value
@@ -32,7 +40,7 @@ def _pyproject_candidates() -> list[Path]:
     if bundle_contents is not None:
         candidates.append(bundle_contents / "Resources" / "pyproject.toml")
         candidates.append(bundle_contents / "Frameworks" / "pyproject.toml")
-    candidates.append(Path(__file__).resolve().parent.parent.parent / "pyproject.toml")
+    candidates.append(Path(__file__).resolve().parents[3] / "pyproject.toml")
     return candidates
 
 

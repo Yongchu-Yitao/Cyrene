@@ -2,6 +2,63 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta9] - 2026-09-06
+
+Beta9 brings together all changes since beta8 to task contexts, shared agreements, conversation interactions, local web previews, PowerPoint operations, files and memory, and performance during long conversations and background work. A conversation can now keep several sets of task material and let the Agent switch between them: public messages and common requirements remain available while execution details follow the active task. Saved evidence can be read again when returning to earlier work.
+
+### Multiple task contexts and shared agreements
+
+- One conversation can retain several independent task contexts. When work changes to a different kind of task, the Agent can pause the current task and switch its working material, keeping unrelated tool calls and large results out of the current task's input. User messages and Agent prose remain in the same readable conversation.
+- Context management is part of the built-in core tool pack. The Agent can load, unload, append to, and replace task material. Unloading saves automatically and means paused, not completed or canceled; continuing ordinary work after unloading creates a new context automatically.
+- Every unload requires a summary covering current progress, unfinished work, and useful references, including progress not yet written into the task document. Summaries retain at most 200 characters, preserving the beginning and end when shortened so the Agent can identify work to resume.
+- Existing context IDs, active status, and unload summaries stay available to the Agent. It can select a task directly or append to and replace any saved task's body without switching first. Edits update the current material without creating extra versions, generated titles, or a naming workflow.
+- Each conversation automatically receives an initially empty, always-loaded shared document for overall goals, acceptance criteria, common constraints, interface agreements, and confirmed decisions spanning tasks. The Agent can maintain it with sources and scope, distinguishing agreements for all tasks from decisions applying only to selected tasks.
+- Shared material remains loaded through task switches and is not changed by ordinary task reflection or compaction. Task material is separate from the system prompt, long-term memory, pinned resources, current input, and project environment information, so switching tasks does not treat these as removable execution history.
+- Within an active task, tool calls and complete results continue accumulating in their original order. Without switching or explicitly rewriting context, subsequent requests retain the established ordering and append behavior, preserving input-prefix reuse rather than disrupting it merely because multiple contexts are available.
+- Returning to an earlier task provides path references to previously loaded material, with saved snapshots available to read again. An original file path means the file as it exists now; a snapshot means the content read at the time. Switching does not restore the working directory, disk files, or external systems, so the Agent must recheck important evidence that may have changed.
+- Contexts and their referenced material remain with the conversation. Unloading or clearing temporary caches does not delete them; deleting the conversation removes them together. At unload boundaries, lengthy early public messages can also be retained as readable historical material to reduce input growth across repeated task switches.
+
+### Context recovery, DeepReflect, and compaction
+
+- DeepReflect and conversation compaction now organize only the active task, leaving other tasks and shared material intact. Appends, replacements, reflection, and compaction do not overwrite one another's newly saved work. Organizing task input also preserves the original messages and activity visible in the interface.
+- DeepReflect receives a clearer request to organize existing progress around the current reflection objective, reducing cases where it continues the source conversation as ordinary chat. If valid reflection material cannot be produced, the original task material remains available instead of being replaced with an invalid answer.
+- Multi-step context operations retain their successful and failed results for the current request, reducing repeated appends, duplicate shared constraints, and repeated switch sequences after the Agent changes tasks.
+- Unknown context IDs and missing, unreadable, or unverifiable referenced material produce explicit errors while preserving the current valid state. They do not silently create a task with the requested ID. Correcting the target or restoring the material allows loading to continue in the same turn.
+- Reopening a conversation restores saved tasks, shared material, and compaction progress. Editing an earlier message to create a branch uses the task state and material available at that point, without importing decisions made later in the original conversation.
+- Side Agents use independent task contexts and shared material instead of directly inheriting or modifying the main conversation's task documents. Memory processing also follows the effective task input, avoiding the return of obsolete execution content already replaced by reflection or compaction.
+
+### Conversation interface, sending, and confirmations
+
+- Fixed a case where sending the first message from a blank conversation did not actually create the conversation or submit the message. Typing and sending from the new-conversation page now starts work normally.
+- Questions awaiting permission or user input retain their related messages and answer controls. Refreshing, reconnecting, or reopening the conversation allows the original pending question to be handled.
+- While the built-in Agent awaits confirmation, the user can send a new message to change direction. The pending operation is denied before the new request starts; the new message is not treated as approval. External Agents retain their existing answer flows.
+- Collapsed running activity groups show the current action name and its icon directly, with a thinking icon during reasoning. This removes repeated “Running” wording and spinner clutter; simultaneous tool and thinking activity contributes to the active count.
+- Long commands, paths, and multiline activity details preserve line breaks and fit the panel width, reducing horizontal overflow and awkward word breaks in narrow splits.
+- The context-usage panel now reports “Compacted N times,” making accumulated compaction easier to understand.
+- The application version shown in the interface agrees with the release version, including full beta, alpha, or rc labels when running from source or a Python installation.
+- Live delivery is lighter during long answers and sustained reasoning. Slow connections, temporarily offline pages, and clients reconnecting later can still recover complete current content, with less memory pressure and repeated transmission during extended generation.
+- Updating conversation titles, settings, status, or plans is lighter for long conversations and no longer repeatedly reloads the entire history. Settings updated while replies are being saved also preserve the latest messages.
+
+### Interactive local HTML previews
+
+- In the desktop app, the Agent can open workspace HTML directly in the built-in browser and use browser snapshots, screenshots, clicks, and typing to inspect the real page. This supports functional walkthroughs of generated websites, demos, and interactive prototypes.
+- Previews support relative stylesheets, scripts, images, and fonts in the HTML file's directory and subdirectories, along with isolated page storage. Refreshing loads file edits, and opening another local HTML file replaces the previous local preview.
+- Local previews are isolated from normal browser sign-ins. External network access, pop-ups, hidden files, and resources outside the preview directory are unavailable, and temporary preview resources are cleared when closed. Dependencies must be stored locally; non-desktop environments explicitly report that this preview mode is unavailable.
+
+### Live PowerPoint operations
+
+- Creating, replacing, applying templates to, and rearranging slides now completes a whole slide at once by default, reducing the wait from showing individual elements. The existing staged and element-by-element modes remain available when the user explicitly wants to watch construction.
+- Independent slide reads and previews can finish sooner without every request waiting behind one slow render. Edit acknowledgments are also more prompt, reducing unnecessary waiting after a change has completed.
+- Slide previews default to a faster 960-pixel width, while higher resolution remains available for detailed inspection. Complex edits and image rendering also receive more appropriate time allowances, reducing premature timeouts during valid work.
+
+### Files, behavior material, memory, and background performance
+
+- Reading an image, PDF, binary file, or other non-UTF-8 text produces a clear format explanation and guidance toward attachment analysis or the correct text encoding, instead of repeated identical reads or requests to upload the same file again.
+- Behavior learning and action records more reliably retain files and images explicitly provided by tools. Paths with spaces, long filenames, and image previews after a restart are more reliable; path-like text in commands, ordinary output, or descriptions is not mistaken for an attachment.
+- Project-memory learning checks whether the complete request exceeds the selected model's context capacity and reports insufficient capacity before submitting material that cannot fit.
+- macOS application inspection, media-generation jobs, and background wakeups perform less repetitive idle work while continuing to respond to new jobs and completed results, reducing extra background CPU use.
+- Workspace change tracking focuses more closely on files that actually changed, reducing repeated scanning, copying, and counting of unchanged material in large projects and making consecutive file operations and change inspection smoother.
+
 ## [0.9.0-beta8] - 2026-09-05
 
 Beta8 completes the work since beta7 on live conversation content, tool activity, failure recovery, Side Agents, and Quick Chat, while making project-file operations and malformed model tool requests more reliable. Replies in progress, reasoning, tool operations, user steering, and saved history now share one recoverable timeline: content keeps its order through saving, reconnecting, and switching surfaces, without being duplicated or disappearing, and the main conversation, split conversations, Side Agents, and Quick Chat provide the same reading experience.
