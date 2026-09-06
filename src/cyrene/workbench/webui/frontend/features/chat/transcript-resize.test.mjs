@@ -12,7 +12,7 @@ function surface() {
   };
 }
 function fixture(count = 30) {
-  let selected = false, pip = false, sticking = false;
+  let selected = false, pip = false, sticking = false, restored = 0;
   const timers = new Map();
   const doc = surface();
   doc.defaultView = {
@@ -40,9 +40,10 @@ function fixture(count = 30) {
     querySelectorAll: () => rows,
   });
   const page = Object.assign(surface(), { querySelector: () => pip });
-  const cleanup = protectTranscriptResize(thread, page, () => sticking);
+  const cleanup = protectTranscriptResize(thread, page, () => sticking, () => { restored++; });
   return {
     rows, thread, page, doc, timers, cleanup,
+    get restored() { return restored; },
     start() { page.emit('transitionrun', { propertyName: 'grid-template-columns' }); },
     end(type = 'transitionend') { page.emit(type, { propertyName: 'grid-template-columns' }); },
     frozen() { return rows.filter(row => row.hasAttribute('data-wbc-resize-frozen')); },
@@ -74,8 +75,8 @@ test('reading anchor is compensated after frozen rows regain their natural heigh
   f.cleanup();
 });
 
-test('short history, selected text, PiP and focused rows stay live', () => {
-  for (const configure of [f => f.select(), f => f.pip()]) {
+test('short history, selected text and focused rows stay live', () => {
+  for (const configure of [f => f.select()]) {
     const f = fixture(); configure(f); f.start(); assert.equal(f.frozen().length, 0); f.cleanup();
   }
   const short = fixture(10); short.start(); assert.equal(short.frozen().length, 0); short.cleanup();
@@ -104,4 +105,16 @@ test('unrelated transitions are ignored and repeated starts restore before freez
   f.start(); const count = f.frozen().length; f.start();
   assert.equal(f.frozen().length, count);
   f.end(); assert.equal(f.frozen().length, 0); f.cleanup();
+});
+
+test('PiP only keeps its avoided rows live and refreshes avoidance after thaw', () => {
+  const f = fixture(); f.pip();
+  f.rows[0].classList.contains = name => name === 'wbc-browser-avoid-right';
+  f.rows[1].classList.contains = name => name === 'wbc-browser-avoid-left';
+  f.start();
+  assert.ok(f.frozen().length > 0);
+  assert.equal(f.rows[0].attrs.size + f.rows[1].attrs.size, 0);
+  assert.equal(f.restored, 0);
+  f.end(); assert.equal(f.restored, 1);
+  f.cleanup(); assert.equal(f.restored, 1);
 });

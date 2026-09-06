@@ -577,7 +577,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       maxBottom = Math.max(maxBottom, paneRect.bottom - hostRect.top);
       var page = pane.closest && pane.closest(".wbc-page");
       var sideCard = page && page.querySelector(":scope > .wbc-side .wbc-side-card");
-      if (sideCard) minY = Math.max(0, sideCard.getBoundingClientRect().bottom + 12 - hostRect.top);
+      if (sideCard && !page.classList.contains("wbc-side-hidden")) minY = Math.max(0, sideCard.getBoundingClientRect().bottom + 12 - hostRect.top);
     }
     minY = Math.min(minY, maxBottom);
     return { minY: minY, maxBottom: maxBottom };
@@ -1866,13 +1866,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
 
   useWbcComposerReserveHeight(mainRef, chat && chat.id);
 
-  useWbcEffect(function () {
-    var thread = scrollRef.current;
-    var page = mainRef.current && mainRef.current.closest(".wbc-page");
-    if (!thread || !page) return undefined;
-    return protectTranscriptResize(thread, page, function () { return stickRef.current; });
-  }, [chat && chat.id]);
-
   // Expanded side-panel content owns the whole right-side corridor below the
   // conversation card, leaving no room for a floating browser there. Hide the
   // PiP outright while a side tab is open instead of compressing it into a
@@ -1919,7 +1912,9 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
     // transcript, touch its styles, or force layout through scroll metrics.
     // The resize observers independently preserve the live-tail position.
     if (!browserWindow && !avoidedItems.length) return;
-    var items = Array.prototype.slice.call(thread.querySelectorAll(":scope > [data-wbc-thread-item]"));
+    // Frozen offscreen rows keep their measured height; only live rows can
+    // intersect the PiP. Recompute all rows when the resize protection ends.
+    var items = Array.prototype.slice.call(thread.querySelectorAll(":scope > [data-wbc-thread-item]:not([data-wbc-resize-frozen])"));
     if (!items.length) return;
     avoidanceApplyingRef.current = true;
     if (avoidanceApplyingRafRef.current) cancelAnimationFrame(avoidanceApplyingRafRef.current);
@@ -2016,6 +2011,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       applyBrowserAvoidance(true);
     });
   }, [applyBrowserAvoidance]);
+
+  useWbcEffect(function () {
+    var thread = scrollRef.current;
+    var page = mainRef.current && mainRef.current.closest(".wbc-page");
+    if (!thread || !page) return undefined;
+    return protectTranscriptResize(thread, page, function () { return stickRef.current; }, scheduleBrowserAvoidance);
+  }, [chat && chat.id, scheduleBrowserAvoidance]);
 
   // Moving toward older messages immediately releases the live-tail anchor,
   // even within the small bottom tolerance. Re-enable it only at the bottom.

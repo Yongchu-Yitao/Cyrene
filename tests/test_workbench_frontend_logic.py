@@ -3961,7 +3961,8 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert ".wbc-browser-restore-float" in styles
     pip_styles = styles.split(".wbc-browser-window.pip {", 1)[1].split("}", 1)[0]
     assert "max(240px, calc(var(--wbc-side-track-width) - (2 * var(--wbc-card-gutter))))" in pip_styles
-    assert "height: min(240px" in pip_styles
+    assert "height: var(--wbc-browser-pip-user-height, min(240px" in pip_styles
+    assert "translate: 0 var(--wbc-browser-pip-user-offset-y, 0px);" in pip_styles
     assert ".wbc-pane-card-chat:has(.wbc-browser-window.pip)" in styles
     assert ".wbc-pane-layout.single:has(.wbc-browser-window.pip)" in styles
     assert "right: calc(var(--wbc-card-gutter) - var(--wbc-side-track-width));" in styles

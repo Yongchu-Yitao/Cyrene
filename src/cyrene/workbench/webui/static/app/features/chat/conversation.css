@@ -453,7 +453,9 @@ html[data-theme="dark"] .wbc-conversation-nav-panel {
     max(240px, calc(var(--wbc-side-track-width) - (2 * var(--wbc-card-gutter)))),
     calc(100% - 24px)
   );
-  height: min(240px, calc(100% - 24px));
+  height: var(--wbc-browser-pip-user-height, min(240px, calc(100% - 24px)));
+  /* User geometry also applies when the panel track is collapsed. */
+  translate: 0 var(--wbc-browser-pip-user-offset-y, 0px);
   min-width: min(240px, 100%);
   min-height: min(180px, 100%);
   border-radius: 18px;

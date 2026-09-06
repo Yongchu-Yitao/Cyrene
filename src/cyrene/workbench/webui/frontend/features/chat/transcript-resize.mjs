@@ -1,6 +1,6 @@
 // Keep offscreen history out of per-frame line layout during sidebar motion.
 // Rows stay mounted, with their measured height, until the transition settles.
-export function protectTranscriptResize(thread, page, isSticking) {
+export function protectTranscriptResize(thread, page, isSticking, onRestored = () => {}) {
   const doc = thread.ownerDocument;
   const win = doc.defaultView;
   let frozen = [];
@@ -25,14 +25,13 @@ export function protectTranscriptResize(thread, page, isSticking) {
     if (!preserve) return;
     if (bottom) thread.scrollTop = thread.scrollHeight;
     else if (anchor?.isConnected) thread.scrollTop += anchor.getBoundingClientRect().top - offset;
+    onRestored();
   }
 
   function start(event) {
     if (event.target !== page || event.propertyName !== 'grid-template-columns') return;
     restore();
-    // PiP avoidance measures individual rows; keep its existing geometry path.
-    // Do not hide selected text or an active editor from the browser either.
-    if (page.querySelector('.wbc-browser-window.pip, .wbc-browser-restore-float')) return;
+    // Keep selection, editors and rows currently yielding space to a PiP live.
     const selection = win.getSelection();
     if (selection && !selection.isCollapsed) return;
     const rows = thread.querySelectorAll(':scope > [data-wbc-thread-item]');
@@ -45,7 +44,9 @@ export function protectTranscriptResize(thread, page, isSticking) {
     for (const row of rows) {
       const rect = row.getBoundingClientRect();
       if ((rect.bottom < viewport.top - buffer || rect.top > viewport.bottom + buffer)
-        && !row.contains(doc.activeElement) && !row.classList.contains('retry-clearing')) {
+        && !row.contains(doc.activeElement) && !row.classList.contains('retry-clearing')
+        && !row.classList.contains('wbc-browser-avoid-left')
+        && !row.classList.contains('wbc-browser-avoid-right')) {
         candidates.push([row, rect.height]);
       }
     }
