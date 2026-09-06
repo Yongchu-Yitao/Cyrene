@@ -2,6 +2,40 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta10] - 2026-09-06
+
+Beta10 makes Cyrene more dependable during long conversations and hands-on work. The Agent can ask you directly when it needs more information, is less likely to mix up earlier and current work when a task continues or changes, and is less likely to lose long content or complete inputs when using tools with different models. After a refresh, reconnection, or Conversation recovery, reasoning, tool activity, and replies continue in the right place. Existing features, permission settings, and your tool choices remain unchanged.
+
+### Agent questions and tool settings
+
+- “Ask user” is now an independent built-in tool instead of belonging to the Control tools pack. The main Agent can still request missing details, distinguish between reasonable approaches, or confirm a risky action when planning, reflection, and progress controls are disabled.
+- The question tool can be enabled or disabled on its own without changing plan mode, reflection, plan progress, or other Control tools. Existing saved tool selections continue to apply.
+- Questions support either a direct written answer or up to six short options, and a custom answer remains available when options are shown. Option labels are presented normally instead of exposing their internal structure in the interface.
+- Only the main Agent in the active Conversation turn can open a question that waits for the user. Side Agents and inactive turns cannot unexpectedly display one, while the existing wait-and-resume flow remains unchanged.
+
+### Model tool operations and failure recovery
+
+- Tool requests made through OpenAI and compatible models now better match the strict formats those models support, reducing cases where the correct tool is selected but cannot run because of optional fields or formatting differences. Required inputs, optional inputs, permissions, and the tool's actual behavior do not change.
+- When a model returns an empty placeholder for an optional input it did not fill in, Cyrene treats that input as omitted. Explicitly supplied empty values, required inputs, and all other content still follow the existing checks, so compatibility does not loosen feature constraints.
+- During streamed tool generation, Cyrene now uses the complete operation confirmed by the model at the end. Long arguments, successive updates, and content completed during the closing stage are less likely to be left as partial commands, file content, or other incomplete tool inputs.
+- If a tool request is incomplete or too long, automatic correction asks for the complete operation again and guides large file content into safe consecutive steps. A rejected partial operation is not treated as executed and is not retried unchanged.
+- When several model connections have been attempted and all fail, the final message retains the diagnostics belonging to the error actually shown. This reduces mismatches between the reported cause and the underlying connection, streamed response, or tool-content problem.
+
+### Task contexts and cross-task agreements
+
+- Before each new request, the Agent proactively decides whether it is the first task, a continuation of the current task, a return to earlier work, or a separate new task. This also applies to text-only requests, without asking the user to mention contexts or manage context IDs.
+- The first task uses the prepared initial context directly instead of performing an unnecessary switch. Corrections, progress questions, and later steps toward the same outcome stay with the current task and do not repeat context operations when nothing changed.
+- Starting independent work first saves and pauses the current task before using separate material. Returning to earlier work restores the exact saved task instead of assuming that public chat history or rereading a file is enough, reducing accidental mixing of execution details between tasks.
+- Explicit agreements that apply to all later tasks are saved to the Conversation's shared material before the current request finishes, together with their source and scope. Task-only results and uncertain inferences are not promoted into common requirements.
+- When temporary files are needed during work, the Agent keeps them separate from user deliverables and removes them before finishing. Existing user files, finished deliverables, and content required by the project are preserved.
+
+### Live Conversation activity and recovery
+
+- When a Conversation is opened or recovered, reasoning, tool operations, and reply activity produced from the start of execution is received completely instead of losing the earliest progress because the interface began listening slightly later.
+- If recovery proceeds into a later execution stage within the same turn, new activity continues to belong to the currently visible run instead of disappearing when the internal stage changes. The user sees one continuous, recoverable work sequence.
+- A Conversation replays only history belonging to the current task and run. Events from an earlier run or a different execution tree do not enter the new turn, reducing stale, duplicate, or misassigned activity after refresh, reconnection, recovery, or a quickly submitted next request.
+- Activity saved to history and delivered live to the interface now uses the same current-run scope. The main Conversation, a reconnected page, and later recovery therefore show more consistent content while retaining each activity's original execution source for correct status updates.
+
 ## [0.9.0-beta9] - 2026-09-06
 
 Beta9 brings together all changes since beta8 to task contexts, shared agreements, conversation interactions, local web previews, PowerPoint operations, files and memory, and performance during long conversations and background work. A conversation can now keep several sets of task material and let the Agent switch between them: public messages and common requirements remain available while execution details follow the active task. Saved evidence can be read again when returning to earlier work.
