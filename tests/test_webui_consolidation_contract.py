@@ -155,16 +155,16 @@ def test_workbench_uses_one_module_entry_after_ordered_vendor_scripts():
         "highlight.min.js",
         "echarts.min.js",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.9.0-beta10",
-        "pdfjs/pdf_viewer.js?v=0.9.0-beta10",
-        "compiled/app.js?v=0.9.0-beta10",
+        "pdfjs/pdf.min.js?v=0.9.0-beta11",
+        "pdfjs/pdf_viewer.js?v=0.9.0-beta11",
+        "compiled/app.js?v=0.9.0-beta11",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     compiled_scripts = [script for script in scripts if script.startswith("compiled/")]
-    assert compiled_scripts == ["compiled/app.js?v=0.9.0-beta10"]
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta10"></script>' in index
+    assert compiled_scripts == ["compiled/app.js?v=0.9.0-beta11"]
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta11"></script>' in index
 
 
 def test_single_webui_source_build_and_entrypoint_shape():

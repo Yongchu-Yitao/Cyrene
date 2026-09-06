@@ -732,6 +732,13 @@ function WbcPaneRowResizer({ active, side, ratio, onResize }) {
     if (!column) return;
     var rect = column.getBoundingClientRect();
     var finished = false;
+    var frame = 0;
+    var nextRatio = safeRatio;
+    function paint() {
+      frame = 0;
+      column.style.gridTemplateRows = nextRatio + "fr " + (1 - nextRatio) + "fr";
+      handle.style.top = "calc(" + (nextRatio * 100) + "% + " + (6 - nextRatio * 12) + "px)";
+    }
     function move(moveEvent) {
       if (moveEvent.pointerId !== pointerId) return;
       // Plugin panes are sandboxed iframes. If a platform drops pointerup while
@@ -742,7 +749,8 @@ function WbcPaneRowResizer({ active, side, ratio, onResize }) {
         return;
       }
       var trackHeight = Math.max(1, rect.height - 12);
-      onResize(Math.max(0.2, Math.min(0.8, (moveEvent.clientY - rect.top - 6) / trackHeight)));
+      nextRatio = Math.max(0.2, Math.min(0.8, (moveEvent.clientY - rect.top - 6) / trackHeight));
+      if (!frame) frame = requestAnimationFrame(paint);
     }
     function stop(stopEvent) {
       if (finished) return;
@@ -756,7 +764,12 @@ function WbcPaneRowResizer({ active, side, ratio, onResize }) {
       if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
         try { handle.releasePointerCapture(pointerId); } catch (error) {}
       }
+      if (frame) { cancelAnimationFrame(frame); paint(); }
       document.body.classList.remove("wbc-resizing-pane-row");
+      onResize(nextRatio);
+      window.dispatchEvent(new CustomEvent("workbench:split-resize-end", {
+        detail: { ratio: nextRatio, side: side },
+      }));
     }
     if (handle && handle.setPointerCapture) {
       try { handle.setPointerCapture(pointerId); } catch (error) {}
@@ -851,8 +864,17 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
       : null;
     if (!layout) return;
     var startX = event.clientX;
-    var startWidth = clampFor(layout, width);
+    // The outer layout stays fixed throughout the gesture. Read its bounds
+    // once, and keep pointer moves out of React and persistent storage.
+    var bounds = boundsFor(layout);
+    var startWidth = Math.max(bounds.minimum, Math.min(bounds.maximum, Number(width) || 520));
+    var nextWidth = startWidth;
+    var frame = 0;
     var finished = false;
+    function paint() {
+      frame = 0;
+      layout.style.setProperty("--wbc-pane-right-width", nextWidth + "px");
+    }
     function move(moveEvent) {
       if (moveEvent.pointerId !== pointerId) return;
       if (moveEvent.pointerType === "mouse" && !(moveEvent.buttons & 1)) {
@@ -860,7 +882,8 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
         return;
       }
       var next = startWidth + (startX - moveEvent.clientX);
-      onResize(clampFor(layout, next));
+      nextWidth = Math.max(bounds.minimum, Math.min(bounds.maximum, next));
+      if (!frame) frame = requestAnimationFrame(paint);
     }
     function stop(stopEvent) {
       if (finished) return;
@@ -874,7 +897,12 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
       if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
         try { handle.releasePointerCapture(pointerId); } catch (error) {}
       }
+      if (frame) { cancelAnimationFrame(frame); paint(); }
       document.body.classList.remove("wbc-resizing-pane-column");
+      onResize(nextWidth);
+      window.dispatchEvent(new CustomEvent("workbench:split-resize-end", {
+        detail: { width: nextWidth },
+      }));
     }
     if (handle && handle.setPointerCapture) {
       try { handle.setPointerCapture(pointerId); } catch (error) {}

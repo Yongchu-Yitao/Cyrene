@@ -58,3 +58,75 @@ test("loaded split passes the pending question and messages to the transcript", 
   assert.equal(transcript.props.pendingQuestion, pendingQuestion)
   assert.equal(transcript.props.messages, messages)
 })
+
+function resizeHarness(kind) {
+  const listeners = new Map()
+  const frames = new Map()
+  const commits = []
+  const events = []
+  let frameId = 0
+  let reads = 0
+  let paints = 0
+  const style = { setProperty(key, value) { this[key] = value; paints++ } }
+  const layout = { style, getBoundingClientRect() { reads++; return { width: 1236, height: 812, top: 0 } } }
+  const handle = { style: {}, closest: () => layout, addEventListener() {}, removeEventListener() {} }
+  const dependencies = { useWbcRef: () => ({ current: handle }), useWbcEffect() {}, wbcT: (_key, fallback) => fallback }
+  const context = {
+    module: { exports: {} }, require: () => dependencies, React,
+    document: { body: { classList: { add() {}, remove() {} } } },
+    window: {
+      addEventListener: (name, fn) => listeners.set(name, fn),
+      removeEventListener: name => listeners.delete(name),
+      dispatchEvent: event => events.push(event),
+    },
+    CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail } },
+    requestAnimationFrame(fn) { frames.set(++frameId, fn); return frameId },
+    cancelAnimationFrame: id => frames.delete(id),
+  }
+  vm.runInNewContext(code, context)
+  const component = context.module.exports[kind === "column" ? "WbcPaneColumnResizer" : "WbcPaneRowResizer"]
+  const element = component({ width: 520, ratio: 0.5, side: "left", onResize: value => commits.push(value) })
+  element.props.onPointerDown({ button: 0, clientX: 700, pointerId: 1, currentTarget: handle, preventDefault() {} })
+  return {
+    commits, events, frames, layout, handle,
+    reads: () => reads, paints: () => paints,
+    move(x, y, pointerId = 1) { listeners.get("pointermove")({ clientX: x, clientY: y, pointerId, pointerType: "mouse", buttons: 1 }) },
+    stop(type = "pointerup") { listeners.get(type)({ pointerId: 1 }) },
+    flush() { for (const [id, fn] of frames) { frames.delete(id); fn() } },
+    listeners,
+  }
+}
+
+test("column dragging coalesces moves without state commits or repeated layout reads", () => {
+  const drag = resizeHarness("column")
+  for (let x = 699; x >= 600; x--) drag.move(x, 0)
+  assert.equal(drag.commits.length, 0)
+  assert.equal(drag.reads(), 1)
+  assert.equal(drag.frames.size, 1)
+  drag.flush()
+  assert.equal(drag.paints(), 1)
+  assert.equal(drag.layout.style["--wbc-pane-right-width"], "620px")
+  drag.move(-5000, 0)
+  drag.stop()
+  assert.deepEqual(drag.commits, [820])
+  assert.equal(drag.layout.style["--wbc-pane-right-width"], "820px")
+  assert.equal(drag.frames.size, 0)
+  assert.equal(drag.listeners.size, 0)
+  assert.equal(drag.events[0].type, "workbench:split-resize-end")
+})
+
+test("row dragging previews tracks and separator, then commits once on cancellation", () => {
+  const drag = resizeHarness("row")
+  drag.move(0, 606, 2)
+  assert.equal(drag.frames.size, 0)
+  drag.move(0, 406)
+  drag.move(0, 606)
+  assert.equal(drag.commits.length, 0)
+  assert.equal(drag.frames.size, 1)
+  drag.stop("pointercancel")
+  assert.deepEqual(drag.commits, [0.75])
+  assert.equal(drag.layout.style.gridTemplateRows, "0.75fr 0.25fr")
+  assert.equal(drag.handle.style.top, "calc(75% + -3px)")
+  assert.equal(drag.frames.size, 0)
+  assert.equal(drag.listeners.size, 0)
+})

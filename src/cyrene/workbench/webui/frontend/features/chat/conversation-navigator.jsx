@@ -1,5 +1,12 @@
 import { useWbcEffect, useWbcState, wbcT } from "../../workbench-chat.jsx"
 
+function wbcConversationResizeActive() {
+  var classes = document.body.classList;
+  return classes.contains("wbc-resizing-side-agent")
+    || classes.contains("wbc-resizing-pane-column")
+    || classes.contains("wbc-resizing-pane-row");
+}
+
 function wbcConversationMarkersEqual(left, right) {
   if (left === right) return true;
   if (!Array.isArray(left) || left.length !== right.length) return false;
@@ -42,6 +49,7 @@ class WbcConversationNavigatorObserver {
   }
 
   onItemResize(entries) {
+    if (wbcConversationResizeActive()) { this.dirtyFrom = 0; return; }
     entries.forEach(function (entry) {
       var index = this.items.indexOf(entry.target);
       if (index >= 0) this.dirtyFrom = Math.min(this.dirtyFrom, index);
@@ -96,6 +104,7 @@ class WbcConversationNavigatorObserver {
 
   measure() {
     this.raf = 0;
+    if (wbcConversationResizeActive()) return;
     if (this.itemsDirty) this.refreshItems();
     if (this.dirtyFrom < this.items.length) {
       for (var index = this.dirtyFrom; index < this.items.length; index += 1) {
@@ -113,7 +122,7 @@ class WbcConversationNavigatorObserver {
   }
 
   scheduleMeasure() {
-    if (document.body.classList.contains("wbc-resizing-side-agent") || this.raf) return;
+    if (wbcConversationResizeActive() || this.raf) return;
     this.raf = requestAnimationFrame(this.measure);
   }
 

@@ -2,6 +2,51 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta11] - 2026-09-06
+
+Beta11 makes long Conversations, proactive background work, and recovery from model problems more stable and easier to understand. Streaming replies no longer make unrelated parts of the interface refresh repeatedly, and reasoning, tool activity, and final replies no longer reappear as duplicates after saving, recovery, or reconnection. Proactive work is limited to tasks the user explicitly recorded instead of guessing work from memories or old chats. When model output is truncated, incompletely received, or explicitly rejected by a provider, Cyrene now presents a more accurate cause and next step.
+
+### Live Conversation content and interface responsiveness
+
+- While a long reply streams token by token, only the messages that actually change are updated. The composer, browser, sidebar, and neighboring panels no longer refresh for every small text delta, reducing flicker, stalls, and layout movement during fast output, sustained reasoning, and split-view use.
+- When the Conversation sidebar opens or closes, the message area, composer, and related panels now use the same movement duration and rhythm instead of visibly finishing at different times.
+- Dragging a horizontal or vertical split divider now previews the size directly under the pointer and saves the final layout once when released. Continuous dragging no longer repeatedly refreshes the full Conversation or rewrites settings, making split adjustments smoother in long chats.
+- Without a browser picture-in-picture window, sidebar resizing no longer repeatedly examines the entire transcript or rewrites message layout. With picture-in-picture active, only messages that need to make room are moved, and closing it correctly restores the reading position and live-tail behavior.
+- Running reasoning and tool activity keeps the same identity from live display through saving, refresh, and recovery. The interface no longer shows two matching activity cards merely because both a live and saved representation exist.
+- After answering a pending confirmation, reloading midway through a turn, or recovering a Conversation from its run record, Cyrene uses one complete timeline. Completed tools, final replies, and content on either side of the confirmation are not appended a second time.
+- Historical duplicate activity or replies are combined for display, preferring the version with fuller information and more accurate ownership. Genuinely separate repeated tool calls, independent repeated replies, and different user turns remain distinct.
+- Live activity, saved history, reconnected pages, and public Conversation data now use consistent ordering and deduplication, and the message count agrees with what the user can actually see.
+
+### Model responses, error guidance, and automatic recovery
+
+- Reaching a model output limit, receiving only part of a model response, and receiving an invalid response are now treated as different problems. The Conversation shows matching English and Chinese titles, causes, and guidance instead of grouping them all under a vague invalid-response message.
+- When a model provider explicitly reports failure, Cyrene can distinguish service overload, rate limiting, exhausted quota, an invalid key, an oversized request, a rejected request format, or an unavailable model whenever the provider supplies that cause.
+- If a model has conclusively finished its answer but the connection closes imperfectly at the end, Cyrene preserves the completed text, tool operations, and usage information instead of misreporting a successful answer as a network interruption.
+- If the connection ends before model completion, or the provider explicitly says the response is incomplete, Cyrene still reports failure and offers a retry rather than accepting partial text or an unfinished operation as successful.
+- A complete and valid tool operation returned exactly at the model's output limit can proceed normally. Cyrene stops only when the arguments are genuinely incomplete, then performs a bounded correction or retry instead of discarding valid work or executing truncated content.
+- When excessive output requires another attempt, the Agent receives clear guidance to split the work into smaller steps. The same problem cannot retry forever, and existing tool permissions, confirmations, and behavior remain unchanged.
+- Writing a long block of text is no longer rejected before it begins solely because it exceeds the recommended single-call size. Complete content can be preserved exactly, while the Agent still prefers safer chunks for especially large files.
+- Connection-cleanup problems cannot replace a confirmed success, the real model error, or a user cancellation with a misleading final status.
+
+### Proactive work, reminders, and task sources
+
+- Proactive background work now handles only active tasks or problems explicitly recorded by the user or Agent in the current project. Memories, old Conversations, knowledge, project files, and inferred interests may support verification but cannot create unsolicited work on their own.
+- Tasks created in the interface or deliberately tracked through a tool are marked as authoritative work. Automatically extracted candidate information cannot trigger proactive execution or notifications without explicit confirmation.
+- When several authoritative items exist, approaching due dates and higher priorities are considered first, always within the current project so work from one project is not carried into another.
+- Before beginning proactive work, Cyrene checks the selected item against recent public chat and current project state. If it is already completed, superseded, canceled, or no longer applicable, its state is updated silently instead of continuing the work or sending an outdated reminder.
+- After proactive work completes, its item is marked done. If user input is genuinely required, the item is paused and one specific blocker is delivered instead of repeated generic greetings or prompts.
+- An unchanged revision of a task is evaluated only once. A lack of user reply does not make old work reappear on every background check; a change to its content, status, due date, or priority makes the updated state eligible for a fresh decision.
+- Scheduler requests and their own outputs are not written into short-term memory, project memory, or Conversation archives, preventing one background check from becoming evidence for the next and producing repetitive or self-reinforcing reminders.
+
+### Task contexts and shared agreements
+
+- Task contexts now follow the outcome the user is trying to achieve rather than individual messages, keywords, tools, or files. Explanations, corrections, tests, progress questions, and later steps toward the same outcome remain in the active task without unnecessary saving and switching.
+- Merely changing topics or saying “also” or “back to” does not force a switch. Cyrene saves and changes context only when the user starts a separately completable goal or genuinely returns to an earlier goal listed in saved task material.
+- The first task uses its prepared context directly, and returning to earlier work still restores the exact context and rechecks evidence that may have changed. Users do not need to understand or manage context IDs, and no extra operation is shown merely to confirm that no switch is needed.
+- Shared Conversation agreements more strictly retain their source, applicable tasks, and whether they constrain the Agent or the user. A requirement about Agent replies is not rewritten as a restriction on the user, and Cyrene does not invent unstated dates, versions, obligations, examples, or broader scope.
+- New cross-task agreements are appended to shared material, while outdated or incorrect agreements are fully corrected without discarding other valid information. Accurate existing content is not written again, and local conclusions or uncertain inferences remain with their own tasks.
+- English and Chinese descriptions for context tools have been updated together to explain more clearly when to continue, pause, or resume a task and how shared agreements should be maintained.
+
 ## [0.9.0-beta10] - 2026-09-06
 
 Beta10 makes Cyrene more dependable during long conversations and hands-on work. The Agent can ask you directly when it needs more information, is less likely to mix up earlier and current work when a task continues or changes, and is less likely to lose long content or complete inputs when using tools with different models. After a refresh, reconnection, or Conversation recovery, reasoning, tool activity, and replies continue in the right place. Existing features, permission settings, and your tool choices remain unchanged.
