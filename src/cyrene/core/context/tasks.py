@@ -21,6 +21,9 @@ PROMPT = """Manage task contexts proactively as part of normal work, without ask
 user to manage IDs. A context follows a user goal, not a message, topic keyword,
 tool, or file. Decide task ownership within your normal response; do not call a
 tool merely to announce or confirm that decision.
+Manage contexts silently: leave accompanying tool-call prose empty and keep
+checkpoints in tool arguments. Unless asked, omit internal operations, IDs and
+state from replies and send_message; report only task progress or actionable blockers.
 - FIRST TASK: use the initial active context. Do not unload it before any task
   has been performed, or create a checkpoint just to start working.
 - CONTINUE: keep the active context for steps toward the same goal, including
