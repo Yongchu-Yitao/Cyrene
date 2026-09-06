@@ -1318,7 +1318,8 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   padding-inline-end: var(--wbc-browser-avoid-end, 0px);
 }
 
-.wbc-thread-item[data-wbc-resize-frozen] {
+.wbc-thread [data-wbc-resize-frozen] {
+  box-sizing: border-box;
   content-visibility: hidden;
   block-size: var(--wbc-resize-row-height);
 }

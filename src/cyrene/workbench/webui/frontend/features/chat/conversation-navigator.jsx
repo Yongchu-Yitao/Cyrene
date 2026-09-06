@@ -1,8 +1,9 @@
 import { useWbcEffect, useWbcState, wbcT } from "../../workbench-chat.jsx"
 
-function wbcConversationResizeActive() {
+function wbcConversationResizeActive(thread) {
   var classes = document.body.classList;
-  return classes.contains("wbc-resizing-side-agent")
+  return !!(thread && thread.wbcResizeActive)
+    || classes.contains("wbc-resizing-side-agent")
     || classes.contains("wbc-resizing-pane-column")
     || classes.contains("wbc-resizing-pane-row");
 }
@@ -49,7 +50,7 @@ class WbcConversationNavigatorObserver {
   }
 
   onItemResize(entries) {
-    if (wbcConversationResizeActive()) { this.dirtyFrom = 0; return; }
+    if (wbcConversationResizeActive(this.thread)) { this.dirtyFrom = 0; return; }
     entries.forEach(function (entry) {
       var index = this.items.indexOf(entry.target);
       if (index >= 0) this.dirtyFrom = Math.min(this.dirtyFrom, index);
@@ -104,7 +105,7 @@ class WbcConversationNavigatorObserver {
 
   measure() {
     this.raf = 0;
-    if (wbcConversationResizeActive()) return;
+    if (wbcConversationResizeActive(this.thread)) return;
     if (this.itemsDirty) this.refreshItems();
     if (this.dirtyFrom < this.items.length) {
       for (var index = this.dirtyFrom; index < this.items.length; index += 1) {
@@ -122,7 +123,7 @@ class WbcConversationNavigatorObserver {
   }
 
   scheduleMeasure() {
-    if (wbcConversationResizeActive() || this.raf) return;
+    if (wbcConversationResizeActive(this.thread) || this.raf) return;
     this.raf = requestAnimationFrame(this.measure);
   }
 
@@ -141,6 +142,7 @@ class WbcConversationNavigatorObserver {
   start() {
     if (this.threadObserver) this.threadObserver.observe(this.thread);
     if (this.mutationObserver) this.mutationObserver.observe(this.thread, { childList: true });
+    this.thread.addEventListener("workbench:transcript-resize-end", this.invalidateAll);
     this.thread.addEventListener("scroll", this.scheduleMeasure, { passive: true });
     window.addEventListener("resize", this.invalidateAll);
     window.addEventListener("workbench:split-resize-end", this.invalidateAll);
@@ -152,6 +154,7 @@ class WbcConversationNavigatorObserver {
     if (this.threadObserver) this.threadObserver.disconnect();
     if (this.itemObserver) this.itemObserver.disconnect();
     if (this.mutationObserver) this.mutationObserver.disconnect();
+    this.thread.removeEventListener("workbench:transcript-resize-end", this.invalidateAll);
     this.thread.removeEventListener("scroll", this.scheduleMeasure);
     window.removeEventListener("resize", this.invalidateAll);
     window.removeEventListener("workbench:split-resize-end", this.invalidateAll);

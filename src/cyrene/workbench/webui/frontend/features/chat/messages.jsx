@@ -1079,6 +1079,10 @@ function wbcTraceDedupeKeyForDisclosure(trace) {
 function WbcTraceCard({ trace, live, running, label, reasoning, disclosureId }) {
   useWorkbenchI18n(); var entries = Array.isArray(trace) ? trace : [];
   var [expanded, setExpanded] = wbcUseDisclosure(disclosureId || "trace:" + wbcTraceDedupeKeyForDisclosure(trace));
+  // Closed history cards can contain large tool outputs. Mount details on
+  // first disclosure, then retain them so closing still animates normally.
+  var detailsMountedRef = useWbcRef(expanded);
+  if (expanded) detailsMountedRef.current = true;
   var reasoningText = String(reasoning || "");
   if (!entries.length && !reasoningText.trim() && !live && !disclosureId) return null;
   var activityRunning = live && running !== false;
@@ -1094,7 +1098,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning, disclosureId }) 
     return String(entry && entry.status || "").trim().toLowerCase() === "running";
   });
   var summaryRunning = hasRunningEntries || activityRunning;
-  var timelineItems = wbcTraceTimelineItems(entries, reasoningText);
+  var timelineItems = detailsMountedRef.current ? wbcTraceTimelineItems(entries, reasoningText) : [];
   return (
     <div className={cardClass} aria-busy={summaryRunning ? "true" : undefined}>
       <button
@@ -1554,6 +1558,8 @@ function WbcActivityGroup({ group }) {
   var activities = Array.isArray(item.activities) ? item.activities : [];
   var active = !!item.active;
   var [expanded, setExpanded] = wbcUseDisclosure(item.id, activities.map(function (message) { return message.id; }));
+  var detailsMountedRef = useWbcRef(expanded);
+  if (expanded) detailsMountedRef.current = true;
   var duration = item.durationMs == null ? "" : wbcFormatProcessingDuration(item.durationMs);
   var runningSummary = active ? wbcActivityGroupRunningSummary(activities) : null;
   var summary = active
@@ -1592,7 +1598,7 @@ function WbcActivityGroup({ group }) {
       <div className={"wbc-activity-group-collapse" + (expanded ? " open" : "")} aria-hidden={!expanded}>
         <div className="wbc-activity-group-collapse-inner">
           <div className="wbc-activity-group-list">
-            {activities.map(function (message, index) {
+            {(detailsMountedRef.current ? activities : []).map(function (message, index) {
               var view = wbcActivityMessageView(message);
               if (!view || !view.visible) return null;
               return (
