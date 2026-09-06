@@ -3158,21 +3158,21 @@
     "load_context": {
       "en": {
         "name": "Load task context",
-        "description": "Resume an earlier goal by restoring its saved task context before answering or using its evidence. Use the catalog's exact ID; unload a different active context first. Do not call for the already active task, a new goal, or shared. Call alone and wait for success."
+        "description": "Resume an earlier goal by restoring its saved task context before answering or using its evidence. Match the goal to the catalog's exact ID; unload a different active context first. Never load an unrelated context as a placeholder for a new goal. Do not call for the already active task or shared. Call alone and wait for success."
       },
       "zh": {
         "name": "加载任务上下文",
-        "description": "恢复较早目标时，在回答或使用其资料前加载已保存的任务上下文。使用目录中的准确 ID，并先卸载另一个活动任务；当前任务、新目标和 shared 不需要加载。此工具必须单独调用并等待成功。"
+        "description": "恢复较早目标时，在回答或使用其资料前加载已保存的任务上下文。将目标与目录中的准确 ID 对应，并先卸载另一个活动任务；不要为新目标加载无关任务作为占位。当前任务和 shared 不需要加载。此工具必须单独调用并等待成功。"
       }
     },
     "unload_context": {
       "en": {
         "name": "Save and unload task context",
-        "description": "Save a checkpoint and pause the active task before starting an independent goal or loading an earlier one, including text-only work. Do not call for the first task, acknowledgments, or explanations, corrections and tests serving the current goal. Subsequent task work creates a context unless you load one. Call alone and wait for success."
+        "description": "Save a checkpoint and pause the active task before starting an independent goal or loading an earlier one, including text-only work. Do not unload merely to save, finish, report results or wait for the user. Do not call for the first task, acknowledgments, or explanations, corrections and tests serving the current goal. Subsequent task work creates a context unless you load one. Call alone and wait for success."
       },
       "zh": {
         "name": "保存并卸载任务上下文",
-        "description": "开始独立目标或恢复较早任务前，保存交接摘要并暂停当前任务，也适用于纯文字工作。首次任务、简单确认，以及服务于当前目标的说明、修正和测试不需要切换。后续工作自动新建上下文，除非加载已有任务。此工具必须单独调用并等待成功。"
+        "description": "开始独立目标或恢复较早任务前，保存交接摘要并暂停当前任务，也适用于纯文字工作。不要仅为了保存、结束、报告结果或等待用户而卸载。首次任务、简单确认，以及服务于当前目标的说明、修正和测试不需要切换。后续工作自动新建上下文，除非加载已有任务。此工具必须单独调用并等待成功。"
       }
     },
     "append_context": {

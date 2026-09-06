@@ -4,6 +4,7 @@ import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayo
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
 import { WbcComposer } from "./composer.jsx"
 import { WbcConversationNavigator } from "./conversation-navigator.jsx"
+import { protectTranscriptResize } from "./transcript-resize.mjs"
 
 import { permissionOptionLabel } from "./behavior.mjs"
 
@@ -1864,6 +1865,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
   var latestAssistantReplyText = projection.latestAssistantReplyText;
 
   useWbcComposerReserveHeight(mainRef, chat && chat.id);
+
+  useWbcEffect(function () {
+    var thread = scrollRef.current;
+    var page = mainRef.current && mainRef.current.closest(".wbc-page");
+    if (!thread || !page) return undefined;
+    return protectTranscriptResize(thread, page, function () { return stickRef.current; });
+  }, [chat && chat.id]);
 
   // Expanded side-panel content owns the whole right-side corridor below the
   // conversation card, leaving no room for a floating browser there. Hide the

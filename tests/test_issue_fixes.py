@@ -267,7 +267,7 @@ async def test_analyze_attachment_keeps_short_ocr_and_falls_back_to_vision(tmp_p
     vision.assert_awaited_once()
 
 
-async def test_vision_chat_falls_back_to_selected_vision_capable_primary(
+async def test_vision_chat_leaves_empty_route_fallback_to_router(
     monkeypatch,
 ):
     import cyrene.core.plugin
@@ -314,9 +314,9 @@ async def test_vision_chat_falls_back_to_selected_vision_capable_primary(
         "vision_text": "I can see it.",
     }
     call = gateway.complete.await_args
-    assert call.kwargs["route"] == "primary"
+    assert call.kwargs["route"] == "vision"
     assert call.kwargs["session_id"] == "chat-selected"
-    assert call.kwargs["model_identity"]["candidateId"] == "profile-selected-vlm"
+    assert call.kwargs["model_identity"] is None
 
 
 async def test_vision_chat_keeps_configured_vision_route(monkeypatch):

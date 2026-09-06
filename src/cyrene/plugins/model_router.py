@@ -126,14 +126,29 @@ async def _parse_tool_calls(
 def request_token_estimate(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
+    *,
+    model: str = "",
 ) -> int:
     """Conservatively gate configured context windows without the old client."""
 
     from cyrene.observability.context_trace import approx_token_count
+    from cyrene.model.image_tokens import estimate_image_tokens
 
     total = 0
     for message in messages:
-        total += 4 + approx_token_count(json.dumps(message, ensure_ascii=False, sort_keys=True, default=str))
+        content = message.get("content")
+        budget_message = message
+        if isinstance(content, list):
+            text_blocks = []
+            for block in content:
+                if isinstance(block, Mapping) and block.get("type") in {
+                    "image_url", "input_image",
+                }:
+                    total += estimate_image_tokens(block, model=model)
+                else:
+                    text_blocks.append(block)
+            budget_message = {**message, "content": text_blocks}
+        total += 4 + approx_token_count(json.dumps(budget_message, ensure_ascii=False, sort_keys=True, default=str))
     if tools:
         total += approx_token_count(json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str))
     return total
@@ -166,23 +181,30 @@ def _eligible_candidates(
     estimated_input_tokens: Any = None,
 ) -> list[dict[str, Any]]:
     try:
-        required = max(0, int(estimated_input_tokens))
+        prepared = max(0, int(estimated_input_tokens))
     except (TypeError, ValueError):
-        required = request_token_estimate(messages, tools)
+        prepared = None
     try:
-        required += max(0, int(max_tokens or 0))
+        output_tokens = max(0, int(max_tokens or 0))
     except (TypeError, ValueError):
-        pass
+        output_tokens = 0
     eligible: list[dict[str, Any]] = []
-    rejected: list[tuple[str, int]] = []
+    rejected: list[tuple[str, int, int]] = []
     for candidate in candidates:
+        input_tokens = prepared
+        if input_tokens is None:
+            input_tokens = request_token_estimate(
+                messages, tools, model=str(candidate.get("model") or ""),
+            )
+        required = input_tokens + output_tokens
         limit = _candidate_context_limit(candidate)
         if limit and required > limit:
-            rejected.append((str(candidate.get("model") or ""), limit))
+            rejected.append((str(candidate.get("model") or ""), limit, required))
             continue
         eligible.append(candidate)
     if not eligible and rejected:
-        limits = ", ".join(f"{model}={limit}" for model, limit in rejected)
+        limits = ", ".join(f"{model}={limit}" for model, limit, _ in rejected)
+        required = min(required for _, _, required in rejected)
         raise ValueError(
             "Model request exceeds all configured context windows; "
             f"requires about {required} tokens; configured limits: {limits}"

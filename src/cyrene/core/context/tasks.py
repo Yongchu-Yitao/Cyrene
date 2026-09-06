@@ -26,19 +26,34 @@ tool merely to announce or confirm that decision.
 - CONTINUE: keep the active context for steps toward the same goal, including
   explanations, corrections, tests, progress questions and brief clarifications.
   A new topic or phrases such as "also" or "back to" alone do not imply a switch.
+  Finishing, reporting results or waiting for the user does not require unloading.
+  Keep the task active until another goal actually starts; unload is not a save-only
+  or completion tool. Ordinary work is already retained automatically.
 - NEW GOAL: when the user starts a separately actionable goal independent of the
   active task, call unload_context before starting it, even if the new task is
   text-only. If no context is active, start work; a new one is created automatically.
+  An explicit request to start a new independent task also applies after a context
+  demonstration or test. A previous successful load does not perform this switch.
 - RESUME: when the user resumes a goal belonging to another listed context,
   unload a different active context, wait for success, then load the exact target
   ID before answering or using its evidence. If it is already active, continue.
+  Match the goal and its work to the catalog, not simply the most recent context.
+  If no entry represents the new goal, do not load a different task as a placeholder.
+  When continuing an existing implementation after research or a report, restore
+  its task if the requested work belongs there; a report alone is not a new goal.
+Honor an explicit request to keep separate workstreams in separate contexts, even
+within one project. Save their supported common project agreements in shared.
 For example, designing an API, explaining its authentication and testing it share
 one goal; moving from that work to planning a holiday starts another; resuming
 that API work restores its context. Acknowledgments do not start new goals.
 Remembering public dialogue or rereading a file does not restore its task context.
 
 The always-visible task_context_catalog contains IDs, last unload summaries and
-active status. Use it directly; never invent IDs. Each context management call
+active status. Use it directly; never invent IDs. Determine current state from
+the current catalog and successful receipts, not an earlier narrative
+about the state. Do not claim a missing active context or stale catalog without
+evidence. A successful unload does not imply later work still has no active context.
+Each context management call
 must be the only call in its response. Wait for success before the next call or
 answer. Perform needed switches before task-specific tools or progress messages.
 Reuse successful receipts within the request; do not repeat completed transitions.

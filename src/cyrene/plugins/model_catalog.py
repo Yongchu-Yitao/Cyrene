@@ -315,13 +315,32 @@ def configured_model_candidates(
             # selected profile first, then retain the primary route as its
             # fallback chain.
             route_candidates.insert(0, dict(selected))
+    primary_fallbacks: list[dict[str, Any]] = []
+    if normalized_route == "secondary":
+        primary_fallbacks = [dict(item) for item in candidates_for_route("primary")]
+    elif normalized_route == "vision":
+        from cyrene.model.transcript_policy import provider_family_for_candidate
+
+        # Preserve the conversation's selected primary and its endpoint affinity,
+        # but never send images to a text-only model or cross provider families.
+        primary_fallbacks = [
+            item for item in configured_model_candidates(session_id, route="primary")
+            if {"chat", "vision"}.issubset(set(item.get("capabilities") or ()))
+        ]
+        family_anchor = next(iter(route_candidates or primary_fallbacks), None)
+        if family_anchor is not None:
+            family = provider_family_for_candidate(family_anchor)
+            primary_fallbacks = [
+                item for item in primary_fallbacks
+                if provider_family_for_candidate(item) == family
+            ]
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
     for route_role, items in (
         (normalized_route, route_candidates),
         (
             "primary",
-            [dict(item) for item in candidates_for_route("primary")] if normalized_route == "secondary" else [],
+            primary_fallbacks,
         ),
     ):
         for item in items:

@@ -716,32 +716,15 @@ async def run_vision_chat(
     if gateway is None:
         raise RuntimeError("Model Provider Plugins are not available")
     session_id = _vision_session_id(context)
-    model_identity = None
-    route = "vision"
-    try:
-        configuration = application_plugin_service("model_configuration")
-        vision_candidates = (
-            configuration.candidates_for_route("vision")
-            if configuration is not None
-            else []
-        )
-    except Exception:
-        vision_candidates = []
-    if not vision_candidates:
-        fallback = _vision_fallback_candidate(session_id)
-        if fallback is not None:
-            from cyrene.plugins.model_catalog import candidate_identity
-
-            route = "primary"
-            model_identity = candidate_identity(fallback)
-
+    # The catalog appends vision-capable primary candidates, including when
+    # the dedicated vision route is empty. Keep retries in the model router.
     result = await gateway.complete(
         [{"role": "user", "content": content}],
-        route=route,
+        route="vision",
         max_tokens=max_tokens,
         caller="vision",
         session_id=session_id or "vision-analysis",
-        model_identity=model_identity,
+        model_identity=None,
         context=context,
     )
     vision_text = assistant_text(result) or ""
