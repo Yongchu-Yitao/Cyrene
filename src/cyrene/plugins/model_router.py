@@ -576,6 +576,7 @@ async def route_model_call(
     # legacy Agent ContextVar binding is needed (or allowed) on this path.
     failures: list[str] = []
     public_failures: list[ModelErrorDetails] = []
+    failure_diagnostics: list[Mapping[str, Any] | None] = []
     for index, candidate in enumerate(eligible):
         provider = resolve_registered_model_plugin(
             execution.runtime.registry,
@@ -586,6 +587,7 @@ async def route_model_call(
             error = "no matching kind=model Provider Plugin is registered"
             failures.append(f"{candidate.get('model') or candidate.get('id')}: {error}")
             public_failures.append(classify_model_error("model service unavailable"))
+            failure_diagnostics.append(None)
             await _publish_llm_event(
                 context,
                 messages=model_messages,
@@ -626,8 +628,13 @@ async def route_model_call(
                 # as Chinese "超时", which previously became the generic
                 # model_call_failed error.
                 public_failure = details_from_mapping(result.failure.as_dict())
-            public_failures.append(public_failure or classify_model_error(error))
             stream_diagnostics = result.error_details.get("stream_diagnostics")
+            public_failures.append(public_failure or classify_model_error(error))
+            failure_diagnostics.append(
+                dict(stream_diagnostics)
+                if isinstance(stream_diagnostics, Mapping)
+                else None
+            )
             failed_response = (
                 {"stream_diagnostics": dict(stream_diagnostics)}
                 if isinstance(stream_diagnostics, Mapping)
@@ -722,7 +729,16 @@ async def route_model_call(
         "All configured model Provider Plugins failed: %s",
         "; ".join(failures),
     )
-    raise ModelCallError(preferred_model_error(public_failures))
+    preferred = preferred_model_error(public_failures)
+    diagnostics = next(
+        (
+            failure_diagnostics[index]
+            for index, details in enumerate(public_failures)
+            if details is preferred
+        ),
+        None,
+    )
+    raise ModelCallError(preferred, diagnostics=diagnostics)
 
 
 def create_model_router_plugin() -> Plugin:

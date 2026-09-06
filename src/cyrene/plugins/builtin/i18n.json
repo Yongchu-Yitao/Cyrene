@@ -94,11 +94,11 @@
     "cyrene_control": {
       "en": {
         "name": "Control tools",
-        "description": "Ask the user, plan, reflect, and update plan progress."
+        "description": "Plan, reflect, and update plan progress."
       },
       "zh": {
         "name": "控制工具",
-        "description": "向用户提问、制定计划、反思并更新计划进度。"
+        "description": "制定计划、反思并更新计划进度。"
       }
     },
     "cyrene_delivery": {

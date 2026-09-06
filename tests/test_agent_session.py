@@ -304,6 +304,7 @@ def test_invalid_tool_call_response_retries_with_structured_correction(tmp_path)
         "tool_calls": [{
             "index": "0",
             "name": "Write",
+            "arguments_length": len(invalid_arguments),
             "arguments_validation": "invalid_json",
         }],
     }

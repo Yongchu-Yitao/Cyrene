@@ -77,6 +77,65 @@ def _tool_schemas(value: Any) -> dict[str, Mapping[str, Any]]:
     return schemas
 
 
+def _drop_optional_nulls(value: Any, schema: Mapping[str, Any]) -> Any:
+    """Undo nullable placeholders introduced by strict wire schemas.
+
+    OpenAI strict function schemas require every property to be present. The
+    provider may therefore return ``null`` for a field that is optional in the
+    Plugin's authoritative schema. Drop only those optional nulls; required
+    nulls and all other values remain subject to ordinary runtime validation.
+    """
+
+    properties = schema.get("properties")
+    if isinstance(value, Mapping) and isinstance(properties, Mapping):
+        raw_required = schema.get("required")
+        required = {
+            str(name)
+            for name in (raw_required if isinstance(raw_required, list) else ())
+            if isinstance(name, str)
+        }
+        result: dict[str, Any] = {}
+        for raw_name, item in value.items():
+            name = str(raw_name)
+            child_schema = properties.get(name)
+            if (
+                item is None
+                and name not in required
+                and isinstance(child_schema, Mapping)
+                and not _schema_accepts_null(child_schema)
+            ):
+                continue
+            result[name] = (
+                _drop_optional_nulls(item, child_schema)
+                if isinstance(child_schema, Mapping)
+                else item
+            )
+        return result
+    items = schema.get("items")
+    if isinstance(value, list) and isinstance(items, Mapping):
+        return [_drop_optional_nulls(item, items) for item in value]
+    return value
+
+
+def _schema_accepts_null(schema: Mapping[str, Any]) -> bool:
+    expected = schema.get("type")
+    if expected == "null":
+        return True
+    if isinstance(expected, list) and "null" in expected:
+        return True
+    enum = schema.get("enum")
+    if isinstance(enum, list) and None in enum:
+        return True
+    for keyword in ("anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, list) and any(
+            isinstance(branch, Mapping) and _schema_accepts_null(branch)
+            for branch in branches
+        ):
+            return True
+    return False
+
+
 def _canonical_arguments(
     name: str,
     arguments: Mapping[str, Any],
@@ -110,7 +169,7 @@ def _canonical_arguments(
             error_code="provider_tool_unavailable",
         )
     return normalize_plugin_arguments(
-        arguments,
+        _drop_optional_nulls(arguments, schema),
         schema,
         property_aliases=aliases,
     ).arguments

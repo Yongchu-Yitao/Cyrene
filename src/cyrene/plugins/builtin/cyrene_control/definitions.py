@@ -6,26 +6,6 @@ from copy import deepcopy
 from typing import Any
 
 _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
-  'function': {'name': 'ask_user',
-               'description': 'Ask the user a clarification question and pause until they answer. '
-                              'Use this liberally — asking is better than assuming. Trigger when: '
-                              'the request is ambiguous, details are missing, multiple reasonable '
-                              'approaches exist, or you need sign-off before a risky action. If '
-                              'you need to ask the user anything, use this tool instead of putting '
-                              'a question in assistant text. Use freeform text for open questions, '
-                              'or add a short options array for structured choices. The UI always '
-                              'allows custom answers even with options.',
-               'parameters': {'type': 'object',
-                              'properties': {'text': {'type': 'string',
-                                                      'description': 'The clarification question '
-                                                                     'to show the user.'},
-                                             'options': {'type': 'array',
-                                                         'description': 'Optional short option '
-                                                                        'labels when structured '
-                                                                        'choices would help.',
-                                                         'items': {'type': 'string'}}},
-                              'required': ['text']}}},
- {'type': 'function',
   'function': {'name': 'DeepReflect',
                'description': 'Main agent only. Reframe the next working context when the current '
                               "approach is not satisfying the user's goal, repeated work is not "

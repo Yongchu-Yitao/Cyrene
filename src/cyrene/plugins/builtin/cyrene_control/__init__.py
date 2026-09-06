@@ -7,9 +7,9 @@ from typing import Any
 
 from cyrene.core.plugin import Plugin, PluginPack, PluginSetupContext
 
-from . import ask_user, deep_reflect, enter_plan_mode, update_plan_progress
+from . import deep_reflect, enter_plan_mode, update_plan_progress
 
-_MAIN_ONLY = {"ask_user", "enter_plan_mode", "update_plan_progress", "DeepReflect"}
+_MAIN_ONLY = {"enter_plan_mode", "update_plan_progress", "DeepReflect"}
 
 
 def _setup(context: PluginSetupContext) -> None:
@@ -39,9 +39,8 @@ def _plugin(module: ModuleType) -> Plugin:
 
 plugin_pack = PluginPack(
     id="cyrene_control",
-    description="Ask the user, plan, reflect, and update plan progress.",
+    description="Plan, reflect, and update plan progress.",
     plugins=tuple(_plugin(module) for module in (
-        ask_user,
         enter_plan_mode,
         update_plan_progress,
         deep_reflect,

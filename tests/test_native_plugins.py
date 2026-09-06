@@ -166,7 +166,7 @@ def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
         assert set(listing.value["packs"]) == MODEL_VISIBLE_PACK_IDS | {
             "cyrene_plugin_development"
         }
-        assert set(listing.value["standalone_tools"]) == USER_STANDALONE_PLUGIN_NAMES
+        assert set(listing.value["standalone_tools"]) == USER_STANDALONE_PLUGIN_NAMES - {"ask_user"}
 
         globbed = await runtime.call(
             "toolbox",
@@ -560,7 +560,7 @@ def test_frozen_build_reads_the_packaged_canonical_tree(tmp_path, monkeypatch):
     (pack / "__init__.py").write_bytes(b"pack\n")
     for name in ("__init__.py", "application.py", "schedule_spec.py", "tools.py"):
         (schedule_pack / name).write_bytes(name.encode("utf-8"))
-    for name in ("edit.py", "glob.py", "grep.py"):
+    for name in ("edit.py", "glob.py", "grep.py", "ask_user.py"):
         (canonical / name).write_bytes(name.encode("utf-8"))
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -577,4 +577,5 @@ def test_frozen_build_reads_the_packaged_canonical_tree(tmp_path, monkeypatch):
         "edit.py": b"edit.py",
         "glob.py": b"glob.py",
         "grep.py": b"grep.py",
+        "ask_user.py": b"ask_user.py",
     }

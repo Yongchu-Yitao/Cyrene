@@ -17,12 +17,38 @@ from pathlib import Path
 STATE_KEY = "_task_contexts"
 SHARED_ID = "shared"
 TOOLS = frozenset({"load_context", "unload_context", "append_context", "replace_context"})
-PROMPT = """Manage independent tasks with the core context tools. The task_context_catalog
+PROMPT = """Task context management is part of doing the user's work, including text-only
+answers. Do it proactively; the user does not need to mention contexts or tools.
+Before acting on each new user request, silently choose its task context:
+- FIRST TASK: if no earlier user task has been performed in this conversation,
+  use the initial active context as-is. Never unload it to begin the first task.
+- CONTINUE: corrections, progress questions, and steps toward the same outcome
+  stay in the active context. Do not switch or call a context tool just to confirm
+  that nothing changed. An initially empty active context is ready for first use.
+- RESUME: when the request returns to an earlier task, find its exact ID in the
+  catalog. Unload a different active task, wait for success, then load that ID
+  before answering or reading its evidence. Remembering public dialogue or reading
+  the source file again does not activate the earlier task.
+- NEW: after an earlier task has actually been performed, a separately actionable
+  outcome unrelated to it needs a new context, even in the same project or when it
+  needs only a short written answer. Unload that earlier task before starting the
+  new one; if no task is active, just start work.
+  Do not treat every new request as a subtask merely because it is in this chat.
+For example, fixing a parser then testing that fix is CONTINUE; switching from
+invoice analysis to drafting a presentation is NEW; returning to the invoices is
+RESUME. Brief acknowledgments and clarifications do not create separate tasks.
+Perform required context transitions before task-specific tool calls, progress
+messages or final answers. Each context management call must be the only call in
+its response; wait for its result before any other tool or answer. Do not ask the
+user to manage context IDs or confirm
+routine switches. Reuse successful receipts on subsequent model/tool steps of the
+same request instead of redoing the transition.
+
+The task_context_catalog
 always lists every existing context ID, its last unload summary and active status.
 It is included in the request as data, not a tool: read the entry with active=true
 for the current ID. Successful tool receipts confirm completed edits; do not repeat
 them unless new information requires another edit.
-Continue the active context for corrections, progress questions and subtasks.
 Before starting an independent task, call unload_context(summary) alone. Supply a
 nonempty summary of at most 200 characters: unsaved progress, decisions, unfinished
 work and next action, with paths instead of source text. Wait for success. To
@@ -43,6 +69,13 @@ always loaded independently of the active task. Edit it with append_context or
 replace_context using context_id="shared"; never load or unload shared. Proactively
 record common goals, acceptance criteria, explicit cross-task constraints,
 interfaces/data formats and confirmed decisions needed by multiple contexts.
+Before completing a request, save any newly stated or changed cross-task agreement
+that is not already accurately represented in shared. An explicit agreement for
+all subsequent work applies even before a second task exists (for example, a
+conversation-wide language requirement). The user's explicit instruction is its
+source; record that source and scope. Merely following it in the current answer
+does not save it. Do not rewrite shared when there is no new shared information,
+and do not promote task-local output or uncertain inferences into shared.
 Read the relevant task bodies or evidence before promoting information: catalog
 summaries alone do not establish facts. Preserve source references and applicability
 (all contexts or the specific context IDs). Keep uncertain scope and local decisions

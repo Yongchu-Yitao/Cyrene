@@ -440,9 +440,88 @@ def test_prepare_openai_responses_request_converts_function_history_and_options(
             "type": "function",
             "name": "weather",
             "description": "Read the weather",
-            "parameters": TOOLS[0]["function"]["parameters"],
+            "parameters": {
+                **TOOLS[0]["function"]["parameters"],
+                "additionalProperties": False,
+            },
+            "strict": True,
         }
     ]
+
+
+def test_openai_responses_strict_schema_preserves_optional_plugin_fields() -> None:
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "write",
+            "description": "Write content",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string", "maxLength": 8000},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["overwrite", "append"],
+                        "default": "overwrite",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+    }]
+
+    request = prepare_request(
+        "openai_responses",
+        api_key="oa-key",
+        model="gpt-5",
+        messages=[{"role": "user", "content": "write"}],
+        tools=tools,
+        max_tokens=None,
+        stream=True,
+        response_format=None,
+    )
+
+    function = request.payload["tools"][0]
+    assert function["strict"] is True
+    assert function["parameters"]["required"] == ["path", "content", "mode"]
+    assert function["parameters"]["additionalProperties"] is False
+    assert function["parameters"]["properties"]["mode"] == {
+        "anyOf": [
+            {"type": "string", "enum": ["overwrite", "append"]},
+            {"type": "null"},
+        ]
+    }
+
+
+def test_openai_responses_omits_strict_for_freeform_object_schemas() -> None:
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "send_payload",
+            "description": "Send an arbitrary payload",
+            "parameters": {
+                "type": "object",
+                "properties": {"payload": {"type": "object"}},
+                "required": ["payload"],
+            },
+        },
+    }]
+
+    request = prepare_request(
+        "openai_responses",
+        api_key="oa-key",
+        model="gpt-5",
+        messages=[{"role": "user", "content": "send"}],
+        tools=tools,
+        max_tokens=None,
+        stream=True,
+        response_format=None,
+    )
+
+    function = request.payload["tools"][0]
+    assert "strict" not in function
+    assert function["parameters"] == tools[0]["function"]["parameters"]
 
 
 def test_prepare_gemini_request_converts_roles_images_tools_and_schema() -> None:
@@ -1060,7 +1139,41 @@ async def test_anthropic_sse_accepts_complete_usage_in_message_delta() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_responses_sse_uses_named_events_and_accumulates_tool_arguments() -> None:
+@pytest.mark.parametrize(
+    "finalization_events",
+    [
+        pytest.param(
+            [{
+                "type": "response.function_call_arguments.done",
+                "output_index": 1,
+                "item_id": "fc_1",
+                "arguments": '{"city":"Paris"}',
+            }],
+            id="arguments-done",
+        ),
+        pytest.param(
+            [{
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "weather",
+                    "arguments": '{"city":"Paris"}',
+                },
+            }],
+            id="output-item-done",
+        ),
+        pytest.param(
+            [],
+            id="response-completed",
+        ),
+    ],
+)
+async def test_openai_responses_sse_uses_authoritative_tool_arguments(
+    finalization_events: list[dict[str, object]],
+) -> None:
     events = [
         {"type": "response.output_text.delta", "output_index": 0, "delta": "Hel"},
         {"type": "response.output_text.delta", "output_index": 0, "delta": "lo"},
@@ -1069,11 +1182,26 @@ async def test_openai_responses_sse_uses_named_events_and_accumulates_tool_argum
             "output_index": 1,
             "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "weather", "arguments": ""},
         },
-        {"type": "response.function_call_arguments.delta", "output_index": 1, "item_id": "fc_1", "delta": '{"city"'},
-        {"type": "response.function_call_arguments.delta", "output_index": 1, "item_id": "fc_1", "delta": ':"Paris"}'},
+        {"type": "response.function_call_arguments.delta", "output_index": 1, "item_id": "fc_1", "delta": '{"city":'},
+        {"type": "response.function_call_arguments.delta", "output_index": 1, "item_id": "fc_1", "delta": '"Par'},
+        *finalization_events,
         {
             "type": "response.completed",
-            "response": {"status": "completed", "usage": {"input_tokens": 20, "output_tokens": 8, "total_tokens": 28}},
+            "response": {
+                "status": "completed",
+                "usage": {"input_tokens": 20, "output_tokens": 8, "total_tokens": 28},
+                "output": (
+                    [{
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "weather",
+                        "arguments": '{"city":"Paris"}',
+                    }]
+                    if not finalization_events
+                    else []
+                ),
+            },
         },
     ]
 

@@ -53,6 +53,7 @@ def test_catalog_core_tools_and_lazy_creation(tmp_path):
 
 def test_unload_clip_edit_any_context_and_idempotency(tmp_path):
     s = make_session(tmp_path)
+    replacement_body = "TASK_A_REPLACEMENT_EVIDENCE_82f1"
     try:
         a = s.task_contexts.ensure("a")
         summary = "首" * 220 + "尾" * 220
@@ -64,21 +65,21 @@ def test_unload_clip_edit_any_context_and_idempotency(tmp_path):
         command(s, "append_context", {"context_id": a, "content": "first"}, "append")
         command(s, "append_context", {"context_id": a, "content": "first"}, "append")
         assert s.task_contexts.read()["documents"][a]["body"] == "first"
-        command(s, "replace_context", {"context_id": a, "content": "changed"}, "replace")
+        command(s, "replace_context", {"context_id": a, "content": replacement_body}, "replace")
         assert s.task_contexts.read()["active"] == b
-        assert "changed" not in str(s._messages(s.tree.root_id))
+        assert replacement_body not in str(s._messages(s.tree.root_id))
         with pytest.raises(ValueError):
             command(s, "load_context", {"context_id": a}, "blocked")
         command(s, "unload_context", {"summary": "B paused"}, "unload-b")
         command(s, "load_context", {"context_id": a}, "load-a")
-        assert "changed" in str(s._messages(s.tree.root_id))
+        assert replacement_body in str(s._messages(s.tree.root_id))
         assert "revision" not in str(s.task_contexts.read())
     finally:
         s.close()
     reopened = make_session(tmp_path)
     try:
         assert reopened.task_contexts.read()["active"] == a
-        assert reopened.task_contexts.read()["documents"][a]["body"] == "changed"
+        assert reopened.task_contexts.read()["documents"][a]["body"] == replacement_body
     finally:
         reopened.close()
 

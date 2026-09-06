@@ -816,6 +816,10 @@ class ChatRun:
         """Project once, then deliver the same records to storage and clients."""
 
         value = dict(event)
+        execution_run_id = str(value.get("executionRunId") or value.get("runId") or "")
+        if execution_run_id:
+            value["executionRunId"] = execution_run_id
+        value["runId"] = self.run_id
         async with self._publish_lock:
             if value.get("type") == "chat_timing" and "serverElapsedMs" not in value:
                 value = self._timing_event(str(value.get("stage") or "unknown"),

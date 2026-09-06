@@ -8,11 +8,48 @@ import json
 from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
 from cyrene.plugins import ensure_model_router
 from cyrene.plugins.builtin.edit import plugin as edit_plugin
-from cyrene.plugins.tool_call_parsers import GENERIC_TOOL_CALL_PARSER
+from cyrene.plugins.tool_call_parsers import (
+    GENERIC_TOOL_CALL_PARSER,
+    _drop_optional_nulls,
+)
 
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+def test_strict_wire_nulls_are_removed_only_for_optional_fields() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "required_value": {"type": ["string", "null"]},
+            "optional_value": {"type": "string"},
+            "optional_nullable": {"type": ["string", "null"]},
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "keep": {"type": "string"},
+                    "drop": {"type": "string"},
+                },
+                "required": ["keep"],
+            },
+        },
+        "required": ["required_value"],
+    }
+
+    assert _drop_optional_nulls(
+        {
+            "required_value": None,
+            "optional_value": None,
+            "optional_nullable": None,
+            "nested": {"keep": "yes", "drop": None},
+        },
+        schema,
+    ) == {
+        "required_value": None,
+        "optional_nullable": None,
+        "nested": {"keep": "yes"},
+    }
 
 
 def _target_plugin(*, agent_exposure: str = "discoverable") -> Plugin:

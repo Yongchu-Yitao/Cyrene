@@ -13,6 +13,7 @@ import hashlib
 import json
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -397,6 +398,140 @@ def _tool_definitions(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]
     return result
 
 
+def _schema_accepts_null(schema: Mapping[str, Any]) -> bool:
+    expected = schema.get("type")
+    if expected == "null":
+        return True
+    if isinstance(expected, list) and "null" in expected:
+        return True
+    enum = schema.get("enum")
+    if isinstance(enum, list) and None in enum:
+        return True
+    for keyword in ("anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, list) and any(
+            isinstance(branch, Mapping) and _schema_accepts_null(branch)
+            for branch in branches
+        ):
+            return True
+    return False
+
+
+_OPENAI_STRICT_UNSUPPORTED_KEYWORDS = frozenset({
+    "allOf",
+    "contains",
+    "dependentRequired",
+    "dependentSchemas",
+    "else",
+    "if",
+    "maxContains",
+    "minContains",
+    "not",
+    "oneOf",
+    "patternProperties",
+    "propertyNames",
+    "then",
+    "unevaluatedProperties",
+})
+
+
+def _supports_openai_strict_schema(value: Any) -> bool:
+    """Return whether strict mode can preserve this schema's semantics."""
+
+    if isinstance(value, list):
+        return all(_supports_openai_strict_schema(item) for item in value)
+    if not isinstance(value, Mapping):
+        return True
+    if _OPENAI_STRICT_UNSUPPORTED_KEYWORDS.intersection(value):
+        return False
+    expected = value.get("type")
+    if expected == "object" or "properties" in value:
+        if not isinstance(value.get("properties"), Mapping):
+            return False
+        if (
+            "additionalProperties" in value
+            and value.get("additionalProperties") is not False
+        ):
+            return False
+    return all(_supports_openai_strict_schema(item) for item in value.values())
+
+
+def _openai_strict_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a strict-mode schema without changing the runtime contract.
+
+    OpenAI strict function tools require every object property to be listed in
+    ``required``. Preserve optional Plugin fields by making them nullable at
+    the wire boundary; the tool-call parser removes those synthetic nulls
+    before validating against the original Plugin schema.
+    """
+
+    result = {
+        str(key): deepcopy(value)
+        for key, value in schema.items()
+        if key != "default"
+    }
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        branches = result.get(keyword)
+        if isinstance(branches, list):
+            result[keyword] = [
+                _openai_strict_schema(branch)
+                if isinstance(branch, Mapping)
+                else deepcopy(branch)
+                for branch in branches
+            ]
+    for keyword in ("$defs", "definitions"):
+        definitions = result.get(keyword)
+        if isinstance(definitions, Mapping):
+            result[keyword] = {
+                str(name): _openai_strict_schema(value)
+                if isinstance(value, Mapping)
+                else deepcopy(value)
+                for name, value in definitions.items()
+            }
+    items = result.get("items")
+    if isinstance(items, Mapping):
+        result["items"] = _openai_strict_schema(items)
+
+    properties = result.get("properties")
+    if isinstance(properties, Mapping):
+        raw_required = result.get("required")
+        originally_required = {
+            str(name)
+            for name in (raw_required if isinstance(raw_required, list) else ())
+            if isinstance(name, str)
+        }
+        strict_properties: dict[str, Any] = {}
+        for raw_name, raw_schema in properties.items():
+            name = str(raw_name)
+            child = (
+                _openai_strict_schema(raw_schema)
+                if isinstance(raw_schema, Mapping)
+                else {}
+            )
+            if name not in originally_required and not _schema_accepts_null(child):
+                child = {"anyOf": [child, {"type": "null"}]}
+            strict_properties[name] = child
+        result["properties"] = strict_properties
+        result["required"] = list(strict_properties)
+        result["additionalProperties"] = False
+    return result
+
+
+def _openai_response_tool(item: Mapping[str, Any]) -> dict[str, Any]:
+    schema = item.get("parameters")
+    schema = schema if isinstance(schema, Mapping) else {}
+    result = {
+        "type": "function",
+        "name": str(item.get("name") or ""),
+        "description": str(item.get("description") or ""),
+        "parameters": deepcopy(schema),
+    }
+    if _supports_openai_strict_schema(schema):
+        result["parameters"] = _openai_strict_schema(schema)
+        result["strict"] = True
+    return result
+
+
 def _anthropic_content(content: Any) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [{"type": "text", "text": content}] if content else []
@@ -653,10 +788,7 @@ def prepare_request(
         if max_tokens is not None:
             payload["max_output_tokens"] = int(max_tokens)
         if tool_defs:
-            payload["tools"] = [
-                {"type": "function", "name": item["name"], "description": item["description"], "parameters": item["parameters"]}
-                for item in tool_defs
-            ]
+            payload["tools"] = [_openai_response_tool(item) for item in tool_defs]
             payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
         if response_format is not None:
             canonical_format = dict(response_format)
@@ -1230,6 +1362,23 @@ async def handle_stream(
                 elif event_type == "response.function_call_arguments.delta":
                     key = str(data.get("output_index") or 0)
                     tool_calls.setdefault(key, {"id": str(data.get("item_id") or f"call_{uuid.uuid4().hex}"), "name": str(data.get("name") or ""), "arguments": ""})["arguments"] += str(data.get("delta") or "")
+                elif event_type == "response.function_call_arguments.done":
+                    key = str(data.get("output_index") or 0)
+                    call = tool_calls.setdefault(key, {
+                        "id": str(data.get("item_id") or f"call_{uuid.uuid4().hex}"),
+                        "name": str(data.get("name") or ""),
+                        "arguments": "",
+                    })
+                    call["arguments"] = str(data.get("arguments") or "{}")
+                elif event_type == "response.output_item.done":
+                    item = data.get("item") if isinstance(data.get("item"), dict) else {}
+                    if item.get("type") == "function_call":
+                        key = str(data.get("output_index") or 0)
+                        tool_calls[key] = {
+                            "id": str(item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex}"),
+                            "name": str(item.get("name") or ""),
+                            "arguments": str(item.get("arguments") or "{}"),
+                        }
                 elif event_type == "response.completed":
                     stream_diagnostics["terminal_event_seen"] = True
                     completed = data.get("response") if isinstance(data.get("response"), dict) else {}
@@ -1238,7 +1387,20 @@ async def handle_stream(
                     completed_message = parse_response(adapter, completed)
                     for call in completed_message.get("tool_calls") or []:
                         call_id = str(call.get("id") or "")
-                        if not any(value.get("id") == call_id for value in tool_calls.values()):
+                        existing = next(
+                            (
+                                value
+                                for value in tool_calls.values()
+                                if value.get("id") == call_id
+                            ),
+                            None,
+                        )
+                        if existing is not None:
+                            existing.update({
+                                "name": str((call.get("function") or {}).get("name") or existing.get("name") or ""),
+                                "arguments": str((call.get("function") or {}).get("arguments") or "{}"),
+                            })
+                        else:
                             tool_calls[str(len(tool_calls))] = {
                                 "id": call_id,
                                 "name": str((call.get("function") or {}).get("name") or ""),

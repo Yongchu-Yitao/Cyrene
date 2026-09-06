@@ -808,6 +808,53 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
     return ()
 
 
+class _SessionEventStream:
+    """Capture a dedicated session's output before recovery starts executing.
+
+    One bridge operation exclusively owns this stream. Internal execution IDs
+    may change during drain; child trees and earlier replay are separate scopes.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._pending: list[AgentSessionEvent] = []
+        self._listener: Callable[[AgentSessionEvent], None] | None = None
+        self._closed = False
+
+    def receive(self, event: AgentSessionEvent) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            if self._listener is None:
+                self._pending.append(event)
+            else:
+                self._listener(event)
+
+    def bind(self, listener: Callable[[AgentSessionEvent], None], run_id: str) -> Callable[[], None]:
+        with self._lock:
+            if self._listener is not None or self._closed:
+                raise RuntimeError("Session event stream already owned or closed")
+            # Recovery observations precede the operation. Replay only its
+            # execution, never the run being superseded by a new user request.
+            pending, self._pending = self._pending, []
+            for event in pending:
+                if event.run_id == run_id:
+                    listener(event)
+            self._listener = listener
+
+        def unbind() -> None:
+            with self._lock:
+                self._listener = None
+
+        return unbind
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._listener = None
+            self._pending.clear()
+
+
 class _PublisherBinding:
     def __init__(
         self,
@@ -816,6 +863,7 @@ class _PublisherBinding:
         *,
         run_id: str,
         replay: bool,
+        event_stream: _SessionEventStream,
     ) -> None:
         self._session = session
         self._publish = publish
@@ -824,10 +872,11 @@ class _PublisherBinding:
         self._lock = threading.RLock()
         self._futures: list[Future[Any]] = []
         self._event_ids: set[str] = set()
-        self._unsubscribe = session.subscribe(self._receive)
+        self._unsubscribe = event_stream.bind(self._receive, self._run_id)
         if replay:
             for event in session.events():
-                self._receive(event)
+                if event.run_id == self._run_id:
+                    self._receive(event)
 
     async def _send(self, payload: dict[str, Any]) -> None:
         result = self._publish(payload)
@@ -835,7 +884,7 @@ class _PublisherBinding:
             await result
 
     def _receive(self, event: AgentSessionEvent) -> None:
-        if event.run_id != self._run_id:
+        if event.tree_id != self._session.tree.id:
             return
         driver = self._session.session_driver
         pending_driver = bool(
@@ -850,6 +899,7 @@ class _PublisherBinding:
         ):
             return
         for payload in workbench_events(event):
+            payload = {**payload, "runId": self._run_id, "executionRunId": event.run_id}
             event_id = str(payload.get("eventId") or "")
             with self._lock:
                 if event_id and event_id in self._event_ids:
@@ -887,8 +937,12 @@ class _PublisherBinding:
 class WorkbenchSessionBridge:
     """Drive one durable Agent tree from the ordinary Workbench Chat lifecycle."""
 
-    def __init__(self, session: AgentSession) -> None:
+    def __init__(self, session: AgentSession, *, event_stream: _SessionEventStream | None = None) -> None:
         self.session = session
+        self._event_stream = event_stream or _SessionEventStream()
+        self._unsubscribe_events = (
+            session.subscribe(self._event_stream.receive) if event_stream is None else None
+        )
 
     @classmethod
     def open(
@@ -920,6 +974,7 @@ class WorkbenchSessionBridge:
                     "Raw model protocol tracing is enabled; the dedicated "
                     "owner-only trace may contain private conversation content."
                 )
+        event_stream = _SessionEventStream()
         return cls(
             AgentSession(
                 data_directory,
@@ -935,7 +990,9 @@ class WorkbenchSessionBridge:
                 application_scope=application_scope,
                 max_model_calls=max_model_calls,
                 extra_direct_tool_names=extra_direct_tool_names,
-            )
+                event_listener=event_stream.receive,
+            ),
+            event_stream=event_stream,
         )
 
     def snapshot(self) -> dict[str, Any]:
@@ -1064,7 +1121,8 @@ class WorkbenchSessionBridge:
         cancel_on_caller_cancel: bool,
     ) -> WorkbenchChatResult:
         binding = (
-            _PublisherBinding(self.session, publish, run_id=run_id, replay=replay)
+            _PublisherBinding(self.session, publish, run_id=run_id, replay=replay,
+                              event_stream=self._event_stream)
             if publish is not None
             else None
         )
@@ -1101,6 +1159,7 @@ class WorkbenchSessionBridge:
                 publish,
                 run_id=normalized_run_id,
                 replay=False,
+                event_stream=self._event_stream,
             )
             if publish is not None
             else None
@@ -1191,6 +1250,7 @@ class WorkbenchSessionBridge:
                 publish,
                 run_id=run_id,
                 replay=False,
+                event_stream=self._event_stream,
             )
             if publish is not None
             else None
@@ -1243,6 +1303,9 @@ class WorkbenchSessionBridge:
 
     def close(self) -> None:
         self.session.close()
+        if self._unsubscribe_events is not None:
+            self._unsubscribe_events()
+        self._event_stream.close()
 
 
 __all__ = [

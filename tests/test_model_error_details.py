@@ -178,3 +178,50 @@ async def test_model_provider_exports_safe_stream_diagnostics(monkeypatch) -> No
         "stream_completed": False,
     }
     assert "must-not-leak" not in str(result.error_details)
+
+
+@pytest.mark.asyncio
+async def test_endpoint_aggregation_preserves_selected_stream_diagnostics(
+    monkeypatch,
+) -> None:
+    from cyrene.plugins.builtin.cyrene_model import _shared
+
+    diagnostics = {
+        "adapter": "anthropic",
+        "http_status": 200,
+        "termination_reason": "invalid_tool_arguments",
+        "tool_calls": [{
+            "index": "1",
+            "name": "Write",
+            "arguments_length": 10_049,
+            "arguments_validation": "invalid_json",
+        }],
+    }
+
+    async def fail_endpoint(**_kwargs):
+        raise ModelStreamError(
+            "invalid_tool_arguments",
+            "invalid tool arguments",
+            diagnostics,
+        )
+
+    monkeypatch.setattr(_shared, "_complete_stream_endpoint", fail_endpoint)
+    provider = _shared.ModelProvider(
+        id="test-provider",
+        name="Test Provider",
+        plugin_name="TestProvider",
+        adapter="anthropic",
+        default_base_url="https://provider.test/anthropic/v1",
+        default_model="test-model",
+        auth_type="none",
+    )
+
+    with pytest.raises(ModelCallError) as captured:
+        await _shared.complete_model(
+            {"messages": [{"role": "user", "content": "write a report"}]},
+            PluginContext(),
+            provider,
+        )
+
+    assert captured.value.details.retry_scope == "different_arguments"
+    assert captured.value.as_error_details()["stream_diagnostics"] == diagnostics

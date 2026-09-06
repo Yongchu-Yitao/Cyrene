@@ -18,7 +18,7 @@ from types import MappingProxyType
 
 logger = logging.getLogger(__name__)
 
-USER_STANDALONE_PLUGIN_NAMES = frozenset({"Glob", "Grep", "Edit"})
+USER_STANDALONE_PLUGIN_NAMES = frozenset({"Glob", "Grep", "Edit", "ask_user"})
 CORE_PLUGIN_NAMES = frozenset({"Bash", "Read", "Write"})
 
 _CANONICAL_PACKAGE = "cyrene.plugins.builtin"
@@ -111,7 +111,7 @@ def _collect_canonical_files() -> Mapping[str, bytes]:
     if not files:
         raise RuntimeError("canonical Plugin directory contains no seedable files")
     missing_standalone = sorted(
-        {"edit.py", "glob.py", "grep.py"} - files.keys()
+        {"edit.py", "glob.py", "grep.py", "ask_user.py"} - files.keys()
     )
     if missing_standalone:
         raise RuntimeError(

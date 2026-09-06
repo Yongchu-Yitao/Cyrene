@@ -881,6 +881,7 @@ async def complete_model(
 
     failures: list[str] = []
     public_failures: list[ModelErrorDetails] = []
+    failure_diagnostics: list[Mapping[str, Any] | None] = []
     retry_state: dict[str, int] = {}
     async with httpx.AsyncClient(
         **_client_options(context, provider, discovery=False)
@@ -901,6 +902,10 @@ async def complete_model(
                 )
             except Exception as exc:
                 public_failures.append(classify_model_error(exc))
+                diagnostics = getattr(exc, "diagnostics", None)
+                failure_diagnostics.append(
+                    dict(diagnostics) if isinstance(diagnostics, Mapping) else None
+                )
                 failures.append(
                     f"{endpoint}: {type(exc).__name__}: {exc!r}"
                 )
@@ -910,7 +915,16 @@ async def complete_model(
         provider.name,
         "; ".join(failures),
     )
-    raise ModelCallError(preferred_model_error(public_failures))
+    preferred = preferred_model_error(public_failures)
+    diagnostics = next(
+        (
+            failure_diagnostics[index]
+            for index, details in enumerate(public_failures)
+            if details is preferred
+        ),
+        None,
+    )
+    raise ModelCallError(preferred, diagnostics=diagnostics)
 
 
 def _normalize_embedding_vectors(

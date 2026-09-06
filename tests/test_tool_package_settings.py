@@ -110,7 +110,9 @@ def test_settings_api_exposes_registry_packs_and_standalone_plugins(monkeypatch,
     assert plugins["browser_navigate"]["pack_id"] == "cyrene_browser"
     assert plugins["browser_navigate"]["effective_enabled"] is False
     standalone = {item["name"] for item in payload["standalone_plugins"]}
-    assert {"Edit", "Glob", "Grep"} <= standalone
+    assert {"Edit", "Glob", "Grep", "ask_user"} <= standalone
+    assert plugins["ask_user"]["pack_id"] is None
+    assert plugins["ask_user"]["locked"] is False
 
 
 def test_settings_api_updates_package_atomically(monkeypatch, tmp_path):

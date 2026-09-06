@@ -16,6 +16,69 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
+def test_model_router_preserves_provider_stream_diagnostics(monkeypatch):
+    diagnostics = {
+        "adapter": "anthropic",
+        "http_status": 200,
+        "termination_reason": "invalid_tool_arguments",
+        "tool_calls": [{
+            "index": "1",
+            "name": "Write",
+            "arguments_length": 10_049,
+            "arguments_validation": "invalid_json",
+        }],
+    }
+
+    async def provider(_arguments, _context):
+        raise ModelCallError(
+            classify_model_error("invalid Provider Plugin result"),
+            diagnostics=diagnostics,
+        )
+
+    candidate = {
+        "id": "candidate-invalid",
+        "profile_id": "candidate-invalid",
+        "provider": "test_provider",
+        "adapter": "anthropic",
+        "model": "test-model",
+    }
+    monkeypatch.setattr(
+        model_router,
+        "configured_model_candidates",
+        lambda *_args, **_kwargs: [candidate],
+    )
+
+    async def ignore_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(model_router, "_publish_llm_event", ignore_event)
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(
+        Plugin(
+            name="TestProvider",
+            description="test provider",
+            input_schema={"type": "object"},
+            handler=provider,
+            kind="model",
+            metadata={"provider": {"id": "test_provider", "name": "Test"}},
+        ),
+        source="test",
+    )
+    ensure_model_router(registry)
+
+    result = run(
+        PluginRuntime(registry).call(
+            model_router.MODEL_ROUTER_PLUGIN,
+            {"messages": [{"role": "user", "content": "write"}]},
+            PluginContext(data={"session_id": "chat-invalid"}),
+        )
+    )
+
+    assert result.success is False
+    assert result.error_details["retry_scope"] == "different_arguments"
+    assert result.error_details["stream_diagnostics"] == diagnostics
+
+
 def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch):
     captured = {}
 

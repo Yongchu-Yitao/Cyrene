@@ -116,6 +116,13 @@ def _tool_call_correction_payload(
         validation = str(raw_call.get("arguments_validation") or "").strip()
         if validation in {"invalid_json", "not_object", "valid_object"}:
             call["arguments_validation"] = validation
+        arguments_length = raw_call.get("arguments_length")
+        if (
+            isinstance(arguments_length, int)
+            and not isinstance(arguments_length, bool)
+            and 0 <= arguments_length <= 10_000_000
+        ):
+            call["arguments_length"] = arguments_length
         if call:
             tool_calls.append(call)
         if len(tool_calls) >= 32:
@@ -138,6 +145,8 @@ def _tool_call_correction_payload(
             "instructions": [
                 "Regenerate every required tool call with complete JSON object arguments.",
                 "Match the available tool schema exactly.",
+                "Keep every string argument within its schema length limit.",
+                "For Write, send at most 8,000 content characters per call; overwrite the first chunk and append later chunks in separate tool-call turns.",
                 "Do not assume that any tool call from the rejected attempt ran.",
                 "Return corrected tool calls instead of merely explaining the error.",
             ],
@@ -346,6 +355,7 @@ class AgentSession:
         extra_direct_tool_names: Sequence[str] = (),
         load_plugins: bool = True,
         permission_user_request: str | None = None,
+        event_listener: AgentEventListener | None = None,
     ) -> None:
         self.data_directory = Path(data_directory).expanduser().resolve()
         self.plugin_directory = Path(plugin_directory).expanduser().resolve()
@@ -430,6 +440,8 @@ class AgentSession:
         self._event_lock = threading.RLock()
         self._event_sequence = 0
         self._event_listeners: dict[int, AgentEventListener] = {}
+        if event_listener is not None:
+            self._event_listeners[0] = event_listener
         self._next_event_listener_id = 1
         self._status = "idle"
         self._detail = _l("Ready", "就绪")
