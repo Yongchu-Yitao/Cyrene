@@ -2,6 +2,33 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta12] - 2026-09-06
+
+Beta12 improves image and screenshot handling, automatic vision-model recovery, and sidebar responsiveness in long Conversations. Image requests are no longer mistaken for exceeding a model's capacity because of their transfer size, and Cyrene can safely try a compatible model already selected for the current Conversation when the dedicated vision model is unavailable. Opening or closing the sidebar in a long chat now avoids repeatedly laying out unrelated history while preserving the reading position and browser picture-in-picture layout. Internal task-context saving and switching is also quieter and more accurate.
+
+### Images, screenshots, and vision models
+
+- When an image or screenshot is sent, Cyrene now judges the required capacity from the image's actual dimensions and the model's capabilities instead of treating its encoded transfer size as context usage. This reduces cases where an image that the model could handle was rejected before processing began.
+- If the configured vision model is unavailable, lacks capacity, returns no usable content, or fails while processing, Cyrene can automatically try a compatible image-capable model from the current Conversation instead of ending the entire task after one vision-model failure.
+- Automatic recovery prioritizes the primary model selected for the current Conversation and only considers candidates from the same model service that genuinely support images. Text-only models never receive the image, and existing model choices, service settings, and permissions are not changed.
+- Before trying a vision model, Cyrene accounts for the image, accompanying text, and room for the reply together. Candidates without enough capacity are skipped without preventing a larger compatible model from continuing, reducing futile retries with long prompts, multiple images, or high-resolution screenshots.
+- If no compatible model can safely handle the request, the Conversation still shows a clear failure reason instead of silently switching to a model outside the current settings or presenting an answer that appears successful without actually understanding the image.
+
+### Long Conversations, the sidebar, and browser picture-in-picture
+
+- In very long Conversations, history far outside the visible area no longer participates in every frame of layout work while the sidebar opens or closes. Sidebar motion, message-width changes, and composer movement are noticeably smoother.
+- Temporarily simplified history is restored as soon as the sidebar transition finishes, is canceled, times out, or the user starts scrolling or interacting with messages. Restoring it preserves the measured message heights and the previous reading position instead of jumping elsewhere.
+- Users following the newest reply remain at the live tail, while users reading earlier messages keep their current anchor. Selected text, active editors, retry controls, and messages that must avoid picture-in-picture remain fully usable throughout the sidebar transition.
+- When browser picture-in-picture is active, opening or closing the sidebar preserves the height and vertical position chosen by the user instead of resizing the window or making it drift as the Conversation is laid out again.
+- A hidden browser side card no longer continues pushing picture-in-picture away from its original position. After the full message layout is restored, Cyrene recalculates only the avoidance that is still needed so the picture-in-picture window neither covers messages nor leaves unnecessary empty space.
+
+### Task contexts and progress communication
+
+- Saving, loading, or pausing task contexts now stays quiet instead of proactively exposing internal identifiers, states, and housekeeping steps. Cyrene still provides those details when asked, and normal work progress updates remain visible.
+- Finishing work, reporting a result, waiting for the next step, or merely saving progress no longer causes the active task context to be unloaded for internal housekeeping, reducing pointless pauses and resumptions within the same task.
+- When resuming work, Cyrene matches the specific goal the user wants to complete instead of defaulting to the most recently saved material. Unrelated tasks and empty placeholder contexts are not loaded by mistake.
+- If an implementation task still needs to continue after research or an explanation, the Agent returns to that task for the remaining work. When the user explicitly asks to split work into separate tracks, each track keeps its own progress and material, while only genuinely shared agreements are carried across them.
+
 ## [0.9.0-beta11] - 2026-09-06
 
 Beta11 makes long Conversations, proactive background work, and recovery from model problems more stable and easier to understand. Streaming replies no longer make unrelated parts of the interface refresh repeatedly, and reasoning, tool activity, and final replies no longer reappear as duplicates after saving, recovery, or reconnection. Proactive work is limited to tasks the user explicitly recorded instead of guessing work from memories or old chats. When model output is truncated, incompletely received, or explicitly rejected by a provider, Cyrene now presents a more accurate cause and next step.
