@@ -16,7 +16,8 @@
   overflow: visible;
   width: calc(100% - var(--wbc-reclaimed-side-width));
   left: var(--wbc-conversation-shift);
-  transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), left 420ms cubic-bezier(.22, 1.24, .36, 1);
+  /* Follow the rail/grid timing so nested width compensation stays in phase. */
+  transition: width var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1)), left var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1));
   will-change: width, left;
 }
 
@@ -3592,7 +3593,7 @@ button.wbc-attach-file:focus-visible {
   box-sizing: border-box;
   width: calc(100% - var(--wbc-reclaimed-side-width));
   transform: translateX(var(--wbc-conversation-shift));
-  transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);
+  transition: width var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1)), transform var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1));
   will-change: width, transform;
   isolation: isolate;
   padding-bottom: 0;

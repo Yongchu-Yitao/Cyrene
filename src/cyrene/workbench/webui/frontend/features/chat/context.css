@@ -20,7 +20,7 @@
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 160ms ease, visibility 0s linear 420ms;
+  transition: opacity 160ms ease, visibility 0s linear var(--wb-sidebar-motion-duration, 500ms);
 }
 
 .wbc-panel-accordion-surface {

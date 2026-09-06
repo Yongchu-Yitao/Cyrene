@@ -1380,7 +1380,7 @@ function wbcSyncAgentCursorRunning(isRunning) {
   }
 }
 
-function useWbcConversationRuntime(composerChat, runtimeEngine) {
+function useWbcConversationRuntime(composerChat, runtimeEngine, summaryOnly = false) {
   var runtimeChatId = String(composerChat && composerChat.id || "");
   var [runtimeState, setRuntimeState] = useWbcState(function () {
     var initial = runtimeEngine && runtimeEngine.get ? runtimeEngine.get(runtimeChatId) : null;
@@ -1397,8 +1397,9 @@ function useWbcConversationRuntime(composerChat, runtimeEngine) {
       });
     }
     applyRuntimeSnapshot(runtimeEngine.snapshot());
-    return runtimeEngine.subscribe(applyRuntimeSnapshot);
-  }, [runtimeEngine, runtimeChatId]);
+    var subscribe = summaryOnly ? runtimeEngine.subscribeSummary : runtimeEngine.subscribe;
+    return subscribe(applyRuntimeSnapshot);
+  }, [runtimeEngine, runtimeChatId, summaryOnly]);
   return runtimeEngine && runtimeEngine.get
     ? (runtimeState.chatId === runtimeChatId ? runtimeState.value : runtimeEngine.get(runtimeChatId))
     : null;
@@ -1750,49 +1751,14 @@ function wbcRenderConversationTimeline(renderedHistory, runtime, onOpenFile, cha
   ]);
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, errorKind, onRetry, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
-  // The lightweight list item already contains every Composer preference.
-  // Keep using it while the full transcript hydrates so switching chats never
-  // paints a temporary "new chat" Composer with global/default settings.
-  var composerChat = chat || chatSummary || null;
+// Keep token-level state below the conversation shell. This fragment adds no
+// wrapper so thread-item observers and scroll anchoring keep their DOM contract.
+function WbcConversationMessages({ chat, composerChat, runtimeEngine, retryClearingMessageIds, onAnswer, onEditMessage, onOpenFile, onRetryMessage }) {
   var runtime = useWbcConversationRuntime(composerChat, runtimeEngine);
   var running = !!runtime;
-  var mainRef = useWbcRef(null);
-  var stageRef = useWbcRef(null);
-  var scrollRef = useWbcRef(null);
-  var selectionMenuRef = useWbcRef(null);
-  var stickRef = useWbcRef(true);
-  var lastObservedScrollTopRef = useWbcRef(null);
-  var [showScrollToBottom, setShowScrollToBottom] = useWbcState(false);
-  var [selectionMenu, setSelectionMenu] = useWbcState(null);
-  var [chatDropActive, setChatDropActive] = useWbcState(false);
-  var [browserSuppressedForSide, setBrowserSuppressedForSide] = useWbcState(false);
-  var avoidanceRafRef = useWbcRef(0);
-  var stickyRestoreRafRef = useWbcRef(0);
-  var traceDisclosureRafRef = useWbcRef(0);
-  var avoidanceScrollingRef = useWbcRef(false);
-  var avoidanceScrollTimerRef = useWbcRef(null);
-  // ResizeObserver reports the height changes caused by our own PiP lane
-  // classes. Treating those reports like fresh external layout changes creates
-  // a remove/re-add/restore loop which is especially visible at scrollTop=0.
-  var avoidanceApplyingRef = useWbcRef(false);
-  var avoidanceApplyingRafRef = useWbcRef(0);
-
-  useWbcEffect(function () {
-    wbcSyncAgentCursorRunning(running === true);
-  }, [running]);
-
-  useWbcEffect(function () {
-    return function () {
-      wbcSyncAgentCursorRunning(false);
-    };
-  }, []);
   var projection = useWbcConversationProjection(chat, runtime, retryClearingMessageIds);
   var messages = projection.messages;
   var retryClearingIds = projection.retryClearingIds;
-  var runtimeFinalizing = projection.runtimeFinalizing;
-  var latestAssistantReplyId = projection.latestAssistantReplyId;
-  var latestAssistantReplyText = projection.latestAssistantReplyText;
   var displayMessages = projection.displayMessages;
   var activityTraceKeys = projection.activityTraceKeys;
   var lastAssistantId = projection.lastAssistantId;
@@ -1844,6 +1810,57 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
     });
   }, [messages, pendingQuestionId]);
 
+  return <React.Fragment>
+    {renderedTimeline}
+    {chat && chat.pendingQuestion && chat.pendingQuestion.id && (!runtime || wbcIsLiveAgentRequest(chat.pendingQuestion)) && !pendingQuestionInTimeline && (
+      <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} /></WbcThreadItem>
+    )}
+  </React.Fragment>;
+}
+
+function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, errorKind, onRetry, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onRetryClearAnimationEnd, retryClearingMessageIds, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onOpenFile, onOpenDroppedChat, sideVisible, sidePanelTabExpanded, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete, splitOpen, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail, horizontalSessionWheelGesture }) {
+  // The lightweight list item already contains every Composer preference.
+  // Keep using it while the full transcript hydrates so switching chats never
+  // paints a temporary "new chat" Composer with global/default settings.
+  var composerChat = chat || chatSummary || null;
+  // Composer, browser surfaces and layout only observe semantic transitions.
+  var runtime = useWbcConversationRuntime(composerChat, runtimeEngine, true);
+  var running = !!runtime;
+  var mainRef = useWbcRef(null);
+  var stageRef = useWbcRef(null);
+  var scrollRef = useWbcRef(null);
+  var selectionMenuRef = useWbcRef(null);
+  var stickRef = useWbcRef(true);
+  var lastObservedScrollTopRef = useWbcRef(null);
+  var [showScrollToBottom, setShowScrollToBottom] = useWbcState(false);
+  var [selectionMenu, setSelectionMenu] = useWbcState(null);
+  var [chatDropActive, setChatDropActive] = useWbcState(false);
+  var [browserSuppressedForSide, setBrowserSuppressedForSide] = useWbcState(false);
+  var avoidanceRafRef = useWbcRef(0);
+  var stickyRestoreRafRef = useWbcRef(0);
+  var traceDisclosureRafRef = useWbcRef(0);
+  var avoidanceScrollingRef = useWbcRef(false);
+  var avoidanceScrollTimerRef = useWbcRef(null);
+  // ResizeObserver reports the height changes caused by our own PiP lane
+  // classes. Treating those reports like fresh external layout changes creates
+  // a remove/re-add/restore loop which is especially visible at scrollTop=0.
+  var avoidanceApplyingRef = useWbcRef(false);
+  var avoidanceApplyingRafRef = useWbcRef(0);
+
+  useWbcEffect(function () {
+    wbcSyncAgentCursorRunning(running === true);
+  }, [running]);
+
+  useWbcEffect(function () {
+    return function () {
+      wbcSyncAgentCursorRunning(false);
+    };
+  }, []);
+  var projection = useWbcConversationProjection(chat, runtime, retryClearingMessageIds);
+  var messages = projection.messages;
+  var latestAssistantReplyId = projection.latestAssistantReplyId;
+  var latestAssistantReplyText = projection.latestAssistantReplyText;
+
   useWbcComposerReserveHeight(mainRef, chat && chat.id);
 
   // Expanded side-panel content owns the whole right-side corridor below the
@@ -1884,6 +1901,14 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
     var stage = stageRef.current;
     var thread = scrollRef.current;
     if (!stage || !thread) return;
+    var browserWindow = stage.querySelector(".wbc-browser-window.pip")
+      || stage.querySelector(".wbc-browser-restore-float");
+    var avoidedItems = thread.querySelectorAll(":scope > [data-wbc-thread-item]:is(.wbc-browser-avoid-left, .wbc-browser-avoid-right)");
+    // Sidebar transitions resize the stage every frame. Without a PiP or a
+    // lane left to clear, there is no avoidance work: do not enumerate the
+    // transcript, touch its styles, or force layout through scroll metrics.
+    // The resize observers independently preserve the live-tail position.
+    if (!browserWindow && !avoidedItems.length) return;
     var items = Array.prototype.slice.call(thread.querySelectorAll(":scope > [data-wbc-thread-item]"));
     if (!items.length) return;
     avoidanceApplyingRef.current = true;
@@ -1919,15 +1944,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       }
     }
 
-    items.forEach(function (item) {
+    avoidedItems.forEach(function (item) {
       item.classList.remove("wbc-browser-avoid-left", "wbc-browser-avoid-right");
       item.style.removeProperty("--wbc-browser-avoid-start");
       item.style.removeProperty("--wbc-browser-avoid-end");
     });
     restoreViewport();
 
-    var browserWindow = stage.querySelector(".wbc-browser-window.pip")
-      || stage.querySelector(".wbc-browser-restore-float");
     if (!browserWindow) return;
     var browserRect = browserWindow.getBoundingClientRect();
     var threadRect = thread.getBoundingClientRect();
@@ -2334,10 +2357,16 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
             <p>{wbcT("workbenchChat.emptyBody", "Conversations are bound to the current workspace, so the agent can read and work with project context.")}</p>
           </div>
         )}
-        {renderedTimeline}
-        {chat && chat.pendingQuestion && chat.pendingQuestion.id && (!runtime || wbcIsLiveAgentRequest(chat.pendingQuestion)) && !pendingQuestionInTimeline && (
-          <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running && !wbcIsLiveAgentRequest(chat.pendingQuestion)} /></WbcThreadItem>
-        )}
+        <WbcConversationMessages
+          chat={chat}
+          composerChat={composerChat}
+          runtimeEngine={runtimeEngine}
+          retryClearingMessageIds={retryClearingMessageIds}
+          onAnswer={onAnswer}
+          onEditMessage={onEditMessage}
+          onOpenFile={onOpenFile}
+          onRetryMessage={onRetryMessage}
+        />
       </div>
       <WbcConversationNavigator threadRef={scrollRef} chatId={chat && chat.id} messagesRevision={projection.durableMessages} />
       {selectionMenuPortal}

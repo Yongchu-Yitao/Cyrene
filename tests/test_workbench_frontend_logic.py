@@ -1030,9 +1030,9 @@ def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane()
     for lane_css in (stage_css, dock_css):
         assert "width: calc(100% - var(--wbc-reclaimed-side-width));" in lane_css
     assert "left: var(--wbc-conversation-shift);" in stage_css
-    assert "transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), left 420ms cubic-bezier(.22, 1.24, .36, 1);" in stage_css
+    assert "transition: width var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1)), left var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1));" in stage_css
     assert "transform: translateX(var(--wbc-conversation-shift));" in dock_css
-    assert "transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);" in dock_css
+    assert "transition: width var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1)), transform var(--wb-sidebar-motion-duration, 500ms) var(--wb-sidebar-motion-ease, cubic-bezier(.22, 1.16, .36, 1));" in dock_css
 
     compact_css = styles.split("@media (max-width: 980px) {", 1)[1].split("}", 3)
     assert any("--wbc-reclaimed-side-width: 0px;" in block for block in compact_css)
@@ -3711,7 +3711,8 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     )[0]
     assert "runtimeEngine.subscribeSummary(applyRuntimeSnapshot)" in page
     assert "runtimeEngine.subscribe(applyRuntimeSnapshot)" not in page
-    assert "runtimeEngine.subscribe(applyRuntimeSnapshot)" in runtime_hook
+    assert "summaryOnly ? runtimeEngine.subscribeSummary : runtimeEngine.subscribe" in runtime_hook
+    assert "return subscribe(applyRuntimeSnapshot);" in runtime_hook
     assert "var running = !!runtime;" in main
     main_props = page.split("<WbcMain", 1)[1].split("/>", 1)[0]
     assert "runtimeEngine={runtimeEngine}" in main_props
@@ -4389,6 +4390,77 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     assert "padding-inline-end: var(--wbc-browser-avoid-end, 0px);" in thread_item_styles
     assert ".wbc-thread-item > .wbc-msg.user" in styles
     assert ".wbc-thread-item > .wbc-msg.assistant" in styles
+
+
+def test_browser_avoidance_skips_idle_transcripts_and_clears_stale_lanes():
+    source = frontend_module_source("features/chat/conversation.jsx")
+    callback = source.split(
+        "var applyBrowserAvoidance = useWbcCallback(", 1
+    )[1].split(
+        ", [scheduleStickyViewportRestore]);", 1
+    )[0]
+    script = r"""
+const assert = require('node:assert/strict');
+let browser = null, allReads = 0, writes = 0, frames = 0, scrollWrites = 0;
+let scrollTop = 20;
+function item(avoided) {
+  return {
+    avoided, isConnected: true, offsetTop: 0, offsetHeight: 100,
+    classList: { remove() { writes++; this.owner.avoided = false; } },
+    style: { removeProperty() { writes++; } },
+  };
+}
+const clean = item(false), stale = item(false);
+for (const row of [clean, stale]) row.classList.owner = row;
+const stageRef = { current: { querySelector() { return browser; } } };
+const thread = {
+  querySelectorAll(selector) {
+    if (selector.includes(':is(')) return [clean, stale].filter(row => row.avoided);
+    allReads++;
+    return [clean, stale];
+  },
+  get scrollTop() { return scrollTop; },
+  set scrollTop(value) { scrollWrites++; scrollTop = value; },
+  get scrollHeight() { return 300; },
+  getBoundingClientRect() { return { left: 0, top: 0 }; },
+  clientWidth: 800,
+};
+const scrollRef = { current: thread }, stickRef = { current: false };
+const avoidanceApplyingRef = { current: false }, avoidanceApplyingRafRef = { current: 0 };
+function requestAnimationFrame() { return ++frames; }
+function cancelAnimationFrame() {}
+function scheduleStickyViewportRestore() {}
+function getComputedStyle() { return { paddingLeft: '0', paddingRight: '0' }; }
+function wbcBrowserAvoidancePlan() { return null; }
+const apply = CALLBACK;
+// Repeated sidebar resize frames on an ordinary transcript do no layout work.
+for (let i = 0; i < 30; i++) apply(true);
+assert.equal(allReads, 0);
+assert.equal(writes, 0);
+assert.equal(frames, 0);
+assert.equal(scrollWrites, 0);
+// Closing a PiP still clears its old lane and preserves the reading anchor.
+stale.avoided = true;
+apply(true);
+assert.equal(stale.avoided, false);
+assert.equal(writes, 3);
+assert.equal(scrollTop, 20);
+assert.equal(allReads, 1);
+apply(true);
+assert.equal(allReads, 1);
+assert.equal(writes, 3);
+// The live tail is restored when a stale lane is cleared as well.
+stickRef.current = true;
+stale.avoided = true;
+apply(true);
+assert.equal(scrollTop, 300);
+// An actual PiP still enters the existing layout path.
+browser = { getBoundingClientRect() { return { left: 600, width: 200 }; } };
+apply(true);
+assert.equal(allReads, 3);
+assert.equal(writes, 6);
+""".replace("CALLBACK", callback)
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
 
 
 def test_active_browser_tab_uses_standard_text_color():

@@ -911,7 +911,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   var [quickRenameChat, setQuickRenameChat] = useWbcState(null);
   // Streaming runtimes live in the module-level engine so a run survives this
   // page unmounting when the user switches modules mid-reply. The page only
-  // observes semantic runtime changes for the side panel and rail; WbcMain
+  // observes semantic runtime changes for the side panel and rail; the message list
   // subscribes to token-level updates locally so a delta cannot repaint the
   // page layout or its sibling panes.
   var runtimeEngine = WorkbenchChatRuntimes;
