@@ -53,6 +53,11 @@
 
   function showToast(message, type, options) {
     var opts = options || {};
+    if (type === "error" && typeof opts.onAction !== "function") {
+      opts = Object.assign({}, opts, { actionLabel: text("doctor.title", "Cyrene Doctor"), onAction: function () {
+        root.dispatchEvent(new CustomEvent("cyrene:diagnose-error"));
+      } });
+    }
     var toastKey = opts.key == null ? "" : String(opts.key);
     var existing = toastKey
       ? toasts.find(function (toast) { return toast.key === toastKey; })

@@ -585,7 +585,7 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     startupErrorPackagedDetail: 'The application may be corrupted. Please reinstall.',
     backendErrorTitle: 'Cyrene - Backend Error',
     backendErrorMessage: 'The Python backend stopped unexpectedly (exit code {code}).',
-    backendErrorClose: 'The application will now close.',
+    backendErrorClose: 'Cyrene Doctor can inspect this startup failure.',
     backendErrorLog: 'If this keeps happening, check cyrene_error.log in {path}',
     startupTimeoutTitle: 'Cyrene - Startup Timeout',
     startupTimeoutMessage: 'The Python backend did not start within {seconds} seconds.',
@@ -641,7 +641,7 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
     startupErrorPackagedDetail: '应用可能已损坏，请重新安装。',
     backendErrorTitle: 'Cyrene - 后端错误',
     backendErrorMessage: 'Python 后端意外停止（退出代码 {code}）。',
-    backendErrorClose: '应用即将关闭。',
+    backendErrorClose: '可以使用 Cyrene Doctor 检查本次启动故障。',
     backendErrorLog: '如果问题反复出现，请检查 {path} 中的 cyrene_error.log。',
     startupTimeoutTitle: 'Cyrene - 启动超时',
     startupTimeoutMessage: 'Python 后端未能在 {seconds} 秒内启动。',
@@ -5964,6 +5964,34 @@ function getCurrentAppExecutablePath() {
   return app.getPath('exe');
 }
 
+let doctorRecoveryWindow = null;
+let doctorBackendCommand = null;
+let doctorRecoveryHandlers = false;
+function showDoctorRecovery() {
+  if (doctorRecoveryWindow && !doctorRecoveryWindow.isDestroyed()) { doctorRecoveryWindow.show(); return; }
+  if (!doctorRecoveryHandlers) {
+    doctorRecoveryHandlers = true;
+    const authorized = event => doctorRecoveryWindow && !doctorRecoveryWindow.isDestroyed() && event.sender === doctorRecoveryWindow.webContents;
+    ipcMain.handle('doctor-recovery-inspect', async event => {
+      if (!authorized(event)) throw new Error('Unauthorized recovery request');
+      if (!doctorBackendCommand) return { status: 'unavailable', reason: 'python_unavailable' };
+      const { runOfflineDoctor } = require('./doctor-recovery');
+      return runOfflineDoctor(doctorBackendCommand.command, doctorBackendCommand.args, doctorBackendCommand.options);
+    });
+    ipcMain.handle('doctor-recovery-retry', event => {
+      if (!authorized(event)) throw new Error('Unauthorized recovery request');
+      app.relaunch(); app.quit();
+    });
+  }
+  doctorRecoveryWindow = new BrowserWindow({ width: 820, height: 700, title: 'Cyrene Doctor', webPreferences: {
+    preload: path.join(__dirname, 'doctor-recovery-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true,
+  } });
+  doctorRecoveryWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  doctorRecoveryWindow.webContents.on('will-navigate', event => event.preventDefault());
+  doctorRecoveryWindow.on('closed', () => { doctorRecoveryWindow = null; });
+  doctorRecoveryWindow.loadFile(path.join(__dirname, 'doctor-recovery.html'));
+}
+
 function spawnPython() {
   if (pythonProcess) return;
   clearCliConnection();
@@ -6012,6 +6040,7 @@ function spawnPython() {
     childEnv.CYRENE_INSTALL_RESOURCES_DIR = process.resourcesPath;
   }
 
+  doctorBackendCommand = { command: binaryPath || 'python3', args, options: { cwd, env: childEnv } };
   if (binaryPath) {
     pythonProcess = spawn(binaryPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -6063,7 +6092,7 @@ function spawnPython() {
     );
     backendPortWaiters.resolveAll(null);
     backendPort = null;
-    app.quit();
+    showDoctorRecovery();
   });
 
   pythonProcess.on('exit', (code) => {
@@ -6086,7 +6115,7 @@ function spawnPython() {
     } else if (isShuttingDown) {
       // Normal shutdown — Python handled SIGTERM gracefully and exited with
       // code 0.  Don't scare the user with a crash dialog.
-      app.quit();
+      if (!doctorRecoveryWindow || doctorRecoveryWindow.isDestroyed()) app.quit();
     } else {
       // Show error regardless of window state — if Python crashed before
       // printing PORT= the window doesn't exist yet and the user would see
@@ -6098,7 +6127,7 @@ function spawnPython() {
         + `${desktopT('backendErrorClose', settings)}\n\n`
         + desktopFormat('backendErrorLog', settings, { path: getCyreneTempDir() })
       );
-      app.quit();
+      showDoctorRecovery();
     }
   });
 }
@@ -7335,8 +7364,8 @@ async function resolveMainWindowBackendPort() {
       `${desktopFormat('startupTimeoutMessage', settings, { seconds: backendStartupTimeoutMs / 1000 })}\n\n`
       + desktopFormat('startupTimeoutLog', settings, { path: getCyreneTempDir() })
     );
+    showDoctorRecovery();
     killPython();
-    app.quit();
     return null;
   }
 }

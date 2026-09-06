@@ -60,7 +60,7 @@ class ModelCallError(RuntimeError):
     ) -> None:
         super().__init__(details.message_en)
         self.details = details
-        self.diagnostics = _public_stream_diagnostics(diagnostics)
+        self.diagnostics = public_stream_diagnostics(diagnostics)
 
     def as_error_details(self) -> dict[str, Any]:
         result = self.details.as_dict()
@@ -94,7 +94,7 @@ _PUBLIC_TOOL_DIAGNOSTIC_FIELDS = frozenset({
 })
 
 
-def _public_stream_diagnostics(value: Any) -> dict[str, Any]:
+def public_stream_diagnostics(value: Any) -> dict[str, Any]:
     """Keep only content-free protocol evidence at public boundaries."""
 
     if not isinstance(value, Mapping):

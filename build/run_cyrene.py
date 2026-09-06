@@ -360,6 +360,10 @@ if __name__ == "__main__":
         _run_terminal_daemon()
         raise SystemExit(0)
 
+    if sys.argv[1:2] == ["doctor"]:
+        from cyrene.platform.doctor.cli import main as _doctor_main
+        raise SystemExit(_doctor_main(sys.argv[2:]))
+
     if "--launch-web" in sys.argv:
         sys.argv.remove("--launch-web")
         if "--electron" in sys.argv:

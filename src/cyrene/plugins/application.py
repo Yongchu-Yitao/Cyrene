@@ -168,13 +168,18 @@ class PluginApplicationHost:
 
     async def reload_user_plugins(
         self,
+        *,
+        seed: bool = True,
     ) -> tuple[BuiltinPluginSeedResult, tuple[PluginLoadFailure, ...]]:
         """Refresh contributions and immediately reconcile process lifecycle."""
 
         seed_error: Exception | None = None
         seeded: BuiltinPluginSeedResult | None = None
         try:
-            seeded = seed_builtin_plugin_directory(self.plugin_directory)
+            seeded = seed_builtin_plugin_directory(self.plugin_directory) if seed else BuiltinPluginSeedResult(
+                directory=self.plugin_directory, created=(), updated=(), existing=(),
+                manifest=self.plugin_directory / ".upstream-hashes.json",
+            )
         except Exception as exc:
             seed_error = exc
         try:

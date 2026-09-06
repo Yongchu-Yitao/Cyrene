@@ -117,6 +117,8 @@ class ChatRunLifecycleApplicationService:
             await asyncio.to_thread(request.restore_retry_state)
             raise
         except Exception as exc:
+            from cyrene.platform.doctor.repository import record_runtime_incident
+            record_runtime_incident(exc, chat_id=request.chat_id, project_id=request.project_id, run_id=run.run_id)
             logger.exception("Workbench chat run failed for %s", request.chat_id)
             await self._finalize_workspace(request, run, before, "error")
             await asyncio.to_thread(request.restore_retry_state)
@@ -258,6 +260,8 @@ class ChatRunLifecycleApplicationService:
         exc: Exception,
     ) -> None:
         logger.exception("Workbench chat streaming run failed for %s", request.chat_id)
+        from cyrene.platform.doctor.repository import record_runtime_incident
+        record_runtime_incident(exc, chat_id=request.chat_id, project_id=request.project_id, run_id=run.run_id)
         await self._finalize_workspace(request, run, before, "error")
         await asyncio.to_thread(request.restore_retry_state)
         run.outcome = {"kind": "error", "exc": exc}

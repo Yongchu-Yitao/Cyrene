@@ -15,6 +15,7 @@ const TABLER_ICONS_DIR = resolve(__dirname, 'node_modules/@tabler/icons/icons/ou
 const SIMPLE_ICONS_DIR = resolve(__dirname, 'node_modules/simple-icons/icons')
 const LOBE_ICONS_DIR = resolve(__dirname, 'node_modules/@lobehub/icons-static-svg/icons')
 const SETTINGS_ICON_FILES = [
+  'stethoscope.svg',
   'user.svg',
   'settings.svg',
   'palette.svg',

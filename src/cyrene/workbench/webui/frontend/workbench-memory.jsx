@@ -1,4 +1,5 @@
 import { workbenchServices } from "./shared/runtime/services.jsx"
+import { openDoctor } from "./features/doctor/doctor.jsx"
 import { createPendingMemorySelection } from "./shared/runtime/pending-module-selection.jsx"
 // Workbench Memory page.
 //
@@ -686,7 +687,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
       return learningPanelShell(t("memory.learning.skillDetails", "Skill details"),
         !skill ? h("div", { className: "wb-mem-detail-scroll" },
           h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSkillSelected", "Select a learned skill to inspect.")),
-          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)))
+          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t), h("button", { type: "button", className: "wb-btn ghost", onClick: learning.diagnose }, t("doctor.title"))))
           : h("div", { className: "wb-mem-detail-scroll" },
             h("header", { className: "wb-mem-skill-hero" },
               h("span", { className: "wb-mem-ico blue" }, ICON.learning(17)),
@@ -753,7 +754,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
                     h("em", null, t("memory.learning.copy", "Copy")))));
             })()),
         skill && (learning.error || learning.note) ? h("div", { className: "wb-mem-detail-action-bar" },
-          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
+          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t), h("button", { type: "button", className: "wb-btn ghost", onClick: learning.diagnose }, t("doctor.title"))),
           learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)) : null);
     }
     if (detailKind === "candidate") {
@@ -801,7 +802,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
               h("h3", null, t("memory.learning.parameterizedScript", "Parameterized tool script")),
               h("pre", { className: "wb-learning-script-json" }, JSON.stringify(candidateScript, null, 2))) : null),
         candidate && (learning.error || learning.note) ? h("div", { className: "wb-mem-detail-action-bar" },
-          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
+          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t), h("button", { type: "button", className: "wb-btn ghost", onClick: learning.diagnose }, t("doctor.title"))),
           learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)) : null);
     }
 
@@ -812,7 +813,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
           : hasChains
             ? t("memory.learning.selectRound", "Select a round to inspect.")
             : t("memory.learning.noLearnableRounds", "No learnable rounds yet.")),
-        learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)))
+        learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t), h("button", { type: "button", className: "wb-btn ghost", onClick: learning.diagnose }, t("doctor.title"))))
         : h("div", { className: "wb-mem-detail-scroll" },
         h("header", { className: "wb-mem-skill-hero wb-mem-chain-hero" },
           h("span", { className: "wb-mem-ico violet" }, ICON.learning(17)),
@@ -885,7 +886,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
         chainCandidate ? h("div", { className: "wb-replay-section" },
           h("h3", null, t("memory.learning.nextStep", "Next step")),
           h("p", null, candidateNextStepText(chainCandidate, t))) : null,
-        learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
+        learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t), h("button", { type: "button", className: "wb-btn ghost", onClick: learning.diagnose }, t("doctor.title"))),
         learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)),
       null);
   }
@@ -930,7 +931,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
           }) : h("option", { value: "" }, t("memory.learning.noSession", "No session"))))),
       h("div", { className: "wb-mem-list-col" },
         h("div", { className: "wb-mem-scroll wb-learning-list-scroll" },
-          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
+          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t), h("button", { type: "button", className: "wb-btn ghost", onClick: learning.diagnose }, t("doctor.title"))),
           learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note),
           pendingCandidates.length ? h("section", { className: "wb-learning-list-section candidates" },
             h("div", { className: "wb-learning-side-head" },
@@ -1519,6 +1520,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
       loading: learningLoading,
       busy: learningBusy,
       error: learningError,
+      diagnose: function () { openDoctor({ project_id: learningProject }); },
       note: learningNote,
       load: loadLearning,
       runAction: runLearningAction,
@@ -1553,6 +1555,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
       onExit: function () { setActivePanel(""); },
     }) : h("div", { className: "wb-mem-main" },
       h("div", { className: "wb-workbench-filterbar wb-mem-toolbar" },
+        h("button", { type: "button", className: "wb-btn ghost", onClick: function () { openDoctor({ project_id: learningProject }); } }, t("doctor.title")),
         h("div", { className: "wb-workbench-searchbox wb-mem-searchbox" },
           svg({ width: 15, height: 15, strokeWidth: 1.9 }, h("circle", { cx: 11, cy: 11, r: 7 }), h("path", { d: "m20 20-3.2-3.2" })),
           h("input", { type: "text", placeholder: t("memory.searchPlaceholder", "Search memory…"), value: query, onChange: function (e) { setQuery(e.target.value); } })),
@@ -1560,7 +1563,7 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
           dropdown("type", curLabel(typeOptions, activeCat), typeOptions, activeCat, function (value) { setActivePanel(""); setActiveCat(value); }),
           dropdown("source", curLabel(sourceOptions, sourceFilter), sourceOptions, sourceFilter, setSourceFilter),
           dropdown("sort", curLabel(sortOptions, sortKey), sortOptions, sortKey, setSortKey))),
-      error && h("div", { className: "wb-mem-error" }, error),
+      error && h("div", { className: "wb-mem-error" }, error, h("button", { type: "button", className: "wb-btn ghost", onClick: function () { openDoctor({ project_id: learningProject }); } }, t("doctor.title"))),
       h("div", { className: "wb-mem-list-col" },
         h("div", { className: "wb-mem-scroll" },
           loading

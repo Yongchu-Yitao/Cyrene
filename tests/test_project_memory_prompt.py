@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from types import SimpleNamespace
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -19,6 +20,40 @@ class _MemoryGateway:
 
     async def complete(self, messages, **kwargs):
         return await self.handler(messages, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_doctor_retries_only_selected_failed_job(monkeypatch):
+    snapshot = {"projectId": "project-a", "chatId": "chat-a", "roundId": "run-a", "treeId": "chat-a", "treeNodeId": "node-a", "contextHash": "hash-a", "messages": [{"role": "user", "content": "Project uses Python"}]}
+    memory_prompt._save_context_snapshot("chat-a", snapshot)
+    first, _ = memory_prompt._append_job("project-a", snapshot, "manual", "test")
+    memory_prompt._update_job("project-a", first["id"], status="failed")
+    second, _ = memory_prompt._append_job("project-a", {**snapshot, "roundId": "other"}, "manual", "other")
+    memory_prompt._update_job("project-a", second["id"], status="failed")
+    async def learn(actual, current, **_kwargs):
+        assert actual["roundId"] == "run-a"
+        return "Project uses Python.", "Saved project language.", {"model": "test"}
+    monkeypatch.setattr(memory_prompt, "_learn_prompt", learn)
+    app = memory_prompt.ProjectMemoryApplicationService("", memory_prompt.ProjectQueryPort(lambda _: {"id": "project-a"}),
+        SimpleNamespace(get=lambda _: {"projectId": "project-a"}), None, model_gateway=None)
+    result = await app.retry_job("project-a", first["id"])
+    assert result["status"] == "saved"
+    jobs = memory_prompt._load_prompt_document("project-a")["jobs"]
+    assert next(j for j in jobs if j["id"] == second["id"])["status"] == "failed"
+    with pytest.raises(ValueError, match="Only a failed"):
+        await app.retry_job("project-a", first["id"])
+
+
+@pytest.mark.asyncio
+async def test_doctor_does_not_use_a_newer_learning_snapshot():
+    snapshot = {"chatId": "chat-a", "roundId": "run-a", "contextHash": "a", "treeNodeId": "node-a", "messages": [{"role": "user", "content": "old evidence"}]}
+    job, _ = memory_prompt._append_job("project-a", snapshot, "manual", "test")
+    memory_prompt._update_job("project-a", job["id"], status="failed")
+    memory_prompt._save_context_snapshot("chat-a", {**snapshot, "roundId": "run-b"})
+    app = memory_prompt.ProjectMemoryApplicationService("", memory_prompt.ProjectQueryPort(lambda _: {"id": "project-a"}),
+        SimpleNamespace(get=lambda _: {"projectId": "project-a"}), None, model_gateway=None)
+    with pytest.raises(ValueError, match="original learning snapshot"):
+        await app.retry_job("project-a", job["id"])
 
 
 @pytest.fixture(autouse=True)

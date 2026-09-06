@@ -1,4 +1,5 @@
 import { useWorkbenchI18n } from "./workbench-i18n.jsx"
+import { DoctorPanel } from "./features/doctor/doctor.jsx"
 import {
   workbenchServices, WbcVoice, wbcStartVoiceRecorder, wbcTranscribeVoiceBlob,
   useStateSt, useEffectSt, useRefSt, useMemoSt,
@@ -12,6 +13,7 @@ import {
 
 // ── Tab definitions ──
 var TABS = [
+  { id: "doctor", labelKey: "settings.doctor", icon: "stethoscope" },
   { id: "profile", labelKey: "rail.profile", icon: "user" },
   { id: "general", labelKey: "settings.general", icon: "settings" },
   { id: "search", labelKey: "settings.searchProviders", icon: "browser" },
@@ -41,7 +43,7 @@ var SETTINGS_TAB_GROUPS = [
   { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
   { labelKey: "settings.group.extensionsSystem", ids: ["plugin-registry", "hooks", "integrations"] },
   { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
-  { labelKey: "settings.group.other", ids: ["about"] },
+  { labelKey: "settings.group.other", ids: ["doctor", "about"] },
 ];
 
 var TABS_BY_ID = TABS.reduce(function (acc, item) {
@@ -833,6 +835,7 @@ function SettingsPage({
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && React.createElement(DataPanel, { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           (tab === "budget" || tab === "usage") && React.createElement(BudgetPanel, { t, config, mode: tab }),
+          tab === "doctor" && React.createElement(DoctorPanel, {}),
           tab === "about" && AboutPanel({ t, config }),
         ),
       ),

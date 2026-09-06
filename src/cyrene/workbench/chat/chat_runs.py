@@ -1150,6 +1150,8 @@ class ChatRunManager:
                 )
             else:
                 logger.exception("Chat run driver crashed for %s", run.chat_id)
+                from cyrene.platform.doctor.repository import record_runtime_incident
+                incident_id = record_runtime_incident(exc, chat_id=run.chat_id, run_id=run.run_id, stage="run_driver_or_finalization")
                 run.status = "error"
                 run.termination_reason = "driver_error"
                 run.outcome = {"kind": "error", "exc": exc}
@@ -1158,6 +1160,7 @@ class ChatRunManager:
                         "type": "error",
                         "error": "chat_run_driver_failed",
                         "code": "chat_run_driver_failed",
+                        **({"incidentId": incident_id} if incident_id else {}),
                         "detail_key": "workbenchChat.error.driverFailed",
                         "message": localized(
                             "The agent run stopped unexpectedly. Please retry.",

@@ -98,6 +98,9 @@ def _run_plugin_launcher(name: str) -> None:
 
 def main() -> None:
     import sys
+    if sys.argv[1:2] == ["doctor"]:
+        from cyrene.platform.doctor.cli import main as doctor_main
+        raise SystemExit(doctor_main(sys.argv[2:]))
     if sys.argv[1:2] and sys.argv[1] in _CLIENT_COMMANDS:
         from cyrene.cli import main as client_main
 

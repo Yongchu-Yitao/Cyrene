@@ -1,3 +1,4 @@
+import { openDoctor, preloadDoctor } from "../doctor/doctor.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { wbErrorText } from "../../shared/errors.jsx"
 import { wbSetBrowserOverlayObscured } from "../../shared/browser/overlays.jsx"
@@ -81,6 +82,11 @@ function WorkbenchHelpCenter({ onNewProject, onOpenPage, onSettings }) {
   var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
   var quickItems = [
     {
+      id: "doctor", tone: "rose", title: t("doctor.title"), desc: t("help.doctorDesc"),
+      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3v5a4 4 0 0 0 8 0V3M6 4H4M14 4h2M10 12v3a5 5 0 0 0 10 0v-2"/><circle cx="20" cy="10" r="2"/></svg>,
+      action: function () { openDoctor(); },
+    },
+    {
       id: "tutorial", tone: "cyan", title: t("help.tutorial"), desc: t("help.tutorialDesc"),
       icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15Z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/><path d="M8.5 7h7M8.5 11h7"/></svg>,
       action: function () { workbenchServices.tour().open(); },
@@ -134,7 +140,7 @@ function WorkbenchHelpCenter({ onNewProject, onOpenPage, onSettings }) {
               <div className="workbench-help-quick">
                 {quickItems.map(function (item) {
                   return (
-                    <button key={item.id} type="button" className="workbench-help-quick-item" onClick={function () { run(item.action); }}>
+                    <button key={item.id} type="button" className="workbench-help-quick-item" onMouseEnter={item.id === "doctor" ? () => preloadDoctor() : undefined} onFocus={item.id === "doctor" ? () => preloadDoctor() : undefined} onClick={function () { run(item.action); }}>
                       <span className={"workbench-help-quick-icon " + item.tone}>{item.icon}</span>
                       <span className="workbench-help-quick-main">
                         <b>{item.title}</b>

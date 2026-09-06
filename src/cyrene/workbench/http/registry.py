@@ -184,6 +184,15 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         app.state.plugin_application_host = plugin_application_host
         set_application_plugin_scope(plugin_application_host)
     register_plugin_routes(router, plugin_application_host)
+    from cyrene.platform.doctor.service import DoctorService
+    from cyrene.workbench.http.system.doctor import register_doctor_routes
+    doctor = DoctorService(data=Path(plugin_application_host.data_directory), database=Path(db_path),
+                           plugins=plugin_application_host.plugin_directory, host=plugin_application_host)
+    app.state.doctor_service = doctor
+    plugin_application_host.services["doctor"] = doctor
+    from cyrene.platform.doctor.http import DoctorIncidentMiddleware
+    app.add_middleware(DoctorIncidentMiddleware, service=doctor)
+    register_doctor_routes(router, doctor)
     plugin_application_host.attach(router)
     queries = PresentationQueryService(
         db_path=db_path,

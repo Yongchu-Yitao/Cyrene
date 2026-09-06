@@ -73,7 +73,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'return surface === "quick-chat"' in app
     assert 'var QuickChatApp = window.CyreneUI.require("quickChat").App;' in app
     assert "<QuickChatApp />" in app
-    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta12">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.0-beta13">' in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat

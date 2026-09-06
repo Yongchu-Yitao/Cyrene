@@ -224,7 +224,7 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
   );
 }
 
-function WbcErrorNotice({ message, kind, onRetry }) {
+function WbcErrorNotice({ message, kind, onRetry, onDiagnose }) {
   var isMessageError = kind === "message";
   var isMemoryError = kind === "memory";
   var title = isMemoryError
@@ -276,6 +276,7 @@ function WbcErrorNotice({ message, kind, onRetry }) {
         </React.Fragment> : <small>{body}</small>}
       </span>
       <span className="wbc-error-actions">
+        {onDiagnose && <button type="button" className="wbc-error-retry" onClick={onDiagnose}>{t("doctor.title")}</button>}
         {agentPresentation ? <button type="button" className="wbc-error-copy-button" onClick={copyErrorDetail}>{WBC_ICONS.copy}<span>{wbcT("workbenchChat.error.copyDetail", "Copy details")}</span></button> : null}
         {onRetry && <button type="button" className="wbc-error-retry" onClick={onRetry}>{wbcT("workbenchChat.error.retry", "Retry")}</button>}
       </span>

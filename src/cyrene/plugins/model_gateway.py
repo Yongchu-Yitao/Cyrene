@@ -12,6 +12,7 @@ from .tool_call_parsers import (
     GENERIC_TOOL_CALL_PARSER_PLUGIN,
 )
 from cyrene.core.plugin.plugin import PluginContext
+from cyrene.core.plugin.model import ModelGatewayError
 from cyrene.core.plugin.registry import PluginRegistry, PluginRegistryError
 from cyrene.core.plugin.runtime import PluginRuntime
 
@@ -106,7 +107,7 @@ class PluginModelGateway:
             invocation_context,
         )
         if not result.success:
-            raise RuntimeError(result.error or "Model Plugin call failed")
+            raise ModelGatewayError(result)
         if not isinstance(result.value, Mapping):
             raise RuntimeError("Model Plugin returned a non-object result")
         return dict(result.value)

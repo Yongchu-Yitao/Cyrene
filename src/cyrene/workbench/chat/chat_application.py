@@ -1047,8 +1047,29 @@ def parse_json_object(raw: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, Mapping) else None
 
 
+def _structured_model_error(exc: Exception) -> dict[str, Any]:
+    from cyrene.model.error_details import ModelCallError, details_from_mapping
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        exporter = getattr(current, "as_error_details", None)
+        raw = exporter() if callable(exporter) else None
+        details = details_from_mapping(raw)
+        if details is not None:
+            return ModelCallError(
+                details, diagnostics=raw.get("stream_diagnostics"),
+            ).as_error_details()
+        current = current.__cause__ or current.__context__
+    return {}
+
+
 def chat_run_error_message(exc: Exception, lang: str = "") -> str:
     language = app_language(lang)
+    details = _structured_model_error(exc)
+    if details:
+        return str(details["message_zh" if language == "zh" else "message_en"])
     http_error = _http_status_error(exc)
     if http_error is not None and int(http_error.response.status_code) in (401, 403):
         return localized(
@@ -1102,12 +1123,17 @@ _ERROR_KEYS = {
 }
 
 
-def chat_error_metadata(exc: Exception) -> dict[str, str]:
+def chat_error_metadata(exc: Exception) -> dict[str, Any]:
+    details = _structured_model_error(exc)
+    incident = str(getattr(exc, "incident_id", "") or "")
+    if details:
+        return {**details, **({"incidentId": incident} if incident else {})}
     kind = str(getattr(exc, "kind", "") or getattr(exc, "code", "") or "").strip()
     if kind:
         key = str(getattr(exc, "detail_key", "") or _ERROR_KEYS.get(kind) or "")
         metadata = {
             "code": kind,
+            **({"incidentId": incident} if incident else {}),
             **({"detail_key": key} if key else {"failureKind": kind}),
         }
         detail_params = getattr(exc, "detail_params", None)
@@ -1120,7 +1146,7 @@ def chat_error_metadata(exc: Exception) -> dict[str, str]:
             "code": "model_authentication_failed",
             "detail_key": _ERROR_KEYS["model_authentication_failed"],
         }
-    return {}
+    return {"incidentId": incident} if incident else {}
 
 
 class ContextTreeTranscript:

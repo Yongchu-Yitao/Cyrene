@@ -349,6 +349,7 @@ class AgentSession:
         plugin_context_data: Mapping[str, Any] | None = None,
         plugin_services: Mapping[str, Any] | None = None,
         application_scope: ApplicationPluginScope | None = None,
+        inherit_application_scope: bool = True,
         initial_root_value: Any = _DEFAULT_INITIAL_ROOT,
         agent_id: str = "main",
         parent_agent_id: str = "",
@@ -410,7 +411,7 @@ class AgentSession:
         self.batch = PluginBatchRunner(self.runtime)
         self._plugin_context_data = context_values
         self._plugin_service_values = dict(plugin_services or {})
-        self._application_scope = application_scope or application_plugin_scope()
+        self._application_scope = application_scope or (application_plugin_scope() if inherit_application_scope else None)
         if "model" not in self._plugin_service_values:
             from .plugin.model import RuntimeModelGateway
 

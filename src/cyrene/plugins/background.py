@@ -473,11 +473,18 @@ class BackgroundPluginHost:
                 call_id=f"background:{job_id}:{datetime.now(timezone.utc).isoformat()}",
             )
             if not result.success:
+                from cyrene.platform.doctor.repository import record_runtime_incident
+                error = RuntimeError("Background Plugin failed")
+                record_runtime_incident(error, stage="background_plugin", operation=plugin_name)
                 logger.error(
                     "Background Plugin %s failed: %s",
                     plugin_name,
                     result.error,
                 )
+        except Exception as exc:
+            from cyrene.platform.doctor.repository import record_runtime_incident
+            record_runtime_incident(exc, stage="background_plugin", operation=plugin_name)
+            raise
         finally:
             if current is not None:
                 self._running_tasks.pop(current, None)

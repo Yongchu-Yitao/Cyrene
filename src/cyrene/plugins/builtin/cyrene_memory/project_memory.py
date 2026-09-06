@@ -1165,6 +1165,17 @@ def _error_type(exc: Exception) -> str:
         return "optimistic_conflict"
     if isinstance(exc, InvalidProjectMemoryOutput):
         return "invalid_model_output"
+    from cyrene.model.error_details import details_from_mapping
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        exporter = getattr(current, "as_error_details", None)
+        details = details_from_mapping(exporter()) if callable(exporter) else None
+        if details is not None:
+            return details.code
+        current = current.__cause__ or current.__context__
     if "context windows" in str(exc):
         return "context_overflow"
     return "internal_error"
@@ -1278,8 +1289,8 @@ async def _run_job(job: dict[str, Any], snapshot: dict[str, Any], *, model_gatew
                 durationMs=max(0, int((time.monotonic() - started) * 1000)),
                 errorType="internal_error",
                 error=localized(
-                    "Memory learning was cancelled because its conversation or project was deleted.",
-                    "由于所属对话或项目已删除，记忆学习已取消。",
+                    "Memory learning was interrupted, or its source conversation/project was removed.",
+                    "记忆学习已中断，或所属对话/项目已移除。",
                     language=language,
                 ),
             )
@@ -1508,6 +1519,34 @@ class ProjectMemoryApplicationService:
         self.chats = chats
         self.structured_memories = structured_memories
         self.model_gateway = model_gateway
+
+    async def retry_job(self, project_id: str, job_id: str) -> dict[str, Any]:
+        """Retry only this failed job, retaining its exact learning evidence."""
+        await self._require_project(project_id)
+        document = _load_prompt_document(project_id)
+        job = next((dict(item) for item in document.get("jobs", []) if item.get("id") == job_id), None)
+        if job is None or job.get("status") not in {"failed", "conflict"}:
+            raise ValueError("Only a failed or conflicting learning job can be retried")
+        snapshot = _load_context_snapshot(str(job.get("chatId") or ""))
+        if not snapshot or not _job_matches(job, snapshot) or snapshot.get("treeNodeId") != job.get("treeNodeId"):
+            raise ValueError("The original learning snapshot is no longer available")
+        chat = self.chats.get(str(job.get("chatId") or ""))
+        if not chat or chat.get("projectId") != project_id:
+            raise ValueError("The source conversation is no longer available")
+        task = asyncio.current_task()
+        if _PROJECT_LOCKS.get(project_id) and _PROJECT_LOCKS[project_id].locked():
+            raise ValueError("Project learning is already running")
+        if task is not None:
+            _PENDING_TASKS.add(task)
+        try:
+            await _run_job(job, snapshot, model_gateway=self.model_gateway)
+        finally:
+            if task is not None:
+                _PENDING_TASKS.discard(task)
+        return next(dict(item) for item in _load_prompt_document(project_id)["jobs"] if item.get("id") == job_id)
+
+    def has_active_learning(self) -> bool:
+        return bool(_PENDING_TASKS) or any(lock.locked() for lock in _PROJECT_LOCKS.values())
 
     async def get(self, project_id: str, *, include_memories: bool = True) -> dict:
         await self._require_project(project_id)

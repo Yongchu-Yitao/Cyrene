@@ -520,7 +520,25 @@ class MemoryService:
         )
         return structured, project
 
+    def _record_diagnostic(self, status: str, reason: str, stage: str) -> None:
+        try:
+            from cyrene.workbench.persistence.store import write_document
+            if self.db_path and self.session_id:
+                write_document(self.db_path, "memory_pipeline:" + self.session_id,
+                               {"status": status, "reason": reason, "stage": stage}, dict)
+        except Exception:
+            logger.debug("Could not persist memory diagnostic state", exc_info=True)
+
     async def on_conversation_turn_committed(self, event: HookEvent) -> None:
+        self._record_diagnostic("info", "memory_processing", "committed_turn")
+        try:
+            await self._process_committed_turn(event)
+        except Exception as exc:
+            from cyrene.platform.doctor.evidence import error_code
+            self._record_diagnostic("failed", error_code(exc), "committed_turn")
+            raise
+
+    async def _process_committed_turn(self, event: HookEvent) -> None:
         """Archive and learn only after Workbench durably accepts the turn."""
 
         details = event.payload if isinstance(event.payload, Mapping) else {}
@@ -552,6 +570,7 @@ class MemoryService:
             assistant_node_id,
         )
         if learning is None:
+            self._record_diagnostic("skipped", "memory_no_committed_context", "context")
             return
         (
             messages,
@@ -574,6 +593,7 @@ class MemoryService:
             metadata.get("command") or self.run_data.get("command") or ""
         ).strip()
         if not learning_enabled or command or not tree_user_text or not messages:
+            self._record_diagnostic("skipped", "memory_write_disabled" if not learning_enabled else "memory_ineligible_content", "eligibility")
             return
         snapshot = self._persist_learning_snapshot(
             messages,
@@ -601,6 +621,7 @@ class MemoryService:
                 snapshot.get("structuredMemoryThresholdPercent") or 0
             ) or None
         if structured_threshold is None:
+            self._record_diagnostic("skipped", "memory_threshold_not_reached", "threshold")
             return
         snapshot["structuredMemoryThresholdPercent"] = structured_threshold
         evidence = self.verified_evidence(assistant_node_id)
@@ -617,6 +638,7 @@ class MemoryService:
             round_id=run_id,
             threshold=structured_threshold,
         )
+        self._record_diagnostic("passed", "memory_capture_completed", "capture_and_learn")
 
     async def _capture_and_learn(
         self,

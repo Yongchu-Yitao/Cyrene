@@ -3,11 +3,33 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from .plugin import PluginContext
+from .plugin import PluginCallResult, PluginContext
 from .runtime import PluginRuntime
+
+
+class ModelGatewayError(RuntimeError):
+    """Preserve public Plugin failure evidence across auxiliary model calls."""
+
+    def __init__(self, result: PluginCallResult) -> None:
+        super().__init__(result.error or "Model Plugin call failed")
+        self.failure = result.failure
+        self.call_id = result.call_id
+        self._details = deepcopy(dict(result.error_details))
+        self.code = str(self._details.get("code") or (
+            result.failure.error_code if result.failure else "model_call_failed"
+        ))
+        self.detail_key = str(self._details.get("detail_key") or "")
+
+    def as_error_details(self) -> dict[str, Any]:
+        fallback = {
+            "retryable": self.failure.retryable,
+            "retry_scope": self.failure.retry_scope,
+        } if self.failure is not None else {}
+        return {**fallback, **deepcopy(self._details), "code": self.code}
 
 
 class RuntimeModelGateway:
@@ -42,10 +64,10 @@ class RuntimeModelGateway:
             replace(invocation_context, data=context_data),
         )
         if not result.success:
-            raise RuntimeError(result.error or "Model Plugin call failed")
+            raise ModelGatewayError(result)
         if not isinstance(result.value, Mapping):
             raise RuntimeError("Model Plugin returned a non-object result")
         return dict(result.value)
 
 
-__all__ = ["RuntimeModelGateway"]
+__all__ = ["ModelGatewayError", "RuntimeModelGateway"]

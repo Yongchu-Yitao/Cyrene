@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "node build-jsx.mjs",
-    "test": "node --test frontend/architecture/*.test.mjs frontend/features/chat/*.test.mjs"
+    "test": "node --test frontend/architecture/*.test.mjs frontend/features/chat/*.test.mjs frontend/features/doctor/*.test.mjs"
   },
   "dependencies": {
     "@aiden0z/pptx-renderer": "1.2.4",

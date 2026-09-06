@@ -8,6 +8,8 @@ transcripts or task state machines).
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import asyncio
 import threading
 from dataclasses import dataclass, field
@@ -56,6 +58,20 @@ class RunCoordinator:
         self._lock = threading.RLock()
         self._active: dict[tuple[str, str], RunLease] = {}
         self._by_run_id: dict[str, RunLease] = {}
+        self._maintenance = False
+
+    @contextmanager
+    def maintenance(self):
+        """Reject new runs while an idle-only host repair changes resources."""
+        with self._lock:
+            if self._maintenance or self._active:
+                raise RuntimeError("Active runs must finish before maintenance")
+            self._maintenance = True
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._maintenance = False
 
     @staticmethod
     def _current_task_and_loop() -> tuple[
@@ -94,6 +110,8 @@ class RunCoordinator:
         bound_loop = current_loop if bound_task is not None else None
         key = (normalized_type, normalized_owner)
         with self._lock:
+            if self._maintenance:
+                raise RuntimeError("Host maintenance is in progress; retry after it completes")
             existing = self._active.get(key)
             if existing is not None and not existing.released:
                 return None

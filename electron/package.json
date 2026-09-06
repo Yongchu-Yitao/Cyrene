@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.9.0-beta12",
+  "version": "0.9.0-beta13",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "desktopName": "cyrene.desktop",
@@ -176,6 +176,10 @@
       ]
     },
     "files": [
+      "doctor-recovery.js",
+      "doctor-recovery-preload.js",
+      "doctor-recovery-renderer.js",
+      "doctor-recovery.html",
       "main.js",
       "backend-port-waiters.js",
       "main-window-lifecycle.js",

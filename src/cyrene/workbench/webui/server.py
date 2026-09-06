@@ -95,6 +95,9 @@ def create_app(
             await _start_workbench_chat_runs()
             yield
         finally:
+            doctor = getattr(_app.state, "doctor_service", None)
+            if doctor is not None:
+                await doctor.close()
             # Drain native Agent/Chat work while Plugin services and their
             # model/provider ports are still available.
             await _shutdown_native_runs()

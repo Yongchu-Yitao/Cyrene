@@ -5338,3 +5338,75 @@ html[data-theme="dark"] .workbench-project-memory-modal {
     min-height: 40px;
   }
 }
+
+/* Doctor uses the shared workbench modal and theme palette. */
+.wb-doctor-dialog {
+  position: fixed; inset: 0; margin: auto; padding: 0;
+  width: min(820px, calc(100vw - 40px)); max-width: none;
+  max-height: min(860px, calc(100dvh - 48px)); overflow: auto;
+  border: 1px solid var(--wb-modal-border, var(--line));
+  border-radius: var(--wb-modal-radius, 16px);
+  background: var(--wb-modal-bg, var(--bg-2)); color: var(--wb-text, var(--text));
+  box-shadow: var(--wb-modal-shadow); font: inherit;
+}
+.wb-doctor-dialog::backdrop { background: var(--wb-modal-scrim-bg, #06101d88); backdrop-filter: var(--wb-modal-scrim-filter, blur(4px)); }
+.wb-doctor-panel { color: var(--wb-text, var(--text)); font-size: 13px; line-height: 1.6; }
+.wb-doctor-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 24px; border-bottom: 1px solid var(--wb-line, var(--line)); }
+.wb-doctor-dialog .wb-doctor-head { position: sticky; top: 0; z-index: 1; background: var(--wb-modal-bg, var(--bg-2)); }
+.wb-doctor-head h2 { margin: 2px 0 0; font-size: 22px; font-weight: 650; letter-spacing: -.4px; }
+.wb-doctor-eyebrow { font-size: 12px; color: var(--wb-muted, var(--text-2)); }
+.wb-doctor-body { padding: 0 24px 24px; }
+.wb-doctor-body > p:first-child { color: var(--wb-muted, var(--text-2)); margin: 18px 0; }
+.wb-doctor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wb-doctor-panel h3 { font-size: 14px; margin: 0 0 10px; font-weight: 650; }
+.wb-doctor-report-id { color: var(--wb-muted, var(--text-2)); overflow-wrap: anywhere; }
+.wb-doctor-analysis, .wb-doctor-finding, .wb-doctor-repair { padding: 16px; margin-bottom: 12px; border-radius: 12px; border: 1px solid var(--wb-line, var(--line)); background: var(--wb-panel, var(--bg-2)); }
+.wb-doctor-analysis { background: var(--wb-control-bg, var(--bg-1)); margin-bottom: 24px; }
+.wb-doctor-finding.is-failed { border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
+.wb-doctor-finding.is-failed > strong { color: var(--err); }
+.wb-doctor-finding p, .wb-doctor-analysis p { margin: 8px 0; }
+.wb-doctor-panel details { margin: 10px 0; color: var(--wb-muted, var(--text-2)); }
+.wb-doctor-panel summary { cursor: pointer; }
+.wb-doctor-panel pre { font-size: 12px; max-height: 240px; overflow: auto; }
+.wb-doctor-repair { border-color: var(--wb-accent, var(--accent)); }
+.wb-doctor-repair .wb-btn + .wb-btn { margin-left: 8px; }
+.wb-mem-error > .wb-btn { margin-left: 12px; }
+@media (max-width: 600px) {
+  .wb-doctor-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
+  .wb-doctor-head { padding: 18px; }
+  .wb-doctor-body { padding: 0 18px 18px; }
+  .wb-doctor-actions .wb-btn { flex: 1 1 auto; }
+}
+.wb-doctor-notice { position: fixed; bottom: 20px; right: 20px; z-index: 11000; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; max-width: min(520px, calc(100vw - 40px)); padding: 14px; border: 1px solid var(--wb-modal-border, var(--line)); border-radius: 12px; background: var(--wb-modal-bg, var(--bg-2)); color: var(--wb-text, var(--text)); box-shadow: var(--wb-modal-shadow); font: 13px/1.5 system-ui; }
+
+/* A distinct rose identity, separate from the help menu's cyan/blue/amber/purple. */
+.workbench-help-quick-icon.rose { background: #fce7ef; color: #b52d61; }
+html[data-theme="dark"] .workbench-help-quick-icon.rose { background: #f17aa51c; color: #f19cbd; }
+.workbench-help-quick-item:has(.rose) .workbench-help-quick-main small { white-space: normal; overflow: visible; line-height: 1.5; }
+.wb-doctor-panel { --doctor-accent: #b52d61; --doctor-tint: #fce7ef; }
+html[data-theme="dark"] .wb-doctor-panel { --doctor-accent: #f19cbd; --doctor-tint: #f17aa51c; }
+.wb-doctor-title { display: flex; align-items: center; gap: 12px; }
+.wb-doctor-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: var(--doctor-tint); color: var(--doctor-accent); font-size: 23px; }
+.wb-doctor-head { padding: 18px 24px; }
+.wb-doctor-head h2 { font-size: 20px; }
+.wb-doctor-usage { font-size: 12px; color: var(--wb-muted, var(--text-2)); margin: 10px 0 18px; }
+.wb-doctor-overview { display: flex; flex-direction: column; gap: 5px; padding: 14px 16px; margin-bottom: 16px; border-radius: 12px; background: var(--doctor-tint); }
+.wb-doctor-overview strong { color: var(--doctor-accent); font-size: 14px; }
+.wb-doctor-overview span { color: var(--wb-muted, var(--text-2)); font-size: 12px; }
+.wb-doctor-analysis-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.wb-doctor-analysis-head h3 { margin: 0; }
+.wb-doctor-analysis-head .wb-btn { color: var(--doctor-accent); border-color: color-mix(in srgb, var(--doctor-accent) 45%, var(--wb-line)); background: var(--doctor-tint); }
+.wb-doctor-analysis { padding: 14px 16px; margin-bottom: 20px; }
+.wb-doctor-status { display: inline-block; margin-right: 8px; font-size: 11px; color: var(--wb-muted, var(--text-2)); }
+.wb-doctor-finding { padding: 12px 14px; margin-bottom: 8px; }
+.wb-doctor-finding > strong { font-weight: 600; }
+.wb-doctor-other > summary, .wb-doctor-report-meta > summary { padding: 10px 0; }
+.wb-doctor-other .wb-doctor-finding { background: transparent; }
+.wb-doctor-report-meta { border-top: 1px solid var(--wb-line); font-size: 12px; }
+.wb-doctor-report-meta code { overflow-wrap: anywhere; }
+.wb-doctor-description-label { display: block; margin: 14px 0 7px; font-weight: 600; }
+.wb-doctor-description { display: block; box-sizing: border-box; width: 100%; min-height: 88px; max-height: 260px; resize: vertical; border: 1px solid var(--wb-field-border, var(--line)); border-radius: 9px; padding: 10px 12px; background: var(--wb-control-bg, var(--bg-1)); color: var(--wb-text, var(--text)); font: inherit; line-height: 1.6; }
+.wb-doctor-description::placeholder { color: var(--wb-muted, var(--text-2)); opacity: .8; }
+.wb-doctor-description:focus-visible { outline: 2px solid var(--doctor-accent); outline-offset: 2px; }
+.wb-doctor-description-hint { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--wb-muted, var(--text-2)); font-size: 11px; }
+.wb-doctor-description-hint span { white-space: nowrap; }
