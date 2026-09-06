@@ -3069,7 +3069,7 @@ def test_workbench_confirmed_user_turn_keeps_live_timeline_anchor():
     )
 
     assert result == {
-        "ids": ["saved_user", "runtime_heartbeat_chat_1", "runtime_activity_1"],
+        "ids": ["saved_user", "runtime_heartbeat_chat_1", "activity_1"],
         "createdAt": "2026-07-15T09:27:52.100Z",
         "serverCreatedAt": "2026-07-15T09:27:52.180000+00:00",
     }
@@ -3121,7 +3121,7 @@ def test_workbench_hydration_keeps_live_user_turn_before_runtime_placeholder():
     )
 
     assert result == {
-        "ids": ["saved_user", "runtime_heartbeat_chat_1", "runtime_activity_1"],
+        "ids": ["saved_user", "runtime_heartbeat_chat_1", "activity_1"],
         "createdAt": "2026-07-15T09:27:52.100Z",
         "serverCreatedAt": "2026-07-15T09:27:56.000000+00:00",
     }
@@ -3261,7 +3261,7 @@ def test_workbench_hydration_cannot_remove_the_live_user_turn():
     )
 
     assert result == {
-        "ids": ["pending_user", "runtime_heartbeat_chat_1", "runtime_activity_1"],
+        "ids": ["pending_user", "runtime_heartbeat_chat_1", "activity_1"],
         "content": "你好",
         "optimistic": True,
     }
@@ -7293,7 +7293,7 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     assert "segments: segments.concat" in source
     assert "progress: Array.isArray(message.trace) ? message.trace" in source
     assert "wbcRuntimeSegmentMessages(runtime)" in source
-    assert "wbcMergeChronologicalMessages(durableMessages" in source
+    assert "wbcProjectRuntimeTranscript(durableMessages" in source
     assert "<WbcAssistantMessage" in source
     assert "event.assistantMessages" in source
     assert 'event.type === "assistant_message" && event.intermediate && event.message' in source

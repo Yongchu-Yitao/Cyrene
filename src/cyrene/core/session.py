@@ -3943,7 +3943,7 @@ class AgentSession:
         )
         retry_scope = str(details.get("retry_scope") or "")
         if (
-            str(details.get("code") or "") != "model_response_invalid"
+            str(details.get("code") or "") not in {"model_response_invalid", "model_output_truncated", "model_response_incomplete"}
             or details.get("retryable") is False
             or retry_scope not in {"immediate", "different_arguments"}
         ):

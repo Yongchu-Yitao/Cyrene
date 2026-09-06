@@ -1,4 +1,4 @@
-import { wbcProjectTranscript } from "./runtime-timeline.jsx"
+import { wbcProjectRuntimeTranscript, wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserAvoidancePlan, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserWindowTitle, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcClampBrowserWindowFrame, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcHasAgentCapabilitySnapshot, wbcHasChatDrag, wbcIsBuiltinAgent, wbcKeepBrowserWindowClearOfComposer, wbcLoadBrowserWindowFrame, wbcMergeChronologicalMessages, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcNotifyResourceShelfPointerDrag, wbcPointInsideResourceShelf, wbcReadChatDrag, wbcReconcileLiveUserMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcSaveBrowserWindowFrame, wbcT, wbcTraceDedupeKey } from "../../workbench-chat.jsx"
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
@@ -1434,7 +1434,9 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
     return new Set(retryClearingKey ? retryClearingKey.split("\u0000") : []);
   }, [retryClearingKey]);
   var messages = useWbcMemo(function () {
-    return runtime && runtime.timeline ? wbcProjectTranscript(chatMessages, runtime) : wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
+    return runtime && runtime.timeline
+      ? wbcProjectTranscript(chatMessages, runtime)
+      : wbcProjectRuntimeTranscript(durableMessages, runtimeTimeline);
   }, [durableMessages, runtimeTimeline, runtime && runtime.timeline, runtime && runtime.pendingQuestion, runtime && runtime.reconnecting]);
   var activityTraceKeys = useWbcMemo(function () {
     var keys = new Set();

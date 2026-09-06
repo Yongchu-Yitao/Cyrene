@@ -19,6 +19,7 @@ from cyrene.config import WORKSPACE_DIR, cyrene_dir
 from cyrene.localization import localized
 from cyrene.workbench.projects import project_repository, project_runtime
 from cyrene.workbench.chat.chat_repository import ChatRepository
+from cyrene.workbench.chat.chat_application import deduplicate_projected_messages
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ def _public_chat_full(chat: Mapping[str, Any]) -> dict[str, Any]:
         for item in chat.get("messages") or ()
         if (public := _public_message(item)) is not None
     ]
-    public_messages.sort(key=lambda item: str(item.get("createdAt") or ""))
+    public_messages = deduplicate_projected_messages(public_messages)
     payload["messages"] = public_messages
     payload["messageCount"] = len(public_messages)
     payload["files"] = [

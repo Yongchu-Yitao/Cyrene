@@ -52,6 +52,9 @@ def setup_application(context: PluginApplicationContext) -> None:
     @router.post("/api/entities")
     async def api_create_entity(body: dict):
         filtered = {k: v for k, v in body.items() if k in _CREATE_FIELDS}
+        # A user-created entity is authoritative. Background extraction writes
+        # candidates through EntityService instead of this route.
+        filtered.setdefault("source", "explicit")
         try:
             return await entities.create(**filtered)
         except (TypeError, ValueError) as exc:

@@ -26,7 +26,9 @@ async def track_entity(
         due_date=arguments.get("due_date"),
         people=arguments.get("people", []),
         tags=arguments.get("tags", []),
-        source=arguments.get("source", "extracted"),
+        # Invoking the tracking tool is an explicit durable action. Automatic
+        # extraction uses the candidate pipeline and never comes through here.
+        source=arguments.get("source", "explicit"),
         confidence=arguments.get("confidence", 1.0),
         source_round_id=(
             arguments.get("source_round_id")

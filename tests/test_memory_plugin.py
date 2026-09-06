@@ -227,7 +227,7 @@ def test_memory_pack_rebinds_persisted_hooks_on_reopen(monkeypatch, tmp_path):
     reopened.close()
 
 
-def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
+def test_memory_plugin_does_not_treat_recent_conversation_as_proactive_work(
     monkeypatch,
     tmp_path,
 ):
@@ -237,8 +237,11 @@ def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
     from cyrene.plugins.builtin.cyrene_memory import archive
     from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
 
+    called = False
+
     async def recent_conversations(days=1):
-        assert days == 1
+        nonlocal called
+        called = True
         return "user: ship the release\nassistant: noted"
 
     monkeypatch.setattr(archive, "get_recent_conversations", recent_conversations)
@@ -258,8 +261,8 @@ def test_memory_plugin_mounts_recent_conversation_for_proactive_run(
 
     result = run(service.on_turn_start(event))
 
-    assert result["context"].startswith("## ")
-    assert "ship the release" in result["context"]
+    assert result == {}
+    assert called is False
 
 
 def test_memory_context_uses_chat_snapshot_instead_of_live_project_store(

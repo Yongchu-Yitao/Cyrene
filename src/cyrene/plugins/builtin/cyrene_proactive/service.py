@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
@@ -72,13 +73,6 @@ async def _run_plugin_proactive_turn(
     """Run one scheduler turn through the same Plugin Agent as Workbench Chat."""
 
     runtime = ConversationRuntime(str(db_path or ""))
-    memory_snapshot = None
-    memory_service = _memory_service()
-    snapshot_loader = getattr(memory_service, "current_snapshot", None)
-    if callable(snapshot_loader):
-        loaded = await asyncio.to_thread(snapshot_loader, str(project_id or ""))
-        if isinstance(loaded, dict):
-            memory_snapshot = dict(loaded)
     config = ConversationConfig(
         session_id=str(session_id),
         workspace_dir=str(workspace_dir or WORKSPACE_DIR),
@@ -91,11 +85,15 @@ async def _run_plugin_proactive_turn(
         workspace_enabled=True,
         system_extra=_proactive_language_instruction(lang),
         project_id=str(project_id or ""),
-        project_memory_snapshot=memory_snapshot,
+        project_memory_snapshot=None,
         session_title=str(session_title or ""),
-        memory_write_enabled=True,
+        # Scheduler work must not learn from its own synthetic prompt/output;
+        # otherwise one heartbeat becomes evidence for the next heartbeat.
+        memory_write_enabled=False,
         memory_trigger_enabled=False,
-        memory_archive_enabled=True,
+        memory_archive_enabled=False,
+        memory_short_term_enabled=False,
+        memory_project_enabled=False,
         conversation_source="scheduler",
         extra_direct_tool_names=(OUTCOME_TOOL_NAME,),
     )
@@ -116,13 +114,16 @@ async def _run_plugin_proactive_turn(
 # Lottery state  (persisted to disk)
 # ---------------------------------------------------------------------------
 
-_LOTTERY_STATE: dict[str, float] = {
+_LOTTERY_STATE: dict[str, Any] = {
     "probability": 0.0,           # current draw probability 0.0 .. 1.0
     "delta": 0.15,                # increment on each failed draw
     "max_probability": 0.85,      # ceiling for the accumulated probability
     "consecutive_unanswered": 0,  # count of consecutive unanswered proactive messages
     "cooldown_until": 0.0,        # Unix timestamp: suppress proactive until this time
     "last_proactive_time": 0.0,   # Unix timestamp: when last proactive message was sent
+    # Work is evaluated once per durable entity revision. A user message does
+    # not change the work queue and therefore must not make old work eligible.
+    "evaluated_work_signatures": {},
 }
 _LOTTERY_SETTING_KEY = "proactive_lottery_state"
 
@@ -167,6 +168,16 @@ def _load_lottery_state() -> None:
             _LOTTERY_STATE["consecutive_unanswered"] = int(data.get("consecutive_unanswered", 0))
             _LOTTERY_STATE["cooldown_until"] = float(data.get("cooldown_until", 0.0))
             _LOTTERY_STATE["last_proactive_time"] = float(data.get("last_proactive_time", 0.0))
+            signatures = data.get("evaluated_work_signatures", {})
+            _LOTTERY_STATE["evaluated_work_signatures"] = (
+                {
+                    str(project): str(signature)
+                    for project, signature in signatures.items()
+                    if str(project).strip() and str(signature).strip()
+                }
+                if isinstance(signatures, Mapping)
+                else {}
+            )
             logger.debug(
                 "Loaded lottery state: probability=%.2f consecutive_unanswered=%d cooldown_until=%.0f",
                 _LOTTERY_STATE["probability"],
@@ -320,6 +331,73 @@ def _latest_workbench_user_activity() -> dict[str, object] | None:
     return latest
 
 
+def _source_chat_context(chat_id: str, *, max_chars: int = 6000) -> str:
+    """Render the latest authoritative public transcript for validation only."""
+
+    if not _workbench_db_path or not str(chat_id or "").strip():
+        return ""
+    chat = ChatRepository(_workbench_db_path).get(str(chat_id))
+    if not isinstance(chat, Mapping):
+        return ""
+    records: list[dict[str, str]] = []
+    used = 0
+    for message in reversed(chat.get("messages") or []):
+        if not isinstance(message, Mapping):
+            continue
+        role = str(message.get("role") or "")
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        record = {
+            "role": role,
+            "created_at": str(message.get("createdAt") or ""),
+            "content": content,
+        }
+        size = len(json.dumps(record, ensure_ascii=False))
+        if records and used + size > max(1, int(max_chars)):
+            break
+        records.append(record)
+        used += size
+    records.reverse()
+    return json.dumps(
+        {
+            "chat_id": str(chat.get("id") or chat_id),
+            "title": str(chat.get("title") or ""),
+            "last_user_message_at": str(chat.get("lastUserMessageAt") or ""),
+            "messages": records,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+async def _authoritative_work_items(project_id: str) -> list[dict[str, Any]]:
+    """Load the explicit active queue; memories and extracted facts never qualify."""
+
+    service = application_plugin_service("entities")
+    if service is None:
+        return []
+    try:
+        active = await service.list(
+            status="active",
+            project_id=str(project_id or "default"),
+            limit=200,
+        )
+        from cyrene.plugins.builtin.cyrene_entity.proactive import (
+            select_proactive_entities,
+        )
+
+        return select_proactive_entities(
+            active,
+            project_id=str(project_id or "default"),
+        )
+    except Exception:
+        logger.exception("Failed to load authoritative proactive work items")
+        return []
+
+
 def _workbench_workspace_dir_for_project(project_id: str) -> str:
     """Return an existing Workbench project workspace for scheduler runs."""
     project_id = str(project_id or "").strip()
@@ -397,9 +475,14 @@ def _silence_hours() -> float | None:
 
 def _build_proactive_user_prompt(
     silence_hours: float | None,
+    *,
+    work_items: list[Mapping[str, Any]],
+    source_chat_context: str,
     consecutive_unanswered: int = 0,
 ) -> str:
-    """Build the scheduler instruction; Plugins mount contextual evidence."""
+    """Build a work-item-driven scheduler instruction."""
+    from cyrene.plugins.builtin.cyrene_entity.proactive import render_proactive_entities
+
     now = datetime.now().strftime("%H:%M")
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -418,9 +501,11 @@ def _build_proactive_user_prompt(
         )
 
     return f"""## Objective
-- This is an autonomous work cycle, not a social check-in. Proactively advance one useful, concrete item when the context supports it.
-- Look for an open task, unresolved decision, due or stale item, missing verification, research gap, or small project-maintenance action.
-- When an actionable item exists, use tools and complete the work now. Do not merely suggest work, offer to help, or describe what you could do.
+- This is an autonomous work cycle, not a social check-in. Work on exactly one item from the authoritative work-item snapshot below.
+- The snapshot is the complete work queue for this cycle. Memories, old conversations, knowledge records, project files, and inferred user interests are supporting evidence only and must never create another task.
+- Before doing work, compare the selected item with the authoritative recent-chat snapshot and current project state. If they prove it completed, superseded, cancelled, or no longer applicable, update the entity lifecycle accordingly and suppress delivery.
+- When the selected item remains actionable, use tools and complete bounded work now. Do not merely suggest work, offer to help, or describe what you could do.
+- After completing it, update that entity to done. If it genuinely requires user input, update it to paused and deliver the one concrete blocker once.
 - Prefer bounded work with a verifiable result. Respect the proactive write-safety boundary in the system instructions.
 - Report only a concrete completed result, a newly verified material fact, or a specific blocker/risk that genuinely needs the user's attention. State what changed or was found and why it matters.
 - Finish every cycle by calling finish_proactive exactly once. Use decision=deliver and put only the exact concise user-visible report in report when there is a material result. Use decision=suppress and report="" when nothing should be shown.
@@ -435,7 +520,13 @@ def _build_proactive_user_prompt(
 - Current time: {now}
 - Trigger: system scheduler; no new user activity
 - {silence_line}
-- Consecutive proactive messages not replied to: {consecutive_unanswered}"""
+- Consecutive proactive messages not replied to: {consecutive_unanswered}
+
+## Authoritative work-item snapshot
+{render_proactive_entities(work_items)}
+
+## Authoritative recent-chat snapshot
+{source_chat_context or "(no recent public transcript is available)"}"""
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +671,37 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
             )
             return {"status": "conversation_running"}
 
+        # Resolve one exact project before selecting work.  The durable entity
+        # lifecycle is the source of truth; conversation memory is not a queue.
+        if target_session_id:
+            proactive_project_id = str(
+                (workbench_target or {}).get("project_id") or ""
+            )
+            if not proactive_project_id:
+                proactive_project_id = _default_workbench_project_scope()[
+                    "project_id"
+                ]
+            workspace_dir = _workbench_workspace_dir_for_project(
+                proactive_project_id
+            )
+        else:
+            scope = _default_workbench_project_scope()
+            proactive_project_id = scope["project_id"]
+            workspace_dir = scope["workspace_dir"]
+
+        work_items = await _authoritative_work_items(proactive_project_id)
+        if not work_items:
+            return {"status": "no_actionable_work"}
+        from cyrene.plugins.builtin.cyrene_entity.proactive import (
+            proactive_work_signature,
+        )
+
+        work_signature = proactive_work_signature(work_items)
+        evaluated = _LOTTERY_STATE.get("evaluated_work_signatures")
+        evaluated = evaluated if isinstance(evaluated, Mapping) else {}
+        if work_signature == str(evaluated.get(proactive_project_id) or ""):
+            return {"status": "work_unchanged"}
+
         # -------- Cooldown trigger --------
         # ``consecutive_unanswered`` counts proactive messages we actually
         # delivered without a user reply in between. It is incremented once per
@@ -642,8 +764,8 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
         proactive_prompt = (
             "This is a scheduler-initiated proactive check-in.\n"
             "Treat it as an autonomous work cycle, not a social check-in.\n"
-            "Find and complete one useful, bounded incremental task when the available context supports it.\n"
-            "Use tools to inspect the Workbench project, search memory/knowledge, create a new additive note/artifact, track a follow-up, or verify current facts.\n"
+            "The authoritative work-item snapshot in this request is the only source of work. Do not infer another task from memory, knowledge, files, or conversation history.\n"
+            "Use tools only to validate or advance one listed work item and to update its durable lifecycle.\n"
             "Any proactive task must be incremental: do not modify, overwrite, move, rename, or delete existing files. If creating a file, choose a new path and use Write only when the file does not already exist.\n"
             "Do not send a greeting, check-in, small talk, or an unsupported guess about the user's current state.\n"
             "At the end, call finish_proactive exactly once. Use decision=deliver and put only the exact concise user-visible report in report when there is a material result or concrete risk/blocker. Use decision=suppress and report=\"\" when nothing should be shown.\n"
@@ -651,6 +773,8 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
             "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
             + _build_proactive_user_prompt(
                 silence_h,
+                work_items=work_items,
+                source_chat_context=_source_chat_context(target_session_id),
                 consecutive_unanswered=int(
                     _LOTTERY_STATE.get("consecutive_unanswered", 0)
                 ),
@@ -658,24 +782,6 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
         )
         delivered_target: dict[str, str] | None = None
         proactive_session_id = f"wbchat_{uuid.uuid4().hex[:10]}"
-        if target_session_id:
-            # The latest user chat selects the project and workspace only. The
-            # autonomous run and its visible reply live in a fresh conversation
-            # session so they cannot mutate or pollute an existing transcript.
-            proactive_project_id = str(
-                (workbench_target or {}).get("project_id") or ""
-            )
-            if not proactive_project_id:
-                proactive_project_id = _default_workbench_project_scope()[
-                    "project_id"
-                ]
-            workspace_dir = _workbench_workspace_dir_for_project(
-                proactive_project_id
-            )
-        else:
-            scope = _default_workbench_project_scope()
-            proactive_project_id = scope["project_id"]
-            workspace_dir = scope["workspace_dir"]
 
         result = await asyncio.wait_for(
             _run_plugin_proactive_turn(
@@ -713,6 +819,10 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
                 "error": outcome.error,
             }
         if outcome.decision == "suppress":
+            evaluated = _LOTTERY_STATE.setdefault("evaluated_work_signatures", {})
+            if isinstance(evaluated, dict):
+                evaluated[proactive_project_id] = work_signature
+            _save_lottery_state()
             logger.info("Proactive round explicitly suppressed public delivery")
             return {"status": "no_visible_result"}
 
@@ -748,6 +858,9 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
         _LOTTERY_STATE["consecutive_unanswered"] = int(_LOTTERY_STATE.get("consecutive_unanswered", 0)) + 1
         _LOTTERY_STATE["last_proactive_time"] = time.time()
         _LOTTERY_STATE["probability"] = 0.0
+        evaluated = _LOTTERY_STATE.setdefault("evaluated_work_signatures", {})
+        if isinstance(evaluated, dict):
+            evaluated[proactive_project_id] = work_signature
         _save_lottery_state()
 
         logger.info("Proactive message sent via Plugin Agent: %s", str(text)[:100])

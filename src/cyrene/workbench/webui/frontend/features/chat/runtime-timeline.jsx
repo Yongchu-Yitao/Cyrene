@@ -316,6 +316,43 @@ function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
     messages: wbcMergeChronologicalMessages(current, Array.from(updates.values())) };
 }
 
+function wbcActivityDedupeKeys(message) {
+  if (!message) return [];
+  var activity = message.runtimeActivity && typeof message.runtimeActivity === "object"
+    ? message.runtimeActivity
+    : (message.activityCard ? message : null);
+  if (!activity) return [];
+  var keys = new Set();
+  [message.id, activity.id].forEach(function (value) {
+    var id = String(value || "");
+    // Older clients wrapped the server activity id in a UI-only ``runtime_``
+    // prefix. Treat both representations as the same durable timeline record.
+    if (id.startsWith("runtime_")) id = id.slice("runtime_".length);
+    if (id) keys.add("activity:" + id);
+  });
+  var entries = Array.isArray(activity.progress)
+    ? activity.progress
+    : (Array.isArray(activity.trace) ? activity.trace : (Array.isArray(message.trace) ? message.trace : []));
+  entries.forEach(function (entry) {
+    var toolCallId = String(entry && (entry.toolCallId || entry.tool_call_id) || "");
+    if (toolCallId) keys.add("tool:" + toolCallId);
+  });
+  return Array.from(keys);
+}
+
+function wbcProjectRuntimeTranscript(messages, additions) {
+  var runtimeMessages = Array.isArray(additions) ? additions.filter(Boolean) : [];
+  var liveActivityKeys = new Set();
+  runtimeMessages.forEach(function (message) {
+    wbcActivityDedupeKeys(message).forEach(function (key) { liveActivityKeys.add(key); });
+  });
+  var durable = (Array.isArray(messages) ? messages : []).filter(function (message) {
+    if (!liveActivityKeys.size) return true;
+    return !wbcActivityDedupeKeys(message).some(function (key) { return liveActivityKeys.has(key); });
+  });
+  return wbcMergeChronologicalMessages(durable, runtimeMessages);
+}
+
 // One projection for all surfaces. Server identities survive hydration and save.
 function wbcApplyTimeline(runtime, patch) {
   if (!patch || (patch.version !== 1 && patch.version !== 2)) return runtime;
@@ -355,12 +392,19 @@ function wbcProjectTranscript(messages, runtime) {
   if (!runtime || !runtime.timeline) return durable;
   var patch = runtime.timeline;
   var liveIds = new Set(patch.messages.map(function (message) { return message.id; }));
+  var liveActivityKeys = new Set();
+  patch.messages.forEach(function (message) {
+    wbcActivityDedupeKeys(message).forEach(function (key) { liveActivityKeys.add(key); });
+  });
   var saved = new Map(durable.map(function (message) { return [message.id, message]; }));
   var records = patch.messages.map(function (message) {
     var historical = saved.get(message.id);
     return historical && Number(historical.timelineRevision || 0) > Number(message.timelineRevision || 0) ? historical : { ...historical, ...message };
   });
-  var merged = wbcMergeChronologicalMessages(durable.filter(function (message) { return !liveIds.has(message.id); }), records);
+  var merged = wbcMergeChronologicalMessages(durable.filter(function (message) {
+    if (liveIds.has(message.id)) return false;
+    return !wbcActivityDedupeKeys(message).some(function (key) { return liveActivityKeys.has(key); });
+  }), records);
   var busy = patch.messages.some(function (message) {
     return message.status === "running" && (message.activityCard || String(message.content || "").length > 0);
   });
@@ -404,7 +448,10 @@ function wbcRuntimeTimelineMessages(runtime, options) {
   }];
   activities.forEach(function (activity, index) {
     items.push({
-      id: "runtime_" + String(activity.id || index),
+      // Activity ids originate on the server and must remain stable across the
+      // live -> checkpointed transition. A UI-only prefix creates a second
+      // identity and causes the same card to be rendered twice after hydration.
+      id: String(activity.id || ("runtime_activity_" + index)),
       role: "assistant",
       createdAt: new Date(Number(activity.createdAt || startedAt + index + 2)).toISOString(),
       runtimeActivity: activity,
@@ -704,4 +751,4 @@ function wbcPersistDurableTrace(chatId, payload) {
   } catch (e) {}
 }
 
-export { wbcApplyTimeline, wbcProjectTranscript, wbcChatCacheState, wbcLastChatByProject, wbcChatCache, wbcRenderMarkdown, wbcRenderMapMarkdown, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, WbcSplitPickerMenu, wbcFormatTime, wbcFormatProcessingDuration, wbcConfirmOptimisticMessage, wbcReconcileLiveUserMessages, wbcRetryTurnSelection, wbcTruncateMessagesAfterUser, wbcClearModelOutputForRetry, wbcPreserveLiveTimelineAnchors, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcFinalizeRuntime, wbcCreateDetachedRuntime, wbcReduceDetachedRuntime, wbcMergeToolLifecycleEntry, wbcToolEntryIsTerminal, wbcToolOccurrenceIndex, wbcMergeToolOccurrence, WBC_DURABLE_TRACE_FIELDS, wbcCleanDurableTraceEntry, wbcDurableTracePayload, wbcPersistDurableTrace }
+export { wbcApplyTimeline, wbcProjectTranscript, wbcProjectRuntimeTranscript, wbcChatCacheState, wbcLastChatByProject, wbcChatCache, wbcRenderMarkdown, wbcRenderMapMarkdown, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, WbcSplitPickerMenu, wbcFormatTime, wbcFormatProcessingDuration, wbcConfirmOptimisticMessage, wbcReconcileLiveUserMessages, wbcRetryTurnSelection, wbcTruncateMessagesAfterUser, wbcClearModelOutputForRetry, wbcPreserveLiveTimelineAnchors, wbcMergeChronologicalMessages, wbcMergeSavedAssistantMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcFinalizeRuntime, wbcCreateDetachedRuntime, wbcReduceDetachedRuntime, wbcMergeToolLifecycleEntry, wbcToolEntryIsTerminal, wbcToolOccurrenceIndex, wbcMergeToolOccurrence, WBC_DURABLE_TRACE_FIELDS, wbcCleanDurableTraceEntry, wbcDurableTracePayload, wbcPersistDurableTrace }

@@ -1,8 +1,6 @@
 """Editable durable-entity Plugin pack."""
 
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
-
 from cyrene.core.hook import TURN_START, HookEvent
 from cyrene.plugins.context import PluginApplicationContext
 from cyrene.core.plugin import (
@@ -16,6 +14,7 @@ from .list_entities import plugin as list_plugin
 from .query_entities import plugin as query_plugin
 from .track_entity import plugin as track_plugin
 from .update_entity import plugin as update_plugin
+from .proactive import render_proactive_entities, select_proactive_entities
 
 
 def _session_id(data: Mapping[str, object]) -> str:
@@ -90,64 +89,33 @@ def setup(context: PluginSetupContext) -> None:
             or context.data.get("language")
         )
 
-        now = datetime.now(timezone.utc)
-        due_cutoff = (now + timedelta(hours=24)).isoformat()
-        stale_cutoff = (now - timedelta(days=7)).isoformat()
+        run_context = context.data.get("run_context")
+        project_id = str(
+            context.data.get("project_id")
+            or (
+                run_context.get("project_id")
+                if isinstance(run_context, Mapping)
+                else ""
+            )
+            or "default"
+        )
         try:
-            due_soon = await service.query(due_before=due_cutoff, status="active")
-            active = await service.list(status="active", limit=200)
+            active = await service.list(
+                status="active",
+                project_id=project_id,
+                limit=200,
+            )
         except Exception:
             return {}
-        stale = [
-            item
-            for item in active
-            if str(item.get("last_referenced_at") or "") < stale_cutoff
-        ]
-        open_decisions = [
-            item
-            for item in active
-            if str(item.get("type") or "") == "decision"
-            and not (
-                item.get("metadata", {}).get("outcome")
-                if isinstance(item.get("metadata"), Mapping)
-                else False
-            )
-        ]
-        lines: list[str] = []
-        if due_soon:
-            titles = ", ".join(
-                str(item.get("title") or "") for item in due_soon[:3]
-            )
-            lines.append(localized(
-                "- Due within 24 hours: {titles}",
-                "- 24 小时内到期：{titles}",
-                language=language,
-                titles=titles,
-            ))
-        if stale:
-            lines.append(localized(
-                "- Not referenced recently: {title}",
-                "- 最近未提及：{title}",
-                language=language,
-                title=stale[0].get("title", ""),
-            ))
-        if open_decisions:
-            lines.append(
-                localized(
-                    "- Open decision to follow up: {title}",
-                    "- 待跟进的未决事项：{title}",
-                    language=language,
-                    title=open_decisions[0].get("title", ""),
-                )
-            )
-        if not lines:
+        work_items = select_proactive_entities(active, project_id=project_id)
+        if not work_items:
             return {}
         return {
             "context": localized(
-                "## Items needing attention\n{items}",
-                "## 需要关注的事务\n{items}",
+                "## Authoritative proactive work items\n{items}",
+                "## 权威主动工作项\n{items}",
                 language=language,
-                items="\n".join(lines),
+                items=render_proactive_entities(work_items),
             ),
             "context_kind": "proactive_entities",
             "context_source": "cyrene_entity",

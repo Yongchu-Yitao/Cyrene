@@ -70,6 +70,7 @@ async def test_seeded_entity_pack_owns_session_and_application_backend(tmp_path)
         {"type": "fact", "title": "用户目录后端"},
     )
     assert tracked["entity"]["project_id"] == "project-a"
+    assert tracked["entity"]["source"] == "explicit"
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
@@ -115,17 +116,42 @@ async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_
     from cyrene.plugins.builtin.cyrene_entity import setup
 
     class Entities:
-        async def query(self, **_filters):
-            return [{"title": "Publish release"}]
+        filters = None
 
-        async def list(self, **_filters):
-            return [{
-                "title": "Choose rollout strategy",
-                "type": "decision",
-                "last_referenced_at": "2000-01-01T00:00:00+00:00",
-                "metadata": {},
-            }]
+        async def list(self, **filters):
+            self.filters = filters
+            return [
+                {
+                    "id": "task-explicit",
+                    "title": "Publish release",
+                    "content": "Publish the verified artifacts.",
+                    "type": "task",
+                    "status": "active",
+                    "source": "explicit",
+                    "priority": "high",
+                    "project_id": "project-a",
+                    "updated_at": "2026-06-17T12:00:00+00:00",
+                },
+                {
+                    "id": "decision-extracted",
+                    "title": "Choose rollout strategy",
+                    "type": "decision",
+                    "status": "active",
+                    "source": "extracted",
+                    "project_id": "project-a",
+                    "last_referenced_at": "2000-01-01T00:00:00+00:00",
+                },
+                {
+                    "id": "other-project",
+                    "title": "Other project task",
+                    "type": "task",
+                    "status": "active",
+                    "source": "explicit",
+                    "project_id": "project-b",
+                },
+            ]
 
+    entities = Entities()
     store = ContextStoreRouter(tmp_path / "context")
     tree = store.create_tree(tree_id="proactive", root_id="root")
     hooks = store.hooks_for(tree.id)
@@ -137,14 +163,20 @@ async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_
         tree_id=tree.id,
         root_id=tree.root_id,
         hooks=hooks,
-        data={},
-        services={"entities": Entities()},
+        data={"project_id": "project-a"},
+        services={"entities": entities},
     ))
 
     assert await hooks.turn_start({"metadata": {}}) == ""
     mounted = await hooks.turn_start({"metadata": {"proactive": True}})
     assert "Publish release" in mounted
-    assert "Choose rollout strategy" in mounted
+    assert "Choose rollout strategy" not in mounted
+    assert "Other project task" not in mounted
+    assert entities.filters == {
+        "status": "active",
+        "project_id": "project-a",
+        "limit": 200,
+    }
     store.close()
 
 

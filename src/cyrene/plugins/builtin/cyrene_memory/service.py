@@ -317,31 +317,6 @@ class MemoryService:
         caller = self.data.get("owner_call")
         return caller(callback) if callable(caller) else callback()
 
-    async def _proactive_conversation_context(self) -> str:
-        """Return recent dialogue needed only by proactive Agent runs."""
-
-        try:
-            from .archive import get_recent_conversations
-
-            conversations = str(await get_recent_conversations(days=1) or "")
-        except Exception:
-            logger.exception("Failed to render proactive conversation context")
-            return ""
-        if len(conversations) > 3000:
-            conversations = conversations[-3000:]
-            boundary = conversations.find("\n=== ")
-            if boundary > 100:
-                conversations = conversations[boundary + 1 :]
-        conversations = conversations.strip()
-        if not conversations:
-            return ""
-        header = localized(
-            "## Recent conversation",
-            "## 近期对话",
-            language=self.language,
-        )
-        return header + "\n" + conversations
-
     async def on_session_start(self, event: HookEvent) -> dict[str, str]:
         context = self.context_block().strip()
         return {
@@ -396,19 +371,9 @@ class MemoryService:
         return self.context_block()
 
     async def on_turn_start(self, event: HookEvent) -> dict[str, str]:
-        """Add only context whose value is specific to this proactive turn."""
+        """Memory is not a work queue; proactive context comes from entities."""
 
-        details = event.payload if isinstance(event.payload, Mapping) else {}
-        metadata = details.get("metadata")
-        metadata = metadata if isinstance(metadata, Mapping) else {}
-        if not bool(metadata.get("proactive")):
-            return {}
-        context = (await self._proactive_conversation_context()).strip()
-        return {
-            "context": context,
-            "context_kind": "proactive_memory",
-            "context_source": "cyrene_memory",
-        } if context else {}
+        return {}
 
     async def on_context_used(self, event: HookEvent) -> None:
         usage = event.payload

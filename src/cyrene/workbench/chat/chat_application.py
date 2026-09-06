@@ -466,12 +466,121 @@ def messages_in_chronological_order(messages: list[Any]) -> list[Any]:
     ]
 
 
+def _activity_tool_call_key(message: Mapping[str, Any]) -> tuple[str, ...]:
+    if not message.get("activityCard"):
+        return ()
+    trace = message.get("trace")
+    if not isinstance(trace, list):
+        return ()
+    return tuple(sorted({
+        str(entry.get("toolCallId") or entry.get("tool_call_id") or "")
+        for entry in trace
+        if isinstance(entry, Mapping)
+        and str(entry.get("toolCallId") or entry.get("tool_call_id") or "")
+    }))
+
+
+def _canonical_timeline_rank(message: Mapping[str, Any]) -> int:
+    identity = str(message.get("id") or "")
+    return int(bool(
+        message.get("timelineVersion")
+        or (
+            message.get("runId")
+            and message.get("timelineOrder") is not None
+            and identity.startswith("run_")
+            and (":activity:" in identity or ":message:" in identity)
+        )
+    ))
+
+
+def _merge_equivalent_projection(
+    current: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep the canonical timeline identity while retaining legacy-only metrics."""
+
+    if _canonical_timeline_rank(candidate) > _canonical_timeline_rank(current):
+        secondary, primary = current, candidate
+    else:
+        secondary, primary = candidate, current
+    return {**dict(secondary), **dict(primary)}
+
+
+def deduplicate_projected_messages(messages: list[Any]) -> list[Any]:
+    """Collapse legacy and canonical copies of the same projected Agent record.
+
+    During the timeline migration, permission-resume and fallback finalization
+    could persist both a ``run_*:activity:*`` record and an
+    ``activity_assistant_*`` projection for the same tool call.  Some resumed
+    replies were likewise saved once by the run timeline and once by the legacy
+    result projection.  Tool-call identity and an adjacent canonical/legacy
+    reply pair are strong enough to repair those records without merging real
+    repeated calls or separate user turns.
+    """
+
+    result: list[Any] = []
+    activity_indices: dict[tuple[str, ...], int] = {}
+    reply_indices: dict[str, int] = {}
+    for raw in messages_in_chronological_order(messages):
+        if not isinstance(raw, Mapping):
+            result.append(raw)
+            continue
+        message = dict(raw)
+        if str(message.get("role") or "") == "user":
+            activity_indices.clear()
+            reply_indices.clear()
+            result.append(message)
+            continue
+        activity_key = _activity_tool_call_key(message)
+        if activity_key:
+            existing_index = activity_indices.get(activity_key)
+            if existing_index is not None:
+                result[existing_index] = _merge_equivalent_projection(
+                    result[existing_index],
+                    message,
+                )
+                continue
+            activity_indices[activity_key] = len(result)
+            result.append(message)
+            continue
+        content = str(message.get("content") or "")
+        if (
+            str(message.get("role") or "") == "assistant"
+            and content
+            and not message.get("intermediate")
+            and not message.get("notificationCard")
+        ):
+            existing_index = reply_indices.get(content)
+            if existing_index is not None:
+                existing = result[existing_index]
+                ranks = {
+                    _canonical_timeline_rank(existing),
+                    _canonical_timeline_rank(message),
+                }
+                existing_time = message_event_time(existing)
+                candidate_time = message_event_time(message)
+                close_in_time = bool(
+                    existing_time is not None
+                    and candidate_time is not None
+                    and abs((candidate_time - existing_time).total_seconds()) <= 30
+                )
+                if ranks == {0, 1} and close_in_time:
+                    result[existing_index] = _merge_equivalent_projection(
+                        existing,
+                        message,
+                    )
+                    continue
+            reply_indices[content] = len(result)
+        result.append(message)
+    return result
+
+
 def merge_chat_messages_chronologically(
     chat: dict[str, Any],
     additions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     messages = chat.setdefault("messages", [])
-    messages[:] = messages_in_chronological_order(messages)
+    messages[:] = deduplicate_projected_messages(messages)
     causal_floor = 0
     for item in additions:
         if not isinstance(item, dict):
@@ -505,6 +614,7 @@ def merge_chat_messages_chronologically(
         insert_at = max(causal_floor, insert_at)
         messages.insert(insert_at, item)
         causal_floor = insert_at + 1
+    messages[:] = deduplicate_projected_messages(messages)
     return messages
 
 
@@ -785,11 +895,12 @@ def public_chat_full(
     active_run: Any = None,
 ) -> dict[str, Any]:
     payload = public_chat_light(chat, active_run=active_run)
-    payload["messages"] = [
+    payload["messages"] = deduplicate_projected_messages([
         public_message(dict(item))
         for item in messages_in_chronological_order(list(chat.get("messages") or ()))
         if isinstance(item, Mapping) and not is_hidden_protocol_record(item)
-    ]
+    ])
+    payload["messageCount"] = len(payload["messages"])
     payload["files"] = [
         dict(item)
         for item in chat.get("generatedFiles") or ()
@@ -985,6 +1096,8 @@ _ERROR_KEYS = {
     "model_connection_failed": "workbenchChat.error.modelConnectionFailed",
     "model_service_unavailable": "workbenchChat.error.modelServiceUnavailable",
     "model_response_invalid": "workbenchChat.error.modelResponseInvalid",
+    "model_output_truncated": "workbenchChat.error.modelOutputTruncated",
+    "model_response_incomplete": "workbenchChat.error.modelResponseIncomplete",
     "model_call_failed": "workbenchChat.error.modelCallFailed",
 }
 

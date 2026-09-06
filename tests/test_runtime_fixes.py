@@ -51,6 +51,20 @@ def _structured_proactive_result(
     )
 
 
+def _proactive_work_item(project_id="default"):
+    return {
+        "id": "task-explicit",
+        "type": "task",
+        "title": "Publish release",
+        "content": "Publish the verified artifacts.",
+        "status": "active",
+        "source": "explicit",
+        "priority": "high",
+        "project_id": project_id,
+        "updated_at": "2026-09-06T08:00:00+00:00",
+    }
+
+
 def test_core_soul_projection_is_empty_when_plugin_is_unavailable(monkeypatch):
     from cyrene.workbench.artifacts import presentation_runtime
 
@@ -605,9 +619,15 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
     monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(
+        scheduler,
+        "_authoritative_work_items",
+        AsyncMock(return_value=[_proactive_work_item()]),
+    )
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
+        evaluated_work_signatures={},
     )
 
     async def fake_run_plugin_proactive_turn(
@@ -646,7 +666,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
     assert "Recent memories about the user" not in seen["prompt"]
     assert "autonomous work cycle, not a social check-in" in seen["prompt"]
-    assert "use tools and complete the work now" in seen["prompt"]
+    assert "use tools and complete bounded work now" in seen["prompt"]
     assert "Never claim or imply that the user just woke up" in seen["prompt"]
     assert "Trigger: system scheduler; no new user activity" in seen["prompt"]
     assert "Do not send a greeting, check-in, small talk" in seen["prompt"]
@@ -666,8 +686,14 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
     monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(
+        scheduler,
+        "_authoritative_work_items",
+        AsyncMock(return_value=[_proactive_work_item()]),
+    )
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
+        evaluated_work_signatures={},
     )
 
     async def fake_run_plugin_proactive_turn(prompt, **_kwargs):
@@ -742,9 +768,15 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
     monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(
+        scheduler,
+        "_authoritative_work_items",
+        AsyncMock(return_value=[_proactive_work_item()]),
+    )
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
+        evaluated_work_signatures={},
     )
 
     # Deliver exactly one message on the first tick; stay silent ever after.
@@ -801,10 +833,16 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
     monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(
+        scheduler,
+        "_authoritative_work_items",
+        AsyncMock(return_value=[_proactive_work_item()]),
+    )
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=scheduler._PROACTIVE_COOLDOWN_THRESHOLD,
         cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
+        evaluated_work_signatures={},
     )
 
     async def fake_run_plugin_proactive_turn(prompt, **_kwargs):

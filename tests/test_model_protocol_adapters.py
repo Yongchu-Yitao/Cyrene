@@ -6,6 +6,8 @@ import json
 import httpx
 import pytest
 
+from cyrene.model.error_details import classify_model_error
+
 from cyrene.model.protocol_adapters import (
     ModelStreamError,
     PreparedRequest,
@@ -852,7 +854,7 @@ async def test_openai_chat_sse_accumulates_content_reasoning_tools_and_usage() -
     diagnostics = parsed.pop("stream_diagnostics")
     assert diagnostics == {
         "adapter": "openai_compatible",
-        "line_count": 10,
+        "line_count": 9,
         "data_chunk_count": 4,
         "event_count": 4,
         "invalid_json_line_count": 0,
@@ -917,6 +919,7 @@ async def test_stream_rejects_clean_eof_without_provider_terminal_signal() -> No
             )
 
     assert captured.value.kind == "upstream_incomplete"
+    assert classify_model_error(captured.value).code == "model_response_incomplete"
     assert captured.value.diagnostics["http_status"] == 200
     assert captured.value.diagnostics["event_count"] == 1
     assert captured.value.diagnostics["stream_completed"] is False
@@ -948,7 +951,8 @@ async def test_stream_distinguishes_local_protocol_decode_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_rejects_malformed_tool_arguments_with_safe_diagnostics() -> None:
+@pytest.mark.parametrize("finish", ["tool_calls", "length", "max_tokens", "max_output_tokens"])
+async def test_stream_rejects_malformed_tool_arguments_with_safe_diagnostics(finish) -> None:
     events = [{
         "choices": [{
             "delta": {
@@ -958,7 +962,7 @@ async def test_stream_rejects_malformed_tool_arguments_with_safe_diagnostics() -
                     "function": {"name": "weather", "arguments": '{"city"'},
                 }],
             },
-            "finish_reason": "tool_calls",
+            "finish_reason": finish,
         }],
     }]
 
@@ -977,8 +981,13 @@ async def test_stream_rejects_malformed_tool_arguments_with_safe_diagnostics() -
 
     assert captured.value.kind == "invalid_tool_arguments"
     diagnostics = captured.value.diagnostics
-    assert diagnostics["finish_reason"] == "tool_calls"
-    assert diagnostics["termination_reason"] == "invalid_tool_arguments"
+    assert diagnostics["finish_reason"] == ("tool_calls" if finish == "tool_calls" else "length")
+    assert diagnostics["termination_reason"] == (
+        "invalid_tool_arguments" if finish == "tool_calls" else "output_limit_with_invalid_tool_arguments"
+    )
+    assert classify_model_error(captured.value).code == (
+        "model_response_invalid" if finish == "tool_calls" else "model_output_truncated"
+    )
     assert diagnostics["tool_calls"] == [{
         "index": "0",
         "name": "weather",
@@ -1267,3 +1276,225 @@ async def test_gemini_sse_requests_stream_route_and_accumulates_chunks() -> None
         "usage": {"prompt_tokens": 6, "completion_tokens": 2, "total_tokens": 8},
         "finish_reason": "stop",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason,arguments,code", [
+    ("max_output_tokens", '{"city":', "model_output_truncated"),
+    ("max_output_tokens", '{"city":"Paris"}', None),
+    ("max_output_tokens", None, "model_output_truncated"),
+    ("content_filter", None, "model_response_incomplete"),
+    (None, None, "model_response_incomplete"),
+])
+async def test_responses_incomplete_terminal_event(reason, arguments, code):
+    output = [] if arguments is None else [{
+        "type": "function_call", "id": "item_1", "call_id": "call_1",
+        "name": "weather", "arguments": arguments,
+    }]
+    events = [{"type": "response.incomplete", "response": {
+        "id": "resp_1", "status": "incomplete", "output": output,
+        "incomplete_details": {"reason": reason},
+        "usage": {"input_tokens": 20, "output_tokens": 4096},
+    }}]
+    async def handler(_request):
+        return _sse_response(events)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        call = handle_stream("openai_responses", client, "https://provider.test/v1/responses",
+                             PreparedRequest({"stream": True}, {}), None)
+        if code:
+            with pytest.raises(ModelStreamError) as captured:
+                await call
+            assert classify_model_error(captured.value).code == code
+            assert captured.value.diagnostics["terminal_event_seen"] is True
+            assert captured.value.diagnostics["termination_reason"] != "eof_without_terminal_event"
+        else:
+            result = await call
+            assert result["finish_reason"] == "length"
+            assert result["tool_calls"][0]["function"]["arguments"] == arguments
+
+
+class _DisconnectAfterEvents(httpx.AsyncByteStream):
+    def __init__(self, events, done=False):
+        self.body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        if done:
+            self.body += "data: [DONE]\n\n"
+
+    async def __aiter__(self):
+        yield self.body.encode()
+        raise httpx.ReadError("connection closed after events")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter,events,done", [
+    ("openai_compatible", [{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}], False),
+    ("openai_compatible", [{"choices": [{"delta": {"content": "ok"}}]}], True),
+    ("anthropic", [
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}},
+        {"type": "message_stop"},
+    ], False),
+    ("openai_responses", [
+        {"type": "response.output_text.delta", "delta": "ok"},
+        {"type": "response.completed", "response": {"status": "completed", "output": []}},
+    ], False),
+])
+async def test_successful_terminal_survives_tail_disconnect(adapter, events, done):
+    async def handler(_request):
+        return httpx.Response(200, stream=_DisconnectAfterEvents(events, done),
+                              headers={"content-type": "text/event-stream"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await handle_stream(adapter, client, "https://provider.test/stream",
+                                     PreparedRequest({"stream": True}, {}), None)
+    assert result["content"] == "ok"
+    assert result["stream_diagnostics"]["stream_completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_tail_disconnect_preserves_usage_after_finish_reason():
+    events = [
+        {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}},
+    ]
+    async def handler(_request):
+        return httpx.Response(200, stream=_DisconnectAfterEvents(events),
+                              headers={"content-type": "text/event-stream"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await handle_stream("openai_compatible", client, "https://provider.test/stream",
+                                     PreparedRequest({"stream": True}, {}), None)
+    assert result["usage"]["completion_tokens"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish,arguments,expected", [
+    (None, None, "model_connection_failed"),
+    ("length", '{"path":', "model_output_truncated"),
+    ("tool_calls", '{"path":', "model_response_invalid"),
+])
+async def test_tail_disconnect_does_not_accept_unfinished_response(finish, arguments, expected):
+    delta = {"content": "partial"}
+    if arguments is not None:
+        delta["tool_calls"] = [{"index": 0, "id": "call_1", "function": {
+            "name": "Write", "arguments": arguments,
+        }}]
+    events = [{"choices": [{"delta": delta, "finish_reason": finish}]}]
+    async def handler(_request):
+        return httpx.Response(200, stream=_DisconnectAfterEvents(events),
+                              headers={"content-type": "text/event-stream"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ModelStreamError) as captured:
+            await handle_stream("openai_compatible", client, "https://provider.test/stream",
+                                PreparedRequest({"stream": True}, {}), None)
+    assert classify_model_error(captured.value).code == expected
+
+
+class _CloseFailureStream(httpx.AsyncByteStream):
+    def __init__(self, events):
+        self.body = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
+        self.close_attempts = 0
+
+    async def __aiter__(self):
+        yield self.body
+
+    async def aclose(self):
+        self.close_attempts += 1
+        raise httpx.ReadError("cleanup failed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments,expected", [
+    ('{"city":"Paris"}', None),
+    ('{"city":', "model_output_truncated"),
+])
+async def test_cleanup_failure_preserves_terminal_response_or_validation_error(arguments, expected):
+    stream = _CloseFailureStream([{"type": "response.incomplete", "response": {
+        "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
+        "output": [{"type": "function_call", "id": "item_1", "call_id": "call_1",
+                    "name": "weather", "arguments": arguments}],
+    }}])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _r: httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+    )) as client:
+        call = handle_stream("openai_responses", client, "https://provider.test/stream",
+                             PreparedRequest({"stream": True}, {}), None)
+        if expected:
+            with pytest.raises(ModelStreamError) as captured:
+                await call
+            assert classify_model_error(captured.value).code == expected
+        else:
+            result = await call
+            assert result["tool_calls"][0]["function"]["arguments"] == arguments
+    assert stream.close_attempts >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code,expected", [
+    ("server_error", "model_service_unavailable"),
+    ("rate_limit_exceeded", "model_rate_limited"),
+    ("insufficient_quota", "model_quota_exhausted"),
+    ("invalid_api_key", "model_authentication_failed"),
+    ("context_length_exceeded", "model_request_too_large"),
+    ("invalid_prompt", "model_request_invalid"),
+    ("model_not_found", "model_unavailable"),
+    ("private-unknown-code", "model_call_failed"),
+])
+async def test_responses_failed_preserves_cause_even_when_cleanup_fails(code, expected):
+    from cyrene.model.error_details import ModelCallError
+    stream = _CloseFailureStream([{"type": "response.failed", "response": {
+        "status": "failed", "error": {"code": code, "message": "private-upstream-text"},
+    }}])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _r: httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+    )) as client:
+        with pytest.raises(ModelStreamError) as captured:
+            await handle_stream("openai_responses", client, "https://provider.test/stream",
+                                PreparedRequest({"stream": True}, {}), None)
+    error = captured.value
+    assert error.kind == "provider_failed"
+    assert error.diagnostics["termination_reason"] == "provider_response_failed"
+    details = ModelCallError(classify_model_error(error), diagnostics=error.diagnostics).as_error_details()
+    assert details["code"] == expected
+    assert "private-" not in json.dumps(details)
+    assert details["stream_diagnostics"]["provider_error_code"] == (
+        "unknown" if code == "private-unknown-code" else code
+    )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_hide_callback_cancellation():
+    import asyncio
+    stream = _CloseFailureStream([{"choices": [{"delta": {"content": "partial"}}]}])
+    async def cancel(_event):
+        raise asyncio.CancelledError()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _r: httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+    )) as client:
+        with pytest.raises(asyncio.CancelledError):
+            await handle_stream("openai_compatible", client, "https://provider.test/stream",
+                                PreparedRequest({"stream": True}, {}), cancel)
+    assert stream.close_attempts >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 429, 503])
+async def test_cleanup_preserves_success_and_http_failure(status):
+    stream = _CloseFailureStream([{"type": "response.completed", "response": {
+        "status": "completed", "output": [], "usage": {"input_tokens": 10, "output_tokens": 2},
+    }}])
+    emitted = []
+    async def callback(event):
+        emitted.append(event)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _r: httpx.Response(status, stream=stream, headers={"content-type": "text/event-stream"})
+    )) as client:
+        call = handle_stream("openai_responses", client, "https://provider.test/stream",
+                             PreparedRequest({"stream": True}, {}), callback)
+        if status == 200:
+            result = await call
+            assert result["stream_diagnostics"]["stream_completed"] is True
+            assert result["usage"]["completion_tokens"] == 2
+            assert sum(e["type"] == "reply_done" for e in emitted) == 1
+        else:
+            with pytest.raises(httpx.HTTPStatusError) as captured:
+                await call
+            assert captured.value.response.status_code == status
+            assert not emitted
+    assert stream.close_attempts >= 1

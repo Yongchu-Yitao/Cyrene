@@ -1342,6 +1342,43 @@ def test_retry_question_identity_survives_resume_without_incrementing_turn_count
     assert captured["config"].completed_turn_count == 7
 
 
+def test_answer_resume_uses_canonical_run_timeline_instead_of_legacy_activities():
+    from cyrene.workbench.http.workbench.chat_routes.run_answer_routes import (
+        _AnswerOperation,
+    )
+
+    canonical = {
+        "id": "run_answer:activity:2",
+        "runId": "run_answer",
+        "timelineVersion": 1,
+        "timelineOrder": 2,
+        "role": "assistant",
+        "activityCard": True,
+        "trace": [{"kind": "tool", "toolCallId": "call-1"}],
+    }
+    operation = object.__new__(_AnswerOperation)
+    operation.run = SimpleNamespace(
+        timeline=SimpleNamespace(messages=lambda: [canonical]),
+    )
+    operation.service = SimpleNamespace(
+        utc_now_iso=lambda: "2030-01-01T00:00:00+00:00",
+    )
+    result = SimpleNamespace(activity_messages=[{
+        "id": "activity_assistant_legacy",
+        "role": "assistant",
+        "activityCard": True,
+        "trace": [{"kind": "tool", "toolCallId": "call-1"}],
+    }])
+
+    assert operation._runtime_timeline(result, "provider/model") == [
+        {
+            **canonical,
+            "model": "provider/model",
+            "createdAt": "2030-01-01T00:00:00+00:00",
+        }
+    ]
+
+
 def test_builtin_runtime_message_fields_preserve_latest_request_usage():
     from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 

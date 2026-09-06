@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+
+import pytest
 from dataclasses import replace
 
 from cyrene.core.session import AgentSession
@@ -197,13 +199,20 @@ def test_invalid_model_response_retries_same_node_through_context_hook(tmp_path)
     session.close()
 
 
-def test_invalid_model_response_retry_is_bounded(tmp_path):
+@pytest.mark.parametrize("error_text,code", [
+    ("invalid JSON response", "model_response_invalid"),
+    ("model output truncated", "model_output_truncated"),
+    ("incomplete-stream", "model_response_incomplete"),
+])
+def test_invalid_model_response_retry_is_bounded(tmp_path, error_text, code):
     model_calls = 0
 
     async def invalid_model(_arguments, _context):
         nonlocal model_calls
         model_calls += 1
-        raise ModelCallError(classify_model_error("invalid JSON response"))
+        from cyrene.model.protocol_adapters import ModelStreamError
+        error = ModelStreamError("upstream_incomplete", "EOF", {}) if error_text == "incomplete-stream" else error_text
+        raise ModelCallError(classify_model_error(error))
 
     registry = PluginRegistry()
     registry.register_pack(
@@ -230,7 +239,7 @@ def test_invalid_model_response_retry_is_bounded(tmp_path):
     output = session.final_output("invalid-response-bounded")
     assert output is not None
     assert output["error"] is True
-    assert output["failure_kind"] == "model_response_invalid"
+    assert output["failure_kind"] == code
     session.close()
 
 

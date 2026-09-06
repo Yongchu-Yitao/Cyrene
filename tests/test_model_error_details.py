@@ -170,7 +170,7 @@ async def test_model_provider_exports_safe_stream_diagnostics(monkeypatch) -> No
     )
 
     assert result.success is False
-    assert result.error_details["code"] == "model_response_invalid"
+    assert result.error_details["code"] == "model_response_incomplete"
     assert result.error_details["stream_diagnostics"] == {
         "adapter": "anthropic",
         "event_count": 3,

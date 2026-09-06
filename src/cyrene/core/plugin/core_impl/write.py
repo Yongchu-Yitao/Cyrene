@@ -9,9 +9,6 @@ from ..plugin import Plugin, PluginContext
 from .permission_boundaries import path_boundary, resolved_path
 
 
-_MAX_WRITE_CHARS = 8_000
-
-
 async def write(arguments: dict[str, Any], context: PluginContext) -> str:
     path = resolved_path(arguments.get("path"), context)
     content = str(arguments.get("content", ""))
@@ -54,7 +51,6 @@ WRITE_PLUGIN = Plugin(
             "path": {"type": "string"},
             "content": {
                 "type": "string",
-                "maxLength": _MAX_WRITE_CHARS,
                 "description": "One complete chunk, at most 8,000 characters.",
             },
             "mode": {

@@ -3158,41 +3158,41 @@
     "load_context": {
       "en": {
         "name": "Load task context",
-        "description": "Load an existing task context. Unload another active context first. Call alone."
+        "description": "Resume an earlier goal by restoring its saved task context before answering or using its evidence. Use the catalog's exact ID; unload a different active context first. Do not call for the already active task, a new goal, or shared. Call alone and wait for success."
       },
       "zh": {
         "name": "加载任务上下文",
-        "description": "加载指定任务上下文；先卸载当前其他任务。此工具必须单独调用。"
+        "description": "恢复较早目标时，在回答或使用其资料前加载已保存的任务上下文。使用目录中的准确 ID，并先卸载另一个活动任务；当前任务、新目标和 shared 不需要加载。此工具必须单独调用并等待成功。"
       }
     },
     "unload_context": {
       "en": {
         "name": "Save and unload task context",
-        "description": "Save a checkpoint and unload the active context. Call alone. Subsequent task work creates a context unless you load one."
+        "description": "Save a checkpoint and pause the active task before starting an independent goal or loading an earlier one, including text-only work. Do not call for the first task, acknowledgments, or explanations, corrections and tests serving the current goal. Subsequent task work creates a context unless you load one. Call alone and wait for success."
       },
       "zh": {
         "name": "保存并卸载任务上下文",
-        "description": "保存不超过 200 字符的交接摘要并卸载当前任务；后续工作自动新建上下文，除非加载已有任务。此工具必须单独调用。"
+        "description": "开始独立目标或恢复较早任务前，保存交接摘要并暂停当前任务，也适用于纯文字工作。首次任务、简单确认，以及服务于当前目标的说明、修正和测试不需要切换。后续工作自动新建上下文，除非加载已有任务。此工具必须单独调用并等待成功。"
       }
     },
     "append_context": {
       "en": {
         "name": "Append task context",
-        "description": "Append body text to any context, including shared, without activating it. For shared, preserve source references and applicability. Call alone."
+        "description": "Save new task notes in any context without activating it. Use shared for new supported cross-task agreements with source and scope. Skip information already covered; keep local or uncertain conclusions in their task. To correct an existing agreement, use replace_context instead of appending contradictory text. Execution records are managed separately. Call alone and wait for success."
       },
       "zh": {
         "name": "追加任务上下文",
-        "description": "向指定上下文或 shared 追加正文，不切换当前任务；共享信息应保留来源与适用范围。此工具必须单独调用。"
+        "description": "向任意上下文保存新的任务记录而不切换任务。新的跨任务共同约定写入 shared，并注明来源与范围；跳过已有内容，把局部或不确定结论留在对应任务中。修正已有约定时应完整替换，不追加相互矛盾的内容。执行记录独立管理，此工具必须单独调用并等待成功。"
       }
     },
     "replace_context": {
       "en": {
         "name": "Replace task context",
-        "description": "Overwrite any context body, including shared, without activating it; preserve valid shared agreements, source references and applicability. No revision history. Execution records are managed separately. Call alone."
+        "description": "Correct or update any context body without activating it. Supply the complete replacement; there is no revision history. For shared, replace outdated or incorrect agreements while preserving other valid information, sources and scope. Do not rewrite unchanged content or add unsupported requirements. Execution records are managed separately. Call alone and wait for success."
       },
       "zh": {
         "name": "替换任务上下文",
-        "description": "覆盖指定上下文或 shared 的正文，不切换任务、不保存修订历史；保留有效共同约定、来源与适用范围。执行记录独立管理，此工具必须单独调用。"
+        "description": "修正或更新任意上下文而不切换任务。提供完整替换内容，且不保留修订历史；更新 shared 时替换过时或错误约定，同时保留其他有效信息、来源与范围。不要重写未变化内容或加入没有依据的要求。执行记录独立管理，此工具必须单独调用并等待成功。"
       }
     }
   }

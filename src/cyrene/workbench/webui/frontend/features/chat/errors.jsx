@@ -22,6 +22,8 @@ var WORKBENCH_ERROR_I18N_KEYS = {
   model_connection_failed: "workbenchChat.error.modelConnectionFailed",
   model_service_unavailable: "workbenchChat.error.modelServiceUnavailable",
   model_response_invalid: "workbenchChat.error.modelResponseInvalid",
+  model_output_truncated: "workbenchChat.error.modelOutputTruncated",
+  model_response_incomplete: "workbenchChat.error.modelResponseIncomplete",
   model_call_failed: "workbenchChat.error.modelCallFailed",
   process_restarted: "workbenchChat.error.processRestarted",
   chat_run_driver_failed: "workbenchChat.error.driverFailed",
@@ -93,6 +95,8 @@ function wbcAgentErrorPresentation(detail, failureKind) {
     model_connection_failed: ["network", "workbenchChat.error.modelConnectionTitle", "Cannot reach model service", "workbenchChat.error.modelConnectionSummary", "Cyrene could not connect to the configured model endpoint.", "workbenchChat.error.modelConnectionHint", "Check that the service is running and verify its address, port, proxy, and network."],
     model_service_unavailable: ["network", "workbenchChat.error.modelServiceTitle", "Model service is unavailable", "workbenchChat.error.modelServiceSummary", "The upstream model service is overloaded or temporarily unavailable.", "workbenchChat.error.modelServiceHint", "Wait briefly and retry, or switch models."],
     model_response_invalid: ["model", "workbenchChat.error.modelResponseTitle", "Invalid model response", "workbenchChat.error.modelResponseSummary", "The service returned an empty or unsupported response.", "workbenchChat.error.modelResponseHint", "Check API compatibility or switch to another model."],
+    model_output_truncated: ["model", "workbenchChat.error.modelOutputTruncatedTitle", "Model output limit reached", "workbenchChat.error.modelOutputTruncated", "The model reached its output limit and returned invalid tool arguments.", "workbenchChat.error.modelOutputTruncatedHint", "Split the output into smaller tool calls and retry."],
+    model_response_incomplete: ["model", "workbenchChat.error.modelResponseIncompleteTitle", "Incomplete model response", "workbenchChat.error.modelResponseIncomplete", "The model response was not fully received.", "workbenchChat.error.modelResponseIncompleteHint", "Retry to receive a complete response."],
     model_call_failed: ["model", "workbenchChat.error.modelCallTitle", "Model call failed", "workbenchChat.error.modelCallSummary", "The model call failed for an unclassified reason.", "workbenchChat.error.modelCallHint", "Copy the details, check the model service, and retry."],
   }[String(failureKind || "").toLowerCase()];
   if (stable) return {

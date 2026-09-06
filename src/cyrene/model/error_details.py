@@ -71,6 +71,7 @@ class ModelCallError(RuntimeError):
 
 _PUBLIC_STREAM_FIELDS = frozenset({
     "adapter",
+    "provider_error_code",
     "data_chunk_count",
     "event_count",
     "finish_reason",
@@ -134,6 +135,8 @@ _DETAIL_KEYS = {
     "model_connection_failed": "modelConnectionFailed",
     "model_service_unavailable": "modelServiceUnavailable",
     "model_response_invalid": "modelResponseInvalid",
+    "model_output_truncated": "modelOutputTruncated",
+    "model_response_incomplete": "modelResponseIncomplete",
     "model_call_failed": "modelCallFailed",
 }
 
@@ -185,6 +188,14 @@ _ERROR_MESSAGES = {
     "model_service_unavailable": (
         "The model service is temporarily unavailable.",
         "模型服务暂时不可用。",
+    ),
+    "model_response_incomplete": (
+        "The model response was not fully received. Please retry.",
+        "模型响应未完整接收，请重试。",
+    ),
+    "model_output_truncated": (
+        "The model reached its output limit before completing the response. Split the output into smaller calls and retry.",
+        "模型输出达到上限，响应未完成。请拆分为更小的调用后重试。",
     ),
     "model_response_invalid": (
         "The model service returned an invalid or empty response.",
@@ -259,13 +270,39 @@ def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
     signature = f"{type(exc).__name__} {text}".lower()
     status = _status_code(exc, signature)
 
+    if "model output truncated" in signature:
+        return _details("model_output_truncated", True, status, retry_scope="different_arguments")
+
     stream_kind = str(getattr(exc, "kind", "") or "")
+    if stream_kind == "upstream_incomplete":
+        return _details("model_response_incomplete", True, status, retry_scope="immediate")
+    diagnostics = getattr(exc, "diagnostics", {})
+    if stream_kind == "provider_failed":
+        provider_code = diagnostics.get("provider_error_code") if isinstance(diagnostics, Mapping) else None
+        code, retryable = {
+            "server_error": ("model_service_unavailable", True),
+            "rate_limit_exceeded": ("model_rate_limited", True),
+            "insufficient_quota": ("model_quota_exhausted", False),
+            "invalid_api_key": ("model_authentication_failed", False),
+            "authentication_error": ("model_authentication_failed", False),
+            "context_length_exceeded": ("model_request_too_large", False),
+            "invalid_prompt": ("model_request_invalid", False),
+            "invalid_request_error": ("model_request_invalid", False),
+            "model_not_found": ("model_unavailable", False),
+        }.get(provider_code, ("model_call_failed", True))
+        return _details(code, retryable, 0)
+    if stream_kind == "output_limit" or (
+        stream_kind == "invalid_tool_arguments"
+        and isinstance(diagnostics, Mapping)
+        and str(diagnostics.get("finish_reason") or "").lower()
+        in {"length", "max_tokens", "max_tokens_reached", "max_output_tokens"}
+    ):
+        return _details("model_output_truncated", True, status, retry_scope="different_arguments")
     if stream_kind == "transport_interrupted":
         return _details("model_connection_failed", True, status)
     if stream_kind in {
         "protocol_invalid_json",
         "protocol_invalid_event",
-        "upstream_incomplete",
     }:
         return _details("model_response_invalid", True, status)
     if stream_kind == "invalid_tool_arguments":

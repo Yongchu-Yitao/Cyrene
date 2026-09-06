@@ -13,9 +13,10 @@ import hashlib
 import json
 import time
 import uuid
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -1067,7 +1068,7 @@ async def _stream_payloads(
                         data_lines.clear()
                     if diagnostics is not None:
                         diagnostics["saw_done_marker"] = True
-                    continue
+                    return
                 data_lines.append(value)
                 continue
             if data_lines:
@@ -1079,6 +1080,16 @@ async def _stream_payloads(
     except ModelStreamError:
         raise
     except (httpx.TransportError, TimeoutError, OSError) as exc:
+        # Some providers close the transport uncleanly after their final event.
+        # Preserve the response; handle_stream still validates tool arguments
+        # and output-limit stops before accepting it. Keep reading after a
+        # finish reason so trailing usage events are not lost.
+        if diagnostics is not None and (
+            diagnostics.get("finish_reason")
+            or diagnostics.get("terminal_event_seen")
+            or diagnostics.get("saw_done_marker")
+        ):
+            return
         if diagnostics is not None:
             diagnostics["termination_reason"] = "transport_interrupted"
             diagnostics["stream_completed"] = False
@@ -1217,6 +1228,35 @@ def _completed_stream_message(
     return message
 
 
+@asynccontextmanager
+async def _model_stream_response(
+    client: httpx.AsyncClient,
+    target: str,
+    request: PreparedRequest,
+    diagnostics: dict[str, Any],
+) -> AsyncIterator[httpx.Response]:
+    """Own transport cleanup until parsing and outcome validation have finished."""
+    response = await client.send(
+        client.build_request("POST", target, json=request.payload, headers=request.headers),
+        stream=True,
+    )
+    body_failed = False
+    try:
+        yield response
+    except BaseException:
+        body_failed = True
+        raise
+    finally:
+        try:
+            await response.aclose()
+        except (httpx.TransportError, TimeoutError, OSError):
+            # Connection disposal is secondary to the validated call outcome.
+            # Preserve either the original failure/cancellation or the fully
+            # parsed result; a terminal marker alone is not success.
+            if not body_failed and not diagnostics.get("stream_completed"):
+                raise
+
+
 async def handle_stream(
     adapter_id: str,
     client: httpx.AsyncClient,
@@ -1264,7 +1304,7 @@ async def handle_stream(
         if callback:
             await callback({"type": "reply_delta", "delta": text})
 
-    async with client.stream("POST", target, json=request.payload, headers=request.headers) as response:
+    async with _model_stream_response(client, target, request, stream_diagnostics) as response:
         stream_diagnostics["http_status"] = int(response.status_code)
         if timing is not None:
             timing["response_headers_ms"] = (time.monotonic() - request_started) * 1000
@@ -1379,11 +1419,45 @@ async def handle_stream(
                             "name": str(item.get("name") or ""),
                             "arguments": str(item.get("arguments") or "{}"),
                         }
-                elif event_type == "response.completed":
+                elif event_type == "response.failed":
+                    failed = data.get("response")
+                    failed = failed if isinstance(failed, dict) else {}
+                    error = failed.get("error")
+                    error = error if isinstance(error, dict) else {}
+                    # Retain only known codes, never upstream messages or request data.
+                    code = str(error.get("code") or "")
+                    known_codes = {
+                        "server_error", "rate_limit_exceeded", "insufficient_quota",
+                        "invalid_api_key", "authentication_error", "context_length_exceeded",
+                        "invalid_prompt", "invalid_request_error", "model_not_found",
+                    }
+                    stream_diagnostics["provider_error_code"] = code if code in known_codes else "unknown"
+                    stream_diagnostics["terminal_event_seen"] = True
+                    stream_diagnostics["finish_reason"] = "failed"
+                    stream_diagnostics["termination_reason"] = "provider_response_failed"
+                    _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+                    raise ModelStreamError(
+                        "provider_failed", "The provider reported a failed response.", stream_diagnostics,
+                    )
+                elif event_type in {"response.completed", "response.incomplete"}:
                     stream_diagnostics["terminal_event_seen"] = True
                     completed = data.get("response") if isinstance(data.get("response"), dict) else {}
                     usage.update(_usage(adapter, completed))
                     finish = str(completed.get("status") or finish)
+                    if event_type == "response.incomplete":
+                        details = completed.get("incomplete_details")
+                        reason = details.get("reason") if isinstance(details, dict) else None
+                        if reason == "max_output_tokens":
+                            finish = "length"
+                        else:
+                            stream_diagnostics["finish_reason"] = "incomplete"
+                            stream_diagnostics["termination_reason"] = "provider_response_incomplete"
+                            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+                            raise ModelStreamError(
+                                "upstream_incomplete",
+                                "The provider reported an incomplete response.",
+                                stream_diagnostics,
+                            )
                     completed_message = parse_response(adapter, completed)
                     for call in completed_message.get("tool_calls") or []:
                         call_id = str(call.get("id") or "")
@@ -1435,71 +1509,81 @@ async def handle_stream(
                 finish = event_finish or finish
 
             _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+            stream_diagnostics["finish_reason"] = finish
+            if stream_diagnostics.get("terminal_event_seen"):
+                break
 
-    normalized_finish = (
-        "length"
-        if finish.lower() in {"max_tokens", "max_tokens_reached"}
-        else finish.lower()
-    )
-    stream_diagnostics["finish_reason"] = normalized_finish
-    terminal_seen = bool(
-        normalized_finish
-        or stream_diagnostics.get("saw_done_marker")
-        or stream_diagnostics.get("terminal_event_seen")
-    )
-    if not terminal_seen:
-        stream_diagnostics["termination_reason"] = "eof_without_terminal_event"
-        _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
-        raise ModelStreamError(
-            "upstream_incomplete",
-            "The model stream ended before a terminal event was received.",
-            stream_diagnostics,
+        normalized_finish = (
+            "length"
+            if finish.lower() in {"max_tokens", "max_tokens_reached", "max_output_tokens"}
+            else finish.lower()
         )
-    invalid_calls = [
-        item
-        for item in _tool_stream_diagnostics(tool_calls)
-        if item["arguments_validation"] != "valid_object"
-    ]
-    if invalid_calls:
+        stream_diagnostics["finish_reason"] = normalized_finish
+        terminal_seen = bool(
+            normalized_finish
+            or stream_diagnostics.get("saw_done_marker")
+            or stream_diagnostics.get("terminal_event_seen")
+        )
+        if not terminal_seen:
+            stream_diagnostics["termination_reason"] = "eof_without_terminal_event"
+            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+            raise ModelStreamError(
+                "upstream_incomplete",
+                "The model stream ended before a terminal event was received.",
+                stream_diagnostics,
+            )
+        invalid_calls = [
+            item
+            for item in _tool_stream_diagnostics(tool_calls)
+            if item["arguments_validation"] != "valid_object"
+        ]
+        if invalid_calls:
+            stream_diagnostics["termination_reason"] = (
+                "output_limit_with_invalid_tool_arguments"
+                if normalized_finish == "length"
+                else "invalid_tool_arguments"
+            )
+            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
+            raise ModelStreamError(
+                "invalid_tool_arguments",
+                "The model stream ended with invalid tool arguments.",
+                stream_diagnostics,
+            )
+        if normalized_finish == "length" and not tool_calls:
+            stream_diagnostics["termination_reason"] = "output_limit_without_tool_calls"
+            raise ModelStreamError(
+                "output_limit",
+                "The model reached its output limit before completing the response.",
+                stream_diagnostics,
+            )
+        stream_diagnostics["stream_completed"] = True
         stream_diagnostics["termination_reason"] = (
-            "output_limit_with_invalid_tool_arguments"
-            if normalized_finish == "length"
-            else "invalid_tool_arguments"
+            "provider_finish_reason"
+            if normalized_finish
+            else "provider_terminal_event"
+            if stream_diagnostics.get("terminal_event_seen")
+            else "done_marker"
         )
-        _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
-        raise ModelStreamError(
-            "invalid_tool_arguments",
-            "The model stream ended with invalid tool arguments.",
-            stream_diagnostics,
-        )
-    stream_diagnostics["stream_completed"] = True
-    stream_diagnostics["termination_reason"] = (
-        "provider_finish_reason"
-        if normalized_finish
-        else "provider_terminal_event"
-        if stream_diagnostics.get("terminal_event_seen")
-        else "done_marker"
-    )
-    if protocol_trace is not None:
-        try:
-            await protocol_trace({
-                "type": "response_end",
-                "status": "completed",
-                "diagnostics": dict(stream_diagnostics),
-            })
-        except Exception:
-            pass
+        if protocol_trace is not None:
+            try:
+                await protocol_trace({
+                    "type": "response_end",
+                    "status": "completed",
+                    "diagnostics": dict(stream_diagnostics),
+                })
+            except Exception:
+                pass
 
-    if not started and callback:
-        await callback({"type": "reply_start"})
-    if reasoning_started and callback:
-        await callback({"type": "reasoning_done", "response": "".join(reasoning_parts)})
-    if callback:
-        await callback({"type": "reply_done", "response": "".join(text_parts)})
-    return _completed_stream_message(
-        text_parts, reasoning_parts, tool_calls, usage, finish,
-        response_id, returned_model, stream_diagnostics,
-    )
+        if not started and callback:
+            await callback({"type": "reply_start"})
+        if reasoning_started and callback:
+            await callback({"type": "reasoning_done", "response": "".join(reasoning_parts)})
+        if callback:
+            await callback({"type": "reply_done", "response": "".join(text_parts)})
+        return _completed_stream_message(
+            text_parts, reasoning_parts, tool_calls, usage, finish,
+            response_id, returned_model, stream_diagnostics,
+        )
 
 
 __all__ = [

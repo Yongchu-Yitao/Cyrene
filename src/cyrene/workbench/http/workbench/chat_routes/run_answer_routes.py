@@ -470,17 +470,22 @@ class _AnswerOperation:
         chat = self.service.repository.get(self.chat_id)
         return self.service.public_chat_light(chat) if chat else {}
 
-    def _runtime_activities(self, result: Any, model: str) -> list[dict[str, Any]]:
+    def _runtime_timeline(self, result: Any, model: str) -> list[dict[str, Any]]:
         now = self.service.utc_now_iso()
-        activities = [
+        active_run = getattr(self, "run", None)
+        timeline = getattr(active_run, "timeline", None)
+        records = timeline.messages() if timeline is not None else []
+        if not records:
+            records = result.activity_messages or ()
+        messages = [
             copy.deepcopy(dict(item))
-            for item in (result.activity_messages or ())
+            for item in records
             if isinstance(item, dict)
         ]
-        for item in activities:
+        for item in messages:
             item.setdefault("model", model)
             item.setdefault("createdAt", now)
-        return activities
+        return messages
 
     def _runtime_message_fields(self, result: Any) -> dict[str, Any]:
         fields: dict[str, Any] = runtime_usage_message_fields(
@@ -510,7 +515,7 @@ class _AnswerOperation:
         if str(pending.get("turnId") or "") != self.turn_id:
             raise RuntimeError("pending ContextTree question changed turn identity")
         model = str(result.model or self.chat.get("model") or "")
-        additions = self._runtime_activities(result, model)
+        additions = self._runtime_timeline(result, model)
         question = self.service.pending_question_message(
             pending,
             usage=dict(result.usage or {}),
@@ -567,8 +572,22 @@ class _AnswerOperation:
         if not fresh_chat:
             raise RuntimeError("chat disappeared while resuming its answer")
         model = str(result.model or fresh_chat.get("model") or "")
-        timeline = self._runtime_activities(result, model)
+        timeline = self._runtime_timeline(result, model)
         assistant = self._assistant_message(result, model)
+        final = next(
+            (
+                item
+                for item in reversed(timeline)
+                if item.get("role") == "assistant"
+                and not item.get("activityCard")
+                and not item.get("intermediate")
+                and not item.get("notificationCard")
+            ),
+            None,
+        )
+        if final is not None:
+            assistant = {**assistant, **final, "status": "completed"}
+            timeline = [item for item in timeline if item.get("id") != final.get("id")]
         saved_messages = [*timeline, assistant]
         await self._persist_completed_reply(
             fresh_chat,

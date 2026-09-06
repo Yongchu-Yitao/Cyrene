@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from cyrene.localization import app_language, localized
 from cyrene.workbench.chat.chat_external_turn_service import ExternalTurnProjection
+from cyrene.workbench.chat.chat_application import deduplicate_projected_messages
 from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.application.notifications import append_notification
 
@@ -225,6 +226,7 @@ class ChatReplyFinalizationApplicationService:
                 }
                 for notice in projection.notifications
             ]
+        timeline[:] = deduplicate_projected_messages(timeline)
 
     def _update_chat(
         self,

@@ -244,15 +244,6 @@ async def _normalized_provider_result(
     tools: Any,
 ) -> dict[str, Any]:
     finish_reason = str(value.get("finish_reason") or "").strip().lower()
-    raw_tool_calls = value.get("tool_calls")
-    if (
-        finish_reason in _TRUNCATED_FINISH_REASONS
-        and isinstance(raw_tool_calls, list)
-        and raw_tool_calls
-    ):
-        raise ValueError(
-            "Provider Plugin returned tool calls from a truncated response"
-        )
     content = value.get("content")
     reasoning = value.get("reasoning")
     if not isinstance(reasoning, str):
@@ -271,11 +262,20 @@ async def _normalized_provider_result(
         latency_ms = max(0.0, float(value.get("latency_ms") or 0.0))
     except (TypeError, ValueError):
         latency_ms = 0.0
-    tool_calls = await _parse_tool_calls(
-        value.get("tool_calls"),
-        provider_plugin,
-        tools,
-    )
+    # A length stop does not imply malformed arguments: some providers return
+    # complete tool calls at the output limit. Validate the entire batch before
+    # accepting it, just as for any other finish reason.
+    try:
+        tool_calls = await _parse_tool_calls(
+            value.get("tool_calls"), provider_plugin, tools,
+        )
+    except PluginInvocationError as exc:
+        if finish_reason not in _TRUNCATED_FINISH_REASONS:
+            raise
+        raise ModelCallError(
+            classify_model_error("model output truncated"),
+            diagnostics=value.get("stream_diagnostics"),
+        ) from exc
     result = {
         "content": content if isinstance(content, str) else "",
         "reasoning": reasoning if isinstance(reasoning, str) else "",
@@ -691,7 +691,12 @@ async def route_model_call(
             # evidence that this model candidate is unavailable.  Falling back
             # here can duplicate generation and lets a shared parser failure
             # poison otherwise healthy fallback candidates.
-            raise ModelCallError(_invalid_provider_result_details(exc)) from exc
+            if isinstance(exc, ModelCallError):
+                raise
+            raise ModelCallError(
+                _invalid_provider_result_details(exc),
+                diagnostics=result.value.get("stream_diagnostics"),
+            ) from exc
         await _publish_llm_event(
             context,
             messages=model_messages,

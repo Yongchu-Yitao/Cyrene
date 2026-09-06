@@ -42,6 +42,20 @@ def _write_chats(path, chats):
     path.write_text(json.dumps({"chats": chats}, ensure_ascii=False), encoding="utf-8")
 
 
+def _work_item(project_id="project_1"):
+    return {
+        "id": "task-explicit",
+        "type": "task",
+        "title": "Publish release",
+        "content": "Publish the verified artifacts.",
+        "status": "active",
+        "source": "explicit",
+        "priority": "high",
+        "project_id": project_id,
+        "updated_at": "2026-06-17T12:00:00+00:00",
+    }
+
+
 def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_path):
     from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
@@ -230,6 +244,11 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
     monkeypatch.setattr(
         scheduler,
+        "_authoritative_work_items",
+        AsyncMock(return_value=[_work_item()]),
+    )
+    monkeypatch.setattr(
+        scheduler,
         "_is_workbench_conversation_running",
         lambda _db_path, _session_id: False,
     )
@@ -242,6 +261,7 @@ async def test_proactive_is_persisted_to_new_workbench_chat(
         cooldown_until=0.0,
         last_proactive_time=0.0,
         probability=0.0,
+        evaluated_work_signatures={},
     )
 
     await scheduler._heartbeat_proactive_check(
@@ -288,7 +308,9 @@ def test_lottery_win_is_consumed_only_after_delivery(monkeypatch):
     assert scheduler._LOTTERY_STATE["probability"] == 0.6
 
 
-async def test_generation_timeout_preserves_accumulated_probability(monkeypatch):
+async def test_generation_timeout_preserves_accumulated_probability(
+    monkeypatch, tmp_path
+):
     from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
 
     async def timeout_run(*_args, **_kwargs):
@@ -299,18 +321,80 @@ async def test_generation_timeout_preserves_accumulated_probability(monkeypatch)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
     monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(
+        scheduler,
+        "_authoritative_work_items",
+        AsyncMock(return_value=[_work_item("default")]),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_default_workbench_project_scope",
+        lambda: {"project_id": "default", "workspace_dir": str(tmp_path)},
+    )
     monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", timeout_run)
     scheduler._LOTTERY_STATE.update(
         probability=0.75,
         consecutive_unanswered=0,
         cooldown_until=0.0,
         last_proactive_time=0.0,
+        evaluated_work_signatures={},
     )
 
     outcome = await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
 
     assert outcome == {"status": "generation_timeout"}
     assert scheduler._LOTTERY_STATE["probability"] == 0.75
+
+
+async def test_proactive_does_not_run_without_explicit_active_work(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
+
+    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
+    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(
+        scheduler,
+        "_default_workbench_project_scope",
+        lambda: {"project_id": "default", "workspace_dir": "/tmp/workspace"},
+    )
+    monkeypatch.setattr(
+        scheduler, "_authoritative_work_items", AsyncMock(return_value=[])
+    )
+    run = AsyncMock()
+    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run)
+
+    outcome = await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
+
+    assert outcome == {"status": "no_actionable_work"}
+    run.assert_not_awaited()
+
+
+async def test_proactive_evaluates_each_work_revision_only_once(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_entity.proactive import proactive_work_signature
+    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
+
+    item = _work_item("default")
+    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
+    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
+    monkeypatch.setattr(
+        scheduler,
+        "_default_workbench_project_scope",
+        lambda: {"project_id": "default", "workspace_dir": "/tmp/workspace"},
+    )
+    monkeypatch.setattr(
+        scheduler, "_authoritative_work_items", AsyncMock(return_value=[item])
+    )
+    scheduler._LOTTERY_STATE["evaluated_work_signatures"] = {
+        "default": proactive_work_signature([item])
+    }
+    run = AsyncMock()
+    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run)
+
+    outcome = await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
+
+    assert outcome == {"status": "work_unchanged"}
+    run.assert_not_awaited()
 
 
 def test_workbench_frontend_handles_proactive_sse():
