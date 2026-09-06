@@ -1,12 +1,12 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.9.0-beta13-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.0--beta13-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
 
 <p align="center">
-  <img src="docs/assets/cyrene-hero.png" alt="Cyrene hero image" width="100%">
+  <img src="docs/assets/cyrene-hero.png" alt="Cyrene architecture: a continuous Agent runtime composed from context, model and capability plugins, with parallel subagents and local persistence" width="100%">
 </p>
 
 <h1 align="center">Cyrene — AI Agent That Evolves</h1>
@@ -60,6 +60,24 @@ Cyrene's personality, memory, models, tools, and workflows come from plugins
 rather than a fixed, unchangeable agent. Each conversation and project can use a
 different set of capabilities, while Plugin Center lets you manage plugins and
 tool visibility.
+
+The diagram above shows the native Cyrene Agent architecture:
+
+- **One continuous run** — Workbench organizes projects and conversations;
+  each run continues through model output, tool calls, user questions, and
+  final delivery, with cancellation and recovery built into the runtime.
+- **ContextTree and Hooks** — context plugins compose system instructions,
+  SOUL.md, memory, and conversation selections into a durable tree. Hooks
+  manage lifecycle behavior and tool permission review; compaction bounds
+  model input while preserving history.
+- **Plugin-provided inference and capabilities** — model providers supply
+  inference, while capability plugins provide MCP, skills, browser and
+  SimpleXNG search, knowledge, Office, goals, plans, and schedules. Tools are
+  directly visible or discovered through `toolbox: list → describe → invoke`.
+- **Parallel work, durable state** — subagents run independent loops and
+  communicate through a durable inbox. ContextTree SQLite stores, the app
+  database, plugin data, and workspace files persist local state; the context
+  inspector, run timeline, and logs expose execution.
 
 See [Architecture](docs/architecture.md) for the implementation and
 [Custom plugins](docs/project-plugins.md) for extension points.

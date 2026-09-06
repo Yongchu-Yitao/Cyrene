@@ -1,12 +1,12 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.9.0-beta13-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.9.0--beta13-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
 
 <p align="center">
-  <img src="docs/assets/cyrene-hero.png" alt="Cyrene hero image" width="100%">
+  <img src="docs/assets/cyrene-hero.png" alt="Cyrene 架构：由上下文、模型与能力插件组装的连续 Agent Runtime，支持并行 Subagent 与本地持久化" width="100%">
 </p>
 
 <h1 align="center">Cyrene — 会成长的 AI Agent</h1>
@@ -52,6 +52,20 @@
 Cyrene 的人格、记忆、模型、工具与工作流都由插件提供，而不是固化在一个不可改变
 的 Agent 中。不同 Conversation 和 Project 可以启用不同能力；你也可以在 Plugin
 Center 中管理插件和工具的可见性。
+
+上图展示了原生 Cyrene Agent 的当前架构：
+
+- **单一连续运行**：Workbench 组织 Project 和 Conversation；每次 Run 连续处理
+  模型输出、工具调用、用户提问与最终交付，Runtime 内置取消与恢复机制。
+- **ContextTree 与 Hook**：上下文插件将系统指令、SOUL.md、记忆和会话选择组装为
+  持久化上下文树。Hook 管理生命周期行为与工具权限审查；上下文压缩限制模型输入
+  大小，同时保留完整历史。
+- **插件提供推理与能力**：Model Provider 提供推理，能力插件提供 MCP、Skill、
+  Browser 与 SimpleXNG 搜索、Knowledge、Office、Goal、Plan 和 Schedule。
+  工具可直接对模型可见，也可通过 `toolbox: list → describe → invoke` 按需发现。
+- **并行协作与持久状态**：Subagent 拥有独立运行循环，通过持久化 Inbox 通信。
+  ContextTree SQLite、应用数据库、插件数据与工作区文件共同保存本地状态；
+  Context Inspector、Run Timeline 和日志呈现执行过程。
 
 实现原理见[架构说明](docs/architecture.zh-CN.md)，扩展方式见
 [自定义插件](docs/project-plugins.zh-CN.md)。
