@@ -1,0 +1,107 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { protectTranscriptResize } from './transcript-resize.mjs';
+
+function surface() {
+  const listeners = new Map();
+  return {
+    addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(fn); },
+    removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+    emit(type, extra = {}) { for (const fn of listeners.get(type) || []) fn({ target: this, ...extra }); },
+    get listeners() { return [...listeners.values()].reduce((n, set) => n + set.size, 0); },
+  };
+}
+function fixture(count = 30) {
+  let selected = false, pip = false, sticking = false;
+  const timers = new Map();
+  const doc = surface();
+  doc.defaultView = {
+    setTimeout(fn) { timers.set(1, fn); return 1; },
+    clearTimeout(id) { timers.delete(id); },
+    getSelection() { return { isCollapsed: !selected }; },
+  };
+  const rows = Array.from({ length: count }, (_, i) => {
+    const attrs = new Map(), styles = new Map();
+    return {
+      isConnected: true,
+      getBoundingClientRect() { return { top: (i - 15) * 100, bottom: (i - 14) * 100, height: 100 }; },
+      hasAttribute(name) { return attrs.has(name); },
+      setAttribute(name, value) { attrs.set(name, value); },
+      removeAttribute(name) { attrs.delete(name); },
+      style: { setProperty(name, value) { styles.set(name, value); }, removeProperty(name) { styles.delete(name); } },
+      contains(el) { return el === this; },
+      classList: { contains() { return false; } },
+      attrs, styles,
+    };
+  });
+  const thread = Object.assign(surface(), {
+    ownerDocument: doc, children: rows, scrollTop: 1500, scrollHeight: 3000,
+    getBoundingClientRect: () => ({ top: 0, bottom: 400, height: 400 }),
+    querySelectorAll: () => rows,
+  });
+  const page = Object.assign(surface(), { querySelector: () => pip });
+  const cleanup = protectTranscriptResize(thread, page, () => sticking);
+  return {
+    rows, thread, page, doc, timers, cleanup,
+    start() { page.emit('transitionrun', { propertyName: 'grid-template-columns' }); },
+    end(type = 'transitionend') { page.emit(type, { propertyName: 'grid-template-columns' }); },
+    frozen() { return rows.filter(row => row.hasAttribute('data-wbc-resize-frozen')); },
+    select() { selected = true; }, pip() { pip = true; }, stick() { sticking = true; },
+  };
+}
+
+test('only distant history is frozen; final layout restores the live tail', () => {
+  const f = fixture();
+  f.stick(); f.start();
+  assert.ok(f.frozen().length > 0);
+  assert.ok(!f.rows[15].attrs.size);
+  assert.equal(f.rows[0].styles.get('--wbc-resize-row-height'), '100px');
+  f.end();
+  assert.equal(f.frozen().length, 0);
+  assert.equal(f.thread.scrollTop, 3000);
+  assert.equal(f.timers.size, 0);
+  assert.ok(f.rows.every(row => !row.styles.size));
+  f.cleanup();
+});
+
+test('reading anchor is compensated after frozen rows regain their natural height', () => {
+  const f = fixture();
+  f.start();
+  const anchor = f.rows[15];
+  anchor.getBoundingClientRect = () => ({ top: f.frozen().length ? 0 : 125, bottom: 225, height: 100 });
+  f.end();
+  assert.equal(f.thread.scrollTop, 1625);
+  f.cleanup();
+});
+
+test('short history, selected text, PiP and focused rows stay live', () => {
+  for (const configure of [f => f.select(), f => f.pip()]) {
+    const f = fixture(); configure(f); f.start(); assert.equal(f.frozen().length, 0); f.cleanup();
+  }
+  const short = fixture(10); short.start(); assert.equal(short.frozen().length, 0); short.cleanup();
+  const f = fixture(); f.doc.activeElement = f.rows[0]; f.start();
+  assert.equal(f.rows[0].attrs.size, 0); f.cleanup();
+});
+
+test('interruptions, cancellation, timeout and cleanup cannot strand hidden messages', () => {
+  for (const finish of [
+    f => f.end('transitioncancel'), f => f.thread.emit('wheel'),
+    f => f.doc.emit('keydown'), f => f.doc.emit('pointerdown'),
+    f => f.timers.get(1)(), f => f.cleanup(),
+  ]) {
+    const f = fixture(); f.start(); assert.ok(f.frozen().length); finish(f);
+    assert.equal(f.frozen().length, 0); f.cleanup();
+    assert.equal(f.doc.listeners + f.thread.listeners + f.page.listeners, 0);
+    assert.equal(f.timers.size, 0);
+  }
+});
+
+test('unrelated transitions are ignored and repeated starts restore before freezing', () => {
+  const f = fixture();
+  f.page.emit('transitionrun', { propertyName: 'opacity' });
+  f.page.emit('transitionrun', { propertyName: 'grid-template-columns', target: f.thread });
+  assert.equal(f.frozen().length, 0);
+  f.start(); const count = f.frozen().length; f.start();
+  assert.equal(f.frozen().length, count);
+  f.end(); assert.equal(f.frozen().length, 0); f.cleanup();
+});
