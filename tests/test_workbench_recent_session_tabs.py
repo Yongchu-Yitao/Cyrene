@@ -319,7 +319,9 @@ def test_recent_conversation_lists_stay_in_sync_with_chat_page():
     assert "reloadRecentChats(projects || [])" in lifecycle
     assert "updateRecentChats: function (projectId, chats)" in shell
     assert "onChatsChange: sessions.updateRecentChats" in shell
-    assert "if (onChatsChange && projectId) onChatsChange(projectId, chats)" in chat
+    assert "useWbcChatProjections(projectId, chatCache, onChatsChange)" in chat
+    projections = _frontend_source("features/chat/page-state.jsx")
+    assert "if (onChatsChange && projectId) onChatsChange(projectId, chats)" in projections
 
 
 def test_session_tabs_remain_interactive_inside_the_draggable_titlebar():
