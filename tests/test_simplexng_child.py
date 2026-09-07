@@ -122,3 +122,32 @@ assert evaluate("9**999999999", 0.05) is None
         [4, False], [64, False], [1, True], [1, True],
         [3.141592653589793, False], ["", False], ["", False],
     ]
+
+
+def test_windows_watchdog_tracks_managed_parent_through_bootloader(monkeypatch):
+    calls = []
+    waits = iter([258, 0])
+
+    def wait(handle, timeout):
+        calls.append(("wait", handle, timeout))
+        return next(waits)
+
+    def exit_process(code):
+        raise SystemExit(code)
+
+    monkeypatch.setitem(sys.modules, "_winapi", types.SimpleNamespace(
+        OpenProcess=lambda *args: calls.append(("open", *args)) or 123,
+        WaitForSingleObject=wait,
+        CloseHandle=lambda handle: calls.append(("close", handle)),
+        WAIT_OBJECT_0=0,
+    ))
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(os, "getppid", lambda: 999)
+    monkeypatch.setattr(os, "_exit", exit_process)
+    with pytest.raises(SystemExit) as stopped:
+        child._watch_parent(4321)
+    assert stopped.value.code == 0
+    assert calls == [
+        ("open", 0x00100000, False, 4321),
+        ("wait", 123, 1000), ("wait", 123, 1000), ("close", 123),
+    ]

@@ -64,7 +64,37 @@ def _parent_is_alive(parent_pid: int) -> bool:
     return _pid_exists(parent_pid)
 
 
+def _watch_windows_parent(parent_pid: int, interval: float) -> None:
+    """Track the managed parent itself across one-file bootloader wrappers.
+
+    A held process handle refers to the original process even if its PID is
+    reused. The immediate OS parent may legitimately be a PyInstaller loader.
+    """
+    import _winapi
+
+    while True:
+        try:
+            handle = _winapi.OpenProcess(0x00100000, False, parent_pid)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 87:
+                os._exit(0)
+            time.sleep(interval)
+            continue
+        try:
+            while _winapi.WaitForSingleObject(handle, max(1, int(interval * 1000))) != _winapi.WAIT_OBJECT_0:
+                pass
+            os._exit(0)
+        except OSError:
+            # An inaccessible handle is not evidence that the parent died.
+            time.sleep(interval)
+        finally:
+            _winapi.CloseHandle(handle)
+
+
 def _watch_parent(parent_pid: int, interval: float = 1.0) -> None:
+    if sys.platform == "win32":
+        _watch_windows_parent(parent_pid, interval)
+        return
     while True:
         time.sleep(interval)
         if not _parent_is_alive(parent_pid):
