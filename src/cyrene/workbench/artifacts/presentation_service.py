@@ -106,6 +106,9 @@ class PresentationQueryService:
         payload["pluginModules"] = list(self._current_frontend_modules())
         return payload
 
+    async def status(self) -> dict[str, Any]:
+        return await presentation_runtime.build_status(self._db_path)
+
     async def dashboard(self, timezone_name: str = "") -> dict[str, Any]:
         timezone = presentation_runtime._resolve_ui_tz(timezone_name)
         return await presentation_runtime._build_dashboard(timezone, self._db_path)

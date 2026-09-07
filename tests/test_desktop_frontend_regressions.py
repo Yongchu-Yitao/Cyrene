@@ -28,7 +28,7 @@ def test_electron_auth_header_is_limited_to_the_discovered_backend_port():
         1,
     )[0]
 
-    port_check = "target.port === String(backendPort || '')"
+    port_check = "target.port === String(backend.port || '')"
     header_write = "'X-Cyrene-Token': AUTH_TOKEN"
     assert port_check in injector
     assert "if (!isLocalBackend)" in injector

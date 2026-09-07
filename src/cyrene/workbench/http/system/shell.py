@@ -44,6 +44,10 @@ def register_shell_routes(
     async def api_ui_data(tz: str = ""):
         return await queries.ui_data(tz)
 
+    @router.get("/api/status")
+    async def api_status():
+        return await queries.status()
+
     @router.get("/api/dashboard")
     async def api_dashboard(tz: str = ""):
         return await queries.dashboard(tz)

@@ -146,6 +146,7 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     _spec("redact_secrets", "boolean", True, tab="data", readable=True),
     _spec("beta_updates", "boolean", False, tab="about"),
     _spec("auto_update", "boolean", True, tab="about"),
+    _spec("proxy_updates_enabled", "boolean", False, tab="general", apply_mode="next_run"),
     _spec("budget_enabled", "boolean", False, tab="budget"),
     _spec("budget_monthly", "number", 50.0, tab="budget", minimum=0, maximum=1_000_000),
     _spec("budget_currency", "string", "CNY", tab="budget", enum=("CNY", "USD")),

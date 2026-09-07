@@ -198,7 +198,7 @@ process.stdout.write(JSON.stringify({{
     )[0]
     assert "var chatViewerFile = wbcViewerFileFromItems(viewerFile, viewerItems);" in side_panel
     assert 'if (chatViewerFile) tabs.push({ id: "viewer"' in side_panel
-    open_pane = frontend_module_source("features/chat/pane-layout-controller.jsx").split(
+    open_pane = (frontend_module_source("features/chat/pane-layout-controller.jsx") + "\n" + frontend_module_source("features/chat/pane-layout-transforms.jsx")).split(
         "function wbcOpenPaneContent(", 1
     )[1].split(
         "\nfunction wbcUpdatePaneCard", 1
@@ -741,7 +741,7 @@ def test_remote_desktop_topbar_tab_uses_a_dedicated_monitor_icon():
 
 def test_remote_desktop_rail_uses_dedicated_vector_icons():
     icons = frontend_module_source("features/chat/icons.jsx")
-    rail = frontend_module_source("features/chat/rail.jsx")
+    rail = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
 
     assert "remoteDesktop: <svg" in icons
     assert 'd="m9 7.5 6.2 5.3-3 .6-1.4 2.7Z"' in icons
@@ -753,10 +753,10 @@ def test_remote_desktop_rail_uses_dedicated_vector_icons():
 
 
 def test_remote_desktop_cards_reuse_the_terminal_resource_card_style():
-    rail = frontend_module_source("features/chat/rail.jsx")
+    rail = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     styles = workbench_style_source()
 
-    terminal_card = rail.split("function renderTerminalCard(terminal)", 1)[1].split(
+    terminal_card = rail.split("function renderTerminalCard(terminal,", 1)[1].split(
         "function renderTerminalSection", 1
     )[0]
     plugin_cards = rail.split("function renderPluginCollectionItems", 1)[1].split(
@@ -1420,7 +1420,7 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
 
 def test_workbench_deleted_chat_closes_every_split_reference():
     source = workbench_chat_source()
-    close_deleted = frontend_module_source("features/chat/pane-layout-controller.jsx").split(
+    close_deleted = (frontend_module_source("features/chat/pane-layout-controller.jsx") + "\n" + frontend_module_source("features/chat/pane-layout-transforms.jsx")).split(
         "function wbcCloseDeletedChatSplits(context, chatId) {", 1
     )[1].split(
         "\nfunction wbcMovePaneCardOtherSide", 1
@@ -1641,10 +1641,10 @@ def test_pane_grip_drag_uses_rendered_position_key_for_drop_feedback():
 
 def test_agent_can_open_move_close_and_resize_semantic_split_panes():
     page = frontend_module_source("features/chat/page.jsx")
-    rail = frontend_module_source("features/chat/rail.jsx")
+    rail = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     split = frontend_module_source("features/chat/split-pane.jsx")
     semantic = frontend_module_source("features/chat/pane-semantic-controller.jsx")
-    layout = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    layout = (frontend_module_source("features/chat/pane-layout-controller.jsx") + "\n" + frontend_module_source("features/chat/pane-layout-transforms.jsx"))
     drag_layout = frontend_module_source("features/chat/drag-layout.jsx")
 
     assert 'action_id: "open_split", kind: "move"' in rail
@@ -1669,10 +1669,10 @@ def test_agent_can_open_move_close_and_resize_semantic_split_panes():
     )[1].split("function wbcPlacePaneCard", 1)[0]
     move_helper = "function wbcMovePaneCardLayout" + layout.split(
         "function wbcMovePaneCardLayout", 1
-    )[1].split("function wbcMovePaneCard(context", 1)[0]
+    )[1].split("function wbcSwapPaneCardsLayout", 1)[0]
     swap_helper = "function wbcSwapPaneCardsLayout" + layout.split(
         "function wbcSwapPaneCardsLayout", 1
-    )[1].split("function wbcSwapPaneCards(context", 1)[0]
+    )[1].split("export function openPaneLayout", 1)[0]
     script = f"""
 eval({json.dumps(location_helper + move_helper + swap_helper)});
 const a = {{ id: "a" }}, b = {{ id: "b" }}, c = {{ id: "c" }};
@@ -1731,7 +1731,7 @@ def test_each_conversation_split_grip_closes_its_own_conversation():
 
 def test_floating_conversation_panel_resource_split_replaces_right_and_restores_previous_split():
     source = workbench_chat_source()
-    pane_controller = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    pane_controller = (frontend_module_source("features/chat/pane-layout-controller.jsx") + "\n" + frontend_module_source("features/chat/pane-layout-transforms.jsx"))
     opener = pane_controller.split("function wbcOpenPaneContent", 1)[1].split(
         "function wbcUpdatePaneCard", 1
     )[0]
@@ -1742,17 +1742,18 @@ def test_floating_conversation_panel_resource_split_replaces_right_and_restores_
         "function wbcCloseDeletedChatSplits", 1
     )[0]
     assert "paneLayoutRestoreRef.current[card.id] = layout" in opener
-    assert "wbcPromotePaneSourceLayout(layout, source, card)" in opener
+    assert "return openPaneLayout(layout, card, opts)" in opener
+    assert "wbcPromotePaneSourceLayout(layout, source, card)" in pane_controller
     assert "restore: !!floating" in panel
     assert "promoteSourceLeft: true" in panel
     assert "wbcUpdatePaneLayout(context, restore, ownerChatId)" in closer
 
 
 def test_opening_content_from_a_vertical_split_preserves_both_existing_panes():
-    pane_controller = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    pane_controller = (frontend_module_source("features/chat/pane-layout-controller.jsx") + "\n" + frontend_module_source("features/chat/pane-layout-transforms.jsx"))
     helper = "function wbcPromotePaneSourceLayout" + pane_controller.split(
         "function wbcPromotePaneSourceLayout", 1
-    )[1].split("function wbcOpenPaneContent", 1)[0]
+    )[1].split("function wbcMovePaneCardLayout", 1)[0]
     script = f"""
 eval({json.dumps(helper)});
 const top = {{ id: "top" }};
@@ -2072,7 +2073,7 @@ def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
     source = workbench_chat_source()
     styles = workbench_style_source()
 
-    pane_helpers = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    pane_helpers = (frontend_module_source("features/chat/pane-layout-controller.jsx") + "\n" + frontend_module_source("features/chat/pane-layout-transforms.jsx"))
     open_viewer = frontend_module_source("features/chat/page-resource-controller.jsx")
 
     assert 'return context.projectId ? "project:" + String(context.projectId) : "";' in pane_helpers
@@ -5027,10 +5028,10 @@ def test_project_terminal_menu_is_above_the_outside_click_scrim():
 
 
 def test_project_tool_view_persists_per_project_and_restores_terminal_list():
-    source = frontend_module_source("features/chat/rail.jsx")
+    source = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     helpers = source.split(
         'var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";', 1
-    )[1].split("function WbcTerminalStatusIcon(", 1)[0]
+    )[1].split("function WbcRail(", 1)[0]
     helpers = (
         'var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";'
         + helpers
@@ -5076,13 +5077,13 @@ process.stdout.write(JSON.stringify({{
 
 
 def test_project_terminal_cards_have_independent_agent_lifecycle_and_unread_semantics():
-    source = frontend_module_source("features/chat/rail.jsx")
+    source = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     terminal_controller = frontend_module_source("features/chat/terminal-controller.jsx")
     styles = workbench_style_source()
     terminal_state = source.split("function terminalRailVisualState(terminal)", 1)[1].split(
         "function renderTerminalCard", 1
     )[0]
-    terminal_card = source.split("function renderTerminalCard(terminal)", 1)[1].split(
+    terminal_card = source.split("function renderTerminalCard(terminal,", 1)[1].split(
         "function renderTerminalSection", 1
     )[0]
 
@@ -5129,10 +5130,10 @@ def test_project_terminal_cards_have_independent_agent_lifecycle_and_unread_sema
 
 
 def test_finished_one_shot_terminals_are_hidden_from_the_project_rail():
-    source = frontend_module_source("features/chat/rail.jsx")
+    source = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     helper = "function wbcTerminalVisibleInRail(" + source.split(
         "function wbcTerminalVisibleInRail(", 1
-    )[1].split("function WbcTerminalStatusIcon(", 1)[0]
+    )[1].split("function WbcRail(", 1)[0]
     script = f"""
 eval({json.dumps(helper)});
 process.stdout.write(JSON.stringify([
@@ -5171,11 +5172,11 @@ def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
 
 
 def test_plugin_tools_share_conversation_cards_and_split_drop_pipeline():
-    rail = frontend_module_source("features/chat/rail.jsx")
+    rail = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     drag_layout = frontend_module_source("features/chat/drag-layout.jsx")
     page = frontend_module_source("features/chat/page.jsx")
     pane_drop = frontend_module_source("features/chat/pane-drop-controller.jsx")
-    pane_layout = frontend_module_source("features/chat/pane-layout-controller.jsx")
+    pane_layout = (frontend_module_source("features/chat/pane-layout-controller.jsx") + "\n" + frontend_module_source("features/chat/pane-layout-transforms.jsx"))
     styles = workbench_style_source()
     i18n = workbench_i18n_source()
 
@@ -5239,7 +5240,7 @@ def test_dynamic_surfaces_reuse_plugin_snapshot_and_protect_user_panes():
     pane_drag = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
     pane_restore = frontend_module_source("features/chat/pane-detachment.jsx")
     root = Path(__file__).resolve().parents[1]
-    electron = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    electron = (root / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (root / "electron" / "detached-panes.js").read_text()
 
     assert "workbenchSurfaces" in plugins
     assert "workspaceFileTypes" in plugins
@@ -5256,14 +5257,14 @@ def test_dynamic_surfaces_reuse_plugin_snapshot_and_protect_user_panes():
     assert 'outcome: SURFACE_OUTCOMES.DEFERRED' in broker
     assert "wbcProjectFileDraftKey" in page
     assert "surfaceSuppressionRef" in page
-    assert "wbcRevealSurface(previous" in page
+    assert "wbcRevealSurface(previous" in frontend_module_source("features/chat/workspace-surface-controller.jsx")
     assert 'card.kind === "surface"' in page
     assert "<WbcSurfaceHost" in page
     assert 'kind === "surface"' in detached
     assert "<WbcSurfaceHost" in detached
     assert "meta: pane.meta" in pane_drag
     assert "meta: descriptor.meta" in pane_restore
-    assert "const meta = sourceMeta ?" in electron
+    assert "const meta = sourceMeta ?" in (Path(__file__).resolve().parents[1] / "electron/detached-panes.js").read_text()
     assert "claimedByUser: sourceMeta.claimedByUser === true" in electron
 
 
@@ -5340,7 +5341,7 @@ def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
     assert "clientRequestId: requestId" in guidance_handler
     assert "optimistic: true" in guidance_handler
     assert "response.userMessage" in guidance_handler
-    assert "item.clientRequestId" in guidance_handler
+    assert "item.clientRequestId" in frontend_module_source("features/chat/answer-projection.mjs")
     assert 'status: (toolStarted || toolProgress) ? "running" : "completed"' in source
     assert 'event.type === "tool_call_progress"' in source
     assert 'className="wbc-transfer-progress"' in trace_card
@@ -6301,7 +6302,7 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
 
 
 def test_unified_search_only_shows_loading_status_while_results_are_pending():
-    source = frontend_module_source("features/chat/rail.jsx")
+    source = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     input_markup = source.split('data-cyrene-node-id="chat_search_input"', 1)[1].split(
         "/>\n", 1
     )[0]
@@ -6515,7 +6516,7 @@ def test_non_chat_floating_cards_share_the_chat_topbar_baseline():
 
 def test_chat_empty_rail_state_centers_vertically():
     styles = workbench_style_source()
-    chat_source = frontend_module_source("features/chat/rail.jsx")
+    chat_source = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
 
     assert '!loading && visibleRailItemCount === 0 ? " is-empty" : ""' in chat_source
     chat_empty_css = styles.split(
@@ -9876,7 +9877,7 @@ def test_workbench_skill_learning_is_gated_by_active_skills_plugin():
 
 def test_code_and_terminal_frontend_stop_when_code_plugin_marker_is_absent():
     page = frontend_module_source("features/chat/page.jsx")
-    rail = frontend_module_source("features/chat/rail.jsx")
+    rail = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
     terminal = frontend_module_source("terminal/entry.jsx")
     diff = frontend_module_source("shared/diff/viewer.jsx")
     editor = frontend_module_source("code/editor.jsx")

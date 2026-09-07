@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.localization import localized
-from cyrene.platform import settings_store, update_install, updater
+from cyrene.platform import settings_store, update_diagnostics, update_install, updater
 from cyrene.platform.host_actions import finalize_origin, schedule_action
 from cyrene.platform.host_bridge import HostBridgeError, call_host
 
@@ -87,11 +87,9 @@ class DownloadCoordinator:
             result = await self.download_file(info.download_url, self.progress.progress)
         except updater.UpdateDownloadInProgressError:
             return self._in_progress_response()
-        except Exception:
+        except Exception as exc:
             logger.warning("Update download failed", exc_info=True)
-            self.progress.failure(
-                localized("Update download failed.", "下载更新失败。")
-            )
+            self.progress.failure(update_diagnostics.describe_error(exc))
             result = None
 
         verified, error = self._verify(info, result)

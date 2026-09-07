@@ -58,6 +58,9 @@ jobs:
       - name: Lint Python sources
         run: uv run --locked ruff check src tests
 
+      - name: Check Python complexity budgets
+        run: uv run --locked python build/python_complexity.py
+
       - name: Run full Python suite
         run: >-
           uv run --locked pytest -q
@@ -92,6 +95,10 @@ jobs:
       - name: Build WebUI
         working-directory: src/cyrene/workbench/webui
         run: npm run build
+
+      - name: Check JavaScript complexity budgets
+        working-directory: src/cyrene/workbench/webui
+        run: npm run check:complexity
 
       - name: Run WebUI tests
         working-directory: src/cyrene/workbench/webui

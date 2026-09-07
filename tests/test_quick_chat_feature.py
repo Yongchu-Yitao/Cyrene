@@ -19,7 +19,7 @@ def _pillow_image_module():
 
 
 def test_electron_quick_chat_main_process_contract():
-    source = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    source = ((ROOT / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (ROOT / "electron" / "desktop-settings-owner.js").read_text(encoding="utf-8"))
 
     assert "globalShortcut.register(requested" in source
     assert "globalShortcut.unregisterAll()" in source
@@ -46,11 +46,11 @@ def test_quick_chat_preload_exposes_narrow_bridge():
 
 
 def test_quick_chat_shortcut_is_persisted_by_the_main_process():
-    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    main = ((ROOT / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (ROOT / "electron" / "desktop-settings-owner.js").read_text(encoding="utf-8"))
     settings = workbench_settings_source()
 
     assert "quickChatShortcut: 'CommandOrControl+Shift+Space'" in main
-    assert "quickChatShortcut: normalizeQuickChatShortcut" in main
+    assert "quickChatShortcut: this.normalizeQuickChatShortcut" in main
     assert "registerQuickChatShortcut(next.quickChatShortcut)" in main
     assert 'startCapture("system-quick-chat")' in settings
     assert "keysToAccelerator(keys)" in settings
@@ -112,7 +112,7 @@ def test_quick_chat_send_close_and_sync_contract():
     ).read_text(encoding="utf-8")
     chat = workbench_chat_source()
     workbench = workbench_shell_source()
-    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    main = ((ROOT / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (ROOT / "electron" / "desktop-settings-owner.js").read_text(encoding="utf-8"))
     preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
 
     # New chat in the default project is created once; existing target sends
@@ -147,16 +147,16 @@ def test_quick_chat_send_close_and_sync_contract():
 
 
 def test_quick_chat_keeps_backend_alive_for_the_global_shortcut():
-    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    main = ((ROOT / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (ROOT / "electron" / "desktop-settings-owner.js").read_text(encoding="utf-8"))
     # Closing a window must not strand the global shortcut on a dead backend.
-    assert "function appStaysResident()" in main
+    assert "appStaysResident()" in main
     assert "if (appStaysResident()) return;" in main
     # Screenshot memory is bounded and the bytes are never logged.
     assert "MAX_SCREENSHOT_BYTES" in main
 
 
 def test_background_residency_exposes_a_tray_entrypoint():
-    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    main = ((ROOT / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (ROOT / "electron" / "desktop-settings-owner.js").read_text(encoding="utf-8"))
     package_json = json.loads((ROOT / "electron" / "package.json").read_text(encoding="utf-8"))
 
     assert "Tray," in main
@@ -220,7 +220,7 @@ def test_tray_icon_is_a_small_transparent_colored_asset(real_pillow_modules):
 
 
 def test_quick_chat_is_opt_in_behind_general_settings_toggles():
-    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    main = ((ROOT / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (ROOT / "electron" / "desktop-settings-owner.js").read_text(encoding="utf-8"))
     general = workbench_settings_source()
 
     # Opt-in: the global shortcut is only claimed when quick chat is enabled,

@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 # Header carrying the shared desktop-local token.
 TOKEN_HEADER = b"x-cyrene-token"
 
-# Paths exempt from token auth so health probes keep working without the token.
-# ``/api/instance-id`` is used by the CLI/browser-fallback health check
+# Public instance identification does not prove authenticated API access.
+# ``/api/health`` deliberately requires the current token; ``/api/instance-id``
+# is used by CLI protected-instance detection and browser fallback
 # (see ``cyrene.platform.host._fallback_to_browser``).
 _EXEMPT_PATHS = frozenset({"/api/instance-id"})
 _MODEL_GATEWAY_PATHS = frozenset({

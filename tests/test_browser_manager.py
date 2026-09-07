@@ -11,11 +11,11 @@ def read(path: str) -> str:
 
 
 def test_electron_publishes_cross_session_browser_manager_state():
-    main = read("electron/main.js")
+    main = read("electron/main.js") + "\n" + read("electron/browser-sessions.js")
     preload = read("electron/preload.js")
 
-    assert "function browserManagerState()" in main
-    assert "for (const manager of browserTabManagers.values())" in main
+    assert "browserManagerState()" in main
+    assert "for (const manager of this.browserTabManagers.values())" in main
     assert "pageCount: pages.length" in main
     assert "browser:manager-state" in main
     assert "browser:get-manager-state" in main
@@ -26,7 +26,7 @@ def test_electron_publishes_cross_session_browser_manager_state():
 
 
 def test_downloads_are_associated_with_the_originating_browser_page():
-    main = read("electron/main.js")
+    main = read("electron/main.js") + "\n" + read("electron/browser-sessions.js")
 
     assert "browserSession.on('will-download'" in main
     assert "browserContentOwners.set(view.webContents, { sessionId: this.sessionId, tabId: id })" in main
@@ -37,11 +37,11 @@ def test_downloads_are_associated_with_the_originating_browser_page():
 
 
 def test_global_download_center_supports_pause_resume_cancel_and_progress():
-    main = read("electron/main.js")
+    main = read("electron/main.js") + "\n" + read("electron/browser-sessions.js")
     source = workbench_shell_source()
     styles = workbench_style_source()
 
-    assert "function controlBrowserDownload(downloadId, action)" in main
+    assert "controlBrowserDownload(downloadId, action)" in main
     assert "record.item.pause()" in main
     assert "record.item.resume()" in main
     assert "record.item.cancel()" in main

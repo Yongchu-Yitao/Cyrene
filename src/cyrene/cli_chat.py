@@ -309,10 +309,10 @@ class ChatTransport:
         return self._client
 
     async def health(self) -> dict[str, Any]:
-        return await self._json("GET", "/api/status")
+        return await self._json("GET", "/api/health")
 
     async def status(self) -> dict[str, Any]:
-        return await self.health()
+        return await self._json("GET", "/api/status")
 
     async def list_chats(self) -> list[dict[str, Any]]:
         params = {"project": self.project_id} if self.project_id else None
@@ -1431,7 +1431,7 @@ class InteractiveChat:
             self._reasoning_overlay_open = False
 
     async def run(self) -> int:
-        status = await self.transport.health()
+        status = await self.transport.status()
         session_label = (
             str(getattr(self.transport, "chat_id", "") or "")
             or self._config_t("新对话", "new conversation")

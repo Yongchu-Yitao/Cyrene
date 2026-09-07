@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Mapping
 import copy
 import time
 from dataclasses import dataclass
@@ -9,7 +11,10 @@ from typing import Any, Callable
 
 from cyrene.localization import app_language, localized
 from cyrene.workbench.chat.chat_external_turn_service import ExternalTurnProjection
-from cyrene.workbench.chat.chat_application import deduplicate_projected_messages
+from cyrene.workbench.chat.chat_application import (
+    deduplicate_projected_messages, completed_turn_count, pending_question_message,
+    merge_chat_messages_chronologically, public_message, utc_now_iso,
+)
 from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.application.notifications import append_notification
 
@@ -45,6 +50,13 @@ class ChatReplyFinalizationRequest:
     projection: ExternalTurnProjection
     commit_retry_cut: Callable[[dict[str, Any]], None]
     timeline: list[dict[str, Any]] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BackgroundReplyFinalizationDependencies:
+    get_chat: Callable[[str], dict[str, Any] | None]
+    write_chat: Callable[..., Any]
+    assistant_message: Callable[..., dict[str, Any]]
 
 
 class ChatReplyFinalizationApplicationService:
@@ -101,6 +113,116 @@ class ChatReplyFinalizationApplicationService:
             # can update rails/caches without immediately reading the chat back.
             "chatSummary": summary,
         }
+
+    @staticmethod
+    async def finalize_background(
+        dependencies: BackgroundReplyFinalizationDependencies, *, chat_id: str,
+        run: Any, result: Any, started_at: float, agent_originated: bool,
+        media_wake: bool, wake_id: str, run_language: str,
+        user_entry: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persist and publish wake replies with their existing source policy.
+
+        Pending questions, turn counts and notification policy intentionally
+        differ from an HTTP reply; both enter this finalization boundary.
+        """
+        fresh = await asyncio.to_thread(dependencies.get_chat, chat_id)
+        if not fresh:
+            raise RuntimeError(
+                localized(
+                    "The chat disappeared during background continuation.",
+                    "后台接续期间对话已不存在。",
+                    language=run_language,
+                )
+            )
+        fresh_base = copy.deepcopy(fresh)
+        additions = ChatReplyFinalizationApplicationService._project_background_reply(
+            fresh, run, result, started_at, agent_originated, media_wake, wake_id, dependencies.assistant_message,
+        )
+        await asyncio.to_thread(
+            dependencies.write_chat,
+            fresh,
+            base_chat=fresh_base,
+        )
+
+        if result.status == "awaiting_user":
+            event: dict[str, Any] = {
+                "type": "awaiting_user",
+                "pendingQuestion": (run.outcome or {}).get("pending"),
+                "assistantMessages": [
+                    public_message(item) for item in additions
+                ],
+            }
+        else:
+            event = {
+                "type": "saved",
+                "assistantMessage": public_message(additions[-1]),
+                "assistantMessages": [
+                    public_message(item) for item in additions
+                ],
+            }
+        if user_entry is not None:
+            event["userMessage"] = public_message(user_entry)
+        await run.publish(event)
+        return fresh
+
+    @staticmethod
+    def _project_background_reply(fresh, run, result, started_at,
+                                  agent_originated, media_wake, wake_id, assistant_message):
+        model = str(result.model or fresh.get("model") or "")
+        additions = [
+            {
+                **copy.deepcopy(dict(item)),
+                "model": str(item.get("model") or model),
+            }
+            for item in result.activity_messages
+            if isinstance(item, Mapping)
+        ]
+        if (
+            result.status == "awaiting_user"
+            and result.pending_question is not None
+        ):
+            pending = result.pending_question.as_dict()
+            additions.append(
+                pending_question_message(
+                    pending,
+                    usage=result.usage,
+                    latest_request_usage=result.latest_request_usage,
+                    model=model,
+                )
+            )
+            fresh["pendingQuestion"] = pending
+            fresh["status"] = "idle"
+            run.outcome = {"kind": "awaiting", "pending": pending}
+        else:
+            assistant = assistant_message(
+                result=result,
+                model=model,
+                started_at=started_at,
+                agent_originated=agent_originated,
+                media_wake=media_wake,
+                wake_id=wake_id,
+            )
+            additions.append(assistant)
+            fresh.pop("pendingQuestion", None)
+            fresh["status"] = "idle"
+            if agent_originated:
+                fresh["completedTurnCount"] = (
+                    completed_turn_count(fresh) + 1
+                )
+            run.outcome = {
+                "kind": "reply",
+                "payload": {
+                    "assistantMessage": assistant,
+                    "assistantMessages": additions,
+                },
+            }
+        merge_chat_messages_chronologically(fresh, additions)
+        if isinstance(result.active_plan, Mapping):
+            fresh["activePlan"] = copy.deepcopy(dict(result.active_plan))
+        fresh["lastModel"] = model
+        fresh["updatedAt"] = utc_now_iso()
+        return additions
 
     def _assistant_message(
         self,

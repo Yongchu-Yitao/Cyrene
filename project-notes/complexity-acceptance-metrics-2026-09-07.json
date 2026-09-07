@@ -1,0 +1,307 @@
+{
+  "baseline": "30835bb6",
+  "working_tree_head": "e460975b",
+  "scope": "whole uncommitted working tree, including concurrent changes",
+  "comparisons": [
+    {
+      "batch": "forward",
+      "scenario": "chat/single_heavy_run",
+      "before_ms": 127.198,
+      "after_ms": 122.494,
+      "delta_percent": -3.7,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "chat/dense_concurrency",
+      "before_ms": 519.656,
+      "after_ms": 569.203,
+      "delta_percent": 9.53,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "chat/multi_tool_storm",
+      "before_ms": 947.308,
+      "after_ms": 979.799,
+      "delta_percent": 3.43,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "features/realtime_events/event_bus_fanout",
+      "before_ms": 64.142,
+      "after_ms": 65.533,
+      "delta_percent": 2.17,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "features/terminal/output_stream_persist_screen_replay",
+      "before_ms": 5568.533,
+      "after_ms": 5613.695,
+      "delta_percent": 0.81,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "features/knowledge/fts_search_concurrency",
+      "before_ms": 2488.703,
+      "after_ms": 2481.629,
+      "delta_percent": -0.28,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "features/knowledge/chunk_replace_concurrency",
+      "before_ms": 794.701,
+      "after_ms": 793.424,
+      "delta_percent": -0.16,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "features/persistence/runtime_database_init",
+      "before_ms": 13.971,
+      "after_ms": 13.44,
+      "delta_percent": -3.8,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "features/scheduler/scheduled_task_crud_concurrency",
+      "before_ms": 1079.447,
+      "after_ms": 1154.326,
+      "delta_percent": 6.94,
+      "quality_preserved": true
+    },
+    {
+      "batch": "forward",
+      "scenario": "features/files/content_hash_cold_and_cached",
+      "before_ms": 6.148,
+      "after_ms": 7.061,
+      "delta_percent": 14.85,
+      "quality_preserved": true
+    },
+    {
+      "batch": "reverse",
+      "scenario": "chat/single_heavy_run",
+      "before_ms": 128.504,
+      "after_ms": 130.036,
+      "delta_percent": 1.19,
+      "quality_preserved": true
+    },
+    {
+      "batch": "reverse",
+      "scenario": "chat/dense_concurrency",
+      "before_ms": 506.964,
+      "after_ms": 534.907,
+      "delta_percent": 5.51,
+      "quality_preserved": true
+    },
+    {
+      "batch": "reverse",
+      "scenario": "chat/multi_tool_storm",
+      "before_ms": 926.57,
+      "after_ms": 990.062,
+      "delta_percent": 6.85,
+      "quality_preserved": true
+    }
+  ],
+  "startup": [
+    {
+      "version": "before",
+      "sample": 0,
+      "seconds": 6.152101874991786,
+      "peak_process_tree_rss_mb": 1142.8125,
+      "exit": 0,
+      "passed": true
+    },
+    {
+      "version": "after",
+      "sample": 0,
+      "seconds": 5.339367625012528,
+      "peak_process_tree_rss_mb": 1219.09375,
+      "exit": 0,
+      "passed": true
+    },
+    {
+      "version": "before",
+      "sample": 1,
+      "seconds": 5.250550958036911,
+      "peak_process_tree_rss_mb": 1198.34375,
+      "exit": 0,
+      "passed": true
+    },
+    {
+      "version": "after",
+      "sample": 1,
+      "seconds": 5.261216417013202,
+      "peak_process_tree_rss_mb": 1191.71875,
+      "exit": 0,
+      "passed": true
+    },
+    {
+      "version": "before",
+      "sample": 2,
+      "seconds": 5.225917916977778,
+      "peak_process_tree_rss_mb": 1179.484375,
+      "exit": 0,
+      "passed": true
+    },
+    {
+      "version": "after",
+      "sample": 2,
+      "seconds": 5.232053458981682,
+      "peak_process_tree_rss_mb": 1209.4375,
+      "exit": 0,
+      "passed": true
+    }
+  ],
+  "transcript": [
+    {
+      "round": 0,
+      "label": "before",
+      "freezeMs": 2.300000011920929,
+      "restoreMs": 255.19999998807907,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 0,
+      "label": "after",
+      "freezeMs": 1.699999988079071,
+      "restoreMs": 259.10000002384186,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 1,
+      "label": "after",
+      "freezeMs": 1.800000011920929,
+      "restoreMs": 262.10000002384186,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 1,
+      "label": "before",
+      "freezeMs": 1.800000011920929,
+      "restoreMs": 261.69999998807907,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 2,
+      "label": "before",
+      "freezeMs": 1.699999988079071,
+      "restoreMs": 256.10000002384186,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 2,
+      "label": "after",
+      "freezeMs": 1.800000011920929,
+      "restoreMs": 260.5999999642372,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 3,
+      "label": "after",
+      "freezeMs": 1.800000011920929,
+      "restoreMs": 261,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 3,
+      "label": "before",
+      "freezeMs": 1.800000011920929,
+      "restoreMs": 260.19999998807907,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 4,
+      "label": "before",
+      "freezeMs": 1.699999988079071,
+      "restoreMs": 258.30000001192093,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 4,
+      "label": "after",
+      "freezeMs": 1.800000011920929,
+      "restoreMs": 261.39999997615814,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 5,
+      "label": "after",
+      "freezeMs": 1.600000023841858,
+      "restoreMs": 257.89999997615814,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    },
+    {
+      "round": 5,
+      "label": "before",
+      "freezeMs": 1.7000000476837158,
+      "restoreMs": 262.60000002384186,
+      "frozen": 989,
+      "reads": 12571,
+      "writes": 3956,
+      "restored": 1,
+      "remaining": 0,
+      "active": false
+    }
+  ]
+}

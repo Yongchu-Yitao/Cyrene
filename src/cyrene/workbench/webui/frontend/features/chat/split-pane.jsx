@@ -1,3 +1,5 @@
+import { paneRowGeometry, paneColumnBounds } from "./pane-resize-geometry.mjs"
+import { useSplitTranscriptResize } from "./transcript-resize-hooks.jsx"
 import { WbcTranscript } from "./messages.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, WbcSplitPickerMenu, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentColor, wbcAgentInitials, wbcAttachmentTypeLabel, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcClampSideSplitWidthForPage, wbcCreateDetachedRuntime, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHighlightMentions, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserLayoutChanged, wbcPreserveLiveTimelineAnchors, wbcReconcileLiveUserMessages, wbcReduceDetachedRuntime, wbcRenderMapMarkdown, wbcRenderMarkdown, wbcSubagentStatusClass, wbcSubagentStatusText, wbcT } from "../../workbench-chat.jsx"
@@ -232,10 +234,8 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
     return runtimeEngine.subscribe(applyRuntime);
   }, [chatId, runtimeEngine]);
 
-  useWbcLayoutEffect(function () {
-    var el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [chat && chat.messages && chat.messages.length, loading, running, streamText]);
+  useSplitTranscriptResize(scrollRef, splitRef, chatId, loading, chat && chat.messages && chat.messages.length, running, streamText);
+
 
   // Split conversations own an absolutely positioned composer. Measure it on
   // the split itself instead of relying on the main page's reserve variable:
@@ -714,13 +714,7 @@ function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropE
 
 function WbcPaneRowResizer({ active, side, ratio, onResize }) {
   var handleRef = useWbcRef(null);
-  var safeRatio = Math.max(0.2, Math.min(0.8, Number(ratio) || 0.5));
-  // Grid gaps do not participate in fr sizing. Position the separator at the
-  // exact centre of the 12px gap instead of at a percentage of the full
-  // column, which drifts into one of the cards as the ratio changes.
-  var seamOffset = 6 - (safeRatio * 12);
-  var seamTop = "calc(" + (safeRatio * 100) + "% "
-    + (seamOffset < 0 ? "- " : "+ ") + Math.abs(seamOffset) + "px)";
+  var { safeRatio, seamTop } = paneRowGeometry(ratio);
   function startResize(event) {
     if (event.button !== 0 || !onResize) return;
     event.preventDefault();
@@ -775,6 +769,7 @@ function WbcPaneRowResizer({ active, side, ratio, onResize }) {
       try { handle.setPointerCapture(pointerId); } catch (error) {}
       handle.addEventListener("lostpointercapture", stop, { once: true });
     }
+    window.dispatchEvent(new CustomEvent("workbench:split-resize-start"));
     document.body.classList.add("wbc-resizing-pane-row");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
@@ -839,19 +834,8 @@ function WbcPaneRowResizer({ active, side, ratio, onResize }) {
 
 function WbcPaneColumnResizer({ active, width, onResize }) {
   var handleRef = useWbcRef(null);
-  function boundsFor(layout) {
-    var rect = layout.getBoundingClientRect();
-    // 24px outer padding + 12px card gap. Both tracks receive the exact same
-    // 380px floor; on compact windows that floor shrinks symmetrically.
-    var trackWidth = Math.max(0, rect.width - 36);
-    var minimum = Math.min(380, trackWidth / 2);
-    return {
-      minimum: minimum,
-      maximum: Math.max(minimum, trackWidth - minimum),
-    };
-  }
   function clampFor(layout, value) {
-    var bounds = boundsFor(layout);
+    var bounds = paneColumnBounds(layout);
     return Math.max(bounds.minimum, Math.min(bounds.maximum, Number(value) || 520));
   }
   function startResize(event) {
@@ -866,7 +850,7 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
     var startX = event.clientX;
     // The outer layout stays fixed throughout the gesture. Read its bounds
     // once, and keep pointer moves out of React and persistent storage.
-    var bounds = boundsFor(layout);
+    var bounds = paneColumnBounds(layout);
     var startWidth = Math.max(bounds.minimum, Math.min(bounds.maximum, Number(width) || 520));
     var nextWidth = startWidth;
     var frame = 0;
@@ -908,6 +892,7 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
       try { handle.setPointerCapture(pointerId); } catch (error) {}
       handle.addEventListener("lostpointercapture", stop, { once: true });
     }
+    window.dispatchEvent(new CustomEvent("workbench:split-resize-start"));
     document.body.classList.add("wbc-resizing-pane-column");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
@@ -927,7 +912,7 @@ function WbcPaneColumnResizer({ active, width, onResize }) {
     var handle = handleRef.current;
     var layout = handle && handle.closest ? handle.closest(".wbc-pane-layout") : null;
     if (!layout) throw new Error("pane column separator is not available");
-    var bounds = boundsFor(layout);
+    var bounds = paneColumnBounds(layout);
     var current = clampFor(layout, width);
     var next;
     if (input && Number.isFinite(Number(input.value_ratio))) {

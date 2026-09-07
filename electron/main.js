@@ -1,3 +1,6 @@
+const { DesktopSettings } = require('./desktop-settings-owner');
+const { BrowserSessions } = require('./browser-sessions');
+const { DetachedPanes } = require('./detached-panes');
 const {
   app,
   BrowserWindow,
@@ -21,7 +24,6 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
 const { AppUseManager } = require('./app-use');
 const {
   AGENT_CURSOR_FADE_IN_MS,
@@ -53,7 +55,8 @@ const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
 const { HostControl } = require('./host-control');
 const { createLocalPreview } = require('./browser-local-preview');
 const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
-const { createBackendPortWaiters } = require('./backend-port-waiters');
+const { BackendProcess } = require('./backend-process');
+const { dispatchBrowserCommand } = require('./browser-rpc');
 const { createSingleFlight, loadWindowUrl } = require('./main-window-lifecycle');
 const { RotatingFileLog } = require('./rotating-log');
 const { migrateLegacyDevelopmentData } = require('./development-data-migration');
@@ -124,7 +127,7 @@ function publishCliConnection(port) {
       url: `http://127.0.0.1:${Number(port)}`,
       token: AUTH_TOKEN,
       electronPid: process.pid,
-      backendPid: pythonProcess && pythonProcess.pid ? pythonProcess.pid : null,
+      backendPid: backend.process && backend.process.pid ? backend.process.pid : null,
     }), { encoding: 'utf8', mode: 0o600 });
     try { fs.chmodSync(temporary, 0o600); } catch (_) {}
     try { fs.rmSync(target, { force: true }); } catch (_) {}
@@ -326,19 +329,33 @@ if (isLinux && process.env.CYRENE_DISABLE_HARDWARE_ACCELERATION === '1') {
 }
 
 let mainWindow = null;
+const browserSessions = new BrowserSessions({
+  getMainWindow: () => mainWindow,
+  createManager: (id) => new BrowserTabManager(id), normalizeBrowserSessionId,
+});
+const detachedPanes = new DetachedPanes({
+  getMainWindow: () => mainWindow, BrowserWindow, screen, waitForPort,
+  normalizeBrowserSessionId, browserSessions, installLocalNavigationGuards, AUTH_TOKEN,
+});
+
 let quickChatWindow = null;
-const detachedPaneWindows = new Map();
-const detachedBrowserSurfaceWindows = new Map();
-const detachedPaneDragSessions = new Map();
 let quickChatWindowReady = null;
 let quickChatOpenPromise = null;
 let pendingQuickChatScreenshot = null;
-let registeredQuickChatShortcut = '';
-let quickChatShortcutError = '';
-let pythonProcess = null;
-let isBackendRestarting = false;
-let backendPort = null;
-const backendPortWaiters = createBackendPortWaiters(() => backendPort);
+const backend = new BackendProcess({
+  clearConnection: clearCliConnection,
+  publishConnection: publishCliConnection,
+  launch: prepareBackendLaunch,
+  stdout(text) { process.stdout.write(`[cyrene] ${text}`); appendErrorLog(text); },
+  stderr(text) { process.stderr.write(`[cyrene] ${text}`); appendErrorLog(text); },
+  error: showBackendStartupError,
+  unavailable: showDoctorRecovery,
+  logExit(code) { console.log(`[electron] Python backend exited (code=${code})`); },
+  exit: handleBackendExit,
+  reveal() { createMainWindow().catch(() => {}); },
+  invalidateWindows: invalidateBackendWindows,
+  stopping() { isShuttingDown = true; },
+});
 const mainWindowCreation = createSingleFlight();
 let isShuttingDown = false;
 let isQuitting = false;
@@ -346,13 +363,6 @@ let quitExtensionCheckInFlight = false;
 let quitExtensionDecisionMade = false;
 let launchHidden = process.argv.includes('--hidden');
 let tray = null;
-const browserTabManagers = new Map();
-const browserContentOwners = new WeakMap();
-const activeBrowserDownloads = new Map();
-let nextBrowserDownloadId = 1;
-let browserManagerPublishTimer = null;
-let activeBrowserSessionId = '';
-let browserSurfaceObscured = false;
 let activeVideoFullscreenManager = null;
 let appUseManager = null;
 let appUsePointerWindow = null;
@@ -466,13 +476,20 @@ const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   quickChatEnabled: false,
   quickChatShortcut: 'CommandOrControl+Shift+Space',
 });
+const desktopSettings = new DesktopSettings({
+  app, globalShortcut, supportsLoginItem, DEFAULT_DESKTOP_SETTINGS,
+  normalizeDesktopLanguage, getDesktopLanguage, syncTrayWithSettings,
+  rebuildApplicationMenu, broadcastDesktopLanguage, destroyQuickChatWindow,
+  openQuickChat, appendErrorLog,
+});
+
 
 function postBackendJson(pathname, payload) {
-  if (!backendPort) return;
+  if (!backend.port) return;
   const body = JSON.stringify(payload || {});
   const req = http.request({
     hostname: '127.0.0.1',
-    port: backendPort,
+    port: backend.port,
     path: pathname,
     method: 'POST',
     headers: {
@@ -494,14 +511,14 @@ function postBackendJson(pathname, payload) {
 
 function requestBackendJson(method, pathname, payload) {
   return new Promise((resolve, reject) => {
-    if (!backendPort) {
+    if (!backend.port) {
       reject(new Error('backend unavailable'));
       return;
     }
     const body = payload == null ? '' : JSON.stringify(payload);
     const req = http.request({
       hostname: '127.0.0.1',
-      port: backendPort,
+      port: backend.port,
       path: pathname,
       method,
       headers: {
@@ -1260,7 +1277,7 @@ function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
   });
 }
 
-function readBackendJson(pathname, port = backendPort) {
+function readBackendJson(pathname, port = backend.port) {
   return new Promise((resolve, reject) => {
     const request = http.request({
       hostname: '127.0.0.1',
@@ -1331,7 +1348,7 @@ async function applyBrowserProxySettings(settings = {}) {
   return { ok: true, enabled, proxyUrl: enabled ? proxyUrl : '' };
 }
 
-async function syncBrowserProxyFromBackend(port = backendPort) {
+async function syncBrowserProxyFromBackend(port = backend.port) {
   if (!port) return { ok: false, error: 'backend_unavailable' };
   const settings = await readBackendJson('/api/settings/config', port);
   return applyBrowserProxySettings(settings);
@@ -1352,7 +1369,7 @@ function pointerLockRequestOrigin(webContents, details = {}) {
 }
 
 function pointerLockPromptParent(webContents) {
-  for (const manager of browserTabManagers.values()) {
+  for (const manager of browserSessions.browserTabManagers.values()) {
     const tab = Array.from(manager.tabs.values()).find((candidate) => (
       candidate && candidate.view && candidate.view.webContents === webContents
     ));
@@ -1425,7 +1442,7 @@ class BrowserTabManager {
     this._tabPickerWindowBlurHandler = null;
     this._tabPickerHideTimer = null;
     this.visible = false;
-    this.obscured = browserSurfaceObscured;
+    this.obscured = browserSessions.browserSurfaceObscured;
     this.zoomEnabled = true;
     this.resizeEdgeHintEnabled = false;
     this.resizeEdgeHintActive = false;
@@ -1560,9 +1577,9 @@ class BrowserTabManager {
   }
 
   ownerWindow() {
-    const detached = detachedBrowserSurfaceWindows.get(this.sessionId);
+    const detached = detachedPanes.detachedBrowserSurfaceWindows.get(this.sessionId);
     if (detached && !detached.isDestroyed()) return detached;
-    if (detached) detachedBrowserSurfaceWindows.delete(this.sessionId);
+    if (detached) detachedPanes.detachedBrowserSurfaceWindows.delete(this.sessionId);
     return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
   }
 
@@ -1816,8 +1833,8 @@ class BrowserTabManager {
     webContents.on('did-create-window', (childWindow) => {
       if (!childWindow || childWindow.isDestroyed()) return;
       try { childWindow.setMenu(null); } catch (_) {}
-      const pageOwner = browserContentOwners.get(webContents);
-      if (pageOwner) browserContentOwners.set(childWindow.webContents, pageOwner);
+      const pageOwner = browserSessions.browserContentOwners.get(webContents);
+      if (pageOwner) browserSessions.browserContentOwners.set(childWindow.webContents, pageOwner);
       const agentOwnerRoundId = String(getAgentOwnerRoundId() || '');
       this.configurePageContents(childWindow.webContents, () => agentOwnerRoundId);
     });
@@ -2492,7 +2509,7 @@ class BrowserTabManager {
   emitState() {
     publishBrowserManagerState();
     if (this.tabPickerState.visible || this.tabPickerState.closing) this.pushTabPickerState();
-    if (this.sessionId !== activeBrowserSessionId) return;
+    if (this.sessionId !== browserSessions.activeBrowserSessionId) return;
     // Fullscreen video may live in a separate macOS window, but state updates
     // always belong to the Cyrene renderer so each in-app browser surface can
     // show the same playback placeholder.
@@ -2539,7 +2556,7 @@ class BrowserTabManager {
       lastAgentRoundId: String(agentOwnerRoundId || '').trim(),
     };
     this.tabs.set(id, tab);
-    browserContentOwners.set(view.webContents, { sessionId: this.sessionId, tabId: id });
+    browserSessions.browserContentOwners.set(view.webContents, { sessionId: this.sessionId, tabId: id });
     this._recordAgentTab(tab, tab.agentOwnerRoundId);
     if (activate || !this.activeTabId) {
       const previous = this.tabs.get(this.activeTabId);
@@ -2862,8 +2879,8 @@ class BrowserTabManager {
     });
     try { view.setBackgroundColor('#00000000'); } catch (_) {}
     view.webContents.on('did-finish-load', () => this.pushChatOverlayState());
-    const overlayUrl = backendPort
-      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-chat-overlay.html?platform=${encodeURIComponent(process.platform)}`
+    const overlayUrl = backend.port
+      ? `http://127.0.0.1:${backend.port}/static/app/electron/browser-chat-overlay.html?platform=${encodeURIComponent(process.platform)}`
       : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_CHAT_OVERLAY_HTML)}`;
     view.webContents.loadURL(overlayUrl).catch(() => {});
     this.chatOverlayView = view;
@@ -3026,8 +3043,8 @@ class BrowserTabManager {
       console.warn(`[electron] Browser tab picker failed to load (${code}): ${description}`);
     });
     this.tabPickerView = view;
-    const pickerUrl = backendPort
-      ? `http://127.0.0.1:${backendPort}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}&style=flat-chrome-1`
+    const pickerUrl = backend.port
+      ? `http://127.0.0.1:${backend.port}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}&style=flat-chrome-1`
       : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`;
     view.webContents.loadURL(pickerUrl).catch((err) => {
       console.error('[electron] Failed to load browser tab picker:', err);
@@ -3246,7 +3263,7 @@ class BrowserTabManager {
       this.dismissTabPicker(false);
       return;
     }
-    const ownsVisibleSurface = fullscreenActive || this.sessionId === activeBrowserSessionId;
+    const ownsVisibleSurface = fullscreenActive || this.sessionId === browserSessions.activeBrowserSessionId;
     for (const tab of this.tabs.values()) {
       if (!active || tab.id !== active.id || !ownsVisibleSurface) this.detachView(tab);
     }
@@ -4852,201 +4869,24 @@ class BrowserTabManager {
   }
 }
 
-function browserContentOwner(webContents) {
-  const known = webContents && browserContentOwners.get(webContents);
-  if (known) return known;
-  for (const manager of browserTabManagers.values()) {
-    for (const tab of manager.tabs.values()) {
-      if (tab && tab.view && tab.view.webContents === webContents) {
-        const owner = { sessionId: manager.sessionId, tabId: tab.id };
-        browserContentOwners.set(webContents, owner);
-        return owner;
-      }
-    }
-  }
-  return { sessionId: '', tabId: '' };
-}
-
-function browserDownloadRecord(item, webContents) {
-  const owner = browserContentOwner(webContents);
-  let pageTitle = '';
-  let pageUrl = '';
-  try { pageTitle = String(webContents && webContents.getTitle() || ''); } catch (_) {}
-  try { pageUrl = String(webContents && webContents.getURL() || ''); } catch (_) {}
-  const id = `download_${nextBrowserDownloadId++}`;
-  return {
-    id,
-    item,
-    sessionId: String(owner.sessionId || ''),
-    tabId: String(owner.tabId || ''),
-    pageTitle,
-    pageUrl,
-    filename: String(item && item.getFilename && item.getFilename() || ''),
-    url: String(item && item.getURL && item.getURL() || ''),
-    receivedBytes: 0,
-    totalBytes: 0,
-    paused: false,
-    state: 'progressing',
-    startedAt: Date.now(),
-  };
-}
-
-function syncBrowserDownloadRecord(record, state) {
-  const item = record && record.item;
-  if (!record || !item) return;
-  try { record.filename = String(item.getFilename() || record.filename || ''); } catch (_) {}
-  try { record.receivedBytes = Math.max(0, Number(item.getReceivedBytes()) || 0); } catch (_) {}
-  try { record.totalBytes = Math.max(0, Number(item.getTotalBytes()) || 0); } catch (_) {}
-  try { record.paused = item.isPaused() === true; } catch (_) {}
-  record.state = String(state || record.state || 'progressing');
-}
-
-function trackBrowserDownload(item, webContents) {
-  if (!item) return;
-  const record = browserDownloadRecord(item, webContents);
-  activeBrowserDownloads.set(record.id, record);
-  syncBrowserDownloadRecord(record, 'progressing');
-  publishBrowserManagerState();
-  item.on('updated', (_event, state) => {
-    if (!activeBrowserDownloads.has(record.id)) return;
-    syncBrowserDownloadRecord(record, state);
-    scheduleBrowserManagerStatePublish();
-  });
-  item.once('done', (_event, state) => {
-    syncBrowserDownloadRecord(record, state);
-    activeBrowserDownloads.delete(record.id);
-    publishBrowserManagerState();
-  });
-}
-
-function controlBrowserDownload(downloadId, action) {
-  const record = activeBrowserDownloads.get(String(downloadId || ''));
-  const command = String(action || '').trim().toLowerCase();
-  if (!record || !record.item) return { ok: false, error: 'download_not_found' };
-  try {
-    if (command === 'pause') {
-      record.item.pause();
-    } else if (command === 'resume') {
-      record.item.resume();
-    } else if (command === 'cancel') {
-      record.item.cancel();
-    } else {
-      return { ok: false, error: 'unsupported_download_action' };
-    }
-    syncBrowserDownloadRecord(record, command === 'cancel' ? 'cancelled' : 'progressing');
-    if (command === 'cancel') activeBrowserDownloads.delete(record.id);
-    publishBrowserManagerState();
-    return { ok: true, state: browserManagerState() };
-  } catch (error) {
-    return { ok: false, error: String(error && error.message || error || 'download_action_failed') };
-  }
-}
-
-function browserManagerState() {
-  const downloads = Array.from(activeBrowserDownloads.values()).map((record) => ({
-    id: record.id,
-    sessionId: record.sessionId,
-    tabId: record.tabId,
-    pageTitle: record.pageTitle,
-    pageUrl: record.pageUrl,
-    filename: record.filename,
-    url: record.url,
-    receivedBytes: record.receivedBytes,
-    totalBytes: record.totalBytes,
-    paused: record.paused,
-    state: record.state,
-    startedAt: record.startedAt,
-  }));
-  const byPage = new Map();
-  downloads.forEach((download) => {
-    const key = `${download.sessionId}:${download.tabId}`;
-    if (!byPage.has(key)) byPage.set(key, []);
-    byPage.get(key).push(download);
-  });
-
-  const pages = [];
-  for (const manager of browserTabManagers.values()) {
-    const state = manager.state();
-    for (const tab of state.tabs) {
-      const key = `${state.sessionId}:${tab.id}`;
-      pages.push({
-        ...tab,
-        key,
-        sessionId: state.sessionId,
-        tabId: tab.id,
-        sessionActive: state.sessionId === activeBrowserSessionId,
-        downloads: byPage.get(key) || [],
-      });
-      byPage.delete(key);
-    }
-  }
-
-  return {
-    ok: true,
-    pageCount: pages.length,
-    downloadCount: downloads.length,
-    activeSessionId: activeBrowserSessionId,
-    pages,
-    downloads,
-  };
-}
-
-function publishBrowserManagerState() {
-  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents || mainWindow.webContents.isDestroyed()) return;
-  try { mainWindow.webContents.send('browser:manager-state', browserManagerState()); } catch (_) {}
-}
-
-function scheduleBrowserManagerStatePublish() {
-  if (browserManagerPublishTimer) return;
-  browserManagerPublishTimer = setTimeout(() => {
-    browserManagerPublishTimer = null;
-    publishBrowserManagerState();
-  }, 100);
-}
-
-function getBrowserTabManager(sessionId = activeBrowserSessionId) {
-  const normalized = normalizeBrowserSessionId(sessionId);
-  if (!browserTabManagers.has(normalized)) {
-    browserTabManagers.set(normalized, new BrowserTabManager(normalized));
-  }
-  return browserTabManagers.get(normalized);
-}
-
-function activateBrowserSession(info = {}) {
-  const sessionId = normalizeBrowserSessionId(info.sessionId || info.session_id);
-  if (sessionId !== activeBrowserSessionId) {
-    const previous = browserTabManagers.get(activeBrowserSessionId);
-    if (previous) {
-      previous.hideAllAgentCursors();
-      previous.visible = false;
-      previous.syncAttachedView();
-    }
-    activeBrowserSessionId = sessionId;
-  }
-  const manager = getBrowserTabManager(sessionId);
-  manager.setContext(info);
-  manager.syncAttachedView();
-  manager.emitState();
-  return manager;
-}
-
-function hideAllBrowserSessions() {
-  for (const manager of browserTabManagers.values()) {
-    manager.setBounds({ visible: false });
-  }
-}
-
-function setBrowserSurfaceObscured(obscured = false) {
-  browserSurfaceObscured = obscured === true;
-  for (const manager of browserTabManagers.values()) {
-    manager.setObscured(browserSurfaceObscured);
-  }
-  return getBrowserTabManager(activeBrowserSessionId).state();
-}
+function browserContentOwner(...args) { return browserSessions.browserContentOwner(...args); }
+function browserDownloadRecord(...args) { return browserSessions.browserDownloadRecord(...args); }
+function syncBrowserDownloadRecord(...args) { return browserSessions.syncBrowserDownloadRecord(...args); }
+function trackBrowserDownload(...args) { return browserSessions.trackBrowserDownload(...args); }
+function controlBrowserDownload(...args) { return browserSessions.controlBrowserDownload(...args); }
+function browserManagerState(...args) { return browserSessions.browserManagerState(...args); }
+function publishBrowserManagerState(...args) { return browserSessions.publishBrowserManagerState(...args); }
+function scheduleBrowserManagerStatePublish(...args) { return browserSessions.scheduleBrowserManagerStatePublish(...args); }
+function getBrowserTabManager(...args) { return browserSessions.getBrowserTabManager(...args); }
+function activateBrowserSession(...args) { return browserSessions.activateBrowserSession(...args); }
+function hideAllBrowserSessions(...args) { return browserSessions.hideAllBrowserSessions(...args); }
+function setBrowserSurfaceObscured(...args) { return browserSessions.setBrowserSurfaceObscured(...args); }
+function closeAllBrowserSessions(...args) { return browserSessions.closeAllBrowserSessions(...args); }
+function closeBrowserSession(...args) { return browserSessions.closeBrowserSession(...args); }
 
 async function setAgentCursorRunning(running) {
   agentCursorRunning = running === true;
-  const updates = Array.from(browserTabManagers.values()).map((manager) => (
+  const updates = Array.from(browserSessions.browserTabManagers.values()).map((manager) => (
     manager.setAgentCursorRunning(agentCursorRunning)
   ));
   if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) {
@@ -5076,7 +4916,7 @@ async function setAgentCursorOwner(owner) {
 
   const updates = [];
   if (nextOwner !== 'browser') {
-    for (const manager of browserTabManagers.values()) {
+    for (const manager of browserSessions.browserTabManagers.values()) {
       updates.push(manager.hideAllAgentCursors());
     }
   }
@@ -5098,28 +4938,6 @@ function updateAgentCursorRunningSource(webContents, running) {
   }
   agentCursorRunningSources.set(sourceId, running === true);
   return setAgentCursorRunning(Array.from(agentCursorRunningSources.values()).some(Boolean));
-}
-
-function closeAllBrowserSessions() {
-  for (const manager of browserTabManagers.values()) manager.closeAll();
-  browserTabManagers.clear();
-  activeBrowserDownloads.clear();
-  if (browserManagerPublishTimer) clearTimeout(browserManagerPublishTimer);
-  browserManagerPublishTimer = null;
-  activeBrowserSessionId = '';
-  browserSurfaceObscured = false;
-  publishBrowserManagerState();
-}
-
-function closeBrowserSession(sessionId) {
-  const normalized = normalizeBrowserSessionId(sessionId);
-  const manager = browserTabManagers.get(normalized);
-  if (!manager) return { ok: true, sessionId: normalized, closed: false };
-  manager.closeAll();
-  browserTabManagers.delete(normalized);
-  if (activeBrowserSessionId === normalized) activeBrowserSessionId = '';
-  publishBrowserManagerState();
-  return { ok: true, sessionId: normalized, closed: true };
 }
 
 function getAppUseManager() {
@@ -5244,7 +5062,7 @@ function browserRpcSessionId(args = {}, context = {}) {
   if (Object.prototype.hasOwnProperty.call(args || {}, 'session_id')) {
     return normalizeBrowserSessionId(args.session_id);
   }
-  return activeBrowserSessionId;
+  return browserSessions.activeBrowserSessionId;
 }
 
 async function handleBrowserRpc(method, args, context = {}) {
@@ -5276,80 +5094,8 @@ async function handleBrowserRpc(method, args, context = {}) {
     if (agentRequest) manager.beginAgentRound(roundId);
     else manager.setContext({ roundId });
   }
-  switch (method) {
-    case 'state':
-      return manager.state();
-    case 'setBounds':
-      return manager.setBounds(args || {});
-    case 'setChatOverlay':
-      return manager.setChatOverlay(args || {});
-    case 'setTabPicker':
-      return manager.setTabPicker(args || {});
-    case 'setObscured':
-      return setBrowserSurfaceObscured(args && args.obscured);
-    case 'createTab':
-      await manager.createTab({
-        ...(args || {}),
-        agentOwnerRoundId: agentRequest ? roundId : '',
-      });
-      return manager.state();
-    case 'activateTab':
-      return manager.activateTab(args && args.tabId);
-    case 'closeTab':
-      return manager.closeTab(args && args.tabId);
-    case 'openLocalFile':
-      return manager.openLocalFile({
-        ...(args || {}),
-        agentOwnerRoundId: agentRequest ? roundId : '',
-      });
-    case 'navigate':
-      return manager.navigate({
-        ...(args || {}),
-        agentOwnerRoundId: agentRequest ? roundId : '',
-      });
-    case 'snapshot':
-      return manager.pageSnapshot(args && args.tabId, args && args.maxChars);
-    case 'inspect':
-      return manager.inspect(args || {});
-    case 'visibleLinkMatches':
-      return manager.visibleLinkMatches(args || {});
-    case 'navigationGuard':
-      return manager.navigationGuard(args || {});
-    case 'click':
-      return manager.click(args || {});
-    case 'clickRef':
-      return manager.clickRef(args || {});
-    case 'clickText':
-      return manager.clickText(args || {});
-    case 'clickAt':
-      return manager.clickAt(args || {});
-    case 'type':
-      return manager.type(args || {});
-    case 'typeRef':
-      return manager.typeRef(args || {});
-    case 'waitFor':
-      return manager.waitFor(args || {});
-    case 'networkLog':
-      return manager.networkLog(args || {});
-    case 'screenshot':
-      return manager.screenshot(args || {});
-    case 'prepareUpload':
-      return manager.prepareUpload(args || {});
-    case 'setInputFiles':
-      return manager.setInputFiles(args || {});
-    case 'goBack':
-      return manager.goBack();
-    case 'goForward':
-      return manager.goForward();
-    case 'reload':
-      return manager.reload(args || {});
-    case 'setMuted':
-      return manager.setMuted(args || {});
-    case 'scroll':
-      return manager.scroll(args || {});
-    default:
-      return { ok: false, error: `Unknown browser RPC method: ${method}` };
-  }
+  return dispatchBrowserCommand(manager, method, args, agentRequest ? roundId : '', setBrowserSurfaceObscured);
+
 }
 
 async function handleAppUseRpc(method, args) {
@@ -5656,188 +5402,17 @@ function rebuildApplicationMenu(maybeSettings) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function getDesktopSettingsPath() {
-  return path.join(app.getPath('userData'), 'desktop_settings.json');
-}
-
-function readDesktopSettings() {
-  try {
-    const raw = fs.readFileSync(getDesktopSettingsPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    const runInBackground = parsed.runInBackground === true;
-    return {
-      settingsRevision: Number.isInteger(parsed.settingsRevision) && parsed.settingsRevision >= 0 ? parsed.settingsRevision : 0,
-      launchAtLogin: parsed.launchAtLogin === true,
-      runInBackground,
-      language: normalizeDesktopLanguage(parsed.language),
-      // Quick chat can't be on without background residency.
-      quickChatEnabled: runInBackground && parsed.quickChatEnabled === true,
-      quickChatShortcut: normalizeQuickChatShortcut(parsed.quickChatShortcut),
-    };
-  } catch (_) {
-    return { ...DEFAULT_DESKTOP_SETTINGS };
-  }
-}
-
-function writeDesktopSettings(settings) {
-  const runInBackground = settings.runInBackground === true;
-  const payload = {
-    settingsRevision: Number.isInteger(settings.settingsRevision) && settings.settingsRevision >= 0 ? settings.settingsRevision : 0,
-    launchAtLogin: settings.launchAtLogin === true,
-    runInBackground,
-    language: normalizeDesktopLanguage(settings.language),
-    quickChatEnabled: runInBackground && settings.quickChatEnabled === true,
-    quickChatShortcut: normalizeQuickChatShortcut(settings.quickChatShortcut),
-  };
-  fs.mkdirSync(path.dirname(getDesktopSettingsPath()), { recursive: true });
-  fs.writeFileSync(getDesktopSettingsPath(), JSON.stringify(payload, null, 2), 'utf8');
-}
-
-function applyLaunchAtLogin(enabled) {
-  if (!supportsLoginItem) return false;
-  app.setLoginItemSettings({
-    openAtLogin: enabled === true,
-    openAsHidden: enabled === true,
-    args: enabled === true ? ['--hidden'] : [],
-  });
-  return true;
-}
-
-function getDesktopSettings() {
-  const stored = readDesktopSettings();
-  return {
-    ...stored,
-    supportsLaunchAtLogin: supportsLoginItem,
-    platform: process.platform,
-    quickChatShortcutRegistered: (
-      registeredQuickChatShortcut === stored.quickChatShortcut
-      && globalShortcut.isRegistered(stored.quickChatShortcut)
-    ),
-    quickChatShortcutError,
-    language: normalizeDesktopLanguage(stored.language),
-  };
-}
-
-// The app must keep running — and the Python backend must stay alive — after the
-// last window is closed whenever a global quick-chat shortcut is registered
-// (otherwise pressing it would open a window pointing at a dead backend) or the
-// user opted into background mode. Quitting still tears Python down in
-// before-quit; a hidden main window is restored via 'activate' (macOS) or by
-// relaunching the app (single-instance → second-instance).
-function appStaysResident() {
-  if (registeredQuickChatShortcut) return true;
-  try {
-    return readDesktopSettings().runInBackground === true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function saveDesktopSettings(updates, expectedRevision) {
-  const current = readDesktopSettings();
-  const allowed = new Set(['launchAtLogin', 'runInBackground', 'language', 'quickChatEnabled', 'quickChatShortcut']);
-  const input = updates && typeof updates === 'object' && !Array.isArray(updates) ? updates : {};
-  const unknown = Object.keys(input).filter((key) => !allowed.has(key));
-  if (unknown.length) {
-    const error = new Error(`unknown desktop setting(s): ${unknown.join(', ')}`);
-    error.code = 'validation_error';
-    throw error;
-  }
-  const expected = expectedRevision == null ? null : Number(expectedRevision);
-  if (expected !== null && (!Number.isInteger(expected) || expected < 0)) {
-    const error = new Error('expected desktop settings revision must be a non-negative integer');
-    error.code = 'validation_error';
-    throw error;
-  }
-  if (expected !== null && expected !== current.settingsRevision) {
-    const error = new Error(`desktop settings revision conflict: expected ${expected}, actual ${current.settingsRevision}`);
-    error.code = 'revision_conflict';
-    error.actualRevision = current.settingsRevision;
-    throw error;
-  }
-  for (const key of ['launchAtLogin', 'runInBackground', 'quickChatEnabled']) {
-    if (Object.prototype.hasOwnProperty.call(input, key) && typeof input[key] !== 'boolean') {
-      const error = new Error(`${key} must be a boolean`);
-      error.code = 'validation_error';
-      throw error;
-    }
-  }
-  for (const key of ['language', 'quickChatShortcut']) {
-    if (Object.prototype.hasOwnProperty.call(input, key) && typeof input[key] !== 'string') {
-      const error = new Error(`${key} must be a string`);
-      error.code = 'validation_error';
-      throw error;
-    }
-  }
-  const next = {
-    ...current,
-    ...input,
-    settingsRevision: current.settingsRevision + 1,
-  };
-  next.quickChatShortcut = normalizeQuickChatShortcut(next.quickChatShortcut);
-  next.language = normalizeDesktopLanguage(next.language);
-  // Quick chat depends on background residency — turning residency off also
-  // disables it (the UI gates the toggle, but enforce it here too).
-  next.quickChatEnabled = next.runInBackground === true && next.quickChatEnabled === true;
-
-  // Persist settings before attempting the shortcut side-effect, so a
-  // registration failure doesn't discard a language or other setting change.
-  writeDesktopSettings(next);
-  applyLaunchAtLogin(next.launchAtLogin);
-  syncTrayWithSettings(next);
-  if (getDesktopLanguage(current) !== getDesktopLanguage(next)) {
-    rebuildApplicationMenu(next);
-    broadcastDesktopLanguage(next);
-  }
-
-  let shortcutUpdateOk = true;
-  if (next.quickChatEnabled) {
-    // Register (or re-register) the global shortcut. Only attempt it when the
-    // binding is missing or changed so an unrelated toggle doesn't churn it.
-    if (
-      next.quickChatShortcut !== registeredQuickChatShortcut
-      || !globalShortcut.isRegistered(next.quickChatShortcut)
-    ) {
-      shortcutUpdateOk = registerQuickChatShortcut(next.quickChatShortcut);
-    }
-  } else {
-    // Disabled (or residency off) — release the shortcut and tear down the
-    // transient window so nothing keeps the app resident for it.
-    unregisterQuickChatShortcut();
-    destroyQuickChatWindow();
-  }
-
-  return {
-    ...getDesktopSettings(),
-    shortcutUpdateOk,
-  };
-}
-
-function resetDesktopSettings() {
-  const current = readDesktopSettings();
-  const next = {
-    ...DEFAULT_DESKTOP_SETTINGS,
-    settingsRevision: current.settingsRevision + 1,
-  };
-  writeDesktopSettings(next);
-  applyLaunchAtLogin(false);
-  unregisterQuickChatShortcut();
-  destroyQuickChatWindow();
-  syncTrayWithSettings(next);
-  rebuildApplicationMenu(next);
-  if (getDesktopLanguage(current) !== getDesktopLanguage(next)) {
-    broadcastDesktopLanguage(next);
-  }
-  return next;
-}
-
-function unregisterQuickChatShortcut() {
-  if (registeredQuickChatShortcut) {
-    try { globalShortcut.unregister(registeredQuickChatShortcut); } catch (_) {}
-  }
-  registeredQuickChatShortcut = '';
-  quickChatShortcutError = '';
-}
+function getDesktopSettingsPath(...args) { return desktopSettings.getDesktopSettingsPath(...args); }
+function readDesktopSettings(...args) { return desktopSettings.readDesktopSettings(...args); }
+function writeDesktopSettings(...args) { return desktopSettings.writeDesktopSettings(...args); }
+function applyLaunchAtLogin(...args) { return desktopSettings.applyLaunchAtLogin(...args); }
+function getDesktopSettings(...args) { return desktopSettings.getDesktopSettings(...args); }
+function appStaysResident(...args) { return desktopSettings.appStaysResident(...args); }
+function saveDesktopSettings(...args) { return desktopSettings.saveDesktopSettings(...args); }
+function resetDesktopSettings(...args) { return desktopSettings.resetDesktopSettings(...args); }
+function unregisterQuickChatShortcut(...args) { return desktopSettings.unregisterQuickChatShortcut(...args); }
+function normalizeQuickChatShortcut(...args) { return desktopSettings.normalizeQuickChatShortcut(...args); }
+function registerQuickChatShortcut(...args) { return desktopSettings.registerQuickChatShortcut(...args); }
 
 function destroyQuickChatWindow() {
   pendingQuickChatScreenshot = null;
@@ -5847,62 +5422,6 @@ function destroyQuickChatWindow() {
   quickChatWindow = null;
   quickChatWindowReady = null;
 }
-
-function normalizeQuickChatShortcut(value) {
-  const shortcut = String(value || '').trim();
-  return shortcut || DEFAULT_DESKTOP_SETTINGS.quickChatShortcut;
-}
-
-function registerQuickChatShortcut(accelerator) {
-  const requested = normalizeQuickChatShortcut(accelerator);
-  const previous = registeredQuickChatShortcut;
-
-  if (previous === requested && globalShortcut.isRegistered(requested)) {
-    quickChatShortcutError = '';
-    return true;
-  }
-
-  if (previous) {
-    try { globalShortcut.unregister(previous); } catch (_) {}
-    registeredQuickChatShortcut = '';
-  }
-
-  let registered = false;
-  try {
-    registered = globalShortcut.register(requested, () => {
-      openQuickChat().catch((err) => {
-        console.error('[electron] Failed to open quick chat:', err);
-        appendErrorLog(`[electron] Failed to open quick chat: ${err && err.stack ? err.stack : err}\n`);
-      });
-    });
-  } catch (err) {
-    quickChatShortcutError = String((err && err.message) || err || 'shortcut_registration_failed');
-  }
-
-  if (registered) {
-    registeredQuickChatShortcut = requested;
-    quickChatShortcutError = '';
-    return true;
-  }
-
-  quickChatShortcutError = quickChatShortcutError || 'shortcut_in_use';
-  if (previous) {
-    try {
-      if (globalShortcut.register(previous, () => {
-        openQuickChat().catch((err) => {
-          console.error('[electron] Failed to open quick chat:', err);
-        });
-      })) {
-        registeredQuickChatShortcut = previous;
-      }
-    } catch (_) {}
-  }
-  return false;
-}
-
-// ---------------------------------------------------------------------------
-// Python child process management
-// ---------------------------------------------------------------------------
 
 function getPythonBinaryPath() {
   if (isDev) {
@@ -5992,15 +5511,11 @@ function showDoctorRecovery() {
   doctorRecoveryWindow.loadFile(path.join(__dirname, 'doctor-recovery.html'));
 }
 
-function spawnPython() {
-  if (pythonProcess) return;
-  clearCliConnection();
-  const binaryPath = getPythonBinaryPath();
-  const args = getPythonArgs(binaryPath);
-  const cwd = isDev ? path.join(__dirname, '..') : undefined;
+function backendEnvironment() {
   const childEnv = {
     ...process.env,
     CYRENE_APP_EXECUTABLE: getCurrentAppExecutablePath(),
+    CYRENE_ELECTRON_PID: String(process.pid),
     // The Linux development FreeRDP bridge reuses this Electron runtime to
     // capture its isolated X11 RDP window and feed the existing WebRTC host.
     // Production builds still prefer the signed native sidecar.
@@ -6040,106 +5555,68 @@ function spawnPython() {
     childEnv.CYRENE_INSTALL_RESOURCES_DIR = process.resourcesPath;
   }
 
-  doctorBackendCommand = { command: binaryPath || 'python3', args, options: { cwd, env: childEnv } };
-  if (binaryPath) {
-    pythonProcess = spawn(binaryPath, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      cwd: cwd,
-      env: childEnv,
-    });
-  } else {
-    pythonProcess = spawn('python3', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: cwd,
-      env: childEnv,
-    });
-  }
-
-  let port = null;
-
-  pythonProcess.stdout.on('data', (data) => {
-    const text = data.toString();
-    // Scan each line for PORT=<number>
-    const match = text.match(/^PORT=(\d+)$/m);
-    if (match) {
-      port = parseInt(match[1], 10);
-      // Store globally so a later waitForPort() can resolve even if the
-      // PORT event arrived before any window registered a pending resolver
-      // (e.g. launch-at-login hidden startup).
-      backendPort = port;
-      publishCliConnection(port);
-      backendPortWaiters.resolveAll(port);
-    }
-    // Log any other stdout for debugging
-    process.stdout.write(`[cyrene] ${text}`);
-    appendErrorLog(text);
-  });
-
-  pythonProcess.stderr.on('data', (data) => {
-    const text = data.toString();
-    process.stderr.write(`[cyrene] ${text}`);
-    appendErrorLog(text);
-  });
-
-  pythonProcess.on('error', (err) => {
-    console.error('[electron] Failed to start Python backend:', err.message);
-    const settings = readDesktopSettings();
-    dialog.showErrorBox(
-      desktopT('startupErrorTitle', settings),
-      `${desktopT('startupErrorMessage', settings)}\n\n${err.message}\n\n`
-        + desktopT(isDev ? 'startupErrorDevDetail' : 'startupErrorPackagedDetail', settings)
-    );
-    backendPortWaiters.resolveAll(null);
-    backendPort = null;
-    showDoctorRecovery();
-  });
-
-  pythonProcess.on('exit', (code) => {
-    console.log(`[electron] Python backend exited (code=${code})`);
-    pythonProcess = null;
-    backendPort = null;
-    clearCliConnection();
-    if (isBackendRestarting) {
-      isBackendRestarting = false;
-      isShuttingDown = false;
-      spawnPython();
-      createMainWindow().catch((err) => {
-        appendErrorLog(`[electron] Failed to recreate window after backend restart: ${String(err && err.stack || err)}\n`);
-      });
-    } else if (code === 42) {
-      // Exit code 42 = intentional restart after update.
-      // Exit immediately to release the single-instance lock so the
-      // detached updater script can launch the new version.
-      app.exit(0);
-    } else if (isShuttingDown) {
-      // Normal shutdown — Python handled SIGTERM gracefully and exited with
-      // code 0.  Don't scare the user with a crash dialog.
-      if (!doctorRecoveryWindow || doctorRecoveryWindow.isDestroyed()) app.quit();
-    } else {
-      // Show error regardless of window state — if Python crashed before
-      // printing PORT= the window doesn't exist yet and the user would see
-      // a silent flash-quit without this unconditional dialog.
-      const settings = readDesktopSettings();
-      dialog.showErrorBox(
-        desktopT('backendErrorTitle', settings),
-        `${desktopFormat('backendErrorMessage', settings, { code })}\n`
-        + `${desktopT('backendErrorClose', settings)}\n\n`
-        + desktopFormat('backendErrorLog', settings, { path: getCyreneTempDir() })
-      );
-      showDoctorRecovery();
-    }
-  });
+  return childEnv;
 }
 
-function restartPythonBackend() {
-  if (!pythonProcess) {
+function prepareBackendLaunch() {
+  const binaryPath = getPythonBinaryPath();
+  const args = getPythonArgs(binaryPath);
+  const cwd = isDev ? path.join(__dirname, '..') : undefined;
+  const childEnv = backendEnvironment();
+
+  doctorBackendCommand = { command: binaryPath || 'python3', args, options: { cwd, env: childEnv } };
+  return {
+    command: binaryPath || 'python3', args,
+    options: {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(binaryPath ? { windowsHide: true } : {}),
+      cwd, env: childEnv,
+    },
+  };
+}
+
+function showBackendStartupError(err) {
+  console.error('[electron] Failed to start Python backend:', err.message);
+  const settings = readDesktopSettings();
+  dialog.showErrorBox(
+    desktopT('startupErrorTitle', settings),
+    `${desktopT('startupErrorMessage', settings)}\n\n${err.message}\n\n`
+      + desktopT(isDev ? 'startupErrorDevDetail' : 'startupErrorPackagedDetail', settings)
+  );
+}
+
+function handleBackendExit(code, restarting) {
+  if (restarting) {
+    isShuttingDown = false;
     spawnPython();
-    createMainWindow().catch(() => {});
-    return;
+    createMainWindow().catch((err) => {
+      appendErrorLog(`[electron] Failed to recreate window after backend restart: ${String(err && err.stack || err)}\n`);
+    });
+  } else if (code === 42) {
+    // Exit code 42 = intentional restart after update.
+    // Exit immediately to release the single-instance lock so the
+    // detached updater script can launch the new version.
+    app.exit(0);
+  } else if (isShuttingDown) {
+    // Normal shutdown — Python handled SIGTERM gracefully and exited with
+    // code 0.  Don't scare the user with a crash dialog.
+    if (!doctorRecoveryWindow || doctorRecoveryWindow.isDestroyed()) app.quit();
+  } else {
+    // Show error regardless of window state — if Python crashed before
+    // printing PORT= the window doesn't exist yet and the user would see
+    // a silent flash-quit without this unconditional dialog.
+    const settings = readDesktopSettings();
+    dialog.showErrorBox(
+      desktopT('backendErrorTitle', settings),
+      `${desktopFormat('backendErrorMessage', settings, { code })}\n`
+      + `${desktopT('backendErrorClose', settings)}\n\n`
+      + desktopFormat('backendErrorLog', settings, { path: getCyreneTempDir() })
+    );
+    showDoctorRecovery();
   }
-  isBackendRestarting = true;
-  const proc = pythonProcess;
+}
+
+function invalidateBackendWindows() {
   mainWindowCreation.invalidate();
   // Recreate renderer surfaces after the backend reports its new port. This
   // also invalidates every old UI tree and ui_instance_id.
@@ -6148,59 +5625,15 @@ function restartPythonBackend() {
   if (quickChatWindow && !quickChatWindow.isDestroyed()) quickChatWindow.destroy();
   quickChatWindow = null;
   quickChatWindowReady = null;
-  try {
-    if (isWindows) {
-      const taskkill = spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
-        stdio: 'ignore', windowsHide: true,
-      });
-      taskkill.unref();
-    } else {
-      proc.kill('SIGTERM');
-      setTimeout(() => {
-        try { if (proc.exitCode === null) proc.kill('SIGKILL'); } catch (_) {}
-      }, 5000);
-    }
-  } catch (_) {
-    isBackendRestarting = false;
-  }
 }
 
-function killPython() {
-  if (!pythonProcess) return;
-  isShuttingDown = true;
-  const proc = pythonProcess;
-  pythonProcess = null;
-  clearCliConnection();
+function spawnPython() { backend.start(); }
 
-  try {
-    if (isWindows) {
-      // On Windows, SIGTERM doesn't exist — terminate the backend directly.
-      // The Terminal Daemon is a detached descendant by design. Killing the
-      // whole tree here would destroy PTYs when the Electron window closes.
-      const taskkill = spawn('taskkill', ['/pid', String(proc.pid), '/f'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      taskkill.unref();
-    } else {
-      proc.kill('SIGTERM');
-      // Graceful shutdown: wait up to 5s, then force-kill
-      setTimeout(() => {
-        try {
-          if (proc.exitCode === null) proc.kill('SIGKILL');
-        } catch (_) { /* ignore */ }
-      }, 5000);
-    }
-  } catch (_) { /* ignore */ }
-}
+function restartPythonBackend() { backend.restart(); }
 
-// ---------------------------------------------------------------------------
-// Wait for Python to report its port
-// ---------------------------------------------------------------------------
+function killPython() { backend.stop(); }
 
-function waitForPort(timeoutMs = 30000) {
-  return backendPortWaiters.wait(timeoutMs);
-}
+function waitForPort(timeoutMs = 30000) { return backend.waitForPort(timeoutMs); }
 
 // ---------------------------------------------------------------------------
 // Auth header injection
@@ -6220,7 +5653,7 @@ function installAuthHeaderInjector() {
       try {
         const target = new URL(String(details.url || ''));
         isLocalBackend = target.hostname === '127.0.0.1'
-          && target.port === String(backendPort || '');
+          && target.port === String(backend.port || '');
       } catch (_) {}
       if (!isLocalBackend) {
         callback({ requestHeaders: details.requestHeaders });
@@ -6238,7 +5671,7 @@ function installAuthHeaderInjector() {
     let isLocalBackend = false;
     try {
       const target = new URL(String((webContents && webContents.getURL()) || details.requestingUrl || ''));
-      isLocalBackend = target.hostname === '127.0.0.1' && target.port === String(backendPort || '');
+      isLocalBackend = target.hostname === '127.0.0.1' && target.port === String(backend.port || '');
     } catch (_) {}
     const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
     const audioOnly = mediaTypes.length > 0 && mediaTypes.every((mediaType) => mediaType === 'audio');
@@ -6480,586 +5913,27 @@ async function createQuickChatWindow() {
   return quickChatWindow;
 }
 
-function debugDetachedPane(stage, details) {
-  if (process.env.ELECTRON_DEV !== '1') return;
-  try { console.log(`[detached-pane] ${stage}`, details || ''); } catch (_) {}
-}
-
-function detachedPaneContextForSender(sender) {
-  for (const record of detachedPaneWindows.values()) {
-    if (
-      record.window && !record.window.isDestroyed()
-      && record.window.webContents === sender
-    ) return record;
-  }
-  return null;
-}
-
-function normalizeDetachedPaneDescriptor(value) {
-  const source = value && typeof value === 'object' ? value : {};
-  const kind = String(source.kind || '').trim();
-  const sourceMeta = source.meta && typeof source.meta === 'object' ? source.meta : null;
-  const meta = sourceMeta ? {
-    origin: sourceMeta.origin === 'agent' ? 'agent' : 'user',
-    claimedByUser: sourceMeta.claimedByUser === true,
-    pinned: sourceMeta.pinned === true,
-    autoClosePolicy: ['run-end', 'idle', 'never'].includes(String(sourceMeta.autoClosePolicy || ''))
-      ? String(sourceMeta.autoClosePolicy) : 'never',
-    createdAt: Math.max(0, Number(sourceMeta.createdAt) || 0),
-    lastIntentAt: Math.max(0, Number(sourceMeta.lastIntentAt) || 0),
-  } : null;
-  // Pane transport is intentionally kind-agnostic. Built-ins and future
-  // plugin cards share the same structured-clone boundary; the renderer owns
-  // whether a registered card kind has UI for this window.
-  if (!/^[a-z][a-z0-9._-]{0,79}$/i.test(kind)) throw new Error('Invalid detached pane kind.');
-  const serialized = JSON.stringify({
-    kind,
-    payload: source.payload == null ? null : source.payload,
-    meta,
-    ownerChatId: String(source.ownerChatId || ''),
-    project: source.project && typeof source.project === 'object' ? source.project : null,
-    title: String(source.title || '').slice(0, 300),
-    items: Array.isArray(source.items) ? source.items : [],
-    agent: source.agent && typeof source.agent === 'object' ? source.agent : null,
-    agents: Array.isArray(source.agents) ? source.agents : [],
-    draft: source.draft && typeof source.draft === 'object' ? source.draft : null,
-  });
-  if (Buffer.byteLength(serialized, 'utf8') > 2 * 1024 * 1024) {
-    throw new Error('Detached pane context is too large.');
-  }
-  return JSON.parse(serialized);
-}
-
-function detachedPaneBounds(info = {}) {
-  const requestedPoint = info.dropPoint && typeof info.dropPoint === 'object'
-    ? info.dropPoint
-    : null;
-  const liveCursor = screen.getCursorScreenPoint();
-  const cursor = {
-    x: Number.isFinite(Number(requestedPoint && requestedPoint.x))
-      ? Math.round(Number(requestedPoint.x))
-      : liveCursor.x,
-    y: Number.isFinite(Number(requestedPoint && requestedPoint.y))
-      ? Math.round(Number(requestedPoint.y))
-      : liveCursor.y,
-  };
-  const sourceBounds = info.sourceBounds && typeof info.sourceBounds === 'object'
-    ? info.sourceBounds
-    : {};
-  const width = Math.max(420, Math.min(1400, Math.round(Number(sourceBounds.width) || 720)));
-  const height = Math.max(320, Math.min(1200, Math.round(Number(sourceBounds.height) || 720)));
-  const grab = info.grabOffset && typeof info.grabOffset === 'object' ? info.grabOffset : {};
-  const display = screen.getDisplayNearestPoint(cursor);
-  const workArea = display.workArea;
-  const x = Math.max(
-    workArea.x,
-    Math.min(
-      Math.round(cursor.x - Math.max(0, Math.min(width, Number(grab.x) || width / 2))),
-      workArea.x + workArea.width - width,
-    ),
-  );
-  const y = Math.max(
-    workArea.y,
-    Math.min(
-      Math.round(cursor.y - Math.max(0, Math.min(height, Number(grab.y) || 28))),
-      workArea.y + workArea.height - height,
-    ),
-  );
-  return { x, y, width: Math.min(width, workArea.width), height: Math.min(height, workArea.height) };
-}
-
-function pointInsideBounds(bounds, point) {
-  return !!(bounds && point
-    && point.x >= bounds.x
-    && point.x <= bounds.x + bounds.width
-    && point.y >= bounds.y
-    && point.y <= bounds.y + bounds.height);
-}
-
-function pointAtBlockedDisplayEdge(sourceBounds, point) {
-  if (!sourceBounds || !point) return false;
-  const display = screen.getDisplayNearestPoint(point);
-  const displayBounds = display && display.bounds;
-  if (!displayBounds) return false;
-  const seam = 10;
-  const aligned = 2;
-  const sourceRight = sourceBounds.x + sourceBounds.width;
-  const sourceBottom = sourceBounds.y + sourceBounds.height;
-  const displayRight = displayBounds.x + displayBounds.width;
-  const displayBottom = displayBounds.y + displayBounds.height;
-  return (
-    (sourceBounds.x <= displayBounds.x + aligned && point.x <= displayBounds.x + seam)
-    || (sourceRight >= displayRight - aligned && point.x >= displayRight - seam)
-    || (sourceBounds.y <= displayBounds.y + aligned && point.y <= displayBounds.y + seam)
-    || (sourceBottom >= displayBottom - aligned && point.y >= displayBottom - seam)
-  );
-}
-
-function updateDetachedPaneDrag(sender, rawPoint) {
-  const session = detachedPaneDragSessions.get(sender && sender.id);
-  if (!session) return;
-  const point = rawPoint && typeof rawPoint === 'object' ? rawPoint : {};
-  const screenX = Number(point.screenX != null ? point.screenX : point.x);
-  const screenY = Number(point.screenY != null ? point.screenY : point.y);
-  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
-  const screenPoint = { x: Math.round(screenX), y: Math.round(screenY) };
-  const clientX = Number(point.clientX);
-  const clientY = Number(point.clientY);
-  const viewportWidth = Number(point.viewportWidth);
-  const viewportHeight = Number(point.viewportHeight);
-  const previous = session.lastRendererPoint;
-  const next = {
-    clientX,
-    clientY,
-    screenX: screenPoint.x,
-    screenY: screenPoint.y,
-    at: Date.now(),
-  };
-  session.lastRendererPoint = next;
-  session.lastCursorPoint = screenPoint;
-  if (!session.loggedFirstMove) {
-    session.loggedFirstMove = true;
-    debugDetachedPane('first pointer move', { senderId: session.senderId, screenPoint });
-  }
-  if (previous) {
-    const dx = next.screenX - previous.screenX;
-    const dy = next.screenY - previous.screenY;
-    if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) session.lastRendererVector = { dx, dy };
-  }
-  if (
-    Number.isFinite(clientX) && Number.isFinite(clientY)
-    && Number.isFinite(viewportWidth) && Number.isFinite(viewportHeight)
-  ) {
-    const vector = session.lastRendererVector || { dx: 0, dy: 0 };
-    const seam = 8;
-    session.boundaryExitIntent = (
-      (clientX <= seam && vector.dx < 0)
-      || (clientX >= viewportWidth - seam && vector.dx > 0)
-      || (clientY <= seam && vector.dy < 0)
-      || (clientY >= viewportHeight - seam && vector.dy > 0)
-    );
-  }
-  if (session.detachedWindow && !session.detachedWindow.isDestroyed()) {
-    session.detachedWindow.setBounds(detachedPaneBounds({
-      ...session.info,
-      dropPoint: screenPoint,
-    }), false);
-  }
-  // Pointer capture keeps delivering real screen coordinates beyond the
-  // renderer. Create on the first outside point, exactly like the proven
-  // side demo; the cursor poll below is now only a safety fallback.
-  const crossedSourceBounds = !pointInsideBounds(session.sourceWindowBounds, screenPoint);
-  // A maximized source window can occupy the complete display work area. In
-  // that case macOS clamps the pointer to the physical screen edge, so there
-  // is no coordinate that can ever be outside owner.getBounds(). Treat a
-  // renderer pointer that reaches the outer seam while still moving outward
-  // as the equivalent boundary crossing. This is the only behavioural
-  // difference between the small working demo window and Cyrene at full size.
-  if (!session.creating && (crossedSourceBounds || session.boundaryExitIntent)) {
-    debugDetachedPane(crossedSourceBounds ? 'pointer crossed source bounds' : 'pointer pushed past display edge', {
-      senderId: session.senderId,
-      screenPoint,
-      sourceWindowBounds: session.sourceWindowBounds,
-      boundaryExitIntent: session.boundaryExitIntent,
-    });
-    startDetachedPaneCreation(session, screenPoint);
-  }
-}
-
-function updateDetachedPaneCursor(session) {
-  const point = screen.getCursorScreenPoint();
-  const previous = session && session.lastCursorPoint;
-  if (session && previous) {
-    const dx = point.x - previous.x;
-    const dy = point.y - previous.y;
-    if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) session.lastCursorVector = { dx, dy };
-  }
-  if (session) session.lastCursorPoint = point;
-  return point;
-}
-
-function clearDetachedPaneDragSession(senderOrId) {
-  const senderId = typeof senderOrId === 'number'
-    ? senderOrId
-    : senderOrId && senderOrId.id;
-  const session = detachedPaneDragSessions.get(senderId);
-  if (!session) return null;
-  detachedPaneDragSessions.delete(senderId);
-  if (session.timer) clearInterval(session.timer);
-  session.timer = null;
-  if (session.releaseTimer) clearTimeout(session.releaseTimer);
-  session.releaseTimer = null;
-  return session;
-}
-
-function notifyDetachedPaneCreated(session, result) {
-  const sender = session && session.sender;
-  if (!sender || sender.isDestroyed()) return;
-  try {
-    sender.send('detached-pane:created', {
-      ...(result || {}),
-      cardId: String(session.info.cardId || ''),
-      layoutOwnerChatId: String(session.info.layoutOwnerChatId || ''),
-    });
-  } catch (_) {}
-}
-
-function startDetachedPaneCreation(session, dropPoint) {
-  if (!session || session.creating) return;
-  session.creating = true;
-  debugDetachedPane('creating native window', { senderId: session.senderId, dropPoint });
-  session.lastCursorPoint = dropPoint || session.lastCursorPoint || screen.getCursorScreenPoint();
-  const createInfo = {
-    ...session.info,
-    dropPoint: session.lastCursorPoint,
-    dragSession: session,
-    sourceWindow: session.owner,
-    sourceSenderId: session.senderId,
-  };
-  createDetachedPaneWindow(session.descriptor, createInfo).then((result) => {
-    session.creationResult = result;
-    if (session.released) {
-      notifyDetachedPaneCreated(session, result);
-      session.createdNotified = true;
-      finishDetachedPaneDragSession(session, session.releasePoint);
-    }
-  }).catch((error) => {
-    clearDetachedPaneDragSession(session.senderId);
-    notifyDetachedPaneCreated(session, {
-      ok: false,
-      detached: false,
-      error: String(error && error.message || error),
-    });
-  });
-}
-
-function finishDetachedPaneDragSession(session, rawPoint) {
-  if (!session) return { ok: true, detached: false };
-  const fallback = session.lastCursorPoint || screen.getCursorScreenPoint();
-  const point = rawPoint && Number.isFinite(Number(rawPoint.x)) && Number.isFinite(Number(rawPoint.y))
-    ? { x: Math.round(Number(rawPoint.x)), y: Math.round(Number(rawPoint.y)) }
-    : fallback;
-  session.released = true;
-  session.releasePoint = point;
-  if (
-    !session.creating
-    && (!pointInsideBounds(session.sourceWindowBounds, point)
-      || session.boundaryExitIntent
-      || pointAtBlockedDisplayEdge(session.sourceWindowBounds, point))
-  ) {
-    startDetachedPaneCreation(session, point);
-  }
-  const win = session.detachedWindow;
-  if (!win || win.isDestroyed()) {
-    if (session.creating) return { ok: true, detached: false, pending: true };
-    clearDetachedPaneDragSession(session.senderId);
-    notifyDetachedPaneCreated(session, { ok: true, detached: false, cancelled: true });
-    return { ok: true, detached: false };
-  }
-  win.setBounds(detachedPaneBounds({ ...session.info, dropPoint: point }), false);
-  try { win.setIgnoreMouseEvents(false); } catch (_) {}
-  try { win.setAlwaysOnTop(false); } catch (_) {}
-  if (session.windowReady) {
-    win.show();
-    win.focus();
-  }
-  if (session.creating && !session.creationResult) {
-    return { ok: true, detached: false, pending: true };
-  }
-  if (session.creationResult && !session.createdNotified) {
-    notifyDetachedPaneCreated(session, session.creationResult);
-    session.createdNotified = true;
-  }
-  clearDetachedPaneDragSession(session.senderId);
-  return { ok: true, detached: true, id: session.detachedRecord && session.detachedRecord.id };
-}
-
-function beginDetachedPaneDrag(sender, rawInfo) {
-  const owner = BrowserWindow.fromWebContents(sender);
-  if (!owner || owner.isDestroyed()) return { ok: false, error: 'source_window_not_found' };
-  let descriptor;
-  try {
-    descriptor = normalizeDetachedPaneDescriptor(rawInfo && rawInfo.descriptor);
-  } catch (error) {
-    return { ok: false, error: String(error && error.message || error) };
-  }
-  clearDetachedPaneDragSession(sender);
-  const info = rawInfo && typeof rawInfo === 'object' ? rawInfo : {};
-  const session = {
-    sender,
-    senderId: sender.id,
-    owner,
-    sourceWindowBounds: owner.getBounds(),
-    descriptor,
-    info,
-    startedAt: Date.now(),
-    lastRendererPoint: null,
-    lastRendererVector: null,
-    lastCursorPoint: screen.getCursorScreenPoint(),
-    lastCursorVector: null,
-    boundaryExitIntent: false,
-    creating: false,
-    released: false,
-    releasePoint: null,
-    detachedWindow: null,
-    detachedRecord: null,
-    windowReady: false,
-    timer: null,
-  };
-  session.timer = setInterval(() => {
-    if (sender.isDestroyed() || owner.isDestroyed()) {
-      clearDetachedPaneDragSession(session.senderId);
-      return;
-    }
-    if (Date.now() - session.startedAt > 30000) {
-      clearDetachedPaneDragSession(session.senderId);
-      return;
-    }
-    const cursorPoint = updateDetachedPaneCursor(session);
-    if (
-      pointInsideBounds(session.sourceWindowBounds, cursorPoint)
-      && !session.boundaryExitIntent
-      && !pointAtBlockedDisplayEdge(session.sourceWindowBounds, cursorPoint)
-    ) {
-      return;
-    }
-    // Renderer pointer capture is authoritative; this cursor check is only a
-    // fallback for a dropped move event. A latched edge push also counts when
-    // the source fills the display and no outside cursor coordinate exists.
-    startDetachedPaneCreation(session, cursorPoint);
-  }, 32);
-  if (session.timer && typeof session.timer.unref === 'function') session.timer.unref();
-  detachedPaneDragSessions.set(sender.id, session);
-  debugDetachedPane('pointer capture session began', {
-    senderId: sender.id,
-    cardId: String(info.cardId || ''),
-    sourceWindowBounds: session.sourceWindowBounds,
-  });
-  return { ok: true };
-}
-
-function detachBrowserSurface(record) {
-  const descriptor = record && record.descriptor;
-  if (!descriptor || descriptor.kind !== 'browser') return;
-  const sessionId = normalizeBrowserSessionId(descriptor.ownerChatId);
-  if (!sessionId) return;
-  detachedBrowserSurfaceWindows.set(sessionId, record.window);
-  const manager = browserTabManagers.get(sessionId);
-  if (manager) {
-    manager.syncAttachedView();
-    manager.emitState();
-  }
-}
-
-function restoreBrowserSurface(record) {
-  const descriptor = record && record.descriptor;
-  if (!descriptor || descriptor.kind !== 'browser') return;
-  const sessionId = normalizeBrowserSessionId(descriptor.ownerChatId);
-  if (detachedBrowserSurfaceWindows.get(sessionId) !== record.window) return;
-  detachedBrowserSurfaceWindows.delete(sessionId);
-  const manager = browserTabManagers.get(sessionId);
-  if (manager) {
-    manager.setBounds({ visible: false });
-    manager.syncAttachedView();
-    manager.emitState();
-  }
-}
-
-async function createDetachedPaneWindow(rawDescriptor, info = {}) {
-  const descriptor = normalizeDetachedPaneDescriptor(rawDescriptor);
-  const port = await waitForPort();
-  if (!port) throw new Error('Cyrene backend is unavailable.');
-  const id = crypto.randomUUID();
-  const bounds = detachedPaneBounds(info);
-  const win = new BrowserWindow({
-    ...bounds,
-    minWidth: 420,
-    minHeight: 320,
-    title: descriptor.title || 'Cyrene',
-    show: false,
-    frame: false,
-    resizable: true,
-    maximizable: true,
-    fullscreenable: true,
-    backgroundColor: '#111418',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-  debugDetachedPane('BrowserWindow constructed', { id, bounds, dragging: !!info.dragSession });
-  const dragSession = info.dragSession && typeof info.dragSession === 'object'
-    ? info.dragSession
-    : null;
-  let resolveReady;
-  const readyPromise = new Promise((resolve) => { resolveReady = resolve; });
-  const record = {
-    id,
-    window: win,
-    descriptor,
-    resolveReady,
-    sourceWindow: info.sourceWindow || null,
-    sourceSenderId: Number(info.sourceSenderId) || 0,
-    sourceInfo: {
-      cardId: String(info.cardId || ''),
-      layoutOwnerChatId: String(info.layoutOwnerChatId || ''),
-      sourceSide: info.sourceSide === 'right' ? 'right' : 'left',
-      sourceIndex: Math.max(0, Number(info.sourceIndex) || 0),
-    },
-    returnDrag: null,
-    returning: false,
-  };
-  detachedPaneWindows.set(id, record);
-  if (dragSession) {
-    dragSession.detachedWindow = win;
-    dragSession.detachedRecord = record;
-    try { win.setAlwaysOnTop(true, 'floating'); } catch (_) {}
-    try { win.setIgnoreMouseEvents(true); } catch (_) {}
-  }
-  win.on('closed', () => {
-    restoreBrowserSurface(record);
-    detachedPaneWindows.delete(id);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try { mainWindow.webContents.send('detached-pane:closed', { id, descriptor }); } catch (_) {}
-    }
-  });
-  installLocalNavigationGuards(win, port);
-  await win.loadURL(
-    `http://127.0.0.1:${port}/?surface=detached-pane&paneWindowId=${encodeURIComponent(id)}`,
-    { extraHeaders: `X-Cyrene-Token: ${AUTH_TOKEN}\n` },
-  );
-  const ready = await Promise.race([
-    readyPromise.then(() => true),
-    new Promise((resolve) => setTimeout(() => resolve(false), 8000)),
-  ]);
-  if (!ready || win.isDestroyed()) {
-    if (!win.isDestroyed()) win.destroy();
-    throw new Error('The detached pane did not become ready.');
-  }
-  detachBrowserSurface(record);
-  if (dragSession) {
-    dragSession.windowReady = true;
-    if (dragSession.lastCursorPoint) {
-      win.setBounds(detachedPaneBounds({
-        ...info,
-        dropPoint: dragSession.lastCursorPoint,
-      }), false);
-    }
-    if (dragSession.released) {
-      try { win.setIgnoreMouseEvents(false); } catch (_) {}
-      try { win.setAlwaysOnTop(false); } catch (_) {}
-      win.show();
-      win.focus();
-    } else {
-      win.showInactive();
-      // A lost pointerup must never leave the child permanently click-through.
-      dragSession.releaseTimer = setTimeout(() => {
-        if (win.isDestroyed()) return;
-        finishDetachedPaneDragSession(dragSession, dragSession.lastCursorPoint);
-      }, 220);
-    }
-  } else {
-    win.show();
-    win.focus();
-  }
-  return { ok: true, detached: true, id, bounds: win.getBounds() };
-}
-
-function closeDetachedPanesForChat(chatId) {
-  const normalized = String(chatId || '');
-  let closed = 0;
-  for (const record of Array.from(detachedPaneWindows.values())) {
-    const descriptor = record.descriptor || {};
-    const payloadChatId = descriptor.kind === 'chat' ? String(descriptor.payload || '') : '';
-    if (String(descriptor.ownerChatId || '') !== normalized && payloadChatId !== normalized) continue;
-    if (record.window && !record.window.isDestroyed()) {
-      record.window.close();
-      closed += 1;
-    }
-  }
-  return { ok: true, closed };
-}
-
-function detachedPaneReturnBounds(record, point) {
-  const win = record && record.window;
-  if (!win || win.isDestroyed()) return null;
-  const current = win.getBounds();
-  const grab = record.returnDrag && record.returnDrag.grab || {
-    x: current.width / 2,
-    y: 24,
-  };
-  return {
-    x: Math.round(point.x - Math.max(0, Math.min(current.width, Number(grab.x) || 0))),
-    y: Math.round(point.y - Math.max(0, Math.min(current.height, Number(grab.y) || 0))),
-    width: current.width,
-    height: current.height,
-  };
-}
-
-function beginDetachedPaneReturnDrag(sender, info = {}) {
-  const record = detachedPaneContextForSender(sender);
-  if (!record || !record.window || record.window.isDestroyed()) return { ok: false };
-  record.returnDrag = {
-    grab: info.grab && typeof info.grab === 'object' ? info.grab : { x: 190, y: 24 },
-    merge: false,
-  };
-  try { record.window.setAlwaysOnTop(true, 'floating'); } catch (_) {}
-  record.window.moveTop();
-  return { ok: true };
-}
-
-function updateDetachedPaneReturnDrag(sender, rawPoint) {
-  const record = detachedPaneContextForSender(sender);
-  if (!record || !record.returnDrag || !record.window || record.window.isDestroyed()) return;
-  const point = rawPoint && typeof rawPoint === 'object' ? rawPoint : {};
-  const x = Number(point.screenX != null ? point.screenX : point.x);
-  const y = Number(point.screenY != null ? point.screenY : point.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-  const screenPoint = { x: Math.round(x), y: Math.round(y) };
-  const bounds = detachedPaneReturnBounds(record, screenPoint);
-  if (bounds) record.window.setBounds(bounds, false);
-  const source = record.sourceWindow;
-  const merge = !!(source && !source.isDestroyed() && pointInsideBounds(source.getBounds(), screenPoint));
-  if (merge === record.returnDrag.merge) return;
-  record.returnDrag.merge = merge;
-  try { record.window.webContents.send('detached-pane:return-hover', { active: merge }); } catch (_) {}
-  if (source && !source.isDestroyed()) {
-    try { source.webContents.send('detached-pane:return-hover', { active: merge }); } catch (_) {}
-  }
-}
-
-function finishDetachedPaneReturnDrag(sender, rawPoint) {
-  const record = detachedPaneContextForSender(sender);
-  if (!record || !record.returnDrag || !record.window || record.window.isDestroyed()) {
-    return { ok: false };
-  }
-  updateDetachedPaneReturnDrag(sender, rawPoint || screen.getCursorScreenPoint());
-  const merge = !!record.returnDrag.merge;
-  record.returnDrag = null;
-  const source = record.sourceWindow;
-  try { record.window.webContents.send('detached-pane:return-hover', { active: false }); } catch (_) {}
-  if (source && !source.isDestroyed()) {
-    try { source.webContents.send('detached-pane:return-hover', { active: false }); } catch (_) {}
-  }
-  if (!merge || !source || source.isDestroyed()) {
-    try { record.window.setAlwaysOnTop(false); } catch (_) {}
-    return { ok: true, merged: false };
-  }
-  record.returning = true;
-  try {
-    source.webContents.send('detached-pane:returned', {
-      id: record.id,
-      descriptor: record.descriptor,
-      ...record.sourceInfo,
-    });
-  } catch (_) {}
-  record.window.destroy();
-  source.show();
-  source.focus();
-  return { ok: true, merged: true };
-}
+function debugDetachedPane(...args) { return detachedPanes.debugDetachedPane(...args); }
+function detachedPaneContextForSender(...args) { return detachedPanes.detachedPaneContextForSender(...args); }
+function normalizeDetachedPaneDescriptor(...args) { return detachedPanes.normalizeDetachedPaneDescriptor(...args); }
+function detachedPaneBounds(...args) { return detachedPanes.detachedPaneBounds(...args); }
+function pointInsideBounds(...args) { return detachedPanes.pointInsideBounds(...args); }
+function pointAtBlockedDisplayEdge(...args) { return detachedPanes.pointAtBlockedDisplayEdge(...args); }
+function updateDetachedPaneDrag(...args) { return detachedPanes.updateDetachedPaneDrag(...args); }
+function updateDetachedPaneCursor(...args) { return detachedPanes.updateDetachedPaneCursor(...args); }
+function clearDetachedPaneDragSession(...args) { return detachedPanes.clearDetachedPaneDragSession(...args); }
+function notifyDetachedPaneCreated(...args) { return detachedPanes.notifyDetachedPaneCreated(...args); }
+function startDetachedPaneCreation(...args) { return detachedPanes.startDetachedPaneCreation(...args); }
+function finishDetachedPaneDragSession(...args) { return detachedPanes.finishDetachedPaneDragSession(...args); }
+function beginDetachedPaneDrag(...args) { return detachedPanes.beginDetachedPaneDrag(...args); }
+function detachBrowserSurface(...args) { return detachedPanes.detachBrowserSurface(...args); }
+function restoreBrowserSurface(...args) { return detachedPanes.restoreBrowserSurface(...args); }
+function createDetachedPaneWindow(...args) { return detachedPanes.createDetachedPaneWindow(...args); }
+function closeDetachedPanesForChat(...args) { return detachedPanes.closeDetachedPanesForChat(...args); }
+function detachedPaneReturnBounds(...args) { return detachedPanes.detachedPaneReturnBounds(...args); }
+function beginDetachedPaneReturnDrag(...args) { return detachedPanes.beginDetachedPaneReturnDrag(...args); }
+function updateDetachedPaneReturnDrag(...args) { return detachedPanes.updateDetachedPaneReturnDrag(...args); }
+function finishDetachedPaneReturnDrag(...args) { return detachedPanes.finishDetachedPaneReturnDrag(...args); }
 
 async function openQuickChat() {
   if (quickChatOpenPromise) return quickChatOpenPromise;
@@ -7318,7 +6192,7 @@ async function startTerminalLifecycleSoakTest() {
     );
     const message = await runTerminalLifecycleSoak({
       cycles,
-      getBackendPid: () => Number(pythonProcess && pythonProcess.pid || 0),
+      getBackendPid: () => Number(backend.process && backend.process.pid || 0),
       requestBackendJson,
       restartBackend: restartPythonBackend,
       terminalArgv: [
@@ -7644,7 +6518,7 @@ if (!gotSingleInstanceLock) {
       updateDetachedPaneDrag(event.sender, point);
     });
     ipcMain.handle('detached-pane:finish-drag', async (event, info) => {
-      const session = detachedPaneDragSessions.get(event.sender.id);
+      const session = detachedPanes.detachedPaneDragSessions.get(event.sender.id);
       if (info && info.cancel === true) {
         clearDetachedPaneDragSession(event.sender);
         return { ok: true, detached: false };
@@ -7907,7 +6781,7 @@ if (!gotSingleInstanceLock) {
     ipcMain.handle('browser:screenshot', (_event, info) => handleBrowserRpc('screenshot', info || {}, info || {}));
     ipcMain.on('browser-chat-overlay:action', (event, action) => {
       const sessionId = normalizeBrowserSessionId(action && action.sessionId);
-      const manager = browserTabManagers.get(sessionId);
+      const manager = browserSessions.browserTabManagers.get(sessionId);
       if (!manager || !manager.chatOverlayView || manager.chatOverlayView.webContents !== event.sender) return;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('browser:chat-overlay-action', {
@@ -7919,7 +6793,7 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.on('browser-tab-picker:ready', (event, info) => {
       const sessionId = normalizeBrowserSessionId(info && info.sessionId);
-      const manager = browserTabManagers.get(sessionId) || Array.from(browserTabManagers.values()).find((candidate) => (
+      const manager = browserSessions.browserTabManagers.get(sessionId) || Array.from(browserSessions.browserTabManagers.values()).find((candidate) => (
         candidate.tabPickerView && candidate.tabPickerView.webContents === event.sender
       ));
       if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
@@ -7928,13 +6802,13 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.on('browser-tab-picker:action', (event, action) => {
       const sessionId = normalizeBrowserSessionId(action && action.sessionId);
-      const manager = browserTabManagers.get(sessionId);
+      const manager = browserSessions.browserTabManagers.get(sessionId);
       if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
       manager.handleTabPickerAction(action || {});
     });
     ipcMain.on('browser-tab-picker:hidden-ready', (event, info) => {
       const sessionId = normalizeBrowserSessionId(info && info.sessionId);
-      const manager = browserTabManagers.get(sessionId);
+      const manager = browserSessions.browserTabManagers.get(sessionId);
       if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
       manager.finishTabPickerHide();
     });
@@ -7961,7 +6835,7 @@ if (!gotSingleInstanceLock) {
     // restartPythonBackend deliberately tears down every renderer so stale
     // ui_instance_id/tree revisions cannot survive the backend boundary. Do
     // not interpret that temporary zero-window state as an application quit.
-    if (isBackendRestarting) return;
+    if (backend.restarting) return;
     // Keep the backend alive while the app stays resident for the global
     // shortcut / background mode; otherwise tear it down and quit on non-mac.
     if (appStaysResident()) return;
@@ -7972,7 +6846,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('before-quit', (event) => {
-    if (!quitExtensionDecisionMade && backendPort && !quitExtensionCheckInFlight) {
+    if (!quitExtensionDecisionMade && backend.port && !quitExtensionCheckInFlight) {
       event.preventDefault();
       quitExtensionCheckInFlight = true;
       requestBackendJson('GET', '/api/extensions/tasks')

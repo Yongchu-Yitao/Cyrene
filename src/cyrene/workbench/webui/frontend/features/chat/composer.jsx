@@ -1,3 +1,4 @@
+import { WbcComposerAttachmentView } from "./composer-attachment-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcNormalizePermissionMode, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
 import { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
@@ -1141,35 +1142,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         data-agent-flow={agentFlow || undefined}
       >
         {topOverlay}
-        {attachments.length > 0 && (
-          <div className="wbc-attach-row">
-            {attachments.map(function (file, i) {
-              var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
-              var attachmentKey = String(file.id || file.url || i);
-              var showImagePreview = isImg && file.url && !failedImagePreviews[attachmentKey];
-              return (
-                <div className={"wbc-attach-card" + (showImagePreview ? " image" : " file")} key={attachmentKey}>
-                  {showImagePreview
-                    ? <img src={file.url} alt="" onError={function () {
-                        setFailedImagePreviews(function (prev) {
-                          return Object.assign({}, prev, { [attachmentKey]: true });
-                        });
-                      }} />
-                    : <>
-                        <WbcFileVisual file={file} className="wbc-composer-file-visual" />
-                        <span className="wbc-attach-file-meta">
-                          <b title={file.name}>{file.name || "file"}</b>
-                          <small>{wbcAttachmentTypeLabel(file)}</small>
-                        </span>
-                      </>}
-                  <button type="button" className="wbc-attach-x" disabled={awaitingAnswer} onClick={function () {
-                    setAttachments(attachments.filter(function (_f, idx) { return idx !== i; }));
-                  }} aria-label={wbcT("workbenchChat.removeAttachment", "Remove attachment")}>{WBC_ICONS.x}</button>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <WbcComposerAttachmentView attachments={attachments} failedImagePreviews={failedImagePreviews} setFailedImagePreviews={setFailedImagePreviews} setAttachments={setAttachments} awaitingAnswer={awaitingAnswer} />
         <textarea
           ref={taRef}
           className="wbc-composer-textarea"

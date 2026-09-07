@@ -20,6 +20,7 @@ SCOPE_SETTINGS: Final[dict[str, str]] = {
     "search": "proxy_search_enabled",
     "browser": "proxy_browser_enabled",
     "extensions": "proxy_extensions_enabled",
+    "updates": "proxy_updates_enabled",
 }
 
 

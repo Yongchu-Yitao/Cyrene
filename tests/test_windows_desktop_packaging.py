@@ -25,7 +25,6 @@ def test_electron_dev_launcher_is_cross_platform_and_uses_checkout_backend():
     assert "'.venv', 'bin', 'cyrene'" in main
     assert "'run'," in main
     assert "'cyrene'," in main
-    assert "cwd: cwd" in main
 
 
 def test_windows_arm_keeps_electron_hardware_acceleration_enabled():
@@ -219,12 +218,11 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
 def test_windows_backend_termination_does_not_hold_electron_open():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     assert "DESKTOP_SMOKE_TEST=awaiting_harness_cleanup" in main
-    taskkill_calls = main.split("spawn('taskkill'")[1:]
-
-    assert len(taskkill_calls) == 2
-    assert all("stdio: 'ignore'" in call[:220] for call in taskkill_calls)
-    assert all("'pipe'" not in call[:220] for call in taskkill_calls)
-    assert main.count("taskkill.unref();") == 2
+    # Behavioral termination assertions live in backend-process.test.js and
+    # cover both stop and restart. Packaging must include the shared owner.
+    import json
+    package = json.loads((ROOT / "electron/package.json").read_text(encoding="utf-8"))
+    assert "backend-process.js" in package["build"]["files"]
 
 
 def test_frozen_smoke_imports_numpy_native_extension():

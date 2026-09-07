@@ -1084,7 +1084,7 @@ def test_chat_runtime_broadcasts_terminal_lifecycle_to_topbar():
     assert 'publishLifecycle(chatId, "awaiting_user", event)' in chat
     assert 'publishLifecycle(chatId, "cancelled", event)' in chat
     assert "publishLifecycle: publishLifecycle" in chat
-    assert "context.runtimeEngine.publishLifecycle(chatId, status, result || {})" in chat
+    assert "runtimeEngine.publishLifecycle(chatId, status, result || {})" in _frontend_source("features/chat/answer-projection.mjs")
     assert "wbApplyRecentChatSummary(setRecentChatsByProject, data)" in lifecycle
     assert "setRecentChatsByProject(function (current)" in lifecycle
     assert 'window.addEventListener("cyrene:wbc-chat-lifecycle", onChatLifecycle)' in live_activity

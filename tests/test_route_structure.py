@@ -58,6 +58,10 @@ def test_plugin_application_host_owns_the_complete_public_contract(tmp_path):
 
     assert len(routes) == len(set(routes)), "duplicate method/path declaration"
     assert {
+        "GET /api/health",
+        "GET /api/status",
+        "GET /api/instance-id",
+        "GET /api/ui-data",
         "GET /api/projects/{project_id}/memory-prompt",
         "PATCH /api/projects/{project_id}/memory-prompt",
         "POST /api/projects/{project_id}/memory-prompt/restore",

@@ -517,7 +517,7 @@ async def test_proactive_chat_projection_persists_exact_latest_request_usage(
 ):
     from cyrene.observability import debug
     from cyrene.plugins.builtin.cyrene_proactive import projection
-    from cyrene.workbench.chat import chat_application
+    from cyrene.workbench.chat import chat_application, background_projection
     from cyrene.workbench.chat.chat_repository import ChatRepository
 
     class ComposerContext:
@@ -534,9 +534,9 @@ async def test_proactive_chat_projection_persists_exact_latest_request_usage(
         "_composer_context_service",
         lambda: ComposerContext(),
     )
-    monkeypatch.setattr(projection, "application_plugin_service", lambda _name: None)
-    monkeypatch.setattr(projection, "_ensure_proactive_context", AsyncMock())
-    monkeypatch.setattr(projection, "publish_chat_changed", AsyncMock())
+    monkeypatch.setattr(background_projection, "application_plugin_service", lambda _name: None)
+    monkeypatch.setattr(background_projection, "_ensure_proactive_context", AsyncMock())
+    monkeypatch.setattr(background_projection, "publish_chat_changed", AsyncMock())
     monkeypatch.setattr(debug, "publish_event", AsyncMock())
 
     db_path = tmp_path / "cyrene.runtime.database"

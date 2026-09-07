@@ -223,7 +223,7 @@ def test_memory_pack_rebinds_persisted_hooks_on_reopen(monkeypatch, tmp_path):
     assert memory_hooks["cyrene-memory-context_used"].config == {
         "include_node_tokens": False
     }
-    assert reopened._plugin_setup_failures == {}
+    assert reopened._plugins.setup_failures == {}
     reopened.close()
 
 

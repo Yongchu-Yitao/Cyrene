@@ -88,9 +88,7 @@ function wbApplyStoredRightWidth(node) {
 // Drag handle pinned to the left edge of the rightmost panel. Shared by the
 // conversation side panel (exposed on window for the
 // separately-bundled workbench-chat.js).
-function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
-  var handleRef = useWorkbenchRef(null);
-  function resolvePanel(handle) {
+  function resolveRightPanel(handle, trackGutter) {
     if (!handle) return null;
     var panel = handle.closest(".workbench-right-panel, .wbc-side");
     if (panel || !trackGutter) return panel;
@@ -104,6 +102,10 @@ function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
       }));
     } catch (err) {}
   }
+
+function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
+  var handleRef = useWorkbenchRef(null);
+  function resolvePanel(handle) { return resolveRightPanel(handle, trackGutter); }
   function onPointerDown(e) {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -126,10 +128,15 @@ function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
       // the context panel. ResizeObserver delivery alone trails fast drags.
       emitResizePhase("move", w);
     }
+    var finished = false;
     function onUp() {
+      if (finished) return;
+      finished = true;
       handle.removeEventListener("pointermove", onMove);
       handle.removeEventListener("pointerup", onUp);
       handle.removeEventListener("pointercancel", onUp);
+      handle.removeEventListener("lostpointercapture", onUp);
+      window.removeEventListener("blur", onUp);
       document.body.classList.remove("wb-col-resizing");
       handle.classList.remove("is-resizing");
       emitResizePhase("end");
@@ -141,10 +148,14 @@ function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
     handle.addEventListener("pointermove", onMove);
     handle.addEventListener("pointerup", onUp);
     handle.addEventListener("pointercancel", onUp);
+    handle.addEventListener("lostpointercapture", onUp);
+    window.addEventListener("blur", onUp);
   }
   function onDoubleClick() {
     var grid = document.querySelector(".workbench-grid");
+    emitResizePhase("start");
     if (grid) grid.style.removeProperty("--wb-right-w");
+    emitResizePhase("end");
     try { localStorage.removeItem(WB_RIGHT_STORE); } catch (err) {}
   }
   function setSemanticWidth(input) {
@@ -165,8 +176,10 @@ function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
       next = current + ((maxW - minW) * Math.max(-1, Math.min(1, delta)));
     }
     next = Math.max(minW, Math.min(maxW, Math.round(next)));
+    emitResizePhase("start");
     grid.style.setProperty("--wb-right-w", next + "px");
     emitResizePhase("move", next);
+    emitResizePhase("end", next);
     try { localStorage.setItem(WB_RIGHT_STORE, String(next)); } catch (err) {}
     return { width: next, minimum: minW, maximum: maxW };
   }

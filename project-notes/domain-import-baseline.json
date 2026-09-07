@@ -1,0 +1,21 @@
+[
+  "src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_center::register_plugin_center_routes",
+  "src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::application_extension_service",
+  "src/cyrene/plugins/builtin/cyrene_cli/hooks.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment",
+  "src/cyrene/plugins/builtin/cyrene_cli/service.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::ExtensionService",
+  "src/cyrene/plugins/builtin/cyrene_cli/service.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::get_extension_service",
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment",
+  "src/cyrene/plugins/builtin/cyrene_code/workspace_execution.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment",
+  "src/cyrene/plugins/builtin/cyrene_control/deep_reflect.py::cyrene.plugins.builtin.cyrene_memory.archive::load_session_conversation_entries",
+  "src/cyrene/plugins/builtin/cyrene_extensions/agent_model_gateway_routes.py::cyrene.agents.model_gateway::_openai_response",
+  "src/cyrene/plugins/builtin/cyrene_mcp/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_center::register_plugin_center_routes",
+  "src/cyrene/plugins/builtin/cyrene_mcp/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::application_extension_service",
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::cyrene.plugins.builtin.cyrene_cli.hooks::CliHookService",
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::cyrene.plugins.builtin.cyrene_cli.hooks::public_hook",
+  "src/cyrene/plugins/builtin/cyrene_proactive/service.py::cyrene.plugins.builtin.cyrene_entity.proactive::proactive_work_signature",
+  "src/cyrene/plugins/builtin/cyrene_proactive/service.py::cyrene.plugins.builtin.cyrene_entity.proactive::render_proactive_entities",
+  "src/cyrene/plugins/builtin/cyrene_proactive/service.py::cyrene.plugins.builtin.cyrene_entity.proactive::select_proactive_entities",
+  "src/cyrene/plugins/builtin/cyrene_skills/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_center::register_plugin_center_routes",
+  "src/cyrene/plugins/builtin/cyrene_skills/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::application_extension_service",
+  "src/cyrene/workbench/chat/chat_runs.py::cyrene.workbench.application.inbox::_workbench_agent_inbox"
+]

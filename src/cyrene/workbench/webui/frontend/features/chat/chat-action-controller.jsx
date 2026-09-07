@@ -1,3 +1,4 @@
+import { beginAnswerProjection, guidanceProjection, settleAnswerProjection, hydrateAnswerProjection } from "./answer-projection.mjs"
 import { WbcVoice, wbcClearModelOutputForRetry, wbcErrorText, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcRetryTurnSelection } from "../../workbench-chat.jsx"
 import { wbcIsLiveAgentRequest } from "./conversation.jsx"
 import { settleChatListItem as wbcSettleChatListItem } from "./behavior.mjs"
@@ -13,28 +14,14 @@ function wbcHandleGuidance(context, message) {
     clientRequestId: requestId,
   };
   context.setError("");
-  context.runtimeEngine.closeTimeline(chatId);
-  context.runtimeEngine.recordUserMessage(chatId, optimistic);
-  context.setActiveChat(function (previous) {
-    if (!previous || previous.id !== chatId) return previous;
-    return { ...previous, messages: wbcMergeChronologicalMessages(previous.messages || [], [optimistic]) };
-  });
+  guidanceProjection(context, chatId, { type: "begin", message: optimistic }, wbcMergeChronologicalMessages);
   return context.model.sendGuidance(chatId, text, requestId).then(function (response) {
     if (response && response.userMessage) {
-      context.runtimeEngine.recordUserMessage(chatId, response.userMessage, optimistic.id);
-      context.setActiveChat(function (previous) {
-        if (!previous || previous.id !== chatId) return previous;
-        return { ...previous, messages: wbcMergeChronologicalMessages(previous.messages || [], [response.userMessage]) };
-      });
+      guidanceProjection(context, chatId, { type: "confirm", message: response.userMessage, optimisticId: optimistic.id }, wbcMergeChronologicalMessages);
     }
     return response;
   }).catch(function (error) {
-    context.setActiveChat(function (previous) {
-      if (!previous || previous.id !== chatId) return previous;
-      return { ...previous, messages: (previous.messages || []).filter(function (item) {
-        return String(item && item.clientRequestId || "") !== requestId;
-      }) };
-    });
+    guidanceProjection(context, chatId, { type: "reject", requestId: requestId }, wbcMergeChronologicalMessages);
     if (error && error.code === "chat_not_running") {
       context.runtimeEngine.deferSend(chatId, { message: text }, context.model);
       return { deferred: true };
@@ -51,16 +38,7 @@ function wbcAnswerLiveAgentRequest(context, chatId, questionId, optionText, form
     : (formAnswer
       ? { type: "form", form: optionText.values && typeof optionText.values === "object" ? optionText.values : {} }
       : { type: "text", text: String(optionText || "") });
-  context.setChats(function (previous) {
-    return previous.map(function (chat) {
-      return String(chat && chat.id || "") === chatId
-        ? { ...chat, pendingQuestion: null, status: "running", runStatus: "running" } : chat;
-    });
-  });
-  context.setActiveChat(function (previous) {
-    return previous && String(previous.id || "") === chatId
-      ? { ...previous, pendingQuestion: null, status: "running" } : previous;
-  });
+  beginAnswerProjection({ setChats: context.setChats, setActiveChat: context.setActiveChat }, chatId);
   return context.model.answerAgentRequest(chatId, questionId, response).catch(function (error) {
     context.setActiveChat(function (previous) {
       return previous && String(previous.id || "") === chatId
@@ -76,24 +54,9 @@ function wbcBeginAnswerRuntime(context, chatId, questionId, optionText) {
     id: "answer_pending_" + Date.now(), role: "user", content: optionText,
     createdAt: new Date().toISOString(), answerToQuestionId: questionId, optimistic: true,
   };
-  context.setChats(function (previous) {
-    return previous.map(function (chat) {
-      return String(chat && chat.id || "") === chatId
-        ? { ...chat, pendingQuestion: null, status: "running", runStatus: "running" } : chat;
-    });
-  });
-  var cached = context.chatCache.details[chatId];
-  if (cached) context.chatCache.details[chatId] = {
-    ...cached, pendingQuestion: null, status: "running",
-    messages: wbcMergeChronologicalMessages(cached.messages || [], [optimistic]),
-  };
-  context.setActiveChat(function (previous) {
-    if (!previous || String(previous.id || "") !== chatId) return previous;
-    return {
-      ...previous, pendingQuestion: null, status: "running",
-      messages: wbcMergeChronologicalMessages(previous.messages || [], [optimistic]),
-    };
-  });
+  beginAnswerProjection({
+    setChats: context.setChats, setActiveChat: context.setActiveChat, cache: context.chatCache.details,
+  }, chatId, optimistic, wbcMergeChronologicalMessages);
   var startedAt = Date.parse(String(optimistic.createdAt || "")) || Date.now();
   context.runtimeEngine.update(chatId, {
     chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0,
@@ -106,9 +69,11 @@ function wbcBeginAnswerRuntime(context, chatId, questionId, optionText) {
 function wbcHydrateAnsweredChat(context, chatId) {
   var hydrationSequence = context.beginChatHydration(chatId);
   return context.model.getChat(chatId).then(function (chat) {
-    if (!context.isCurrentChatHydration(chatId, hydrationSequence)) return;
-    context.chatCache.details[chatId] = chat;
-    if (context.activeChatIdRef.current === chatId) context.setActiveChat(chat);
+    hydrateAnswerProjection({
+      cache: context.chatCache.details, setActiveChat: context.setActiveChat,
+      activeChatId: function () { return context.activeChatIdRef.current; },
+      isCurrent: function () { return context.isCurrentChatHydration(chatId, hydrationSequence); },
+    }, chatId, chat);
   });
 }
 
@@ -123,13 +88,8 @@ function wbcAnswerRegularQuestion(context, chatId, questionId, optionText, resum
     answerSettled = true;
     var status = result && result.interrupted
       ? "cancelled" : (result && result.awaitingUser ? "awaiting_user" : "completed");
-    context.runtimeEngine.publishLifecycle(chatId, status, result || {});
-    context.runtimeEngine.update(chatId, null);
-    context.beginChatListRequest(String(context.projectIdRef.current || ""));
-    context.setChats(function (previous) {
-      return previous.map(function (chat) {
-        return String(chat && chat.id || "") === chatId ? wbcSettleChatListItem(chat, status, result) : chat;
-      });
+    settleAnswerProjection(context, chatId, status, result, wbcSettleChatListItem, function () {
+      context.beginChatListRequest(String(context.projectIdRef.current || ""));
     });
     return wbcHydrateAnsweredChat(context, chatId);
   }).then(function () {

@@ -45,7 +45,7 @@ def test_start_readiness_checks_never_use_environment_proxy(monkeypatch):
         calls.append((url, kwargs))
         return httpx.Response(
             200,
-            json={"sessions": []},
+            json={"service": "cyrene", "status": "ok", "sessions": []},
             request=httpx.Request("GET", url),
         )
 
@@ -64,7 +64,9 @@ def test_start_readiness_checks_never_use_environment_proxy(monkeypatch):
 
     cli.cmd_start(argparse.Namespace())
 
-    assert len(calls) == 1
+    assert [url for url, _ in calls] == [
+        "http://127.0.0.1:4242/api/health", "http://127.0.0.1:4242/api/ui-data",
+    ]
     assert all(kwargs["trust_env"] is False for _, kwargs in calls)
     assert launch["start_new_session"] is (cli.sys.platform != "win32")
 
@@ -73,9 +75,10 @@ def test_start_uses_an_alternate_port_when_default_port_is_unavailable(monkeypat
     from cyrene import cli
 
     def local_get(url, **kwargs):
+        assert url == "http://127.0.0.1:4243/api/health"
         return httpx.Response(
             200,
-            json={"sessions": []},
+            json={"service": "cyrene", "status": "ok", "sessions": []},
             request=httpx.Request("GET", url),
         )
 
@@ -144,7 +147,7 @@ def test_cli_discovers_authenticated_electron_backend(monkeypatch, tmp_path):
         seen["headers"] = kwargs.get("headers")
         return httpx.Response(
             200,
-            json={"ok": True},
+            json={"service": "cyrene", "status": "ok"},
             request=httpx.Request("GET", url),
         )
 
@@ -154,6 +157,7 @@ def test_cli_discovers_authenticated_electron_backend(monkeypatch, tmp_path):
 
     assert cli._discover_daemon_url() == "http://127.0.0.1:4242"
     assert cli.DAEMON_TOKEN == "desktop-secret"
+    assert seen["url"] == "http://127.0.0.1:4242/api/health"
     assert seen["headers"] == {"X-Cyrene-Token": "desktop-secret"}
 
 
@@ -167,5 +171,56 @@ def test_electron_publishes_same_user_cli_connection():
     assert "function publishCliConnection(port)" in source
     assert "mode: 0o600" in source
     assert "token: AUTH_TOKEN" in source
-    assert "publishCliConnection(port);" in source
-    assert "clearCliConnection();" in source
+    assert "publishConnection: publishCliConnection" in source
+    assert "clearConnection: clearCliConnection" in source
+
+
+@pytest.mark.parametrize("payload", [{"ok": True}, [], None, {"service": "other", "status": "ok"}])
+def test_discovery_rejects_unrelated_http_servers(monkeypatch, payload):
+    from cyrene import cli
+
+    monkeypatch.setattr(cli, "_read_desktop_connection", lambda: None)
+    monkeypatch.setattr(cli, "_CLI_PORT_RANGE", [4242])
+    monkeypatch.setattr(cli, "_port_is_open", lambda port: True)
+    monkeypatch.setattr(cli.httpx, "get", lambda *a, **kw: httpx.Response(200, json=payload))
+    assert cli._discover_daemon_url() == ""
+
+
+def test_discovery_preserves_protected_desktop_detection(monkeypatch):
+    from cyrene import cli
+
+    paths = []
+
+    def get(url, **kwargs):
+        paths.append(url)
+        if url.endswith("/api/health"):
+            return httpx.Response(401)
+        return httpx.Response(200, json={"instance_id": "desktop"})
+
+    monkeypatch.setattr(cli, "_read_desktop_connection", lambda: None)
+    monkeypatch.setattr(cli, "_CLI_PORT_RANGE", [4242])
+    monkeypatch.setattr(cli, "_port_is_open", lambda port: True)
+    monkeypatch.setattr(cli, "_PROTECTED_DAEMON_PRESENT", False)
+    monkeypatch.setattr(cli.httpx, "get", get)
+    assert cli._discover_daemon_url() == ""
+    assert cli._PROTECTED_DAEMON_PRESENT is True
+    assert paths == ["http://127.0.0.1:4242/api/health", "http://127.0.0.1:4242/api/instance-id"]
+
+
+def test_readiness_retries_until_authenticated_cyrene_is_ready(monkeypatch):
+    from cyrene.platform import daemon_health
+
+    responses = iter([httpx.Response(200, text="<html>other server</html>"),
+                      httpx.Response(401), httpx.Response(200, json={"service": "cyrene", "status": "ok"})])
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(daemon_health.httpx, "get", get)
+    monkeypatch.setattr(daemon_health.time, "sleep", lambda seconds: None)
+    assert daemon_health.wait_for_daemon("http://127.0.0.1:4242", {"X-Cyrene-Token": "secret"})
+    assert len(calls) == 3
+    assert all(url.endswith("/api/health") and kw["headers"] == {"X-Cyrene-Token": "secret"}
+               for url, kw in calls)

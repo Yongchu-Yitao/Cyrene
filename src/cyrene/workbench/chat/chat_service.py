@@ -55,6 +55,9 @@ from cyrene.workbench.chat.chat_dto import (
     ChatMessageDTO,
     ChatSummaryDTO,
 )
+from cyrene.workbench.chat.chat_reply_finalization_service import (
+    BackgroundReplyFinalizationDependencies, ChatReplyFinalizationApplicationService,
+)
 from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
 from cyrene.workbench.chat.chat_runs import (
@@ -818,94 +821,15 @@ class ChatService:
                     },
                     publish=run.publish,
                 )
-                fresh = await asyncio.to_thread(self.repository.get, chat_id)
-                if not fresh:
-                    raise RuntimeError(
-                        localized(
-                            "The chat disappeared during background continuation.",
-                            "后台接续期间对话已不存在。",
-                            language=run_language,
-                        )
-                    )
-                fresh_base = copy.deepcopy(fresh)
-                model = str(result.model or fresh.get("model") or "")
-                additions = [
-                    {
-                        **copy.deepcopy(dict(item)),
-                        "model": str(item.get("model") or model),
-                    }
-                    for item in result.activity_messages
-                    if isinstance(item, Mapping)
-                ]
-                if (
-                    result.status == "awaiting_user"
-                    and result.pending_question is not None
-                ):
-                    pending = result.pending_question.as_dict()
-                    additions.append(
-                        pending_question_message(
-                            pending,
-                            usage=result.usage,
-                            latest_request_usage=result.latest_request_usage,
-                            model=model,
-                        )
-                    )
-                    fresh["pendingQuestion"] = pending
-                    fresh["status"] = "idle"
-                    run.outcome = {"kind": "awaiting", "pending": pending}
-                else:
-                    assistant = _shell_wake_assistant_message(
-                        result=result,
-                        model=model,
-                        started_at=started_at,
-                        agent_originated=agent_originated,
-                        media_wake=media_wake,
-                        wake_id=wake_id,
-                    )
-                    additions.append(assistant)
-                    fresh.pop("pendingQuestion", None)
-                    fresh["status"] = "idle"
-                    if agent_originated:
-                        fresh["completedTurnCount"] = (
-                            completed_turn_count(fresh) + 1
-                        )
-                    run.outcome = {
-                        "kind": "reply",
-                        "payload": {
-                            "assistantMessage": assistant,
-                            "assistantMessages": additions,
-                        },
-                    }
-                merge_chat_messages_chronologically(fresh, additions)
-                if isinstance(result.active_plan, Mapping):
-                    fresh["activePlan"] = copy.deepcopy(dict(result.active_plan))
-                fresh["lastModel"] = model
-                fresh["updatedAt"] = utc_now_iso()
-                await asyncio.to_thread(
-                    self.repository.write_one,
-                    fresh,
-                    base_chat=fresh_base,
+                fresh = await ChatReplyFinalizationApplicationService.finalize_background(
+                    BackgroundReplyFinalizationDependencies(
+                        get_chat=self.repository.get, write_chat=self.repository.write_one,
+                        assistant_message=_shell_wake_assistant_message,
+                    ),
+                    chat_id=chat_id, run=run, result=result, started_at=started_at,
+                    agent_originated=agent_originated, media_wake=media_wake,
+                    wake_id=wake_id, run_language=run_language, user_entry=user_entry,
                 )
-
-                if result.status == "awaiting_user":
-                    event: dict[str, Any] = {
-                        "type": "awaiting_user",
-                        "pendingQuestion": (run.outcome or {}).get("pending"),
-                        "assistantMessages": [
-                            public_message(item) for item in additions
-                        ],
-                    }
-                else:
-                    event = {
-                        "type": "saved",
-                        "assistantMessage": public_message(additions[-1]),
-                        "assistantMessages": [
-                            public_message(item) for item in additions
-                        ],
-                    }
-                if user_entry is not None:
-                    event["userMessage"] = public_message(user_entry)
-                await run.publish(event)
                 try:
                     language = app_language()
                     chat_title = fresh.get('title') or localized(

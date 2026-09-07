@@ -1,0 +1,149 @@
+{
+  "javascript": [
+    {
+      "from": "electron/main.js::saveDesktopSettings",
+      "to": "electron/desktop-settings-owner.js::DesktopSettings.saveDesktopSettings",
+      "metrics": {
+        "decisions": 28
+      }
+    },
+    {
+      "from": "electron/main.js::createDetachedPaneWindow",
+      "to": "electron/detached-panes.js::DetachedPanes.createDetachedPaneWindow",
+      "metrics": {
+        "lines": 101,
+        "decisions": 30
+      }
+    },
+    {
+      "from": "electron/main.js::detachedPaneBounds",
+      "to": "electron/detached-panes.js::DetachedPanes.detachedPaneBounds",
+      "metrics": {
+        "decisions": 24
+      }
+    },
+    {
+      "from": "electron/main.js::finishDetachedPaneDragSession",
+      "to": "electron/detached-panes.js::DetachedPanes.finishDetachedPaneDragSession",
+      "metrics": {
+        "decisions": 28
+      }
+    },
+    {
+      "from": "electron/main.js::finishDetachedPaneReturnDrag",
+      "to": "electron/detached-panes.js::DetachedPanes.finishDetachedPaneReturnDrag",
+      "metrics": {
+        "decisions": 22
+      }
+    },
+    {
+      "from": "electron/main.js::normalizeDetachedPaneDescriptor",
+      "to": "electron/detached-panes.js::DetachedPanes.normalizeDetachedPaneDescriptor",
+      "metrics": {
+        "decisions": 47
+      }
+    },
+    {
+      "from": "electron/main.js::updateDetachedPaneDrag",
+      "to": "electron/detached-panes.js::DetachedPanes.updateDetachedPaneDrag",
+      "metrics": {
+        "decisions": 45
+      }
+    },
+    {
+      "from": "electron/main.js::updateDetachedPaneReturnDrag",
+      "to": "electron/detached-panes.js::DetachedPanes.updateDetachedPaneReturnDrag",
+      "metrics": {
+        "decisions": 33
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#28",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#26",
+      "metrics": {
+        "decisions": 24
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#73",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#72",
+      "metrics": {
+        "decisions": 26
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain.<anonymous>#5",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain.<anonymous>#6",
+      "metrics": {
+        "decisions": 36
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.renderTerminalCard",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/rail-terminal-view.jsx::renderTerminalCard",
+      "metrics": {
+        "lines": 101,
+        "decisions": 43
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.terminalRailVisualState",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/rail-terminal-view.jsx::terminalRailVisualState",
+      "metrics": {
+        "decisions": 36
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchSessionActivityPreview",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar-session-view.jsx::WorkbenchSessionActivityPreview",
+      "metrics": {
+        "decisions": 33
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.<anonymous>#30",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.<anonymous>#24",
+      "metrics": {
+        "decisions": 48
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#43",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#40",
+      "metrics": {
+        "decisions": 37
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#47",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#44",
+      "metrics": {
+        "decisions": 30
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#48",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#45",
+      "metrics": {
+        "lines": 126,
+        "decisions": 53
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#53",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#50",
+      "metrics": {
+        "decisions": 35
+      }
+    }
+  ],
+  "python": [
+    {
+      "from": "src/cyrene/core/session.py::AgentSession.reconcile_plugins",
+      "to": "src/cyrene/core/plugin/session_plugins.py::SessionPlugins.reconcile_plugins",
+      "metrics": {
+        "decisions": 23
+      }
+    }
+  ]
+}

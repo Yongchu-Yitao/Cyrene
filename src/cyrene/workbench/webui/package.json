@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "build": "node build-jsx.mjs",
+    "check:complexity": "node build/javascript-structure.mjs",
     "test": "node --test frontend/architecture/*.test.mjs frontend/features/chat/*.test.mjs frontend/features/doctor/*.test.mjs"
   },
   "dependencies": {

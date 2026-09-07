@@ -24,6 +24,20 @@ function AboutPanel(p) {
 }
 
 // ── Update Section (inlined) ──
+  function fmtBytes(n) {
+    n = Number(n || 0);
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+    return (n / 1073741824).toFixed(1) + " GB";
+  }
+
+  function fmtDate(value) {
+    if (!value) return "—";
+    return workbenchServices.i18n().formatDate(value, { dateStyle: "medium" }) || "—";
+  }
+
+
 function UpdateSection({ t, config }) {
   var dataState = workbenchServices.data().state;
   var [checking, setChecking] = useStateSt(false);
@@ -66,6 +80,7 @@ function UpdateSection({ t, config }) {
     setChecking(true); setError("");
     settingsFetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
       setInfo(d);
+      if (d.error) setError(d.error);
       setChangelog({ version: d.latest_version || "", published_at: d.published_at || "", release_notes: d.release_notes || "" });
       syncDownloadState();
     }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
@@ -125,19 +140,6 @@ function UpdateSection({ t, config }) {
       return "done";
     }).catch(function () { setError(t("settings.updateDownloadFailed")); return "done"; })
       .then(function (mode) { if (mode !== "following") setDownloading(false); });
-  }
-
-  function fmtBytes(n) {
-    n = Number(n || 0);
-    if (n < 1024) return n + " B";
-    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
-    if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
-    return (n / 1073741824).toFixed(1) + " GB";
-  }
-
-  function fmtDate(value) {
-    if (!value) return "—";
-    return workbenchServices.i18n().formatDate(value, { dateStyle: "medium" }) || "—";
   }
 
   function notesText() {

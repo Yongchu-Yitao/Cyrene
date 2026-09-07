@@ -5,7 +5,7 @@ import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayo
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
 import { WbcComposer } from "./composer.jsx"
 import { WbcConversationNavigator } from "./conversation-navigator.jsx"
-import { protectTranscriptResize } from "./transcript-resize.mjs"
+import { useMainTranscriptResize } from "./transcript-resize-hooks.jsx"
 
 import { permissionOptionLabel } from "./behavior.mjs"
 
@@ -1865,6 +1865,8 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
   var latestAssistantReplyId = projection.latestAssistantReplyId;
   var latestAssistantReplyText = projection.latestAssistantReplyText;
 
+  var resizeAvoidanceRef = useMainTranscriptResize(scrollRef, mainRef, stickRef, chat && chat.id);
+
   useWbcComposerReserveHeight(mainRef, chat && chat.id);
 
   // Expanded side-panel content owns the whole right-side corridor below the
@@ -2012,13 +2014,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       applyBrowserAvoidance(true);
     });
   }, [applyBrowserAvoidance]);
-
-  useWbcEffect(function () {
-    var thread = scrollRef.current;
-    var page = mainRef.current && mainRef.current.closest(".wbc-page");
-    if (!thread || !page) return undefined;
-    return protectTranscriptResize(thread, page, function () { return stickRef.current; }, scheduleBrowserAvoidance);
-  }, [chat && chat.id, scheduleBrowserAvoidance]);
+  resizeAvoidanceRef.current = scheduleBrowserAvoidance;
 
   // Moving toward older messages immediately releases the live-tail anchor,
   // even within the small bottom tolerance. Re-enable it only at the bottom.

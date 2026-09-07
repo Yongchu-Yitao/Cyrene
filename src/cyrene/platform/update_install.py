@@ -29,6 +29,8 @@ def _spawn_restart_script(
                 "powershell.exe",
                 "-NoProfile",
                 "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
@@ -36,8 +38,13 @@ def _spawn_restart_script(
             ],
             creationflags=(
                 0x00000200  # CREATE_NEW_PROCESS_GROUP
-                | 0x00000008  # DETACHED_PROCESS
+                | 0x08000000  # CREATE_NO_WINDOW (not compatible with DETACHED_PROCESS)
             ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=str(dest.parent),
+            close_fds=True,
         )
         return
 

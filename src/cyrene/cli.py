@@ -26,12 +26,12 @@ import os
 import socket
 import subprocess
 import sys
-import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
+from cyrene.platform.daemon_health import is_healthy_response, wait_for_daemon
 from cyrene.localization import app_language, normalize_language
 
 DAEMON_URL = "http://localhost:4242"
@@ -258,14 +258,14 @@ def _read_desktop_connection() -> tuple[str, str] | None:
         return None
     try:
         response = httpx.get(
-            f"{url}/api/status",
+            f"{url}/api/health",
             timeout=0.75,
             trust_env=False,
             headers=_daemon_auth_headers(token),
         )
     except Exception:
         return None
-    return (url, token) if response.status_code == 200 else None
+    return (url, token) if is_healthy_response(response) else None
 
 
 def _daemon_url(port: int) -> str:
@@ -299,14 +299,14 @@ def _discover_daemon_url() -> str:
         url = _daemon_url(port)
         try:
             response = httpx.get(
-                f"{url}/api/status",
+                f"{url}/api/health",
                 timeout=0.5,
                 trust_env=False,
                 headers=headers,
             )
         except Exception:
             continue
-        if response.status_code == 200:
+        if is_healthy_response(response):
             return url
         if response.status_code == 401:
             try:
@@ -338,8 +338,8 @@ def _allocate_daemon_port() -> int:
 
 def cmd_start(args: argparse.Namespace, *, quiet: bool = False) -> str:
     """Start the Cyrene daemon in background."""
-    headers = _daemon_auth_headers()
     running_url = _discover_daemon_url()
+    headers = _daemon_auth_headers()
     if running_url:
         if not quiet:
             print(_t(
@@ -387,21 +387,7 @@ def cmd_start(args: argparse.Namespace, *, quiet: bool = False) -> str:
         ), file=sys.stderr)
         raise SystemExit(1) from exc
 
-    # Wait for it to be ready
-    for _ in range(30):
-        try:
-            resp = httpx.get(
-                f"{selected_url}/api/ui-data",
-                timeout=3.0,
-                trust_env=False,
-                headers=headers,
-            )
-            if resp.status_code == 200:
-                break
-        except Exception:
-            pass
-        time.sleep(1)
-    else:
+    if not wait_for_daemon(selected_url, headers):
         print(_t(
             "Error: The daemon failed to start within 30 seconds.",
             "错误：Daemon 未能在 30 秒内启动。",
@@ -409,17 +395,21 @@ def cmd_start(args: argparse.Namespace, *, quiet: bool = False) -> str:
         proc.kill()
         sys.exit(1)
 
+    if quiet:
+        return selected_url
     try:
+        resp = httpx.get(
+            f"{selected_url}/api/ui-data", timeout=3.0, trust_env=False, headers=headers,
+        )
+        resp.raise_for_status()
         data = resp.json()
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         print(_t(
             "Error: The daemon returned invalid startup data: {error}",
             "错误：Daemon 返回了无效的启动数据：{error}",
             error=exc,
         ), file=sys.stderr)
         raise SystemExit(1) from exc
-    if quiet:
-        return selected_url
     sessions = data.get("sessions", [])
 
     print(_t(

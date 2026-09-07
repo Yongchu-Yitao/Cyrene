@@ -12,7 +12,7 @@ function surface() {
     get listeners() { return [...listeners.values()].reduce((n, set) => n + set.size, 0); },
   };
 }
-function fixture(count = 30) {
+function fixture(count = 30, conversationId = "") {
   let selected = false, pip = false, sticking = false, restored = 0;
   const timers = new Map(), frames = new Map();
   const doc = surface();
@@ -33,7 +33,7 @@ function fixture(count = 30) {
       hasAttribute(name) { return attrs.has(name); },
       setAttribute(name, value) { attrs.set(name, value); },
       removeAttribute(name) { attrs.delete(name); },
-      style: { setProperty(name, value) { styles.set(name, value); }, removeProperty(name) { styles.delete(name); } },
+      style: { getPropertyValue(name) { return styles.get(name) || ""; }, setProperty(name, value) { styles.set(name, value); }, removeProperty(name) { styles.delete(name); } },
       contains(el) { return el === this; },
       classList: { contains() { return false; } },
       attrs, styles,
@@ -45,7 +45,7 @@ function fixture(count = 30) {
     querySelectorAll: () => rows,
   });
   const page = Object.assign(surface(), { querySelector: () => pip });
-  const cleanup = protectTranscriptResize(thread, page, () => sticking, () => { restored++; });
+  const cleanup = protectTranscriptResize(thread, page, () => sticking, () => { restored++; }, conversationId);
   return {
     rows, thread, page, doc, timers, cleanup, frames,
     flushFrames() { while(frames.size) {const fn=frames.get(1);frames.delete(1);fn();} },
@@ -178,4 +178,61 @@ test('restoring the right panel through its menu prepares before the state updat
   const f = fixture(); f.doc.defaultView.emit('workbench:show-chat-side');
   assert.ok(f.frozen().length); f.start(); assert.equal(f.restored, 0);
   f.end(); f.cleanup(); assert.equal(f.doc.defaultView.listeners, 0);
+});
+
+
+test('continuous right and split drags retain protection beyond the sidebar timeout', () => {
+  for (const split of [false, true]) {
+    const f = fixture(200), win = f.doc.defaultView;
+    win.emit(split ? 'workbench:split-resize-start' : 'workbench:right-resize', {detail: {phase: 'start'}});
+    const count = f.frozen().length;
+    assert.ok(count > 32);
+    assert.equal(f.timers.size, 0);
+    f.page.emit('transitionend', {propertyName: 'grid-template-columns'});
+    assert.equal(f.frozen().length, count);
+    win.emit(split ? 'workbench:split-resize-end' : 'workbench:right-resize', {detail: {phase: 'end'}});
+    assert.equal(f.frozen().length, count, 'wait for the final React size commit');
+    f.flushFrames();
+    assert.equal(f.frozen().length, 0);
+    assert.equal(f.restored, 1);
+    f.cleanup();
+    assert.equal(win.listeners, 0);
+  }
+});
+
+test('closing a split prepares before mutation and waits for both grid transitions', () => {
+  const f = fixture(200), pane = {matches: () => true};
+  f.doc.defaultView.emit('workbench:pane-layout-change');
+  const count = f.frozen().length;
+  f.start();
+  f.page.emit('transitionrun', {target: pane, propertyName: 'grid-template-columns'});
+  f.page.emit('transitionend', {target: pane, propertyName: 'grid-template-columns'});
+  assert.equal(f.frozen().length, count);
+  f.end();
+  assert.equal(f.frozen().length, 0);
+  f.cleanup();
+});
+
+test('losing window focus restores a held separator without leaving hidden history', () => {
+  const f = fixture(200);
+  f.doc.defaultView.emit('workbench:right-resize', {detail: {phase: 'start'}});
+  f.doc.defaultView.emit('blur');
+  f.flushFrames();
+  assert.equal(f.frozen().length, 0);
+  f.cleanup();
+});
+
+
+test('replacement transcript adopts old offscreen heights before its first layout', () => {
+  const f = fixture(200, 'chat');
+  f.doc.defaultView.emit('workbench:pane-layout-change');
+  const count = f.frozen().length;
+  f.cleanup();
+  assert.equal(f.frozen().length, 0);
+  const release = protectTranscriptResize(f.thread, f.page, () => false, () => {}, 'chat');
+  assert.equal(f.frozen().length, count);
+  f.page.emit('transitionend', {propertyName: 'grid-template-columns'});
+  f.flushFrames();
+  assert.equal(f.frozen().length, 0);
+  release();
 });

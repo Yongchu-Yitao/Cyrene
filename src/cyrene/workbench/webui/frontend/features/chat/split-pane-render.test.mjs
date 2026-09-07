@@ -4,6 +4,7 @@ import test from "node:test"
 import vm from "node:vm"
 import { transformSync } from "esbuild"
 import React from "react"
+import { paneColumnBounds, paneRowGeometry } from "./pane-resize-geometry.mjs"
 
 const source = readFileSync(new URL("./split-pane.jsx", import.meta.url), "utf8")
 const { code } = transformSync(source, { loader: "jsx", format: "cjs" })
@@ -25,7 +26,10 @@ function renderPane(chat, loading = true, error = "") {
     wbcReconcileLiveUserMessages: messages => messages,
     wbcGroupConsecutiveActivityMessages: messages => messages,
   }, { get: (target, key) => key in target ? target[key] : String(key) })
-  const context = { module: { exports: {} }, require: () => dependencies, React }
+  const hookSource = readFileSync(new URL("./transcript-resize-hooks.jsx", import.meta.url), "utf8")
+  const hookContext = { module: { exports: {} }, require: () => dependencies }
+  vm.runInNewContext(transformSync(hookSource, { loader: "jsx", format: "cjs" }).code, hookContext)
+  const context = { module: { exports: {} }, require: name => name.includes("transcript-resize-hooks") ? hookContext.module.exports : dependencies, React }
   vm.runInNewContext(code, context)
   return context.module.exports.WbcChatSplit({ chatId: "restored-chat" })
 }
@@ -72,14 +76,14 @@ function resizeHarness(kind) {
   const handle = { style: {}, closest: () => layout, addEventListener() {}, removeEventListener() {} }
   const dependencies = { useWbcRef: () => ({ current: handle }), useWbcEffect() {}, wbcT: (_key, fallback) => fallback }
   const context = {
-    module: { exports: {} }, require: () => dependencies, React,
+    module: { exports: {} }, require: name => name.includes("pane-resize-geometry") ? { paneColumnBounds, paneRowGeometry } : dependencies, React,
     document: { body: { classList: { add() {}, remove() {} } } },
     window: {
       addEventListener: (name, fn) => listeners.set(name, fn),
       removeEventListener: name => listeners.delete(name),
       dispatchEvent: event => events.push(event),
     },
-    CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail } },
+    CustomEvent: class { constructor(type, options = {}) { this.type = type; this.detail = options.detail } },
     requestAnimationFrame(fn) { frames.set(++frameId, fn); return frameId },
     cancelAnimationFrame: id => frames.delete(id),
   }
@@ -112,7 +116,7 @@ test("column dragging coalesces moves without state commits or repeated layout r
   assert.equal(drag.layout.style["--wbc-pane-right-width"], "820px")
   assert.equal(drag.frames.size, 0)
   assert.equal(drag.listeners.size, 0)
-  assert.equal(drag.events[0].type, "workbench:split-resize-end")
+  assert.deepEqual(drag.events.map(event => event.type), ["workbench:split-resize-start", "workbench:split-resize-end"])
 })
 
 test("row dragging previews tracks and separator, then commits once on cancellation", () => {

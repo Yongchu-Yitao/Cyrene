@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from .transition_driver import TransitionCallbacks, TransitionDriver
+from .plugin.permission_grants import PermissionGrants
+from .plugin.session_plugins import SessionPlugins
+from .context.mounts import stored_context_mounts, unique_context_mounts, contribution_mounts
+from .plugin.result_codec import json_value, decoded_plugin_value, question_options, stored_result, restored_result
+
 from .context.tasks import TaskContexts, TOOLS as TASK_CONTEXT_TOOLS, task_messages, task_nodes, context_catalog, STATE_KEY as TASK_STATE_KEY
 
 import asyncio
 import hashlib
 import json
 import logging
-import queue
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
@@ -51,9 +56,6 @@ from .plugin import (
     PluginCall,
     PluginCallResult,
     PluginContext,
-    PluginFailure,
-    PluginLoadFailure,
-    PluginPack,
     PluginRegistry,
     PluginRuntime,
     PluginSetupContext,
@@ -72,7 +74,6 @@ from .plugin.core_impl import (
     PermissionReviewPlugin,
 )
 from .plugin.scopes import ApplicationPluginScope, application_plugin_scope
-from .plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 from .localization import localized, normalize_language, system_language
 
 
@@ -226,95 +227,8 @@ class AgentSessionEvent:
 AgentEventListener = Callable[[AgentSessionEvent], None]
 
 
-class _SetupHookTracker:
-    """Record Hooks a pack setup creates or rebinds without constraining it."""
-
-    def __init__(self, hooks: Any) -> None:
-        self._hooks = hooks
-        self.touched: set[str] = set()
-        self.created: set[str] = set()
-        self._previous_plugins: dict[str, Any | None] = {}
-        self._previous_configs: dict[str, Mapping[str, Any]] = {}
-        self._previous_failure_policies: dict[str, str] = {}
-
-    def register(self, *args: Any, **kwargs: Any) -> Any:
-        before = {hook.id for hook in self._hooks.list()}
-        unsubscribe = self._hooks.register(*args, **kwargs)
-        created = {hook.id for hook in self._hooks.list() if hook.id not in before}
-        self.created.update(created)
-        self.touched.update(created)
-        return unsubscribe
-
-    def bind_plugin(self, plugin_id: str, *args: Any, **kwargs: Any) -> Any:
-        normalized_id = str(plugin_id)
-        if normalized_id not in self._previous_plugins:
-            self._previous_plugins[normalized_id] = self._hooks._plugins.resolve(
-                normalized_id
-            )
-        result = self._hooks.bind_plugin(plugin_id, *args, **kwargs)
-        self.touched.update(
-            hook.id
-            for hook in self._hooks.list()
-            if hook.plugin_id == str(plugin_id)
-        )
-        return result
-
-    def update_config(self, hook_id: str, config: Mapping[str, Any]) -> None:
-        normalized_id = str(hook_id)
-        if normalized_id not in self._previous_configs:
-            previous = next(
-                (hook for hook in self._hooks.list() if hook.id == normalized_id),
-                None,
-            )
-            if previous is not None:
-                self._previous_configs[normalized_id] = dict(previous.config)
-        self._hooks.update_config(normalized_id, config)
-        self.touched.add(normalized_id)
-
-    def update_failure_policy(self, hook_id: str, failure_policy: str) -> None:
-        normalized_id = str(hook_id)
-        if normalized_id not in self._previous_failure_policies:
-            previous = next(
-                (hook for hook in self._hooks.list() if hook.id == normalized_id),
-                None,
-            )
-            if previous is not None:
-                self._previous_failure_policies[normalized_id] = (
-                    previous.failure_policy
-                )
-        self._hooks.update_failure_policy(normalized_id, failure_policy)
-        self.touched.add(normalized_id)
-
-    def rollback(self) -> None:
-        """Undo a failed setup without deleting restored durable bindings."""
-
-        for hook_id in self.created:
-            self._hooks.unregister(hook_id)
-        for hook_id, config in self._previous_configs.items():
-            if hook_id not in self.created:
-                self._hooks.update_config(hook_id, config)
-        for hook_id, failure_policy in self._previous_failure_policies.items():
-            if hook_id not in self.created:
-                self._hooks.update_failure_policy(hook_id, failure_policy)
-        for plugin_id, previous in self._previous_plugins.items():
-            if previous is None:
-                self._hooks._plugins.unregister(plugin_id)
-            else:
-                self._hooks.bind_plugin(plugin_id, previous, replace=True)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._hooks, name)
 
 
-@dataclass(slots=True)
-class _SessionPackAttachment:
-    pack: PluginPack
-    source: str
-    setup_fingerprint: tuple[Any, ...]
-    hooks: set[str]
-    previous_services: dict[str, tuple[bool, Any]]
-    provided_services: dict[str, Any]
-    driver: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +248,15 @@ class _PreparedModelInput:
 
 class AgentSession:
     """One tree whose passive trigger nodes advance the Agent state machine."""
+
+    _stored_context_mounts = staticmethod(stored_context_mounts)
+    _unique_context_mounts = staticmethod(unique_context_mounts)
+    _contribution_mounts = staticmethod(contribution_mounts)
+    _json_value = staticmethod(json_value)
+    _decoded_plugin_value = staticmethod(decoded_plugin_value)
+    _question_options = staticmethod(question_options)
+    _stored_result = staticmethod(stored_result)
+    _restored_result = staticmethod(restored_result)
 
     def __init__(
         self,
@@ -419,21 +342,15 @@ class AgentSession:
                 self.runtime,
                 self.model_plugin,
             )
-        self._plugin_reconcile_lock = threading.RLock()
         self._session_start_build_lock = threading.Lock()
-        self._plugin_pack_attachments: dict[str, _SessionPackAttachment] = {}
-        self._plugin_setup_failures: dict[str, str] = {}
-        self._plugin_load_failures: tuple[PluginLoadFailure, ...] = tuple(failures)
-        self._required_session_pack_ids: set[str] = {
-            pack.id
-            for pack in self.registry.list_packs()
-            if pack.has_session_contributions and bool(pack.metadata.get("required"))
-        }
-        self._plugin_sync_token: tuple[Any, ...] | None = None
-        self._authoritative_directory_revision: int | None = None
-        self._authoritative_customization_revision: int | None = None
-        self._host_service_names: set[str] = set()
-        self._capture_application_host_services()
+        self._plugins = SessionPlugins(
+            registry=self.registry, plugin_directory=self.plugin_directory,
+            services=self._plugin_service_values, application_scope=self._application_scope,
+            failures=failures, setup_context=self._session_setup_context,
+            get_hooks=lambda: self.hooks, tree_id=lambda: self.tree.id,
+            is_closed=lambda: self._transitions.closed,
+            worker_alive=lambda: self._transitions.thread.is_alive(),
+        )
         self.store = ContextStoreRouter(self.data_directory / "context")
         self._tree_id_hint = str(tree_id or "agent-session")
         self._state_lock = threading.RLock()
@@ -450,8 +367,7 @@ class AgentSession:
         self._current_user_request = ""
         self._current_run_id = ""
         self._run_permission_user_request = ""
-        self._permission_once_grants: set[str] = set()
-        self._permission_session_grants: set[str] = set()
+        self._permission_grants = PermissionGrants(self._state_lock)
         self._explicit_delegation_quotes: set[str] = set()
         self._explicit_delegation_batches: dict[str, tuple[tuple[str, ...], int]] = {}
         if "permission" in self._plugin_service_values:
@@ -465,20 +381,12 @@ class AgentSession:
         self._streamed_transition_keys: set[str] = set()
         self._stream_source_ids: dict[str, str] = {}
         self._stream_attempts: dict[str, int] = {}
-        self._session_driver: Any = None
-        self._owns_session_driver = False
-        self._closed = False
-        self._transition_condition = threading.Condition(threading.RLock())
-        self._transition_pending: set[str] = set()
-        self._transition_work: queue.Queue[tuple[str, ContextNode] | None] = queue.Queue()
-        self._transition_loop: asyncio.AbstractEventLoop | None = None
-        self._active_transition_task: asyncio.Task[None] | None = None
-        self._active_transition_run_id = ""
-        self._transition_thread = threading.Thread(
-            target=self._transition_worker_main,
-            name=f"agent-transition-{tree_id}",
-            daemon=True,
-        )
+        self._transitions = TransitionDriver(tree_id, TransitionCallbacks(
+            key=self._transition_key, run_id=self._node_run_id,
+            cancelled=self._is_cancelled, coroutine=self._transition_coroutine,
+            failure=self._transition_failure, idle=self._transitions_idle,
+            snapshot=lambda: {"status": self._status, "leaf_id": self._leaf_id},
+        ))
 
         permission = PermissionReviewPlugin(
             self._permission_model,
@@ -519,6 +427,7 @@ class AgentSession:
                     permission.registration(),
                 ),
             )
+        self._transitions.tree_id = self.tree.id
         root_node = self.store.get_node(self.tree.id, self.tree.root_id)
         self._initial_root_value = deepcopy(root_node.value)
         if isinstance(self._initial_root_value, dict):
@@ -597,9 +506,9 @@ class AgentSession:
             restored_leaf_id=self._leaf_id,
             restored_run_id=self._current_run_id,
         )
-        self._transition_thread.start()
-        if self._owns_session_driver:
-            self._session_driver.attach()
+        self._transitions.thread.start()
+        if self._plugins.owns_driver:
+            self._plugins.driver.attach()
 
     @property
     def current_user_request(self) -> str:
@@ -632,58 +541,13 @@ class AgentSession:
         with self._state_lock:
             return self._run_permission_user_request or self._current_user_request
 
-    @staticmethod
-    def _permission_fingerprint(
-        tool_name: str,
-        arguments: Mapping[str, Any],
-        request: Mapping[str, Any],
-    ) -> str:
-        explicit = str(request.get("fingerprint") or "").strip()
-        if explicit:
-            return explicit
-        payload = {
-            "tool": str(tool_name or "").strip(),
-            "arguments": dict(arguments),
-            "kind": str(request.get("kind") or "scope_elevation"),
-            "operation": str(request.get("operation") or ""),
-            "path_hint": str(request.get("path_hint") or ""),
-            "reason": str(request.get("reason") or "")[:500],
-        }
-        encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+    _permission_fingerprint = staticmethod(PermissionGrants.fingerprint)
 
     def _consume_permission_grant(self, fingerprint: str) -> bool:
-        normalized = str(fingerprint or "").strip()
-        if not normalized:
-            return False
-        with self._state_lock:
-            if normalized in self._permission_session_grants:
-                return True
-            if normalized in self._permission_once_grants:
-                self._permission_once_grants.remove(normalized)
-                return True
-        return False
+        return self._permission_grants.consume(fingerprint)
 
     def _persist_session_permission_grant(self, fingerprint: str) -> None:
-        normalized = str(fingerprint or "").strip()
-        if not normalized:
-            return
-        root = self.store.get_node(self.tree.id, self.tree.root_id)
-        value = dict(root.value) if isinstance(root.value, Mapping) else {}
-        grants = {
-            str(item).strip()
-            for item in value.get("permission_session_grants") or ()
-            if str(item).strip()
-        }
-        grants.add(normalized)
-        value["permission_session_grants"] = sorted(grants)
-        self.store.update_node(self.tree.id, root.id, value)
+        self._permission_grants.persist(fingerprint, self.store, self.tree)
 
     def _permission_requirement(self, event: HookEvent) -> PermissionRequirement:
         """Apply the 0.7.13 boundary/mode rules inside the review Plugin."""
@@ -959,7 +823,7 @@ class AgentSession:
     def session_driver(self) -> Any:
         """Return the optional generic coordinator contributed by a Plugin pack."""
 
-        return self._session_driver
+        return self._plugins.driver
 
     @property
     def plugin_context_data(self) -> dict[str, Any]:
@@ -1097,7 +961,7 @@ class AgentSession:
         hooks = self.hooks.list(SESSION_START)
         hook_ids = {hook.id for hook in hooks}
         pack_versions = []
-        for pack_id, attachment in sorted(self._plugin_pack_attachments.items()):
+        for pack_id, attachment in sorted(self._plugins.attachments.items()):
             if not hook_ids.intersection(attachment.hooks):
                 continue
             pack_versions.append({
@@ -1135,77 +999,8 @@ class AgentSession:
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
-    @staticmethod
-    def _stored_context_mounts(raw_mounts: Any) -> list[dict[str, str]]:
-        if not isinstance(raw_mounts, list):
-            return []
-        return [
-            {
-                "kind": str(item.get("kind") or "context"),
-                "content": str(item.get("content") or "").strip(),
-                "source": str(item.get("source") or "context_tree"),
-                "lifecycle": str(item.get("lifecycle") or ""),
-            }
-            for item in raw_mounts
-            if isinstance(item, Mapping)
-            and str(item.get("content") or "").strip()
-        ]
 
-    @staticmethod
-    def _unique_context_mounts(
-        mounts: tuple[dict[str, str], ...] | list[dict[str, str]],
-    ) -> list[dict[str, str]]:
-        """Keep later turn mounts from shadowing an earlier stable kind."""
 
-        result: list[dict[str, str]] = []
-        used_names: set[str] = set()
-        next_suffix: dict[str, int] = {}
-        for raw in mounts:
-            mount = dict(raw)
-            base = str(mount.get("kind") or "context")
-            kind = base
-            if kind in used_names:
-                suffix = max(2, next_suffix.get(base, 2))
-                while f"{base}.{suffix}" in used_names:
-                    suffix += 1
-                kind = f"{base}.{suffix}"
-                next_suffix[base] = suffix + 1
-            used_names.add(kind)
-            mount["kind"] = kind
-            result.append(mount)
-        return result
-
-    @staticmethod
-    def _contribution_mounts(
-        contributions: tuple[dict[str, str], ...],
-        *,
-        system_kind: str,
-        ordinary_kind: str,
-        system_source: str,
-        ordinary_source: str,
-        lifecycle: str,
-    ) -> list[dict[str, str]]:
-        mounts: list[dict[str, str]] = []
-        used_kinds: dict[str, int] = {}
-        for item in contributions:
-            content = str(item.get("context") or "").strip()
-            if not content:
-                continue
-            is_system = str(item.get("position") or "") == "system"
-            base_kind = str(item.get("context_kind") or "").strip() or (
-                system_kind if is_system else ordinary_kind
-            )
-            occurrence = used_kinds.get(base_kind, 0) + 1
-            used_kinds[base_kind] = occurrence
-            kind = base_kind if occurrence == 1 else f"{base_kind}.{occurrence}"
-            mounts.append({
-                "kind": kind,
-                "content": content,
-                "source": str(item.get("context_source") or "").strip()
-                or (system_source if is_system else ordinary_source),
-                "lifecycle": lifecycle,
-            })
-        return mounts
 
     def _plugin_data(self, *, run_id: str = "", **details: Any) -> dict[str, Any]:
         data = dict(self._plugin_context_data)
@@ -1298,353 +1093,21 @@ class AgentSession:
 
         self.reconcile_plugins(force=True)
 
-    def _application_host(self) -> Any | None:
-        host = self._application_scope
-        if host is None:
-            return None
-        if Path(host.plugin_directory).resolve() != self.plugin_directory:
-            return None
-        return host
-
-    def _capture_application_host_services(self) -> None:
-        host = self._application_host()
-        if host is None:
-            return
-        for name, value in host.services.items():
-            if self._plugin_service_values.get(name) is value:
-                self._host_service_names.add(name)
-        self._authoritative_directory_revision = host.registry.directory_revision
-        self._authoritative_customization_revision = host.registry.customizations.revision
-
-    def _sync_application_host_services(self, host: Any | None) -> None:
-        if host is None:
-            return
-        active = host.active_services
-        owned = {
-            name
-            for attachment in self._plugin_pack_attachments.values()
-            for name in attachment.provided_services
-        }
-        names = self._host_service_names | set(active)
-        self._host_service_names.update(active)
-        for name in names:
-            if name in owned:
-                continue
-            if name in active:
-                self._plugin_service_values[name] = active[name]
-            else:
-                self._plugin_service_values.pop(name, None)
-
-    def _failed_pack_sources(self, host: Any | None) -> set[str]:
-        failures = list(self._plugin_load_failures)
-        if host is not None:
-            failures.extend(host.load_failures)
-        return {str(item.path.resolve()) for item in failures}
-
-    def _application_pack_state_token(self, host: Any | None) -> tuple[Any, ...]:
-        """Include process lifecycle state in lazy session reconciliation."""
-
-        if host is None:
-            return ("application_host", "unavailable")
-        values = []
-        for pack in self.registry.list_packs():
-            if not pack.has_application_contributions:
-                continue
-            values.append(
-                (
-                    pack.id,
-                    host.pack_operational(pack.id),
-                    host.pack_restart_required(pack.id),
-                    host.startup_failures.get(pack.id, ""),
-                )
-            )
-        return tuple(values)
-
-    @staticmethod
-    def _application_pack_error(pack: PluginPack, host: Any | None) -> str:
-        if not pack.has_application_contributions:
-            return ""
-        if host is None:
-            # A session can be embedded without Cyrene's process-level
-            # application host (for example in a worker, test host, or a
-            # standalone Agent integration).  ``application_setup`` is an
-            # additional surface; it must not prevent the pack's
-            # session-scoped ``setup`` from wiring Hooks and services there.
-            # When a host exists its lifecycle state is authoritative and is
-            # still enforced below.
-            return ""
-        if host.pack_restart_required(pack.id):
-            return "application contribution changed and requires restart"
-        startup_error = host.startup_failures.get(pack.id, "")
-        if startup_error:
-            return f"application startup failed: {startup_error}"
-        if not host.pack_operational(pack.id):
-            return "application contribution is not operational"
-        return ""
-
-    def _remember_required_session_packs(self, host: Any | None) -> None:
-        for pack in self.registry.list_packs():
-            if pack.has_session_contributions and bool(pack.metadata.get("required")):
-                self._required_session_pack_ids.add(pack.id)
-        failures = list(self._plugin_load_failures)
-        if host is not None:
-            failures.extend(host.load_failures)
-
-    def _required_session_pack_error(self, host: Any | None = None) -> str:
-        missing = sorted(
-            pack_id
-            for pack_id in self._required_session_pack_ids
-            if pack_id not in self._plugin_pack_attachments
-        )
-        if not missing:
-            return ""
-        failures = list(self._plugin_load_failures)
-        if host is not None:
-            failures.extend(host.load_failures)
-        load_errors = {
-            failure.path.name: str(failure.error or "load failed")
-            for failure in failures
-        }
-        details = []
-        for pack_id in missing:
-            reason = self._plugin_setup_failures.get(pack_id)
-            if not reason:
-                reason = load_errors.get(pack_id, "setup is not attached")
-            details.append(f"{pack_id} ({reason})")
-        return ", ".join(details)
-
-    def _ensure_required_session_packs(self) -> None:
-        error = self._required_session_pack_error(self._application_host())
-        if error:
-            raise RuntimeError(
-                "Required Plugin session setup unavailable: " + error
-            )
-
-    @staticmethod
-    def _pack_setup_fingerprint(pack: PluginPack, source: str) -> tuple[Any, ...]:
-        """Keep no-op directory refreshes from restarting session services."""
-
-        path = Path(source)
-        try:
-            if path.is_dir():
-                files = tuple(sorted(path.rglob("*.py")))
-            elif path.is_file():
-                files = (path,)
-            else:
-                files = ()
-            if files:
-                return (
-                    "files",
-                    tuple(
-                        (
-                            str(item.relative_to(path) if path.is_dir() else item.name),
-                            item.stat().st_mtime_ns,
-                            item.stat().st_size,
-                        )
-                        for item in files
-                    ),
-                )
-        except OSError:
-            pass
-        return ("callable", tuple(id(setup) for setup in pack.session_setups))
-
-    def _detach_session_pack(self, pack_id: str, *, reason: str) -> None:
-        attachment = self._plugin_pack_attachments.pop(pack_id, None)
-        if attachment is None:
-            return
-        for hook_id in attachment.hooks:
-            self.hooks.unregister(hook_id)
-        for name, provided in attachment.provided_services.items():
-            if self._plugin_service_values.get(name) is not provided:
-                continue
-            existed, previous = attachment.previous_services[name]
-            if existed:
-                self._plugin_service_values[name] = previous
-            else:
-                self._plugin_service_values.pop(name, None)
-        driver = attachment.driver
-        if driver is not None:
-            request_cancel = getattr(driver, "request_cancel_all", None)
-            if callable(request_cancel):
-                try:
-                    request_cancel(reason)
-                except PLUGIN_BOUNDARY_ERRORS:
-                    logger.exception("Failed to cancel session driver for %s", pack_id)
-            close = getattr(driver, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except PLUGIN_BOUNDARY_ERRORS:
-                    logger.exception("Failed to close session driver for %s", pack_id)
-            if self._session_driver is driver:
-                self._session_driver = None
-                self._owns_session_driver = False
-
-    def _attach_session_pack(self, pack: PluginPack, source: str) -> None:
-        if "agent_session" in self._plugin_service_values:
-            raise ValueError("Plugin service name is reserved: agent_session")
-        before = dict(self._plugin_service_values)
-        tracker = _SetupHookTracker(self.hooks)
-        driver: Any = None
+    def _session_setup_context(self, tracker):
         self._plugin_service_values["agent_session"] = self
-        context = PluginSetupContext(
-            data_directory=self.data_directory,
-            plugin_directory=self.plugin_directory,
-            workspace=self.workspace,
-            tree=self.store,
-            tree_id=self.tree.id,
-            root_id=self.tree.root_id,
-            hooks=tracker,
-            data=self._plugin_data(),
-            services=self._plugin_service_values,
-            agent_id=self.agent_id,
+        return PluginSetupContext(
+            data_directory=self.data_directory, plugin_directory=self.plugin_directory,
+            workspace=self.workspace, tree=self.store, tree_id=self.tree.id,
+            root_id=self.tree.root_id, hooks=tracker, data=self._plugin_data(),
+            services=self._plugin_service_values, agent_id=self.agent_id,
             parent_agent_id=self.parent_agent_id,
         )
-        try:
-            for setup in pack.session_setups:
-                setup(context)
-            driver = self._plugin_service_values.pop("session_driver", None)
-            changed = {
-                name: value
-                for name, value in self._plugin_service_values.items()
-                if name != "agent_session" and before.get(name) is not value
-            }
-            previous = {
-                name: (name in before, before.get(name)) for name in changed
-            }
-            attachment = _SessionPackAttachment(
-                pack=pack,
-                source=source,
-                setup_fingerprint=self._pack_setup_fingerprint(pack, source),
-                hooks=set(tracker.touched),
-                previous_services=previous,
-                provided_services=changed,
-                driver=driver,
-            )
-            if driver is not None:
-                if self._session_driver is not None:
-                    raise ValueError("Plugin session_driver service already exists")
-                self._session_driver = driver
-                self._owns_session_driver = True
-                attach = getattr(driver, "attach", None)
-                if callable(attach) and self._transition_thread.is_alive():
-                    attach()
-            self._plugin_pack_attachments[pack.id] = attachment
-        except PLUGIN_BOUNDARY_ERRORS as exc:
-            self._plugin_setup_failures[pack.id] = str(exc)
-            self._plugin_service_values.pop("agent_session", None)
-            attachment = self._plugin_pack_attachments.get(pack.id)
-            if attachment is not None:
-                self._detach_session_pack(pack.id, reason="plugin_setup_failed")
-            else:
-                if driver is not None and self._session_driver is driver:
-                    self._session_driver = None
-                    self._owns_session_driver = False
-                    close = getattr(driver, "close", None)
-                    if callable(close):
-                        try:
-                            close()
-                        except PLUGIN_BOUNDARY_ERRORS:
-                            logger.exception(
-                                "Failed to close setup driver for %s", pack.id
-                            )
-                tracker.rollback()
-                for name in tuple(self._plugin_service_values):
-                    if name not in before:
-                        self._plugin_service_values.pop(name, None)
-                self._plugin_service_values.update(before)
-            logger.exception(
-                "Failed to attach Plugin pack %s to Agent session %s",
-                pack.id,
-                self.tree.id,
-            )
-        else:
-            self._plugin_setup_failures.pop(pack.id, None)
-            self._plugin_service_values.pop("agent_session", None)
 
     def reconcile_plugins(self, *, force: bool = False) -> None:
-        """Synchronize live setup Hooks/services with shared Plugin state."""
+        self._plugins.reconcile_plugins(force=force)
 
-        with self._plugin_reconcile_lock:
-            if self._closed:
-                return
-            host = self._application_host()
-            host_token = host.registry.sync_token if host is not None else None
-            failure_token = tuple(
-                sorted(self._failed_pack_sources(host))
-            )
-            application_token = self._application_pack_state_token(host)
-            token = (
-                self.registry.sync_token,
-                host_token,
-                failure_token,
-                application_token,
-            )
-            if not force and token == self._plugin_sync_token:
-                return
-
-            if host is not None:
-                authoritative_directory = host.registry.directory_revision
-                if (
-                    host.registry is not self.registry
-                    and self._authoritative_directory_revision is not None
-                    and authoritative_directory != self._authoritative_directory_revision
-                ):
-                    self._plugin_load_failures = tuple(
-                        self.registry.refresh_directory(self.plugin_directory)
-                    )
-                self._authoritative_directory_revision = authoritative_directory
-                customization_revision = host.registry.customizations.revision
-            else:
-                customization_revision = self.registry.customizations.revision
-            if customization_revision != self._authoritative_customization_revision:
-                self.registry.refresh_customizations()
-                self._authoritative_customization_revision = customization_revision
-
-            self._remember_required_session_packs(host)
-            failed_sources = self._failed_pack_sources(host)
-            desired: dict[str, tuple[PluginPack, str]] = {}
-            for pack in self.registry.list_packs():
-                if not pack.has_session_contributions:
-                    continue
-                try:
-                    source = self.registry.pack_source(pack.id)
-                    enabled = self.registry.pack_enabled(pack.id)
-                except Exception:
-                    continue
-                application_error = self._application_pack_error(pack, host)
-                if application_error:
-                    self._plugin_setup_failures[pack.id] = application_error
-                if (
-                    enabled
-                    and not application_error
-                    and str(Path(source).resolve()) not in failed_sources
-                ):
-                    desired[pack.id] = (pack, source)
-
-            for pack_id, attachment in tuple(self._plugin_pack_attachments.items()):
-                next_value = desired.get(pack_id)
-                if next_value is None or (
-                    attachment.source != next_value[1]
-                    or attachment.setup_fingerprint
-                    != self._pack_setup_fingerprint(*next_value)
-                ):
-                    self._detach_session_pack(
-                        pack_id,
-                        reason="plugin_disabled_or_reloaded",
-                    )
-
-            self._sync_application_host_services(host)
-            for pack_id, (pack, source) in desired.items():
-                if pack_id not in self._plugin_pack_attachments:
-                    self._attach_session_pack(pack, source)
-
-            self._plugin_sync_token = (
-                self.registry.sync_token,
-                host.registry.sync_token if host is not None else None,
-                tuple(sorted(self._failed_pack_sources(host))),
-                self._application_pack_state_token(host),
-            )
+    def _ensure_required_session_packs(self) -> None:
+        self._plugins._ensure_required_session_packs()
 
     def _plugin_services(self) -> dict[str, Any]:
         self.reconcile_plugins()
@@ -2074,7 +1537,7 @@ class AgentSession:
             node_value = dict(service.node_value(events, run_id=run_id))
             node_value["caused_by"] = node_key
             with self._linearized_context_commit():
-                if self._closed or run_id in self._cancelled_run_ids:
+                if self._transitions.closed or run_id in self._cancelled_run_ids:
                     service.requeue(events)
                     return None
                 try:
@@ -2162,52 +1625,8 @@ class AgentSession:
         with self._state_lock:
             return bool(run_id and run_id in self._cancelled_run_ids)
 
-    @staticmethod
-    def _json_value(value: Any) -> Any:
-        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
-    @staticmethod
-    def _decoded_plugin_value(value: Any) -> Any:
-        """Decode JSON-shaped Plugin output without changing ordinary strings."""
 
-        if not isinstance(value, str):
-            return value
-        stripped = value.strip()
-        if not stripped or stripped[0] not in "[{":
-            return value
-        try:
-            return json.loads(stripped)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return value
-
-    @staticmethod
-    def _question_options(raw: Any) -> list[dict[str, str]]:
-        options: list[dict[str, str]] = []
-        for index, item in enumerate(raw if isinstance(raw, list) else (), start=1):
-            if isinstance(item, Mapping):
-                label = next(
-                    (
-                        str(item.get(key) or "").strip()
-                        for key in ("label", "text", "value", "title", "name")
-                        if str(item.get(key) or "").strip()
-                    ),
-                    "",
-                )
-                option_id = str(item.get("id") or "").strip()
-            else:
-                label = str(item or "").strip()
-                option_id = ""
-            if not label:
-                continue
-            options.append(
-                {
-                    "id": option_id or f"option_{index}",
-                    "label": label,
-                }
-            )
-            if len(options) >= 6:
-                break
-        return options
 
     def _turn_user_context(
         self, run_id: str
@@ -2373,193 +1792,35 @@ class AgentSession:
         return None
 
     def _enqueue_transition(self, kind: str, node: ContextNode) -> None:
-        key = f"{kind}:{self._transition_key(node)}"
-        run_id = self._node_run_id(node)
-        cancelled = self._is_cancelled(run_id)
-        with self._transition_condition:
-            if self._closed or cancelled or key in self._transition_pending:
-                log_operation(
-                    logger,
-                    "cyrene.core.session",
-                    "enqueue_transition",
-                    phase="skipped",
-                    tree_id=self.tree.id,
-                    run_id=run_id,
-                    node_id=node.id,
-                    transition_kind=kind,
-                    transition_key=key,
-                    closed=self._closed,
-                    cancelled=cancelled,
-                    duplicate=key in self._transition_pending,
-                )
-                return
-            self._transition_pending.add(key)
-            self._transition_work.put((kind, node))
-            self._transition_condition.notify_all()
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "enqueue_transition",
-            phase="queued",
-            tree_id=self.tree.id,
-            run_id=run_id,
-            node_id=node.id,
-            transition_kind=kind,
-            transition_key=key,
-        )
+        self._transitions.enqueue(kind, node)
+    def _transition_coroutine(self, kind: str, node: ContextNode):
+        if kind == "advance":
+            return self._advance(node)
+        if kind == "tools":
+            return self._continue_tools(node)
+        if kind == "finish":
+            return self._finish_success(node)
+        raise RuntimeError(f"unsupported Agent transition: {kind}")
 
-    def _transition_worker_main(self) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        with self._transition_condition:
-            self._transition_loop = loop
-            self._transition_condition.notify_all()
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "transition_worker",
-            phase="started",
-            tree_id=self._tree_id_hint,
-            thread=threading.current_thread().name,
+    def _transition_failure(self, node: ContextNode, run_id: str):
+        failure = self._mount_assistant(
+            node.id, _l("The Agent transition failed.", "Agent 状态转换失败。"),
+            error=True, caused_by=self._transition_key(node), run_id=run_id,
         )
-        try:
-            while True:
-                item = self._transition_work.get()
-                if item is None:
-                    return
-                kind, node = item
-                key = f"{kind}:{self._transition_key(node)}"
-                run_id = self._node_run_id(node)
-                try:
-                    cancelled = self._is_cancelled(run_id)
-                    with self._transition_condition:
-                        if self._closed or cancelled:
-                            log_operation(
-                                logger,
-                                "cyrene.core.session",
-                                "transition",
-                                phase="skipped",
-                                tree_id=self.tree.id,
-                                run_id=run_id,
-                                node_id=node.id,
-                                transition_kind=kind,
-                                transition_key=key,
-                                closed=self._closed,
-                                cancelled=cancelled,
-                            )
-                            continue
-                    if kind == "advance":
-                        coroutine = self._advance(node)
-                    elif kind == "tools":
-                        coroutine = self._continue_tools(node)
-                    elif kind == "finish":
-                        coroutine = self._finish_success(node)
-                    else:
-                        raise RuntimeError(f"unsupported Agent transition: {kind}")
-                    with operation(
-                        logger,
-                        "cyrene.core.session",
-                        "transition",
-                        tree_id=self.tree.id,
-                        run_id=run_id,
-                        node_id=node.id,
-                        transition_kind=kind,
-                        transition_key=key,
-                    ) as op:
-                        task = loop.create_task(coroutine)
-                        with self._transition_condition:
-                            self._active_transition_task = task
-                            self._active_transition_run_id = run_id
-                            self._transition_condition.notify_all()
-                        loop.run_until_complete(task)
-                        op.finish(status=self._status, leaf_id=self._leaf_id)
-                except asyncio.CancelledError as exc:
-                    log_operation(
-                        logger,
-                        "cyrene.core.session",
-                        "transition_cancelled",
-                        phase="completed",
-                        level=logging.WARNING,
-                        tree_id=self.tree.id,
-                        run_id=run_id,
-                        node_id=node.id,
-                        transition_kind=kind,
-                        reason=exc,
-                    )
-                except BaseException as exc:
-                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                        raise
-                    log_operation(
-                        logger,
-                        "cyrene.core.session",
-                        "transition_failure",
-                        phase="failed",
-                        level=logging.ERROR,
-                        exc_info=True,
-                        tree_id=self.tree.id,
-                        run_id=run_id,
-                        node_id=node.id,
-                        transition_kind=kind,
-                        error=exc,
-                    )
-                    failure = self._mount_assistant(
-                        node.id,
-                        _l(
-                            "The Agent transition failed.",
-                            "Agent 状态转换失败。",
-                        ),
-                        error=True,
-                        caused_by=self._transition_key(node),
-                        run_id=run_id,
-                    )
-                    if failure is not None:
-                        loop.run_until_complete(
-                            self._finish_terminal(failure, status="failed")
-                        )
-                finally:
-                    with self._transition_condition:
-                        self._active_transition_task = None
-                        self._active_transition_run_id = ""
-                        self._transition_pending.discard(key)
-                        no_pending_transitions = not self._transition_pending
-                        self._transition_condition.notify_all()
-                    if no_pending_transitions:
-                        with self._state_lock:
-                            if (
-                                run_id
-                                and run_id in self._cancelled_run_ids
-                                and self._current_run_id == run_id
-                                and self._status == "cancelling"
-                            ):
-                                cancelled_state = self._set_state_locked(
-                                    "idle",
-                                    _l("Cancelled", "已取消"),
-                                )
-                            else:
-                                cancelled_state = None
-                        if cancelled_state is not None:
-                            self._emit_state_snapshot(cancelled_state)
-        finally:
-            with self._transition_condition:
-                self._active_transition_task = None
-                self._active_transition_run_id = ""
-                self._transition_loop = None
-                self._transition_condition.notify_all()
-            loop.close()
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "transition_worker",
-                phase="stopped",
-                tree_id=self._tree_id_hint,
-                thread=threading.current_thread().name,
-            )
+        if failure is not None:
+            return self._finish_terminal(failure, status="failed")
 
+    def _transitions_idle(self, run_id: str) -> None:
+        with self._state_lock:
+            if (run_id and run_id in self._cancelled_run_ids
+                and self._current_run_id == run_id and self._status == "cancelling"):
+                cancelled_state = self._set_state_locked("idle", _l("Cancelled", "已取消"))
+            else:
+                cancelled_state = None
+        if cancelled_state is not None:
+            self._emit_state_snapshot(cancelled_state)
     def _wait_for_transitions(self) -> None:
-        with self._transition_condition:
-            while self._transition_pending:
-                self._transition_condition.wait()
-
+        self._transitions.wait()
     def _select_restore_leaf(self, nodes: Sequence[ContextNode]) -> ContextNode:
         dialogue = [
             node
@@ -2715,7 +1976,7 @@ class AgentSession:
             ),
             {},
         )
-        self._permission_session_grants = {
+        self._permission_grants.session = {
             str(item).strip()
             for item in root_value.get("permission_session_grants") or ()
             if str(item).strip()
@@ -2984,7 +2245,7 @@ class AgentSession:
             )
         has_session_context = self._has_context_provider()
         with self._state_lock:
-            if self._closed:
+            if self._transitions.closed:
                 raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status != "idle":
                 raise RuntimeError(_l(
@@ -3080,7 +2341,7 @@ class AgentSession:
                 "必须提供 question_id 和 answer。",
             ))
         with self._linearized_context_commit():
-            if self._closed:
+            if self._transitions.closed:
                 raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status != "awaiting_user":
                 raise RuntimeError(_l(
@@ -3115,10 +2376,10 @@ class AgentSession:
                 if fingerprint and normalized_answer in option_labels and not negative:
                     with self._state_lock:
                         if "本次会话" in normalized_answer or "始终" in normalized_answer:
-                            self._permission_session_grants.add(fingerprint)
+                            self._permission_grants.session.add(fingerprint)
                             self._persist_session_permission_grant(fingerprint)
                         else:
-                            self._permission_once_grants.add(fingerprint)
+                            self._permission_grants.once.add(fingerprint)
             elif resume and str(pending.get("kind") or "") == "clarification":
                 self._append_clarification_authorization(run_id, normalized_answer)
 
@@ -3205,7 +2466,7 @@ class AgentSession:
         metadata = metadata if isinstance(metadata, Mapping) else {}
         run_id = self._node_run_id(source)
         with self._state_lock:
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
         details = {
             "run_id": run_id,
@@ -3237,7 +2498,7 @@ class AgentSession:
             # cannot invalidate the provider cache for the stable prefix.
             mounts = self._unique_context_mounts([*stable_mounts, *turn_mounts])
         with self._linearized_context_commit():
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
             source_value = dict(value)
             if value.get("turn_start_complete") is not True:
@@ -3667,7 +2928,7 @@ class AgentSession:
             return None, base_result
         run_id = self._node_run_id(trigger)
         with self._linearized_context_commit():
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return None, {
                     **base_result,
                     "reason": "cancelled",
@@ -3735,10 +2996,10 @@ class AgentSession:
     ) -> dict[str, Any]:
         """Force one durable compaction while the Agent is fully idle."""
 
-        with self._transition_condition:
-            transitions_pending = bool(self._transition_pending)
+        with self._transitions.condition:
+            transitions_pending = bool(self._transitions.pending)
         with self._state_lock:
-            if self._closed:
+            if self._transitions.closed:
                 raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status == "awaiting_user":
                 raise RuntimeError(_l(
@@ -3788,10 +3049,10 @@ class AgentSession:
         newer branch by timestamp.
         """
 
-        with self._transition_condition:
-            transitions_pending = bool(self._transition_pending)
+        with self._transitions.condition:
+            transitions_pending = bool(self._transitions.pending)
         with self._state_lock:
-            if self._closed:
+            if self._transitions.closed:
                 raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status == "awaiting_user":
                 raise RuntimeError(_l(
@@ -3951,7 +3212,7 @@ class AgentSession:
             return False
 
         with self._linearized_context_commit():
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return False
             latest = self.store.get_node(self.tree.id, trigger.id)
             if self._transition_key(latest) != transition_key:
@@ -4091,7 +3352,7 @@ class AgentSession:
         if self._is_cancelled(run_id):
             return
         with self._state_lock:
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
             self._model_calls += 1
             count = self._model_calls
@@ -4108,7 +3369,7 @@ class AgentSession:
             return
 
         with self._state_lock:
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
             if self._max_model_calls is None:
                 detail = _l(
@@ -4233,7 +3494,7 @@ class AgentSession:
         owner = (self.task_contexts.read()["active"] if control_batch
                  else self.task_contexts.ensure(transition_key))
         with self._linearized_context_commit():
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
             assistant = self.store.mount(
                 self.tree.id,
@@ -4281,10 +3542,10 @@ class AgentSession:
             value.get("session_end_status") or status or "completed"
         )
         with self._state_lock:
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
         guidance_service = self._guidance_service()
-        driver = self._session_driver if self._owns_session_driver else None
+        driver = self._plugins.driver if self._plugins.owns_driver else None
         driver_pending = bool(driver is not None and driver.has_pending_work)
         if guidance_service is not None and value.get("intermediate") is not True:
             guidance_events: list[dict[str, Any]] = []
@@ -4357,7 +3618,7 @@ class AgentSession:
             metadata = user_value.get("metadata")
             metadata = metadata if isinstance(metadata, Mapping) else {}
             with self._state_lock:
-                if self._closed or run_id in self._cancelled_run_ids:
+                if self._transitions.closed or run_id in self._cancelled_run_ids:
                     return
             await self.hooks.session_end(
                 {
@@ -4377,7 +3638,7 @@ class AgentSession:
                 }
             )
         with self._linearized_context_commit():
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
             current = self.store.get_node(self.tree.id, assistant.id)
             completed = (
@@ -4403,38 +3664,7 @@ class AgentSession:
             self._current_user_request = ""
         self._emit_state_snapshot(completed_state)
 
-    @staticmethod
-    def _stored_result(result: PluginCallResult) -> dict[str, Any]:
-        return {
-            "call_id": result.call_id,
-            "name": result.name,
-            "success": result.success,
-            "value": AgentSession._json_value(result.value),
-            "error": result.error,
-            "time": result.time.isoformat(),
-            **(
-                {"failure": result.failure.as_dict()}
-                if result.failure is not None
-                else {}
-            ),
-        }
 
-    @staticmethod
-    def _restored_result(raw: Mapping[str, Any]) -> PluginCallResult:
-        raw_failure = raw.get("failure")
-        return PluginCallResult(
-            str(raw.get("call_id") or ""),
-            str(raw.get("name") or ""),
-            bool(raw.get("success")),
-            raw.get("value"),
-            str(raw.get("error") or ""),
-            datetime.fromisoformat(str(raw.get("time"))),
-            (
-                PluginFailure.from_dict(raw_failure)
-                if isinstance(raw_failure, Mapping)
-                else None
-            ),
-        )
 
     def _resource_presentation(
         self,
@@ -4675,7 +3905,7 @@ class AgentSession:
         if existing_result is not None:
             pending = self._pending_from_node(existing_result)
             with self._state_lock:
-                if self._closed or run_id in self._cancelled_run_ids:
+                if self._transitions.closed or run_id in self._cancelled_run_ids:
                     return
                 if pending is not None:
                     restored_state = self._set_state_locked(
@@ -4759,7 +3989,7 @@ class AgentSession:
             if result.call_id == str(call_id):
                 completed[str(call_id)] = result
         with self._state_lock:
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
             tools_state = self._set_state_locked(
                 "tools",
@@ -4804,7 +4034,7 @@ class AgentSession:
             )
         )
         with self._linearized_context_commit():
-            if self._closed or run_id in self._cancelled_run_ids:
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
             call_by_id = {
                 str(call.get("id") or ""): call
@@ -4900,7 +4130,7 @@ class AgentSession:
         node_id = self._stable_id("assistant_error", caused_by) if caused_by else None
         with self._linearized_context_commit():
             effective_run_id = str(run_id or self._current_run_id)
-            if self._closed or effective_run_id in self._cancelled_run_ids:
+            if self._transitions.closed or effective_run_id in self._cancelled_run_ids:
                 return None
             existing = None
             if node_id is not None:
@@ -4946,7 +4176,7 @@ class AgentSession:
         ):
             return
         value["intermediate"] = True
-        metadata = getattr(self._session_driver, "waiting_metadata", {})
+        metadata = getattr(self._plugins.driver, "waiting_metadata", {})
         if isinstance(metadata, Mapping):
             value.update(deepcopy(dict(metadata)))
         self.store.update_node(self.tree.id, leaf_id, value)
@@ -5154,7 +4384,7 @@ class AgentSession:
 
         normalized_reason = str(reason or "user_cancelled")
         with self._state_lock:
-            if self._closed:
+            if self._transitions.closed:
                 log_operation(
                     logger,
                     "cyrene.core.session",
@@ -5167,13 +4397,13 @@ class AgentSession:
                     reason=normalized_reason,
                 )
                 return False
-        driver = self._session_driver if self._owns_session_driver else None
+        driver = self._plugins.driver if self._plugins.owns_driver else None
         children_active = bool(driver is not None and driver.has_active)
         if children_active:
             driver.request_cancel_all(normalized_reason)
         with self._linearized_context_commit():
             if (
-                self._closed
+                self._transitions.closed
                 or (self._status == "idle" and not children_active)
                 or not self._current_run_id
             ):
@@ -5185,7 +4415,7 @@ class AgentSession:
                     tree_id=self.tree.id,
                     run_id=self._current_run_id,
                     status=self._status,
-                    closed=self._closed,
+                    closed=self._transitions.closed,
                     reason=normalized_reason,
                     children_cancelled=children_active,
                 )
@@ -5228,11 +4458,11 @@ class AgentSession:
         )
         self._emit_state_snapshot(cancelling_state)
 
-        with self._transition_condition:
-            loop = self._transition_loop
-            task = self._active_transition_task
-            active_run_id = self._active_transition_run_id
-            has_pending = bool(self._transition_pending)
+        with self._transitions.condition:
+            loop = self._transitions.loop
+            task = self._transitions.active_task
+            active_run_id = self._transitions.active_run_id
+            has_pending = bool(self._transitions.pending)
         if (
             loop is not None
             and task is not None
@@ -5279,11 +4509,11 @@ class AgentSession:
         ) as op:
             with self._state_lock:
                 own_run_active = (
-                    not self._closed
+                    not self._transitions.closed
                     and self._status != "idle"
                     and bool(self._current_run_id)
                 )
-            driver = self._session_driver if self._owns_session_driver else None
+            driver = self._plugins.driver if self._plugins.owns_driver else None
             changed = self.request_cancel(reason)
             if not changed:
                 op.finish(changed=False)
@@ -5364,15 +4594,15 @@ class AgentSession:
         with self._event_lock:
             event_sequence = self._event_sequence
         pending_driver = bool(
-            self._owns_session_driver
-            and self._session_driver is not None
-            and self._session_driver.has_pending_work
+            self._plugins.owns_driver
+            and self._plugins.driver is not None
+            and self._plugins.driver.has_pending_work
         )
         public_status = "running" if status == "idle" and pending_driver else status
         public_detail = (
             str(
                 getattr(
-                    self._session_driver,
+                    self._plugins.driver,
                     "pending_detail",
                     _l("Background work", "后台工作"),
                 )
@@ -5403,8 +4633,8 @@ class AgentSession:
                 for node in nodes
             ],
         }
-        if self._owns_session_driver and self._session_driver is not None:
-            snapshot = self._session_driver.session_snapshot()
+        if self._plugins.owns_driver and self._plugins.driver is not None:
+            snapshot = self._plugins.driver.session_snapshot()
             if isinstance(snapshot, Mapping):
                 result.update(deepcopy(dict(snapshot)))
         log_operation(
@@ -5429,7 +4659,7 @@ class AgentSession:
     ) -> tuple[bool, list[dict[str, Any]]]:
         """Race child coordination against a loop-neutral guidance wakeup."""
 
-        driver = self._session_driver
+        driver = self._plugins.driver
         if driver is None:
             return False, []
         drive_task = asyncio.create_task(driver.drive())
@@ -5486,8 +4716,8 @@ class AgentSession:
                 await asyncio.shield(self.hooks.drain())
                 await asyncio.to_thread(self._wait_for_transitions)
                 await asyncio.shield(self.hooks.drain())
-                with self._transition_condition:
-                    pending = bool(self._transition_pending)
+                with self._transitions.condition:
+                    pending = bool(self._transitions.pending)
                 with self._state_lock:
                     status = self._status
                 if not pending and status in {"idle", "awaiting_user"}:
@@ -5499,9 +4729,9 @@ class AgentSession:
                         )
                         return
                     if (
-                        self._owns_session_driver
-                        and self._session_driver is not None
-                        and self._session_driver.has_pending_work
+                        self._plugins.owns_driver
+                        and self._plugins.driver is not None
+                        and self._plugins.driver.has_pending_work
                     ):
                         self._mark_leaf_waiting_for_driver()
                         guidance_service = self._guidance_service()
@@ -5550,8 +4780,8 @@ class AgentSession:
     def close(self) -> None:
         """Stop process-local workers while leaving unfinished tree state recoverable."""
 
-        with self._transition_condition:
-            if self._closed:
+        with self._transitions.condition:
+            if self._transitions.closed:
                 log_operation(
                     logger,
                     "cyrene.core.session",
@@ -5569,19 +4799,12 @@ class AgentSession:
                 tree_id=self.tree.id,
                 run_id=self._current_run_id,
                 status=self._status,
-                pending_transitions=len(self._transition_pending),
+                pending_transitions=len(self._transitions.pending),
             )
-            self._closed = True
-            loop = self._transition_loop
-            task = self._active_transition_task
-            if loop is not None and task is not None and not task.done():
-                loop.call_soon_threadsafe(task.cancel)
-            self._transition_work.put(None)
-            self._transition_condition.notify_all()
-        if self._transition_thread is not threading.current_thread():
-            self._transition_thread.join()
-        if self._owns_session_driver and self._session_driver is not None:
-            self._session_driver.close()
+            self._transitions.stop_locked()
+        self._transitions.join()
+        if self._plugins.owns_driver and self._plugins.driver is not None:
+            self._plugins.driver.close()
         self._unsubscribe_context_events()
         self.store.close()
         log_operation(

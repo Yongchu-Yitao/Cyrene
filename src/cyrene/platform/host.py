@@ -64,6 +64,12 @@ def _bootstrap_source_checkout() -> None:
 
 _bootstrap_source_checkout()
 
+# Install before application imports can launch dependency probes.
+if sys.platform == "win32" and "--electron-mode" in sys.argv:
+    from cyrene.platform.windows_process import hide_background_console_windows
+
+    hide_background_console_windows()
+
 from cyrene.config import (
     ASSISTANT_NAME,
     DB_PATH,
@@ -740,26 +746,6 @@ def _run_electron_mode() -> None:
     if _sys.stderr is None:
         import os as _os
         _sys.stderr = open(_os.devnull, "w")
-
-    # Prevent ALL subprocesses from creating console windows on Windows.
-    # Our backend has no console (console=False), so any subprocess spawned
-    # by dependencies (e.g. git calls from vendored searx) would get a new
-    # console window unless CREATE_NO_WINDOW is specified.
-    # Monkey-patch subprocess.Popen to inject CREATE_NO_WINDOW + SW_HIDE
-    # on every call — there is no clean global default in Python 3.13.
-    if _sys.platform == "win32":
-        import subprocess as _sp
-        _orig_popen_init = _sp.Popen.__init__
-        _CREATE_NO_WINDOW = 0x08000000
-        def _patched_popen_init(self, *args, **kwargs):
-            kwargs['creationflags'] = kwargs.get('creationflags', 0) | _CREATE_NO_WINDOW
-            if 'startupinfo' not in kwargs or kwargs['startupinfo'] is None:
-                _si = _sp.STARTUPINFO()
-                _si.dwFlags = _sp.STARTF_USESHOWWINDOW
-                _si.wShowWindow = 0  # SW_HIDE
-                kwargs['startupinfo'] = _si
-            _orig_popen_init(self, *args, **kwargs)
-        _sp.Popen.__init__ = _patched_popen_init
 
     import asyncio
     from cyrene.workbench.webui.server import create_app, WebBot

@@ -25,7 +25,7 @@ async function main() {
       throw new Error(`${label} failed: ${error && error.stack || error}`);
     }
   };
-  const reactRoot = path.join(__dirname, '..', 'src', 'webui', 'static', 'app');
+  const reactRoot = path.join(__dirname, '..', 'src', 'cyrene', 'workbench', 'webui', 'static', 'app');
   const reactSource = fs.readFileSync(path.join(reactRoot, 'react.production.min.js'), 'utf8');
   const reactDomSource = fs.readFileSync(path.join(reactRoot, 'react-dom.production.min.js'), 'utf8');
 

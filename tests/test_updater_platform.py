@@ -201,7 +201,8 @@ def test_portable_windows_restart_script_replaces_original_without_uac(monkeypat
     assert "$appPath = 'C:\\Apps\\Cyrene-portable.exe'" in script
     assert "Move-Item -LiteralPath $newPath -Destination $appPath -Force" in script
     assert "Start-Process -FilePath $appPath" in script
-    assert "Start-Sleep -Seconds 3" in script
+    assert "Wait-CyreneExit" in script
+    assert "Start-Sleep -Seconds 3" not in script
     assert "timeout /t" not in script
     assert "-Verb RunAs" not in script
 
@@ -213,12 +214,32 @@ def test_installed_windows_restart_script_waits_and_propagates_installer_exit(mo
 
     script = updater.get_restart_script(Path(r"C:\Temp\Cyrene-new.exe"))
 
-    assert "Start-Sleep -Seconds 3" in script
+    assert "Wait-CyreneExit" in script
+    assert "Start-Sleep -Seconds 3" not in script
     assert "timeout /t" not in script
     assert "@('/S', '--updated')" in script
     assert "-Wait -PassThru" in script
     assert "$installerExitCode = $installer.ExitCode" in script
     assert "if ($installerExitCode -ne 0)" in script
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_windows_update_waits_for_both_owners_before_install(monkeypatch, portable):
+    monkeypatch.setattr(updater.os, "getpid", lambda: 1234)
+    monkeypatch.setenv("CYRENE_ELECTRON_PID", "5678")
+    monkeypatch.setattr(updater, "_is_windows_portable_runtime", lambda: portable)
+    script = updater._restart_script_windows(Path("update.exe"))
+    assert "foreach ($processId in @(1234, 5678))" in script
+    assert "$running.WaitForExit($remaining)" in script
+    assert "update aborted." in script
+    operation = "Copy-Item" if portable else "$installer = Start-Process"
+    assert script.index("    Wait-CyreneExit") < script.index("    Stop-CyreneTerminal") < script.index(operation)
+    assert "token=$record.token; action='shutdown'" in script
+    assert "$daemon.WaitForExit(30000)" in script
+    assert "Stop-Process" not in script
+    if portable:
+        assert "AddSeconds(60)" in script
+        assert "if ((Get-Date) -ge $replaceDeadline) { throw }" in script
 
 
 def test_windows_update_launcher_uses_bom_encoded_detached_powershell(tmp_path, monkeypatch):
@@ -254,12 +275,65 @@ def test_windows_update_launcher_uses_bom_encoded_detached_powershell(tmp_path, 
         "powershell.exe",
         "-NoProfile",
         "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
         str(script_path),
     ]
-    assert kwargs["creationflags"] == 0x00000208
+    assert kwargs["creationflags"] == 0x08000200
+    assert kwargs["stdin"] == kwargs["stdout"] == kwargs["stderr"] == -3
+    assert kwargs["cwd"] == str(tmp_path)
+    assert kwargs["close_fds"] is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires Windows PowerShell")
+@pytest.mark.parametrize("portable", [False, True])
+def test_windows_update_script_execution(tmp_path, monkeypatch, portable):
+    """Execute generated PowerShell with controlled process/installer doubles."""
+    import subprocess
+
+    folder = tmp_path / "更新 O'Brien"
+    folder.mkdir()
+    package = folder / "update.exe"
+    target = folder / "Cyrene.exe"
+    package.write_bytes(b"new version")
+    target.write_bytes(b"old version")
+    monkeypatch.setenv("CYRENE_APP_EXECUTABLE", str(target))
+    monkeypatch.setenv("CYRENE_TERMINAL_STATE_DIR", str(folder / "no-daemon"))
+    monkeypatch.setattr(updater, "_is_windows_portable_runtime", lambda: portable)
+    script = updater._restart_script_windows(package)
+    script = script.replace("Join-Path $env:TEMP 'cyrene_update.log'", updater._powershell_literal(folder / "update.log"))
+    prelude = r"""
+function Get-Process { return $null }
+$script:attempts = 0
+function Move-Item {
+    param($LiteralPath, $Destination, [switch]$Force)
+    $script:attempts++
+    if ($script:attempts -lt 3) { throw 'simulated file lock' }
+    Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force
+}
+"""
+    if portable:
+        prelude += "function Start-Process { Write-Output 'restarted' }\n"
+    else:
+        prelude += "function Start-Process { [PSCustomObject]@{ExitCode=37} }\n"
+    script_path = folder / "test-update.ps1"
+    script_path.write_text(prelude + script, encoding="utf-8-sig")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+        capture_output=True, timeout=20, creationflags=0x08000000,
+    )
+    assert result.returncode == (0 if portable else 37), result.stderr
+    assert target.read_bytes() == (b"new version" if portable else b"old version")
+    assert package.exists() is (not portable)
+    import json
+    report = json.loads((folder / "last-install.json").read_text(encoding="utf-8-sig"))
+    assert report["status"] == ("completed" if portable else "failed")
+    assert report["exit_code"] == (0 if portable else 37)
+    if portable:
+        assert b"restarted" in result.stdout
 
 
 # --- #47: missing platform assets must never fall back to another package -----

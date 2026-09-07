@@ -1,0 +1,1756 @@
+{
+  "src/cyrene/agents/acp_events.py::AcpEventMapper._session_update": {
+    "nesting": 6
+  },
+  "src/cyrene/agents/acp_transport.py::AcpStdioTransport": {
+    "methods": 29,
+    "fields": 31
+  },
+  "src/cyrene/agents/model_gateway.py::issue_model_gateway_binding": {
+    "lines": 130,
+    "decisions": 38
+  },
+  "src/cyrene/agents/process_manager.py::AcpProcessManager.validate_installation": {
+    "lines": 109,
+    "decisions": 26
+  },
+  "src/cyrene/agents/runtime_service.py": {
+    "module_lines": 1499
+  },
+  "src/cyrene/agents/runtime_service.py::AcpConnection._event_iterator": {
+    "lines": 119,
+    "decisions": 37
+  },
+  "src/cyrene/agents/runtime_service.py::AcpConnection.apply_config_values": {
+    "decisions": 22
+  },
+  "src/cyrene/agents/runtime_service.py::_acp_resource_candidates.walk": {
+    "decisions": 36
+  },
+  "src/cyrene/agents/runtime_service.py::_materialize_acp_artifacts": {
+    "decisions": 34
+  },
+  "src/cyrene/agents/runtime_service.py::run_external_agent_turn": {
+    "lines": 269,
+    "decisions": 73,
+    "nesting": 6
+  },
+  "src/cyrene/cli.py": {
+    "module_lines": 1314
+  },
+  "src/cyrene/cli.py::_api": {
+    "nesting": 6
+  },
+  "src/cyrene/cli.py::build_parser": {
+    "lines": 304
+  },
+  "src/cyrene/cli.py::cmd_start": {
+    "lines": 126
+  },
+  "src/cyrene/cli.py::main": {
+    "decisions": 31,
+    "nesting": 11
+  },
+  "src/cyrene/cli_chat.py": {
+    "module_lines": 3305
+  },
+  "src/cyrene/cli_chat.py::ChatTransport": {
+    "methods": 31
+  },
+  "src/cyrene/cli_chat.py::InteractiveChat": {
+    "methods": 59
+  },
+  "src/cyrene/cli_chat.py::InteractiveChat._choose_config_action": {
+    "lines": 133
+  },
+  "src/cyrene/cli_chat.py::InteractiveChat._choose_with_arrows": {
+    "lines": 102
+  },
+  "src/cyrene/cli_chat.py::InteractiveChat._command": {
+    "lines": 114,
+    "decisions": 33,
+    "nesting": 14
+  },
+  "src/cyrene/cli_chat.py::InteractiveChat._context_block_style": {
+    "decisions": 24,
+    "nesting": 6
+  },
+  "src/cyrene/cli_chat.py::InteractiveChat._render_context_blocks": {
+    "decisions": 33
+  },
+  "src/cyrene/cli_chat.py::InteractiveChat._run_config_action": {
+    "nesting": 13
+  },
+  "src/cyrene/cli_chat.py::RichRenderer": {
+    "methods": 30
+  },
+  "src/cyrene/cli_chat.py::RichRenderer.handle": {
+    "lines": 171,
+    "decisions": 68
+  },
+  "src/cyrene/cli_chat.py::run_chat": {
+    "decisions": 25
+  },
+  "src/cyrene/core/context/compaction.py::_render_prefix": {
+    "decisions": 23
+  },
+  "src/cyrene/core/context/projection.py::project_model_messages": {
+    "lines": 165,
+    "decisions": 58,
+    "nesting": 8
+  },
+  "src/cyrene/core/context/router.py::ContextStoreRouter": {
+    "methods": 41
+  },
+  "src/cyrene/core/context/router.py::ContextStoreRouter.create_tree": {
+    "lines": 113
+  },
+  "src/cyrene/core/context/store.py": {
+    "module_lines": 1070
+  },
+  "src/cyrene/core/context/store.py::ContextTreeStore": {
+    "methods": 37
+  },
+  "src/cyrene/core/context/tasks.py::TaskContexts.execute": {
+    "decisions": 22,
+    "nesting": 8
+  },
+  "src/cyrene/core/context/tasks.py::fork_task_state": {
+    "decisions": 23,
+    "nesting": 7
+  },
+  "src/cyrene/core/context/tasks.py::project_tasks": {
+    "decisions": 47,
+    "nesting": 6
+  },
+  "src/cyrene/core/hook/registry.py": {
+    "module_lines": 1646
+  },
+  "src/cyrene/core/hook/registry.py::HookSet": {
+    "methods": 44
+  },
+  "src/cyrene/core/hook/registry.py::HookSet._run_pre_tool": {
+    "lines": 129
+  },
+  "src/cyrene/core/hook/registry.py::HookSet._run_pre_tool_batch": {
+    "lines": 169,
+    "decisions": 36,
+    "nesting": 6
+  },
+  "src/cyrene/core/hook/registry.py::HookSet._worker_main": {
+    "nesting": 7
+  },
+  "src/cyrene/core/observability.py::safe_log_value": {
+    "decisions": 27
+  },
+  "src/cyrene/core/plugin/batch_runner.py::PluginBatchRunner.run": {
+    "lines": 126,
+    "decisions": 21
+  },
+  "src/cyrene/core/plugin/core_impl/permission.py::PermissionReviewPlugin.review_batch": {
+    "decisions": 33
+  },
+  "src/cyrene/core/plugin/core_impl/permission_boundaries.py::_is_safe_review_directory_refresh": {
+    "decisions": 21
+  },
+  "src/cyrene/core/plugin/plugin.py::Plugin.__post_init__": {
+    "lines": 106,
+    "decisions": 40
+  },
+  "src/cyrene/core/plugin/registry.py": {
+    "module_lines": 1710
+  },
+  "src/cyrene/core/plugin/registry.py::PluginRegistry": {
+    "methods": 57
+  },
+  "src/cyrene/core/plugin/registry.py::PluginRegistry._load_directory": {
+    "lines": 178,
+    "decisions": 30
+  },
+  "src/cyrene/core/plugin/registry.py::PluginRegistry.register_pack": {
+    "decisions": 21
+  },
+  "src/cyrene/core/plugin/runtime.py::PluginRuntime.execute": {
+    "lines": 117
+  },
+  "src/cyrene/core/plugin/runtime.py::PluginRuntime.review_batch": {
+    "lines": 208
+  },
+  "src/cyrene/core/plugin/session_plugins.py::SessionPlugins.reconcile_plugins": {
+    "decisions": 23
+  },
+  "src/cyrene/core/plugin/validation.py::_promote_operation_to_invocation": {
+    "decisions": 27
+  },
+  "src/cyrene/core/session.py": {
+    "module_lines": 4824
+  },
+  "src/cyrene/core/session.py::AgentSession": {
+    "methods": 116,
+    "fields": 49
+  },
+  "src/cyrene/core/session.py::AgentSession.__init__": {
+    "lines": 251,
+    "decisions": 34
+  },
+  "src/cyrene/core/session.py::AgentSession._advance": {
+    "lines": 208,
+    "decisions": 46
+  },
+  "src/cyrene/core/session.py::AgentSession._answer": {
+    "lines": 118,
+    "decisions": 39
+  },
+  "src/cyrene/core/session.py::AgentSession._compact_task_at_node": {
+    "lines": 144,
+    "decisions": 29
+  },
+  "src/cyrene/core/session.py::AgentSession._continue_tools": {
+    "lines": 190,
+    "decisions": 48
+  },
+  "src/cyrene/core/session.py::AgentSession._event_for_node": {
+    "nesting": 6
+  },
+  "src/cyrene/core/session.py::AgentSession._finish_terminal": {
+    "lines": 135,
+    "decisions": 47
+  },
+  "src/cyrene/core/session.py::AgentSession._mount_guidance": {
+    "decisions": 27
+  },
+  "src/cyrene/core/session.py::AgentSession._pending_question_from_results": {
+    "decisions": 39
+  },
+  "src/cyrene/core/session.py::AgentSession._permission_requirement": {
+    "lines": 125,
+    "decisions": 49
+  },
+  "src/cyrene/core/session.py::AgentSession._record_permission_review": {
+    "decisions": 31
+  },
+  "src/cyrene/core/session.py::AgentSession._restore": {
+    "lines": 250,
+    "decisions": 42
+  },
+  "src/cyrene/core/session.py::AgentSession._restore_run_context": {
+    "decisions": 31
+  },
+  "src/cyrene/core/session.py::AgentSession._select_restore_leaf": {
+    "decisions": 22
+  },
+  "src/cyrene/core/session.py::AgentSession.drain": {
+    "nesting": 7
+  },
+  "src/cyrene/core/session.py::AgentSession.request_cancel": {
+    "lines": 110
+  },
+  "src/cyrene/core/session.py::AgentSession.submit": {
+    "lines": 110
+  },
+  "src/cyrene/model/codex_provider.py": {
+    "module_lines": 1706
+  },
+  "src/cyrene/model/codex_provider.py::CodexAppServer.complete": {
+    "lines": 356,
+    "decisions": 78,
+    "nesting": 10
+  },
+  "src/cyrene/model/codex_provider.py::CodexAppServer.generate_image": {
+    "lines": 204,
+    "decisions": 38,
+    "nesting": 7
+  },
+  "src/cyrene/model/codex_provider.py::_normalize_provider_action": {
+    "decisions": 21
+  },
+  "src/cyrene/model/codex_provider.py::codex_availability_error": {
+    "decisions": 26
+  },
+  "src/cyrene/model/error_details.py::classify_model_error": {
+    "decisions": 38
+  },
+  "src/cyrene/model/protocol_adapters.py": {
+    "module_lines": 1602
+  },
+  "src/cyrene/model/protocol_adapters.py::_anthropic_messages": {
+    "decisions": 28
+  },
+  "src/cyrene/model/protocol_adapters.py::_gemini_messages": {
+    "decisions": 24
+  },
+  "src/cyrene/model/protocol_adapters.py::_openai_chat_stream_event": {
+    "decisions": 29
+  },
+  "src/cyrene/model/protocol_adapters.py::_parse_aliyun_bailian_models": {
+    "decisions": 47
+  },
+  "src/cyrene/model/protocol_adapters.py::_responses_input": {
+    "decisions": 23
+  },
+  "src/cyrene/model/protocol_adapters.py::_stream_payloads": {
+    "decisions": 27
+  },
+  "src/cyrene/model/protocol_adapters.py::_usage": {
+    "decisions": 32
+  },
+  "src/cyrene/model/protocol_adapters.py::handle_stream": {
+    "lines": 327,
+    "decisions": 148,
+    "nesting": 14
+  },
+  "src/cyrene/model/protocol_adapters.py::parse_discovery_response": {
+    "decisions": 39
+  },
+  "src/cyrene/model/protocol_adapters.py::parse_response": {
+    "decisions": 56,
+    "nesting": 8
+  },
+  "src/cyrene/model/protocol_adapters.py::prepare_request": {
+    "lines": 104,
+    "decisions": 31
+  },
+  "src/cyrene/observability/context_debug.py::_print_event": {
+    "decisions": 22
+  },
+  "src/cyrene/observability/context_trace.py::_infer_block_for_message": {
+    "nesting": 6
+  },
+  "src/cyrene/observability/powerpoint_performance_benchmark.py::_run_strategy": {
+    "lines": 108,
+    "decisions": 23
+  },
+  "src/cyrene/observability/terminal_performance_benchmark.py::_run_case": {
+    "lines": 183,
+    "decisions": 28
+  },
+  "src/cyrene/observability/terminal_performance_benchmark.py::_run_fairness_case": {
+    "lines": 150,
+    "nesting": 6
+  },
+  "src/cyrene/platform/adaptive_budget.py::AdaptiveBudgetController.calculate": {
+    "lines": 141
+  },
+  "src/cyrene/platform/attachments.py::analyze_attachment": {
+    "decisions": 22
+  },
+  "src/cyrene/platform/backup.py::_commit_stage": {
+    "decisions": 22
+  },
+  "src/cyrene/platform/backup.py::_inspect_archive": {
+    "decisions": 51
+  },
+  "src/cyrene/platform/backup.py::_stage_archive": {
+    "decisions": 23
+  },
+  "src/cyrene/platform/budget.py::_query_records": {
+    "nesting": 7
+  },
+  "src/cyrene/platform/budget.py::get_budget_state": {
+    "lines": 190,
+    "decisions": 60
+  },
+  "src/cyrene/platform/config_store.py": {
+    "module_lines": 1033
+  },
+  "src/cyrene/platform/config_store.py::_profile_ctx_limit": {
+    "decisions": 22
+  },
+  "src/cyrene/platform/doctor/agent_analysis.py::analyze": {
+    "lines": 103
+  },
+  "src/cyrene/platform/doctor/checks.py::memory_checks": {
+    "decisions": 28
+  },
+  "src/cyrene/platform/doctor/checks.py::plugin_checks": {
+    "decisions": 25
+  },
+  "src/cyrene/platform/doctor/checks.py::run_checks": {
+    "nesting": 6
+  },
+  "src/cyrene/platform/doctor/service.py::DoctorService.diagnose": {
+    "decisions": 42
+  },
+  "src/cyrene/platform/host.py": {
+    "module_lines": 1235
+  },
+  "src/cyrene/platform/host.py::_handle_menu": {
+    "lines": 152,
+    "decisions": 25,
+    "nesting": 9
+  },
+  "src/cyrene/platform/host.py::_run_web_gui": {
+    "lines": 198
+  },
+  "src/cyrene/platform/host.py::main": {
+    "nesting": 7
+  },
+  "src/cyrene/platform/host_actions.py::_execute": {
+    "decisions": 30
+  },
+  "src/cyrene/platform/host_bridge.py::call_host": {
+    "decisions": 26
+  },
+  "src/cyrene/platform/persistence/analytics.py::_backfill_runtime_logs": {
+    "nesting": 7
+  },
+  "src/cyrene/platform/persistence/analytics.py::record_usage_stats_batch": {
+    "lines": 100
+  },
+  "src/cyrene/platform/persistence/telemetry.py::TelemetryRepository._latency_row": {
+    "decisions": 40
+  },
+  "src/cyrene/platform/persistence/telemetry.py::TelemetryRepository._trace_from_latency": {
+    "decisions": 36
+  },
+  "src/cyrene/platform/settings_service.py::_normalize": {
+    "lines": 108,
+    "decisions": 70,
+    "nesting": 12
+  },
+  "src/cyrene/platform/settings_service.py::validate_changes": {
+    "decisions": 37
+  },
+  "src/cyrene/platform/shell_wake.py::TerminalWakeBridge._daemon_poll_loop": {
+    "decisions": 22
+  },
+  "src/cyrene/platform/storage.py::scan_storage": {
+    "lines": 129
+  },
+  "src/cyrene/platform/storage.py::scan_storage.walk": {
+    "nesting": 6
+  },
+  "src/cyrene/platform/update_install.py::launch_update_restart": {
+    "lines": 115,
+    "decisions": 25
+  },
+  "src/cyrene/platform/updater.py": {
+    "module_lines": 1104
+  },
+  "src/cyrene/platform/updater.py::_restore_download_state": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/application.py::PluginApplicationHost": {
+    "methods": 32,
+    "fields": 27
+  },
+  "src/cyrene/plugins/background.py::BackgroundPluginHost._invoke": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/_ui_action.py::execute_action": {
+    "lines": 130,
+    "decisions": 60
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/chats.py::handler": {
+    "decisions": 36,
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/data.py::handler": {
+    "decisions": 31
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/lifecycle.py::handler": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/projects.py::handler": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/session_message.py::handler": {
+    "lines": 133,
+    "decisions": 39
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/settings_update.py::handler": {
+    "lines": 100,
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_application/updates.py::handler": {
+    "decisions": 37
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/browser_screenshot.py::_tool_browser_screenshot": {
+    "lines": 122
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/browser_upload_files.py::_tool_browser_upload_files": {
+    "lines": 231,
+    "decisions": 56
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/routes.py::register_browser_routes": {
+    "lines": 138
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/runtime.py": {
+    "module_lines": 4088
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/runtime.py::_BrowserSession": {
+    "methods": 60
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/runtime.py::_BrowserSession.navigation_guard": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/runtime.py::_BrowserSession.set_input_files": {
+    "decisions": 29
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/runtime.py::screenshot": {
+    "lines": 115,
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_browser/runtime.py::scroll_page": {
+    "lines": 106,
+    "decisions": 30
+  },
+  "src/cyrene/plugins/builtin/cyrene_channels/wechat/bot.py::_handle_message": {
+    "lines": 112
+  },
+  "src/cyrene/plugins/builtin/cyrene_channels/wechat/client.py::WeChatClient.download_incoming_item": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_channels/wechat/client.py::WeChatClient.send_file": {
+    "lines": 172
+  },
+  "src/cyrene/plugins/builtin/cyrene_cli/config_agent.py::configure_cli": {
+    "lines": 133,
+    "decisions": 35
+  },
+  "src/cyrene/plugins/builtin/cyrene_cli/config_agent.py::configure_user_hook": {
+    "lines": 115
+  },
+  "src/cyrene/plugins/builtin/cyrene_cli/hooks.py::CliHookService.dispatch": {
+    "decisions": 31
+  },
+  "src/cyrene/plugins/builtin/cyrene_cli/hooks.py::CliHookService.execute": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_cli/hooks.py::_normalize_hook": {
+    "decisions": 34
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/analysis.py::analyze_structure": {
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/indexer.py::build_index": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/read_shell.py::_tool_read_shell": {
+    "lines": 133,
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/client.py::TerminalDaemonClient": {
+    "methods": 35
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/daemon.py::TerminalDaemon._create_terminal": {
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/daemon.py::TerminalDaemon._dispatch_mutation_action": {
+    "decisions": 47
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/daemon.py::TerminalDaemon._dispatch_query_action": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/daemon.py::TerminalDaemon._subscribe": {
+    "lines": 110
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/daemon.py::TerminalDaemon._subscribe.receive_commands": {
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py": {
+    "module_lines": 4492
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager": {
+    "methods": 103
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager._apply_osc_metadata": {
+    "decisions": 35
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager._mark_exited": {
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager._open_store": {
+    "lines": 108
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager._session_from_row": {
+    "decisions": 38
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager.close": {
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager.create_resolved": {
+    "lines": 113,
+    "decisions": 43
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::_TerminalPersistenceWriter": {
+    "methods": 43,
+    "fields": 36
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::_TerminalPersistenceWriter._index_output": {
+    "lines": 126,
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal_routes.py::register_terminal_routes": {
+    "lines": 100
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal_wake.py::TerminalWakeBridge._daemon_poll_loop": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/workspace_action.py::handler": {
+    "decisions": 23,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/workspace_execution.py::WorkspaceExecutionService": {
+    "methods": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/workspace_execution.py::WorkspaceExecutionService._replace_action_terminal": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/workspace_execution.py::WorkspaceExecutionService.refresh": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_composer_context/application.py::ComposerContextService": {
+    "methods": 29
+  },
+  "src/cyrene/plugins/builtin/cyrene_composer_context/application.py::ComposerContextService._mcp_catalog": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_content/deepseek_web_search.py::_parse_response": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_content/pdf_routes.py::_PDF_VIEWER_HTML": {
+    "lines": 264
+  },
+  "src/cyrene/plugins/builtin/cyrene_content/pdf_routes.py::register_pdf_routes": {
+    "lines": 139
+  },
+  "src/cyrene/plugins/builtin/cyrene_content/search_backend.py": {
+    "module_lines": 1106
+  },
+  "src/cyrene/plugins/builtin/cyrene_content/search_backend.py::_deep_search_simplexng": {
+    "lines": 134,
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_control/deep_reflect.py::_user_messages": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_control/enter_plan_mode.py::_tool_enter_plan_mode": {
+    "lines": 139,
+    "decisions": 30
+  },
+  "src/cyrene/plugins/builtin/cyrene_control/update_plan_progress.py::_current_plan": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_control/update_plan_progress.py::_tool_update_plan_progress": {
+    "lines": 123,
+    "decisions": 42
+  },
+  "src/cyrene/plugins/builtin/cyrene_delivery/send_wechat_file.py::_tool_send_wechat_file": {
+    "lines": 107,
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_semantic_backend.py::_effect_verified": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_semantic_backend.py::execute_action": {
+    "decisions": 29
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_semantic_backend.py::execute_snapshot": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_use_backend.py": {
+    "module_lines": 1529
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_use_backend.py::_execute_measure_coordinates": {
+    "lines": 192,
+    "decisions": 35
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_use_backend.py::_execute_visual_click": {
+    "lines": 167,
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_use_backend.py::_execute_visual_type": {
+    "lines": 135,
+    "decisions": 34
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_use_backend.py::_with_python_capabilities": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_use_backend.py::execute_app_use": {
+    "lines": 301,
+    "decisions": 110
+  },
+  "src/cyrene/plugins/builtin/cyrene_desktop/_app_use_backend.py::localize_app_use_result": {
+    "lines": 110,
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_entity/application.py::setup_application": {
+    "lines": 133
+  },
+  "src/cyrene/plugins/builtin/cyrene_entity/store.py::update_entity": {
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/agent_model_gateway_routes.py::register_agent_model_gateway_routes": {
+    "lines": 143
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/agent_routes.py::register_agent_routes": {
+    "lines": 106
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_agent_runtime.py::_sanitize_capabilities": {
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_agent_runtime.py::fetch_manifest_from_source": {
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_agent_runtime.py::validate_agent_manifest": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_plugin_center.py::_install_request": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py": {
+    "module_lines": 2929
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService": {
+    "methods": 60
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._download": {
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._extension_card": {
+    "decisions": 46
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._install_mise": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._install_recommended_agent": {
+    "lines": 100,
+    "decisions": 38
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._install_tex": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._search_cli": {
+    "decisions": 52
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._search_mcp": {
+    "lines": 117,
+    "decisions": 58
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService._search_skill_repositories": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService.list_extensions": {
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService.search": {
+    "decisions": 36
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService.set_extension_enabled": {
+    "decisions": 34,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService.start_install": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::ExtensionService.uninstall": {
+    "decisions": 47
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::agent_extension_paths": {
+    "decisions": 43
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::agent_process_environment": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/extension_service.py::update_source_settings": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/manage_extensions.py::_tool_manage_extensions": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/project_plugin_dependencies.py::ensure_project_plugins": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_extensions/search_environment.py::_compact_candidate": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_goal/service.py": {
+    "module_lines": 1311
+  },
+  "src/cyrene/plugins/builtin/cyrene_goal/service.py::ConversationGoalService": {
+    "methods": 43
+  },
+  "src/cyrene/plugins/builtin/cyrene_goal/service.py::ConversationGoalService._normalize_review": {
+    "decisions": 26
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/content.py::_bib_entries": {
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/content.py::_parse_json": {
+    "decisions": 59
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/legacy_migration.py::migrate_legacy_knowledge": {
+    "lines": 386,
+    "decisions": 114,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/local_models.py::status": {
+    "nesting": 8
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/local_onnx.py::_embed_sync": {
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/routes.py::register_routes": {
+    "lines": 264
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/search_library.py::handler": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/service.py": {
+    "module_lines": 1215
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/service.py::KnowledgeService": {
+    "methods": 66
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/service.py::KnowledgeService.resolve_library_file_payload": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/settings_routes.py::register_settings_routes": {
+    "lines": 136
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/store.py": {
+    "module_lines": 2005
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/store.py::KnowledgeStore": {
+    "methods": 60
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/store.py::KnowledgeStore._hydrate": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/store.py::KnowledgeStore.update_item": {
+    "decisions": 21,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/zotero.py::_item_payload": {
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_knowledge/zotero.py::sync_zotero": {
+    "lines": 198,
+    "decisions": 52
+  },
+  "src/cyrene/plugins/builtin/cyrene_map/application.py::setup_application": {
+    "lines": 139
+  },
+  "src/cyrene/plugins/builtin/cyrene_mcp/content.py::serialize_mcp_result": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_mcp/service.py::MCPPluginService": {
+    "methods": 31
+  },
+  "src/cyrene/plugins/builtin/cyrene_mcp/service.py::validate_mcp_configs": {
+    "decisions": 36
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/delivery.py::MediaDelivery._project": {
+    "lines": 166,
+    "decisions": 47
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/manager.py::MediaJobManager": {
+    "methods": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/manager.py::MediaJobManager.create_batch": {
+    "lines": 129,
+    "decisions": 36
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/comfyui.py::ComfyUIProvider.generate": {
+    "lines": 231,
+    "decisions": 58
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/comfyui.py::_inline_artifacts": {
+    "decisions": 34
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/comfyui.py::_stage_local_inputs": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/google_media.py::GoogleMediaProvider._generate_image": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/google_media.py::GoogleMediaProvider._generate_omni_video": {
+    "lines": 377,
+    "decisions": 87
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/google_media.py::GoogleMediaProvider._generate_veo_video": {
+    "lines": 236,
+    "decisions": 76,
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/helpers.py::download_bytes": {
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/helpers.py::download_to_path": {
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/minimax.py::MiniMaxProvider._generate_music": {
+    "decisions": 32
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/minimax.py::MiniMaxProvider._generate_video": {
+    "lines": 341,
+    "decisions": 107,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/minimax.py::_media_class": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/openai_image.py::OpenAIImageProvider.generate": {
+    "lines": 151,
+    "decisions": 56
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/registry.py::_request_is_compatible": {
+    "decisions": 45
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/seedance.py::SeedanceProvider.generate": {
+    "lines": 162,
+    "decisions": 45,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/providers/seedream.py::SeedreamProvider.generate": {
+    "lines": 113,
+    "decisions": 54
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/settings.py::merge_media_settings_update": {
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/settings.py::save_media_settings": {
+    "decisions": 42
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/start_media_generation.py::_normalize_request": {
+    "lines": 241,
+    "decisions": 42
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/start_media_generation.py::_resolve_references": {
+    "lines": 104,
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/start_media_generation.py::_tool_start_media_generation": {
+    "lines": 159,
+    "decisions": 32
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/worker.py::MediaWorker._process": {
+    "lines": 172,
+    "decisions": 48
+  },
+  "src/cyrene/plugins/builtin/cyrene_media/worker.py::MediaWorker._register_artifact": {
+    "lines": 111,
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/application.py::MemoryApplication": {
+    "methods": 47
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/application.py::MemoryApplication._search": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/application.py::MemoryApplication.overview": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/archive.py::archive_session_exchange": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/list_memories.py::_tool_list_memories": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py": {
+    "module_lines": 1746
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py::_learn_prompt": {
+    "lines": 101
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py::_parse_memory_agent_response": {
+    "lines": 108,
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py::_run_job": {
+    "lines": 103,
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py::supersede_turn_learning": {
+    "decisions": 54
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/recall_memory.py::_tool_recall_memory": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService": {
+    "methods": 32
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService._committed_learning_context": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService._process_committed_turn": {
+    "lines": 101,
+    "decisions": 26
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService.context_block": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService.trigger_project_learning": {
+    "lines": 101
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/structured.py": {
+    "module_lines": 1825
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/structured.py::add_agent_memory_checked": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/structured.py::build_verified_tool_evidence": {
+    "decisions": 30
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/structured.py::render_memory_for_injection": {
+    "decisions": 35
+  },
+  "src/cyrene/plugins/builtin/cyrene_memory/structured.py::search_project_memories": {
+    "decisions": 37
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/_shared.py": {
+    "module_lines": 1238
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/_shared.py::_complete_stream_endpoint": {
+    "lines": 139,
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/_shared.py::complete_model": {
+    "lines": 160,
+    "decisions": 32
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/_shared.py::discover_models": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/_shared.py::embed_model": {
+    "decisions": 34
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/configuration.py": {
+    "module_lines": 1021
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/configuration.py::_migrate_plugin_seed_connections": {
+    "decisions": 32
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/configuration.py::candidate_for_profile": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/configuration.py::normalize_model_configuration": {
+    "lines": 229,
+    "decisions": 90
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/configuration.py::validate_active_route_provider_families": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/oauth.py::register_oauth_routes": {
+    "lines": 122
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/routes.py::_model_discovery_error_response": {
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/routes.py::_public_configuration_with_plugins": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/routes.py::register_model_configuration_routes": {
+    "lines": 155
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/_shared.py": {
+    "module_lines": 1137
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/_shared.py::_normalize_operation": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py": {
+    "module_lines": 2074
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine": {
+    "methods": 67
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine._append_imported_slides": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine._apply_batch_operation": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine._apply_style": {
+    "decisions": 29
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine._chart_png": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine._create_batch_group": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine._shape_part_edit": {
+    "decisions": 26,
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine.call": {
+    "lines": 101,
+    "decisions": 52
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine.master_and_theme": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/file_engine.py::PptxFileEngine.verify": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/gateway.py::_register_asset_routes": {
+    "lines": 109
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/gateway.py::_register_document_routes": {
+    "lines": 141
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/kit.py::_create_slides_handler": {
+    "lines": 157,
+    "decisions": 35
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/service.py::OfficeBridgeService.call": {
+    "lines": 101
+  },
+  "src/cyrene/plugins/builtin/cyrene_office/slide_layout.py::compile_slide_spec": {
+    "lines": 122,
+    "decisions": 64,
+    "nesting": 7
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py": {
+    "module_lines": 1497
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::_model_source": {
+    "lines": 100
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::install": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::manage_hooks": {
+    "lines": 184,
+    "decisions": 64
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::manage_plugin_source": {
+    "lines": 107,
+    "decisions": 35
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::manage_plugins": {
+    "lines": 109,
+    "decisions": 36
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::scaffold": {
+    "lines": 102,
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::validate_pack_directory": {
+    "lines": 108,
+    "decisions": 52
+  },
+  "src/cyrene/plugins/builtin/cyrene_proactive/outcome.py::outcome_from_result": {
+    "decisions": 26
+  },
+  "src/cyrene/plugins/builtin/cyrene_proactive/service.py::_heartbeat_proactive_check": {
+    "lines": 278,
+    "decisions": 44
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/commands.py": {
+    "module_lines": 2915
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/commands.py::RemoteCommandExecutor": {
+    "methods": 41
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/commands.py::RemoteCommandExecutor._harness_command": {
+    "lines": 341,
+    "decisions": 88
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/commands.py::RemoteCommandExecutor._settings_read": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/commands.py::RemoteCommandExecutor._settings_update": {
+    "lines": 149,
+    "decisions": 57,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/commands.py::_remote_agent_context": {
+    "lines": 243,
+    "decisions": 69
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/commands.py::referenced_chat_attachment_target": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/control.py": {
+    "module_lines": 2689
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/control.py::RemoteControlStore": {
+    "methods": 38
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/control.py::RemoteControlStore._initialize": {
+    "lines": 128
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/control.py::RemoteControlStore.complete_pairing_response": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/control.py::RemoteGateway._handle_command": {
+    "lines": 138,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/control.py::RemoteGateway._receive": {
+    "lines": 109,
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/files.py::_download": {
+    "decisions": 30
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/files.py::_sync": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/harness.py::handler": {
+    "lines": 101
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/jobs.py::handler": {
+    "decisions": 26
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/pairing.py::DirectPairingServer._handle_connection": {
+    "lines": 222,
+    "decisions": 46,
+    "nesting": 11
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/permission.py::remote_permission_request": {
+    "lines": 152,
+    "decisions": 44
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/relay.py::CyreneRelayServer._verify_registration": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/run.py::handler": {
+    "lines": 101,
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/workspace.py::RemoteJobManager._start": {
+    "decisions": 26
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/workspace.py::RemoteWorkspaceFiles._execute_at_root": {
+    "decisions": 31
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/workspace.py::RemoteWorkspaceFiles._sync_diff": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/providers.py": {
+    "module_lines": 1066
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/providers.py::FreeRdpProvider.__init__": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py": {
+    "module_lines": 2590
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService": {
+    "methods": 75
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService._consume_forced_disconnects": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService._download_clipboard_image": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService._handle_host_clipboard_file_upload": {
+    "decisions": 41
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService._handle_host_clipboard_image_upload": {
+    "decisions": 22
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService._receive_clipboard_file_entry": {
+    "decisions": 32
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService.cards": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService.connect": {
+    "decisions": 36
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService.handle_remote_command": {
+    "decisions": 26
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService.project_layout": {
+    "decisions": 42
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote_desktop/service.py::RemoteDesktopService.receive_clipboard_files": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_schedule/application.py::setup_application": {
+    "lines": 145
+  },
+  "src/cyrene/plugins/builtin/cyrene_schedule/application.py::setup_application.search": {
+    "decisions": 37
+  },
+  "src/cyrene/plugins/builtin/cyrene_schedule/schedule_spec.py::recurrence_label": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/cyrene_schedule/tools.py::edit_schedule": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/candidate.py::CandidateService._build_candidate_script": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/candidate.py::CandidateService.list_skill_candidates": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/capture.py::CaptureService._rebuild_tool_chain_for_turn": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/capture.py::browser_event_learning_fields": {
+    "decisions": 21,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/lifecycle.py::LifecycleService": {
+    "methods": 30
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/lifecycle.py::LifecycleService._extract_with_rules": {
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/lifecycle.py::LifecycleService._persist_skill_version": {
+    "decisions": 30
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/lifecycle.py::LifecycleService.extract_skill_parameters": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/orchestrator.py": {
+    "module_lines": 1619
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/orchestrator.py::_collect_template_action_groups": {
+    "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/orchestrator.py::_derive_parameter_templates": {
+    "decisions": 28,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/orchestrator.py::list_tool_chains": {
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/orchestrator.py::run_learned_skill_result": {
+    "lines": 154,
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/routes.py::register_learning_routes": {
+    "lines": 144
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/run_learned_skill.py::_tool_run_learned_skill": {
+    "lines": 140,
+    "decisions": 26
+  },
+  "src/cyrene/plugins/builtin/cyrene_skills/skills.py::install_skill_from_path": {
+    "lines": 216,
+    "decisions": 56
+  },
+  "src/cyrene/plugins/builtin/cyrene_soul/store.py::apply_soul_update": {
+    "decisions": 24,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/contracts.py::SubagentRecord.from_value": {
+    "decisions": 31
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py": {
+    "module_lines": 1834
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager": {
+    "methods": 48
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager._deliver_inbox": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager._on_child_event": {
+    "decisions": 27,
+    "nesting": 6
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager._report_finished_children": {
+    "decisions": 29,
+    "nesting": 8
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager.drive": {
+    "lines": 103,
+    "decisions": 27
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager.mode_context": {
+    "lines": 100
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager.send": {
+    "lines": 179,
+    "decisions": 47
+  },
+  "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager.spawn": {
+    "lines": 142,
+    "decisions": 31
+  },
+  "src/cyrene/plugins/builtin/cyrene_voice/engine.py::status": {
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_voice/engine.py::update_settings": {
+    "decisions": 28
+  },
+  "src/cyrene/plugins/builtin/cyrene_voice/routes.py::register_voice_routes": {
+    "lines": 103
+  },
+  "src/cyrene/plugins/builtin/cyrene_voice/voice_command.py::VoiceCommandApplicationService.execute": {
+    "lines": 104,
+    "decisions": 29
+  },
+  "src/cyrene/plugins/contributions.py::_validate_project_tools": {
+    "decisions": 36
+  },
+  "src/cyrene/plugins/model_catalog.py::configured_model_candidates": {
+    "lines": 106,
+    "decisions": 46
+  },
+  "src/cyrene/plugins/model_catalog.py::resolve_exact_model_candidate": {
+    "decisions": 38
+  },
+  "src/cyrene/plugins/model_router.py::_normalized_provider_result": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/model_router.py::_publish_llm_event": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/model_router.py::route_model_call": {
+    "lines": 199,
+    "decisions": 32
+  },
+  "src/cyrene/plugins/native_runtime.py::guard_shell_command_workspace_write": {
+    "decisions": 24
+  },
+  "src/cyrene/plugins/native_tools.py::_seed_canonical_directory": {
+    "lines": 193,
+    "decisions": 45
+  },
+  "src/cyrene/workbench/application/app_control.py::_consume_explicit_user_delegation": {
+    "lines": 154,
+    "decisions": 37
+  },
+  "src/cyrene/workbench/application/app_control.py::authorize": {
+    "lines": 149,
+    "decisions": 36
+  },
+  "src/cyrene/workbench/application/app_services.py::delete_project": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/application/app_services.py::fork_chat": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/application/app_services.py::manage_chat_group": {
+    "decisions": 40
+  },
+  "src/cyrene/workbench/application/inbox.py": {
+    "module_lines": 1881
+  },
+  "src/cyrene/workbench/application/inbox.py::WorkbenchAgentInbox": {
+    "methods": 45,
+    "fields": 30
+  },
+  "src/cyrene/workbench/application/inbox.py::WorkbenchAgentInbox.close": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/application/inbox.py::WorkbenchAgentInbox.submit_tool_batch": {
+    "lines": 116
+  },
+  "src/cyrene/workbench/application/inbox.py::WorkbenchAgentInbox.submit_tool_batch.run_batch": {
+    "decisions": 31
+  },
+  "src/cyrene/workbench/application/inbox.py::read_workbench_inbox_snapshot": {
+    "lines": 161,
+    "decisions": 48
+  },
+  "src/cyrene/workbench/artifacts/presentation_runtime.py::_build_dashboard": {
+    "lines": 116,
+    "decisions": 75
+  },
+  "src/cyrene/workbench/artifacts/presentation_runtime.py::_calc_messages_spend": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/artifacts/presentation_runtime.py::_search_workbench_items": {
+    "decisions": 25
+  },
+  "src/cyrene/workbench/chat/channel_chat_service.py::ChannelChatService.turn": {
+    "lines": 149,
+    "decisions": 25
+  },
+  "src/cyrene/workbench/chat/chat_application.py": {
+    "module_lines": 1578
+  },
+  "src/cyrene/workbench/chat/chat_application.py::WorkspaceChangeService.sync_generated_files.update": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/chat/chat_application.py::extract_exchange_timeline": {
+    "decisions": 25
+  },
+  "src/cyrene/workbench/chat/chat_application.py::new_chat": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/chat/chat_application.py::normalize_workspace_surface": {
+    "decisions": 45
+  },
+  "src/cyrene/workbench/chat/chat_application.py::public_chat_light": {
+    "lines": 113,
+    "decisions": 53,
+    "nesting": 6
+  },
+  "src/cyrene/workbench/chat/chat_application.py::sanitize_durable_traces": {
+    "nesting": 8
+  },
+  "src/cyrene/workbench/chat/chat_attachment_service.py::referenced_chat_attachment_target": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/chat/chat_external_turn_service.py::_ExternalEventProjector.publish": {
+    "nesting": 10
+  },
+  "src/cyrene/workbench/chat/chat_groups.py": {
+    "module_lines": 1226
+  },
+  "src/cyrene/workbench/chat/chat_groups.py::_apply_mutation_intent": {
+    "decisions": 47
+  },
+  "src/cyrene/workbench/chat/chat_groups.py::_normalize_groups": {
+    "decisions": 29
+  },
+  "src/cyrene/workbench/chat/chat_groups.py::_rebase_groups": {
+    "decisions": 41
+  },
+  "src/cyrene/workbench/chat/chat_groups.py::_reconcile_events": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/chat/chat_groups.py::_safe_public_message": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/chat/chat_groups.py::read_group_session_snapshots": {
+    "decisions": 25
+  },
+  "src/cyrene/workbench/chat/chat_reply_finalization_service.py::ChatReplyFinalizationApplicationService._prepend_external_projection": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/chat/chat_runs.py": {
+    "module_lines": 1704
+  },
+  "src/cyrene/workbench/chat/chat_runs.py::ChatRun": {
+    "fields": 29
+  },
+  "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager._drive": {
+    "lines": 162,
+    "decisions": 33
+  },
+  "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager._reconcile_inbox_guidance_messages": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager.startup": {
+    "decisions": 26
+  },
+  "src/cyrene/workbench/chat/chat_service.py::ChatService": {
+    "methods": 50
+  },
+  "src/cyrene/workbench/chat/chat_service.py::ChatService.dispatch_shell_wake_run": {
+    "lines": 316,
+    "decisions": 37
+  },
+  "src/cyrene/workbench/chat/chat_service.py::ChatService.dispatch_shell_wake_run.runner": {
+    "lines": 147
+  },
+  "src/cyrene/workbench/chat/chat_service.py::ChatService.generate_chat_group_metadata": {
+    "lines": 135,
+    "decisions": 27
+  },
+  "src/cyrene/workbench/chat/chat_service.py::ChatService.update_chat_agent_context_report": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py": {
+    "module_lines": 2012
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::AgentContextRepository._read_tree": {
+    "lines": 177,
+    "decisions": 54
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::ConversationContextQueryService._agent_blocks": {
+    "decisions": 26
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::ConversationContextQueryService._timeline_payload": {
+    "decisions": 29
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::ConversationContextQueryService.subagents": {
+    "decisions": 50
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::ConversationInboxQueryService._agent_events": {
+    "decisions": 27
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::_agent_path_plugin_usage.record_result": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::_agent_system_prefix_layer": {
+    "decisions": 22
+  },
+  "src/cyrene/workbench/chat/conversation_context_service.py::_agent_turn_context_layer": {
+    "decisions": 35
+  },
+  "src/cyrene/workbench/chat/pinned_resources.py::_conversation_summary": {
+    "decisions": 41
+  },
+  "src/cyrene/workbench/chat/pinned_resources.py::global_agent_context": {
+    "decisions": 30
+  },
+  "src/cyrene/workbench/chat/pinned_resources.py::upsert_resource": {
+    "lines": 122,
+    "decisions": 60
+  },
+  "src/cyrene/workbench/chat/run_timeline.py::RunTimeline._apply_tool": {
+    "decisions": 28
+  },
+  "src/cyrene/workbench/chat/run_timeline.py::RunTimeline.apply": {
+    "decisions": 46,
+    "nesting": 15
+  },
+  "src/cyrene/workbench/core_adapter/bridge.py": {
+    "module_lines": 1320
+  },
+  "src/cyrene/workbench/core_adapter/bridge.py::_turn_metrics": {
+    "lines": 102,
+    "decisions": 40
+  },
+  "src/cyrene/workbench/core_adapter/bridge.py::project_tool_activity_messages": {
+    "lines": 152,
+    "decisions": 78
+  },
+  "src/cyrene/workbench/core_adapter/bridge.py::workbench_events": {
+    "lines": 195,
+    "decisions": 60
+  },
+  "src/cyrene/workbench/core_adapter/chat_runtime.py::run_workbench_chat": {
+    "lines": 199,
+    "decisions": 36
+  },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge": {
+    "lines": 115,
+    "decisions": 28
+  },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.fork_context": {
+    "lines": 105
+  },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py::context_checkpoint_from_nodes": {
+    "decisions": 22
+  },
+  "src/cyrene/workbench/core_adapter/hook_listing.py::update_runtime_hook": {
+    "lines": 176,
+    "decisions": 47
+  },
+  "src/cyrene/workbench/http/plugins.py::register_plugin_routes": {
+    "lines": 256
+  },
+  "src/cyrene/workbench/http/settings/plugin_service.py::_activation_update_error": {
+    "lines": 110,
+    "decisions": 31
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/collection_routes.py::_register_create_route": {
+    "lines": 154
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/collection_routes.py::_register_create_route.api_workbench_create_chat": {
+    "lines": 147,
+    "decisions": 28
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/collection_routes.py::_register_quick_targets_route.api_workbench_quick_chat_targets": {
+    "decisions": 29
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/context.py::ChatRouteContext.create": {
+    "lines": 103
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/detail_routes.py::_apply_agent_config_values": {
+    "decisions": 29
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/detail_routes.py::_normalize_active_plan": {
+    "decisions": 61
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/detail_routes.py::_register_get_route": {
+    "lines": 110
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/detail_routes.py::_register_update_route": {
+    "lines": 243
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/detail_routes.py::_register_update_route.api_workbench_update_chat": {
+    "lines": 232,
+    "decisions": 46
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/files.py::register_file_routes": {
+    "lines": 107
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/fork_routes.py::_build_fork_chat": {
+    "decisions": 28
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_action_routes.py::_prepare_action_send": {
+    "decisions": 22
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_answer_routes.py::_AnswerOperation": {
+    "fields": 31
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
+    "module_lines": 1721
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
+    "methods": 37,
+    "fields": 56
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._dispatch_builtin": {
+    "lines": 116
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_chat": {
+    "lines": 155,
+    "decisions": 64
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._parse_request": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._prepare_user_turn": {
+    "decisions": 26
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._select_model": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_stream_routes.py::register_run_stream_routes": {
+    "lines": 128
+  },
+  "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository._chat_message_summary": {
+    "decisions": 27
+  },
+  "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository.mutate_chat": {
+    "decisions": 26
+  },
+  "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository.write_chat_bundle": {
+    "decisions": 52,
+    "nesting": 6
+  },
+  "src/cyrene/workbench/persistence/document_merge.py::_merge_entity_list": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/persistence/document_merge.py::_three_way_merge": {
+    "decisions": 34
+  },
+  "src/cyrene/workbench/projects/project_composition.py::build_project_application_service": {
+    "lines": 134
+  },
+  "src/cyrene/workbench/projects/project_runtime.py::_ctx_limit_for_model": {
+    "decisions": 24,
+    "nesting": 9
+  },
+  "src/cyrene/workbench/sessions/context_records.py::append_context_record": {
+    "decisions": 25
+  },
+  "src/cyrene/workbench/sessions/session_presentation.py::WorkbenchSessionPresentation._summary": {
+    "decisions": 28
+  },
+  "src/cyrene/workbench/sessions/session_presentation.py::_markdown": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/sessions/session_presentation.py::_run_status": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/sessions/session_view.py::has_recent_main_agent_activity": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/sessions/session_view.py::merge_adjacent_trace_only_messages": {
+    "decisions": 39
+  },
+  "src/cyrene/workbench/workspaces/workspace_changes.py": {
+    "module_lines": 1121
+  },
+  "src/cyrene/workbench/workspaces/workspace_changes.py::_capture_incremental_snapshot": {
+    "lines": 112
+  },
+  "src/cyrene/workbench/workspaces/workspace_changes.py::capture_workspace_snapshot": {
+    "decisions": 26
+  },
+  "src/cyrene/workbench/workspaces/workspace_changes.py::compare_workspace_snapshots": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/workspaces/workspace_changes.py::save_change_set": {
+    "lines": 122,
+    "decisions": 46
+  }
+}

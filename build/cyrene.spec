@@ -347,7 +347,7 @@ a = Analysis(
     hiddenimports=_hidden,
     hookspath=[str(Path(SPECPATH).resolve())],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(Path(SPECPATH).resolve() / "windows_process_hook.py")] if _IS_WIN else [],
     excludes=_excludes,
     noarchive=False,
 )

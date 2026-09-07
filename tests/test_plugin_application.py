@@ -294,7 +294,7 @@ def test_system_exit_isolated_from_other_session_plugin_setups(tmp_path):
         registry=registry,
     )
     try:
-        assert session._plugin_setup_failures == {
+        assert session._plugins.setup_failures == {
             "a-session-exit": "session setup exited"
         }
         assert session._plugin_services()["session_healthy"] is True

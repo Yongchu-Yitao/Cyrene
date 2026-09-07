@@ -388,7 +388,7 @@ function handleUiEventError(es) {
   if (__eventsClosed) return;
   // EventSource hides the HTTP status. Probe one authenticated endpoint so an
   // obsolete Electron token invalidates the renderer instead of reconnecting forever.
-  fetch("/api/status", { cache: "no-store" })
+  fetch("/api/health", { cache: "no-store" })
     .then(scheduleEventReconnect)
     .catch(scheduleEventReconnect);
 }

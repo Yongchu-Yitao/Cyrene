@@ -1,3 +1,5 @@
+import { useTopbarBrowserSubscription } from "./topbar-browser-subscription.jsx"
+import { wbSessionStatusLabel, wbSessionActivityCopy, WorkbenchSessionStatusIcon, WorkbenchAssetIcon, WorkbenchSessionActivityPreview } from "./topbar-session-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WbVoiceCommand, wbcSetPluginViewDrag } from "../../workbench-chat.jsx"
 import { WbcHoverMarquee } from "../chat/rail.jsx"
@@ -87,114 +89,6 @@ function WorkbenchSessionMenuFileName({ name }) {
     </span>
   );
 }
-function wbSessionStatusLabel(activity, t) {
-  var state = activity || {};
-  if (state.phase === "attention") {
-    return {
-      input: t("workbench.sessionStatus.needsInput", "Needs input"),
-      approval: t("workbench.sessionStatus.needsApproval", "Needs approval"),
-      review: t("workbench.sessionStatus.needsReview", "Needs review"),
-      blocked: t("workbench.sessionStatus.blocked", "Blocked"),
-    }[state.reason] || t("workbench.sessionStatus.needsAttention", "Needs attention");
-  }
-  return {
-    idle: t("workbench.sessionStatus.idle", "Idle"),
-    planning: state.isLive
-      ? t("workbench.sessionStatus.planning", "Planning")
-      : t("workbench.sessionStatus.planningStage", "Planning stage"),
-    running: t("workbench.sessionStatus.running", "Running"),
-    paused: t("workbench.sessionStatus.paused", "Paused"),
-    cancelled: t("workbench.sessionStatus.cancelled", "Stopped"),
-    completed: t("workbench.sessionStatus.completed", "Completed"),
-    failed: t("workbench.sessionStatus.failed", "Failed"),
-  }[state.phase] || t("workbench.sessionStatus.idle", "Idle");
-}
-
-function wbSessionActivityCopy(activity, t) {
-  var state = activity || {};
-  if (state.phase === "attention" || state.phase === "failed" || state.phase === "paused" || state.phase === "cancelled" || state.phase === "completed") {
-    return wbSessionStatusLabel(state, t);
-  }
-  if (state.phase === "planning") return wbSessionStatusLabel(state, t);
-  if (state.phase === "running") {
-    if (state.activity && state.activity.kind === "browser" && state.activity.label) return state.activity.label;
-    if (state.progress && state.progress.current && state.progress.total) {
-      return t("workbench.sessionStatus.step", {
-        current: state.progress.current,
-        total: state.progress.total,
-      }, "Step {current}/{total}");
-    }
-    if (state.activity && state.activity.label) return state.activity.label;
-  }
-  return "";
-}
-
-function WorkbenchSessionStatusIcon({ phase, active }) {
-  var state = String(phase || "idle");
-  if (state === "attention") {
-    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2 14 13H2Z"/><path d="M8 5.5v3.4M8 11.3h.01"/></svg>;
-  }
-  if (state === "completed") {
-    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m3.2 8.2 3 3L12.8 4.8"/></svg>;
-  }
-  if (state === "failed") {
-    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="8" cy="8" r="5.6"/><path d="m6 6 4 4m0-4-4 4"/></svg>;
-  }
-  if (state === "cancelled") {
-    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="8" cy="8" r="5.6"/><path d="M5.7 8h4.6"/></svg>;
-  }
-  if (state === "paused") {
-    return <svg className="workbench-session-status-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M5.7 4.5v7M10.3 4.5v7"/></svg>;
-  }
-  return <span className={"workbench-session-status-dot " + state + (active ? " is-live" : "")} />;
-}
-
-function WorkbenchAssetIcon({ name, className }) {
-  var assets = window.CyreneIconAssets;
-  var markup = assets && assets.settings && assets.settings[name] || "";
-  if (!markup) return null;
-  return <span className={className || "workbench-asset-icon"} dangerouslySetInnerHTML={{ __html: markup }} aria-hidden="true" />;
-}
-
-function WorkbenchSessionActivityPreview({ preview, t }) {
-  if (!preview) return null;
-  var item = preview.item;
-  var activity = preview.activity || {};
-  var progress = activity.progress || {};
-  var activeAgents = (activity.agents || []).filter(function (agent) {
-    return ["running", "resumed", "waiting"].indexOf(String(agent.status || "")) >= 0;
-  });
-  var percent = progress.total ? Math.max(0, Math.min(100, Math.round((progress.completed / progress.total) * 100))) : 0;
-  return (
-    <div
-      id="workbench-session-activity-preview"
-      className="workbench-session-activity-preview"
-      role="tooltip"
-      style={{ left: preview.left, top: preview.top, ...preview.portalTheme }}
-    >
-      <div className="workbench-session-activity-preview-head">
-        <WorkbenchSessionStatusIcon phase={activity.phase} active={activity.isLive} />
-        <div><b>{item.title}</b><small>{wbSessionStatusLabel(activity, t)}</small></div>
-      </div>
-      {progress.total ? (
-        <div className="workbench-session-activity-progress">
-          <div><span>{t("workbench.sessionStatus.progress", "Progress")}</span><b>{progress.current || progress.completed}/{progress.total}</b></div>
-          <span className="workbench-session-activity-progress-track"><i style={{ width: percent + "%" }} /></span>
-          {progress.title || progress.action ? <p>{progress.action || progress.title}</p> : null}
-        </div>
-      ) : null}
-      {activity.activity && (activity.activity.label || activity.activity.detail) ? (
-        <div className="workbench-session-activity-current">
-          <span>{activity.activity.kind === "browser" ? t("workbench.sessionStatus.browsing", "Browsing") : t("workbench.sessionStatus.currentActivity", "Current activity")}</span>
-          <b>{activity.activity.label || activity.activity.detail}</b>
-          {activity.activity.label && activity.activity.detail ? <small>{activity.activity.detail}</small> : null}
-        </div>
-      ) : null}
-      {activeAgents.length ? <div className="workbench-session-activity-agents">{t("workbench.sessionStatus.agentsRunning", { count: activeAgents.length }, "{count} agents active")}</div> : null}
-    </div>
-  );
-}
-
 function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, activeTabKey, sessionCandidates, recentSessions, overflowSessions, browserOwners, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onOpenBrowserPage, onStopSession, onTogglePinnedSession, onReorderPinnedSession, onMovePinnedSession, onRemoveSessionTab, onLoadSessionResources, onLoadSessionBrowserPreview, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onSelectProject, onEditProject, onEditMemory, onDeleteProject, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = workbenchServices.i18n().use();
   var dataState = workbenchServices.data().state;
@@ -282,50 +176,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
     return function () { window.removeEventListener("resize", placeResourceMenu); };
   }, [resourceMenu && resourceMenu.anchorX, resourceMenu && resourceMenu.anchorY, resourceMenu && resourceMenu.resource && resourceMenu.resource.kind]);
 
-  useWorkbenchEffect(function () {
-    if (!browserAvailable) {
-      setBrowserManagerState({ ok: true, pageCount: 0, downloadCount: 0, pages: [], downloads: [] });
-      setBrowserManagerMenu(null);
-      return undefined;
-    }
-    var bridge = window.cyrene && window.cyrene.browser;
-    if (!bridge || typeof bridge.getManagerState !== "function") return undefined;
-    var mounted = true;
-    bridge.getManagerState().then(function (next) {
-      if (mounted && next && next.ok !== false) setBrowserManagerState(next);
-    }).catch(function () {});
-    var unsubscribe = typeof bridge.onManagerState === "function"
-      ? bridge.onManagerState(function (next) {
-          if (mounted && next && next.ok !== false) setBrowserManagerState(next);
-        })
-      : function () {};
-    return function () {
-      mounted = false;
-      unsubscribe();
-    };
-  }, [browserAvailable]);
-
-  useWorkbenchEffect(function () {
-    if (!browserManagerMenu) return undefined;
-    wbSetBrowserOverlayObscured(1);
-    function close(event) {
-      if (event && event.key && event.key !== "Escape") return;
-      setBrowserManagerMenu(null);
-    }
-    window.addEventListener("resize", close);
-    document.addEventListener("keydown", close);
-    return function () {
-      window.removeEventListener("resize", close);
-      document.removeEventListener("keydown", close);
-      wbSetBrowserOverlayObscured(-1);
-    };
-  }, [!!browserManagerMenu]);
-
-  useWorkbenchEffect(function () {
-    if (browserManagerMenu && !browserManagerState.pageCount && !browserManagerState.downloadCount) {
-      setBrowserManagerMenu(null);
-    }
-  }, [browserManagerState.pageCount, browserManagerState.downloadCount, !!browserManagerMenu]);
+  useTopbarBrowserSubscription(browserAvailable, browserManagerMenu, browserManagerState, setBrowserManagerState, setBrowserManagerMenu);
 
   useWorkbenchEffect(function () {
     if (!projectMenuOpen) return undefined;

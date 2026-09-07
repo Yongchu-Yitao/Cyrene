@@ -56,7 +56,7 @@ def test_launch_screen_waits_for_initial_workbench_content():
     assert '"cyrene:page-invalidated"' in app
     assert 'window.addEventListener("pagehide", disposePageData' in data
     assert 'window.addEventListener("unload", disposePageData' in data
-    assert 'fetch("/api/status", { cache: "no-store" })' in data
+    assert 'fetch("/api/health", { cache: "no-store" })' in data
     assert 'root.addEventListener("cyrene:page-invalidated", disposeSurface' in ui_surface
     assert 'root.cyrene.uiSurface.unregister(instanceId)' in ui_surface
     assert 'surfaceSocket.close()' in ui_surface
@@ -121,7 +121,7 @@ global.CyreneUI = {
 };
 vm.runInThisContext(match[1]);
 (async () => {
-  await global.fetch("/api/status");
+  await global.fetch("/api/health");
   let blocked = false;
   try { await global.fetch("/api/sessions"); } catch (error) {
     blocked = error && error.code === "page_invalidated";

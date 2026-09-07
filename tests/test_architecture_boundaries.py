@@ -439,3 +439,29 @@ def test_private_import_budget_can_only_decrease() -> None:
     """Block new private cross-package dependencies."""
     current = _private_import_counts()
     assert sum(current.values()) <= PRIVATE_IMPORT_TOTAL_BUDGET
+
+
+def test_private_domain_and_sibling_plugin_imports_cannot_grow() -> None:
+    import runpy
+    collect = runpy.run_path(str(REPOSITORY_ROOT / "build/dependency_boundaries.py"))["collect"]
+
+    baseline = json.loads((REPOSITORY_ROOT / "project-notes/domain-import-baseline.json").read_text())
+    assert not (collect() - set(baseline))
+
+
+def test_domain_import_check_resolves_relative_and_conditional_imports() -> None:
+    import runpy
+    boundary_debt = runpy.run_path(str(REPOSITORY_ROOT / "build/dependency_boundaries.py"))["boundary_debt"]
+
+    source = "def load():\n    if enabled:\n        from ..projects.service import _cache\n"
+    assert boundary_debt(source, "src/cyrene/workbench/chat/loader.py") == {
+        "src/cyrene/workbench/chat/loader.py::cyrene.workbench.projects.service::_cache"
+    }
+    assert boundary_debt("from cyrene.workbench.chat.service import PublicService", "src/cyrene/plugins/builtin/demo/setup.py") == set()
+    assert boundary_debt("from ..other.api import public", "src/cyrene/plugins/builtin/demo/setup.py") == {
+        "src/cyrene/plugins/builtin/demo/setup.py::cyrene.plugins.builtin.other.api::public"
+    }
+
+    assert boundary_debt("from .. import other", "src/cyrene/plugins/builtin/demo/setup.py") == {
+        "src/cyrene/plugins/builtin/demo/setup.py::cyrene.plugins.builtin.other::other"
+    }

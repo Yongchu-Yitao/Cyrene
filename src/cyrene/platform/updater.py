@@ -15,6 +15,11 @@ import httpx
 from packaging.version import Version
 
 from cyrene.localization import app_language, localized, localized_plural
+from cyrene.platform import update_diagnostics
+from cyrene.platform.update_scripts import (
+    windows_wait_for_exit_script as _windows_wait_for_exit_script,
+    portable_restart_script, installed_restart_script,
+)
 from cyrene.platform.paths import TEMP_DIR
 from cyrene.platform.version import get_version
 
@@ -60,6 +65,16 @@ def _auto_update_enabled() -> bool:
         return bool(settings_store.get("auto_update", True))
     except Exception:
         return True
+
+
+def _update_http_client(*, timeout: float) -> httpx.AsyncClient:
+    """Use the explicit update proxy for both metadata and package requests."""
+    from cyrene.platform.network_proxy import scoped_proxy_url
+
+    return httpx.AsyncClient(
+        timeout=timeout, proxy=scoped_proxy_url("updates") or None,
+        trust_env=False, follow_redirects=True,
+    )
 
 
 def _update_check_interval_seconds() -> int:
@@ -193,7 +208,7 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
         include_prerelease = _beta_updates_enabled()
 
     try:
-        async with httpx.AsyncClient(timeout=15.0, trust_env=False, follow_redirects=True) as client:
+        async with _update_http_client(timeout=15.0) as client:
             data = await _fetch_target_release(client, include_prerelease)
             if not data:
                 return UpdateInfo(available=False, current_version=current, latest_version="")
@@ -273,8 +288,8 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
             )
 
     except Exception as exc:
-        logger.debug("Update check failed: %s", exc)
-        return UpdateInfo(available=False, current_version=current, latest_version="")
+        logger.warning("Update check failed", exc_info=True)
+        return UpdateInfo(available=False, current_version=current, latest_version="", error=update_diagnostics.describe_error(exc))
 
 
 async def download_update(
@@ -332,7 +347,7 @@ async def _download_to(
     """单次下载会话：从已有部分续传，最终返回完整文件（含全文件 sha256）。"""
     resume_from = dest.stat().st_size if dest.exists() else 0
 
-    async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+    async with _update_http_client(timeout=600.0) as client:
         headers = {"Range": f"bytes={resume_from}-"} if resume_from > 0 else None
         async with client.stream("GET", url, headers=headers) as resp:
             if resp.status_code == 416 and resume_from > 0:
@@ -501,6 +516,47 @@ def _restart_script_macos(dmg_path: Path) -> str:
     )
 
 
+
+
+def _windows_stop_terminal_script() -> str:
+    # The frozen daemon uses the same Cyrene.exe as the backend and deliberately
+    # survives normal desktop quits. Retire it only when replacing the bundle,
+    # after Electron is gone so UI requests cannot start it again.
+    from cyrene.plugins.builtin.cyrene_code.terminal.client import terminal_state_dir
+
+    connection = _powershell_literal(terminal_state_dir() / "connection.json")
+    return f"""
+function Stop-CyreneTerminal {{
+    $connectionPath = {connection}
+    if (-not (Test-Path -LiteralPath $connectionPath)) {{ return }}
+    $record = Get-Content -LiteralPath $connectionPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $daemon = Get-Process -Id ([int]$record.pid) -ErrorAction SilentlyContinue
+    if ($null -eq $daemon) {{ return }}
+    # Authenticate via the recorded token instead of killing by process name.
+    # A compatible daemon may still run from an older portable extraction.
+    Write-UpdateLog 'Stopping terminal daemon before replacing application files.'
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {{
+        if (-not $client.ConnectAsync('127.0.0.1', [int]$record.port).Wait(3000)) {{
+            throw 'Terminal daemon connection timed out.'
+        }}
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = 5000
+        $stream.WriteTimeout = 5000
+        $request = @{{version=$record.version; token=$record.token; action='shutdown'}} | ConvertTo-Json -Compress
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($request + "`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+        $reader = New-Object System.IO.StreamReader($stream)
+        $response = $reader.ReadLine() | ConvertFrom-Json
+        if ($response.ok -ne $true) {{ throw 'Terminal daemon rejected shutdown.' }}
+        if (-not $daemon.WaitForExit(30000)) {{ throw 'Terminal daemon did not exit.' }}
+    }} finally {{
+        $client.Dispose()
+    }}
+}}
+"""
+
+
 def _restart_script_windows(exe_path: Path) -> str:
     """Return a detached-safe PowerShell update script for Windows.
 
@@ -511,6 +567,11 @@ def _restart_script_windows(exe_path: Path) -> str:
     timeout exits immediately when the updater has no attached console input.
     """
     app_exe = _current_app_executable()
+    wait_for_exit = _windows_wait_for_exit_script()
+    stop_terminal = _windows_stop_terminal_script()
+    report_script = update_diagnostics.windows_report_script(
+        _powershell_literal(exe_path.parent / "last-install.json")
+    )
     update_literal = _powershell_literal(exe_path)
     app_expression = (
         _powershell_literal(app_exe)
@@ -518,73 +579,8 @@ def _restart_script_windows(exe_path: Path) -> str:
         else "(Join-Path $env:LOCALAPPDATA 'Programs\\Cyrene\\Cyrene.exe')"
     )
     if _is_windows_portable_runtime():
-        return f"""$ErrorActionPreference = 'Stop'
-$logPath = Join-Path $env:TEMP 'cyrene_update.log'
-$updatePath = {update_literal}
-$appPath = {app_expression}
-$newPath = $appPath + '.new'
-
-function Write-UpdateLog {{
-    param([string]$Message)
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
-    Add-Content -LiteralPath $logPath -Value "$timestamp $Message" -Encoding UTF8
-}}
-
-try {{
-    Write-UpdateLog "Starting portable update. Update=$updatePath Target=$appPath"
-    # The updater is detached, so use a timer that does not read console input.
-    Start-Sleep -Seconds 3
-    Copy-Item -LiteralPath $updatePath -Destination $newPath -Force
-    Move-Item -LiteralPath $newPath -Destination $appPath -Force
-    Start-Process -FilePath $appPath
-    Remove-Item -LiteralPath $updatePath -Force -ErrorAction SilentlyContinue
-    Write-UpdateLog 'Portable update complete.'
-    exit 0
-}} catch {{
-    Write-UpdateLog ("Portable update failed: " + $_.Exception.Message)
-    Remove-Item -LiteralPath $newPath -Force -ErrorAction SilentlyContinue
-    exit 1
-}}
-"""
-    return f"""$ErrorActionPreference = 'Stop'
-$logPath = Join-Path $env:TEMP 'cyrene_update.log'
-$updatePath = {update_literal}
-$appPath = {app_expression}
-
-function Write-UpdateLog {{
-    param([string]$Message)
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
-    Add-Content -LiteralPath $logPath -Value "$timestamp $Message" -Encoding UTF8
-}}
-
-try {{
-    Write-UpdateLog "Starting installed update. Installer=$updatePath Target=$appPath"
-    # Give Electron and the frozen backend time to release installed files.
-    # Start-Sleep remains reliable when this script runs without a console.
-    Start-Sleep -Seconds 3
-    Write-UpdateLog 'Launching elevated installer.'
-    # --updated enables electron-builder's update-specific process shutdown path.
-    $installer = Start-Process -FilePath $updatePath -ArgumentList @('/S', '--updated') -Verb RunAs -Wait -PassThru -WindowStyle Hidden
-    $installerExitCode = $installer.ExitCode
-    Write-UpdateLog "Installer exit code: $installerExitCode"
-    if ($installerExitCode -ne 0) {{
-        exit $installerExitCode
-    }}
-
-    Start-Sleep -Seconds 1
-    if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {{
-        throw "Updated application executable was not found: $appPath"
-    }}
-    Write-UpdateLog "Restarting application: $appPath"
-    Start-Process -FilePath $appPath
-    Remove-Item -LiteralPath $updatePath -Force -ErrorAction SilentlyContinue
-    Write-UpdateLog 'Installed update complete.'
-    exit 0
-}} catch {{
-    Write-UpdateLog ("Installed update failed: " + $_.Exception.Message)
-    exit 1
-}}
-"""
+        return portable_restart_script(update_literal, app_expression, wait_for_exit, stop_terminal, report_script)
+    return installed_restart_script(update_literal, app_expression, wait_for_exit, stop_terminal, report_script)
 
 
 def _restart_script_linux(appimage_path: Path) -> str:
@@ -1047,9 +1043,9 @@ async def _auto_download_latest(info: UpdateInfo) -> None:
         _append_update_ready_notification(info)
     except Exception as exc:
         progress["done"] = True
-        progress["verification_error"] = str(exc)
+        progress["verification_error"] = update_diagnostics.describe_error(exc)
         logger.warning("Auto-download of update failed: %s", exc)
-        _append_update_failed_notification(info, str(exc))
+        _append_update_failed_notification(info, progress["verification_error"])
 
 
 def _maybe_auto_download(info: UpdateInfo) -> None:
@@ -1076,6 +1072,7 @@ def _maybe_auto_download(info: UpdateInfo) -> None:
 
 
 async def _run_update_check_once() -> UpdateInfo:
+    update_diagnostics.notify_install_failure(TEMP_DIR / "updates" / "last-install.json")
     info = await check_for_update()
     set_cached_update_info(info)
     if info.available:
