@@ -25,9 +25,21 @@ TOOL_DEF = {'type': 'function',
                                                                     'show the user.'},
                                             'options': {'type': 'array',
                                                         'description': 'Optional short option '
-                                                                       'labels when structured '
-                                                                       'choices would help.',
-                                                        'items': {'type': 'string'}}},
+                                                                       'labels or objects with a '
+                                                                       'label and optional id, key, '
+                                                                       'or description. Strings and '
+                                                                       'objects may be mixed.',
+                                                        'items': {'anyOf': [
+                                                            {'type': 'string'},
+                                                            {'type': 'object',
+                                                             'properties': {
+                                                                 'label': {'type': 'string'},
+                                                                 'id': {'type': 'string'},
+                                                                 'key': {'type': 'string'},
+                                                                 'description': {'type': 'string'},
+                                                             },
+                                                             'required': ['label']},
+                                                        ]}}},
                              'required': ['text']}}}
 TOOL_METADATA = {"agent_exposure": "direct", "main_only": True}
 
@@ -56,9 +68,9 @@ async def _tool_ask_user(args: dict[str, Any], context: PluginContext) -> str:
             "只能在活动的对话轮次中向用户提问。",
         )
 
-    # Pass options through as-is; _normalize_pending_question (via
-    # upsert_pending_question) handles both plain strings and the option objects
-    # models sometimes emit, extracting the label and capping the count. Calling
+    # Pass options through as-is; the session's question_options normalizer
+    # handles both plain strings and option objects, extracting the label and
+    # capping the count. Calling
     # str() on a dict here would leak `{'id':.., 'label':..}` into the UI labels.
     raw_options = args.get("options", [])
     options = raw_options if isinstance(raw_options, list) else []

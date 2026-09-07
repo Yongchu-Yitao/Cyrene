@@ -1,3 +1,4 @@
+import { createDisclosureSubscriptions } from './disclosure-subscriptions.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import React from 'react'
@@ -12,7 +13,7 @@ function buttons(element) {
 }
 
 test('terminal error notice renders a translated diagnostic action without a global translator',()=>{
-  const dependencies={WBC_ICONS:{alert:null,refresh:null},wbcT:(key)=>'translated:'+key,
+  const dependencies={createDisclosureSubscriptions,WBC_ICONS:{alert:null,refresh:null},wbcT:(key)=>'translated:'+key,
     wbcErrorText:()=> 'controlled terminal error',wbcAgentErrorPresentation:()=>null};
   const context={module:{exports:{}},require:()=>dependencies,React};
   vm.runInNewContext(code,context);

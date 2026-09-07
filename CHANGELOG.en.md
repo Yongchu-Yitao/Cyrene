@@ -4,7 +4,7 @@
 
 ## [0.9.0-beta14] - 2026-09-07
 
-beta14 improves application updates, Windows web search, and panel resizing in long Conversations. Updates can now use a separately selected proxy and provide clearer failure information. Windows updates wait for the application to exit and handle temporary file locks, while built-in search fixes startup and unexpected-exit problems. This release also fixes application status refreshes, image capability checks, and damaged model responses, while preserving the existing chat, split-view, tool, model settings, and desktop workflows.
+beta14 improves application updates, Windows web search, panel resizing, and browsing activity details in long Conversations. Updates can now use a separately selected proxy and provide clearer failure information. Windows updates wait for the application to exit and handle temporary file locks, while built-in search fixes startup and unexpected-exit problems. This release also fixes Agent question option compatibility, application status refreshes, image capability checks, and damaged model responses, while preserving the existing chat, split-view, tool, model settings, and desktop workflows.
 
 ### Application updates and proxy settings
 
@@ -24,6 +24,9 @@ beta14 improves application updates, Windows web search, and panel resizing in l
 
 ### Conversations, split views, and interface details
 
+- Expanding or collapsing reasoning, tool calls, and activity groups in long Conversations refreshes only related cards and groups, reducing stalls caused by refreshing unrelated history. The same content retains synchronized expansion state across split views.
+- Conversation navigation defers repeated measurements during activity expansion and collapse animations, then updates when the animation finishes or is cancelled, making activity details smoother to browse in long chats.
+- Fixed Agent questions rejecting options supplied with labels, descriptions, or identifiers. These options can be mixed with plain text choices while the interface continues to show readable option labels.
 - Resizing the right panel, split-view columns, or vertically stacked panes in a long Conversation reduces repeated layout work for distant history. Both the main chat and split chats protect the current reading position and retain following of the latest response when already at the bottom.
 - When closing a pane promotes a split Conversation into the main chat, previously measured history sizes are carried across the transition, reducing concentrated layout work and jumps in long chats.
 - Chat content returns to normal display when a separator is held, a drag is cancelled, or focus leaves the window during resizing. Scrolling, text selection, keyboard interaction, and editing remain available.

@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 
-test('navigator defers all history measurements during sidebar motion and refreshes after thaw', () => {
+for (const flag of ['wbcResizeActive', 'wbcDisclosureActive']) test('navigator defers history measurements during ' + flag, () => {
   const source = readFileSync(new URL('./conversation-navigator.jsx', import.meta.url), 'utf8');
   const code = source.slice(source.indexOf('function wbcConversationResizeActive'), source.indexOf('function WbcConversationNavigator({'));
   let pending, reads = 0;
   const thread = new EventTarget();
-  Object.assign(thread, {wbcResizeActive:true, clientHeight:500, scrollTop:0});
+  Object.assign(thread, {[flag]:true, clientHeight:500, scrollTop:0});
   const context = {document:{body:{classList:{contains:()=>false}}}, window:new EventTarget(),
     requestAnimationFrame(fn) { pending=fn; return 1; }, cancelAnimationFrame(){}};
   vm.createContext(context);
@@ -20,7 +20,7 @@ test('navigator defers all history measurements during sidebar motion and refres
   observer.invalidateAll(); observer.measure();
   assert.equal(reads, 0);
   assert.equal(pending, undefined);
-  thread.wbcResizeActive = false;
+  thread[flag] = false;
   thread.dispatchEvent(new Event('workbench:transcript-resize-end'));
   assert.equal(typeof pending, 'function');
   pending();

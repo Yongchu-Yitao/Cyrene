@@ -2,7 +2,7 @@ import { useWbcEffect, useWbcState, wbcT } from "../../workbench-chat.jsx"
 
 function wbcConversationResizeActive(thread) {
   var classes = document.body.classList;
-  return !!(thread && thread.wbcResizeActive)
+  return !!(thread && (thread.wbcResizeActive || thread.wbcDisclosureActive))
     || classes.contains("wbc-resizing-side-agent")
     || classes.contains("wbc-resizing-pane-column")
     || classes.contains("wbc-resizing-pane-row");

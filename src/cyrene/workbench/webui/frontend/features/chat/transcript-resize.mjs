@@ -17,6 +17,7 @@ class TranscriptResizeProtection {
     this.restoreFrame = 0;
     this.dragging = false;
     this.transitions = new Set();
+    this.disclosure = { timer: 0, active: new Set() };
 
     // Closing a pane may replace WbcChatSplit with WbcMain. Adopt measured
     // offscreen heights before the new owner's first layout effects measure it.
@@ -37,6 +38,8 @@ class TranscriptResizeProtection {
         this.timeout = this.win.setTimeout(() => this.restore(true, true), 1000);
       }
     }
+    this.prepareDisclosure = this.prepareDisclosure.bind(this);
+    this.finishDisclosure = this.finishDisclosure.bind(this);
     this.prepare = this.prepare.bind(this);
     this.prepareHandoff = this.prepareHandoff.bind(this);
     this.resizePhase = this.resizePhase.bind(this);
@@ -46,6 +49,9 @@ class TranscriptResizeProtection {
     this.interrupt = this.interrupt.bind(this);
     this.beforeInteraction = this.beforeInteraction.bind(this);
     this.listeners = [
+      [this.thread, "workbench:trace-disclosure", this.prepareDisclosure],
+      [this.thread, "transitionend", this.finishDisclosure],
+      [this.thread, "transitioncancel", this.finishDisclosure],
       [this.win, "workbench:show-chat-side", this.prepare, true],
       [this.win, "workbench:pane-layout-change", this.prepareHandoff],
       [this.win, "workbench:right-resize", this.resizePhase],
@@ -62,6 +68,30 @@ class TranscriptResizeProtection {
       [this.thread, "focusin", this.interrupt],
     ];
     for (const [target, ...args] of this.listeners) target.addEventListener(...args);
+  }
+
+  prepareDisclosure(event) {
+    const summary = event.detail?.anchor;
+    const collapse = summary?.parentElement?.querySelector(':scope > .wbc-trace-collapse, :scope > .wbc-activity-group-collapse');
+    if (!collapse) return;
+    this.disclosure.active.add(collapse);
+    this.thread.wbcDisclosureActive = true;
+    this.win.clearTimeout(this.disclosure.timer);
+    this.disclosure.timer = this.win.setTimeout(() => this.finishDisclosure(), 500);
+  }
+
+  finishDisclosure(event) {
+    if (event) {
+      if (event.propertyName !== 'grid-template-rows' || !this.disclosure.active.has(event.target)) return;
+      this.disclosure.active.delete(event.target);
+      if (this.disclosure.active.size) return;
+    }
+    this.disclosure.active.clear();
+    this.win.clearTimeout(this.disclosure.timer);
+    this.disclosure.timer = 0;
+    if (!this.thread.wbcDisclosureActive) return;
+    this.thread.wbcDisclosureActive = false;
+    this.thread.dispatchEvent(new this.win.Event("workbench:transcript-resize-end"));
   }
 
   restore(preserve = true, gradual = false) {
@@ -220,6 +250,8 @@ class TranscriptResizeProtection {
   }
 
   dispose() {
+    this.win.clearTimeout(this.disclosure.timer);
+    this.thread.wbcDisclosureActive = false;
     this.restore(false);
     for (const [target, type, handler, options] of this.listeners) {
       if (options === true) target.removeEventListener(type, handler, true);

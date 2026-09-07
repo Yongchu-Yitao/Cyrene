@@ -3,7 +3,10 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+from cyrene.core.plugin.result_codec import question_options
 from cyrene.plugins import native_tools
 
 
@@ -14,7 +17,26 @@ def direct_names(registry, agent_id='main'):
     return {tool['function']['name'] for tool in registry.direct_tool_definitions(agent_id=agent_id)}
 
 
-def test_ask_user_loads_and_runs_without_control_pack(tmp_path):
+@pytest.mark.parametrize(('options', 'expected_options'), [
+    (['Short', 'Long'], [
+        {'id': 'option_1', 'label': 'Short'},
+        {'id': 'option_2', 'label': 'Long'},
+    ]),
+    ([
+        {'key': 'A', 'label': '继续完善 WorldForge', 'description': '修边角、扩功能'},
+        {'key': 'B', 'label': '用 SDK 起新插件', 'description': '做第二个独立插件包'},
+        {'key': 'C', 'label': '实现统一安装器', 'description': '五类插件统一管理'},
+    ], [
+        {'id': 'option_1', 'label': '继续完善 WorldForge'},
+        {'id': 'option_2', 'label': '用 SDK 起新插件'},
+        {'id': 'option_3', 'label': '实现统一安装器'},
+    ]),
+    (['Short', {'id': 'long', 'label': 'Long'}], [
+        {'id': 'option_1', 'label': 'Short'},
+        {'id': 'long', 'label': 'Long'},
+    ]),
+])
+def test_ask_user_loads_and_runs_without_control_pack(tmp_path, options, expected_options):
     shutil.copy2(SOURCE, tmp_path / 'ask_user.py')
     registry = PluginRegistry()
     assert registry.load_directory(tmp_path) == ()
@@ -26,7 +48,7 @@ def test_ask_user_loads_and_runs_without_control_pack(tmp_path):
     assert 'ask_user' not in direct_names(registry)
     registry.set_plugin_enabled('ask_user', True)
     result = asyncio.run(PluginRuntime(registry).call(
-        'ask_user', {'text': 'Which format?', 'options': ['Short', 'Long']},
+        'ask_user', {'text': 'Which format?', 'options': options},
         PluginContext(data={'run_context': {'agent_id': 'main', 'round_id': 'round-test',
                                           'permission_mode': 'full_access'}}),
     ))
@@ -34,7 +56,9 @@ def test_ask_user_loads_and_runs_without_control_pack(tmp_path):
     value = json.loads(result.value)
     assert value['status'] == 'awaiting_user'
     assert value['text'] == 'Which format?'
-    assert value['options'] == ['Short', 'Long']
+    assert value['options'] == options
+    assert value['option_count'] == len(options)
+    assert question_options(value['options']) == expected_options
     assert value['round_id'] == 'round-test'
 
 

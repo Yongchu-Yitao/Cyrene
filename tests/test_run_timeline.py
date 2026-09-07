@@ -131,6 +131,8 @@ def test_disclosure_survives_completion_grouping_and_remount():
     from conftest import frontend_module_source
     source = frontend_module_source("features/chat/messages.jsx")
     helper = source[source.index("var wbcDisclosureListeners"):source.index("function wbcLocalizedToolName")]
+    subscriptions = frontend_module_source("features/chat/disclosure-subscriptions.mjs").replace("export function", "function")
+    helper = subscriptions + "\n" + helper
     script = f"""
 const storage = new Map();
 const localStorage = {{getItem:k=>storage.has(k)?storage.get(k):null,setItem:(k,v)=>storage.set(k,v)}};

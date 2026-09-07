@@ -236,3 +236,21 @@ test('replacement transcript adopts old offscreen heights before its first layou
   assert.equal(f.frozen().length, 0);
   release();
 });
+
+
+test('nested disclosure animations defer navigation until both finish, without hiding history', () => {
+  const f = fixture();
+  const outer = {}, inner = {};
+  for (const collapse of [outer, inner]) {
+    f.thread.emit('workbench:trace-disclosure', {detail: {anchor: {parentElement: {querySelector: () => collapse}}}});
+  }
+  assert.equal(f.thread.wbcDisclosureActive, true);
+  assert.equal(f.frozen().length, 0);
+  f.thread.emit('transitionend', {target: outer, propertyName: 'opacity'});
+  assert.equal(f.thread.wbcDisclosureActive, true);
+  f.thread.emit('transitionend', {target: outer, propertyName: 'grid-template-rows'});
+  assert.equal(f.thread.wbcDisclosureActive, true);
+  f.thread.emit('transitionend', {target: inner, propertyName: 'grid-template-rows'});
+  assert.equal(f.thread.wbcDisclosureActive, false);
+  f.cleanup();
+});

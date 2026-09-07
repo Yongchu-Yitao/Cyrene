@@ -1,3 +1,4 @@
+import { createDisclosureSubscriptions } from './disclosure-subscriptions.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -10,6 +11,7 @@ function mount(name, initialExpanded = false) {
   const source = readFileSync(new URL('./messages.jsx',import.meta.url),'utf8');
   let expanded = initialExpanded, ref, count = 0;
   const deps = {
+    createDisclosureSubscriptions,
     useWorkbenchI18n(){}, useWbcRef(initial){return ref ||= {current:initial}},
     WBC_ICONS:{}, wbcT:(_key,fallback)=>fallback,
   };

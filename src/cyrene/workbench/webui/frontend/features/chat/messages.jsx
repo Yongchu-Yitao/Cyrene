@@ -1,3 +1,4 @@
+import { createDisclosureSubscriptions, subscribeDisclosureUpdates } from "./disclosure-subscriptions.mjs"
 import { wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
@@ -6,7 +7,7 @@ import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag,
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
 
 // Workbench chat feature module with explicit ESM dependencies.
-var wbcDisclosureListeners = new Set();
+var wbcDisclosureListeners = createDisclosureSubscriptions();
 function wbcDisclosureValue(id) {
   try { var value = localStorage.getItem("cyrene:disclosure:" + id); return value === null ? null : value === "open"; } catch (_) { return null; }
 }
@@ -22,16 +23,14 @@ function wbcUseDisclosure(id, children) {
   useWbcEffect(function () {
     function sync() { setExpanded(read()); }
     sync();
-    wbcDisclosureListeners.add(sync);
-    window.addEventListener("storage", sync);
-    return function () { wbcDisclosureListeners.delete(sync); window.removeEventListener("storage", sync); };
+    return subscribeDisclosureUpdates(window, wbcDisclosureListeners, [id].concat(children || []), sync);
   }, [id, (children || []).join("\0")]);
   function change(value) {
     try {
       localStorage.setItem("cyrene:disclosure:" + id, value ? "open" : "closed");
     } catch (_) {}
     setExpanded(value);
-    wbcDisclosureListeners.forEach(function (notify) { notify(); });
+    wbcDisclosureListeners.notify(id);
   }
   return [expanded, change];
 }
