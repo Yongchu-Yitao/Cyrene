@@ -3,6 +3,22 @@ import assert from 'node:assert/strict'
 import { harness } from './hook-harness.test.mjs'
 import { sessionMenuResources } from '../shell/topbar-resource-projection.mjs'
 
+test('paint timing uploads only client stages without dropping local server timings', async () => {
+  const h = harness('./model-api.jsx');
+  let request;
+  h.context.fetch = async (url, options) => { request = {url, ...options}; return {ok:true}; };
+  const api = h.run(mod => mod.WorkbenchChatModel);
+  const stages = {click_send:0, ack_received:113, first_delta_received:1009, first_dom_paint:1015,
+    server_received:0, ack:58, snapshot_complete:153, agent_bridge_open:215,
+    provider_request_sent:290, first_delta:1002};
+  await api.recordChatTiming('chat', 'run', {clientRequestId:'send', stages});
+  assert.deepEqual(JSON.parse(request.body), {clientRequestId:'send', stages:{
+    click_send:0, ack_received:113, first_delta_received:1009, first_dom_paint:1015}});
+  assert.equal(request.url, '/api/workbench/chats/chat/runs/run/timing');
+  assert.equal(stages.snapshot_complete, 153);
+  assert.equal(Object.keys(stages).length, 10);
+});
+
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 const event=()=>({clientX:30,clientY:40,preventDefault(){},stopPropagation(){},currentTarget:{getBoundingClientRect:()=>({left:10,right:80,bottom:40,width:70})}});
 

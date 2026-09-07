@@ -418,13 +418,22 @@ import { wbcErrorText } from "./errors.jsx"
 
   function recordChatTiming(chatId, runId, payload) {
     if (!chatId || !runId) return Promise.resolve(null);
+    var stages = (payload && payload.stages) || {};
     return fetch(
       "/api/workbench/chats/" + encodeURIComponent(chatId)
         + "/runs/" + encodeURIComponent(runId) + "/timing",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload || {}),
+        body: JSON.stringify({
+          ...(payload || {}),
+          stages: {
+            click_send: stages.click_send,
+            ack_received: stages.ack_received,
+            first_delta_received: stages.first_delta_received,
+            first_dom_paint: stages.first_dom_paint,
+          },
+        }),
         keepalive: true,
       }
     ).catch(function () { return null; });
