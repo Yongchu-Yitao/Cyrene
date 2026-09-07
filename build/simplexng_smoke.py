@@ -18,7 +18,7 @@ from urllib.request import ProxyHandler, build_opener
 import yaml
 
 
-def run_smoke(executable: Path | None = None) -> None:
+def run_smoke(executable: Path | None = None, *, sidecar: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="cyrene-search-smoke-") as directory:
         root = Path(directory)
         with socket.socket() as sock:
@@ -36,7 +36,7 @@ def run_smoke(executable: Path | None = None) -> None:
         settings_path = root / "settings.yml"
         settings_path.write_text(yaml.safe_dump(settings), encoding="utf-8")
         command = (
-            [str(executable.resolve()), "--launch-simplexng"]
+            [str(executable.resolve())] + ([] if sidecar else ["--launch-simplexng"])
             if executable else [sys.executable, "-m", "cyrene.simplexng_child"]
         )
         command += ["--settings", str(settings_path), "-p", str(port), "-H", "127.0.0.1"]
@@ -95,4 +95,6 @@ def run_smoke(executable: Path | None = None) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path, help="Frozen Cyrene executable; omit for source")
-    run_smoke(parser.parse_args().executable)
+    parser.add_argument("--sidecar", action="store_true", help="Executable is the standalone WoA search sidecar")
+    args = parser.parse_args()
+    run_smoke(args.executable, sidecar=args.sidecar)

@@ -390,6 +390,14 @@ jobs:
           if ($failures.Count -gt 0) {
             throw "WoA sidecar validation failures ($($failures.Count)):`n$($failures -join "`n")"
           }
+      - name: Verify WoA sidecar JSON search and calculator
+        shell: powershell
+        run: |
+          $output = python build/simplexng_smoke.py --executable dist/x64-sidecars/simplexng/CyreneSimpleXNG.exe --sidecar
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0 -or "$output" -notmatch 'CYRENE_SIMPLEXNG_SMOKE=ok') {
+            throw "WoA SimpleXNG API smoke test failed"
+          }
       - name: Upload WoA x64 sidecars
         uses: actions/upload-artifact@v7
         with:

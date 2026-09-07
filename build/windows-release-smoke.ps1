@@ -327,6 +327,13 @@ if ($Arch -eq "arm64") {
         $searchSmoke = Invoke-CapturedProcess -Path $searchSidecar -Arguments @("--smoke-test") -Label "woa-simplexng-sidecar"
         Assert-SmokeSucceeded -Result $searchSmoke -SuccessMarker "CYRENE_SIMPLEXNG_SIDECAR_SMOKE=ok" -Label "WoA SimpleXNG sidecar smoke test"
     }
+    Invoke-ReleaseValidation -Label "Installed WoA search and calculator" -Action {
+        $output = python (Join-Path $PSScriptRoot "simplexng_smoke.py") --executable $searchSidecar --sidecar
+        $output | Write-Host
+        if ($LASTEXITCODE -ne 0 -or "$output" -notmatch 'CYRENE_SIMPLEXNG_SMOKE=ok') {
+            throw "Installed WoA SimpleXNG API smoke test failed"
+        }
+    }
 }
 
 Invoke-ReleaseValidation -Label "Installed frozen backend smoke test" -Action {
