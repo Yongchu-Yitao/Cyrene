@@ -1,0 +1,80 @@
+{
+  "src/cyrene/model/protocol_adapters.py::handle_stream": {
+    "before": {
+      "lines": 327,
+      "decisions": 148,
+      "nesting": 14
+    },
+    "after": {
+      "lines": 140,
+      "decisions": 30,
+      "nesting": 3
+    }
+  },
+  "src/cyrene/core/session.py::AgentSession": {
+    "before": {
+      "methods": 116,
+      "fields": 49
+    },
+    "after": {
+      "methods": 116,
+      "fields": 46
+    }
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
+    "before": {
+      "methods": 37,
+      "fields": 56
+    },
+    "after": {
+      "methods": 37,
+      "fields": 43
+    }
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage": {
+    "before": {
+      "lines": 3304,
+      "decisions": 190,
+      "nesting": 2,
+      "hooks": 129,
+      "setter_targets": 0,
+      "subscriptions": 0
+    },
+    "after": {
+      "lines": 3292,
+      "decisions": 190,
+      "nesting": 2,
+      "hooks": 126,
+      "setter_targets": 0,
+      "subscriptions": 0
+    }
+  },
+  "electron/main.js::BrowserTabManager": {
+    "before": {
+      "methods": 122,
+      "fields": 43
+    },
+    "after": {
+      "methods": 113,
+      "fields": 37
+    }
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer": {
+    "before": {
+      "lines": 1473,
+      "decisions": 503,
+      "nesting": 4,
+      "hooks": 56,
+      "setter_targets": 0,
+      "subscriptions": 0
+    },
+    "after": {
+      "lines": 1448,
+      "decisions": 503,
+      "nesting": 4,
+      "hooks": 51,
+      "setter_targets": 0,
+      "subscriptions": 0
+    }
+  }
+}

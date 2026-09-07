@@ -36,7 +36,7 @@
     "nesting": 6
   },
   "src/cyrene/cli.py": {
-    "module_lines": 1314
+    "module_lines": 1304
   },
   "src/cyrene/cli.py::_api": {
     "nesting": 6
@@ -45,7 +45,7 @@
     "lines": 304
   },
   "src/cyrene/cli.py::cmd_start": {
-    "lines": 126
+    "lines": 116
   },
   "src/cyrene/cli.py::main": {
     "decisions": 31,
@@ -183,15 +183,15 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 4824
+    "module_lines": 4710
   },
   "src/cyrene/core/session.py::AgentSession": {
     "methods": 116,
-    "fields": 49
+    "fields": 46
   },
   "src/cyrene/core/session.py::AgentSession.__init__": {
-    "lines": 251,
-    "decisions": 34
+    "lines": 248,
+    "decisions": 33
   },
   "src/cyrene/core/session.py::AgentSession._advance": {
     "lines": 208,
@@ -271,7 +271,7 @@
     "decisions": 38
   },
   "src/cyrene/model/protocol_adapters.py": {
-    "module_lines": 1602
+    "module_lines": 1426
   },
   "src/cyrene/model/protocol_adapters.py::_anthropic_messages": {
     "decisions": 28
@@ -280,7 +280,7 @@
     "decisions": 24
   },
   "src/cyrene/model/protocol_adapters.py::_openai_chat_stream_event": {
-    "decisions": 29
+    "decisions": 23
   },
   "src/cyrene/model/protocol_adapters.py::_parse_aliyun_bailian_models": {
     "decisions": 47
@@ -295,9 +295,8 @@
     "decisions": 32
   },
   "src/cyrene/model/protocol_adapters.py::handle_stream": {
-    "lines": 327,
-    "decisions": 148,
-    "nesting": 14
+    "lines": 140,
+    "decisions": 30
   },
   "src/cyrene/model/protocol_adapters.py::parse_discovery_response": {
     "decisions": 39
@@ -1671,11 +1670,11 @@
     "fields": 31
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
-    "module_lines": 1721
+    "module_lines": 1698
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
     "methods": 37,
-    "fields": 56
+    "fields": 43
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._dispatch_builtin": {
     "lines": 116
@@ -1683,9 +1682,6 @@
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_chat": {
     "lines": 155,
     "decisions": 64
-  },
-  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._parse_request": {
-    "decisions": 23
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._prepare_user_turn": {
     "decisions": 26

@@ -1,3 +1,4 @@
+import { partitionRailItems } from "./rail-projection.mjs"
 import { useWbcEffect, useWbcMemo, useWbcRef, useWbcState, wbcT } from "../../workbench-chat.jsx"
 import {
   WBC_CHAT_ORDER_PREFIX,
@@ -38,6 +39,8 @@ function useWbcRailOrdering({ chats, groups, pinnedChatIds, projectId, query, se
   var railItems = useWbcMemo(function () { return wbcBuildChatRailItems(filtered, groups) }, [filtered, groups])
   var pinnedIds = new Set((Array.isArray(pinnedChatIds) ? pinnedChatIds : []).map(function (id) { return String(id || "") }))
 
+  var sections = partitionRailItems(railItems, pinnedIds)
+
   function commitOrder(nextOrder, movedId) {
     var normalized = wbcNormalizeChatOrder(defaultOrder, nextOrder)
     var positionChanged = normalized.join("|") !== (orderRef.current || []).join("|")
@@ -72,13 +75,13 @@ function useWbcRailOrdering({ chats, groups, pinnedChatIds, projectId, query, se
     defaultOrder: defaultOrder,
     defaultOrderKey: defaultOrderKey,
     filtered: filtered,
-    groupItems: railItems.filter(function (item) { return item.kind === "group" }),
+    groupItems: sections.groupItems,
     moveByKeyboard: moveByKeyboard,
     order: order,
     orderedChats: orderedChats,
     orderRef: orderRef,
-    pinnedItems: railItems.filter(function (item) { return item.kind === "chat" && pinnedIds.has(String(item.chat && item.chat.id || "")) }),
-    recentItems: railItems.filter(function (item) { return item.kind === "chat" && !pinnedIds.has(String(item.chat && item.chat.id || "")) }),
+    pinnedItems: sections.pinnedItems,
+    recentItems: sections.recentItems,
     setOrder: setOrder,
   }
 }

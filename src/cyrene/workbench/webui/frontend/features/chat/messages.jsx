@@ -276,7 +276,7 @@ function WbcErrorNotice({ message, kind, onRetry, onDiagnose }) {
         </React.Fragment> : <small>{body}</small>}
       </span>
       <span className="wbc-error-actions">
-        {onDiagnose && <button type="button" className="wbc-error-retry" onClick={onDiagnose}>{t("doctor.title")}</button>}
+        {onDiagnose && <button type="button" className="wbc-error-retry" onClick={onDiagnose}>{wbcT("doctor.title", "Cyrene Doctor")}</button>}
         {agentPresentation ? <button type="button" className="wbc-error-copy-button" onClick={copyErrorDetail}>{WBC_ICONS.copy}<span>{wbcT("workbenchChat.error.copyDetail", "Copy details")}</span></button> : null}
         {onRetry && <button type="button" className="wbc-error-retry" onClick={onRetry}>{wbcT("workbenchChat.error.retry", "Retry")}</button>}
       </span>

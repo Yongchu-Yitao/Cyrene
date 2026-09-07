@@ -95,3 +95,42 @@ async def test_chat_transport_separates_health_from_status():
         assert await transport.health() == {"service": "cyrene", "status": "ok"}
         assert await transport.status() == {"model": "test-model"}
     assert paths == ["/api/health", "/api/status"]
+
+
+def test_combined_session_refresh_builds_one_projection(client, monkeypatch):
+    from cyrene.workbench.sessions.session_presentation import WorkbenchSessionPresentation
+
+    calls = []
+    sessions = [{"id": "a", "messageCount": 4, "subagents": [{"id": "worker"}]}]
+
+    def list_sessions(self):
+        calls.append(self.db_path)
+        return sessions
+
+    monkeypatch.setattr(WorkbenchSessionPresentation, "list", list_sessions)
+    headers = {"X-Cyrene-Token": "test-secret"}
+    combined = client.get("/api/workbench/sessions?include_status=true", headers=headers)
+    assert combined.status_code == 200
+    assert len(calls) == 1
+    assert combined.json()["sessions"] == sessions
+    assert combined.json()["status"]["session_messages"] == 4
+    assert combined.json()["status"]["workers"] == [{"id": "worker"}]
+    standalone = client.get("/api/status", headers=headers)
+    assert standalone.json() == combined.json()["status"]
+    assert len(calls) == 2
+    assert client.get("/api/workbench/sessions", headers=headers).json() == {"sessions": sessions}
+    assert len(calls) == 3
+    sessions[0]["messageCount"] = 8
+    assert client.get("/api/workbench/sessions?include_status=true", headers=headers).json()["status"]["session_messages"] == 8
+    assert len(calls) == 4
+
+
+def test_optional_status_failure_does_not_discard_sessions(client, monkeypatch, caplog):
+    from cyrene.workbench.sessions.session_presentation import WorkbenchSessionPresentation
+
+    monkeypatch.setattr(WorkbenchSessionPresentation, "list", lambda self: [{"id": "a"}])
+    monkeypatch.setattr(runtime, "build_status", AsyncMock(side_effect=RuntimeError("unavailable")))
+    response = client.get("/api/workbench/sessions?include_status=true", headers={"X-Cyrene-Token": "test-secret"})
+    assert response.status_code == 500
+    assert response.json() == {"sessions": [{"id": "a"}], "status_error": True}
+    assert "Could not build supplemental Workbench status" in caplog.text

@@ -154,17 +154,9 @@ function wbcCloseDeletedChatSplits(context, chatId) {
     });
     return changed ? updated : current;
   });
-  context.setResourceSplitByChat(function (current) {
-    var updated = Object.assign({}, current);
-    var changed = false;
-    Object.keys(current).forEach(function (ownerId) {
-      var resource = current[ownerId];
-      if (String(ownerId) === deletedChatId
-        || (resource && resource.type === "chat" && String(resource.payload || "") === deletedChatId)) {
-        delete updated[ownerId]; changed = true;
-      }
-    });
-    return changed ? updated : current;
+  context.splitSelection.pruneResources(function (resource, ownerId) {
+    return String(ownerId) === deletedChatId
+      || (resource && resource.type === "chat" && String(resource.payload || "") === deletedChatId);
   });
   Object.keys(context.paneLayoutRestoreRef.current).forEach(function (cardId) {
     var restore = context.paneLayoutRestoreRef.current[cardId];

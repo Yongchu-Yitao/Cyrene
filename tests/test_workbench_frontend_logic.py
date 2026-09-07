@@ -1428,7 +1428,7 @@ def test_workbench_deleted_chat_closes_every_split_reference():
     assert "context.setPaneLayoutsByChat(function (current)" in close_deleted
     assert 'card.kind === "chat" && String(card.payload || "") === deletedChatId' in close_deleted
     assert "if (!left.length && right.length)" in close_deleted
-    assert "context.setResourceSplitByChat(function (current)" in close_deleted
+    assert "context.splitSelection.pruneResources(function (resource, ownerId)" in close_deleted
     assert 'resource.type === "chat" && String(resource.payload || "") === deletedChatId' in close_deleted
     assert "delete context.paneLayoutRestoreRef.current[cardId]" in close_deleted
     delete_success = source.split("model.deleteChat(chatId).then(function () {", 1)[1].split(
@@ -1978,8 +1978,8 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     assert "<WbcResourceListRow" in artifact_tab
     assert 'className={"wbc-artifact-list-row"' in resource_list
     assert "if (onSelectArtifact) onSelectArtifact(file);" in artifact_tab
-    assert "context.setArtifactSplitByChat" in select_handler
-    assert 'wbcClearOtherSplits(context, chatId, "artifact")' in select_handler
+    assert 'context.splitSelection.select(chatId, "artifact", key)' in select_handler
+    # Atomic selection clears other slots; behavior is covered by split-selection-state.test.mjs.
     assert "function WbcArtifactSplitHost" in source
     assert "<WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} />" in source
     assert "<WbcSideSplitGrip" not in source
@@ -3524,7 +3524,7 @@ def test_data_refresh_cancels_superseded_requests_and_is_event_driven():
         ("status", "/api/status"),
         ("dashboard", "/api/dashboard?tz="),
     ):
-        assert f"if (__{name}RequestController) __{name}RequestController.abort();" in source
+        assert f"__{name}RequestController.abort();" in source
         assert f"__{name}RequestController = controller;" in source
         assert f"__{name}RequestController === controller" in source
         request = source.split(f'fetch("{endpoint}', 1)[1].split(";", 1)[0]
@@ -3532,7 +3532,7 @@ def test_data_refresh_cancels_superseded_requests_and_is_event_driven():
 
     # Sequence guards reject stale responses. Runtime refreshes are driven by
     # SSE; there are no delayed safety retries or periodic fallback fetches.
-    assert "seq !== __sessionsRequestSeq" in source
+    assert "seq === __sessionsRequestSeq && Array.isArray(sessions)" in source
     assert "seq !== __statusRequestSeq" in source
     assert "seq !== __dashboardRequestSeq" in source
     assert "scheduleRealtimeRefresh();" in source
@@ -9951,7 +9951,8 @@ def test_chat_agent_picker_is_gated_by_agents_plugin_marker():
 
     assert 'var agentsAvailable = pluginModules.indexOf("agents") >= 0;' in page
     assert "onDraftAgentChange={agentsAvailable ? handleDraftAgentChange : null}" in page
-    assert "wbcSaveDraftAgentBinding(projectId, null);" in page
+    assert "useWbcDraftAgentBinding(projectId, agentsAvailable)" in page
+    assert "wbcSaveDraftAgentBinding(projectId, null);" in frontend_module_source("features/chat/page-state.jsx")
     assert 'var agentsAvailable = pluginModules.indexOf("agents") >= 0;' in composer
     assert 'var agentPickerEnabled = agentsAvailable && typeof onDraftAgentChange === "function";' in composer
     disabled_branch = catalog.split("if (!enabled) {", 1)[1].split("}", 1)[0]

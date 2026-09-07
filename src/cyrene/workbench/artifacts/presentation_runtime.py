@@ -291,9 +291,11 @@ async def _build_status(
     return {'phase': 'evolve', 'state': localized('Evolving', '进化'), 'metrics': [], 'sparkData': [], 'workers': subagents, 'logs': [], 'services': [], 'model': project_runtime._get_model(), 'base_url': project_runtime._get_base_url(), 'short_term_entries': len(load_entries()), 'session_messages': sum(int(session.get('messageCount') or 0) for session in session_rows), 'scheduled_tasks': 0, 'soul_exists': bool(soul.get('path'))}
 
 
-async def build_status(db_path: str | Path | None = None) -> dict:
+async def build_status(
+    db_path: str | Path | None = None, *, sessions: list[dict[str, Any]] | None = None,
+) -> dict:
     """Public status projection for adjacent application services."""
-    return await _build_status(db_path)
+    return await _build_status(db_path, sessions=sessions)
 
 async def _build_dashboard(
     ui_tz=None,

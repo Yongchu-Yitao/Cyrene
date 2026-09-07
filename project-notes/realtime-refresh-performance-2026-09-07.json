@@ -1,0 +1,257 @@
+{
+  "method": "Real loopback HTTP, same server and isolated fixture; separate endpoints requested concurrently; ABBA alternation; four warmup iterations excluded; all response payloads equal",
+  "results": {
+    "separate": {
+      "samples": 30,
+      "median_ms": 12.421187479048967,
+      "p95_ms": 13.968207989819348
+    },
+    "combined": {
+      "samples": 30,
+      "median_ms": 7.29793804930523,
+      "p95_ms": 8.430042013060302
+    }
+  },
+  "samples": [
+    {
+      "combined": false,
+      "milliseconds": 12.549665989354253
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.420209003612399
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.240834005642682
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.42212497163564
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.807540944777429
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.214583980385214
+    },
+    {
+      "combined": true,
+      "milliseconds": 8.430042013060302
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.720958970021456
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.270917010027915
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.683125033508986
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.970584032591432
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.866666016634554
+    },
+    {
+      "combined": false,
+      "milliseconds": 13.368834042921662
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.759207976050675
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.848957960959524
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.604416988324374
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.420249986462295
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.3369170422665775
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.481500040739775
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.618582986760885
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.96754100965336
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.957167002838105
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.630083953496069
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.686457961332053
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.343457968905568
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.77775003714487
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.622041983064264
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.354584014043212
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.296291009988636
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.72141695395112
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.552709033712745
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.425499978940934
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.916541960090399
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.747417035512626
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.597833009436727
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.33912504883483
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.071417004335672
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.812166015151888
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.725875020492822
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.90362502913922
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.672082997392863
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.940999999642372
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.416291977278888
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.28341698879376
+    },
+    {
+      "combined": false,
+      "milliseconds": 12.000083981547505
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.258959056343883
+    },
+    {
+      "combined": true,
+      "milliseconds": 6.770832987967879
+    },
+    {
+      "combined": false,
+      "milliseconds": 11.851542047224939
+    },
+    {
+      "combined": false,
+      "milliseconds": 13.19037500070408
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.801542000379413
+    },
+    {
+      "combined": true,
+      "milliseconds": 7.774041965603828
+    },
+    {
+      "combined": false,
+      "milliseconds": 13.049209024757147
+    },
+    {
+      "combined": false,
+      "milliseconds": 14.167165965773165
+    },
+    {
+      "combined": true,
+      "milliseconds": 8.4495420451276
+    },
+    {
+      "combined": true,
+      "milliseconds": 8.020332956220955
+    },
+    {
+      "combined": false,
+      "milliseconds": 13.026750006247312
+    },
+    {
+      "combined": false,
+      "milliseconds": 13.968207989819348
+    },
+    {
+      "combined": true,
+      "milliseconds": 8.433375041931868
+    },
+    {
+      "combined": true,
+      "milliseconds": 8.363624976482242
+    },
+    {
+      "combined": false,
+      "milliseconds": 14.42370901349932
+    }
+  ]
+}

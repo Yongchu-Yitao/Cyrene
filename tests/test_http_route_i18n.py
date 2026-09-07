@@ -83,19 +83,24 @@ async def test_button_action_projection_follows_app_language(monkeypatch) -> Non
 
 
 def test_side_agent_prompt_is_not_forced_to_chinese() -> None:
+    from dataclasses import replace
+    from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin, SendOptions
+
     operation = run_send_routes._SendOperation(
         SimpleNamespace(context=SimpleNamespace(), service=SimpleNamespace()),
         "chat-1",
         {},
         detached=False,
     )
+    operation.origin = SendOrigin.parse({})
+    operation.options = SendOptions.parse({})
     operation.message = "What does this imply?"
     operation.is_external_agent = False
     operation.command = ""
     operation.is_side_agent = True
     operation.chat = {"sourceQuote": "selected text"}
     operation.parent_transcript = "User: context"
-    operation.lang = "en"
+    operation.options = replace(operation.options, lang="en")
     operation.normalized = []
 
     operation._build_agent_message()

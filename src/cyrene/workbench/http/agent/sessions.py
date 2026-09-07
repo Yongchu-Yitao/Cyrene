@@ -36,8 +36,13 @@ def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     service = WorkbenchSessionApplicationService(db_path)
 
     @router.get("/api/workbench/sessions")
-    async def api_workbench_sessions():
-        return await _session_call(service.list_sessions)
+    async def api_workbench_sessions(include_status: bool = False):
+        result = await _session_call(lambda: service.list_sessions(include_status=include_status))
+        if isinstance(result, dict) and result.get("status_error"):
+            # Keep HTTP failure visible to diagnostics while allowing the UI
+            # to apply the independently successful session projection.
+            return JSONResponse(status_code=500, content=result)
+        return result
 
     @router.post("/api/workbench/sessions/{chat_id}/clear")
     async def api_workbench_clear_session(chat_id: str):

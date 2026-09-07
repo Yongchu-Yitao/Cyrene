@@ -179,18 +179,31 @@ function sessionsFingerprint(sessions) {
   }).join(",");
 }
 
-async function refreshSessions() {
+function beginSessionsRequest(includeStatus) {
   const seq = ++__sessionsRequestSeq;
-  if (__sessionsRequestController) __sessionsRequestController.abort();
+  // A shared request may still own a current status refresh. Let that part
+  // finish when only sessions are superseded; sequence guards reject old data.
+  if (__sessionsRequestController && (includeStatus || __sessionsRequestController !== __statusRequestController)) __sessionsRequestController.abort();
   const controller = new AbortController();
   __sessionsRequestController = controller;
+  const statusSeq = includeStatus ? ++__statusRequestSeq : 0;
+  if (includeStatus) {
+    if (__statusRequestController) __statusRequestController.abort();
+    __statusRequestController = controller;
+  }
+  return { seq, statusSeq, controller };
+}
+
+async function refreshSessions(includeStatus = false) {
+  const { seq, statusSeq, controller } = beginSessionsRequest(includeStatus);
   try {
-    const r = await fetch("/api/workbench/sessions", { signal: controller.signal });
-    if (!r.ok) return;
-    const { sessions } = await r.json();
-    if (seq !== __sessionsRequestSeq) return;
-    var changed = false;
-    if (Array.isArray(sessions)) {
+    const r = await fetch("/api/workbench/sessions" + (includeStatus ? "?include_status=true" : ""), { signal: controller.signal });
+    if (!r.ok && !includeStatus) return;
+    const { sessions, status } = await r.json();
+    const statusChanged = r.ok && includeStatus && status && statusSeq === __statusRequestSeq
+      ? applyStatus(status) : false;
+    var changed = statusChanged;
+    if (seq === __sessionsRequestSeq && Array.isArray(sessions)) {
       var prev = sessionsFingerprint(DATA.sessions);
       var next = sessionsFingerprint(sessions);
       DATA.sessions = sessions;
@@ -199,12 +212,19 @@ async function refreshSessions() {
     if (changed) bumpData();
   } catch (e) { /* swallow */ } finally {
     if (__sessionsRequestController === controller) __sessionsRequestController = null;
+    if (__statusRequestController === controller) __statusRequestController = null;
   }
+}
+
+function applyStatus(status) {
+  var changed = JSON.stringify(DATA.status) !== JSON.stringify(status);
+  DATA.status = status;
+  return changed;
 }
 
 async function refreshStatus() {
   const seq = ++__statusRequestSeq;
-  if (__statusRequestController) __statusRequestController.abort();
+  if (__statusRequestController && __statusRequestController !== __sessionsRequestController) __statusRequestController.abort();
   const controller = new AbortController();
   __statusRequestController = controller;
   try {
@@ -212,10 +232,7 @@ async function refreshStatus() {
     if (!r.ok) return;
     const status = await r.json();
     if (seq !== __statusRequestSeq) return;
-    var prev = JSON.stringify(DATA.status);
-    var next = JSON.stringify(status);
-    DATA.status = status;
-    if (prev !== next) bumpData();
+    if (applyStatus(status)) bumpData();
   } catch (e) { /* swallow */ } finally {
     if (__statusRequestController === controller) __statusRequestController = null;
   }
@@ -256,8 +273,7 @@ function scheduleRealtimeRefresh() {
   if (__refreshTimer) return;
   __refreshTimer = window.setTimeout(() => {
     __refreshTimer = null;
-    void refreshSessions();
-    void refreshStatus();
+    void refreshSessions(true);
   }, 80);
 }
 

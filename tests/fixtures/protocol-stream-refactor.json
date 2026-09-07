@@ -1,0 +1,1340 @@
+[
+  {
+    "adapter": "anthropic",
+    "chunks": [
+      {
+        "type": "message_start",
+        "message": {
+          "usage": {
+            "input_tokens": 8,
+            "cache_read_input_tokens": 2
+          }
+        }
+      },
+      {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "text",
+          "text": "Hi"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "text_delta",
+          "text": "!"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {
+          "type": "thinking_delta",
+          "thinking": "Think"
+        }
+      },
+      {
+        "type": "content_block_start",
+        "index": 2,
+        "content_block": {
+          "type": "tool_use",
+          "id": "tool-1",
+          "name": "read"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "{\"path\":"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "\"p\"}"
+        }
+      },
+      {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "tool_use"
+        },
+        "usage": {
+          "output_tokens": 3
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi!",
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 3,
+          "total_tokens": 13,
+          "prompt_cache_hit_tokens": 2,
+          "prompt_cache_miss_tokens": 8
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "tool-1",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            }
+          }
+        ],
+        "finish_reason": "tool_use",
+        "stream_diagnostics": {
+          "adapter": "anthropic",
+          "line_count": 18,
+          "data_chunk_count": 9,
+          "event_count": 9,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "message_stop",
+          "tool_calls": [
+            {
+              "index": "2",
+              "name": "read",
+              "arguments_length": 12,
+              "arguments_sha256": "c280f48908bf63af43965e693dfa700ce10e8096b15551060497c74172879bad",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "tool_use"
+        }
+      },
+      "events": [
+        {
+          "type": "reply_start"
+        },
+        {
+          "type": "reply_delta",
+          "delta": "Hi"
+        },
+        {
+          "type": "reply_delta",
+          "delta": "!"
+        },
+        {
+          "type": "reasoning_start"
+        },
+        {
+          "type": "reasoning_delta",
+          "delta": "Think"
+        },
+        {
+          "type": "reasoning_done",
+          "response": "Think"
+        },
+        {
+          "type": "reply_done",
+          "response": "Hi!"
+        }
+      ]
+    }
+  },
+  {
+    "adapter": "anthropic",
+    "chunks": [
+      {
+        "type": "message_start",
+        "message": {
+          "usage": {
+            "input_tokens": 8,
+            "cache_read_input_tokens": 2
+          }
+        }
+      },
+      {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "text",
+          "text": "Hi"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "text_delta",
+          "text": "!"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {
+          "type": "thinking_delta",
+          "thinking": "Think"
+        }
+      },
+      {
+        "type": "content_block_start",
+        "index": 2,
+        "content_block": {
+          "type": "tool_use",
+          "id": "tool-1",
+          "name": "read"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "{\"path\":"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "\"p\"}"
+        }
+      },
+      {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "tool_use"
+        },
+        "usage": {
+          "output_tokens": 3
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi!",
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 3,
+          "total_tokens": 13,
+          "prompt_cache_hit_tokens": 2,
+          "prompt_cache_miss_tokens": 8
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "tool-1",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            }
+          }
+        ],
+        "finish_reason": "tool_use",
+        "stream_diagnostics": {
+          "adapter": "anthropic",
+          "line_count": 18,
+          "data_chunk_count": 9,
+          "event_count": 9,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "message_stop",
+          "tool_calls": [
+            {
+              "index": "2",
+              "name": "read",
+              "arguments_length": 12,
+              "arguments_sha256": "c280f48908bf63af43965e693dfa700ce10e8096b15551060497c74172879bad",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "tool_use"
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.reasoning_summary_text.delta",
+        "delta": "Think"
+      },
+      {
+        "type": "response.output_text.delta",
+        "delta": "Hi"
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+          "type": "function_call",
+          "call_id": "tool-1",
+          "name": "read"
+        }
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "output_index": 0,
+        "delta": "{\"path\":\"p\"}"
+      },
+      {
+        "type": "response.function_call_arguments.done",
+        "output_index": 0,
+        "arguments": "{\"path\":\"p\"}"
+      },
+      {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+          "type": "function_call",
+          "call_id": "tool-1",
+          "name": "read",
+          "arguments": "{\"path\":\"p\"}"
+        }
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "status": "completed",
+          "usage": {
+            "input_tokens": 8,
+            "output_tokens": 3
+          },
+          "output": [
+            {
+              "type": "function_call",
+              "call_id": "tool-1",
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            },
+            {
+              "type": "function_call",
+              "call_id": "tool-2",
+              "name": "other",
+              "arguments": "{}"
+            }
+          ]
+        }
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi",
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3,
+          "total_tokens": 11
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "tool-1",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            }
+          },
+          {
+            "id": "tool-2",
+            "type": "function",
+            "function": {
+              "name": "other",
+              "arguments": "{}"
+            }
+          }
+        ],
+        "finish_reason": "completed",
+        "stream_diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 14,
+          "data_chunk_count": 7,
+          "event_count": 7,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "response.completed",
+          "tool_calls": [
+            {
+              "index": "0",
+              "name": "read",
+              "arguments_length": 12,
+              "arguments_sha256": "c280f48908bf63af43965e693dfa700ce10e8096b15551060497c74172879bad",
+              "arguments_validation": "valid_object"
+            },
+            {
+              "index": "1",
+              "name": "other",
+              "arguments_length": 2,
+              "arguments_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "completed"
+        }
+      },
+      "events": [
+        {
+          "type": "reasoning_start"
+        },
+        {
+          "type": "reasoning_delta",
+          "delta": "Think"
+        },
+        {
+          "type": "reply_start"
+        },
+        {
+          "type": "reply_delta",
+          "delta": "Hi"
+        },
+        {
+          "type": "reasoning_done",
+          "response": "Think"
+        },
+        {
+          "type": "reply_done",
+          "response": "Hi"
+        }
+      ]
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.reasoning_summary_text.delta",
+        "delta": "Think"
+      },
+      {
+        "type": "response.output_text.delta",
+        "delta": "Hi"
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+          "type": "function_call",
+          "call_id": "tool-1",
+          "name": "read"
+        }
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "output_index": 0,
+        "delta": "{\"path\":\"p\"}"
+      },
+      {
+        "type": "response.function_call_arguments.done",
+        "output_index": 0,
+        "arguments": "{\"path\":\"p\"}"
+      },
+      {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+          "type": "function_call",
+          "call_id": "tool-1",
+          "name": "read",
+          "arguments": "{\"path\":\"p\"}"
+        }
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "status": "completed",
+          "usage": {
+            "input_tokens": 8,
+            "output_tokens": 3
+          },
+          "output": [
+            {
+              "type": "function_call",
+              "call_id": "tool-1",
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            },
+            {
+              "type": "function_call",
+              "call_id": "tool-2",
+              "name": "other",
+              "arguments": "{}"
+            }
+          ]
+        }
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi",
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3,
+          "total_tokens": 11
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "tool-1",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            }
+          },
+          {
+            "id": "tool-2",
+            "type": "function",
+            "function": {
+              "name": "other",
+              "arguments": "{}"
+            }
+          }
+        ],
+        "finish_reason": "completed",
+        "stream_diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 14,
+          "data_chunk_count": 7,
+          "event_count": 7,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "response.completed",
+          "tool_calls": [
+            {
+              "index": "0",
+              "name": "read",
+              "arguments_length": 12,
+              "arguments_sha256": "c280f48908bf63af43965e693dfa700ce10e8096b15551060497c74172879bad",
+              "arguments_validation": "valid_object"
+            },
+            {
+              "index": "1",
+              "name": "other",
+              "arguments_length": 2,
+              "arguments_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "completed"
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "gemini",
+    "chunks": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "Think",
+                  "thought": true
+                },
+                {
+                  "text": "Hi"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "name": "read",
+                    "args": {
+                      "path": "p"
+                    }
+                  }
+                }
+              ]
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 8,
+          "candidatesTokenCount": 3
+        }
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi",
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3,
+          "total_tokens": 11
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "call_gemini_0000000000000000",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\": \"p\"}"
+            }
+          }
+        ],
+        "finish_reason": "stop",
+        "stream_diagnostics": {
+          "adapter": "gemini",
+          "line_count": 5,
+          "data_chunk_count": 2,
+          "event_count": 2,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": true,
+          "http_status": 200,
+          "terminal_event_seen": false,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "",
+          "tool_calls": [
+            {
+              "index": "gemini:0:read",
+              "name": "read",
+              "arguments_length": 13,
+              "arguments_sha256": "8465dd900e3b185226413fc5495f82b97196300e9d16850fae16607898bed8ca",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "stop"
+        }
+      },
+      "events": [
+        {
+          "type": "reply_start"
+        },
+        {
+          "type": "reply_delta",
+          "delta": "Hi"
+        },
+        {
+          "type": "reasoning_start"
+        },
+        {
+          "type": "reasoning_delta",
+          "delta": "Think"
+        },
+        {
+          "type": "reasoning_done",
+          "response": "Think"
+        },
+        {
+          "type": "reply_done",
+          "response": "Hi"
+        }
+      ]
+    }
+  },
+  {
+    "adapter": "gemini",
+    "chunks": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "Think",
+                  "thought": true
+                },
+                {
+                  "text": "Hi"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "name": "read",
+                    "args": {
+                      "path": "p"
+                    }
+                  }
+                }
+              ]
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 8,
+          "candidatesTokenCount": 3
+        }
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi",
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3,
+          "total_tokens": 11
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "call_gemini_0000000000000000",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\": \"p\"}"
+            }
+          }
+        ],
+        "finish_reason": "stop",
+        "stream_diagnostics": {
+          "adapter": "gemini",
+          "line_count": 5,
+          "data_chunk_count": 2,
+          "event_count": 2,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": true,
+          "http_status": 200,
+          "terminal_event_seen": false,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "",
+          "tool_calls": [
+            {
+              "index": "gemini:0:read",
+              "name": "read",
+              "arguments_length": 13,
+              "arguments_sha256": "8465dd900e3b185226413fc5495f82b97196300e9d16850fae16607898bed8ca",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "stop"
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "openai_compatible",
+    "chunks": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "Hi",
+              "reasoning_content": "Think",
+              "tool_calls": [
+                {
+                  "id": "tool-1",
+                  "index": 0,
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "\"p\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3
+        }
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi",
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3,
+          "total_tokens": 11
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "tool-1",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            }
+          }
+        ],
+        "finish_reason": "tool_calls",
+        "stream_diagnostics": {
+          "adapter": "openai_compatible",
+          "line_count": 5,
+          "data_chunk_count": 2,
+          "event_count": 2,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": true,
+          "http_status": 200,
+          "terminal_event_seen": false,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "",
+          "tool_calls": [
+            {
+              "index": "0",
+              "name": "read",
+              "arguments_length": 12,
+              "arguments_sha256": "c280f48908bf63af43965e693dfa700ce10e8096b15551060497c74172879bad",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "tool_calls"
+        }
+      },
+      "events": [
+        {
+          "type": "reply_start"
+        },
+        {
+          "type": "reply_delta",
+          "delta": "Hi"
+        },
+        {
+          "type": "reasoning_start"
+        },
+        {
+          "type": "reasoning_delta",
+          "delta": "Think"
+        },
+        {
+          "type": "reasoning_done",
+          "response": "Think"
+        },
+        {
+          "type": "reply_done",
+          "response": "Hi"
+        }
+      ]
+    }
+  },
+  {
+    "adapter": "openai_compatible",
+    "chunks": [
+      {
+        "choices": [
+          {
+            "delta": {
+              "content": "Hi",
+              "reasoning_content": "Think",
+              "tool_calls": [
+                {
+                  "id": "tool-1",
+                  "index": 0,
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "\"p\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3
+        }
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "role": "assistant",
+        "content": "Hi",
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 3,
+          "total_tokens": 11
+        },
+        "reasoning_content": "Think",
+        "tool_calls": [
+          {
+            "id": "tool-1",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"path\":\"p\"}"
+            }
+          }
+        ],
+        "finish_reason": "tool_calls",
+        "stream_diagnostics": {
+          "adapter": "openai_compatible",
+          "line_count": 5,
+          "data_chunk_count": 2,
+          "event_count": 2,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": true,
+          "http_status": 200,
+          "terminal_event_seen": false,
+          "stream_completed": true,
+          "termination_reason": "provider_finish_reason",
+          "last_event_type": "",
+          "tool_calls": [
+            {
+              "index": "0",
+              "name": "read",
+              "arguments_length": 12,
+              "arguments_sha256": "c280f48908bf63af43965e693dfa700ce10e8096b15551060497c74172879bad",
+              "arguments_validation": "valid_object"
+            }
+          ],
+          "finish_reason": "tool_calls"
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.failed",
+        "response": {
+          "error": {
+            "code": "server_error",
+            "message": "DO NOT EXPOSE"
+          }
+        }
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "error": "provider_failed",
+        "message": "The provider reported a failed response.",
+        "diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 2,
+          "data_chunk_count": 1,
+          "event_count": 1,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "provider_response_failed",
+          "last_event_type": "response.failed",
+          "provider_error_code": "server_error",
+          "finish_reason": "failed",
+          "tool_calls": []
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.failed",
+        "response": {
+          "error": {
+            "code": "server_error",
+            "message": "DO NOT EXPOSE"
+          }
+        }
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "error": "provider_failed",
+        "message": "The provider reported a failed response.",
+        "diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 2,
+          "data_chunk_count": 1,
+          "event_count": 1,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "provider_response_failed",
+          "last_event_type": "response.failed",
+          "provider_error_code": "server_error",
+          "finish_reason": "failed",
+          "tool_calls": []
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.incomplete",
+        "response": {
+          "status": "incomplete",
+          "incomplete_details": {
+            "reason": "content_filter"
+          }
+        }
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "error": "upstream_incomplete",
+        "message": "The provider reported an incomplete response.",
+        "diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 2,
+          "data_chunk_count": 1,
+          "event_count": 1,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "provider_response_incomplete",
+          "last_event_type": "response.incomplete",
+          "finish_reason": "incomplete",
+          "tool_calls": []
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.incomplete",
+        "response": {
+          "status": "incomplete",
+          "incomplete_details": {
+            "reason": "content_filter"
+          }
+        }
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "error": "upstream_incomplete",
+        "message": "The provider reported an incomplete response.",
+        "diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 2,
+          "data_chunk_count": 1,
+          "event_count": 1,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "provider_response_incomplete",
+          "last_event_type": "response.incomplete",
+          "finish_reason": "incomplete",
+          "tool_calls": []
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.output_text.delta",
+        "delta": "partial"
+      },
+      {
+        "type": "response.incomplete",
+        "response": {
+          "status": "incomplete",
+          "incomplete_details": {
+            "reason": "max_output_tokens"
+          }
+        }
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "error": "output_limit",
+        "message": "The model reached its output limit before completing the response.",
+        "diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 4,
+          "data_chunk_count": 2,
+          "event_count": 2,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "output_limit_without_tool_calls",
+          "last_event_type": "response.incomplete",
+          "tool_calls": [],
+          "finish_reason": "length"
+        }
+      },
+      "events": [
+        {
+          "type": "reply_start"
+        },
+        {
+          "type": "reply_delta",
+          "delta": "partial"
+        }
+      ]
+    }
+  },
+  {
+    "adapter": "openai_responses",
+    "chunks": [
+      {
+        "type": "response.output_text.delta",
+        "delta": "partial"
+      },
+      {
+        "type": "response.incomplete",
+        "response": {
+          "status": "incomplete",
+          "incomplete_details": {
+            "reason": "max_output_tokens"
+          }
+        }
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "error": "output_limit",
+        "message": "The model reached its output limit before completing the response.",
+        "diagnostics": {
+          "adapter": "openai_responses",
+          "line_count": 4,
+          "data_chunk_count": 2,
+          "event_count": 2,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "output_limit_without_tool_calls",
+          "last_event_type": "response.incomplete",
+          "tool_calls": [],
+          "finish_reason": "length"
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "anthropic",
+    "chunks": [
+      {
+        "type": "content_block_start",
+        "content_block": {
+          "type": "tool_use",
+          "id": "tool",
+          "name": "read"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "{"
+        }
+      },
+      {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "tool_use"
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ],
+    "callback": true,
+    "expected": {
+      "result": {
+        "error": "invalid_tool_arguments",
+        "message": "The model stream ended with invalid tool arguments.",
+        "diagnostics": {
+          "adapter": "anthropic",
+          "line_count": 8,
+          "data_chunk_count": 4,
+          "event_count": 4,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "invalid_tool_arguments",
+          "last_event_type": "message_stop",
+          "tool_calls": [
+            {
+              "index": "0",
+              "name": "read",
+              "arguments_length": 1,
+              "arguments_sha256": "021fb596db81e6d02bf3d2586ee3981fe519f275c0ac9ca76bbcf2ebb4097d96",
+              "arguments_validation": "invalid_json"
+            }
+          ],
+          "finish_reason": "tool_use"
+        }
+      },
+      "events": []
+    }
+  },
+  {
+    "adapter": "anthropic",
+    "chunks": [
+      {
+        "type": "content_block_start",
+        "content_block": {
+          "type": "tool_use",
+          "id": "tool",
+          "name": "read"
+        }
+      },
+      {
+        "type": "content_block_delta",
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": "{"
+        }
+      },
+      {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "tool_use"
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ],
+    "callback": false,
+    "expected": {
+      "result": {
+        "error": "invalid_tool_arguments",
+        "message": "The model stream ended with invalid tool arguments.",
+        "diagnostics": {
+          "adapter": "anthropic",
+          "line_count": 8,
+          "data_chunk_count": 4,
+          "event_count": 4,
+          "invalid_json_line_count": 0,
+          "saw_done_marker": false,
+          "http_status": 200,
+          "terminal_event_seen": true,
+          "stream_completed": false,
+          "termination_reason": "invalid_tool_arguments",
+          "last_event_type": "message_stop",
+          "tool_calls": [
+            {
+              "index": "0",
+              "name": "read",
+              "arguments_length": 1,
+              "arguments_sha256": "021fb596db81e6d02bf3d2586ee3981fe519f275c0ac9ca76bbcf2ebb4097d96",
+              "arguments_validation": "invalid_json"
+            }
+          ],
+          "finish_reason": "tool_use"
+        }
+      },
+      "events": []
+    }
+  }
+]

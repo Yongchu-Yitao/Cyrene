@@ -1,0 +1,700 @@
+[
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx",
+    "before": {
+      "module_lines": 3368
+    },
+    "after": {
+      "module_lines": 3357
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage",
+    "before": {
+      "lines": 3304,
+      "decisions": 190,
+      "hooks": 129
+    },
+    "after": {
+      "lines": 3292,
+      "decisions": 190,
+      "hooks": 126
+    },
+    "exactFunctionSource": false
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#43",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#43",
+    "before": {
+      "decisions": 67
+    },
+    "after": {
+      "decisions": 67
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#25",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#25",
+    "before": {
+      "decisions": 25
+    },
+    "after": {
+      "decisions": 25
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#57",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#57",
+    "before": {
+      "decisions": 49
+    },
+    "after": {
+      "decisions": 49
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#68",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#68",
+    "before": {
+      "decisions": 32
+    },
+    "after": {
+      "decisions": 32
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.applyChatSummaryEvent",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.applyChatSummaryEvent",
+    "before": {
+      "decisions": 22
+    },
+    "after": {
+      "decisions": 22
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.beginFloatingPanelSplit",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.beginFloatingPanelSplit",
+    "before": {
+      "lines": 151,
+      "decisions": 28
+    },
+    "after": {
+      "lines": 151,
+      "decisions": 28
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.closePaneCardWithConfirmation",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.closePaneCardWithConfirmation",
+    "before": {
+      "decisions": 32
+    },
+    "after": {
+      "decisions": 32
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.handlePaneDropOver",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.handlePaneDropOver",
+    "before": {
+      "decisions": 27
+    },
+    "after": {
+      "decisions": 27
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.openSplitChatContent.<anonymous>",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.openSplitChatContent.<anonymous>",
+    "before": {
+      "nesting": 7
+    },
+    "after": {
+      "nesting": 7
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderActiveConversationCard",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderActiveConversationCard",
+    "before": {
+      "decisions": 22
+    },
+    "after": {
+      "decisions": 22
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard",
+    "before": {
+      "lines": 334,
+      "decisions": 97,
+      "nesting": 11
+    },
+    "after": {
+      "lines": 334,
+      "decisions": 97,
+      "nesting": 11
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>.<anonymous>#4",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>.<anonymous>#4",
+    "before": {
+      "decisions": 23
+    },
+    "after": {
+      "decisions": 23
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>#9",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>#9",
+    "before": {
+      "decisions": 25
+    },
+    "after": {
+      "decisions": 25
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.restoreFloatingPanelSplit",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.restoreFloatingPanelSplit",
+    "before": {
+      "lines": 103,
+      "decisions": 25
+    },
+    "after": {
+      "lines": 103,
+      "decisions": 25
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx",
+    "before": {
+      "module_lines": 1701
+    },
+    "after": {
+      "module_lines": 1666
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer",
+    "before": {
+      "lines": 1473,
+      "decisions": 503,
+      "hooks": 56
+    },
+    "after": {
+      "lines": 1448,
+      "decisions": 503,
+      "hooks": 51
+    },
+    "exactFunctionSource": false
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#17",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#17",
+    "before": {
+      "decisions": 24
+    },
+    "after": {
+      "decisions": 24
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#15",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#9",
+    "before": {
+      "decisions": 37
+    },
+    "after": {
+      "decisions": 37
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#24",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#18",
+    "before": {
+      "decisions": 29,
+      "setter_targets": 14
+    },
+    "after": {},
+    "exactFunctionSource": false
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#44",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#38",
+    "before": {
+      "lines": 113,
+      "decisions": 22
+    },
+    "after": {
+      "lines": 113,
+      "decisions": 22
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#64",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#58",
+    "before": {
+      "decisions": 26
+    },
+    "after": {
+      "decisions": 26
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.onKeyDown",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.onKeyDown",
+    "before": {
+      "decisions": 36
+    },
+    "after": {
+      "decisions": 36
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.submit",
+    "to": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.submit",
+    "before": {
+      "decisions": 60
+    },
+    "after": {
+      "decisions": 60
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js",
+    "to": "electron/main.js",
+    "before": {
+      "module_lines": 6911
+    },
+    "after": {
+      "module_lines": 6660
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::<anonymous>#2",
+    "to": "electron/main.js::<anonymous>#2",
+    "before": {
+      "lines": 354
+    },
+    "after": {
+      "lines": 354
+    },
+    "exactFunctionSource": false
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager",
+    "to": "electron/main.js::BrowserTabManager",
+    "before": {
+      "methods": 122,
+      "fields": 43
+    },
+    "after": {
+      "methods": 113,
+      "fields": 37
+    },
+    "exactFunctionSource": false
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager._describeUploadTarget",
+    "to": "electron/main.js::BrowserTabManager._describeUploadTarget",
+    "before": {
+      "decisions": 24
+    },
+    "after": {
+      "decisions": 24
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager._dispatchClick",
+    "to": "electron/main.js::BrowserTabManager._dispatchClick",
+    "before": {
+      "lines": 131,
+      "decisions": 61
+    },
+    "after": {
+      "lines": 131,
+      "decisions": 61
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager._findTarget",
+    "to": "electron/main.js::BrowserTabManager._findTarget",
+    "before": {
+      "decisions": 28
+    },
+    "after": {
+      "decisions": 28
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager._findTarget.run",
+    "to": "electron/main.js::BrowserTabManager._findTarget.run",
+    "before": {
+      "decisions": 32
+    },
+    "after": {
+      "decisions": 32
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager._targetFromRef",
+    "to": "electron/main.js::BrowserTabManager._targetFromRef",
+    "before": {
+      "decisions": 37
+    },
+    "after": {
+      "decisions": 37
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager._typeIntoTarget",
+    "to": "electron/main.js::BrowserTabManager._typeIntoTarget",
+    "before": {
+      "decisions": 51
+    },
+    "after": {
+      "decisions": 51
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.applyPageZoom",
+    "to": "electron/main.js::BrowserTabManager.applyPageZoom",
+    "before": {
+      "decisions": 32
+    },
+    "after": {
+      "decisions": 32
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.closeAll",
+    "to": "electron/main.js::BrowserTabManager.closeAll",
+    "before": {
+      "decisions": 23
+    },
+    "after": {},
+    "exactFunctionSource": false
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.createView",
+    "to": "electron/main.js::BrowserTabManager.createView",
+    "before": {
+      "lines": 120,
+      "subscriptions": 20
+    },
+    "after": {
+      "lines": 120,
+      "subscriptions": 20
+    },
+    "exactFunctionSource": false
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.enterVideoFullscreen",
+    "to": "electron/main.js::BrowserTabManager.enterVideoFullscreen",
+    "before": {
+      "decisions": 39
+    },
+    "after": {
+      "decisions": 39
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.finishVideoFullscreen",
+    "to": "electron/main.js::BrowserTabManager.finishVideoFullscreen",
+    "before": {
+      "decisions": 31
+    },
+    "after": {
+      "decisions": 31
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.handleCapturedUserEvent",
+    "to": "electron/main.js::BrowserTabManager.handleCapturedUserEvent",
+    "before": {
+      "decisions": 21
+    },
+    "after": {
+      "decisions": 21
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.inspect",
+    "to": "electron/main.js::BrowserTabManager.inspect",
+    "before": {
+      "decisions": 47
+    },
+    "after": {
+      "decisions": 47
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.installUserEventCapture",
+    "to": "electron/main.js::BrowserTabManager.installUserEventCapture",
+    "before": {
+      "lines": 135
+    },
+    "after": {
+      "lines": 135
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.navigate",
+    "to": "electron/main.js::BrowserTabManager.navigate",
+    "before": {
+      "decisions": 25
+    },
+    "after": {
+      "decisions": 25
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.navigationGuard",
+    "to": "electron/main.js::BrowserTabManager.navigationGuard",
+    "before": {
+      "decisions": 26
+    },
+    "after": {
+      "decisions": 26
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.pageViewportMatches",
+    "to": "electron/main.js::BrowserTabManager.pageViewportMatches",
+    "before": {
+      "decisions": 23
+    },
+    "after": {
+      "decisions": 23
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.prepareBoundsTransition",
+    "to": "electron/main.js::BrowserTabManager.prepareBoundsTransition",
+    "before": {
+      "lines": 104,
+      "decisions": 33
+    },
+    "after": {
+      "lines": 104,
+      "decisions": 33
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.recordUserEvent",
+    "to": "electron/main.js::BrowserTabManager.recordUserEvent",
+    "before": {
+      "decisions": 25
+    },
+    "after": {
+      "decisions": 25
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.screenshot",
+    "to": "electron/main.js::BrowserTabManager.screenshot",
+    "before": {
+      "decisions": 28
+    },
+    "after": {
+      "decisions": 28
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.scroll",
+    "to": "electron/main.js::BrowserTabManager.scroll",
+    "before": {
+      "decisions": 41
+    },
+    "after": {
+      "decisions": 41
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.setBounds",
+    "to": "electron/main.js::BrowserTabManager.setBounds",
+    "before": {
+      "decisions": 25
+    },
+    "after": {
+      "decisions": 25
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.setInputFiles",
+    "to": "electron/main.js::BrowserTabManager.setInputFiles",
+    "before": {
+      "decisions": 48
+    },
+    "after": {
+      "decisions": 48
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.setTabPicker",
+    "to": "electron/main.js::BrowserTabManager.setTabPicker",
+    "before": {
+      "decisions": 22
+    },
+    "after": {},
+    "exactFunctionSource": false
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.syncAttachedView",
+    "to": "electron/main.js::BrowserTabManager.syncAttachedView",
+    "before": {
+      "decisions": 47
+    },
+    "after": {
+      "decisions": 47
+    },
+    "exactFunctionSource": false
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.syncChatOverlay",
+    "to": "electron/main.js::BrowserTabManager.syncChatOverlay",
+    "before": {
+      "decisions": 30
+    },
+    "after": {
+      "decisions": 30
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.syncTabPicker",
+    "removed": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.visibleLinkMatches",
+    "to": "electron/main.js::BrowserTabManager.visibleLinkMatches",
+    "before": {
+      "decisions": 30
+    },
+    "after": {
+      "decisions": 30
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::BrowserTabManager.waitFor",
+    "to": "electron/main.js::BrowserTabManager.waitFor",
+    "before": {
+      "decisions": 30
+    },
+    "after": {
+      "decisions": 30
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::captureQuickChatScreenshot",
+    "to": "electron/main.js::captureQuickChatScreenshot",
+    "before": {
+      "decisions": 24
+    },
+    "after": {
+      "decisions": 24
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::createMainWindowOnce",
+    "to": "electron/main.js::createMainWindowOnce",
+    "before": {
+      "lines": 104,
+      "decisions": 42
+    },
+    "after": {
+      "lines": 104,
+      "decisions": 42
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::getTrayIconImage",
+    "to": "electron/main.js::getTrayIconImage",
+    "before": {
+      "decisions": 27
+    },
+    "after": {
+      "decisions": 27
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::runDesktopSettingsSmokeTest",
+    "to": "electron/main.js::runDesktopSettingsSmokeTest",
+    "before": {
+      "decisions": 30
+    },
+    "after": {
+      "decisions": 30
+    },
+    "exactFunctionSource": true
+  },
+  {
+    "from": "electron/main.js::startElectronRpcServer.attempt.<anonymous>.<anonymous>.<anonymous>#2",
+    "to": "electron/main.js::startElectronRpcServer.attempt.<anonymous>.<anonymous>.<anonymous>#2",
+    "before": {
+      "decisions": 26
+    },
+    "after": {
+      "decisions": 26
+    },
+    "exactFunctionSource": true
+  }
+]

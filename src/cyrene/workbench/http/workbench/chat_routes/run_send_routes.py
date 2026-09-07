@@ -43,6 +43,7 @@ from cyrene.workbench.chat.chat_session_naming_service import (
 from cyrene.workbench.http import schemas as api_models
 from cyrene.workbench.http.errors import localized_error_payload, localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
+from cyrene.workbench.http.workbench.chat_routes.send_request import SendOptions, SendOrigin
 from cyrene.workbench.http.workbench.chat_routes.shared import (
     schedule_workspace_changes_finalize,
     track_session_title_task,
@@ -198,7 +199,7 @@ class _SendOperation:
                     "工作流启动失败，且无法恢复对话状态。",
                     500,
                     "workflow_rollback_failed",
-                    language=self.lang,
+                    language=self.options.lang,
                 )
             return error
         await self._finalize_persisted_user_turn()
@@ -230,7 +231,7 @@ class _SendOperation:
                 "此工作流当前不可用。",
                 503,
                 "workflow_unavailable",
-                language=self.lang,
+                language=self.options.lang,
             )
         try:
             result = handler(
@@ -251,7 +252,7 @@ class _SendOperation:
                 "无法启动此工作流。",
                 503,
                 "workflow_start_failed",
-                language=self.lang,
+                language=self.options.lang,
             )
         return None
 
@@ -259,51 +260,27 @@ class _SendOperation:
         body = self.body
         self.message = str(body.get("message") or "").strip()
         self.public_message = self.message
-        self.client_request_id = str(body.get("clientRequestId") or "").strip()
-        try:
-            self.client_send_epoch_ms = float(body.get("clientSendEpochMs") or 0.0)
-        except (TypeError, ValueError, OverflowError):
-            self.client_send_epoch_ms = 0.0
-        self.ui_instance_id = str(body.get("uiInstanceId") or "").strip()
-        self.conversation_source = str(
-            body.get("conversationSource") or ""
-        ).strip()
-        self.agent_originated = body.get("agentOriginated") is True
-        self.origin_session_id = str(
-            body.get("sourceSessionId") or ""
-        ).strip()
+        self.origin = SendOrigin.parse(body)
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         if attachments:
             attachments = [await self.context.resolve_library_file_payload(item) if isinstance(item, dict) else item for item in attachments]
         self.command = str(body.get("command") or "").strip()
-        self.requested_context_activations = (
-            body.get("contextActivations")
-            if "contextActivations" in body
-            else None
-        )
-        self.wants_stream = bool(body.get("stream"))
-        self.retry = bool(body.get("retry"))
-        self.fork_replay = bool(body.get("forkReplay"))
-        self.requested_mode = str(body.get("mode") or "").strip().lower()
-        self.requested_model = str(body.get("model") or "").strip()
-        self.requested_effort = str(body.get("reasoningEffort") or "").strip().lower()
-        self.lang = str(body.get("lang") or "").strip().lower()
-        self.voice_command = body.get("voiceCommand") is True
-        self.controller.preferences.persist_language(self.lang)
+        self.options = SendOptions.parse(body)
+        self.controller.preferences.persist_language(self.options.lang)
         self.routes = self.context.runtime()
         self.normalized = self.routes.normalize_attachments(attachments)
         self.public_attachments = [self.routes.build_public_attachment_payload(item) for item in self.normalized]
-        if not self.retry and not self.message and not self.normalized and not self.command:
+        if not self.options.retry and not self.message and not self.normalized and not self.command:
             return localized_error_response(
                 "A message or attachment is required.",
                 "请输入消息或添加附件。",
                 400,
                 "message_required",
-                language=self.lang,
+                language=self.options.lang,
             )
         budget_error = await self.context.check_budget_gate(
             self.chat_id,
-            language=self.lang,
+            language=self.options.lang,
         )
         if budget_error:
             return JSONResponse(budget_error, status_code=403)
@@ -317,7 +294,7 @@ class _SendOperation:
                 "未找到对话。",
                 404,
                 "chat_not_found",
-                language=self.lang,
+                language=self.options.lang,
             )
         self.base_chat = copy.deepcopy(self.chat)
         from cyrene.agents.builtin import normalize_agent_binding
@@ -349,7 +326,7 @@ class _SendOperation:
                     "此 Agent 命令不可用。",
                     400,
                     "agent_command_unavailable",
-                    language=self.lang,
+                    language=self.options.lang,
                 )
         else:
             from cyrene.workbench.chat.slash_commands import resolve_slash_command
@@ -377,15 +354,15 @@ class _SendOperation:
                     "未知的 Cyrene 命令。",
                     400,
                     "unknown_command",
-                    language=self.lang,
+                    language=self.options.lang,
                 )
         if self.command and not self.public_message:
             self.public_message = "/" + self.command
 
         composer_context = _composer_context_service()
         requested_activations = (
-            self.requested_context_activations
-            if self.requested_context_activations is not None
+            self.options.requested_context_activations
+            if self.options.requested_context_activations is not None
             else self.chat.get("contextActivations")
         )
         if self.dynamic_command and isinstance(
@@ -409,7 +386,7 @@ class _SendOperation:
                 "编辑器上下文能力需要使用 Cyrene 内置 Agent。",
                 400,
                 "builtin_agent_required",
-                language=self.lang,
+                language=self.options.lang,
             )
         requested_agent = self.body.get("agent") if isinstance(self.body.get("agent"), dict) else None
         installation_id = str((requested_agent or {}).get("installationId") or "").strip()
@@ -419,7 +396,7 @@ class _SendOperation:
                 "发送消息时不能更改 Agent 绑定。",
                 409,
                 "agent_binding_locked",
-                language=self.lang,
+                language=self.options.lang,
             )
         self.is_side_agent = str(self.chat.get("kind") or "") == "side-agent"
         self.completed_turn_count_before = self.service.completed_turn_count(self.chat)
@@ -433,7 +410,7 @@ class _SendOperation:
         )
         self.parent_transcript = self.service.side_agent_parent_transcript(parent)
         stored_mode = str(self.chat.get("permissionMode") or "").strip().lower()
-        selected_mode = self.requested_mode or stored_mode
+        selected_mode = self.options.requested_mode or stored_mode
         self.mode = selected_mode if selected_mode in permission_modes else "default"
         self.chat["permissionMode"] = self.mode
         if "soulActive" in self.body:
@@ -454,7 +431,7 @@ class _SendOperation:
             )
         self.project_id = str(self.chat.get("projectId") or "")
         attention = VoiceCommandAttention(
-            enabled=self.voice_command,
+            enabled=self.options.voice_command,
             chat_id=self.chat_id,
             project_id=self.project_id,
             chat_title=str(self.chat.get("title") or ""),
@@ -474,7 +451,7 @@ class _SendOperation:
                 "未找到项目。",
                 404,
                 "project_not_found",
-                language=self.lang,
+                language=self.options.lang,
             )
         if "workspaceOverride" in self.body:
             try:
@@ -490,7 +467,7 @@ class _SendOperation:
                     "工作区覆盖路径无效。",
                     400,
                     "invalid_workspace_override",
-                    language=self.lang,
+                    language=self.options.lang,
                 )
             if workspace:
                 self.chat["workspaceOverride"] = workspace
@@ -513,7 +490,7 @@ class _SendOperation:
                 "工作区配置无效。",
                 400,
                 "invalid_workspace",
-                language=self.lang,
+                language=self.options.lang,
             )
         try:
             resolved_input = self.service.resolve_composer_input_context(
@@ -544,7 +521,7 @@ class _SendOperation:
                     if invalid
                     else "composer_context_unavailable"
                 ),
-                language=self.lang,
+                language=self.options.lang,
             )
         self.context_activations = dict(
             resolved_input["contextActivations"]
@@ -566,7 +543,7 @@ class _SendOperation:
         self.selected_candidate = None
         recovered_stale_selection = False
         self.agent_owns_models = self.is_external_agent and str((self.chat.get("modelAccess") or {}).get("mode") or "") == "agent_managed"
-        selected_key = "" if self.agent_owns_models else self.requested_model or str(self.chat.get("modelSelectionId") or "").strip()
+        selected_key = "" if self.agent_owns_models else self.options.requested_model or str(self.chat.get("modelSelectionId") or "").strip()
         if selected_key:
             from cyrene.core.plugin import application_plugin_service
 
@@ -587,13 +564,13 @@ class _SendOperation:
                 None,
             )
             if self.selected_candidate is None:
-                if self.requested_model:
+                if self.options.requested_model:
                     return localized_error_response(
                         "The configured model was not found.",
                         "未找到已配置的模型。",
                         400,
                         "model_not_found",
-                        language=self.lang,
+                        language=self.options.lang,
                     )
                 models = model_service.candidates_for_route("primary") if model_service is not None else []
                 self.selected_candidate = models[0] if models else None
@@ -608,7 +585,7 @@ class _SendOperation:
                 "此对话已有回复正在生成。",
                 409,
                 "chat_run_in_progress",
-                language=self.lang,
+                language=self.options.lang,
             )
         return None
 
@@ -619,21 +596,21 @@ class _SendOperation:
         selected_model = str(candidate.get("model") or candidate.get("name") or selected_key).strip()
         selected_model_id = str(candidate.get("id") or selected_key).strip()
         selected_effort = (
-            self.requested_effort
+            self.options.requested_effort
             or str((candidate.get("reasoning_effort") if recovered else self.chat.get("reasoningEffort")) or candidate.get("reasoning_effort") or "").strip().lower()
         )
         set_session_model_preference(self.chat_id, candidate, selected_effort)
         self.chat["modelSelectionId"] = selected_model_id
         self.chat["model"] = selected_model
         self.chat["reasoningEffort"] = selected_effort
-        if self.requested_model:
+        if self.options.requested_model:
             self.chat.pop("lastModel", None)
 
     async def _prepare_user_turn(self):
         self.now = self.service.utc_now_iso()
         messages = self.chat.setdefault("messages", [])
         self.should_generate_title = False
-        if self.retry:
+        if self.options.retry:
             last_user_index = next(
                 (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
                 -1,
@@ -644,7 +621,7 @@ class _SendOperation:
                     "没有可重试的消息。",
                     400,
                     "nothing_to_retry",
-                    language=self.lang,
+                    language=self.options.lang,
                 )
             self.user_entry = messages[last_user_index]
             self.truncate_after_id = str(self.user_entry.get("id") or "")
@@ -690,12 +667,12 @@ class _SendOperation:
         }
         if self.command:
             self.user_entry["command"] = self.command
-        if self.client_request_id:
-            self.user_entry["clientRequestId"] = self.client_request_id
-        if self.agent_originated:
+        if self.origin.client_request_id:
+            self.user_entry["clientRequestId"] = self.origin.client_request_id
+        if self.origin.agent_originated:
             self.user_entry["agentOriginated"] = True
-        if self.origin_session_id:
-            self.user_entry["originSessionId"] = self.origin_session_id
+        if self.origin.origin_session_id:
+            self.user_entry["originSessionId"] = self.origin.origin_session_id
         if self.public_attachments:
             self.user_entry["attachments"] = self.public_attachments
             self.user_entry["agentAttachments"] = self.normalized
@@ -727,7 +704,7 @@ class _SendOperation:
                     "无法准备对话群组上下文。",
                     503,
                     "chat_group_context_unavailable",
-                    language=self.lang,
+                    language=self.options.lang,
                 )
         self.chat["status"] = "running"
         if self.selected_candidate is None and not self.agent_owns_models:
@@ -741,7 +718,7 @@ class _SendOperation:
         return None
 
     async def _finalize_persisted_user_turn(self) -> None:
-        if self.normalized and not self.retry:
+        if self.normalized and not self.options.retry:
             await self.routes.register_attachments_kb(self.chat_id, self.normalized)
         if self.should_generate_title:
             task = self.controller.session_naming.generate_and_persist(
@@ -798,22 +775,22 @@ class _SendOperation:
                 "<main_conversation>\n{conversation}\n</main_conversation>\n\n"
                 "<selected_quote>\n{quote}\n</selected_quote>\n\n"
                 "用户问题：\n{question}",
-                language=self.lang,
+                language=self.options.lang,
                 conversation=self.parent_transcript
-                or localized("(empty)", "（空）", language=self.lang),
+                or localized("(empty)", "（空）", language=self.options.lang),
                 quote=source_quote
-                or localized("(none)", "（无）", language=self.lang),
+                or localized("(none)", "（无）", language=self.options.lang),
                 question=self.message,
             )
         if self.normalized:
             self.agent_message = (
                 self.agent_message
                 or localized(
-                    "[Attachment upload]", "[附件上传]", language=self.lang
+                    "[Attachment upload]", "[附件上传]", language=self.options.lang
                 )
             ) + self.routes.attachment_prompt_block(
                 self.normalized,
-                language=self.lang,
+                language=self.options.lang,
             )
 
     def _attachment_path_map(self) -> dict[str, str]:
@@ -862,7 +839,7 @@ class _SendOperation:
             db_path=self.context.db_path,
             bot=self.context.bot,
             host_chat_id=self.routes.chat_id,
-            client_request_id=self.client_request_id,
+            client_request_id=self.origin.client_request_id,
             permission_mode=self.mode,
             command=self.command,
             public_user_message=self.public_message,
@@ -894,19 +871,19 @@ class _SendOperation:
             memory_project_enabled=self.service.chat_project_memory_active(
                 self.chat
             ),
-            retry=self.retry,
+            retry=self.options.retry,
             completed_turn_count=next_completed_turn_count(
                 {
                     "completedTurnCount": int(
                         getattr(self, "completed_turn_count_before", 0) or 0
                     )
                 },
-                retry=self.retry,
+                retry=self.options.retry,
                 command=self.command,
                 is_side_agent=self.is_side_agent,
             ),
             response_capabilities=("interactive_blocks",),
-            ui_instance_id=self.ui_instance_id,
+            ui_instance_id=self.origin.ui_instance_id,
             conversation_source=source,
             guidance_channel=run.guidance_channel,
         )
@@ -940,8 +917,8 @@ class _SendOperation:
         source = (
             "side_agent"
             if self.is_side_agent
-            else self.conversation_source
-            or await resolve_conversation_source(self.ui_instance_id)
+            else self.origin.conversation_source
+            or await resolve_conversation_source(self.origin.ui_instance_id)
         )
         config = self._conversation_config(
             run,
@@ -958,11 +935,11 @@ class _SendOperation:
             ),
             run_id=run.run_id,
             metadata={
-                "client_request_id": self.client_request_id,
+                "client_request_id": self.origin.client_request_id,
                 "public_user_message": self.public_message,
                 "public_attachments": [dict(item) for item in self.public_attachments],
                 "command": self.command,
-                "retry": self.retry,
+                "retry": self.options.retry,
                 "turn_id": str(
                     (
                         getattr(self, "user_entry", {})
@@ -971,7 +948,7 @@ class _SendOperation:
                     ).get("id")
                     or ""
                 ),
-                "fork_replay": self.fork_replay,
+                "fork_replay": self.options.fork_replay,
                 "ephemeral_context": "\n\n".join(
                     part for part in turn_system_extras if part
                 ),
@@ -1008,7 +985,7 @@ class _SendOperation:
             workspace_dir=self.workspace_dir,
             message=self.public_message,
             command=self.command,
-            retry=self.retry,
+            retry=self.options.retry,
             is_side_agent=self.is_side_agent,
             is_external_agent=self.is_external_agent,
             completed_turn_count_before=self.completed_turn_count_before,
@@ -1039,7 +1016,7 @@ class _SendOperation:
             logger.exception("Failed to restore retry state for %s", self.chat_id)
 
     def _commit_retry_cut(self, target_chat: dict[str, Any]) -> None:
-        if not self.retry or not self.truncate_after_id:
+        if not self.options.retry or not self.truncate_after_id:
             return
         self.service.remove_retry_replaced_messages(
             target_chat,
@@ -1127,7 +1104,7 @@ class _SendOperation:
             run_id=run_id,
             node_id=node_id,
             status="awaiting_user" if pending is not None else "completed",
-            retry=self.retry,
+            retry=self.options.retry,
             user_text=self.public_message,
             assistant_text=(
                 ""
@@ -1160,7 +1137,7 @@ class _SendOperation:
                 self.service.public_message(item) for item in additions
             ],
             "chatSummary": summary,
-            "retry": self.retry,
+            "retry": self.options.retry,
         }
         if pending is not None:
             payload["pendingQuestion"] = pending
@@ -1282,7 +1259,7 @@ class _SendOperation:
                 additions = [*timeline, assistant]
                 chat["completedTurnCount"] = self.service.next_completed_turn_count(
                     {"completedTurnCount": self.completed_turn_count_before},
-                    retry=self.retry,
+                    retry=self.options.retry,
                     command=self.command,
                     is_side_agent=self.is_side_agent,
                 )
@@ -1338,7 +1315,7 @@ class _SendOperation:
                     "pending_question": pending,
                     "pendingQuestion": pending,
                     "assistantMessages": payload.get("assistantMessages") or [],
-                    "retry": self.retry,
+                    "retry": self.options.retry,
                     "retryReplacedMessageIds": sorted(
                         self.retry_replaced_message_ids
                     ),
@@ -1363,7 +1340,7 @@ class _SendOperation:
             finalize_origin(
                 self.chat_id,
                 "",
-                origin_run_id=self.client_request_id,
+                origin_run_id=self.origin.client_request_id,
             )
         )
 
@@ -1453,7 +1430,7 @@ class _SendOperation:
                     "message": localized(
                         "The Agent run failed. Please try again.",
                         "Agent 运行失败，请重试。",
-                        language=self.lang,
+                        language=self.options.lang,
                     ),
                     **self.service.chat_error_metadata(exc),
                 }
@@ -1497,8 +1474,8 @@ class _SendOperation:
             (time.monotonic() - self.processing_started_at) * 1000,
         )
         client_to_server_ms = (
-            max(0.0, time.time() * 1000 - self.client_send_epoch_ms)
-            if self.client_send_epoch_ms > 0
+            max(0.0, time.time() * 1000 - self.origin.client_send_epoch_ms)
+            if self.origin.client_send_epoch_ms > 0
             else None
         )
         server_received_timing: dict[str, Any] = {
@@ -1510,7 +1487,7 @@ class _SendOperation:
         ack: dict[str, Any] = {
             "type": "ack",
             "chatId": self.chat_id,
-            "clientRequestId": self.client_request_id,
+            "clientRequestId": self.origin.client_request_id,
             "_timingEnabled": True,
             "_latencyStartedMonotonic": self.processing_started_at,
             "timing": [
@@ -1518,7 +1495,7 @@ class _SendOperation:
                 {"stage": "ack", "serverElapsedMs": round(ack_elapsed_ms, 3)},
             ],
         }
-        if self.retry:
+        if self.options.retry:
             ack.update(
                 {
                     "retry": True,
@@ -1535,7 +1512,7 @@ class _SendOperation:
             self.chat_id,
             ack,
             runner,
-            stream=self.wants_stream,
+            stream=self.options.wants_stream,
             settler=self._publish_builtin_settled,
         )
         if not is_new:
@@ -1544,7 +1521,7 @@ class _SendOperation:
                     "This chat already has a reply in progress.",
                     "此对话已有回复正在生成。",
                     "chat_run_in_progress",
-                    language=self.lang,
+                    language=self.options.lang,
                 ),
                 status_code=409,
             )
@@ -1557,7 +1534,7 @@ class _SendOperation:
             chatSummary=self.service.public_chat_light(self.chat),
             userMessage=self.service.public_message(self.user_entry),
         )
-        if self.wants_stream:
+        if self.options.wants_stream:
             if self.detached:
                 return self._builtin_dispatch_response(
                     payload={
@@ -1588,7 +1565,7 @@ class _SendOperation:
                     "The Agent run failed. Please try again.",
                     "Agent 运行失败，请重试。",
                     code,
-                    language=self.lang,
+                    language=self.options.lang,
                     **metadata,
                 ),
                 status_code=502,
@@ -1602,7 +1579,7 @@ class _SendOperation:
                     "The Agent run ended without a result.",
                     "Agent 运行结束，但未产生结果。",
                     "agent_outcome_missing",
-                    language=self.lang,
+                    language=self.options.lang,
                 )
             ),
             status_code=200 if isinstance(payload, dict) else 500,
@@ -1640,11 +1617,11 @@ class _SendOperation:
                 chat_id=self.chat_id,
                 project_id=self.project_id,
                 workspace_dir=self.workspace_dir,
-                lang=self.lang,
-                client_request_id=self.client_request_id,
-                retry=self.retry,
+                lang=self.options.lang,
+                client_request_id=self.origin.client_request_id,
+                retry=self.options.retry,
                 detached=self.detached,
-                wants_stream=self.wants_stream,
+                wants_stream=self.options.wants_stream,
                 is_external_agent=self.is_external_agent,
                 user_entry=self.user_entry,
                 retry_replaced_message_ids=self.retry_replaced_message_ids,
@@ -1697,7 +1674,7 @@ class _SendOperation:
                     "The Agent run failed. Please try again.",
                     "Agent 运行失败，请重试。",
                     code,
-                    language=self.lang,
+                    language=self.options.lang,
                     **metadata,
                 ),
                 status_code=lifecycle.status_code,

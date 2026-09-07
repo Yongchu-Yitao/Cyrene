@@ -1,8 +1,10 @@
+import { useWbcSplitSelection } from "./split-selection-state.jsx"
+import { useWbcChatProjections, useWbcDraftAgentBinding, useWbcSplitSide } from "./page-state.jsx"
 import { resolveRefreshedChatSelection as wbcResolveRefreshedChatSelection } from "./behavior.mjs"
 import { wbcWorkspaceSurfaceDescriptor, useWbcWorkspaceSurfaceState, useWbcSurfaceIntentListener, useWbcResourceObservations, wbcOpenStartedWorkspace } from "./workspace-surface-controller.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { PluginFrontendService, PluginView, pluginLocalizedField } from "../../platform/plugins.jsx"
-import { WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcCaptureConversationViewport, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPinPageSplitLayout, wbcPinSplitMotionOpen, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReleasePinnedPageSplitLayout, wbcReleasePinnedSplitMotion, wbcRestoreConversationViewport, wbcSaveDraftAgentBinding, wbcT } from "../../workbench-chat.jsx"
+import { WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcCaptureConversationViewport, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPinPageSplitLayout, wbcPinSplitMotionOpen, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReleasePinnedPageSplitLayout, wbcReleasePinnedSplitMotion, wbcRestoreConversationViewport, wbcT } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcChatSplit, WbcChatSplitHost, WbcMapPaneContent, WbcMapSplitHost, WbcPaneCardFrame, WbcPaneColumnResizer, WbcPaneContextTrackDropSurface, WbcPaneRowResizer, WbcSide, WbcSideAgentSplit, WbcSideAgentSplitHost, WbcSplitGripBar, WbcSubagentsSplitHost, WbcSubagentsTab, wbcArtifactFileKey, wbcChatArtifactFiles, wbcDiscardProjectFileDraft, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { WorkbenchChatRuntimes, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence } from "./file-resources.jsx"
 
@@ -88,9 +90,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   // newly opened list until the user explicitly chooses one of its cards.
   var [railSelectionSuppressed, setRailSelectionSuppressed] = useWbcState(false);
   var chatCache = wbcChatCache();
-  var [chats, setChats] = useWbcState([]);
-  var chatsRef = useWbcRef([]);
-  var chatsProjectIdRef = useWbcRef("");
+  var { chats, setChats, chatsRef, chatsProjectIdRef, activeChat, setActiveChat } = useWbcChatProjections(projectId, chatCache, onChatsChange);
   var requestSequencer = useWbcChatRequestSequencer();
   var beginChatHydration = requestSequencer.beginHydration;
   var isCurrentChatHydration = requestSequencer.isCurrentHydration;
@@ -114,25 +114,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     lastEventAt: 0,
     waitingForIdle: false,
   });
-  // Draft Agent binding for a not-yet-created chat (handoff §8.3): the first
-  // message's lazy createChat() submits this binding instead of creating a
-  // default-Agent chat and immediately rebinding it.
-  var [draftAgentBinding, setDraftAgentBinding] = useWbcState(function () {
-    return wbcLoadDraftAgentBinding(projectId);
-  });
-  var draftAgentBindingRef = useWbcRef(draftAgentBinding);
-  if (!agentsAvailable) draftAgentBindingRef.current = null;
-  useWbcEffect(function () { draftAgentBindingRef.current = draftAgentBinding; }, [draftAgentBinding]);
-  useWbcEffect(function () {
-    if (agentsAvailable) return;
-    draftAgentBindingRef.current = null;
-    setDraftAgentBinding(null);
-    wbcSaveDraftAgentBinding(projectId, null);
-  }, [agentsAvailable, projectId]);
-  function handleDraftAgentChange(binding) {
-    setDraftAgentBinding(binding || null);
-    wbcSaveDraftAgentBinding(projectId, binding || null);
-  }
+  var { draftAgentBinding, setDraftAgentBinding, draftAgentBindingRef, handleDraftAgentChange } = useWbcDraftAgentBinding(projectId, agentsAvailable);
   function handleSwitchAgent(binding) {
     if (!binding || !activeChat || !activeChat.id) return Promise.resolve(null);
     setError("");
@@ -195,7 +177,6 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     setActiveChatId("");
     if (previousId) restoreTerminalReplacement(previousId);
   }
-  var [activeChat, setActiveChat] = useWbcState(null);
   var [loading, setLoading] = useWbcState(true);
   var [chatLoading, setChatLoading] = useWbcState(false);
   var [loadRevision, setLoadRevision] = useWbcState(0);
@@ -262,27 +243,6 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   function deleteTerminal(terminalId) { return wbcDeleteTerminal(terminalActionContext(), terminalId); }
 
   useWbcEffect(function () {
-    chatsRef.current = chats;
-    if (
-      projectId
-      && chatsProjectIdRef.current === projectId
-      && Array.isArray(chats)
-      && chats.every(function (chat) { return String((chat && chat.projectId) || "") === String(projectId); })
-    ) {
-      chatCache.lists[projectId] = chats;
-    }
-    if (onChatsChange && projectId) onChatsChange(projectId, chats);
-  }, [chats]);
-  useWbcEffect(function () {
-    if (
-      activeChat
-      && activeChat.id
-      && String(activeChat.projectId || "") === String(projectId)
-    ) {
-      chatCache.details[activeChat.id] = activeChat;
-    }
-  }, [activeChat]);
-  useWbcEffect(function () {
     activeChatIdRef.current = activeChatId;
     // Remember the open conversation per project so switching to another module
     // and back restores it (rather than snapping to the most-recent chat) — key
@@ -301,31 +261,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       retryClearCommitRef.current = null;
     };
   }, []);
-  // Which side of the conversation the detail split anchors to. Global across
-  // chats (like the split width) so the choice survives conversation switches.
-  var [splitSide, setSplitSide] = useWbcState(function () {
-    try {
-      return localStorage.getItem("wbc-split-side") === "left" ? "left" : "right";
-    } catch (e) {
-      return "right";
-    }
-  });
-  function toggleSplitSide() {
-    setSplitSide(function (current) {
-      var next = current === "left" ? "right" : "left";
-      try { localStorage.setItem("wbc-split-side", next); } catch (e) {}
-      return next;
-    });
-  }
-  // Idempotent setter used by the grip drag so moving the pointer across the
-  // window midline follows the split live without toggling on every move.
-  function setSplitSideDirect(next) {
-    setSplitSide(function (current) {
-      if (current === next) return current;
-      try { localStorage.setItem("wbc-split-side", next); } catch (e) {}
-      return next;
-    });
-  }
+  var { splitSide, toggleSplitSide, setSplitSideDirect } = useWbcSplitSide();
   var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState(function () {
     var restored = wbcReadPaneWorkspace(projectId);
     if (!restored) return {};
@@ -466,7 +402,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       paneLayoutsByChat: paneLayoutsByChat, activeChatIdRef: activeChatIdRef,
       paneLayoutRestoreRef: paneLayoutRestoreRef, floatingSplitRestoreRef: floatingSplitRestoreRef,
       terminalClient: terminalClient,
-      setPaneLayoutsByChat: setPaneLayoutsByChat, setResourceSplitByChat: setResourceSplitByChat,
+      setPaneLayoutsByChat: setPaneLayoutsByChat, splitSelection: splitSelection,
       setActiveTerminalId: setActiveTerminalId, setRailSelectionSuppressed: setRailSelectionSuppressed,
       setRailMode: setRailMode, setActiveChatId: setActiveChatId, setActiveChat: setActiveChat,
       setChats: setChats, setError: setError, setErrorKind: setErrorKind,
@@ -559,14 +495,12 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   // Selecting a side question in the right-hand list opens its conversation
   // beside the main thread. Keep this separate from the remembered list
   // selection so creating/loading an agent never opens the split by itself.
-  var [sideAgentSplitByChat, setSideAgentSplitByChat] = useWbcState({});
+  var splitSelection = useWbcSplitSelection();
+  var { sideAgentSplitByChat, artifactSplitByChat, changeSplitByChat, resourceSplitByChat } = splitSelection;
   // Artifacts use the same resizable detail track as side conversations. Store
   // only the stable file key so refreshed chat payloads can supply fresh URLs.
-  var [artifactSplitByChat, setArtifactSplitByChat] = useWbcState({});
-  var [changeSplitByChat, setChangeSplitByChat] = useWbcState({});
   // Map, browser, viewer and subagent details share the same right-side split
   // shell. The side panel only exposes their lightweight index/list surface.
-  var [resourceSplitByChat, setResourceSplitByChat] = useWbcState({});
   // While a detail split is open, the conversation panel can float beneath
   // the main conversation grip without disturbing that split. If a resource
   // is opened from the floating panel, remember the displaced split so its
@@ -1279,16 +1213,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   useWbcEffect(function () {
     if (mapAvailable && browserAvailable) return;
     var blockedKinds = new Set([].concat(mapAvailable ? [] : ["map"], browserAvailable ? [] : ["browser"]));
-    setResourceSplitByChat(function (current) {
-      var next = {};
-      var changed = false;
-      Object.keys(current).forEach(function (key) {
-        var value = current[key];
-        if (value && blockedKinds.has(value.type)) changed = true;
-        else next[key] = value;
-      });
-      return changed ? next : current;
-    });
+    splitSelection.pruneResources(function (value) { return value && blockedKinds.has(value.type); });
     setPaneLayoutsByChat(function (current) {
       var next = Object.assign({}, current);
       var changed = false;
@@ -1441,8 +1366,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       sideAgentSplitByChat: sideAgentSplitByChat, artifactSplitByChat: artifactSplitByChat,
       changeSplitByChat: changeSplitByChat, resourceSplitByChat: resourceSplitByChat,
       setSideAgents: setSideAgents, setActiveSideAgentByChat: setActiveSideAgentByChat,
-      setSideAgentSplitByChat: setSideAgentSplitByChat, setArtifactSplitByChat: setArtifactSplitByChat,
-      setChangeSplitByChat: setChangeSplitByChat, setResourceSplitByChat: setResourceSplitByChat,
+      splitSelection: splitSelection,
       setSideTab: setSideTab, setViewerFile: setViewerFile,
       setFloatingConversationPanelOpen: setFloatingConversationPanelOpen,
       setError: setError, setErrorKind: setErrorKind, openPaneContent: openPaneContent,
@@ -1714,9 +1638,9 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     return true;
   }
 
-  function closeSideAgentSplit() { return wbcCloseNamedSplit(splitSelectionContext(), setSideAgentSplitByChat); }
-  function closeArtifactSplit() { return wbcCloseNamedSplit(splitSelectionContext(), setArtifactSplitByChat); }
-  function closeChangeSplit() { return wbcCloseNamedSplit(splitSelectionContext(), setChangeSplitByChat); }
+  function closeSideAgentSplit() { return wbcCloseNamedSplit(splitSelectionContext(), "side-agent"); }
+  function closeArtifactSplit() { return wbcCloseNamedSplit(splitSelectionContext(), "artifact"); }
+  function closeChangeSplit() { return wbcCloseNamedSplit(splitSelectionContext(), "change"); }
   function closeResourceSplit() { return wbcCloseResourceSplit(splitSelectionContext()); }
   function closeMainConversationSplit() { return wbcCloseMainConversationSplit(splitSelectionContext()); }
   function closeActiveSplit() { return wbcCloseActiveSplit(splitSelectionContext()); }

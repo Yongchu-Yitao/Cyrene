@@ -128,10 +128,20 @@ class WorkbenchSessionApplicationService:
     ) -> None:
         self._presentation = WorkbenchSessionPresentation(db_path)
 
-    async def list_sessions(self) -> dict[str, Any]:
-        return {
-            "sessions": await asyncio.to_thread(self._presentation.list),
-        }
+    async def list_sessions(self, *, include_status: bool = False) -> dict[str, Any]:
+        sessions = await asyncio.to_thread(self._presentation.list)
+        payload = {"sessions": sessions}
+        if include_status:
+            try:
+                payload["status"] = await presentation_runtime.build_status(
+                    self._presentation.db_path, sessions=sessions,
+                )
+            except Exception:
+                # These projections previously refreshed independently: a status
+                # failure must not discard a successfully loaded session list.
+                logger.exception("Could not build supplemental Workbench status")
+                payload["status_error"] = True
+        return payload
 
     async def clear_session(self, chat_id: str) -> dict[str, Any]:
         session, deleted_archives = await asyncio.to_thread(

@@ -898,7 +898,12 @@ def test_conversation_runtime_forwards_exact_model_identity(tmp_path, monkeypatc
 def test_send_operation_uses_session_route_instead_of_exact_model_identity():
     from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
+    from dataclasses import replace
+    from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin, SendOptions
+
     operation = object.__new__(_SendOperation)
+    operation.origin = SendOrigin.parse({})
+    operation.options = SendOptions.parse({})
     operation.chat_id = "chat-preferred-route"
     operation.workspace_dir = "/tmp/workspace"
     operation.context = SimpleNamespace(
@@ -906,7 +911,7 @@ def test_send_operation_uses_session_route_instead_of_exact_model_identity():
         bot=None,
     )
     operation.routes = SimpleNamespace(chat_id="host-chat")
-    operation.client_request_id = "request-1"
+    operation.origin = replace(operation.origin, client_request_id="request-1")
     operation.mode = "default"
     operation.command = ""
     operation.public_message = "hello"
@@ -916,9 +921,9 @@ def test_send_operation_uses_session_route_instead_of_exact_model_identity():
     operation.resolved_context_activations = {}
     operation.project_id = "project-1"
     operation.is_side_agent = False
-    operation.retry = False
+    operation.options = replace(operation.options, retry=False)
     operation.completed_turn_count_before = 0
-    operation.ui_instance_id = "ui-1"
+    operation.origin = replace(operation.origin, ui_instance_id="ui-1")
     operation.service = SimpleNamespace(
         chat_soul_active=lambda _chat: True,
         chat_workspace_active=lambda _chat: True,
@@ -1040,9 +1045,14 @@ def test_builtin_workbench_route_always_uses_new_runtime(
 
     monkeypatch.setattr(host_bridge, "resolve_conversation_source", fake_source)
 
+    from dataclasses import replace
+    from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin, SendOptions
+
     operation = object.__new__(_SendOperation)
+    operation.origin = SendOrigin.parse({})
+    operation.options = SendOptions.parse({})
     operation.chat_id = "chat-route"
-    operation.client_request_id = "request-route"
+    operation.origin = replace(operation.origin, client_request_id="request-route")
     operation.is_external_agent = False
     operation.is_side_agent = False
     operation.agent_message = "hello"
@@ -1052,14 +1062,14 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     operation.command = ""
     operation.mode = "default"
     operation.workspace_dir = str(tmp_path / "workspace")
-    operation.ui_instance_id = "ui-route"
-    operation.conversation_source = ""
+    operation.origin = replace(operation.origin, ui_instance_id="ui-route")
+    operation.origin = replace(operation.origin, conversation_source="")
     operation.context_activations = {"skills": ["writer"]}
     operation.resolved_context_activations = {"skills": ["writer"]}
     operation.dynamic_command_prompt = ""
     operation.project_id = "project-route"
-    operation.retry = False
-    operation.fork_replay = False
+    operation.options = replace(operation.options, retry=False)
+    operation.options = replace(operation.options, fork_replay=False)
     operation.completed_turn_count_before = 2
     operation.chat = {
         "projectMemorySnapshot": {},
@@ -1137,9 +1147,14 @@ def test_failed_plugin_workflow_atomically_restores_the_user_turn(tmp_path):
     }
     repository.write({"chats": [base_chat]})
     before = repository.get(base_chat["id"])
+    from dataclasses import replace
+    from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin, SendOptions
+
     operation = object.__new__(_SendOperation)
+    operation.origin = SendOrigin.parse({})
+    operation.options = SendOptions.parse({})
     operation.chat_id = base_chat["id"]
-    operation.lang = "en"
+    operation.options = replace(operation.options, lang="en")
     operation.base_chat = before
     operation.chat = {
         **dict(before or {}),

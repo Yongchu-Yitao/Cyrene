@@ -1,7 +1,10 @@
+import { useWbcComposerSettings, resolveComposerSettings, wbcNormalizeContextActivations } from "./composer-settings.jsx"
+import { useWbcComposerDraft } from "./composer-draft.jsx"
+import { useWbcComposerContextResource, useWbcComposerCommandCatalog } from "./composer-resources.jsx"
 import { WbcComposerAttachmentView } from "./composer-attachment-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcNormalizePermissionMode, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
-import { WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
+import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
+import { WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
 import { WbcFileVisual, wbcCommandMeta } from "./file-resources.jsx"
 import { useWbcComposerAttachments } from "./composer-attachments.jsx"
 import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
@@ -17,17 +20,6 @@ function wbcAuthoredContextTranslation(item, field) {
   try { language = workbenchServices.i18n().getLang() || "en"; } catch (error) {}
   var localized = translations[language] || translations[String(language).split("-")[0]] || {};
   return String(localized && localized[field] || "");
-}
-
-function wbcNormalizeContextActivations(value) {
-  var source = value && typeof value === "object" ? value : {};
-  var result = {};
-  WBC_CONTEXT_ACTIVATION_KEYS.forEach(function (key) {
-    result[key] = Array.from(new Set((Array.isArray(source[key]) ? source[key] : []).map(function (item) {
-      return String(item || "").trim();
-    }).filter(Boolean)));
-  });
-  return result;
 }
 
 function wbcContextCatalogItems(catalog, key) {
@@ -100,14 +92,12 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var agentPickerEnabled = agentsAvailable && typeof onDraftAgentChange === "function";
   var shouldClearOnSend = clearOnSend !== false;
   var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);
-  var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId, draftNs); });
-  var [mode, setMode] = useWbcState(function () {
-    return wbcNormalizePermissionMode(chat && chat.permissionMode, "auto");
-  });
+  var draftState = useWbcComposerDraft(chatId, draftNs);
+  var { draft, setDraft, draftRef, prevChatIdRef, persistCurrentDraft } = draftState;
+  var composerSettings = useWbcComposerSettings(chat);
+  var { mode, soulActive, workspaceActive, shortTermMemoryActive, projectMemoryActive, contextActivations } = composerSettings.settings;
+  var { setMode, setSoulActive, setWorkspaceActive, setShortTermMemoryActive, setProjectMemoryActive, setContextActivations } = composerSettings.actions;
   var [command, setCommand] = useWbcState("");
-  var [slashCommandCatalog, setSlashCommandCatalog] = useWbcState([]);
-  var [slashCommandCatalogLoaded, setSlashCommandCatalogLoaded] = useWbcState(false);
-  var [slashCommandCatalogLoading, setSlashCommandCatalogLoading] = useWbcState(false);
   var [slashActiveIndex, setSlashActiveIndex] = useWbcState(0);
   var [slashDismissedDraft, setSlashDismissedDraft] = useWbcState("");
   var [toolsOpen, setToolsOpen] = useWbcState(false);
@@ -116,10 +106,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var agentCatalog = useWbcComposerAgentCatalog(agentPickerEnabled);
   var agentOptions = agentCatalog.options;
   var agentOptionsLoaded = agentCatalog.loaded;
-  var [contextState, setContextState] = useWbcState(null);
-  var [contextCatalogLoading, setContextCatalogLoading] = useWbcState(false);
-  var [contextCatalogLoaded, setContextCatalogLoaded] = useWbcState(false);
-  var [contextStateRevision, setContextStateRevision] = useWbcState(0);
+  var contextResource = useWbcComposerContextResource(projectId, projectWorkspacePath, composerContextAvailable);
+  var { contextState, contextCatalogLoading, contextCatalogLoaded } = contextResource;
   var contextCatalogPayload = contextState && contextState.catalog && typeof contextState.catalog === "object"
     ? contextState.catalog : null;
   var contextOptions = contextState && contextState.options && typeof contextState.options === "object"
@@ -144,18 +132,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   };
   var remoteDevices = remoteAvailable
     ? wbcContextCatalogItems(contextCatalogPayload, "remoteDevices") : [];
-  var [soulActive, setSoulActive] = useWbcState(function () {
-    return chat && typeof chat.soulActive === "boolean" ? chat.soulActive : true;
-  });
-  var [workspaceActive, setWorkspaceActive] = useWbcState(function () {
-    return chat && typeof chat.workspaceActive === "boolean" ? chat.workspaceActive : true;
-  });
-  var [shortTermMemoryActive, setShortTermMemoryActive] = useWbcState(function () {
-    return chat && typeof chat.shortTermMemoryActive === "boolean" ? chat.shortTermMemoryActive : true;
-  });
-  var [projectMemoryActive, setProjectMemoryActive] = useWbcState(function () {
-    return chat && typeof chat.projectMemoryActive === "boolean" ? chat.projectMemoryActive : true;
-  });
   var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
     return String(chat && chat.workspaceOverride || "").trim()
       || wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
@@ -163,23 +139,16 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState(function () {
     return chat && Array.isArray(chat.remoteDeviceIds) ? chat.remoteDeviceIds.slice() : [];
   });
-  var [contextActivations, setContextActivations] = useWbcState(function () {
-    return wbcNormalizeContextActivations(chat && chat.contextActivations);
-  });
   var [contextCatalogPanel, setContextCatalogPanel] = useWbcState("");
   var taRef = useWbcRef(null);
   var composerBoxRef = useWbcRef(null);
   var sendButtonRef = useWbcRef(null);
   var toolsPickerRef = useWbcRef(null);
   var modelPickerRef = useWbcRef(null);
-  var draftRef = useWbcRef(draft);
-  var prevChatIdRef = useWbcRef(chatId);
   var workspaceOverrideRef = useWbcRef(workspaceOverride);
   var remoteDeviceIdsRef = useWbcRef(remoteDeviceIds);
   var contextActivationsRef = useWbcRef(contextActivations);
   var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
-  var draftSaveTimerRef = useWbcRef(0);
-  var pendingDraftSaveRef = useWbcRef(null);
   var modelSelectionRequestRef = useWbcRef(0);
   // Last payload snapshot for optimistic clear with restore on error
   var lastSentRef = useWbcRef(null);
@@ -275,8 +244,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   };
   var agentSlashCommands = wbcComposerSlashCommands(commandSource);
   var slashCommandsCapabilityDriven = agentSlashCommands !== null;
+  var commandCatalog = useWbcComposerCommandCatalog({ builtinContextCapabilities, draft, toolsOpen, projectId, command, setCommand });
+  var { slashCommandCatalog, slashCommandCatalogLoading } = commandCatalog;
 
-  useWbcEffect(function () { draftRef.current = draft; });
   useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
   useWbcEffect(function () { remoteDeviceIdsRef.current = remoteDeviceIds; });
   useWbcEffect(function () { contextActivationsRef.current = contextActivations; });
@@ -342,41 +312,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [builtinContextCapabilities]);
 
   useWbcEffect(function () {
-    if (!builtinContextCapabilities || (draft.indexOf("/") !== 0 && !toolsOpen) || slashCommandCatalogLoaded || slashCommandCatalogLoading) return undefined;
-    var cancelled = false;
-    setSlashCommandCatalogLoading(true);
-    workbenchServices.api().json(
-      "/api/workbench/slash-commands?project_id=" + encodeURIComponent(projectId || ""),
-      { toast: false }
-    ).then(function (payload) {
-      if (cancelled) return;
-      var commands = Array.isArray(payload && payload.commands) ? payload.commands : [];
-      setSlashCommandCatalog(commands);
-      if (command && !commands.some(function (item) { return item && item.id === command; })) {
-        setCommand("");
-      }
-      setSlashCommandCatalogLoaded(true);
-    }).catch(function (err) {
-      if (!cancelled) workbenchServices.api().toastError(err, wbcT("workbenchChat.slashCommandsLoadFailed", "Failed to load commands: "));
-    }).finally(function () {
-      if (!cancelled) setSlashCommandCatalogLoading(false);
-    });
-    return function () { cancelled = true; };
-  }, [builtinContextCapabilities, draft.indexOf("/") === 0, toolsOpen, slashCommandCatalogLoaded, projectId]);
-
-  useWbcEffect(function () {
-    setSlashCommandCatalog([]);
-    setSlashCommandCatalogLoaded(false);
-  }, [projectId]);
-
-  useWbcEffect(function () {
     function invalidateComposerContext() {
-      setContextState(null);
-      setContextCatalogLoaded(false);
+      contextResource.invalidate();
       setContextCatalogPanel("");
-      setContextStateRevision(function (current) { return current + 1; });
-      setSlashCommandCatalog([]);
-      setSlashCommandCatalogLoaded(false);
+      commandCatalog.invalidate();
     }
     function onPlatformEvent(event) {
       if (event && event.type === "remote_devices_changed") invalidateComposerContext();
@@ -393,12 +332,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, []);
 
   useWbcEffect(function () {
-    if (draft.indexOf("/") !== 0 && !toolsOpen && !command && slashCommandCatalogLoaded) {
-      setSlashCommandCatalogLoaded(false);
-    }
-  }, [draft.indexOf("/") === 0, toolsOpen, command]);
-
-  useWbcEffect(function () {
     if (!modelOpen) return undefined;
     var overlays;
     try { overlays = workbenchServices.browserOverlays(); } catch (e) {}
@@ -406,26 +339,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     overlays.adjust(1);
     return function () { overlays.adjust(-1); };
   }, [modelOpen]);
-
-  useWbcEffect(function () {
-    if (prevChatIdRef.current !== chatId) return;
-    if (draftSaveTimerRef.current) window.clearTimeout(draftSaveTimerRef.current);
-    pendingDraftSaveRef.current = { id: chatId, text: draft, ns: draftNs };
-    draftSaveTimerRef.current = window.setTimeout(flushPendingDraftSave, WBC_DRAFT_SAVE_DELAY_MS);
-  }, [draft, chatId, draftNs]);
-
-  useWbcEffect(function () {
-    function flushHiddenDraft() {
-      if (document.visibilityState === "hidden") flushPendingDraftSave();
-    }
-    window.addEventListener("pagehide", flushPendingDraftSave);
-    document.addEventListener("visibilitychange", flushHiddenDraft);
-    return function () {
-      window.removeEventListener("pagehide", flushPendingDraftSave);
-      document.removeEventListener("visibilitychange", flushHiddenDraft);
-      flushPendingDraftSave();
-    };
-  }, []);
 
   useWbcEffect(function () {
     if (prevWorkspaceContextKeyRef.current === workspaceContextKey) {
@@ -473,27 +386,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   useWbcEffect(function () {
     var prev = prevChatIdRef.current;
     if (prev !== chatId) {
-      flushPendingDraftSave();
-      wbcSaveDraft(prev, draftRef.current, draftNs);
+      draftState.switchChat(chatId);
       wbcSaveAttachments(prev, attachRef.current, draftNs);
-      setDraft(wbcLoadDraft(chatId, draftNs));
       setAttachments(wbcLoadAttachments(chatId, draftNs));
-      setMode(wbcNormalizePermissionMode(chat && chat.permissionMode, "auto"));
-      setSoulActive(soulAvailable && (chat && typeof chat.soulActive === "boolean"
-        ? chat.soulActive : contextOptions.soul.selected === true));
-      setWorkspaceActive(workspaceAvailable && (chat && typeof chat.workspaceActive === "boolean"
-        ? chat.workspaceActive : contextOptions.workspace.selected === true));
-      setShortTermMemoryActive(chat && typeof chat.shortTermMemoryActive === "boolean"
-        ? chat.shortTermMemoryActive : true);
-      setProjectMemoryActive(chat && typeof chat.projectMemoryActive === "boolean"
-        ? chat.projectMemoryActive : true);
+      var nextSettings = resolveComposerSettings(chat, {
+        soulAvailable, workspaceAvailable, mcpAvailable, skillsAvailable, pluginPacksAvailable, contextOptions,
+      });
+      composerSettings.actions.restore(nextSettings);
       setReasoningEffort(String(chat && chat.reasoningEffort || "").trim().toLowerCase());
-      var nextContextActivations = wbcNormalizeContextActivations(chat && chat.contextActivations);
-      if (!mcpAvailable) nextContextActivations.mcpServers = [];
-      if (!skillsAvailable) nextContextActivations.skills = [];
-      if (!pluginPacksAvailable) nextContextActivations.pluginPacks = [];
-      setContextActivations(nextContextActivations);
-      contextActivationsRef.current = nextContextActivations;
+      contextActivationsRef.current = nextSettings.contextActivations;
       setContextCatalogPanel("");
       setFailedImagePreviews({});
       prevChatIdRef.current = chatId;
@@ -533,54 +434,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       lastSentRef.current = null;
     }
   }, [running, error, errorKind]);
-
-  useWbcEffect(function () {
-    if (!composerContextAvailable) {
-      setContextState(null);
-      setContextCatalogLoaded(false);
-      setContextCatalogLoading(false);
-      return undefined;
-    }
-    var cancelled = false;
-    var controller = new AbortController();
-    setContextCatalogLoading(true);
-    setContextCatalogLoaded(false);
-    workbenchServices.api().json("/api/context/state", { toast: false, signal: controller.signal }).then(function (s) {
-      if (cancelled) return;
-      var valid = s && typeof s === "object"
-        && s.catalog && typeof s.catalog === "object"
-        && s.options && typeof s.options === "object";
-      setContextState(valid ? s : null);
-      setContextCatalogLoaded(true);
-    }).catch(function (err) {
-      if (cancelled || (err && err.name === "AbortError")) return;
-      setContextState(null);
-      setContextCatalogLoaded(true);
-      workbenchServices.api().toastError(err, wbcT("workbenchChat.contextCapabilitiesLoadFailed", "Failed to load context capabilities: "));
-    }).finally(function () {
-      if (!cancelled) setContextCatalogLoading(false);
-    });
-    return function () { cancelled = true; controller.abort(); };
-  }, [projectId, projectWorkspacePath, composerContextAvailable, contextStateRevision]);
-
-  function flushPendingDraftSave() {
-    if (draftSaveTimerRef.current) {
-      window.clearTimeout(draftSaveTimerRef.current);
-      draftSaveTimerRef.current = 0;
-    }
-    var pending = pendingDraftSaveRef.current;
-    pendingDraftSaveRef.current = null;
-    if (pending) wbcSaveDraft(pending.id, pending.text, pending.ns);
-  }
-
-  function persistCurrentDraft() {
-    pendingDraftSaveRef.current = {
-      id: chatId,
-      text: String(draftRef.current || ""),
-      ns: draftNs,
-    };
-    flushPendingDraftSave();
-  }
 
   function submit(messageOverride) {
     if (awaitingAnswer) return;
@@ -880,14 +733,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     var previousActive = workspaceOn;
     setWorkspaceOverride(selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "");
     setWorkspaceActive(true);
-    setContextState(function (prev) {
-      if (!prev) return prev;
-      var history = Array.isArray(prev.workspace_history) ? prev.workspace_history : [];
-      if (selectedPath) {
-        history = [selectedPath].concat(history.filter(function (item) { return item !== selectedPath; })).slice(0, 10);
-      }
-      return { ...prev, workspace_active: true, workspace_dir: selectedPath || prev.workspace_dir, workspace_history: history };
-    });
+    contextResource.selectWorkspace(selectedPath);
     if (!chatId) return;
     model.updateChatPreferences(chatId, {
       workspaceActive: true,

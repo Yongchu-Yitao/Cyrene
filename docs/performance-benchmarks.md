@@ -14,7 +14,6 @@ not counted as conversation history or cache reuse.
 
 | Group | What it measures |
 |---|---|
-| `agent` | Pure chat, tool loops, long history, large tool results and background contention |
 | `chat` | Real chat run manager, NDJSON stream, SQLite event log and dense multi-tool concurrency |
 | `search` | Search-and-fetch orchestration with deterministic delayed network boundaries |
 | `features` | Event fanout, terminal output, knowledge FTS/read-write concurrency, database initialization, scheduled-task CRUD and file hashing |
@@ -30,6 +29,10 @@ a real connected presentation. It bypasses the model completely, reuses one
 Office session across ordered rounds, validates stable shape references and
 revision continuity, and compares staged Office.js batching with explicitly
 visible element-by-element editing through the connected PowerPoint add-in.
+
+The current entry point supports `chat`, `search`, and `features`. The chat
+fixture measures orchestration with scripted runners; it does not measure the
+complete AgentSession model-execution path or frontend rendering.
 
 ## Run
 

@@ -1,0 +1,57 @@
+[
+  {
+    "old": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#26",
+    "new": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#17",
+    "metrics": {
+      "decisions": 24
+    },
+    "exact": true
+  },
+  {
+    "old": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#17",
+    "new": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#15",
+    "metrics": {
+      "decisions": 37
+    },
+    "exact": true
+  },
+  {
+    "old": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#52",
+    "new": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#44",
+    "metrics": {
+      "lines": 113,
+      "decisions": 22
+    },
+    "exact": true
+  },
+  {
+    "old": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#72",
+    "new": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#64",
+    "metrics": {
+      "decisions": 26
+    },
+    "exact": true
+  },
+  {
+    "old": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.onKeyDown",
+    "new": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.onKeyDown",
+    "metrics": {
+      "decisions": 36
+    },
+    "exact": true
+  },
+  {
+    "old": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.submit",
+    "new": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.submit",
+    "metrics": {
+      "decisions": 60
+    },
+    "exact": true
+  },
+  {
+    "old": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#31",
+    "new": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#24",
+    "exact": false,
+    "reason": "Only draft persistence delegates to its owner; all other chat-switch statements unchanged."
+  }
+]

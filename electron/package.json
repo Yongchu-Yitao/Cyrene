@@ -212,6 +212,7 @@
       "preload.js",
       "browser-chat-overlay-preload.js",
       "browser-tab-picker-preload.js",
+      "browser-tab-picker-owner.js",
       "app-use.js",
       "app-use-macos-worker.js",
       "app-use-linux.js",

@@ -21,6 +21,8 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+from cyrene.model.stream_decoder import StreamDecoder
+
 
 NATIVE_PROTOCOL_ADAPTERS = frozenset({"anthropic", "openai_responses", "gemini"})
 OPENAI_CHAT_ADAPTERS = frozenset({"openai", "openai_compatible", "ollama"})
@@ -1105,7 +1107,9 @@ def _tool_stream_diagnostics(
     tool_calls: Mapping[str, Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
-    for key, value in sorted(tool_calls.items(), key=lambda item: item[0]):
+    # Preserve sorted output for multiple calls; a single call is already ordered.
+    items = sorted(tool_calls.items(), key=lambda item: item[0]) if len(tool_calls) > 1 else tool_calls.items()
+    for key, value in items:
         arguments = str(value.get("arguments") or "")
         validation = "valid_object"
         try:
@@ -1130,7 +1134,26 @@ def _update_tool_stream_diagnostics(
     diagnostics: dict[str, Any],
     tool_calls: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    diagnostics["tool_calls"] = _tool_stream_diagnostics(tool_calls)
+    # Text-only chunks have no tool state to sort, hash or validate.
+    diagnostics["tool_calls"] = _tool_stream_diagnostics(tool_calls) if tool_calls else []
+
+
+def _append_openai_tool_call(tool_calls, raw_call):
+    key = str(raw_call.get("index") or 0)
+    function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+    if key not in tool_calls:
+        tool_calls[key] = {
+            "id": str(raw_call.get("id") or f"call_{uuid.uuid4().hex}"),
+            "name": "",
+            "arguments": "",
+        }
+    call = tool_calls[key]
+    if raw_call.get("id"):
+        call["id"] = str(raw_call["id"])
+    if function.get("name"):
+        call["name"] += str(function["name"])
+    if function.get("arguments"):
+        call["arguments"] += str(function["arguments"])
 
 
 async def _openai_chat_stream_event(
@@ -1168,19 +1191,7 @@ async def _openai_chat_stream_event(
     for raw_call in raw_calls if isinstance(raw_calls, list) else ():
         if not isinstance(raw_call, dict):
             continue
-        key = str(raw_call.get("index") or 0)
-        function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
-        call = tool_calls.setdefault(key, {
-            "id": str(raw_call.get("id") or f"call_{uuid.uuid4().hex}"),
-            "name": "",
-            "arguments": "",
-        })
-        if raw_call.get("id"):
-            call["id"] = str(raw_call["id"])
-        if function.get("name"):
-            call["name"] += str(function["name"])
-        if function.get("arguments"):
-            call["arguments"] += str(function["arguments"])
+        _append_openai_tool_call(tool_calls, raw_call)
     if isinstance(data.get("usage"), dict):
         usage.update(_usage(adapter, data))
     return str(choice.get("finish_reason") or ""), reasoning_started
@@ -1271,10 +1282,6 @@ async def handle_stream(
     if adapter == "gemini":
         target = endpoint.replace(":generateContent", ":streamGenerateContent") + "?alt=sse"
     request_started = time.monotonic()
-    text_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    tool_calls: dict[str, dict[str, Any]] = {}
-    usage: dict[str, int] = {}
     finish = ""
     response_id = ""
     returned_model = ""
@@ -1290,19 +1297,14 @@ async def handle_stream(
         "stream_completed": False,
         "termination_reason": "",
     }
-    started = False
-    reasoning_started = False
-
-    async def emit_text(text: str) -> None:
-        nonlocal started
-        if not text:
-            return
-        if not started and callback:
-            await callback({"type": "reply_start"})
-            started = True
-        text_parts.append(text)
-        if callback:
-            await callback({"type": "reply_delta", "delta": text})
+    decoder = StreamDecoder(
+        adapter, callback, stream_diagnostics, usage_for=_usage,
+        parse_response=parse_response, update_diagnostics=_update_tool_stream_diagnostics,
+        stream_error=ModelStreamError, openai_event=_openai_chat_stream_event,
+        openai_adapters=OPENAI_CHAT_ADAPTERS,
+    )
+    text_parts, reasoning_parts = decoder.text_parts, decoder.reasoning_parts
+    tool_calls, usage = decoder.tool_calls, decoder.usage
 
     async with _model_stream_response(client, target, request, stream_diagnostics) as response:
         stream_diagnostics["http_status"] = int(response.status_code)
@@ -1327,186 +1329,8 @@ async def handle_stream(
                 timing["ttft_ms"] = (time.monotonic() - request_started) * 1000
             response_id = str(data.get("id") or response_id)
             returned_model = str(data.get("model") or returned_model)
-            if adapter == "anthropic":
-                event_type = str(data.get("type") or "")
-                if event_type == "message_start":
-                    usage.update(_usage(adapter, data.get("message") or {}))
-                elif event_type == "content_block_start":
-                    block = data.get("content_block") if isinstance(data.get("content_block"), dict) else {}
-                    if block.get("type") == "tool_use":
-                        call_id = str(block.get("id") or f"toolu_{uuid.uuid4().hex}")
-                        tool_calls[str(data.get("index") or 0)] = {"id": call_id, "name": str(block.get("name") or ""), "arguments": ""}
-                    elif block.get("type") == "text":
-                        await emit_text(str(block.get("text") or ""))
-                elif event_type == "content_block_delta":
-                    delta = data.get("delta") if isinstance(data.get("delta"), dict) else {}
-                    if delta.get("type") == "text_delta":
-                        await emit_text(str(delta.get("text") or ""))
-                    elif delta.get("type") == "input_json_delta":
-                        tool_calls.setdefault(str(data.get("index") or 0), {"id": f"toolu_{uuid.uuid4().hex}", "name": "", "arguments": ""})["arguments"] += str(delta.get("partial_json") or "")
-                    elif delta.get("type") == "thinking_delta":
-                        reasoning = str(delta.get("thinking") or "")
-                        if reasoning:
-                            if callback and not reasoning_started:
-                                await callback({"type": "reasoning_start"})
-                                reasoning_started = True
-                            reasoning_parts.append(reasoning)
-                            if callback:
-                                await callback({"type": "reasoning_delta", "delta": reasoning})
-                elif event_type == "message_delta":
-                    finish = str((data.get("delta") or {}).get("stop_reason") or finish)
-                    raw_usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-                    if raw_usage:
-                        next_usage = _usage(adapter, {"usage": raw_usage})
-                        if any(
-                            key in raw_usage
-                            for key in (
-                                "input_tokens",
-                                "cache_creation_input_tokens",
-                                "cache_read_input_tokens",
-                            )
-                        ):
-                            usage["prompt_tokens"] = next_usage["prompt_tokens"]
-                            for key in (
-                                "prompt_cache_hit_tokens",
-                                "prompt_cache_miss_tokens",
-                            ):
-                                if key in next_usage:
-                                    usage[key] = next_usage[key]
-                        if "output_tokens" in raw_usage:
-                            usage["completion_tokens"] = next_usage["completion_tokens"]
-                        usage["total_tokens"] = (
-                            int(usage.get("prompt_tokens") or 0)
-                            + int(usage.get("completion_tokens") or 0)
-                        )
-                elif event_type == "message_stop":
-                    stream_diagnostics["terminal_event_seen"] = True
-            elif adapter == "openai_responses":
-                event_type = str(data.get("type") or "")
-                if event_type == "response.output_text.delta":
-                    await emit_text(str(data.get("delta") or ""))
-                elif event_type == "response.reasoning_summary_text.delta":
-                    reasoning = str(data.get("delta") or "")
-                    if reasoning:
-                        if callback and not reasoning_started:
-                            await callback({"type": "reasoning_start"})
-                            reasoning_started = True
-                        reasoning_parts.append(reasoning)
-                        if callback:
-                            await callback({"type": "reasoning_delta", "delta": reasoning})
-                elif event_type == "response.output_item.added":
-                    item = data.get("item") if isinstance(data.get("item"), dict) else {}
-                    if item.get("type") == "function_call":
-                        key = str(data.get("output_index") or len(tool_calls))
-                        tool_calls[key] = {"id": str(item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex}"), "name": str(item.get("name") or ""), "arguments": str(item.get("arguments") or "")}
-                elif event_type == "response.function_call_arguments.delta":
-                    key = str(data.get("output_index") or 0)
-                    tool_calls.setdefault(key, {"id": str(data.get("item_id") or f"call_{uuid.uuid4().hex}"), "name": str(data.get("name") or ""), "arguments": ""})["arguments"] += str(data.get("delta") or "")
-                elif event_type == "response.function_call_arguments.done":
-                    key = str(data.get("output_index") or 0)
-                    call = tool_calls.setdefault(key, {
-                        "id": str(data.get("item_id") or f"call_{uuid.uuid4().hex}"),
-                        "name": str(data.get("name") or ""),
-                        "arguments": "",
-                    })
-                    call["arguments"] = str(data.get("arguments") or "{}")
-                elif event_type == "response.output_item.done":
-                    item = data.get("item") if isinstance(data.get("item"), dict) else {}
-                    if item.get("type") == "function_call":
-                        key = str(data.get("output_index") or 0)
-                        tool_calls[key] = {
-                            "id": str(item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex}"),
-                            "name": str(item.get("name") or ""),
-                            "arguments": str(item.get("arguments") or "{}"),
-                        }
-                elif event_type == "response.failed":
-                    failed = data.get("response")
-                    failed = failed if isinstance(failed, dict) else {}
-                    error = failed.get("error")
-                    error = error if isinstance(error, dict) else {}
-                    # Retain only known codes, never upstream messages or request data.
-                    code = str(error.get("code") or "")
-                    known_codes = {
-                        "server_error", "rate_limit_exceeded", "insufficient_quota",
-                        "invalid_api_key", "authentication_error", "context_length_exceeded",
-                        "invalid_prompt", "invalid_request_error", "model_not_found",
-                    }
-                    stream_diagnostics["provider_error_code"] = code if code in known_codes else "unknown"
-                    stream_diagnostics["terminal_event_seen"] = True
-                    stream_diagnostics["finish_reason"] = "failed"
-                    stream_diagnostics["termination_reason"] = "provider_response_failed"
-                    _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
-                    raise ModelStreamError(
-                        "provider_failed", "The provider reported a failed response.", stream_diagnostics,
-                    )
-                elif event_type in {"response.completed", "response.incomplete"}:
-                    stream_diagnostics["terminal_event_seen"] = True
-                    completed = data.get("response") if isinstance(data.get("response"), dict) else {}
-                    usage.update(_usage(adapter, completed))
-                    finish = str(completed.get("status") or finish)
-                    if event_type == "response.incomplete":
-                        details = completed.get("incomplete_details")
-                        reason = details.get("reason") if isinstance(details, dict) else None
-                        if reason == "max_output_tokens":
-                            finish = "length"
-                        else:
-                            stream_diagnostics["finish_reason"] = "incomplete"
-                            stream_diagnostics["termination_reason"] = "provider_response_incomplete"
-                            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
-                            raise ModelStreamError(
-                                "upstream_incomplete",
-                                "The provider reported an incomplete response.",
-                                stream_diagnostics,
-                            )
-                    completed_message = parse_response(adapter, completed)
-                    for call in completed_message.get("tool_calls") or []:
-                        call_id = str(call.get("id") or "")
-                        existing = next(
-                            (
-                                value
-                                for value in tool_calls.values()
-                                if value.get("id") == call_id
-                            ),
-                            None,
-                        )
-                        if existing is not None:
-                            existing.update({
-                                "name": str((call.get("function") or {}).get("name") or existing.get("name") or ""),
-                                "arguments": str((call.get("function") or {}).get("arguments") or "{}"),
-                            })
-                        else:
-                            tool_calls[str(len(tool_calls))] = {
-                                "id": call_id,
-                                "name": str((call.get("function") or {}).get("name") or ""),
-                                "arguments": str((call.get("function") or {}).get("arguments") or "{}"),
-                            }
-            elif adapter == "gemini":
-                parsed = parse_response(adapter, data)
-                await emit_text(str(parsed.get("content") or ""))
-                reasoning = str(parsed.get("reasoning_content") or "")
-                if reasoning:
-                    if callback and not reasoning_started:
-                        await callback({"type": "reasoning_start"})
-                        reasoning_started = True
-                    reasoning_parts.append(reasoning)
-                    if callback:
-                        await callback({"type": "reasoning_delta", "delta": reasoning})
-                for call_index, call in enumerate(parsed.get("tool_calls") or []):
-                    function = call.get("function") or {}
-                    key = f"gemini:{call_index}:{str(function.get('name') or '')}"
-                    tool_calls[key] = {
-                        "id": str(call.get("id") or ""),
-                        "name": str(function.get("name") or ""),
-                        "arguments": str(function.get("arguments") or "{}"),
-                    }
-                usage.update(parsed.get("usage") or {})
-                finish = str(parsed.get("finish_reason") or finish)
-            elif adapter in OPENAI_CHAT_ADAPTERS:
-                event_finish, reasoning_started = await _openai_chat_stream_event(
-                    adapter, data, emit_text, callback, reasoning_parts,
-                    tool_calls, usage, reasoning_started,
-                )
-                finish = event_finish or finish
+            await decoder.consume(data)
+            finish = decoder.finish
 
             _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
             stream_diagnostics["finish_reason"] = finish
@@ -1574,9 +1398,9 @@ async def handle_stream(
             except Exception:
                 pass
 
-        if not started and callback:
+        if not decoder.started and callback:
             await callback({"type": "reply_start"})
-        if reasoning_started and callback:
+        if decoder.reasoning_started and callback:
             await callback({"type": "reasoning_done", "response": "".join(reasoning_parts)})
         if callback:
             await callback({"type": "reply_done", "response": "".join(text_parts)})

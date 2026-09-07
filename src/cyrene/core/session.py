@@ -51,6 +51,7 @@ from .hook import (
     HookRegistration,
 )
 from .observability import log_operation, operation
+from .session_events import SessionEvents
 from .plugin import (
     PluginBatchRunner,
     PluginCall,
@@ -355,12 +356,6 @@ class AgentSession:
         self._tree_id_hint = str(tree_id or "agent-session")
         self._state_lock = threading.RLock()
         self._context_event_deferral = threading.local()
-        self._event_lock = threading.RLock()
-        self._event_sequence = 0
-        self._event_listeners: dict[int, AgentEventListener] = {}
-        if event_listener is not None:
-            self._event_listeners[0] = event_listener
-        self._next_event_listener_id = 1
         self._status = "idle"
         self._detail = _l("Ready", "就绪")
         self._leaf_id = "root"
@@ -427,6 +422,9 @@ class AgentSession:
                     permission.registration(),
                 ),
             )
+        self._events = SessionEvents(
+            self.tree.id, self.events, AgentSessionEvent, logger, event_listener,
+        )
         self._transitions.tree_id = self.tree.id
         root_node = self.store.get_node(self.tree.id, self.tree.root_id)
         self._initial_root_value = deepcopy(root_node.value)
@@ -481,9 +479,9 @@ class AgentSession:
         self._attach_plugin_packs()
         self.hooks.set_before_dispatch(self.reconcile_plugins)
         nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
-        self._event_sequence = sum(
+        self._events.initialize_sequence(sum(
             self._event_for_node(node, sequence=0) is not None for node in nodes
-        )
+        ))
         self._unsubscribe_context_events = self.store.subscribe(
             self._context_output_changed,
             tree_id=self.tree.id,
@@ -1115,127 +1113,16 @@ class AgentSession:
         return dict(self._plugin_service_values)
 
     def subscribe(
-        self,
-        listener: AgentEventListener,
-        *,
-        replay: bool = False,
-        after_sequence: int = 0,
+        self, listener: AgentEventListener, *, replay: bool = False, after_sequence: int = 0,
     ) -> Callable[[], None]:
         """Subscribe to structured output without coupling the Agent to Workbench."""
-
-        if not callable(listener):
-            raise TypeError("listener must be callable")
-        if replay:
-            replayed = self.events(after_sequence=after_sequence)
-            for event in replayed:
-                listener(event)
-        else:
-            replayed = ()
-        with self._event_lock:
-            listener_id = self._next_event_listener_id
-            self._next_event_listener_id += 1
-            self._event_listeners[listener_id] = listener
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "subscribe",
-            phase="completed",
-            tree_id=self.tree.id,
-            listener_id=listener_id,
-            listener=getattr(listener, "__qualname__", type(listener).__qualname__),
-            replay=replay,
-            after_sequence=after_sequence,
-            replayed=len(replayed),
-        )
-
-        def unsubscribe() -> None:
-            with self._event_lock:
-                removed = self._event_listeners.pop(listener_id, None) is not None
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "unsubscribe",
-                phase="completed",
-                tree_id=self.tree.id,
-                listener_id=listener_id,
-                removed=removed,
-            )
-
-        return unsubscribe
+        return self._events.subscribe(listener, replay=replay, after_sequence=after_sequence)
 
     def _emit_event(
-        self,
-        event_type: AgentEventType,
-        *,
-        run_id: str = "",
-        node_id: str | None = None,
-        time: datetime | None = None,
-        data: Mapping[str, Any] | None = None,
+        self, event_type: AgentEventType, *, run_id: str = "", node_id: str | None = None,
+        time: datetime | None = None, data: Mapping[str, Any] | None = None,
     ) -> AgentSessionEvent:
-        with self._event_lock:
-            self._event_sequence += 1
-            event = AgentSessionEvent(
-                sequence=self._event_sequence,
-                type=event_type,
-                tree_id=self.tree.id,
-                run_id=str(run_id or ""),
-                node_id=node_id,
-                time=time or datetime.now(timezone.utc),
-                data=deepcopy(dict(data or {})),
-            )
-            listeners = tuple(self._event_listeners.values())
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "emit_event",
-            phase="started",
-            tree_id=self.tree.id,
-            run_id=event.run_id,
-            node_id=event.node_id,
-            sequence=event.sequence,
-            event_type=event.type,
-            event_time=event.time,
-            data=event.data,
-            listener_count=len(listeners),
-        )
-        delivered = 0
-        failed = 0
-        for listener in listeners:
-            try:
-                listener(event)
-            except Exception as exc:
-                failed += 1
-                log_operation(
-                    logger,
-                    "cyrene.core.session",
-                    "notify_listener",
-                    phase="failed",
-                    level=logging.ERROR,
-                    exc_info=True,
-                    tree_id=self.tree.id,
-                    run_id=event.run_id,
-                    node_id=event.node_id,
-                    sequence=event.sequence,
-                    event_type=event.type,
-                    listener=getattr(listener, "__qualname__", type(listener).__qualname__),
-                    error=exc,
-                )
-            else:
-                delivered += 1
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "emit_event",
-            phase="completed",
-            tree_id=self.tree.id,
-            run_id=event.run_id,
-            node_id=event.node_id,
-            sequence=event.sequence,
-            event_type=event.type,
-            delivered=delivered,
-            failed=failed,
-        )
-        return event
+        return self._events.emit(event_type, run_id=run_id, node_id=node_id, time=time, data=data)
 
     @staticmethod
     def _event_for_node(
@@ -4591,8 +4478,7 @@ class AgentSession:
             detail = self._detail
             leaf_id = self._leaf_id
             run_id = self._current_run_id
-        with self._event_lock:
-            event_sequence = self._event_sequence
+        event_sequence = self._events.sequence
         pending_driver = bool(
             self._plugins.owns_driver
             and self._plugins.driver is not None

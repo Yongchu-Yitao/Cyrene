@@ -1,0 +1,55 @@
+{
+  "moves": [
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#44",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#43",
+      "verification": "exact function source equality"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#31",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#25",
+      "verification": "exact function source equality"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#63",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#57",
+      "verification": "exact function source equality"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#74",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#68",
+      "verification": "exact function source equality"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.openSplitChatContent.<anonymous>",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.openSplitChatContent.<anonymous>",
+      "verification": "exact function source equality"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>.<anonymous>#4",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>.<anonymous>#4",
+      "verification": "exact function source equality"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>#9",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>#9",
+      "verification": "exact function source equality"
+    }
+  ],
+  "before": {
+    "lines": 3370,
+    "decisions": 192,
+    "nesting": 2,
+    "hooks": 137,
+    "setter_targets": 0,
+    "subscriptions": 0
+  },
+  "after": {
+    "lines": 3304,
+    "decisions": 190,
+    "nesting": 2,
+    "hooks": 129,
+    "setter_targets": 0,
+    "subscriptions": 0
+  }
+}

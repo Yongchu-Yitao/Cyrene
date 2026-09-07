@@ -1,0 +1,155 @@
+{
+  "baseline": "30835bb6",
+  "comparison": "4326790adc038d25de5aadabaaa41d943f2d23ae",
+  "measurement_stage": "before this round of edits",
+  "method": "Sequential before/current/current/before/before/current; 3 repeats per invocation; same Python environment; local scripted workloads; independent temporary data directories",
+  "samples": [
+    {
+      "sample": "0-before",
+      "version": "before",
+      "profile": "single_heavy_run",
+      "run_p95_ms": 140.122,
+      "quality_preserved": true
+    },
+    {
+      "sample": "0-before",
+      "version": "before",
+      "profile": "dense_concurrency",
+      "run_p95_ms": 554.898,
+      "quality_preserved": true
+    },
+    {
+      "sample": "0-before",
+      "version": "before",
+      "profile": "multi_tool_storm",
+      "run_p95_ms": 893.59,
+      "quality_preserved": true
+    },
+    {
+      "sample": "1-current",
+      "version": "current",
+      "profile": "single_heavy_run",
+      "run_p95_ms": 143.644,
+      "quality_preserved": true
+    },
+    {
+      "sample": "1-current",
+      "version": "current",
+      "profile": "dense_concurrency",
+      "run_p95_ms": 584.514,
+      "quality_preserved": true
+    },
+    {
+      "sample": "1-current",
+      "version": "current",
+      "profile": "multi_tool_storm",
+      "run_p95_ms": 972.928,
+      "quality_preserved": true
+    },
+    {
+      "sample": "2-current",
+      "version": "current",
+      "profile": "single_heavy_run",
+      "run_p95_ms": 119.307,
+      "quality_preserved": true
+    },
+    {
+      "sample": "2-current",
+      "version": "current",
+      "profile": "dense_concurrency",
+      "run_p95_ms": 516.322,
+      "quality_preserved": true
+    },
+    {
+      "sample": "2-current",
+      "version": "current",
+      "profile": "multi_tool_storm",
+      "run_p95_ms": 944.026,
+      "quality_preserved": true
+    },
+    {
+      "sample": "3-before",
+      "version": "before",
+      "profile": "single_heavy_run",
+      "run_p95_ms": 118.053,
+      "quality_preserved": true
+    },
+    {
+      "sample": "3-before",
+      "version": "before",
+      "profile": "dense_concurrency",
+      "run_p95_ms": 526.604,
+      "quality_preserved": true
+    },
+    {
+      "sample": "3-before",
+      "version": "before",
+      "profile": "multi_tool_storm",
+      "run_p95_ms": 1108.011,
+      "quality_preserved": true
+    },
+    {
+      "sample": "4-before",
+      "version": "before",
+      "profile": "single_heavy_run",
+      "run_p95_ms": 137.352,
+      "quality_preserved": true
+    },
+    {
+      "sample": "4-before",
+      "version": "before",
+      "profile": "dense_concurrency",
+      "run_p95_ms": 567.643,
+      "quality_preserved": true
+    },
+    {
+      "sample": "4-before",
+      "version": "before",
+      "profile": "multi_tool_storm",
+      "run_p95_ms": 942.534,
+      "quality_preserved": true
+    },
+    {
+      "sample": "5-current",
+      "version": "current",
+      "profile": "single_heavy_run",
+      "run_p95_ms": 141.151,
+      "quality_preserved": true
+    },
+    {
+      "sample": "5-current",
+      "version": "current",
+      "profile": "dense_concurrency",
+      "run_p95_ms": 541.813,
+      "quality_preserved": true
+    },
+    {
+      "sample": "5-current",
+      "version": "current",
+      "profile": "multi_tool_storm",
+      "run_p95_ms": 965.408,
+      "quality_preserved": true
+    }
+  ],
+  "summary": [
+    {
+      "profile": "dense_concurrency",
+      "before_median_p95_ms": 554.898,
+      "current_median_p95_ms": 541.813,
+      "change_percent": -2.358091036550869
+    },
+    {
+      "profile": "multi_tool_storm",
+      "before_median_p95_ms": 942.534,
+      "current_median_p95_ms": 965.408,
+      "change_percent": 2.426862054843637
+    },
+    {
+      "profile": "single_heavy_run",
+      "before_median_p95_ms": 137.352,
+      "current_median_p95_ms": 141.151,
+      "change_percent": 2.765886190226574
+    }
+  ],
+  "limits": "Observed variation does not isolate causality; these timings do not measure frontend rendering or model execution."
+}

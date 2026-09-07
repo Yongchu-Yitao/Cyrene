@@ -1,3 +1,4 @@
+const { BrowserTabPicker } = require('./browser-tab-picker-owner');
 const { DesktopSettings } = require('./desktop-settings-owner');
 const { BrowserSessions } = require('./browser-sessions');
 const { DetachedPanes } = require('./detached-panes');
@@ -1428,19 +1429,18 @@ class BrowserTabManager {
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
-    this.tabPickerView = null;
-    this.tabPickerParent = null;
-    this.tabPickerState = {
-      visible: false,
-      closing: false,
-      variant: 'maximized',
-      colors: {},
-      labels: {},
-    };
-    this.tabPickerReady = false;
-    this.tabPickerWindow = null;
-    this._tabPickerWindowBlurHandler = null;
-    this._tabPickerHideTimer = null;
+    this.tabPicker = new BrowserTabPicker({
+      sessionId: this.sessionId, View: WebContentsView,
+      preloadPath: path.join(__dirname, 'browser-tab-picker-preload.js'),
+      flatChromeCSS: BROWSER_TAB_PICKER_FLAT_CHROME_CSS,
+      pickerUrl: () => backend.port
+        ? `http://127.0.0.1:${backend.port}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}&style=flat-chrome-1`
+        : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`,
+      ownerWindow: () => this.ownerWindow(), activeTabId: () => this.activeTabId,
+      tabSnapshots: () => Array.from(this.tabs.values()).map((tab) => this.tabState(tab)).filter(Boolean),
+      tabCount: () => this.tabs.size, surfaceBounds: () => this.pageViewBounds(this.bounds),
+      hostReady: () => this.visible && !this.obscured && !this._boundsTransitioning && !this.videoFullscreen.active,
+    });
     this.visible = false;
     this.obscured = browserSessions.browserSurfaceObscured;
     this.zoomEnabled = true;
@@ -1885,11 +1885,11 @@ class BrowserTabManager {
     wc.on('media-started-playing', update);
     wc.on('media-paused', update);
     wc.on('focus', () => {
-      if (this.tabPickerState.visible) this.dismissTabPicker(true);
+      if (this.tabPicker.tabPickerState.visible) this.tabPicker.dismissTabPicker(true);
     });
     wc.on('before-input-event', (_event, input) => {
-      if (this.tabPickerState.visible && String(input && input.key || '') === 'Escape') {
-        this.dismissTabPicker(true);
+      if (this.tabPicker.tabPickerState.visible && String(input && input.key || '') === 'Escape') {
+        this.tabPicker.dismissTabPicker(true);
       }
     });
     wc.on('enter-html-full-screen', () => {
@@ -2508,7 +2508,7 @@ class BrowserTabManager {
 
   emitState() {
     publishBrowserManagerState();
-    if (this.tabPickerState.visible || this.tabPickerState.closing) this.pushTabPickerState();
+    if (this.tabPicker.tabPickerState.visible || this.tabPicker.tabPickerState.closing) this.tabPicker.pushTabPickerState();
     if (this.sessionId !== browserSessions.activeBrowserSessionId) return;
     // Fullscreen video may live in a separate macOS window, but state updates
     // always belong to the Cyrene renderer so each in-app browser surface can
@@ -2979,259 +2979,30 @@ class BrowserTabManager {
     // above the live page instead of silently ending up behind it.
     const parent = this.ownerWindow()?.contentView || null;
     this.syncChatOverlay(parent, true);
-    if (this.tabPickerState.visible || this.tabPickerState.closing) {
-      this.syncTabPicker(parent, true);
+    if (this.tabPicker.tabPickerState.visible || this.tabPicker.tabPickerState.closing) {
+      this.tabPicker.syncTabPicker(parent, true);
     }
     return { ok: true, visible: this.chatOverlayState.visible };
   }
 
-  tabPickerSnapshot() {
-    const state = this.tabPickerState || {};
-    return {
-      sessionId: this.sessionId,
-      visible: state.visible === true,
-      closing: state.closing === true,
-      variant: state.variant === 'split' ? 'split' : 'maximized',
-      activeTabId: this.activeTabId,
-      tabs: Array.from(this.tabs.values()).map((tab) => this.tabState(tab)).filter(Boolean),
-      labels: state.labels && typeof state.labels === 'object' ? state.labels : {},
-      colors: state.colors && typeof state.colors === 'object' ? state.colors : {},
-    };
-  }
-
-  notifyTabPickerRenderer(extra = {}) {
-    const win = this.ownerWindow();
-    if (!win) return;
-    try {
-      win.webContents.send('browser:tab-picker-action', {
-        sessionId: this.sessionId,
-        visible: this.tabPickerState.visible === true,
-        variant: this.tabPickerState.variant === 'split' ? 'split' : 'maximized',
-        ...extra,
-      });
-    } catch (_) {}
-  }
-
-  ensureTabPickerView() {
-    if (this.tabPickerView && !this.tabPickerView.webContents.isDestroyed()) return this.tabPickerView;
-    if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
-    const view = new WebContentsView({
-      webPreferences: {
-        preload: path.join(__dirname, 'browser-tab-picker-preload.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        backgroundThrottling: true,
-      },
-    });
-    this.tabPickerReady = false;
-    try { view.setBackgroundColor('#00000000'); } catch (_) {}
-    view.webContents.on('did-finish-load', async () => {
-      if (this.tabPickerView !== view) return;
-      try {
-        await view.webContents.insertCSS(BROWSER_TAB_PICKER_FLAT_CHROME_CSS);
-      } catch (_) {}
-      if (this.tabPickerView !== view || view.webContents.isDestroyed()) return;
-      this.tabPickerReady = true;
-      this.pushTabPickerState();
-      if (this.tabPickerState.visible) {
-        try { view.webContents.focus(); } catch (_) {}
-      }
-    });
-    view.webContents.on('did-fail-load', (_event, code, description) => {
-      if (Number(code) === -3) return;
-      console.warn(`[electron] Browser tab picker failed to load (${code}): ${description}`);
-    });
-    this.tabPickerView = view;
-    const pickerUrl = backend.port
-      ? `http://127.0.0.1:${backend.port}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}&style=flat-chrome-1`
-      : `data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_TAB_PICKER_HTML)}`;
-    view.webContents.loadURL(pickerUrl).catch((err) => {
-      console.error('[electron] Failed to load browser tab picker:', err);
-    });
-    return view;
-  }
-
-  pushTabPickerState() {
-    const view = this.tabPickerView;
-    if (!view || view.webContents.isDestroyed()) return;
-    try { view.webContents.send('browser-tab-picker:state', this.tabPickerSnapshot()); } catch (_) {}
-  }
-
-  tabPickerBounds() {
-    const surface = this.pageViewBounds(this.bounds);
-    const variant = this.tabPickerState.variant === 'split' ? 'split' : 'maximized';
-    const horizontalInset = variant === 'maximized' ? 116 : 12;
-    // The native page starts below the browser navigation row. Lift the
-    // floating picker by that chrome height so it sits beneath the title bar
-    // and overlays the navigation row, matching the renderer-hosted menu.
-    const verticalLift = 60;
-    const availableWidth = Math.max(0, surface.width - horizontalInset);
-    const width = Math.min(560, availableWidth);
-    const rows = Math.max(1, this.tabs.size);
-    const desiredHeight = 22 + (rows * 48);
-    const height = Math.min(350, desiredHeight, Math.max(0, surface.height - 12));
-    return {
-      x: surface.x + Math.max(0, Math.round((surface.width - width) / 2)),
-      y: Math.max(0, surface.y - verticalLift),
-      width: Math.max(0, Math.round(width)),
-      height: Math.max(0, Math.round(height)),
-    };
-  }
-
-  trackTabPickerWindow(win) {
-    if (this.tabPickerWindow === win) return;
-    if (this.tabPickerWindow && this._tabPickerWindowBlurHandler) {
-      try { this.tabPickerWindow.removeListener('blur', this._tabPickerWindowBlurHandler); } catch (_) {}
-    }
-    this.tabPickerWindow = win || null;
-    this._tabPickerWindowBlurHandler = null;
-    if (!win || win.isDestroyed()) return;
-    this._tabPickerWindowBlurHandler = () => {
-      if (this.tabPickerState.visible) this.dismissTabPicker(true);
-    };
-    win.on('blur', this._tabPickerWindowBlurHandler);
-  }
-
-  finishTabPickerHide() {
-    if (this.tabPickerState.visible) return;
-    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
-    this._tabPickerHideTimer = null;
-    this.tabPickerState = { ...this.tabPickerState, closing: false };
-    const view = this.tabPickerView;
-    const win = this.ownerWindow();
-    let restoreRendererFocus = false;
-    if (view && !view.webContents.isDestroyed()) {
-      try {
-        restoreRendererFocus = !!(win && win.isFocused() && view.webContents.isFocused());
-      } catch (_) {}
-      try { view.setVisible(false); } catch (_) {}
-    }
-    if (restoreRendererFocus && win) {
-      try { win.webContents.focus(); } catch (_) {}
-    }
-  }
-
-  dismissTabPicker(animate = true) {
-    const wasVisible = this.tabPickerState.visible === true;
-    const wasClosing = this.tabPickerState.closing === true;
-    if (!wasVisible && !wasClosing) return { ok: true, visible: false };
-    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
-    this._tabPickerHideTimer = null;
-    const shouldAnimate = animate === true && wasVisible && this.tabPickerReady
-      && !!this.tabPickerView && !this.tabPickerView.webContents.isDestroyed();
-    this.tabPickerState = {
-      ...this.tabPickerState,
-      visible: false,
-      closing: shouldAnimate,
-    };
-    this.pushTabPickerState();
-    this.notifyTabPickerRenderer({ type: 'visibility' });
-    if (!shouldAnimate) {
-      this.finishTabPickerHide();
-    } else {
-      this._tabPickerHideTimer = setTimeout(() => this.finishTabPickerHide(), 220);
-    }
-    return { ok: true, visible: false };
-  }
-
-  syncTabPicker(container, raise = false) {
-    const parent = container && container.contentView ? container.contentView : container;
-    const hostReady = !!(
-      this.visible
-      && !this.obscured
-      && !this._boundsTransitioning
-      && !this.videoFullscreen.active
-      && parent
-      && this.activeTabId
-    );
-    if (!hostReady) {
-      if (this.tabPickerState.visible || this.tabPickerState.closing) this.dismissTabPicker(false);
-      else this.finishTabPickerHide();
-      return;
-    }
-    if (!this.tabPickerState.visible && !this.tabPickerState.closing) {
-      this.finishTabPickerHide();
-      return;
-    }
-    const bounds = this.tabPickerBounds();
-    if (bounds.width < 120 || bounds.height < 48) {
-      this.dismissTabPicker(false);
-      return;
-    }
-    const view = this.ensureTabPickerView();
-    if (this.tabPickerParent && this.tabPickerParent !== parent) {
-      try { this.tabPickerParent.removeChildView(view); } catch (_) {}
-      this.tabPickerParent = null;
-    }
-    try { view.setBounds(bounds); } catch (_) {}
-    if (raise && this.tabPickerParent === parent) {
-      try { parent.removeChildView(view); } catch (_) {}
-      this.tabPickerParent = null;
-    }
-    if (this.tabPickerParent !== parent) {
-      try {
-        parent.addChildView(view);
-        this.tabPickerParent = parent;
-      } catch (err) {
-        console.error('[electron] Failed to attach browser tab picker:', err);
-        this.dismissTabPicker(false);
-        return;
-      }
-    }
-    this.trackTabPickerWindow(this.ownerWindow());
-    try { view.setVisible(true); } catch (_) {}
-    if (this.tabPickerState.visible) this.pushTabPickerState();
-  }
-
-  setTabPicker(info = {}) {
-    const requestedVariant = info.variant === 'split' ? 'split' : 'maximized';
-    if (info.visible !== true || !this.tabs.size) {
-      if ((this.tabPickerState.visible || this.tabPickerState.closing)
-        && this.tabPickerState.variant !== requestedVariant) {
-        return { ok: true, visible: this.tabPickerState.visible === true };
-      }
-      return this.dismissTabPicker(true);
-    }
-    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
-    this._tabPickerHideTimer = null;
-    const labels = info.labels && typeof info.labels === 'object' ? info.labels : {};
-    const colors = info.colors && typeof info.colors === 'object' ? info.colors : {};
-    this.tabPickerState = {
-      visible: true,
-      closing: false,
-      variant: requestedVariant,
-      labels: Object.fromEntries(Object.entries(labels).map(([key, value]) => [String(key), String(value || '').slice(0, 120)])),
-      colors: Object.fromEntries(Object.entries(colors).map(([key, value]) => [String(key), String(value || '').slice(0, 120)])),
-    };
-    this.syncTabPicker(this.ownerWindow()?.contentView || null, true);
-    this.notifyTabPickerRenderer({ type: 'visibility' });
-    const view = this.tabPickerView;
-    if (view && !view.webContents.isDestroyed()) {
-      setTimeout(() => {
-        if (!this.tabPickerState.visible || this.tabPickerView !== view) return;
-        try { view.webContents.focus(); } catch (_) {}
-      }, 0);
-    }
-    return { ok: true, visible: this.tabPickerState.visible };
-  }
+  setTabPicker(info = {}) { return this.tabPicker.setTabPicker(info); }
 
   handleTabPickerAction(action = {}) {
     const type = String(action.type || '');
     const tabId = String(action.tabId || '');
-    if (type === 'dismiss') return this.dismissTabPicker(true);
-    if (!this.tabPickerState.visible || !tabId || !this.tabs.has(tabId)) return this.state();
+    if (type === 'dismiss') return this.tabPicker.dismissTabPicker(true);
+    if (!this.tabPicker.tabPickerState.visible || !tabId || !this.tabs.has(tabId)) return this.state();
     if (type === 'select') {
-      this.dismissTabPicker(true);
+      this.tabPicker.dismissTabPicker(true);
       const result = this.activateTab(tabId);
       this.recordUserEvent('select_tab', { payload: { tabId } });
-      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      this.tabPicker.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
       return result;
     }
     if (type === 'reload') {
       const result = this.reload({ tabId });
       this.recordUserEvent('navigate', { payload: { action: 'reload', tabId } });
-      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      this.tabPicker.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
       return result;
     }
     if (type === 'mute') {
@@ -3240,14 +3011,14 @@ class BrowserTabManager {
         ? tab.view.webContents.isAudioMuted()
         : false;
       const result = this.setMuted({ tabId, muted: !muted });
-      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      this.tabPicker.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
       return result;
     }
     if (type === 'close') {
       this.recordUserEvent('close_tab', { payload: { tabId } });
       const result = this.closeTab(tabId);
-      if (!result.tabs.length) this.dismissTabPicker(false);
-      this.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
+      if (!result.tabs.length) this.tabPicker.dismissTabPicker(false);
+      this.tabPicker.notifyTabPickerRenderer({ type, tabId, activeTabId: result.activeTabId, tabCount: result.tabs.length });
       return result;
     }
     return this.state();
@@ -3260,7 +3031,7 @@ class BrowserTabManager {
     const win = this.surfaceWindow();
     if (!win) {
       this.hideChatOverlay();
-      this.dismissTabPicker(false);
+      this.tabPicker.dismissTabPicker(false);
       return;
     }
     const ownsVisibleSurface = fullscreenActive || this.sessionId === browserSessions.activeBrowserSessionId;
@@ -3269,7 +3040,7 @@ class BrowserTabManager {
     }
     if (!active || !ownsVisibleSurface) {
       this.hideChatOverlay();
-      this.dismissTabPicker(false);
+      this.tabPicker.dismissTabPicker(false);
       return;
     }
     const shouldShow = fullscreenActive || (this.visible && !this.obscured && !this._boundsTransitioning);
@@ -3281,7 +3052,7 @@ class BrowserTabManager {
         try { active.view.setVisible(false); } catch (_) {}
       }
       this.hideChatOverlay();
-      this.dismissTabPicker(false);
+      this.tabPicker.dismissTabPicker(false);
       return;
     }
     const wasAttached = this.attachedTabId === active.id;
@@ -3313,7 +3084,7 @@ class BrowserTabManager {
     // The picker is another native child view. Raise it after the live page so
     // it can float over that page without hiding, snapshotting, or reattaching
     // the page's compositor surface.
-    this.syncTabPicker(win.contentView, true);
+    this.tabPicker.syncTabPicker(win.contentView, true);
     if (!wasAttached || !wasVisible) this.repaintView(active);
   }
 
@@ -4842,29 +4613,7 @@ class BrowserTabManager {
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
-    if (this._tabPickerHideTimer) clearTimeout(this._tabPickerHideTimer);
-    this._tabPickerHideTimer = null;
-    if (this.tabPickerWindow && this._tabPickerWindowBlurHandler) {
-      try { this.tabPickerWindow.removeListener('blur', this._tabPickerWindowBlurHandler); } catch (_) {}
-    }
-    this.tabPickerWindow = null;
-    this._tabPickerWindowBlurHandler = null;
-    if (this.tabPickerView && this.tabPickerParent) {
-      try { this.tabPickerParent.removeChildView(this.tabPickerView); } catch (_) {}
-    }
-    if (this.tabPickerView && !this.tabPickerView.webContents.isDestroyed()) {
-      try { this.tabPickerView.webContents.close(); } catch (_) {}
-    }
-    this.tabPickerView = null;
-    this.tabPickerParent = null;
-    this.tabPickerReady = false;
-    this.tabPickerState = {
-      visible: false,
-      closing: false,
-      variant: 'maximized',
-      colors: {},
-      labels: {},
-    };
+    this.tabPicker.dispose();
     this.visible = false;
   }
 }
@@ -6794,23 +6543,23 @@ if (!gotSingleInstanceLock) {
     ipcMain.on('browser-tab-picker:ready', (event, info) => {
       const sessionId = normalizeBrowserSessionId(info && info.sessionId);
       const manager = browserSessions.browserTabManagers.get(sessionId) || Array.from(browserSessions.browserTabManagers.values()).find((candidate) => (
-        candidate.tabPickerView && candidate.tabPickerView.webContents === event.sender
+        candidate.tabPicker.tabPickerView && candidate.tabPicker.tabPickerView.webContents === event.sender
       ));
-      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
-      manager.tabPickerReady = true;
-      manager.pushTabPickerState();
+      if (!manager || !manager.tabPicker.tabPickerView || manager.tabPicker.tabPickerView.webContents !== event.sender) return;
+      manager.tabPicker.tabPickerReady = true;
+      manager.tabPicker.pushTabPickerState();
     });
     ipcMain.on('browser-tab-picker:action', (event, action) => {
       const sessionId = normalizeBrowserSessionId(action && action.sessionId);
       const manager = browserSessions.browserTabManagers.get(sessionId);
-      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
+      if (!manager || !manager.tabPicker.tabPickerView || manager.tabPicker.tabPickerView.webContents !== event.sender) return;
       manager.handleTabPickerAction(action || {});
     });
     ipcMain.on('browser-tab-picker:hidden-ready', (event, info) => {
       const sessionId = normalizeBrowserSessionId(info && info.sessionId);
       const manager = browserSessions.browserTabManagers.get(sessionId);
-      if (!manager || !manager.tabPickerView || manager.tabPickerView.webContents !== event.sender) return;
-      manager.finishTabPickerHide();
+      if (!manager || !manager.tabPicker.tabPickerView || manager.tabPicker.tabPickerView.webContents !== event.sender) return;
+      manager.tabPicker.finishTabPickerHide();
     });
     spawnPython();
     if (!launchHidden) {

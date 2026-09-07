@@ -1,3 +1,4 @@
+import { wbcBuildChatRailItems } from "./rail-projection.mjs"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_ICONS, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcBuildRailCardDragPreview, wbcErrorText, wbcFileViewKind, wbcFormatTime, wbcHasChatDrag, wbcHasChatRailDrag, wbcHideNativeDragImage, wbcNotifyAgentChatFlow, wbcSetChatDrag, wbcSetChatGroupDrag, wbcSetResourceDrag, wbcT } from "../../workbench-chat.jsx"
 import { wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue } from "./conversation.jsx"
@@ -210,31 +211,6 @@ function wbcCreateChatGroup(groups, movingId, targetId, nextGroupId) {
     chatIds: [targetId, movingId],
   });
   return current;
-}
-
-function wbcBuildChatRailItems(chats, groups) {
-  var list = Array.isArray(chats) ? chats : [];
-  var renderedGroups = new Set();
-  var visibleIds = new Set(list.map(function (chat) { return String(chat && chat.id || ""); }));
-  var items = [];
-  list.forEach(function (chat) {
-    var group = wbcFindChatGroup(groups, chat && chat.id);
-    if (!group) {
-      items.push({ kind: "chat", chat: chat });
-      return;
-    }
-    if (renderedGroups.has(group.id)) return;
-    renderedGroups.add(group.id);
-    items.push({
-      kind: "group",
-      group: group,
-      chats: list.filter(function (candidate) {
-        return visibleIds.has(String(candidate && candidate.id || ""))
-          && group.chatIds.indexOf(String(candidate && candidate.id || "")) >= 0;
-      }),
-    });
-  });
-  return items;
 }
 
 function wbcConversationTrackRawStatus(chat) {

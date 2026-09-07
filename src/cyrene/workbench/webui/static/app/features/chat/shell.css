@@ -1577,7 +1577,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   width: auto;
   height: 244px;
   min-height: 244px;
-  margin: auto 2px 12px;
+  margin: auto 2px 2px;
   padding-top: 8px;
   grid-template-rows: 196px 36px;
   gap: 4px;
@@ -1588,11 +1588,13 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   width: auto;
   height: 244px;
   min-height: 244px;
-  margin: auto 2px 12px;
+  margin: auto 2px 2px;
 }
 
 .workbench-grid.integrated-sidebars > .workbench-sidebar-dock.is-persistent.is-collapsed {
   left: 15px;
+  /* Match the 3px outer side inset (12px rail left, 15px Dock left). */
+  bottom: calc(var(--wb-floating-card-bottom-gap, 12px) + 3px);
   width: 42px;
   height: 244px;
   min-height: 244px;

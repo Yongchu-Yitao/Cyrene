@@ -1,3 +1,4 @@
+import { sessionMenuResources } from "./topbar-resource-projection.mjs"
 import { useTopbarBrowserSubscription } from "./topbar-browser-subscription.jsx"
 import { wbSessionStatusLabel, wbSessionActivityCopy, WorkbenchSessionStatusIcon, WorkbenchAssetIcon, WorkbenchSessionActivityPreview } from "./topbar-session-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
@@ -869,10 +870,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
       left: left,
       top: top,
       portalTheme: portalTheme,
-      resources: {
-        browser: browserAvailable && cachedResources && cachedResources.browser ? cachedResources.browser : null,
-        files: cachedResources && Array.isArray(cachedResources.files) ? cachedResources.files : [],
-      },
+      resources: sessionMenuResources(browserAvailable, cachedResources),
     });
     if (!loadResources) return;
     Promise.resolve(loadResources(item))
@@ -881,10 +879,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
         setSessionMenu(function (current) {
           if (!current || current.item.id !== item.id || current.item.kind !== item.kind) return current;
           return Object.assign({}, current, {
-            resources: {
-              browser: browserAvailable && resources && resources.browser ? resources.browser : null,
-              files: resources && Array.isArray(resources.files) ? resources.files : [],
-            },
+            resources: sessionMenuResources(browserAvailable, resources),
           });
         });
       })
