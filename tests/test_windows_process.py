@@ -38,3 +38,29 @@ def test_non_windows_does_not_patch_subprocess(monkeypatch):
     original = windows_process.subprocess.Popen.__init__
     windows_process.hide_background_console_windows()
     assert windows_process.subprocess.Popen.__init__ is original
+
+
+def test_managed_windows_stop_targets_only_owned_process_tree(monkeypatch):
+    import types
+    from cyrene.platform import windows_process
+
+    calls = []
+    process = types.SimpleNamespace(pid=4321, poll=lambda: None)
+    monkeypatch.setattr(windows_process.sys, "platform", "win32")
+    monkeypatch.setattr(windows_process.subprocess, "run", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or types.SimpleNamespace(returncode=0)
+    ))
+    windows_process.terminate_managed_process(process)
+    assert calls[0][0] == (["taskkill", "/PID", "4321", "/T", "/F"],)
+    assert calls[0][1]["creationflags"] == 0x08000000
+    assert calls[0][1]["timeout"] == 10
+
+
+def test_managed_posix_stop_preserves_direct_termination(monkeypatch):
+    import types
+    from cyrene.platform import windows_process
+
+    stopped = []
+    monkeypatch.setattr(windows_process.sys, "platform", "linux")
+    windows_process.terminate_managed_process(types.SimpleNamespace(terminate=lambda: stopped.append(True)))
+    assert stopped == [True]

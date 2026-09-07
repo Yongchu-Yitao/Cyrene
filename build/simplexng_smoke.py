@@ -17,6 +17,10 @@ from urllib.request import ProxyHandler, build_opener
 
 import yaml
 
+# Sidecar-only builds do not install the full application distribution.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from cyrene.platform.windows_process import terminate_managed_process  # noqa: E402
+
 
 def run_smoke(executable: Path | None = None, *, sidecar: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="cyrene-search-smoke-") as directory:
@@ -84,7 +88,7 @@ def run_smoke(executable: Path | None = None, *, sidecar: bool = False) -> None:
                 raise
             finally:
                 if process.poll() is None:
-                    process.terminate()
+                    terminate_managed_process(process)
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:

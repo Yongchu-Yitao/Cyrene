@@ -181,7 +181,9 @@ class SearXNGManager:
 
         logger.info("Stopping SimpleXNG (pid=%d)...", proc.pid)
         try:
-            proc.terminate()
+            from cyrene.platform.windows_process import terminate_managed_process
+
+            terminate_managed_process(proc)
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
