@@ -105,7 +105,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--initialize', action='store_true', help='Create first reviewed baseline; refuses overwrite')
     parser.add_argument('--ratchet', action='store_true', help='Tighten baseline only after all budgets pass')
+    parser.add_argument("--ownership-report", type=Path, help="Write domain, state-write and resource-call evidence")
     args = parser.parse_args()
+    if args.ownership_report:
+        from python_ownership_report import write_report
+        write_report(ROOT, args.ownership_report)
     current = collect()
     if args.initialize:
         with BASELINE.open('x', encoding='utf-8') as handle:

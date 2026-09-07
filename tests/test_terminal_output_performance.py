@@ -374,8 +374,8 @@ async def test_screen_and_incremental_indexes_use_separate_background_workers(
     query_threads: list[int] = []
     original_feed = manager_module.pyte.Stream.feed
     original_metadata_feed = manager_module.OscMetadataParser.feed
-    original_commands_query = writer._commands_query
-    original_search_query = writer._search_query
+    original_commands_query = writer._history_queries._commands_query
+    original_search_query = writer._history_queries._search_query
 
     def tracked_feed(stream, data):
         parser_threads.append(threading.get_ident())
@@ -397,8 +397,8 @@ async def test_screen_and_incremental_indexes_use_separate_background_workers(
     monkeypatch.setattr(
         manager_module.OscMetadataParser, "feed", tracked_metadata
     )
-    monkeypatch.setattr(writer, "_commands_query", tracked_commands_query)
-    monkeypatch.setattr(writer, "_search_query", tracked_search_query)
+    monkeypatch.setattr(writer._history_queries, "_commands_query", tracked_commands_query)
+    monkeypatch.setattr(writer._history_queries, "_search_query", tracked_search_query)
     payload = (
         b"\x1b]133;A\x1b\\\x1b]133;B\x1b\\echo worker\r\n"
         b"\x1b]133;C\x1b\\BACKGROUND_WORKER_OUTPUT\r\n"
@@ -576,14 +576,14 @@ async def test_blocked_history_query_does_not_delay_screen_processing(
     assert writer is not None
     started = threading.Event()
     release = threading.Event()
-    original = writer._search_query
+    original = writer._history_queries._search_query
 
     def blocked_search(*args, **kwargs):
         started.set()
         release.wait(timeout=2)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(writer, "_search_query", blocked_search)
+    monkeypatch.setattr(writer._history_queries, "_search_query", blocked_search)
     search_task = asyncio.create_task(manager.search_history_async(
         history.project_id, "target", terminal_id=history.id
     ))
@@ -618,7 +618,7 @@ async def test_screen_work_round_robins_between_noisy_terminals(
     entered = threading.Event()
     release = threading.Event()
     order: list[str] = []
-    original = writer._feed_worker_screen
+    original = writer._screen_projection._feed_worker_screen
 
     def tracked(update):
         order.append(update.terminal_id)
@@ -627,7 +627,7 @@ async def test_screen_work_round_robins_between_noisy_terminals(
             release.wait(timeout=2)
         return original(update)
 
-    monkeypatch.setattr(writer, "_feed_worker_screen", tracked)
+    monkeypatch.setattr(writer._screen_projection, "_feed_worker_screen", tracked)
     manager._append_output(noisy, b"first\n")
     for _ in range(100):
         if entered.is_set():

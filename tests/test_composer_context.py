@@ -245,8 +245,8 @@ async def test_command_only_send_request_is_accepted() -> None:
     )
 
     assert await operation._parse_request() is None
-    assert operation.command == "daily-review"
-    assert operation.message == ""
+    assert operation.input.command == "daily-review"
+    assert operation.input.message == ""
 
 
 @pytest.mark.asyncio
@@ -296,9 +296,9 @@ async def test_dynamic_skill_slash_command_activates_context(monkeypatch) -> Non
 
     assert await operation._parse_request() is None
     assert await operation._load_chat({"default", "auto", "plan"}) is None
-    assert operation.command == "skill:writer"
-    assert operation.message == "make an outline"
-    assert operation.public_message == "/skill:writer make an outline"
+    assert operation.input.command == "skill:writer"
+    assert operation.input.message == "make an outline"
+    assert operation.input.public_message == "/skill:writer make an outline"
     assert operation.context_activations["skills"] == ["writer"]
 
 

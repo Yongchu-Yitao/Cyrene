@@ -85,9 +85,9 @@ async function buildRuntimeTools(context = {}) {
   const target = TARGETS[`${platform}-${arch}`];
   if (!target) throw new Error(`Unsupported runtime-tools target: ${platform}-${arch}`);
 
-  const outputRoot = path.join(__dirname, 'runtime-tools');
+  const outputRoot = path.join(__dirname, '../runtime-tools');
   const output = path.join(outputRoot, target.key);
-  const cache = path.join(__dirname, '.runtime-tools-cache');
+  const cache = path.join(__dirname, '../.runtime-tools-cache');
   fs.rmSync(outputRoot, { recursive: true, force: true });
   fs.mkdirSync(output, { recursive: true });
   fs.mkdirSync(cache, { recursive: true });

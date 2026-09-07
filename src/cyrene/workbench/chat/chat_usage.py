@@ -62,9 +62,33 @@ def runtime_usage_message_fields(
     return fields
 
 
+def runtime_model_message_fields(usage, latest_request, model_identity) -> dict[str, Any]:
+    """Shared usage and identity projection; callers retain timing policies."""
+    fields = runtime_usage_message_fields(usage, latest_request)
+    if model_identity:
+        fields["modelIdentity"] = dict(model_identity)
+    return fields
+
+
+def generation_message_fields(duration=None, rate=None) -> dict[str, Any]:
+    """Round included measurements. None means omit; zero remains meaningful.
+
+    Each entry point chooses inclusion before calling this projection: channel
+    replies keep zero, wakes omit zero, and HTTP replies require positive values.
+    """
+    fields = {}
+    if duration is not None:
+        fields["modelGenerationDurationMs"] = round(duration, 3)
+    if rate is not None:
+        fields["outputTokensPerSecond"] = round(rate, 3)
+    return fields
+
+
 __all__ = [
     "USAGE_KEYS",
     "latest_request_usage",
     "normalized_usage",
     "runtime_usage_message_fields",
+    "runtime_model_message_fields",
+    "generation_message_fields",
 ]

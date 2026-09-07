@@ -1,101 +1,101 @@
 {
-  "electron/agent-cursor.js::agentCursorCommand": {
+  "electron/automation/agent-cursor.js::agentCursorCommand": {
     "lines": 180
   },
-  "electron/app-use-linux.js::LinuxAtspiProvider.perform": {
+  "electron/automation/app-use-linux.js::LinuxAtspiProvider.perform": {
     "decisions": 36
   },
-  "electron/app-use-linux.js::LinuxAtspiProvider.snapshot": {
+  "electron/automation/app-use-linux.js::LinuxAtspiProvider.snapshot": {
     "decisions": 29
   },
-  "electron/app-use.js": {
+  "electron/automation/app-use.js": {
     "module_lines": 1536
   },
-  "electron/app-use.js::AppUseManager": {
+  "electron/automation/app-use.js::AppUseManager": {
     "methods": 32
   },
-  "electron/app-use.js::AppUseManager._find.<anonymous>": {
+  "electron/automation/app-use.js::AppUseManager._find.<anonymous>": {
     "decisions": 32
   },
-  "electron/app-use.js::AppUseManager._mapNodes": {
+  "electron/automation/app-use.js::AppUseManager._mapNodes": {
     "decisions": 66
   },
-  "electron/app-use.js::AppUseManager._perform": {
+  "electron/automation/app-use.js::AppUseManager._perform": {
     "decisions": 46
   },
-  "electron/app-use.js::AppUseManager._pidEventAt": {
+  "electron/automation/app-use.js::AppUseManager._pidEventAt": {
     "decisions": 31
   },
-  "electron/app-use.js::AppUseManager._showCoordinatePointer": {
+  "electron/automation/app-use.js::AppUseManager._showCoordinatePointer": {
     "decisions": 23
   },
-  "electron/app-use.js::AppUseManager.call": {
+  "electron/automation/app-use.js::AppUseManager.call": {
     "decisions": 22
   },
-  "electron/app-use.js::AppUseManager.connect": {
+  "electron/automation/app-use.js::AppUseManager.connect": {
     "decisions": 46
   },
-  "electron/app-use.js::AppUseManager.remoteDesktopGlobalInput": {
+  "electron/automation/app-use.js::AppUseManager.remoteDesktopGlobalInput": {
     "decisions": 29
   },
-  "electron/app-use.js::AppUseManager.remoteDesktopInput": {
+  "electron/automation/app-use.js::AppUseManager.remoteDesktopInput": {
     "decisions": 31
   },
-  "electron/app-use.js::CommandPlatformProvider.request": {
+  "electron/automation/app-use.js::CommandPlatformProvider.request": {
     "decisions": 24
   },
-  "electron/browser-context-menu.js::buildBrowserContextMenuTemplate": {
+  "electron/browser/browser-context-menu.js::buildBrowserContextMenuTemplate": {
     "decisions": 43
   },
-  "electron/browser-input.js::browserTypeTargetInPage": {
+  "electron/browser/browser-input.js::browserTypeTargetInPage": {
     "lines": 238,
     "decisions": 82
   },
-  "electron/desktop-settings-owner.js::DesktopSettings.saveDesktopSettings": {
+  "electron/desktop/desktop-settings-owner.js::DesktopSettings.saveDesktopSettings": {
     "decisions": 28
   },
-  "electron/detached-panes.js::DetachedPanes.createDetachedPaneWindow": {
+  "electron/desktop/detached-panes.js::DetachedPanes.createDetachedPaneWindow": {
     "lines": 101,
     "decisions": 30
   },
-  "electron/detached-panes.js::DetachedPanes.detachedPaneBounds": {
+  "electron/desktop/detached-panes.js::DetachedPanes.detachedPaneBounds": {
     "decisions": 24
   },
-  "electron/detached-panes.js::DetachedPanes.finishDetachedPaneDragSession": {
+  "electron/desktop/detached-panes.js::DetachedPanes.finishDetachedPaneDragSession": {
     "decisions": 28
   },
-  "electron/detached-panes.js::DetachedPanes.finishDetachedPaneReturnDrag": {
+  "electron/desktop/detached-panes.js::DetachedPanes.finishDetachedPaneReturnDrag": {
     "decisions": 22
   },
-  "electron/detached-panes.js::DetachedPanes.normalizeDetachedPaneDescriptor": {
+  "electron/desktop/detached-panes.js::DetachedPanes.normalizeDetachedPaneDescriptor": {
     "decisions": 47
   },
-  "electron/detached-panes.js::DetachedPanes.updateDetachedPaneDrag": {
+  "electron/desktop/detached-panes.js::DetachedPanes.updateDetachedPaneDrag": {
     "decisions": 45
   },
-  "electron/detached-panes.js::DetachedPanes.updateDetachedPaneReturnDrag": {
+  "electron/desktop/detached-panes.js::DetachedPanes.updateDetachedPaneReturnDrag": {
     "decisions": 33
   },
-  "electron/host-control.js::HostControl.handle": {
+  "electron/desktop/host-control.js::HostControl.handle": {
     "lines": 104,
     "decisions": 69
   },
-  "electron/host-control.js::HostControl.registerSurface": {
+  "electron/desktop/host-control.js::HostControl.registerSurface": {
     "decisions": 23
   },
-  "electron/host-control.js::HostControl.windowControl": {
+  "electron/desktop/host-control.js::HostControl.windowControl": {
     "decisions": 45,
     "nesting": 10
   },
   "electron/main.js": {
-    "module_lines": 6660
+    "module_lines": 6518
   },
   "electron/main.js::<anonymous>#2": {
     "lines": 354
   },
   "electron/main.js::BrowserTabManager": {
     "methods": 113,
-    "fields": 37
+    "fields": 31
   },
   "electron/main.js::BrowserTabManager._describeUploadTarget": {
     "decisions": 24
@@ -122,12 +122,6 @@
   "electron/main.js::BrowserTabManager.createView": {
     "lines": 120,
     "subscriptions": 20
-  },
-  "electron/main.js::BrowserTabManager.enterVideoFullscreen": {
-    "decisions": 39
-  },
-  "electron/main.js::BrowserTabManager.finishVideoFullscreen": {
-    "decisions": 31
   },
   "electron/main.js::BrowserTabManager.handleCapturedUserEvent": {
     "decisions": 21
@@ -194,64 +188,64 @@
   "electron/main.js::startElectronRpcServer.attempt.<anonymous>.<anonymous>.<anonymous>#2": {
     "decisions": 26
   },
-  "electron/remote-desktop-host.js::<anonymous>": {
+  "electron/remote-desktop/remote-desktop-host.js::<anonymous>": {
     "lines": 463
   },
-  "electron/remote-desktop-host.js::<anonymous>.<anonymous>#2": {
+  "electron/remote-desktop/remote-desktop-host.js::<anonymous>.<anonymous>#2": {
     "decisions": 23
   },
-  "electron/remote-desktop-host.js::<anonymous>.refreshAutoAdaptation": {
+  "electron/remote-desktop/remote-desktop-host.js::<anonymous>.refreshAutoAdaptation": {
     "decisions": 52
   },
-  "electron/remote-desktop-indicator.js::<anonymous>": {
+  "electron/remote-desktop/remote-desktop-indicator.js::<anonymous>": {
     "decisions": 36
   },
-  "electron/remote-desktop-rdp-sidecar.js::handle": {
+  "electron/remote-desktop/remote-desktop-rdp-sidecar.js::handle": {
     "decisions": 48
   },
-  "electron/remote-desktop-rdp-sidecar.js::inputEvent": {
+  "electron/remote-desktop/remote-desktop-rdp-sidecar.js::inputEvent": {
     "decisions": 28
   },
-  "electron/remote-desktop.js": {
+  "electron/remote-desktop/remote-desktop.js": {
     "module_lines": 1906
   },
-  "electron/remote-desktop.js::MutterRemoteDesktopInput._createAbsoluteStream": {
+  "electron/remote-desktop/remote-desktop.js::MutterRemoteDesktopInput._createAbsoluteStream": {
     "decisions": 22
   },
-  "electron/remote-desktop.js::MutterRemoteDesktopInput.startNativeCapture": {
+  "electron/remote-desktop/remote-desktop.js::MutterRemoteDesktopInput.startNativeCapture": {
     "lines": 100
   },
-  "electron/remote-desktop.js::RemoteDesktopManager": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager": {
     "methods": 61
   },
-  "electron/remote-desktop.js::RemoteDesktopManager._appUseSessionForPoint": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager._appUseSessionForPoint": {
     "decisions": 39
   },
-  "electron/remote-desktop.js::RemoteDesktopManager._clipboardFiles": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager._clipboardFiles": {
     "decisions": 23,
     "nesting": 7
   },
-  "electron/remote-desktop.js::RemoteDesktopManager._linuxInput": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager._linuxInput": {
     "lines": 105,
     "decisions": 61,
     "nesting": 6
   },
-  "electron/remote-desktop.js::RemoteDesktopManager._performInput": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager._performInput": {
     "decisions": 71
   },
-  "electron/remote-desktop.js::RemoteDesktopManager._startClipboardMonitor.<anonymous>": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager._startClipboardMonitor.<anonymous>": {
     "decisions": 30
   },
-  "electron/remote-desktop.js::RemoteDesktopManager.handle": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager.handle": {
     "decisions": 21
   },
-  "electron/remote-desktop.js::RemoteDesktopManager.negotiate": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager.negotiate": {
     "decisions": 35
   },
-  "electron/remote-desktop.js::RemoteDesktopManager.probe": {
+  "electron/remote-desktop/remote-desktop.js::RemoteDesktopManager.probe": {
     "decisions": 34
   },
-  "electron/terminal-lifecycle-soak.js::runTerminalLifecycleSoak": {
+  "electron/scripts/terminal-lifecycle-soak.js::runTerminalLifecycleSoak": {
     "lines": 136,
     "decisions": 41
   },
@@ -353,10 +347,10 @@
     "lines": 119
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx": {
-    "module_lines": 1666
+    "module_lines": 1569
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer": {
-    "lines": 1448,
+    "lines": 1365,
     "decisions": 503,
     "hooks": 51
   },
@@ -372,12 +366,6 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#9": {
     "decisions": 37
-  },
-  "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.onKeyDown": {
-    "decisions": 36
-  },
-  "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.submit": {
-    "decisions": 60
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-indicator.jsx::WbcComposerContextIndicator": {
     "decisions": 22
@@ -606,6 +594,9 @@
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx::wbcStartFilePointerDrag": {
     "lines": 103
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/floating-pane-handoff.jsx::beginFloatingPanelSplit": {
+    "decisions": 28
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx": {
     "module_lines": 1853
   },
@@ -672,10 +663,10 @@
     "decisions": 35
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx": {
-    "module_lines": 3357
+    "module_lines": 3103
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage": {
-    "lines": 3292,
+    "lines": 3037,
     "decisions": 190,
     "hooks": 126
   },
@@ -693,10 +684,6 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.applyChatSummaryEvent": {
     "decisions": 22
-  },
-  "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.beginFloatingPanelSplit": {
-    "lines": 151,
-    "decisions": 28
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.closePaneCardWithConfirmation": {
     "decisions": 32
@@ -719,10 +706,6 @@
     "decisions": 23
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>#9": {
-    "decisions": 25
-  },
-  "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.restoreFloatingPanelSplit": {
-    "lines": 103,
     "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/pane-card-drag-controller.jsx::wbcFinishPaneCardGhost": {
@@ -801,20 +784,20 @@
     "decisions": 36
   },
   "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx": {
-    "module_lines": 2860
+    "module_lines": 2824
   },
   "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcProjectRail": {
     "lines": 126
   },
   "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail": {
-    "lines": 2654,
+    "lines": 2617,
     "decisions": 235,
-    "hooks": 85
+    "hooks": 81
   },
-  "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#41": {
+  "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#39": {
     "lines": 201
   },
-  "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#53": {
+  "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#51": {
     "decisions": 39
   },
   "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.chatRailVisualState": {
@@ -1198,11 +1181,21 @@
     "lines": 191,
     "decisions": 113
   },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar-menus.jsx::useTopbarMenus": {
+    "lines": 234,
+    "decisions": 23
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar-menus.jsx::useTopbarMenus.<anonymous>.handleKey": {
+    "decisions": 22
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar-menus.jsx::useTopbarMenus.openSessionMenu": {
+    "decisions": 21
+  },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar-session-view.jsx::WorkbenchSessionActivityPreview": {
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx": {
-    "module_lines": 1939
+    "module_lines": 1682
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchNotificationCenter": {
     "decisions": 33
@@ -1211,37 +1204,31 @@
     "decisions": 42
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar": {
-    "lines": 1691,
-    "decisions": 285,
-    "hooks": 36
+    "lines": 1434,
+    "decisions": 262,
+    "hooks": 25
   },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.<anonymous>#24": {
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.<anonymous>#19": {
     "decisions": 48
-  },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.handleKey": {
-    "decisions": 22
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.handleSessionShortcut": {
     "decisions": 22
   },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#40": {
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#35": {
     "decisions": 37
   },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#44": {
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#39": {
     "decisions": 30
   },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#45": {
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#40": {
     "lines": 126,
     "decisions": 53
   },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#50": {
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#45": {
     "decisions": 35
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.handleTopbarItemKeyDown": {
     "decisions": 29
-  },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.openSessionMenu": {
-    "decisions": 21
   },
   "src/cyrene/workbench/webui/frontend/platform/api.jsx::<anonymous>": {
     "lines": 220

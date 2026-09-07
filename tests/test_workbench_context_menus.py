@@ -38,15 +38,15 @@ def test_browser_tab_picker_floats_in_a_native_view_without_obscuring_the_page()
     assert 'effectiveMode === "maximized" && !hasNativeTabPicker && maximizedPickerOpen' in chat
     assert "!hasNativeTabPicker && pickerOpen && <div" in split
     assert "const BROWSER_TAB_PICKER_HTML" in main
-    native_view = (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("  ensureTabPickerView() {", 1)[1].split(
+    native_view = (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("  ensureTabPickerView() {", 1)[1].split(
         "  pushTabPickerState() {", 1
     )[0]
     assert "new this.View" in native_view
     assert "View: WebContentsView" in main
-    assert "parent.addChildView(view)" in (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8")
+    assert "parent.addChildView(view)" in (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8")
     assert "this.tabPicker.syncTabPicker(win.contentView, true);" in main
     assert "setTabPicker: (info) => ipcRenderer.invoke('browser:set-tab-picker'" in preload
-    assert '"browser-tab-picker-preload.js"' in package
+    assert '"browser/browser-tab-picker-preload.js"' in package
 
 
 def test_native_browser_tab_picker_has_motion_and_reduced_motion_support():
@@ -55,7 +55,7 @@ def test_native_browser_tab_picker_has_motion_and_reduced_motion_support():
     picker_html = main.split("const BROWSER_TAB_PICKER_HTML", 1)[1].split(
         "function normalizeBrowserSessionId", 1
     )[0]
-    picker_bounds = (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("tabPickerBounds()", 1)[1].split(
+    picker_bounds = (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("tabPickerBounds()", 1)[1].split(
         "trackTabPickerWindow", 1
     )[0]
 
@@ -64,7 +64,7 @@ def test_native_browser_tab_picker_has_motion_and_reduced_motion_support():
     assert "animation: picker-out 150ms" in picker_html
     assert "transform: translate3d" in picker_html
     assert "prefers-reduced-motion: reduce" in picker_html
-    assert "view.setBounds(bounds)" in (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8")
+    assert "view.setBounds(bounds)" in (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8")
     assert "const verticalLift = 60" in picker_bounds
     assert "surface.y - verticalLift" in picker_bounds
     assert "variant === 'maximized' ? 116 : 12" in picker_bounds
@@ -87,7 +87,7 @@ def test_native_browser_tab_picker_has_flat_chrome_without_visible_scrollbars():
     assert "overflow-y: auto" in embedded_picker
     assert "['BROWSER_TAB_PICKER_HTML', 'browser-tab-picker.html']" in build
 
-    native_view = (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("  ensureTabPickerView() {", 1)[1].split(
+    native_view = (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("  ensureTabPickerView() {", 1)[1].split(
         "  pushTabPickerState() {", 1
     )[0]
     assert "this.flatChromeCSS" in native_view
@@ -95,7 +95,7 @@ def test_native_browser_tab_picker_has_flat_chrome_without_visible_scrollbars():
     assert "await view.webContents.insertCSS" in native_view
     assert "&style=flat-chrome-1" in main
 
-    picker_bounds = (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("tabPickerBounds()", 1)[1].split(
+    picker_bounds = (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8").split("tabPickerBounds()", 1)[1].split(
         "trackTabPickerWindow", 1
     )[0]
     assert "variant === 'split' ? 'split' : 'maximized'" in picker_bounds
@@ -120,7 +120,7 @@ def test_native_browser_tab_picker_title_clicks_are_debounced_in_both_hosts():
 def test_native_browser_tab_picker_dismisses_and_syncs_actions_to_both_hosts():
     chat = workbench_chat_source()
     main = (ROOT / "electron/main.js").read_text(encoding="utf-8")
-    picker_preload = (ROOT / "electron/browser-tab-picker-preload.js").read_text(
+    picker_preload = (ROOT / "electron/browser/browser-tab-picker-preload.js").read_text(
         encoding="utf-8"
     )
     picker_html = main.split("const BROWSER_TAB_PICKER_HTML", 1)[1].split(
@@ -130,8 +130,8 @@ def test_native_browser_tab_picker_dismisses_and_syncs_actions_to_both_hosts():
         "function WbcSubagentsSplitHost", 1
     )[0]
 
-    assert "if (this.tabPickerState.visible) this.dismissTabPicker(true);" in (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8")
-    assert "this._tabPickerWindowBlurHandler" in (ROOT / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8")
+    assert "if (this.tabPickerState.visible) this.dismissTabPicker(true);" in (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8")
+    assert "this._tabPickerWindowBlurHandler" in (ROOT / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8")
     assert "String(input && input.key || '') === 'Escape'" in main
     assert "window.addEventListener('blur'" not in picker_html
     assert "browser-tab-picker:hidden-ready" in main

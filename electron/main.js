@@ -1,7 +1,8 @@
-const { BrowserTabPicker } = require('./browser-tab-picker-owner');
-const { DesktopSettings } = require('./desktop-settings-owner');
-const { BrowserSessions } = require('./browser-sessions');
-const { DetachedPanes } = require('./detached-panes');
+const { BrowserVideoFullscreen } = require('./browser/browser-video-fullscreen');
+const { BrowserTabPicker } = require('./browser/browser-tab-picker-owner');
+const { DesktopSettings } = require('./desktop/desktop-settings-owner');
+const { BrowserSessions } = require('./browser/browser-sessions');
+const { DetachedPanes } = require('./desktop/detached-panes');
 const {
   app,
   BrowserWindow,
@@ -25,7 +26,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { AppUseManager } = require('./app-use');
+const { AppUseManager } = require('./automation/app-use');
 const {
   AGENT_CURSOR_FADE_IN_MS,
   AGENT_CURSOR_MOVE_MS,
@@ -35,33 +36,33 @@ const {
   agentCursorOverlayHtml,
   agentCursorRunningCommand,
   agentCursorVisualScaleForZoom,
-} = require('./agent-cursor');
+} = require('./automation/agent-cursor');
 const {
   buildBrowserDeepTypeTargetScript,
   buildBrowserTypeTargetScript,
-} = require('./browser-input');
+} = require('./browser/browser-input');
 const {
   BROWSER_CLEAR_DEEP_REFS_SCRIPT,
   BROWSER_DEEP_RESOLVE_ELEMENT_SCRIPT,
   BROWSER_FIND_NESTED_TARGET_SCRIPT,
   BROWSER_INSPECT_NESTED_SCRIPT,
   browserFrameElementGeometryScript,
-} = require('./browser-deep-dom');
-const { buildBrowserContextMenuTemplate } = require('./browser-context-menu');
+} = require('./browser/browser-deep-dom');
+const { buildBrowserContextMenuTemplate } = require('./browser/browser-context-menu');
 const {
   decideBrowserWindowOpen,
   popupWindowOpenResponse,
-} = require('./browser-popup-policy');
-const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser-target');
-const { HostControl } = require('./host-control');
-const { createLocalPreview } = require('./browser-local-preview');
-const { runTerminalLifecycleSoak } = require('./terminal-lifecycle-soak');
-const { BackendProcess } = require('./backend-process');
-const { dispatchBrowserCommand } = require('./browser-rpc');
-const { createSingleFlight, loadWindowUrl } = require('./main-window-lifecycle');
-const { RotatingFileLog } = require('./rotating-log');
-const { migrateLegacyDevelopmentData } = require('./development-data-migration');
-const { RemoteDesktopManager } = require('./remote-desktop');
+} = require('./browser/browser-popup-policy');
+const { BROWSER_FIND_TARGET_SCRIPT } = require('./browser/browser-target');
+const { HostControl } = require('./desktop/host-control');
+const { createLocalPreview } = require('./browser/browser-local-preview');
+const { runTerminalLifecycleSoak } = require('./scripts/terminal-lifecycle-soak');
+const { BackendProcess } = require('./backend/backend-process');
+const { dispatchBrowserCommand } = require('./browser/browser-rpc');
+const { createSingleFlight, loadWindowUrl } = require('./desktop/main-window-lifecycle');
+const { RotatingFileLog } = require('./shared/rotating-log');
+const { migrateLegacyDevelopmentData } = require('./shared/development-data-migration');
+const { RemoteDesktopManager } = require('./remote-desktop/remote-desktop');
 
 const APP_NAME = 'Cyrene';
 const DEVELOPMENT_APP_NAME = 'Cyrene-dev';
@@ -364,7 +365,6 @@ let quitExtensionCheckInFlight = false;
 let quitExtensionDecisionMade = false;
 let launchHidden = process.argv.includes('--hidden');
 let tray = null;
-let activeVideoFullscreenManager = null;
 let appUseManager = null;
 let appUsePointerWindow = null;
 let appUsePointerOwnerTargetId = '';
@@ -1431,7 +1431,7 @@ class BrowserTabManager {
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
     this.tabPicker = new BrowserTabPicker({
       sessionId: this.sessionId, View: WebContentsView,
-      preloadPath: path.join(__dirname, 'browser-tab-picker-preload.js'),
+      preloadPath: path.join(__dirname, 'browser/browser-tab-picker-preload.js'),
       flatChromeCSS: BROWSER_TAB_PICKER_FLAT_CHROME_CSS,
       pickerUrl: () => backend.port
         ? `http://127.0.0.1:${backend.port}/static/app/electron/browser-tab-picker.html?platform=${encodeURIComponent(process.platform)}&style=flat-chrome-1`
@@ -1439,7 +1439,7 @@ class BrowserTabManager {
       ownerWindow: () => this.ownerWindow(), activeTabId: () => this.activeTabId,
       tabSnapshots: () => Array.from(this.tabs.values()).map((tab) => this.tabState(tab)).filter(Boolean),
       tabCount: () => this.tabs.size, surfaceBounds: () => this.pageViewBounds(this.bounds),
-      hostReady: () => this.visible && !this.obscured && !this._boundsTransitioning && !this.videoFullscreen.active,
+      hostReady: () => this.visible && !this.obscured && !this._boundsTransitioning && !this.videoPresentation.videoFullscreen.active,
     });
     this.visible = false;
     this.obscured = browserSessions.browserSurfaceObscured;
@@ -1453,12 +1453,15 @@ class BrowserTabManager {
     this._boundsTransitionToken = 0;
     this._boundsTransitioning = false;
     this._pageZoomTokenByContents = new Map();
-    this.videoFullscreen = { active: false, external: false, tabId: '' };
-    this.videoFullscreenWindow = null;
-    this._videoFullscreenWindowClosing = false;
-    this._mainWindowWasFullScreen = false;
-    this._fullscreenResizeHandler = null;
-    this._mainFullscreenLeaveHandler = null;
+    this.videoPresentation = new BrowserVideoFullscreen({
+      mainWindow: () => mainWindow, isQuitting: () => isQuitting,
+      isMac, isWindows, isLinux, BrowserWindow, screen,
+      windowTitle: () => desktopT('videoWindowTitle', readDesktopSettings()),
+      tab: id => this.tabs.get(id), tabForView: view => this._tabForView(view),
+      activate: id => { this.activeTabId = id; },
+      syncAttachedView: () => this.syncAttachedView(), emitState: () => this.emitState(),
+      resetAttachment: () => { this.attachedTabId = ''; this.attachedWindow = null; },
+    });
     this.browserContext = { sessionId: this.sessionId, roundId: '' };
     this.activeAgentRoundId = '';
     this.agentOwnedTabIdsByRound = new Map();
@@ -1585,183 +1588,38 @@ class BrowserTabManager {
 
   surfaceWindow() {
     if (
-      this.videoFullscreen.active
-      && this.videoFullscreen.external
-      && this.videoFullscreenWindow
-      && !this.videoFullscreenWindow.isDestroyed()
+      this.videoPresentation.videoFullscreen.active
+      && this.videoPresentation.videoFullscreen.external
+      && this.videoPresentation.videoFullscreenWindow
+      && !this.videoPresentation.videoFullscreenWindow.isDestroyed()
     ) {
-      return this.videoFullscreenWindow;
+      return this.videoPresentation.videoFullscreenWindow;
     }
     return this.ownerWindow();
   }
 
   fullscreenTab() {
-    if (!this.videoFullscreen.active) return null;
-    return this.tabs.get(this.videoFullscreen.tabId) || null;
+    return this.videoPresentation.fullscreenTab();
   }
 
   fullscreenBounds(win) {
-    if (!win || win.isDestroyed()) return { x: 0, y: 0, width: 0, height: 0 };
-    const size = win.getContentSize();
-    return {
-      x: 0,
-      y: 0,
-      width: Math.max(0, Math.round(Number(size && size[0]) || 0)),
-      height: Math.max(0, Math.round(Number(size && size[1]) || 0)),
-    };
+    return this.videoPresentation.fullscreenBounds(win);
   }
 
   syncVideoFullscreenBounds() {
-    if (!this.videoFullscreen.active) return;
-    this.syncAttachedView();
+    return this.videoPresentation.syncVideoFullscreenBounds();
   }
 
   requestVideoFullscreenExit() {
-    const tab = this.fullscreenTab();
-    const wc = tab && tab.view && tab.view.webContents;
-    if (!wc || wc.isDestroyed()) {
-      this.finishVideoFullscreen(tab && tab.view);
-      return;
-    }
-    wc.executeJavaScript(`(() => {
-      if (document.fullscreenElement && document.exitFullscreen) {
-        return document.exitFullscreen().then(() => true).catch(() => false);
-      }
-      return false;
-    })()`, true).catch(() => false).finally(() => {
-      if (this._videoFullscreenExitTimer) clearTimeout(this._videoFullscreenExitTimer);
-      this._videoFullscreenExitTimer = setTimeout(() => {
-        this._videoFullscreenExitTimer = null;
-        if (this.videoFullscreen.active) this.finishVideoFullscreen(tab.view);
-      }, 260);
-    });
+    return this.videoPresentation.requestVideoFullscreenExit();
   }
 
-  async enterVideoFullscreen(view) {
-    const tab = this._tabForView(view);
-    if (!tab || !view || view.webContents.isDestroyed()) return;
-    if (activeVideoFullscreenManager && activeVideoFullscreenManager !== this) {
-      activeVideoFullscreenManager.requestVideoFullscreenExit();
-    }
-    activeVideoFullscreenManager = this;
-    this.activeTabId = tab.id;
-    this._mainWindowWasFullScreen = !!(
-      mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()
-    );
-    this.videoFullscreen = {
-      active: true,
-      external: isMac,
-      tabId: tab.id,
-    };
-
-    if (isMac) {
-      const display = mainWindow && !mainWindow.isDestroyed()
-        ? screen.getDisplayMatching(mainWindow.getBounds())
-        : screen.getPrimaryDisplay();
-      const displayBounds = display && display.bounds ? display.bounds : {};
-      const videoWindow = new BrowserWindow({
-        x: Number(displayBounds.x) || 0,
-        y: Number(displayBounds.y) || 0,
-        width: Math.max(640, Number(displayBounds.width) || 1280),
-        height: Math.max(360, Number(displayBounds.height) || 720),
-        title: desktopT('videoWindowTitle', readDesktopSettings()),
-        show: false,
-        frame: false,
-        fullscreenable: true,
-        backgroundColor: '#000000',
-        autoHideMenuBar: true,
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-        },
-      });
-      this.videoFullscreenWindow = videoWindow;
-      this._videoFullscreenWindowClosing = false;
-      this._fullscreenResizeHandler = () => this.syncVideoFullscreenBounds();
-      videoWindow.on('resize', this._fullscreenResizeHandler);
-      videoWindow.on('enter-full-screen', this._fullscreenResizeHandler);
-      videoWindow.on('leave-full-screen', () => {
-        if (!this._videoFullscreenWindowClosing && this.videoFullscreen.active) {
-          this.requestVideoFullscreenExit();
-        }
-      });
-      videoWindow.on('close', (event) => {
-        if (this._videoFullscreenWindowClosing || isQuitting) return;
-        event.preventDefault();
-        this.requestVideoFullscreenExit();
-      });
-      videoWindow.on('closed', () => {
-        if (this.videoFullscreenWindow === videoWindow) this.videoFullscreenWindow = null;
-      });
-      videoWindow.setMenuBarVisibility(false);
-      videoWindow.show();
-      videoWindow.setFullScreen(true);
-      if (mainWindow && !mainWindow.isDestroyed() && !this._mainWindowWasFullScreen && mainWindow.isFullScreen()) {
-        mainWindow.setFullScreen(false);
-      }
-    } else if ((isWindows || isLinux) && mainWindow && !mainWindow.isDestroyed()) {
-      this._fullscreenResizeHandler = () => this.syncVideoFullscreenBounds();
-      this._mainFullscreenLeaveHandler = () => {
-        this.syncVideoFullscreenBounds();
-        if (this.videoFullscreen.active && !this.videoFullscreen.external) {
-          this.requestVideoFullscreenExit();
-        }
-      };
-      mainWindow.on('resize', this._fullscreenResizeHandler);
-      mainWindow.on('enter-full-screen', this._fullscreenResizeHandler);
-      mainWindow.on('leave-full-screen', this._mainFullscreenLeaveHandler);
-      if (!mainWindow.isFullScreen()) mainWindow.setFullScreen(true);
-    }
-
-    this.syncAttachedView();
-    this.emitState();
-    setTimeout(() => this.syncVideoFullscreenBounds(), 80);
+  enterVideoFullscreen(view) {
+    return this.videoPresentation.enterVideoFullscreen(view);
   }
 
   finishVideoFullscreen(view) {
-    if (!this.videoFullscreen.active) return;
-    const tab = this.fullscreenTab();
-    if (view && tab && tab.view !== view) return;
-    if (this._videoFullscreenExitTimer) clearTimeout(this._videoFullscreenExitTimer);
-    this._videoFullscreenExitTimer = null;
-    const externalWindow = this.videoFullscreenWindow;
-    const wasExternal = this.videoFullscreen.external;
-    this.videoFullscreen = { active: false, external: false, tabId: '' };
-    if (activeVideoFullscreenManager === this) activeVideoFullscreenManager = null;
-
-    if (this._fullscreenResizeHandler) {
-      if (externalWindow && !externalWindow.isDestroyed()) {
-        externalWindow.removeListener('resize', this._fullscreenResizeHandler);
-        externalWindow.removeListener('enter-full-screen', this._fullscreenResizeHandler);
-      }
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.removeListener('resize', this._fullscreenResizeHandler);
-        mainWindow.removeListener('enter-full-screen', this._fullscreenResizeHandler);
-      }
-      this._fullscreenResizeHandler = null;
-    }
-    if (this._mainFullscreenLeaveHandler) {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.removeListener('leave-full-screen', this._mainFullscreenLeaveHandler);
-      }
-      this._mainFullscreenLeaveHandler = null;
-    }
-
-    if (wasExternal && externalWindow && !externalWindow.isDestroyed()) {
-      this._videoFullscreenWindowClosing = true;
-      try { externalWindow.contentView.removeChildView(tab && tab.view); } catch (_) {}
-      externalWindow.destroy();
-      this.videoFullscreenWindow = null;
-      this._videoFullscreenWindowClosing = false;
-    } else if (!wasExternal && mainWindow && !mainWindow.isDestroyed() && !this._mainWindowWasFullScreen) {
-      mainWindow.setFullScreen(false);
-    }
-
-    this.attachedTabId = '';
-    this.attachedWindow = null;
-    this.syncAttachedView();
-    this.emitState();
+    return this.videoPresentation.finishVideoFullscreen(view);
   }
 
   pageContextMenuLabels() {
@@ -1945,8 +1803,8 @@ class BrowserTabManager {
       const destroyedTab = this._tabForView(view);
       const destroyedFullscreenTab = !!(
         destroyedTab
-        && this.videoFullscreen.active
-        && this.videoFullscreen.tabId === destroyedTab.id
+        && this.videoPresentation.videoFullscreen.active
+        && this.videoPresentation.videoFullscreen.tabId === destroyedTab.id
       );
       for (const [id, tab] of this.tabs.entries()) {
         if (tab.view === view) this.tabs.delete(id);
@@ -2498,9 +2356,9 @@ class BrowserTabManager {
       activeTab: tabs.find((tab) => tab.id === this.activeTabId) || null,
       obscured: this.obscured,
       videoFullscreen: {
-        active: this.videoFullscreen.active === true,
-        external: this.videoFullscreen.external === true,
-        tabId: this.videoFullscreen.tabId || '',
+        active: this.videoPresentation.videoFullscreen.active === true,
+        external: this.videoPresentation.videoFullscreen.external === true,
+        tabId: this.videoPresentation.videoFullscreen.tabId || '',
         platform: process.platform,
       },
     };
@@ -2601,7 +2459,7 @@ class BrowserTabManager {
     const id = String(tabId || this.activeTabId || '').trim();
     const tab = this.tabs.get(id);
     if (!tab) return this.state();
-    if (this.videoFullscreen.active && this.videoFullscreen.tabId === id) {
+    if (this.videoPresentation.videoFullscreen.active && this.videoPresentation.videoFullscreen.tabId === id) {
       this.finishVideoFullscreen(tab.view);
     }
     this.detachView(tab);
@@ -2618,7 +2476,7 @@ class BrowserTabManager {
   detachView(tab) {
     if (!tab) return;
     try { tab.view.setVisible(false); } catch (_) {}
-    const windows = [this.attachedWindow, this.videoFullscreenWindow, this.ownerWindow()];
+    const windows = [this.attachedWindow, this.videoPresentation.videoFullscreenWindow, this.ownerWindow()];
     for (const win of windows) {
       if (!win || win.isDestroyed()) continue;
       try { win.contentView.removeChildView(tab.view); } catch (_) {}
@@ -2637,7 +2495,7 @@ class BrowserTabManager {
     this._repaintTimer = setTimeout(() => {
       this._repaintTimer = null;
       if (tab.view.webContents.isDestroyed()) return;
-      const ownsFullscreenSurface = this.videoFullscreen.active && this.videoFullscreen.tabId === tab.id;
+      const ownsFullscreenSurface = this.videoPresentation.videoFullscreen.active && this.videoPresentation.videoFullscreen.tabId === tab.id;
       if (this.attachedTabId !== tab.id || (!ownsFullscreenSurface && (!this.visible || this.obscured))) return;
       try { tab.view.webContents.invalidate(); } catch (_) {}
     }, 80);
@@ -2870,7 +2728,7 @@ class BrowserTabManager {
     if (this.chatOverlayView && !this.chatOverlayView.webContents.isDestroyed()) return this.chatOverlayView;
     const view = new WebContentsView({
       webPreferences: {
-        preload: path.join(__dirname, 'browser-chat-overlay-preload.js'),
+        preload: path.join(__dirname, 'browser/browser-chat-overlay-preload.js'),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -2907,7 +2765,7 @@ class BrowserTabManager {
       state.visible
       && this.visible
       && !this.obscured
-      && !this.videoFullscreen.active
+      && !this.videoPresentation.videoFullscreen.active
       && parent
       && this.bounds.width > 24
       && this.bounds.height > 24
@@ -3277,7 +3135,7 @@ class BrowserTabManager {
     if (!this.visible) this.hideAllAgentCursors();
     // Preserve the in-app host geometry while a video owns the fullscreen
     // surface, but never let renderer layout churn resize the fullscreen View.
-    if (this.videoFullscreen.active) return this.state();
+    if (this.videoPresentation.videoFullscreen.active) return this.state();
     // Coalesce native view updates to a stable ~30fps cadence. Electron 35 can
     // leave a WebContentsView white (or crash on some macOS builds) when
     // setBounds is hammered by concurrent renderer IPC calls. A 32ms trailing
@@ -4589,7 +4447,7 @@ class BrowserTabManager {
 
   closeAll() {
     this.hideAllAgentCursors();
-    if (this.videoFullscreen.active) this.finishVideoFullscreen();
+    if (this.videoPresentation.videoFullscreen.active) this.finishVideoFullscreen();
     if (this._syncTimer) clearTimeout(this._syncTimer);
     this._syncTimer = null;
     if (this._repaintTimer) clearTimeout(this._repaintTimer);
@@ -5243,7 +5101,7 @@ function showDoctorRecovery() {
     ipcMain.handle('doctor-recovery-inspect', async event => {
       if (!authorized(event)) throw new Error('Unauthorized recovery request');
       if (!doctorBackendCommand) return { status: 'unavailable', reason: 'python_unavailable' };
-      const { runOfflineDoctor } = require('./doctor-recovery');
+      const { runOfflineDoctor } = require('./diagnostics/doctor-recovery');
       return runOfflineDoctor(doctorBackendCommand.command, doctorBackendCommand.args, doctorBackendCommand.options);
     });
     ipcMain.handle('doctor-recovery-retry', event => {
@@ -5252,12 +5110,12 @@ function showDoctorRecovery() {
     });
   }
   doctorRecoveryWindow = new BrowserWindow({ width: 820, height: 700, title: 'Cyrene Doctor', webPreferences: {
-    preload: path.join(__dirname, 'doctor-recovery-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true,
+    preload: path.join(__dirname, 'diagnostics/doctor-recovery-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true,
   } });
   doctorRecoveryWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   doctorRecoveryWindow.webContents.on('will-navigate', event => event.preventDefault());
   doctorRecoveryWindow.on('closed', () => { doctorRecoveryWindow = null; });
-  doctorRecoveryWindow.loadFile(path.join(__dirname, 'doctor-recovery.html'));
+  doctorRecoveryWindow.loadFile(path.join(__dirname, 'diagnostics/doctor-recovery.html'));
 }
 
 function backendEnvironment() {

@@ -11,7 +11,7 @@ def read(path: str) -> str:
 
 
 def test_electron_publishes_cross_session_browser_manager_state():
-    main = read("electron/main.js") + "\n" + read("electron/browser-sessions.js")
+    main = read("electron/main.js") + "\n" + read("electron/browser/browser-sessions.js")
     preload = read("electron/preload.js")
 
     assert "browserManagerState()" in main
@@ -26,7 +26,7 @@ def test_electron_publishes_cross_session_browser_manager_state():
 
 
 def test_downloads_are_associated_with_the_originating_browser_page():
-    main = read("electron/main.js") + "\n" + read("electron/browser-sessions.js")
+    main = read("electron/main.js") + "\n" + read("electron/browser/browser-sessions.js")
 
     assert "browserSession.on('will-download'" in main
     assert "browserContentOwners.set(view.webContents, { sessionId: this.sessionId, tabId: id })" in main
@@ -37,7 +37,7 @@ def test_downloads_are_associated_with_the_originating_browser_page():
 
 
 def test_global_download_center_supports_pause_resume_cancel_and_progress():
-    main = read("electron/main.js") + "\n" + read("electron/browser-sessions.js")
+    main = read("electron/main.js") + "\n" + read("electron/browser/browser-sessions.js")
     source = workbench_shell_source()
     styles = workbench_style_source()
 

@@ -179,10 +179,10 @@ jobs:
         continue-on-error: true
         shell: powershell
         run: |
-          node --test electron/app-use.test.js
+          node --test electron/automation/app-use.test.js
           $json = @{ operation = 'list_targets'; excludePid = 0; excludeApplicationIds = @(); excludeAppNames = @() } | ConvertTo-Json -Compress
           $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-          $raw = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File electron\app-use-windows.ps1 -PayloadBase64 $payload
+          $raw = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File electron\automation\app-use-windows.ps1 -PayloadBase64 $payload
           $result = @($raw)[-1] | ConvertFrom-Json
           if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
 
@@ -470,10 +470,10 @@ jobs:
         continue-on-error: true
         shell: powershell
         run: |
-          node --test electron/app-use.test.js
+          node --test electron/automation/app-use.test.js
           $json = @{ operation = 'list_targets'; excludePid = 0; excludeApplicationIds = @(); excludeAppNames = @() } | ConvertTo-Json -Compress
           $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-          $raw = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File electron\app-use-windows.ps1 -PayloadBase64 $payload
+          $raw = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File electron\automation\app-use-windows.ps1 -PayloadBase64 $payload
           $result = @($raw)[-1] | ConvertFrom-Json
           if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
 

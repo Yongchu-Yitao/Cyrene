@@ -59,7 +59,7 @@ from cyrene.workbench.chat.chat_reply_finalization_service import (
     BackgroundReplyFinalizationDependencies, ChatReplyFinalizationApplicationService,
 )
 from cyrene.workbench.chat.chat_repository import ChatRepository
-from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
+from cyrene.workbench.chat.chat_usage import runtime_model_message_fields, generation_message_fields
 from cyrene.workbench.chat.chat_runs import (
     ChatRun,
     ChatRunManager,
@@ -118,15 +118,8 @@ def _shell_wake_assistant_message(
         "mediaWake": media_wake,
         "wakeId": wake_id,
     }
-    message.update(
-        runtime_usage_message_fields(result.usage, result.latest_request_usage)
-    )
-    if result.model_identity:
-        message["modelIdentity"] = dict(result.model_identity)
-    if result.generation_duration_ms:
-        message["modelGenerationDurationMs"] = round(result.generation_duration_ms, 3)
-    if result.output_tokens_per_second:
-        message["outputTokensPerSecond"] = round(result.output_tokens_per_second, 3)
+    message.update(runtime_model_message_fields(result.usage, result.latest_request_usage, result.model_identity))
+    message.update(generation_message_fields(result.generation_duration_ms or None, result.output_tokens_per_second or None))
     return message
 
 

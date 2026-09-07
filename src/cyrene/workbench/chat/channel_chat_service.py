@@ -27,7 +27,7 @@ from cyrene.platform.attachments import build_public_attachment_payload
 from cyrene.workbench.projects import project_runtime
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_service import ChatService
-from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
+from cyrene.workbench.chat.chat_usage import runtime_model_message_fields, generation_message_fields
 from cyrene.workbench.sessions.context import configure_store, read_project_state
 
 
@@ -61,15 +61,8 @@ def _channel_assistant_message(
         ),
         "channel": channel,
     }
-    message.update(
-        runtime_usage_message_fields(result.usage, result.latest_request_usage)
-    )
-    if result.model_identity:
-        message["modelIdentity"] = dict(result.model_identity)
-    if result.generation_duration_ms is not None:
-        message["modelGenerationDurationMs"] = round(result.generation_duration_ms, 3)
-    if result.output_tokens_per_second is not None:
-        message["outputTokensPerSecond"] = round(result.output_tokens_per_second, 3)
+    message.update(runtime_model_message_fields(result.usage, result.latest_request_usage, result.model_identity))
+    message.update(generation_message_fields(result.generation_duration_ms, result.output_tokens_per_second))
     return message
 
 

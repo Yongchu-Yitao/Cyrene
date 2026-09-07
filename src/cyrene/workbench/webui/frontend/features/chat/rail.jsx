@@ -1,3 +1,4 @@
+import { pluginToolKey, useRailPluginCollections } from "./rail-plugin-collections.jsx"
 import { renderTerminalCard } from "./rail-terminal-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { PluginFrontendService, pluginLocalizedField } from "../../platform/plugins.jsx"
@@ -114,9 +115,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     wbcWriteProjectToolView(projectId, "terminal");
   }, [projectId, activeTerminalId, terminals]);
   var [pluginTools, setPluginTools] = useWbcState([]);
-  var [pluginCollections, setPluginCollections] = useWbcState({});
-  var [pluginCollectionLoading, setPluginCollectionLoading] = useWbcState({});
-  var [pluginCollectionErrors, setPluginCollectionErrors] = useWbcState({});
   var [pluginDragId, setPluginDragId] = useWbcState("");
   useWbcEffect(function () {
     return workbenchServices.plugins().subscribe(function (snapshot) {
@@ -129,9 +127,6 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       }));
     });
   }, []);
-  function pluginToolKey(tool) {
-    return String(tool && tool.pack_id || "") + ":" + String(tool && (tool.id || tool.view) || "");
-  }
   function pluginToolView(tool) { return "plugin:" + pluginToolKey(tool); }
   function pluginToolExpanded(tool) { return projectToolView === pluginToolView(tool); }
   function pluginToolGlyph(tool) {
@@ -139,43 +134,12 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     if (iconName && WBC_ICONS[iconName]) return WBC_ICONS[iconName];
     return String(tool && (tool.icon_text || tool.iconText || tool.icon) || "").trim().slice(0, 2) || "◇";
   }
-  function loadPluginCollection(tool) {
-    var packId = String(tool && tool.pack_id || "");
-    var method = String(tool && tool.items_method || "");
-    var key = pluginToolKey(tool);
-    if (!packId || !method || pluginCollectionLoading[key]) return Promise.resolve();
-    setPluginCollectionLoading(function (current) { return Object.assign({}, current, { [key]: true }); });
-    setPluginCollectionErrors(function (current) { return Object.assign({}, current, { [key]: "" }); });
-    return PluginFrontendService.call(packId, method, {}, projectId).then(function (result) {
-      setPluginCollections(function (current) {
-        return Object.assign({}, current, { [key]: Array.isArray(result && result.cards) ? result.cards : [] });
-      });
-    }).catch(function (error) {
-      setPluginCollectionErrors(function (current) {
-        return Object.assign({}, current, { [key]: wbcErrorText(error) });
-      });
-    }).finally(function () {
-      setPluginCollectionLoading(function (current) { return Object.assign({}, current, { [key]: false }); });
-    });
-  }
+  var { pluginCollections, pluginCollectionLoading, pluginCollectionErrors, loadPluginCollection } = useRailPluginCollections(projectId, pluginTools, projectToolView);
   function setPluginToolExpanded(tool, open) {
     var next = open ? pluginToolView(tool) : "";
     setProjectToolView(next);
     if (open) loadPluginCollection(tool);
   }
-  useWbcEffect(function () {
-    var events = window.CyreneUI && window.CyreneUI.events;
-    if (!events || typeof events.subscribe !== "function") return undefined;
-    return events.subscribe(function (event) {
-      if (!event || ["remote_desktop_cards_changed", "remote_desktop_session_changed"].indexOf(String(event.type || "")) < 0) return;
-      pluginTools.filter(function (tool) { return String(tool && tool.presentation || "") === "collection"; }).forEach(loadPluginCollection);
-    });
-  }, [pluginTools, projectId]);
-  useWbcEffect(function () {
-    pluginTools.filter(function (tool) {
-      return String(tool && tool.presentation || "") === "collection" && pluginToolExpanded(tool);
-    }).forEach(loadPluginCollection);
-  }, [pluginTools, projectId, projectToolView]);
   var projectSectionPluginTools = pluginTools.filter(function (tool) {
     return String(tool && (tool.rail_section || tool.railSection) || "") === "project_tools";
   });

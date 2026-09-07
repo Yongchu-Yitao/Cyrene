@@ -87,7 +87,7 @@ uv run pytest -q \
 Release 相关检查：
 
 ```bash
-node --test electron/app-use.test.js
+node --test electron/automation/app-use.test.js
 uv run python -m compileall -q src
 npm --prefix src/cyrene/workbench/webui test
 npm --prefix src/cyrene/workbench/webui run build
@@ -181,7 +181,7 @@ Session-message 后台 handler 必须保留在 `INTERNAL_ONLY_CONCRETE_TOOL_NAME
 源码和仓库内 Compiled WebUI Output 必须同步。聚焦验证为：
 
 ```bash
-node --test electron/ui-surface.test.js electron/host-control.test.js
+node --test electron/tests/ui-surface.test.js electron/desktop/host-control.test.js
 uv run pytest -q tests/test_app_control.py \
   tests/test_plugins.py \
   tests/test_tool_package_settings.py \

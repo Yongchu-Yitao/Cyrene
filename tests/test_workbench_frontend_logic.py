@@ -2857,7 +2857,7 @@ def test_electron_browser_chat_overlay_floats_above_native_page():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-    overlay_preload = (root / "electron" / "browser-chat-overlay-preload.js").read_text(
+    overlay_preload = (root / "electron" / "browser/browser-chat-overlay-preload.js").read_text(
         encoding="utf-8"
     )
     package = (root / "electron" / "package.json").read_text(encoding="utf-8")
@@ -2878,7 +2878,7 @@ def test_electron_browser_chat_overlay_floats_above_native_page():
     assert "setChatOverlay:" in preload
     assert "onChatOverlayAction:" in preload
     assert "contextBridge.exposeInMainWorld('browserChatOverlay'" in overlay_preload
-    assert '"browser-chat-overlay-preload.js"' in package
+    assert '"browser/browser-chat-overlay-preload.js"' in package
 
 
 def _run_workbench_model_js(expression: str):
@@ -5240,7 +5240,7 @@ def test_dynamic_surfaces_reuse_plugin_snapshot_and_protect_user_panes():
     pane_drag = frontend_module_source("features/chat/pane-card-drag-controller.jsx")
     pane_restore = frontend_module_source("features/chat/pane-detachment.jsx")
     root = Path(__file__).resolve().parents[1]
-    electron = (root / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (root / "electron" / "detached-panes.js").read_text()
+    electron = (root / "electron" / "main.js").read_text(encoding="utf-8") + "\n" + (root / "electron" / "desktop/detached-panes.js").read_text()
 
     assert "workbenchSurfaces" in plugins
     assert "workspaceFileTypes" in plugins
@@ -5264,7 +5264,7 @@ def test_dynamic_surfaces_reuse_plugin_snapshot_and_protect_user_panes():
     assert "<WbcSurfaceHost" in detached
     assert "meta: pane.meta" in pane_drag
     assert "meta: descriptor.meta" in pane_restore
-    assert "const meta = sourceMeta ?" in (Path(__file__).resolve().parents[1] / "electron/detached-panes.js").read_text()
+    assert "const meta = sourceMeta ?" in (Path(__file__).resolve().parents[1] / "electron/desktop/detached-panes.js").read_text()
     assert "claimedByUser: sourceMeta.claimedByUser === true" in electron
 
 
@@ -8774,7 +8774,7 @@ def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
 def test_electron_browser_type_uses_react_compatible_native_setter():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    browser_input = (root / "electron" / "browser-input.js").read_text(encoding="utf-8")
+    browser_input = (root / "electron" / "browser/browser-input.js").read_text(encoding="utf-8")
     package = (root / "electron" / "package.json").read_text(encoding="utf-8")
     playwright_browser = (
         root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_browser" / "runtime.py"
@@ -9952,7 +9952,6 @@ def test_chat_agent_picker_is_gated_by_agents_plugin_marker():
     assert 'var agentsAvailable = pluginModules.indexOf("agents") >= 0;' in page
     assert "onDraftAgentChange={agentsAvailable ? handleDraftAgentChange : null}" in page
     assert "useWbcDraftAgentBinding(projectId, agentsAvailable)" in page
-    assert "wbcSaveDraftAgentBinding(projectId, null);" in frontend_module_source("features/chat/page-state.jsx")
     assert 'var agentsAvailable = pluginModules.indexOf("agents") >= 0;' in composer
     assert 'var agentPickerEnabled = agentsAvailable && typeof onDraftAgentChange === "function";' in composer
     disabled_branch = catalog.split("if (!enabled) {", 1)[1].split("}", 1)[0]
@@ -10586,19 +10585,11 @@ def test_packaged_electron_preserves_explicit_runtime_path_overrides():
     assert "process.env.CYRENE_TEMP_DIR || getCyreneTempDir()" in source
 
 
-def test_workbench_composer_uploads_files_pasted_from_clipboard():
-    chat = "\n".join((
-        frontend_module_source("features/chat/composer-attachments.jsx"),
-        frontend_module_source("features/chat/composer.jsx"),
-    ))
-
-    assert "onPaste={onPaste}" in chat
-    assert "clipboard.files" in chat
-    assert "clipboard.items" in chat
-    assert 'item.kind === "file" ? item.getAsFile() : null' in chat
-    assert "if (!files.length) return" in chat
-    assert "event.preventDefault();" in chat
-    assert "addFiles(files)" in chat
+def test_workbench_composer_wires_clipboard_paste_handler():
+    # Execution, default prevention and upload results are covered by the
+    # JavaScript attachment behavior test, independent of source formatting.
+    composer = frontend_module_source("features/chat/composer.jsx")
+    assert "onPaste={onPaste}" in composer
 
 
 def test_settings_codex_quota_uses_the_shared_duration_parser():

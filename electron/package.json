@@ -2,7 +2,7 @@
   "name": "cyrene",
   "version": "0.9.0-beta13",
   "license": "Apache-2.0",
-  "description": "Cyrene AI Agent \u2014 self-evolving AI companion",
+  "description": "Cyrene AI Agent — self-evolving AI companion",
   "desktopName": "cyrene.desktop",
   "author": {
     "name": "Cyrene",
@@ -11,18 +11,19 @@
   "homepage": "https://github.com/ikerrrrrrrrrrr/Cyrene",
   "main": "main.js",
   "scripts": {
-    "prestart": "node build-app-use-macos.js",
+    "prestart": "node scripts/build-app-use-macos.js",
     "start": "electron .",
-    "predev": "node build-app-use-macos.js",
+    "predev": "node scripts/build-app-use-macos.js",
     "dev": "node dev-launcher.js",
-    "build:app-use-macos": "node build-app-use-macos.js",
+    "build:app-use-macos": "node scripts/build-app-use-macos.js",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "build:win:portable": "electron-builder --win portable",
-    "build:linux": "electron-builder --linux"
+    "build:linux": "electron-builder --linux",
+    "test": "node --test */*.test.js"
   },
   "build": {
-    "beforePack": "build-app-use-macos.js",
+    "beforePack": "scripts/build-app-use-macos.js",
     "appId": "com.cyrene.app",
     "productName": "Cyrene",
     "electronLanguages": [
@@ -76,15 +77,15 @@
         "to": "build/tray-mac@2x.png"
       },
       {
-        "from": "app-use-macos.jxa",
+        "from": "automation/app-use-macos.jxa",
         "to": "app-use/app-use-macos.jxa"
       },
       {
-        "from": "app-use-macos-hit-test",
+        "from": "automation/app-use-macos-hit-test",
         "to": "app-use/app-use-macos-hit-test"
       },
       {
-        "from": "app-use-windows.ps1",
+        "from": "automation/app-use-windows.ps1",
         "to": "app-use/app-use-windows.ps1"
       }
     ],
@@ -144,7 +145,7 @@
       "artifactName": "Cyrene-${version}-x64.${ext}"
     },
     "deb": {
-      "afterInstall": "linux-after-install.sh",
+      "afterInstall": "scripts/linux-after-install.sh",
       "depends": [
         "libgtk-3-0",
         "libnotify4",
@@ -162,7 +163,7 @@
       ]
     },
     "rpm": {
-      "afterInstall": "linux-after-install.sh",
+      "afterInstall": "scripts/linux-after-install.sh",
       "depends": [
         "gtk3",
         "libnotify",
@@ -176,50 +177,51 @@
       ]
     },
     "files": [
-      "doctor-recovery.js",
-      "doctor-recovery-preload.js",
-      "doctor-recovery-renderer.js",
-      "doctor-recovery.html",
+      "diagnostics/doctor-recovery.js",
+      "diagnostics/doctor-recovery-preload.js",
+      "diagnostics/doctor-recovery-renderer.js",
+      "diagnostics/doctor-recovery.html",
       "main.js",
-      "backend-port-waiters.js",
-      "backend-process.js",
-      "main-window-lifecycle.js",
-      "development-data-migration.js",
-      "host-control.js",
-      "browser-input.js",
-      "browser-rpc.js",
-      "browser-local-preview.js",
-      "browser-deep-dom.js",
-      "browser-context-menu.js",
-      "browser-popup-policy.js",
-      "browser-target.js",
-      "agent-cursor.js",
-      "terminal-lifecycle-soak.js",
-      "rotating-log.js",
-      "remote-desktop.js",
-      "remote-desktop-coordinates.js",
-      "remote-desktop-preload.js",
-      "remote-desktop-host.html",
-      "remote-desktop-host.js",
-      "remote-desktop-rdp-sidecar.js",
-      "remote-desktop-indicator-preload.js",
-      "remote-desktop-indicator.html",
-      "remote-desktop-indicator.css",
-      "remote-desktop-indicator.js",
-      "remote-desktop-credential-preload.js",
-      "remote-desktop-credential.html",
-      "remote-desktop-credential.js",
+      "backend/backend-port-waiters.js",
+      "backend/backend-process.js",
+      "desktop/main-window-lifecycle.js",
+      "shared/development-data-migration.js",
+      "desktop/host-control.js",
+      "browser/browser-input.js",
+      "browser/browser-rpc.js",
+      "browser/browser-local-preview.js",
+      "browser/browser-deep-dom.js",
+      "browser/browser-context-menu.js",
+      "browser/browser-popup-policy.js",
+      "browser/browser-target.js",
+      "automation/agent-cursor.js",
+      "scripts/terminal-lifecycle-soak.js",
+      "shared/rotating-log.js",
+      "remote-desktop/remote-desktop.js",
+      "remote-desktop/remote-desktop-coordinates.js",
+      "remote-desktop/remote-desktop-preload.js",
+      "remote-desktop/remote-desktop-host.html",
+      "remote-desktop/remote-desktop-host.js",
+      "remote-desktop/remote-desktop-rdp-sidecar.js",
+      "remote-desktop/remote-desktop-indicator-preload.js",
+      "remote-desktop/remote-desktop-indicator.html",
+      "remote-desktop/remote-desktop-indicator.css",
+      "remote-desktop/remote-desktop-indicator.js",
+      "remote-desktop/remote-desktop-credential-preload.js",
+      "remote-desktop/remote-desktop-credential.html",
+      "remote-desktop/remote-desktop-credential.js",
       "preload.js",
-      "browser-chat-overlay-preload.js",
-      "browser-tab-picker-preload.js",
-      "browser-tab-picker-owner.js",
-      "app-use.js",
-      "app-use-macos-worker.js",
-      "app-use-linux.js",
+      "browser/browser-chat-overlay-preload.js",
+      "browser/browser-tab-picker-preload.js",
+      "browser/browser-tab-picker-owner.js",
+      "automation/app-use.js",
+      "automation/app-use-macos-worker.js",
+      "automation/app-use-linux.js",
       "package.json",
-      "browser-sessions.js",
-      "detached-panes.js",
-      "desktop-settings-owner.js"
+      "browser/browser-sessions.js",
+      "desktop/detached-panes.js",
+      "desktop/desktop-settings-owner.js",
+      "browser/browser-video-fullscreen.js"
     ]
   },
   "devDependencies": {

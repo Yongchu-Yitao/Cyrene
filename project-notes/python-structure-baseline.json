@@ -183,7 +183,7 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 4710
+    "module_lines": 4617
   },
   "src/cyrene/core/session.py::AgentSession": {
     "methods": 116,
@@ -230,8 +230,8 @@
     "decisions": 31
   },
   "src/cyrene/core/session.py::AgentSession._restore": {
-    "lines": 250,
-    "decisions": 42
+    "lines": 156,
+    "decisions": 33
   },
   "src/cyrene/core/session.py::AgentSession._restore_run_context": {
     "decisions": 31
@@ -249,11 +249,11 @@
     "lines": 110
   },
   "src/cyrene/model/codex_provider.py": {
-    "module_lines": 1706
+    "module_lines": 1645
   },
   "src/cyrene/model/codex_provider.py::CodexAppServer.complete": {
-    "lines": 356,
-    "decisions": 78,
+    "lines": 293,
+    "decisions": 56,
     "nesting": 10
   },
   "src/cyrene/model/codex_provider.py::CodexAppServer.generate_image": {
@@ -403,9 +403,8 @@
     "decisions": 36
   },
   "src/cyrene/platform/settings_service.py::_normalize": {
-    "lines": 108,
-    "decisions": 70,
-    "nesting": 12
+    "decisions": 53,
+    "nesting": 8
   },
   "src/cyrene/platform/settings_service.py::validate_changes": {
     "decisions": 37
@@ -548,7 +547,7 @@
     "nesting": 6
   },
   "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py": {
-    "module_lines": 4492
+    "module_lines": 4195
   },
   "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::TerminalManager": {
     "methods": 103
@@ -573,8 +572,8 @@
     "decisions": 43
   },
   "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::_TerminalPersistenceWriter": {
-    "methods": 43,
-    "fields": 36
+    "methods": 34,
+    "fields": 28
   },
   "src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py::_TerminalPersistenceWriter._index_output": {
     "lines": 126,
@@ -883,9 +882,8 @@
     "decisions": 32
   },
   "src/cyrene/plugins/builtin/cyrene_media/providers/minimax.py::MiniMaxProvider._generate_video": {
-    "lines": 341,
-    "decisions": 107,
-    "nesting": 6
+    "lines": 142,
+    "decisions": 31
   },
   "src/cyrene/plugins/builtin/cyrene_media/providers/minimax.py::_media_class": {
     "decisions": 21
@@ -1015,18 +1013,11 @@
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::embed_model": {
     "decisions": 34
   },
-  "src/cyrene/plugins/builtin/cyrene_model/configuration.py": {
-    "module_lines": 1021
-  },
   "src/cyrene/plugins/builtin/cyrene_model/configuration.py::_migrate_plugin_seed_connections": {
     "decisions": 32
   },
   "src/cyrene/plugins/builtin/cyrene_model/configuration.py::candidate_for_profile": {
     "decisions": 24
-  },
-  "src/cyrene/plugins/builtin/cyrene_model/configuration.py::normalize_model_configuration": {
-    "lines": 229,
-    "decisions": 90
   },
   "src/cyrene/plugins/builtin/cyrene_model/configuration.py::validate_active_route_provider_families": {
     "decisions": 25
@@ -1589,15 +1580,11 @@
     "nesting": 15
   },
   "src/cyrene/workbench/core_adapter/bridge.py": {
-    "module_lines": 1320
+    "module_lines": 1132
   },
   "src/cyrene/workbench/core_adapter/bridge.py::_turn_metrics": {
     "lines": 102,
     "decisions": 40
-  },
-  "src/cyrene/workbench/core_adapter/bridge.py::project_tool_activity_messages": {
-    "lines": 152,
-    "decisions": 78
   },
   "src/cyrene/workbench/core_adapter/bridge.py::workbench_events": {
     "lines": 195,
@@ -1670,21 +1657,18 @@
     "fields": 31
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
-    "module_lines": 1698
+    "module_lines": 1582
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
-    "methods": 37,
-    "fields": 43
+    "methods": 36,
+    "fields": 29
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._dispatch_builtin": {
     "lines": 116
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_chat": {
-    "lines": 155,
-    "decisions": 64
-  },
-  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._prepare_user_turn": {
-    "decisions": 26
+    "lines": 101,
+    "decisions": 32
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._select_model": {
     "decisions": 23

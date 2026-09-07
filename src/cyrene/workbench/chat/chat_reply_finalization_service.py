@@ -15,7 +15,7 @@ from cyrene.workbench.chat.chat_application import (
     deduplicate_projected_messages, completed_turn_count, pending_question_message,
     merge_chat_messages_chronologically, public_message, utc_now_iso,
 )
-from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
+from cyrene.workbench.chat.chat_usage import runtime_model_message_fields, generation_message_fields
 from cyrene.workbench.application.notifications import append_notification
 
 
@@ -246,23 +246,15 @@ class ChatReplyFinalizationApplicationService:
         effective_usage = dict(usage)
         if any(request.projection.usage.values()):
             effective_usage.update(request.projection.usage)
-        assistant.update(
-            runtime_usage_message_fields(
-                effective_usage,
-                request.projection.latest_request_usage,
-            )
-        )
-        if request.projection.model_identity:
-            assistant["modelIdentity"] = dict(request.projection.model_identity)
-        generation_duration_ms = request.projection.generation_duration_ms
-        if generation_duration_ms is not None and generation_duration_ms > 0:
-            assistant["modelGenerationDurationMs"] = round(
-                generation_duration_ms,
-                3,
-            )
-        output_rate = request.projection.output_tokens_per_second
-        if output_rate is not None and output_rate > 0:
-            assistant["outputTokensPerSecond"] = round(output_rate, 3)
+        assistant.update(runtime_model_message_fields(
+            effective_usage, request.projection.latest_request_usage, request.projection.model_identity,
+        ))
+        duration = request.projection.generation_duration_ms
+        rate = request.projection.output_tokens_per_second
+        assistant.update(generation_message_fields(
+            duration if duration is not None and duration > 0 else None,
+            rate if rate is not None and rate > 0 else None,
+        ))
         attachments = self._deduplicate_files([*files, *request.projection.artifacts])
         if attachments:
             assistant["attachments"] = attachments

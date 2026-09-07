@@ -4,8 +4,8 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const mainPath = path.join(__dirname, 'main.js');
-const preloadPath = path.join(__dirname, 'preload.js');
+const mainPath = path.join(__dirname, '../main.js');
+const preloadPath = path.join(__dirname, '../preload.js');
 const mainSource = fs.readFileSync(mainPath, 'utf8');
 const preloadSource = fs.readFileSync(preloadPath, 'utf8');
 

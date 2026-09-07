@@ -59,7 +59,15 @@ jobs:
         run: uv run --locked ruff check src tests
 
       - name: Check Python complexity budgets
-        run: uv run --locked python build/python_complexity.py
+        run: uv run --locked python build/python_complexity.py --ownership-report /tmp/cyrene-python-ownership.json
+
+      - name: Upload Python ownership report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-ownership-report
+          path: /tmp/cyrene-python-ownership.json
+          if-no-files-found: ignore
 
       - name: Run full Python suite
         run: >-
@@ -108,7 +116,7 @@ jobs:
         run: git diff --exit-code -- src/cyrene/workbench/webui/static/app
 
       - name: Run Electron tests
-        run: node --test electron/*.test.js
+        run: node --test electron/*/*.test.js
 
       - name: Check patch formatting
         run: git diff --check

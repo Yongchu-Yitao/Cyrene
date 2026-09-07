@@ -56,3 +56,21 @@ class SendOptions:
             lang=str(body.get("lang") or "").strip().lower(),
             voice_command=body.get("voiceCommand") is True,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SelectedSendModel:
+    candidate: dict[str, Any] | None
+    agent_managed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedSendEnvironment:
+    """Complete environment after project/context/model validation succeeds.
+
+    Nested records retain their existing identity; this is not a deep snapshot.
+    """
+    workspace_dir: str
+    context_activations: dict[str, Any]
+    resolved_context_activations: dict[str, Any]
+    model: SelectedSendModel

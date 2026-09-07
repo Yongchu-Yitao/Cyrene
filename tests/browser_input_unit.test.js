@@ -5,7 +5,7 @@ const test = require('node:test');
 const {
   browserTypeTargetInPage,
   buildBrowserTypeTargetScript,
-} = require('../electron/browser-input');
+} = require('../electron/browser/browser-input');
 
 class FakeEvent {
   constructor(type, init = {}) {

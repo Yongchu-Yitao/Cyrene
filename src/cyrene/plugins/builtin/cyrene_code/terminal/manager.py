@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .scrollback_segments import ScrollbackSegments
+from .history_queries import TerminalHistoryQueries
+from .screen_projection import TerminalScreenProjection
+
 import asyncio
 import base64
 import codecs
@@ -326,8 +330,6 @@ class _TerminalPersistenceWriter:
     def __init__(self, state_dir: Path, *, output_limit: int) -> None:
         self._state_dir = state_dir
         self._db_path = state_dir / "terminals.sqlite3"
-        self._output_limit = output_limit
-        self._segment_size = min(SCROLLBACK_SEGMENT_SIZE, output_limit)
         self._queue: queue.PriorityQueue[tuple[int, int, float, Any]] = (
             queue.PriorityQueue()
         )
@@ -338,23 +340,24 @@ class _TerminalPersistenceWriter:
         self._completed = 0
         self._failure: BaseException | None = None
         self._retained_starts: dict[str, int] = {}
-        self._screens: dict[str, tuple[Any, Any, Any]] = {}
-        self._metadata_parsers: dict[str, OscMetadataParser] = {}
         self._command_index_parsers: dict[str, OscMetadataParser] = {}
-        self._segment_locks: dict[str, threading.RLock] = {}
+        self._scrollback = ScrollbackSegments(
+            state_dir, output_limit, min(SCROLLBACK_SEGMENT_SIZE, output_limit), self._condition,
+        )
+        self._history_queries = TerminalHistoryQueries(
+            oldest_seq=lambda *args: self._oldest_seq(*args),
+            ensure_index=lambda *args: self._ensure_index(*args),
+            read_history=lambda *args: self._read_history(*args),
+            history_timestamp=self._history_timestamp,
+        )
         self._terminal_work: dict[str, deque[Any]] = {}
         self._terminal_work_scheduled: set[str] = set()
         self._terminal_work_bytes = 0
         self._terminal_work_peak_bytes = 0
-        self._screen_snapshots: dict[str, tuple[int, dict[str, Any]]] = {}
+        self._screen_projection = TerminalScreenProjection(self._condition)
         self.thread_id: int | None = None
         self.query_thread_id: int | None = None
         self.batch_count = 0
-        self.bytes_written = 0
-        self.bytes_read = 0
-        self.segments_deleted = 0
-        self.eviction_count = 0
-        self.screen_bytes_parsed = 0
         self.screen_batches = 0
         self.screen_updates = 0
         self.query_count = 0
@@ -392,11 +395,11 @@ class _TerminalPersistenceWriter:
         with self._condition:
             return {
                 "batches": self.batch_count,
-                "bytesWritten": self.bytes_written,
-                "bytesRead": self.bytes_read,
-                "segmentsDeleted": self.segments_deleted,
-                "evictions": self.eviction_count,
-                "screenBytesParsed": self.screen_bytes_parsed,
+                "bytesWritten": self._scrollback.bytes_written,
+                "bytesRead": self._scrollback.bytes_read,
+                "segmentsDeleted": self._scrollback.segments_deleted,
+                "evictions": self._scrollback.eviction_count,
+                "screenBytesParsed": self._screen_projection.screen_bytes_parsed,
                 "screenBatches": self.screen_batches,
                 "screenUpdates": self.screen_updates,
                 "queries": self.query_count,
@@ -428,14 +431,8 @@ class _TerminalPersistenceWriter:
         if schedule:
             self._put_main(0, _TerminalWorkReady(terminal_id))
 
-    def cached_screen(
-        self, terminal_id: str, minimum_seq: int,
-    ) -> dict[str, Any] | None:
-        with self._condition:
-            entry = self._screen_snapshots.get(terminal_id)
-            if entry is None or entry[0] < minimum_seq:
-                return None
-            return dict(entry[1])
+    def cached_screen(self, terminal_id: str, minimum_seq: int) -> dict[str, Any] | None:
+        return self._screen_projection.cached_screen(terminal_id, minimum_seq)
 
     def submit(self, items: list[_PersistenceItem]) -> int:
         if not items:
@@ -509,189 +506,24 @@ class _TerminalPersistenceWriter:
         self._thread.join()
 
     def _legacy_path(self, terminal_id: str) -> Path:
-        return self._state_dir / "scrollback" / f"{terminal_id}.bin"
+        return self._scrollback._legacy_path(terminal_id)
 
     def _segment_dir(self, terminal_id: str) -> Path:
-        return self._state_dir / "scrollback" / terminal_id
+        return self._scrollback._segment_dir(terminal_id)
 
     def _segment_lock(self, terminal_id: str) -> threading.RLock:
-        with self._condition:
-            return self._segment_locks.setdefault(terminal_id, threading.RLock())
-
-    def _segments(self, terminal_id: str) -> list[tuple[int, Path, int]]:
-        directory = self._segment_dir(terminal_id)
-        if not directory.is_dir():
-            return []
-        entries: list[tuple[int, Path, int]] = []
-        for path in directory.glob("*.bin"):
-            try:
-                entries.append((int(path.stem), path, path.stat().st_size))
-            except (OSError, ValueError):
-                continue
-        entries.sort(key=lambda entry: entry[0])
-        return entries
-
-    def _migrate_legacy(self, terminal_id: str, output_start_seq: int) -> None:
-        """Move an existing single-file scrollback into segmented storage."""
-        legacy = self._legacy_path(terminal_id)
-        target = self._segment_dir(terminal_id)
-        if target.is_dir() or not legacy.is_file():
-            return
-        temporary = target.with_name(f".{target.name}.{os.getpid()}.migrating")
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        temporary.mkdir(parents=True)
-        cursor = max(0, int(output_start_seq))
-        with legacy.open("rb") as source:
-            while data := source.read(self._segment_size):
-                with (temporary / f"{cursor:020d}.bin").open("wb") as stream:
-                    stream.write(data)
-                self.bytes_written += len(data)
-                cursor += len(data)
-        os.replace(temporary, target)
-        legacy.unlink()
+        return self._scrollback._segment_lock(terminal_id)
 
     def _oldest_seq(self, terminal_id: str, fallback: int) -> int:
-        with self._segment_lock(terminal_id):
-            segments = self._segments(terminal_id)
-            return segments[0][0] if segments else max(0, int(fallback))
+        return self._scrollback._oldest_seq(terminal_id, fallback)
 
     def _append_segments(self, item: _PersistenceItem) -> int | None:
-        with self._segment_lock(item.terminal_id):
-            return self._append_segments_locked(item)
-
-    def _append_segments_locked(self, item: _PersistenceItem) -> int | None:
-        output_start_seq = int(item.session_values[14])
-        self._migrate_legacy(item.terminal_id, output_start_seq)
-        directory = self._segment_dir(item.terminal_id)
-        directory.mkdir(parents=True, exist_ok=True)
-        cursor = item.next_seq - len(item.output)
-        offset = 0
-        segments = self._segments(item.terminal_id)
-        while offset < len(item.output):
-            if segments:
-                segment_start, path, size = segments[-1]
-                if segment_start + size == cursor and size < self._segment_size:
-                    capacity = self._segment_size - size
-                else:
-                    path = directory / f"{cursor:020d}.bin"
-                    size = 0
-                    capacity = self._segment_size
-                    segments.append((cursor, path, 0))
-            else:
-                path = directory / f"{cursor:020d}.bin"
-                size = 0
-                capacity = self._segment_size
-                segments.append((cursor, path, 0))
-            chunk = item.output[offset:offset + capacity]
-            with path.open("ab") as stream:
-                stream.write(chunk)
-            self.bytes_written += len(chunk)
-            new_size = size + len(chunk)
-            segments[-1] = (segments[-1][0], path, new_size)
-            cursor += len(chunk)
-            offset += len(chunk)
-
-        total = sum(size for _start, _path, size in segments)
-        evicted = False
-        while total > self._output_limit and len(segments) > 1:
-            _start, path, size = segments.pop(0)
-            path.unlink()
-            self.segments_deleted += 1
-            total -= size
-            evicted = True
-        if evicted:
-            self.eviction_count += 1
-        return segments[0][0] if evicted and segments else None
+        return self._scrollback._append_segments(item)
 
     def _read_history(
         self, terminal_id: str, start_seq: int, end_seq: int, fallback_start: int,
     ) -> tuple[int, int, bytes]:
-        with self._segment_lock(terminal_id):
-            return self._read_history_locked(
-                terminal_id, start_seq, end_seq, fallback_start
-            )
-
-    def _read_history_locked(
-        self, terminal_id: str, start_seq: int, end_seq: int, fallback_start: int,
-    ) -> tuple[int, int, bytes]:
-        self._migrate_legacy(terminal_id, fallback_start)
-        segments = self._segments(terminal_id)
-        oldest = segments[0][0] if segments else max(0, int(fallback_start))
-        start = max(oldest, int(start_seq))
-        end = max(start, int(end_seq))
-        if end <= start:
-            return oldest, start, b""
-        if not segments:
-            legacy = self._legacy_path(terminal_id)
-            try:
-                with legacy.open("rb") as stream:
-                    stream.seek(start - oldest)
-                    return oldest, start, stream.read(end - start)
-            except OSError:
-                return oldest, start, b""
-        parts: list[bytes] = []
-        for segment_start, path, size in segments:
-            segment_end = segment_start + size
-            if segment_end <= start or segment_start >= end:
-                continue
-            left = max(start, segment_start) - segment_start
-            right = min(end, segment_end) - segment_start
-            with path.open("rb") as stream:
-                stream.seek(left)
-                data = stream.read(right - left)
-                self.bytes_read += len(data)
-                parts.append(data)
-        return oldest, start, b"".join(parts)
-
-    def _screen_state(self, terminal_id: str, cols: int, rows: int):
-        state = self._screens.get(terminal_id)
-        if state is None:
-            screen = pyte.Screen(cols, rows)
-            state = (
-                screen,
-                pyte.Stream(screen),
-                codecs.getincrementaldecoder("utf-8")(errors="replace"),
-            )
-            self._screens[terminal_id] = state
-        return state
-
-    def _feed_worker_screen(self, update: _ScreenUpdate) -> None:
-        screen, stream, decoder = self._screen_state(
-            update.terminal_id, update.cols, update.rows
-        )
-        stream.feed(decoder.decode(update.data, final=False))
-        self.screen_bytes_parsed += len(update.data)
-        parser = self._metadata_parsers.setdefault(
-            update.terminal_id, OscMetadataParser()
-        )
-        metadata = parser.feed(update.data, start_seq=update.start_seq)
-        if metadata and update.metadata_loop is not None:
-            update.metadata_loop.call_soon_threadsafe(
-                update.metadata_callback, update.terminal_id, tuple(metadata)
-            )
-        snapshot = self._screen_body((screen, stream, decoder))
-        with self._condition:
-            self._screen_snapshots[update.terminal_id] = (
-                update.next_seq, snapshot
-            )
-
-    @staticmethod
-    def _screen_body(state: tuple[Any, Any, Any]) -> dict[str, Any]:
-        screen = state[0]
-        lines = [str(line).rstrip() for line in screen.display]
-        while lines and not lines[-1]:
-            lines.pop()
-        return {
-            "rows": int(screen.lines),
-            "cols": int(screen.columns),
-            "cursor": {
-                "x": int(screen.cursor.x),
-                "y": int(screen.cursor.y),
-                "visible": not bool(getattr(screen.cursor, "hidden", False)),
-            },
-            "screenText": "\n".join(lines),
-        }
+        return self._scrollback._read_history(terminal_id, start_seq, end_seq, fallback_start)
 
     @staticmethod
     def _history_timestamp(
@@ -947,72 +779,6 @@ class _TerminalPersistenceWriter:
             connection, terminal_id, output_start_seq, next_seq
         )
 
-    def _commands_query(
-        self, connection: sqlite3.Connection, terminal_id: str,
-        output_start_seq: int, next_seq: int,
-    ) -> list[dict[str, Any]]:
-        output_start_seq = self._oldest_seq(terminal_id, output_start_seq)
-        self._ensure_index(
-            connection, terminal_id, output_start_seq, next_seq
-        )
-        rows = connection.execute(
-            """SELECT command_id, command_text, output_start_seq,
-                      output_end_seq, exit_code, started_at, finished_at, running
-                 FROM terminal_commands
-                WHERE terminal_id = ? AND command_start_seq >= ?
-                  AND output_start_seq < ?
-                ORDER BY output_start_seq""",
-            (terminal_id, output_start_seq, next_seq),
-        ).fetchall()
-        return [{
-            "id": str(row["command_id"]),
-            "command": str(row["command_text"]),
-            "outputStartSeq": int(row["output_start_seq"]),
-            "outputEndSeq": min(next_seq, int(row["output_end_seq"])),
-            "exitCode": row["exit_code"],
-            "startedAt": str(row["started_at"] or ""),
-            "finishedAt": str(row["finished_at"] or ""),
-            "running": bool(row["running"]),
-        } for row in rows]
-
-    def _search_query(
-        self, connection: sqlite3.Connection, sessions: tuple[dict[str, Any], ...],
-        needle: str, limit: int,
-    ) -> list[dict[str, Any]]:
-        matches: list[dict[str, Any]] = []
-        for session in sessions:
-            terminal_id = str(session["id"])
-            oldest = self._oldest_seq(
-                terminal_id, int(session["outputStartSeq"])
-            )
-            next_seq = int(session["nextSeq"])
-            self._ensure_index(connection, terminal_id, oldest, next_seq)
-            first_line_row = connection.execute(
-                """SELECT MIN(line_number) FROM terminal_text_chunks
-                    WHERE terminal_id = ? AND end_seq > ? AND start_seq < ?""",
-                (terminal_id, oldest, next_seq),
-            ).fetchone()
-            first_line = int(first_line_row[0] or 1)
-            rows = connection.execute(
-                """SELECT line_number, text, created_at
-                     FROM terminal_text_chunks
-                    WHERE terminal_id = ? AND end_seq > ? AND start_seq < ?
-                      AND instr(search_text, ?) > 0
-                    ORDER BY line_number""",
-                (terminal_id, oldest, next_seq, needle),
-            ).fetchall()
-            for row in rows:
-                matches.append({
-                    "terminalId": terminal_id,
-                    "title": session["title"],
-                    "line": int(row["line_number"]) - first_line + 1,
-                    "text": str(row["text"]),
-                    "createdAt": str(row["created_at"] or ""),
-                })
-                if len(matches) >= limit:
-                    return matches
-        return matches
-
     def _execute_query(
         self, connection: sqlite3.Connection, query: _WorkerQuery,
     ) -> Any:
@@ -1024,69 +790,15 @@ class _TerminalPersistenceWriter:
         if operation == "barrier":
             return None
         if operation == "reset_metadata":
-            self._metadata_parsers.pop(str(arguments[0]), None)
+            self._screen_projection.reset_metadata(str(arguments[0]))
             self._command_index_parsers.pop(str(arguments[0]), None)
             return None
         if operation == "screen":
-            terminal_id, cols, rows, output_start_seq, next_seq = arguments
-            state = self._screens.get(terminal_id)
-            if state is None:
-                state = self._screen_state(terminal_id, cols, rows)
-                _oldest, _start, data = self._read_history(
-                    terminal_id, output_start_seq, next_seq, output_start_seq
-                )
-                if data:
-                    state[1].feed(state[2].decode(data, final=False))
-            body = self._screen_body(state)
-            with self._condition:
-                self._screen_snapshots[terminal_id] = (next_seq, body)
-            return body
-        if operation == "commands":
-            return self._commands_query(connection, *arguments)
-        if operation == "command_output":
-            terminal_id, command_id, output_start_seq, next_seq = arguments
-            command = next((item for item in self._commands_query(
-                connection, terminal_id, output_start_seq, next_seq
-            ) if item["id"] == command_id), None)
-            if command is None:
-                raise LookupError("terminal command not found")
-            _oldest, _actual, data = self._read_history(
-                terminal_id, int(command["outputStartSeq"]),
-                int(command["outputEndSeq"]), output_start_seq,
-            )
-            return command, data, plain_terminal_text(data)
-        if operation == "search":
-            return self._search_query(connection, *arguments)
-        if operation == "replay":
-            terminal_id, cursor, target, chunk_size, output_start_seq = arguments
-            oldest = self._oldest_seq(terminal_id, output_start_seq)
-            position = max(oldest, min(target, cursor))
-            events: list[dict[str, Any]] = []
-            while position < target:
-                _oldest, actual, data = self._read_history(
-                    terminal_id, position, min(target, position + chunk_size), oldest
-                )
-                if not data:
-                    break
-                end = actual + len(data)
-                events.append({
-                    "type": "output",
-                    "seq": actual,
-                    "nextSeq": end,
-                    "createdAt": self._history_timestamp(
-                        connection, terminal_id, actual
-                    ),
-                    "data": base64.b64encode(data).decode("ascii"),
-                })
-                position = end
-            return events
+            return self._screen_projection.read(*arguments, read_history=self._read_history)
         if operation == "remove":
             terminal_id = str(arguments[0])
-            self._screens.pop(terminal_id, None)
-            self._metadata_parsers.pop(terminal_id, None)
+            self._screen_projection.remove(terminal_id)
             self._command_index_parsers.pop(terminal_id, None)
-            with self._condition:
-                self._screen_snapshots.pop(terminal_id, None)
             with self._segment_lock(terminal_id):
                 shutil.rmtree(self._segment_dir(terminal_id), ignore_errors=True)
                 with contextlib.suppress(OSError):
@@ -1099,7 +811,7 @@ class _TerminalPersistenceWriter:
                 )
             connection.commit()
             return None
-        raise ValueError(f"unknown terminal worker operation: {operation}")
+        return self._history_queries.execute(connection, operation, arguments)
 
     def _record_failure(self, exc: BaseException) -> None:
         with self._condition:
@@ -1195,19 +907,10 @@ class _TerminalPersistenceWriter:
         )
         if isinstance(item, _ScreenUpdate):
             self.screen_batches += 1
-            self._feed_worker_screen(item)
+            self._screen_projection._feed_worker_screen(item)
             return
         if isinstance(item, _ScreenResize):
-            state = self._screens.get(item.terminal_id)
-            if state is not None:
-                state[0].resize(lines=item.rows, columns=item.cols)
-                with self._condition:
-                    previous = self._screen_snapshots.get(
-                        item.terminal_id, (0, {})
-                    )
-                    self._screen_snapshots[item.terminal_id] = (
-                        previous[0], self._screen_body(state)
-                    )
+            self._screen_projection.resize(item)
             return
         if isinstance(item, _WorkerQuery):
             try:

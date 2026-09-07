@@ -1,0 +1,602 @@
+{
+  "baseline_commit": "212dcfaa45b70c146313e48fe4197cc31e8b0ee2",
+  "python": [
+    {
+      "symbol": "_SendOperation",
+      "before": {
+        "methods": 37,
+        "fields": 43
+      },
+      "after": {
+        "methods": 36,
+        "fields": 29
+      }
+    },
+    {
+      "symbol": "_SendOperation._load_chat",
+      "before": {
+        "lines": 155,
+        "decisions": 64,
+        "nesting": 3
+      },
+      "after": {
+        "lines": 101,
+        "decisions": 32,
+        "nesting": 2
+      }
+    },
+    {
+      "symbol": "_TerminalPersistenceWriter",
+      "before": {
+        "methods": 43,
+        "fields": 36
+      },
+      "after": {
+        "methods": 34,
+        "fields": 28
+      }
+    }
+  ],
+  "javascript_budget_relocations": [
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.<anonymous>#24",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.<anonymous>#19",
+      "metrics": {
+        "decisions": 48
+      },
+      "reason": "unchanged function source"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.handleKey",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar-menus.jsx::useTopbarMenus.<anonymous>.handleKey",
+      "metrics": {
+        "decisions": 22
+      },
+      "reason": "unchanged function source"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#40",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#35",
+      "metrics": {
+        "decisions": 37
+      },
+      "reason": "unchanged function source"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#44",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#39",
+      "metrics": {
+        "decisions": 30
+      },
+      "reason": "unchanged function source"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#45",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#40",
+      "metrics": {
+        "lines": 126,
+        "decisions": 53
+      },
+      "reason": "unchanged function source"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#50",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#45",
+      "metrics": {
+        "decisions": 35
+      },
+      "reason": "unchanged function source"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.openSessionMenu",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar-menus.jsx::useTopbarMenus.openSessionMenu",
+      "metrics": {
+        "decisions": 21
+      },
+      "reason": "unchanged function source"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.beginFloatingPanelSplit",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/floating-pane-handoff.jsx::beginFloatingPanelSplit",
+      "metrics": {
+        "decisions": 28
+      },
+      "reason": "responsibility extracted from existing scope; bounded by original metrics"
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar",
+      "to": "src/cyrene/workbench/webui/frontend/features/shell/topbar-menus.jsx::useTopbarMenus",
+      "metrics": {
+        "lines": 234,
+        "decisions": 23
+      },
+      "reason": "responsibility extracted from existing scope; bounded by original metrics"
+    }
+  ],
+  "ownership_report_interpretation": "Static ownership clues, not proof that resources leak or writes race.\n\nDomain totals survive moving functions within a domain. Only explicit self\nattribute writes are called owned writes; ambiguous collection receivers remain\nunresolved. Resource calls are syntactic candidates, not allocation accounting.\n",
+  "python_domain_totals": {
+    "src/cyrene/__init__.py": {
+      "modules": 1
+    },
+    "src/cyrene/__main__.py": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 1,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 2
+    },
+    "src/cyrene/agents": {
+      "modules": 14,
+      "owned_writes": 146,
+      "unresolved_mutations": 46,
+      "resource_creation_candidates": 9,
+      "resource_release_candidates": 19
+    },
+    "src/cyrene/cli.py": {
+      "modules": 1,
+      "owned_writes": 3,
+      "unresolved_mutations": 3,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/cli_chat.py": {
+      "modules": 1,
+      "owned_writes": 141,
+      "unresolved_mutations": 51,
+      "resource_creation_candidates": 2,
+      "resource_release_candidates": 15
+    },
+    "src/cyrene/config.py": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 2,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/core": {
+      "modules": 57,
+      "owned_writes": 412,
+      "unresolved_mutations": 185,
+      "resource_creation_candidates": 16,
+      "resource_release_candidates": 55
+    },
+    "src/cyrene/local_cli.py": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 2,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 1
+    },
+    "src/cyrene/localization.py": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 1,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/model": {
+      "modules": 18,
+      "owned_writes": 106,
+      "unresolved_mutations": 81,
+      "resource_creation_candidates": 9,
+      "resource_release_candidates": 34
+    },
+    "src/cyrene/observability": {
+      "modules": 14,
+      "owned_writes": 57,
+      "unresolved_mutations": 69,
+      "resource_creation_candidates": 19,
+      "resource_release_candidates": 29
+    },
+    "src/cyrene/path_policy.py": {
+      "modules": 1
+    },
+    "src/cyrene/platform": {
+      "modules": 62,
+      "owned_writes": 94,
+      "unresolved_mutations": 177,
+      "resource_creation_candidates": 64,
+      "resource_release_candidates": 50
+    },
+    "src/cyrene/plugins": {
+      "modules": 14,
+      "owned_writes": 87,
+      "unresolved_mutations": 94,
+      "resource_creation_candidates": 1,
+      "resource_release_candidates": 15
+    },
+    "src/cyrene/plugins/builtin/__init__.py": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/ask_user.py": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/cyrene_application": {
+      "modules": 22,
+      "owned_writes": 0,
+      "unresolved_mutations": 8,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/plugins/builtin/cyrene_browser": {
+      "modules": 27,
+      "owned_writes": 86,
+      "unresolved_mutations": 52,
+      "resource_creation_candidates": 10,
+      "resource_release_candidates": 26
+    },
+    "src/cyrene/plugins/builtin/cyrene_channels": {
+      "modules": 11,
+      "owned_writes": 27,
+      "unresolved_mutations": 16,
+      "resource_creation_candidates": 2,
+      "resource_release_candidates": 13
+    },
+    "src/cyrene/plugins/builtin/cyrene_cli": {
+      "modules": 7,
+      "owned_writes": 2,
+      "unresolved_mutations": 18,
+      "resource_creation_candidates": 6,
+      "resource_release_candidates": 7
+    },
+    "src/cyrene/plugins/builtin/cyrene_code": {
+      "modules": 38,
+      "owned_writes": 266,
+      "unresolved_mutations": 128,
+      "resource_creation_candidates": 25,
+      "resource_release_candidates": 72
+    },
+    "src/cyrene/plugins/builtin/cyrene_composer_context": {
+      "modules": 5,
+      "owned_writes": 7,
+      "unresolved_mutations": 11,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 8
+    },
+    "src/cyrene/plugins/builtin/cyrene_content": {
+      "modules": 15,
+      "owned_writes": 53,
+      "unresolved_mutations": 49,
+      "resource_creation_candidates": 3,
+      "resource_release_candidates": 22
+    },
+    "src/cyrene/plugins/builtin/cyrene_context": {
+      "modules": 2
+    },
+    "src/cyrene/plugins/builtin/cyrene_control": {
+      "modules": 6,
+      "owned_writes": 0,
+      "unresolved_mutations": 11,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/plugins/builtin/cyrene_delivery": {
+      "modules": 8,
+      "owned_writes": 0,
+      "unresolved_mutations": 3,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 2
+    },
+    "src/cyrene/plugins/builtin/cyrene_desktop": {
+      "modules": 12,
+      "owned_writes": 0,
+      "unresolved_mutations": 37,
+      "resource_creation_candidates": 2,
+      "resource_release_candidates": 12
+    },
+    "src/cyrene/plugins/builtin/cyrene_entity": {
+      "modules": 13,
+      "owned_writes": 13,
+      "unresolved_mutations": 34,
+      "resource_creation_candidates": 16,
+      "resource_release_candidates": 5
+    },
+    "src/cyrene/plugins/builtin/cyrene_extensions": {
+      "modules": 13,
+      "owned_writes": 27,
+      "unresolved_mutations": 95,
+      "resource_creation_candidates": 6,
+      "resource_release_candidates": 13
+    },
+    "src/cyrene/plugins/builtin/cyrene_goal": {
+      "modules": 5,
+      "owned_writes": 17,
+      "unresolved_mutations": 31,
+      "resource_creation_candidates": 9,
+      "resource_release_candidates": 3
+    },
+    "src/cyrene/plugins/builtin/cyrene_guidance": {
+      "modules": 2,
+      "owned_writes": 2,
+      "unresolved_mutations": 0,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 4
+    },
+    "src/cyrene/plugins/builtin/cyrene_image": {
+      "modules": 3
+    },
+    "src/cyrene/plugins/builtin/cyrene_knowledge": {
+      "modules": 25,
+      "owned_writes": 25,
+      "unresolved_mutations": 150,
+      "resource_creation_candidates": 14,
+      "resource_release_candidates": 52
+    },
+    "src/cyrene/plugins/builtin/cyrene_map": {
+      "modules": 4,
+      "owned_writes": 7,
+      "unresolved_mutations": 3,
+      "resource_creation_candidates": 1,
+      "resource_release_candidates": 1
+    },
+    "src/cyrene/plugins/builtin/cyrene_mcp": {
+      "modules": 5,
+      "owned_writes": 68,
+      "unresolved_mutations": 29,
+      "resource_creation_candidates": 2,
+      "resource_release_candidates": 9
+    },
+    "src/cyrene/plugins/builtin/cyrene_media": {
+      "modules": 24,
+      "owned_writes": 50,
+      "unresolved_mutations": 94,
+      "resource_creation_candidates": 13,
+      "resource_release_candidates": 25
+    },
+    "src/cyrene/plugins/builtin/cyrene_memory": {
+      "modules": 23,
+      "owned_writes": 14,
+      "unresolved_mutations": 106,
+      "resource_creation_candidates": 1,
+      "resource_release_candidates": 35
+    },
+    "src/cyrene/plugins/builtin/cyrene_model": {
+      "modules": 24,
+      "owned_writes": 6,
+      "unresolved_mutations": 47,
+      "resource_creation_candidates": 1,
+      "resource_release_candidates": 17
+    },
+    "src/cyrene/plugins/builtin/cyrene_office": {
+      "modules": 24,
+      "owned_writes": 36,
+      "unresolved_mutations": 163,
+      "resource_creation_candidates": 3,
+      "resource_release_candidates": 16
+    },
+    "src/cyrene/plugins/builtin/cyrene_plugin_development": {
+      "modules": 2,
+      "owned_writes": 0,
+      "unresolved_mutations": 42,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 7
+    },
+    "src/cyrene/plugins/builtin/cyrene_proactive": {
+      "modules": 4,
+      "owned_writes": 2,
+      "unresolved_mutations": 7,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_github": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_go": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_java": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_javascript": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 2,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_make": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 1,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_python": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 2,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_rust": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/cyrene_project_tex": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/cyrene_remote": {
+      "modules": 19,
+      "owned_writes": 174,
+      "unresolved_mutations": 43,
+      "resource_creation_candidates": 23,
+      "resource_release_candidates": 26
+    },
+    "src/cyrene/plugins/builtin/cyrene_remote_desktop": {
+      "modules": 12,
+      "owned_writes": 60,
+      "unresolved_mutations": 54,
+      "resource_creation_candidates": 14,
+      "resource_release_candidates": 12
+    },
+    "src/cyrene/plugins/builtin/cyrene_renderer": {
+      "modules": 2,
+      "owned_writes": 0,
+      "unresolved_mutations": 0,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 2
+    },
+    "src/cyrene/plugins/builtin/cyrene_schedule": {
+      "modules": 13,
+      "owned_writes": 24,
+      "unresolved_mutations": 19,
+      "resource_creation_candidates": 16,
+      "resource_release_candidates": 7
+    },
+    "src/cyrene/plugins/builtin/cyrene_skills": {
+      "modules": 23,
+      "owned_writes": 29,
+      "unresolved_mutations": 87,
+      "resource_creation_candidates": 48,
+      "resource_release_candidates": 23
+    },
+    "src/cyrene/plugins/builtin/cyrene_soul": {
+      "modules": 5,
+      "owned_writes": 2,
+      "unresolved_mutations": 7,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 2
+    },
+    "src/cyrene/plugins/builtin/cyrene_split_context": {
+      "modules": 2,
+      "owned_writes": 0,
+      "unresolved_mutations": 6,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 2
+    },
+    "src/cyrene/plugins/builtin/cyrene_subagent": {
+      "modules": 12,
+      "owned_writes": 29,
+      "unresolved_mutations": 20,
+      "resource_creation_candidates": 2,
+      "resource_release_candidates": 16
+    },
+    "src/cyrene/plugins/builtin/cyrene_system_prompt": {
+      "modules": 3
+    },
+    "src/cyrene/plugins/builtin/cyrene_voice": {
+      "modules": 8,
+      "owned_writes": 9,
+      "unresolved_mutations": 6,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 3
+    },
+    "src/cyrene/plugins/builtin/edit.py": {
+      "modules": 1
+    },
+    "src/cyrene/plugins/builtin/glob.py": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 1,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 1
+    },
+    "src/cyrene/plugins/builtin/grep.py": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 1,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 1
+    },
+    "src/cyrene/plugins/builtin/pinned_topbar_context": {
+      "modules": 2,
+      "owned_writes": 0,
+      "unresolved_mutations": 1,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/simplexng_child.py": {
+      "modules": 1,
+      "owned_writes": 0,
+      "unresolved_mutations": 1,
+      "resource_creation_candidates": 1,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/workbench/__init__.py": {
+      "modules": 1
+    },
+    "src/cyrene/workbench/application": {
+      "modules": 8,
+      "owned_writes": 125,
+      "unresolved_mutations": 45,
+      "resource_creation_candidates": 14,
+      "resource_release_candidates": 8
+    },
+    "src/cyrene/workbench/artifacts": {
+      "modules": 5,
+      "owned_writes": 6,
+      "unresolved_mutations": 26,
+      "resource_creation_candidates": 1,
+      "resource_release_candidates": 1
+    },
+    "src/cyrene/workbench/chat": {
+      "modules": 23,
+      "owned_writes": 197,
+      "unresolved_mutations": 184,
+      "resource_creation_candidates": 11,
+      "resource_release_candidates": 40
+    },
+    "src/cyrene/workbench/control": {
+      "modules": 4,
+      "owned_writes": 17,
+      "unresolved_mutations": 3,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/workbench/core_adapter": {
+      "modules": 6,
+      "owned_writes": 43,
+      "unresolved_mutations": 15,
+      "resource_creation_candidates": 11,
+      "resource_release_candidates": 19
+    },
+    "src/cyrene/workbench/http": {
+      "modules": 67,
+      "owned_writes": 109,
+      "unresolved_mutations": 85,
+      "resource_creation_candidates": 5,
+      "resource_release_candidates": 13
+    },
+    "src/cyrene/workbench/persistence": {
+      "modules": 6,
+      "owned_writes": 2,
+      "unresolved_mutations": 27,
+      "resource_creation_candidates": 2,
+      "resource_release_candidates": 14
+    },
+    "src/cyrene/workbench/projects": {
+      "modules": 7,
+      "owned_writes": 20,
+      "unresolved_mutations": 25,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 0
+    },
+    "src/cyrene/workbench/sessions": {
+      "modules": 7,
+      "owned_writes": 5,
+      "unresolved_mutations": 36,
+      "resource_creation_candidates": 3,
+      "resource_release_candidates": 5
+    },
+    "src/cyrene/workbench/ui": {
+      "modules": 3,
+      "owned_writes": 0,
+      "unresolved_mutations": 5,
+      "resource_creation_candidates": 0,
+      "resource_release_candidates": 3
+    },
+    "src/cyrene/workbench/webui": {
+      "modules": 9,
+      "owned_writes": 27,
+      "unresolved_mutations": 8,
+      "resource_creation_candidates": 1,
+      "resource_release_candidates": 4
+    },
+    "src/cyrene/workbench/workspaces": {
+      "modules": 4,
+      "owned_writes": 46,
+      "unresolved_mutations": 16,
+      "resource_creation_candidates": 4,
+      "resource_release_candidates": 11
+    }
+  }
+}

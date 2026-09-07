@@ -1,0 +1,260 @@
+{
+  "baseline_commit": "212dcfaa45b70c146313e48fe4197cc31e8b0ee2",
+  "python": [
+    {
+      "symbol": "normalize_model_configuration",
+      "before": {
+        "lines": 229,
+        "decisions": 90,
+        "nesting": 3
+      },
+      "after": {
+        "lines": 45,
+        "decisions": 13,
+        "nesting": 1
+      }
+    },
+    {
+      "symbol": "_normalize",
+      "before": {
+        "lines": 108,
+        "decisions": 70,
+        "nesting": 12
+      },
+      "after": {
+        "lines": 82,
+        "decisions": 53,
+        "nesting": 8
+      }
+    },
+    {
+      "symbol": "AgentSession._restore",
+      "before": {
+        "lines": 250,
+        "decisions": 42,
+        "nesting": 3
+      },
+      "after": {
+        "lines": 156,
+        "decisions": 33,
+        "nesting": 3
+      }
+    },
+    {
+      "symbol": "CodexAppServer.complete",
+      "before": {
+        "lines": 356,
+        "decisions": 78,
+        "nesting": 10
+      },
+      "after": {
+        "lines": 293,
+        "decisions": 56,
+        "nesting": 10
+      }
+    },
+    {
+      "symbol": "MiniMaxProvider._generate_video",
+      "before": {
+        "lines": 341,
+        "decisions": 107,
+        "nesting": 6
+      },
+      "after": {
+        "lines": 142,
+        "decisions": 31,
+        "nesting": 3
+      }
+    },
+    {
+      "symbol": "_TerminalPersistenceWriter",
+      "before": {
+        "methods": 43,
+        "fields": 36
+      },
+      "after": {
+        "methods": 39,
+        "fields": 30
+      }
+    }
+  ],
+  "javascript": [
+    {
+      "symbol": "BrowserTabManager",
+      "before": {
+        "methods": 113,
+        "fields": 37
+      },
+      "after": {
+        "methods": 113,
+        "fields": 31
+      },
+      "moduleLines": [
+        6660,
+        6518
+      ]
+    },
+    {
+      "symbol": "WorkbenchChatPage",
+      "before": {
+        "lines": 3292,
+        "decisions": 190,
+        "nesting": 2,
+        "hooks": 126,
+        "setter_targets": 0,
+        "subscriptions": 0
+      },
+      "after": {
+        "lines": 3132,
+        "decisions": 190,
+        "nesting": 2,
+        "hooks": 126,
+        "setter_targets": 0,
+        "subscriptions": 0
+      },
+      "moduleLines": [
+        3357,
+        3198
+      ]
+    },
+    {
+      "symbol": "WbcRail",
+      "before": {
+        "lines": 2654,
+        "decisions": 235,
+        "nesting": 4,
+        "hooks": 85,
+        "setter_targets": 0,
+        "subscriptions": 0
+      },
+      "after": {
+        "lines": 2617,
+        "decisions": 235,
+        "nesting": 4,
+        "hooks": 81,
+        "setter_targets": 0,
+        "subscriptions": 0
+      },
+      "moduleLines": [
+        2860,
+        2824
+      ]
+    },
+    {
+      "symbol": "WorkbenchTopbar",
+      "before": {
+        "lines": 1691,
+        "decisions": 285,
+        "nesting": 4,
+        "hooks": 36,
+        "setter_targets": 0,
+        "subscriptions": 0
+      },
+      "after": {
+        "lines": 1663,
+        "decisions": 285,
+        "nesting": 4,
+        "hooks": 35,
+        "setter_targets": 0,
+        "subscriptions": 0
+      },
+      "moduleLines": [
+        1939,
+        1912
+      ]
+    }
+  ],
+  "electron_path_relocations": {
+    "browser-popup-policy.js": "browser/browser-popup-policy.js",
+    "host-control.js": "desktop/host-control.js",
+    "backend-port-waiters.test.js": "backend/backend-port-waiters.test.js",
+    "remote-desktop-preload.js": "remote-desktop/remote-desktop-preload.js",
+    "workbench-shortcuts.test.js": "tests/workbench-shortcuts.test.js",
+    "browser-target.test.js": "browser/browser-target.test.js",
+    "browser-chat-overlay-preload.js": "browser/browser-chat-overlay-preload.js",
+    "remote-desktop-indicator.css": "remote-desktop/remote-desktop-indicator.css",
+    "app-use.test.js": "automation/app-use.test.js",
+    "browser-deep-dom.js": "browser/browser-deep-dom.js",
+    "browser-popup-policy.test.js": "browser/browser-popup-policy.test.js",
+    "remote-desktop-indicator.html": "remote-desktop/remote-desktop-indicator.html",
+    "linux-after-install.sh": "scripts/linux-after-install.sh",
+    "browser-video-fullscreen.test.js": "browser/browser-video-fullscreen.test.js",
+    "remote-desktop-indicator-preload.js": "remote-desktop/remote-desktop-indicator-preload.js",
+    "browser-video-fullscreen.js": "browser/browser-video-fullscreen.js",
+    "remote-desktop-credential.html": "remote-desktop/remote-desktop-credential.html",
+    "browser-local-preview.test.js": "browser/browser-local-preview.test.js",
+    "agent-cursor.test.js": "automation/agent-cursor.test.js",
+    "doctor-recovery.js": "diagnostics/doctor-recovery.js",
+    "app-use-macos-worker.js": "automation/app-use-macos-worker.js",
+    "remote-desktop-credential-preload.js": "remote-desktop/remote-desktop-credential-preload.js",
+    "i18n.test.js": "tests/i18n.test.js",
+    "app-use-macos.jxa": "automation/app-use-macos.jxa",
+    "development-data-migration.js": "shared/development-data-migration.js",
+    "remote-desktop-coordinates.test.js": "remote-desktop/remote-desktop-coordinates.test.js",
+    "browser-context-menu.js": "browser/browser-context-menu.js",
+    "build-runtime-tools.js": "scripts/build-runtime-tools.js",
+    "rotating-log.test.js": "shared/rotating-log.test.js",
+    "desktop-settings-owner.test.js": "desktop/desktop-settings-owner.test.js",
+    "host-control.test.js": "desktop/host-control.test.js",
+    "backend-process.test.js": "backend/backend-process.test.js",
+    "app-use-linux.js": "automation/app-use-linux.js",
+    "doctor-recovery-preload.js": "diagnostics/doctor-recovery-preload.js",
+    "browser-sessions.test.js": "browser/browser-sessions.test.js",
+    "remote-desktop-host.js": "remote-desktop/remote-desktop-host.js",
+    "browser-tab-picker-preload.js": "browser/browser-tab-picker-preload.js",
+    "remote-desktop.js": "remote-desktop/remote-desktop.js",
+    "browser-tab-picker-owner.js": "browser/browser-tab-picker-owner.js",
+    "development-data-migration.test.js": "shared/development-data-migration.test.js",
+    "app-use.js": "automation/app-use.js",
+    "app-use-macos-hit-test": "automation/app-use-macos-hit-test",
+    "detached-panes.js": "desktop/detached-panes.js",
+    "rotating-log.js": "shared/rotating-log.js",
+    "detached-panes.test.js": "desktop/detached-panes.test.js",
+    "browser-target.js": "browser/browser-target.js",
+    "browser-rpc.js": "browser/browser-rpc.js",
+    "browser-tab-picker-owner.test.js": "browser/browser-tab-picker-owner.test.js",
+    "backend-port-waiters.js": "backend/backend-port-waiters.js",
+    "main-window-lifecycle.test.js": "desktop/main-window-lifecycle.test.js",
+    "main-window-lifecycle.js": "desktop/main-window-lifecycle.js",
+    "browser-rpc.test.js": "browser/browser-rpc.test.js",
+    "doctor-recovery.test.js": "diagnostics/doctor-recovery.test.js",
+    "remote-desktop-indicator.js": "remote-desktop/remote-desktop-indicator.js",
+    "browser-context-menu.test.js": "browser/browser-context-menu.test.js",
+    "desktop-settings-owner.js": "desktop/desktop-settings-owner.js",
+    "browser-deep-dom.test.js": "browser/browser-deep-dom.test.js",
+    "app-use-macos-hit-test.swift": "automation/app-use-macos-hit-test.swift",
+    "agent-cursor.js": "automation/agent-cursor.js",
+    "doctor-recovery.html": "diagnostics/doctor-recovery.html",
+    "browser-local-preview.js": "browser/browser-local-preview.js",
+    "ui-surface.test.js": "tests/ui-surface.test.js",
+    "remote-desktop-credential.js": "remote-desktop/remote-desktop-credential.js",
+    "browser-input.js": "browser/browser-input.js",
+    "remote-desktop-coordinates.js": "remote-desktop/remote-desktop-coordinates.js",
+    "browser-sessions.js": "browser/browser-sessions.js",
+    "terminal-lifecycle-soak.js": "scripts/terminal-lifecycle-soak.js",
+    "build-app-use-macos.js": "scripts/build-app-use-macos.js",
+    "remote-desktop-host.html": "remote-desktop/remote-desktop-host.html",
+    "doctor-recovery-renderer.js": "diagnostics/doctor-recovery-renderer.js",
+    "app-use-windows.ps1": "automation/app-use-windows.ps1",
+    "app-use-macos-worker.test.js": "automation/app-use-macos-worker.test.js",
+    "backend-process.js": "backend/backend-process.js",
+    "app-use-linux.test.js": "automation/app-use-linux.test.js",
+    "remote-desktop-rdp-sidecar.js": "remote-desktop/remote-desktop-rdp-sidecar.js"
+  },
+  "javascript_budget_relocations": [
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#41",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#39",
+      "metrics": {
+        "lines": 201
+      }
+    },
+    {
+      "from": "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#53",
+      "to": "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail.<anonymous>#51",
+      "metrics": {
+        "decisions": 39
+      }
+    }
+  ]
+}

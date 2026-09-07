@@ -113,7 +113,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     ).read_text(encoding="utf-8")
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     lifecycle_soak = (
-        ROOT / "electron" / "terminal-lifecycle-soak.js"
+        ROOT / "electron" / "scripts/terminal-lifecycle-soak.js"
     ).read_text(encoding="utf-8")
     electron_package = (ROOT / "electron" / "package.json").read_text(
         encoding="utf-8"
@@ -174,7 +174,7 @@ def test_windows_release_installs_and_runs_the_built_nsis_package():
     assert "CYRENE_TERMINAL_SOAK_BURST_COMPLETE" in lifecycle_soak
     assert "120000" in lifecycle_soak
     assert "await daemonRequest(cleanupConnection, 'shutdown'" in lifecycle_soak
-    assert '"terminal-lifecycle-soak.js"' in electron_package
+    assert '"scripts/terminal-lifecycle-soak.js"' in electron_package
     client = (
         ROOT
         / "src" / "cyrene" / "plugins" / "builtin"
@@ -222,7 +222,7 @@ def test_windows_backend_termination_does_not_hold_electron_open():
     # cover both stop and restart. Packaging must include the shared owner.
     import json
     package = json.loads((ROOT / "electron/package.json").read_text(encoding="utf-8"))
-    assert "backend-process.js" in package["build"]["files"]
+    assert "backend/backend-process.js" in package["build"]["files"]
 
 
 def test_frozen_smoke_imports_numpy_native_extension():

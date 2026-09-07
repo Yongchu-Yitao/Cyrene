@@ -4,8 +4,8 @@ const path = require('path');
 
 function buildMacHitTestHelper() {
   if (process.platform !== 'darwin') return;
-  const source = path.join(__dirname, 'app-use-macos-hit-test.swift');
-  const output = path.join(__dirname, 'app-use-macos-hit-test');
+  const source = path.join(__dirname, '../automation/app-use-macos-hit-test.swift');
+  const output = path.join(__dirname, '../automation/app-use-macos-hit-test');
   const sourceMtime = Math.max(fs.statSync(source).mtimeMs, fs.statSync(__filename).mtimeMs);
   const outputMtime = fs.existsSync(output) ? fs.statSync(output).mtimeMs : 0;
   if (outputMtime >= sourceMtime) return;

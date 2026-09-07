@@ -351,14 +351,14 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
         root
         / "src/cyrene/plugins/builtin/cyrene_remote_desktop/providers.py"
     ).read_text(encoding="utf-8")
-    electron_host = (root / "electron/remote-desktop.js").read_text(encoding="utf-8")
+    electron_host = (root / "electron/remote-desktop/remote-desktop.js").read_text(encoding="utf-8")
     electron_main = (root / "electron/main.js").read_text(encoding="utf-8")
-    media_host = (root / "electron/remote-desktop-host.js").read_text(encoding="utf-8")
-    rdp_sidecar = (root / "electron/remote-desktop-rdp-sidecar.js").read_text(encoding="utf-8")
-    app_use = (root / "electron/app-use.js").read_text(encoding="utf-8")
-    app_use_macos = (root / "electron/app-use-macos.jxa").read_text(encoding="utf-8")
-    app_use_windows = (root / "electron/app-use-windows.ps1").read_text(encoding="utf-8-sig")
-    input_coordinates = (root / "electron/remote-desktop-coordinates.js").read_text(encoding="utf-8")
+    media_host = (root / "electron/remote-desktop/remote-desktop-host.js").read_text(encoding="utf-8")
+    rdp_sidecar = (root / "electron/remote-desktop/remote-desktop-rdp-sidecar.js").read_text(encoding="utf-8")
+    app_use = (root / "electron/automation/app-use.js").read_text(encoding="utf-8")
+    app_use_macos = (root / "electron/automation/app-use-macos.jxa").read_text(encoding="utf-8")
+    app_use_windows = (root / "electron/automation/app-use-windows.ps1").read_text(encoding="utf-8-sig")
+    input_coordinates = (root / "electron/remote-desktop/remote-desktop-coordinates.js").read_text(encoding="utf-8")
     package = json.loads((root / "electron/package.json").read_text(encoding="utf-8"))
     packaged_files = set(package["build"]["files"])
 
@@ -398,11 +398,11 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "rdp_authentication_failed" in rdp_sidecar
     assert "remoteDesktop.credentials.request') return 185_000" in plugin_ui
     assert "Acknowledge ipcRenderer.invoke" in electron_host
-    assert "remote-desktop-rdp-sidecar.js" in packaged_files
+    assert "remote-desktop/remote-desktop-rdp-sidecar.js" in packaged_files
     assert "app.commandLine.appendSwitch('ozone-platform', 'wayland')" in electron_main
     assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" not in electron_main
     assert "app.commandLine.appendSwitch('ozone-platform', 'x11')" in (
-        root / "electron" / "remote-desktop-rdp-sidecar.js"
+        root / "electron" / "remote-desktop/remote-desktop-rdp-sidecar.js"
     ).read_text(encoding="utf-8")
     assert "remote-audio" in plugin_ui
     assert "getUserMedia({ audio: true" in plugin_ui
@@ -561,18 +561,18 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "xdotool" in package["build"]["deb"]["depends"]
     assert "xdotool" in package["build"]["rpm"]["depends"]
     assert {
-        "remote-desktop.js",
-        "remote-desktop-coordinates.js",
-        "remote-desktop-preload.js",
-        "remote-desktop-host.html",
-        "remote-desktop-host.js",
-        "remote-desktop-indicator-preload.js",
-        "remote-desktop-indicator.html",
-        "remote-desktop-indicator.css",
-        "remote-desktop-indicator.js",
-        "remote-desktop-credential-preload.js",
-        "remote-desktop-credential.html",
-        "remote-desktop-credential.js",
+        "remote-desktop/remote-desktop.js",
+        "remote-desktop/remote-desktop-coordinates.js",
+        "remote-desktop/remote-desktop-preload.js",
+        "remote-desktop/remote-desktop-host.html",
+        "remote-desktop/remote-desktop-host.js",
+        "remote-desktop/remote-desktop-indicator-preload.js",
+        "remote-desktop/remote-desktop-indicator.html",
+        "remote-desktop/remote-desktop-indicator.css",
+        "remote-desktop/remote-desktop-indicator.js",
+        "remote-desktop/remote-desktop-credential-preload.js",
+        "remote-desktop/remote-desktop-credential.html",
+        "remote-desktop/remote-desktop-credential.js",
     } <= packaged_files
 
 
@@ -662,7 +662,7 @@ def test_freerdp_connection_arguments_include_initial_controller_viewport():
 
 def test_freerdp_sidecar_reports_failure_before_destroying_display():
     root = Path(__file__).resolve().parent.parent
-    sidecar = (root / "electron/remote-desktop-rdp-sidecar.js").read_text(
+    sidecar = (root / "electron/remote-desktop/remote-desktop-rdp-sidecar.js").read_text(
         encoding="utf-8"
     )
 
@@ -689,7 +689,8 @@ def test_linux_development_freerdp_bridge_reuses_electron_runtime(
     electron.write_text("runtime", encoding="utf-8")
     resources = tmp_path / "resources"
     resources.mkdir()
-    (resources / "remote-desktop-rdp-sidecar.js").write_text("sidecar", encoding="utf-8")
+    (resources / "remote-desktop").mkdir()
+    (resources / "remote-desktop/remote-desktop-rdp-sidecar.js").write_text("sidecar", encoding="utf-8")
     monkeypatch.setattr(
         "cyrene.plugins.builtin.cyrene_remote_desktop.providers.platform.system",
         lambda: "Linux",

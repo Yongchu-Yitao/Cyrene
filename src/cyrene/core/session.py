@@ -52,6 +52,7 @@ from .hook import (
 )
 from .observability import log_operation, operation
 from .session_events import SessionEvents
+from .restore_decision import select_restore_action
 from .plugin import (
     PluginBatchRunner,
     PluginCall,
@@ -1879,46 +1880,38 @@ class AgentSession:
         self._leaf_id = leaf.id
         self._restore_run_context(leaf)
         value = leaf.value if isinstance(leaf.value, Mapping) else {}
-        if value.get("cancelled") is True:
+        def log_restore(leaf, node_count, *, outcome, **details):
+            log_operation(
+                logger, "cyrene.core.session", "restore", phase="completed",
+                tree_id=self.tree.id, run_id=self._current_run_id,
+                leaf_id=leaf.id, outcome=outcome, node_count=node_count,
+                model_calls=self._model_calls, **details,
+            )
+
+        decision = select_restore_action(
+            value,
+            pending=lambda: self._pending_from_node(leaf),
+            has_assistant=lambda: self._transition_assistant(leaf) is not None,
+            has_tool_result=lambda: self._batch_result_node(leaf) is not None,
+            has_context_provider=self._has_context_provider,
+        )
+        if decision.action == "cancelled":
             self._current_user_request = ""
             self._set_state(
                 "idle", _l("Restored cancelled run", "已恢复取消的运行"), leaf_id=leaf.id
             )
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "restore",
-                phase="completed",
-                tree_id=self.tree.id,
-                run_id=self._current_run_id,
-                leaf_id=leaf.id,
-                outcome="cancelled",
-                node_count=len(nodes),
-                model_calls=self._model_calls,
-            )
+            log_restore(leaf, len(nodes), outcome='cancelled')
             return
-        pending = self._pending_from_node(leaf)
-        if pending is not None:
+        pending = decision.pending
+        if decision.action == "awaiting_user":
             self._set_state(
                 "awaiting_user",
                 str(pending.get("text") or _l("Waiting for user answer", "正在等待用户答复")),
                 leaf_id=leaf.id,
             )
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "restore",
-                phase="completed",
-                tree_id=self.tree.id,
-                run_id=self._current_run_id,
-                leaf_id=leaf.id,
-                outcome="awaiting_user",
-                question_id=str(pending.get("id") or ""),
-                node_count=len(nodes),
-                model_calls=self._model_calls,
-            )
+            log_restore(leaf, len(nodes), outcome='awaiting_user', question_id=str(pending.get('id') or ''))
             return
-        if value.get("role") in {"context_compaction", "context_reflection"}:
+        if decision.action == "rewrite":
             if value.get("role") == "context_reflection":
                 model_context = value.get("model_context")
                 model_context = (
@@ -1927,8 +1920,7 @@ class AgentSession:
                 reflection = model_context.get("reflection")
                 reflection = reflection if isinstance(reflection, Mapping) else {}
                 self._current_user_request = str(reflection.get("goal") or "")
-            should_resume = value.get("resume_model") is True
-            if should_resume and self._transition_assistant(leaf) is None:
+            if value.get("resume_model") is True and self._transition_assistant(leaf) is None:
                 self._set_state(
                     "queued",
                     _l(
@@ -1947,39 +1939,17 @@ class AgentSession:
                     leaf_id=leaf.id,
                 )
                 outcome = "compacted_idle"
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "restore",
-                phase="completed",
-                tree_id=self.tree.id,
-                run_id=self._current_run_id,
-                leaf_id=leaf.id,
-                outcome=outcome,
-                node_count=len(nodes),
-                model_calls=self._model_calls,
-            )
+            log_restore(leaf, len(nodes), outcome=outcome)
             return
-        if value.get("role") == "assistant" and value.get("tool_calls"):
-            if self._batch_result_node(leaf) is None:
+        if decision.action in {"resume_tools", "tools_complete"}:
+            if decision.action == "resume_tools":
                 self._set_state(
                     "queued", _l("Resuming tool batch", "正在恢复工具批次"), leaf_id=leaf.id
                 )
                 self._enqueue_transition("tools", leaf)
-                log_operation(
-                    logger,
-                    "cyrene.core.session",
-                    "restore",
-                    phase="completed",
-                    tree_id=self.tree.id,
-                    run_id=self._current_run_id,
-                    leaf_id=leaf.id,
-                    outcome="resume_tools",
-                    node_count=len(nodes),
-                    model_calls=self._model_calls,
-                )
+                log_restore(leaf, len(nodes), outcome='resume_tools')
             return
-        if value.get("role") == "context" and value.get("trigger_model") is False:
+        if decision.action == "resume_context_source":
             self._set_state(
                 "queued",
                 _l("Resuming context mount", "正在恢复上下文挂载"),
@@ -1999,102 +1969,39 @@ class AgentSession:
                     else {}
                 )
                 self.store.update_node(self.tree.id, source.id, source_value)
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "restore",
-                phase="completed",
-                tree_id=self.tree.id,
-                run_id=self._current_run_id,
-                leaf_id=leaf.id,
-                outcome="resume_context_mount",
-                node_count=len(nodes),
-                model_calls=self._model_calls,
-            )
+            log_restore(leaf, len(nodes), outcome='resume_context_mount')
             return
-        if value.get("role") == "user" and value.get("trigger_model") is False:
-            has_context_provider = self._has_context_provider()
-            if has_context_provider:
-                self._set_state(
-                    "queued",
-                    _l("Resuming context mount", "正在恢复上下文挂载"),
-                    leaf_id=leaf.id,
-                )
-                self.store.update_node(self.tree.id, leaf.id, dict(value))
-                log_operation(
-                    logger,
-                    "cyrene.core.session",
-                    "restore",
-                    phase="completed",
-                    tree_id=self.tree.id,
-                    run_id=self._current_run_id,
-                    leaf_id=leaf.id,
-                    outcome="resume_context_mount",
-                    node_count=len(nodes),
-                    model_calls=self._model_calls,
-                )
-                return
-        if (
-            value.get("role") == "assistant"
-            and not value.get("tool_calls")
-            and value.get("error") is not True
-            and value.get("cancelled") is not True
-            and value.get("session_end_complete") is not True
-        ):
+        if decision.action == "resume_user_context":
+            self._set_state(
+                "queued",
+                _l("Resuming context mount", "正在恢复上下文挂载"),
+                leaf_id=leaf.id,
+            )
+            self.store.update_node(self.tree.id, leaf.id, dict(value))
+            log_restore(leaf, len(nodes), outcome='resume_context_mount')
+            return
+        if decision.action == "resume_session_end":
             self._set_state(
                 "queued",
                 _l("Resuming SessionEnd hooks", "正在恢复 SessionEnd Hook"),
                 leaf_id=leaf.id,
             )
             self._enqueue_transition("finish", leaf)
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "restore",
-                phase="completed",
-                tree_id=self.tree.id,
-                run_id=self._current_run_id,
-                leaf_id=leaf.id,
-                outcome="resume_session_end",
-                node_count=len(nodes),
-                model_calls=self._model_calls,
-            )
+            log_restore(leaf, len(nodes), outcome='resume_session_end')
             return
-        if value.get("trigger_model") is True and self._transition_assistant(leaf) is None:
+        if decision.action == "resume_model":
             self._set_state(
                 "queued",
                 _l("Resuming model transition", "正在恢复模型状态转换"),
                 leaf_id=leaf.id,
             )
             self._enqueue_transition("advance", leaf)
-            log_operation(
-                logger,
-                "cyrene.core.session",
-                "restore",
-                phase="completed",
-                tree_id=self.tree.id,
-                run_id=self._current_run_id,
-                leaf_id=leaf.id,
-                outcome="resume_model",
-                node_count=len(nodes),
-                model_calls=self._model_calls,
-            )
+            log_restore(leaf, len(nodes), outcome='resume_model')
             return
         self._set_state("idle", _l("Restored", "已恢复"), leaf_id=leaf.id)
         if value.get("role") == "assistant":
             self._current_user_request = ""
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "restore",
-            phase="completed",
-            tree_id=self.tree.id,
-            run_id=self._current_run_id,
-            leaf_id=leaf.id,
-            outcome="idle",
-            node_count=len(nodes),
-            model_calls=self._model_calls,
-        )
+        log_restore(leaf, len(nodes), outcome='idle')
 
     def submit(
         self,

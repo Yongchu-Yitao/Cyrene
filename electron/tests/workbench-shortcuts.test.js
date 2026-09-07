@@ -82,7 +82,7 @@ test('shortcut UI retries only its action patch and preserves concurrent user or
     '../src/cyrene/workbench/webui/frontend/platform/runtime.jsx',
     '../src/cyrene/workbench/webui/frontend/workbench-shortcuts.jsx',
   ]) {
-    let source = fs.readFileSync(path.join(__dirname, relative), 'utf8');
+    let source = fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
     if (relative.endsWith('workbench-shortcuts.jsx')) {
       source = source.replace(
         /^import[^\n]*\n/,

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow } = require('electron');
-const { buildBrowserTypeTargetScript } = require('../electron/browser-input');
+const { buildBrowserTypeTargetScript } = require('../electron/browser/browser-input');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

@@ -45,7 +45,7 @@ cyrene doctor --offline --json
 
 报告保存在数据目录的 `doctor/reports`，运行故障的内容无关记录保存在 `doctor/incidents`。报告默认不包含对话正文、记忆正文、凭据或原始异常文本；可导出 JSON。故障记录保留分类、阶段、关联 ID 和不带源代码文本的调用栈位置。若报告存储本身失败，页面仍可显示当前基础结果。
 
-自动化用例见 `tests/test_doctor.py`、项目记忆测试中的 Doctor 场景，以及 `electron/doctor-recovery.test.js`。测试使用隔离数据和可控模型响应，覆盖故障识别、降级、取消、修复、回滚、并发保护和精确重试，不需要真实模型额度。
+自动化用例见 `tests/test_doctor.py`、项目记忆测试中的 Doctor 场景，以及 `electron/diagnostics/doctor-recovery.test.js`。测试使用隔离数据和可控模型响应，覆盖故障识别、降级、取消、修复、回滚、并发保护和精确重试，不需要真实模型额度。
 
 ## 统一错误接入
 

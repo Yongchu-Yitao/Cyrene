@@ -642,7 +642,7 @@ class FreeRdpProvider:
         electron_path = str(os.environ.get("CYRENE_ELECTRON_PATH") or "").strip()
         electron_root = str(os.environ.get("CYRENE_ELECTRON_RESOURCES_DIR") or "").strip()
         launcher = os.path.join(os.path.dirname(__file__), "freerdp_dev_sidecar.py")
-        media_host = os.path.join(electron_root, "remote-desktop-rdp-sidecar.js") if electron_root else ""
+        media_host = os.path.join(electron_root, "remote-desktop", "remote-desktop-rdp-sidecar.js") if electron_root else ""
         self._development_launcher = (
             launcher
             if platform.system().lower() == "linux"

@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { app, BrowserWindow, session } = require('electron');
-const { createLocalPreview } = require('../electron/browser-local-preview');
+const { createLocalPreview } = require('../electron/browser/browser-local-preview');
 
 (async () => {
   await app.whenReady();

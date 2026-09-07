@@ -77,7 +77,7 @@ JAVASCRIPT_IMPORT_STAR_ALLOWLIST = {
     "src/cyrene/workbench/webui/build-jsx.mjs",
 }
 JAVASCRIPT_DYNAMIC_NAMESPACE_ALLOWLIST = {
-    "electron/agent-cursor.js",
+    "electron/automation/agent-cursor.js",
 }
 JAVASCRIPT_SERVICE_REGISTRY_ALLOWLIST = {
     "src/cyrene/workbench/webui/frontend/entry/bootstrap.jsx",

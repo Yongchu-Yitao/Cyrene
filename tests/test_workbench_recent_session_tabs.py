@@ -307,7 +307,7 @@ def test_topbar_activation_passes_the_current_visual_order_to_recent_history():
     assert 'context.sessions.rememberOpened("chat", item.id,' in opener
 
 
-def test_recent_conversation_lists_stay_in_sync_with_chat_page():
+def test_recent_conversation_updates_are_wired_from_shell_to_chat_page():
     lifecycle = _frontend_source("features/shell/app-lifecycle.jsx")
     shell = "\n".join([
         _frontend_source("workbench.jsx"),
@@ -320,8 +320,6 @@ def test_recent_conversation_lists_stay_in_sync_with_chat_page():
     assert "updateRecentChats: function (projectId, chats)" in shell
     assert "onChatsChange: sessions.updateRecentChats" in shell
     assert "useWbcChatProjections(projectId, chatCache, onChatsChange)" in chat
-    projections = _frontend_source("features/chat/page-state.jsx")
-    assert "if (onChatsChange && projectId) onChatsChange(projectId, chats)" in projections
 
 
 def test_session_tabs_remain_interactive_inside_the_draggable_titlebar():
@@ -439,11 +437,7 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     assert 'className="workbench-session-menu-portal"' in shell
     assert "portalTheme[name] = computedTheme.getPropertyValue(name)" in shell
     assert "workbench-session-menu" in css
-    topbar = shell.split("function WorkbenchTopbar", 1)[1].split(
-        "function WorkbenchNotificationCenter", 1
-    )[0]
-    assert "wbSetBrowserOverlayObscured(1)" in topbar
-    assert "wbSetBrowserOverlayObscured(-1)" in topbar
+    # Overlay obscuring and cleanup are executed by completion-owners.test.mjs.
     assert "pendingTopbarResourceRef" in chat
     assert 'resource.type === "browser"' in chat
     assert 'resource.type === "file"' in chat

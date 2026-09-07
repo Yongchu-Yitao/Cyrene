@@ -275,6 +275,37 @@ def setting_spec_by_key() -> dict[str, SettingSpec]:
     return {item.key: item for item in setting_specs()}
 
 
+def _normalize_shortcuts(spec: SettingSpec, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise SettingsValidationError(f"{spec.key} must be a shortcut map")
+    normalized = {}
+    modifiers = {"mod", "ctrl", "shift", "alt"}
+    for action_id, raw_keys in value.items():
+        action = str(action_id or "")
+        if action not in SHORTCUT_DEFAULTS:
+            raise SettingsValidationError(f"unknown shortcut action: {action}")
+        if raw_keys is None:
+            normalized[action] = None
+            continue
+        if not isinstance(raw_keys, list) or not raw_keys:
+            raise SettingsValidationError(f"shortcut {action} must contain keys")
+        keys: list[str] = []
+        for raw_token in raw_keys:
+            token = str(raw_token or "").strip()
+            if not token or len(token) > 32:
+                raise SettingsValidationError(f"shortcut {action} contains an invalid key")
+            if token.lower() in modifiers:
+                token = token.lower()
+            elif len(token) == 1:
+                token = token.upper()
+            keys.append(token)
+        terminals = [token for token in keys if token not in modifiers]
+        if len(terminals) != 1 or len(keys) != len(set(keys)):
+            raise SettingsValidationError(f"shortcut {action} must contain one terminal key")
+        normalized[action] = keys
+    return normalized
+
+
 def _normalize(spec: SettingSpec, value: Any) -> Any:
     if spec.value_type == "boolean":
         if not isinstance(value, bool):
@@ -326,33 +357,7 @@ def _normalize(spec: SettingSpec, value: Any) -> Any:
             raise SettingsValidationError(f"{spec.key} must be a map of booleans")
         normalized = dict(value)
     elif spec.value_type == "shortcut_map":
-        if not isinstance(value, dict):
-            raise SettingsValidationError(f"{spec.key} must be a shortcut map")
-        normalized = {}
-        modifiers = {"mod", "ctrl", "shift", "alt"}
-        for action_id, raw_keys in value.items():
-            action = str(action_id or "")
-            if action not in SHORTCUT_DEFAULTS:
-                raise SettingsValidationError(f"unknown shortcut action: {action}")
-            if raw_keys is None:
-                normalized[action] = None
-                continue
-            if not isinstance(raw_keys, list) or not raw_keys:
-                raise SettingsValidationError(f"shortcut {action} must contain keys")
-            keys: list[str] = []
-            for raw_token in raw_keys:
-                token = str(raw_token or "").strip()
-                if not token or len(token) > 32:
-                    raise SettingsValidationError(f"shortcut {action} contains an invalid key")
-                if token.lower() in modifiers:
-                    token = token.lower()
-                elif len(token) == 1:
-                    token = token.upper()
-                keys.append(token)
-            terminals = [token for token in keys if token not in modifiers]
-            if len(terminals) != 1 or len(keys) != len(set(keys)):
-                raise SettingsValidationError(f"shortcut {action} must contain one terminal key")
-            normalized[action] = keys
+        normalized = _normalize_shortcuts(spec, value)
     else:
         raise SettingsValidationError(f"unsupported setting type for {spec.key}")
 

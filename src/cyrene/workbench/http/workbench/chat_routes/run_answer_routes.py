@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from cyrene.localization import app_language, localized
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_runs import ChatRun
-from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
+from cyrene.workbench.chat.chat_usage import runtime_model_message_fields, generation_message_fields
 from cyrene.workbench.http import schemas as api_models
 from cyrene.workbench.http.errors import localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
@@ -488,23 +488,11 @@ class _AnswerOperation:
         return messages
 
     def _runtime_message_fields(self, result: Any) -> dict[str, Any]:
-        fields: dict[str, Any] = runtime_usage_message_fields(
-            result.usage,
-            result.latest_request_usage,
-        )
-        identity = dict(result.model_identity or {})
-        if identity:
-            fields["modelIdentity"] = identity
-        if result.generation_duration_ms is not None and result.generation_duration_ms > 0:
-            fields["modelGenerationDurationMs"] = round(
-                float(result.generation_duration_ms),
-                3,
-            )
-        if result.output_tokens_per_second is not None and result.output_tokens_per_second > 0:
-            fields["outputTokensPerSecond"] = round(
-                float(result.output_tokens_per_second),
-                3,
-            )
+        fields = runtime_model_message_fields(result.usage, result.latest_request_usage, dict(result.model_identity or {}))
+        fields.update(generation_message_fields(
+            float(result.generation_duration_ms) if result.generation_duration_ms is not None and result.generation_duration_ms > 0 else None,
+            float(result.output_tokens_per_second) if result.output_tokens_per_second is not None and result.output_tokens_per_second > 0 else None,
+        ))
         return fields
 
     async def _handle_awaiting_user(self, result: Any) -> dict[str, Any]:

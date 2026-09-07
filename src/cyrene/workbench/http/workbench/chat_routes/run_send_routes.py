@@ -24,7 +24,7 @@ from cyrene.workbench.chat.chat_reply_finalization_service import (
     ChatReplyFinalizationDependencies,
     ChatReplyFinalizationRequest,
 )
-from cyrene.workbench.chat.chat_usage import runtime_usage_message_fields
+from cyrene.workbench.chat.chat_usage import runtime_model_message_fields, generation_message_fields
 from cyrene.workbench.chat.chat_run_lifecycle_service import (
     ChatRunDispatchResult,
     ChatRunLifecycleApplicationService,
@@ -43,7 +43,10 @@ from cyrene.workbench.chat.chat_session_naming_service import (
 from cyrene.workbench.http import schemas as api_models
 from cyrene.workbench.http.errors import localized_error_payload, localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
-from cyrene.workbench.http.workbench.chat_routes.send_request import SendOptions, SendOrigin
+from cyrene.workbench.http.workbench.chat_routes.send_input import (
+    SendInput, PreparedUserTurn, resolve_send_command, retry_send_input, append_user_message,
+)
+from cyrene.workbench.http.workbench.chat_routes.send_request import PreparedSendEnvironment, SelectedSendModel, SendOptions, SendOrigin
 from cyrene.workbench.http.workbench.chat_routes.shared import (
     schedule_workspace_changes_finalize,
     track_session_title_task,
@@ -164,8 +167,6 @@ class _SendOperation:
         self.detached = detached
         self.domain = domain
         self.retry_state_backup: tuple[Any, bytes | None] | None = None
-        self.retry_replaced_message_ids: set[str] = set()
-        self.truncate_after_id = ""
 
     async def execute(self):
         from cyrene.core.permission import PERMISSION_MODES
@@ -176,12 +177,14 @@ class _SendOperation:
         error = await self._load_chat(PERMISSION_MODES)
         if error is not None:
             return error
-        error = await self._load_project_and_model()
+        environment, error = await self._load_project_and_model()
         if error is not None:
             return error
-        error = await self._prepare_user_turn()
+        self.environment = environment
+        turn, error = await self._prepare_user_turn()
         if error is not None:
             return error
+        self.turn = turn
         error = await self._persist_user_turn()
         if error is not None:
             return error
@@ -211,7 +214,7 @@ class _SendOperation:
         return await self._dispatch()
 
     async def _begin_plugin_workflow(self):
-        descriptor = self.dynamic_command if isinstance(self.dynamic_command, dict) else {}
+        descriptor = self.turn.input.dynamic_command if isinstance(self.turn.input.dynamic_command, dict) else {}
         workflow = (
             descriptor.get("workflow")
             if isinstance(descriptor.get("workflow"), dict)
@@ -236,7 +239,7 @@ class _SendOperation:
         try:
             result = handler(
                 self.chat_id,
-                initial_request=self.message,
+                initial_request=self.turn.input.message,
                 project_id=self.project_id,
             )
             if asyncio.iscoroutine(result):
@@ -258,19 +261,20 @@ class _SendOperation:
 
     async def _parse_request(self):
         body = self.body
-        self.message = str(body.get("message") or "").strip()
-        self.public_message = self.message
+        message = str(body.get("message") or "").strip()
+        public_message = message
         self.origin = SendOrigin.parse(body)
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         if attachments:
             attachments = [await self.context.resolve_library_file_payload(item) if isinstance(item, dict) else item for item in attachments]
-        self.command = str(body.get("command") or "").strip()
+        command = str(body.get("command") or "").strip()
         self.options = SendOptions.parse(body)
         self.controller.preferences.persist_language(self.options.lang)
         self.routes = self.context.runtime()
-        self.normalized = self.routes.normalize_attachments(attachments)
-        self.public_attachments = [self.routes.build_public_attachment_payload(item) for item in self.normalized]
-        if not self.options.retry and not self.message and not self.normalized and not self.command:
+        normalized = self.routes.normalize_attachments(attachments)
+        public_attachments = [self.routes.build_public_attachment_payload(item) for item in normalized]
+        self.input = SendInput(message, public_message, command, normalized, public_attachments)
+        if not self.options.retry and not message and not normalized and not command:
             return localized_error_response(
                 "A message or attachment is required.",
                 "请输入消息或添加附件。",
@@ -301,63 +305,10 @@ class _SendOperation:
 
         binding = normalize_agent_binding(self.chat.get("agent") if isinstance(self.chat.get("agent"), dict) else None)
         self.is_external_agent = not binding.is_builtin
-        from cyrene.workbench.application.commands import parse_slash_command, parse_slash_invocation
-
-        self.dynamic_command = None
-        self.dynamic_command_prompt = ""
-
-        if self.is_external_agent:
-            declared_commands = [
-                str(item.get("id") or item.get("name") or item.get("command") or "")
-                if isinstance(item, dict) else str(item or "")
-                for item in (self.chat.get("agentCommands") or [])
-            ]
-            if not self.command and declared_commands:
-                parsed = parse_slash_command(
-                    self.message,
-                    allowed_commands=declared_commands,
-                )
-                if parsed.get("matched"):
-                    self.command = str(parsed.get("command") or "")
-                    self.message = str(parsed.get("arguments") or "")
-            if self.command and declared_commands and self.command not in declared_commands:
-                return localized_error_response(
-                    "This Agent command is not available.",
-                    "此 Agent 命令不可用。",
-                    400,
-                    "agent_command_unavailable",
-                    language=self.options.lang,
-                )
-        else:
-            from cyrene.workbench.chat.slash_commands import resolve_slash_command
-
-            parsed = parse_slash_invocation(self.message) if not self.command else None
-            candidate = self.command or str((parsed or {}).get("command") or "")
-            descriptor = await resolve_slash_command(
-                candidate,
-                str(self.chat.get("projectId") or ""),
-            ) if candidate else None
-            if descriptor is not None:
-                self.command = str(descriptor.get("id") or "")
-                self.dynamic_command = (
-                    descriptor if descriptor.get("source") != "builtin" else None
-                )
-                if parsed and parsed.get("matched"):
-                    self.message = str(parsed.get("arguments") or "")
-                if self.dynamic_command:
-                    self.dynamic_command_prompt = str(
-                        self.dynamic_command.get("system_prompt") or ""
-                    ).strip()
-            elif self.command:
-                return localized_error_response(
-                    "Unknown Cyrene command.",
-                    "未知的 Cyrene 命令。",
-                    400,
-                    "unknown_command",
-                    language=self.options.lang,
-                )
-        if self.command and not self.public_message:
-            self.public_message = "/" + self.command
+        source, error = await resolve_send_command(self.input, self.chat, self.is_external_agent, self.options.lang)
+        if error is not None:
+            return error
+        self.input = source
 
         composer_context = _composer_context_service()
         requested_activations = (
@@ -365,11 +316,11 @@ class _SendOperation:
             if self.options.requested_context_activations is not None
             else self.chat.get("contextActivations")
         )
-        if self.dynamic_command and isinstance(
-            self.dynamic_command.get("activation"), dict
+        if self.input.dynamic_command and isinstance(
+            self.input.dynamic_command.get("activation"), dict
         ):
             requested_activations = composer_context.normalize(requested_activations)
-            activation = self.dynamic_command["activation"]
+            activation = self.input.dynamic_command["activation"]
             activation_kind = str(activation.get("kind") or "")
             activation_id = str(activation.get("id") or "")
             if (
@@ -379,7 +330,6 @@ class _SendOperation:
             ):
                 requested_activations[activation_kind].append(activation_id)
         self.context_activations = composer_context.normalize(requested_activations)
-        self.resolved_context_activations = {}
         if self.is_external_agent and any(self.context_activations.values()):
             return localized_error_response(
                 "Composer context capabilities require the built-in Cyrene Agent.",
@@ -444,9 +394,9 @@ class _SendOperation:
 
     async def _load_project_and_model(self):
         project_store = await asyncio.to_thread(self.routes.read_store)
-        self.project = self.routes.find_project(project_store, self.project_id)
-        if not self.project:
-            return localized_error_response(
+        project = self.routes.find_project(project_store, self.project_id)
+        if not project:
+            return None, localized_error_response(
                 "Project not found.",
                 "未找到项目。",
                 404,
@@ -462,7 +412,7 @@ class _SendOperation:
                     self.chat_id,
                     exc_info=True,
                 )
-                return localized_error_response(
+                return None, localized_error_response(
                     "The workspace override is invalid.",
                     "工作区覆盖路径无效。",
                     400,
@@ -474,9 +424,9 @@ class _SendOperation:
             else:
                 self.chat.pop("workspaceOverride", None)
         try:
-            self.workspace_dir = self.service.resolve_chat_workspace_dir(
+            workspace_dir = self.service.resolve_chat_workspace_dir(
                 self.chat,
-                self.project,
+                project,
                 self.routes.resolve_workspace_dir,
             )
         except ValueError:
@@ -485,7 +435,7 @@ class _SendOperation:
                 self.chat_id,
                 exc_info=True,
             )
-            return localized_error_response(
+            return None, localized_error_response(
                 "The workspace configuration is invalid.",
                 "工作区配置无效。",
                 400,
@@ -494,11 +444,8 @@ class _SendOperation:
             )
         try:
             resolved_input = self.service.resolve_composer_input_context(
-                {
-                    **self.chat,
-                    "contextActivations": self.context_activations,
-                },
-                self.workspace_dir,
+                {**self.chat, "contextActivations": self.context_activations},
+                workspace_dir,
                 strict=True,
             )
         except (ValueError, RuntimeError) as exc:
@@ -508,7 +455,7 @@ class _SendOperation:
                 exc,
             )
             invalid = isinstance(exc, ValueError)
-            return localized_error_response(
+            return None, localized_error_response(
                 (
                     "The context configuration is invalid."
                     if invalid
@@ -526,7 +473,7 @@ class _SendOperation:
         self.context_activations = dict(
             resolved_input["contextActivations"]
         )
-        self.resolved_context_activations = dict(
+        resolved_context_activations = dict(
             resolved_input["resolvedContextActivations"]
         )
         self.chat["contextActivations"] = self.context_activations
@@ -537,20 +484,24 @@ class _SendOperation:
         self.chat["remoteDeviceIds"] = list(
             resolved_input["remoteDeviceIds"]
         )
-        return await self._select_model()
+        model, error = await self._select_model()
+        if error is not None:
+            return None, error
+        return PreparedSendEnvironment(workspace_dir, self.context_activations,
+                                       resolved_context_activations, model), None
 
     async def _select_model(self):
-        self.selected_candidate = None
+        selected_candidate = None
         recovered_stale_selection = False
-        self.agent_owns_models = self.is_external_agent and str((self.chat.get("modelAccess") or {}).get("mode") or "") == "agent_managed"
-        selected_key = "" if self.agent_owns_models else self.options.requested_model or str(self.chat.get("modelSelectionId") or "").strip()
+        agent_owns_models = self.is_external_agent and str((self.chat.get("modelAccess") or {}).get("mode") or "") == "agent_managed"
+        selected_key = "" if agent_owns_models else self.options.requested_model or str(self.chat.get("modelSelectionId") or "").strip()
         if selected_key:
             from cyrene.core.plugin import application_plugin_service
 
             model_service = application_plugin_service("model_configuration")
             selectable_candidates = model_service.selectable_model_candidates() if model_service is not None else []
 
-            self.selected_candidate = next(
+            selected_candidate = next(
                 (
                     candidate
                     for candidate in selectable_candidates
@@ -563,9 +514,9 @@ class _SendOperation:
                 ),
                 None,
             )
-            if self.selected_candidate is None:
+            if selected_candidate is None:
                 if self.options.requested_model:
-                    return localized_error_response(
+                    return None, localized_error_response(
                         "The configured model was not found.",
                         "未找到已配置的模型。",
                         400,
@@ -573,26 +524,25 @@ class _SendOperation:
                         language=self.options.lang,
                     )
                 models = model_service.candidates_for_route("primary") if model_service is not None else []
-                self.selected_candidate = models[0] if models else None
-                if self.selected_candidate is not None:
+                selected_candidate = models[0] if models else None
+                if selected_candidate is not None:
                     recovered_stale_selection = True
-                    selected_key = str(self.selected_candidate.get("id") or self.selected_candidate.get("model") or self.selected_candidate.get("name") or "").strip()
-        if self.selected_candidate is not None:
-            self._persist_model_selection(selected_key, recovered_stale_selection)
+                    selected_key = str(selected_candidate.get("id") or selected_candidate.get("model") or selected_candidate.get("name") or "").strip()
+        if selected_candidate is not None:
+            self._persist_model_selection(selected_candidate, selected_key, recovered_stale_selection)
         if self.service.run_manager.get(self.chat_id) is not None:
-            return localized_error_response(
+            return None, localized_error_response(
                 "This chat already has a reply in progress.",
                 "此对话已有回复正在生成。",
                 409,
                 "chat_run_in_progress",
                 language=self.options.lang,
             )
-        return None
+        return SelectedSendModel(selected_candidate, agent_owns_models), None
 
-    def _persist_model_selection(self, selected_key: str, recovered: bool) -> None:
+    def _persist_model_selection(self, candidate: dict[str, Any], selected_key: str, recovered: bool) -> None:
         from cyrene.plugins.model_catalog import set_session_model_preference
 
-        candidate = self.selected_candidate
         selected_model = str(candidate.get("model") or candidate.get("name") or selected_key).strip()
         selected_model_id = str(candidate.get("id") or selected_key).strip()
         selected_effort = (
@@ -607,87 +557,24 @@ class _SendOperation:
             self.chat.pop("lastModel", None)
 
     async def _prepare_user_turn(self):
-        self.now = self.service.utc_now_iso()
+        now = self.service.utc_now_iso()
         messages = self.chat.setdefault("messages", [])
-        self.should_generate_title = False
-        if self.options.retry:
-            last_user_index = next(
-                (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
-                -1,
+        if not self.options.retry:
+            return append_user_message(self.chat, messages, self.input, self.origin, now, self.service.short_id), None
+        last_user_index = next(
+            (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"), -1,
+        )
+        if last_user_index < 0:
+            return None, localized_error_response(
+                "There is no message to retry.", "没有可重试的消息。", 400,
+                "nothing_to_retry", language=self.options.lang,
             )
-            if last_user_index < 0:
-                return localized_error_response(
-                    "There is no message to retry.",
-                    "没有可重试的消息。",
-                    400,
-                    "nothing_to_retry",
-                    language=self.options.lang,
-                )
-            self.user_entry = messages[last_user_index]
-            self.truncate_after_id = str(self.user_entry.get("id") or "")
-            self.retry_replaced_message_ids = {str(item.get("id") or "") for item in messages[last_user_index + 1 :] if isinstance(item, dict) and str(item.get("id") or "")}
-            self.message = str(self.user_entry.get("content") or "").strip()
-            self.public_message = self.message
-            self.command = str(self.user_entry.get("command") or "").strip()
-            from cyrene.workbench.application.commands import parse_slash_invocation
-
-            parsed_retry_command = parse_slash_invocation(self.message)
-            if parsed_retry_command.get("matched") and (
-                not self.command
-                or self.command == str(parsed_retry_command.get("command") or "")
-            ):
-                self.command = str(parsed_retry_command.get("command") or "")
-                self.message = str(parsed_retry_command.get("arguments") or "")
-            if not self.is_external_agent and self.command:
-                from cyrene.workbench.chat.slash_commands import resolve_slash_command
-
-                descriptor = await resolve_slash_command(
-                    self.command,
-                    str(self.chat.get("projectId") or ""),
-                )
-                if descriptor is None:
-                    self.command = ""
-                elif descriptor.get("source") != "builtin":
-                    self.dynamic_command = descriptor
-                    self.dynamic_command_prompt = str(
-                        descriptor.get("system_prompt") or ""
-                    ).strip()
-            self.normalized = self.routes.normalize_attachments(self.user_entry.get("agentAttachments") or [])
-            self.public_attachments = self.user_entry.get("attachments") if isinstance(self.user_entry.get("attachments"), list) else []
-            return None
-        self._append_user_message(messages)
-        return None
-
-    def _append_user_message(self, messages: list[dict[str, Any]]) -> None:
-        self.user_entry = {
-            "id": self.service.short_id("msg"),
-            "role": "user",
-            "content": self.public_message,
-            "createdAt": self.now,
-        }
-        if self.command:
-            self.user_entry["command"] = self.command
-        if self.origin.client_request_id:
-            self.user_entry["clientRequestId"] = self.origin.client_request_id
-        if self.origin.agent_originated:
-            self.user_entry["agentOriginated"] = True
-        if self.origin.origin_session_id:
-            self.user_entry["originSessionId"] = self.origin.origin_session_id
-        if self.public_attachments:
-            self.user_entry["attachments"] = self.public_attachments
-            self.user_entry["agentAttachments"] = self.normalized
-        is_first_message = not any(item.get("role") == "user" for item in messages)
-        messages.append(self.user_entry)
-        if is_first_message:
-            locked_agent = dict(self.chat.get("agent") or {})
-            locked_agent["bindingLocked"] = True
-            self.chat["agent"] = locked_agent
-        if is_first_message and self.chat.get("title") in ("", "New chat", "新对话", None) and self.public_message:
-            self.chat["title"] = self.public_message.replace("\n", " ")[:24]
-        if is_first_message and bool(self.public_message) and not bool(self.chat.get("titleLocked")) and not self.chat.get("titleNamingStatus"):
-            self.should_generate_title = True
-            self.chat["titleNamingStatus"] = "pending"
-            self.chat["titleNamingStartedAt"] = self.now
+        user_entry = messages[last_user_index]
+        truncate_after_id = str(user_entry.get("id") or "")
+        replaced_ids = {str(item.get("id") or "") for item in messages[last_user_index + 1 :]
+                                 if isinstance(item, dict) and str(item.get("id") or "")}
+        source = await retry_send_input(self.input, user_entry, self.chat, self.is_external_agent, self.routes.normalize_attachments)
+        return PreparedUserTurn(source, user_entry, now, False, truncate_after_id, replaced_ids), None
 
     async def _persist_user_turn(self):
         if not self.is_side_agent:
@@ -707,9 +594,9 @@ class _SendOperation:
                     language=self.options.lang,
                 )
         self.chat["status"] = "running"
-        if self.selected_candidate is None and not self.agent_owns_models:
+        if self.environment.model.candidate is None and not self.environment.model.agent_managed:
             self.chat["model"] = self.routes.get_model()
-        self.service.mark_user_activity(self.chat, self.now)
+        self.service.mark_user_activity(self.chat, self.turn.now)
         await asyncio.to_thread(
             self.service.repository.write_one,
             self.chat,
@@ -718,13 +605,13 @@ class _SendOperation:
         return None
 
     async def _finalize_persisted_user_turn(self) -> None:
-        if self.normalized and not self.options.retry:
-            await self.routes.register_attachments_kb(self.chat_id, self.normalized)
-        if self.should_generate_title:
+        if self.turn.input.normalized and not self.options.retry:
+            await self.routes.register_attachments_kb(self.chat_id, self.turn.input.normalized)
+        if self.turn.should_generate_title:
             task = self.controller.session_naming.generate_and_persist(
                 chat_id=self.chat_id,
                 project_id=str(getattr(self, "project_id", "") or ""),
-                message=self.public_message,
+                message=self.turn.input.public_message,
             )
             track_session_title_task(asyncio.create_task(task))
 
@@ -755,9 +642,9 @@ class _SendOperation:
             await asyncio.to_thread(state_path.write_bytes, previous)
 
     def _build_agent_message(self) -> None:
-        self.agent_message = self.message
-        if self.is_external_agent and self.command:
-            self.agent_message = "/" + self.command + ((" " + self.message) if self.message else "")
+        self.agent_message = self.turn.input.message
+        if self.is_external_agent and self.turn.input.command:
+            self.agent_message = "/" + self.turn.input.command + ((" " + self.turn.input.message) if self.turn.input.message else "")
         if self.is_side_agent:
             source_quote = str(self.chat.get("sourceQuote") or "").strip()
             self.agent_message = localized(
@@ -780,16 +667,16 @@ class _SendOperation:
                 or localized("(empty)", "（空）", language=self.options.lang),
                 quote=source_quote
                 or localized("(none)", "（无）", language=self.options.lang),
-                question=self.message,
+                question=self.turn.input.message,
             )
-        if self.normalized:
+        if self.turn.input.normalized:
             self.agent_message = (
                 self.agent_message
                 or localized(
                     "[Attachment upload]", "[附件上传]", language=self.options.lang
                 )
             ) + self.routes.attachment_prompt_block(
-                self.normalized,
+                self.turn.input.normalized,
                 language=self.options.lang,
             )
 
@@ -797,7 +684,7 @@ class _SendOperation:
         from pathlib import Path
 
         paths: dict[str, str] = {}
-        for item in self.normalized:
+        for item in self.turn.input.normalized:
             full_path = str(item.get("path") or "").strip()
             if not full_path:
                 continue
@@ -835,14 +722,14 @@ class _SendOperation:
 
         return ConversationConfig(
             session_id=self.chat_id,
-            workspace_dir=self.workspace_dir,
+            workspace_dir=self.environment.workspace_dir,
             db_path=self.context.db_path,
             bot=self.context.bot,
             host_chat_id=self.routes.chat_id,
             client_request_id=self.origin.client_request_id,
             permission_mode=self.mode,
-            command=self.command,
-            public_user_message=self.public_message,
+            command=self.turn.input.command,
+            public_user_message=self.turn.input.public_message,
             # Composer selections are already persisted as the session's
             # preferred primary candidate. Leaving the identity empty keeps
             # the configured fallback route intact; auxiliary callers may
@@ -856,8 +743,8 @@ class _SendOperation:
             ),
             soul_enabled=self.service.chat_soul_active(self.chat),
             workspace_enabled=self.service.chat_workspace_active(self.chat),
-            context_activations=self.context_activations,
-            resolved_context_activations=self.resolved_context_activations,
+            context_activations=self.environment.context_activations,
+            resolved_context_activations=self.environment.resolved_context_activations,
             system_extra="\n\n".join(part for part in turn_system_extras if part),
             project_id=self.project_id,
             project_memory_snapshot=memory_snapshot,
@@ -879,7 +766,7 @@ class _SendOperation:
                     )
                 },
                 retry=self.options.retry,
-                command=self.command,
+                command=self.turn.input.command,
                 is_side_agent=self.is_side_agent,
             ),
             response_capabilities=("interactive_blocks",),
@@ -900,8 +787,8 @@ class _SendOperation:
                 chat_id=self.chat_id,
                 chat=self.chat,
                 message=self.agent_message,
-                attachments=self.normalized,
-                workspace_path=self.workspace_dir,
+                attachments=self.turn.input.normalized,
+                workspace_path=self.environment.workspace_dir,
                 projection=self.external,
             )
         from cyrene.platform.host_bridge import resolve_conversation_source
@@ -910,8 +797,8 @@ class _SendOperation:
 
         memory_snapshot = self.service.ensure_chat_memory_snapshot(self.chat)
         turn_system_extras = [
-            command_system_prompt(self.command),
-            self.dynamic_command_prompt,
+            command_system_prompt(self.turn.input.command),
+            self.turn.input.dynamic_command_prompt,
         ]
 
         source = (
@@ -930,15 +817,15 @@ class _SendOperation:
             config,
             (
                 self.agent_message
-                or self.public_message
-                or (f"/{self.command}" if self.command else "")
+                or self.turn.input.public_message
+                or (f"/{self.turn.input.command}" if self.turn.input.command else "")
             ),
             run_id=run.run_id,
             metadata={
                 "client_request_id": self.origin.client_request_id,
-                "public_user_message": self.public_message,
-                "public_attachments": [dict(item) for item in self.public_attachments],
-                "command": self.command,
+                "public_user_message": self.turn.input.public_message,
+                "public_attachments": [dict(item) for item in self.turn.input.public_attachments],
+                "command": self.turn.input.command,
                 "retry": self.options.retry,
                 "turn_id": str(
                     (
@@ -982,9 +869,9 @@ class _SendOperation:
         request = ChatReplyFinalizationRequest(
             chat_id=self.chat_id,
             project_id=self.project_id,
-            workspace_dir=self.workspace_dir,
-            message=self.public_message,
-            command=self.command,
+            workspace_dir=self.environment.workspace_dir,
+            message=self.turn.input.public_message,
+            command=self.turn.input.command,
             retry=self.options.retry,
             is_side_agent=self.is_side_agent,
             is_external_agent=self.is_external_agent,
@@ -1016,12 +903,12 @@ class _SendOperation:
             logger.exception("Failed to restore retry state for %s", self.chat_id)
 
     def _commit_retry_cut(self, target_chat: dict[str, Any]) -> None:
-        if not self.options.retry or not self.truncate_after_id:
+        if not self.options.retry or not self.turn.truncate_after_id:
             return
         self.service.remove_retry_replaced_messages(
             target_chat,
-            self.truncate_after_id,
-            self.retry_replaced_message_ids,
+            self.turn.truncate_after_id,
+            self.turn.retry_replaced_message_ids,
         )
 
     def _stash_pending(self, pending: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1069,19 +956,16 @@ class _SendOperation:
         self.service.repository.write_one(chat, base_chat=base_chat)
 
     def _runtime_message_fields(self, result: Any) -> dict[str, Any]:
-        fields: dict[str, Any] = runtime_usage_message_fields(
-            getattr(result, "usage", None),
-            getattr(result, "latest_request_usage", None),
+        fields = runtime_model_message_fields(
+            getattr(result, "usage", None), getattr(result, "latest_request_usage", None),
+            dict(getattr(result, "model_identity", {}) or {}),
         )
-        identity = dict(getattr(result, "model_identity", {}) or {})
-        if identity:
-            fields["modelIdentity"] = identity
         duration = getattr(result, "generation_duration_ms", None)
-        if isinstance(duration, (int, float)) and duration > 0:
-            fields["modelGenerationDurationMs"] = round(float(duration), 3)
         rate = getattr(result, "output_tokens_per_second", None)
-        if isinstance(rate, (int, float)) and rate > 0:
-            fields["outputTokensPerSecond"] = round(float(rate), 3)
+        fields.update(generation_message_fields(
+            float(duration) if isinstance(duration, (int, float)) and duration > 0 else None,
+            float(rate) if isinstance(rate, (int, float)) and rate > 0 else None,
+        ))
         return fields
 
     def _builtin_commit_event(
@@ -1105,14 +989,14 @@ class _SendOperation:
             node_id=node_id,
             status="awaiting_user" if pending is not None else "completed",
             retry=self.options.retry,
-            user_text=self.public_message,
+            user_text=self.turn.input.public_message,
             assistant_text=(
                 ""
                 if pending is not None
                 else str(getattr(result, "text", "") or "")
             ),
             completed_turn_count=int(chat.get("completedTurnCount") or 0),
-            metadata={"command": self.command},
+            metadata={"command": self.turn.input.command},
         ).as_event()
 
     def _builtin_result_payload(
@@ -1132,7 +1016,7 @@ class _SendOperation:
             "ok": True,
             "awaitingUser": pending is not None,
             "runId": run_id,
-            "userMessage": self.service.public_message(self.user_entry),
+            "userMessage": self.service.public_message(self.turn.user_entry),
             "assistantMessages": [
                 self.service.public_message(item) for item in additions
             ],
@@ -1142,7 +1026,7 @@ class _SendOperation:
         if pending is not None:
             payload["pendingQuestion"] = pending
             payload["retryReplacedMessageIds"] = sorted(
-                self.retry_replaced_message_ids
+                self.turn.retry_replaced_message_ids
             )
         elif assistant is not None:
             payload["assistantMessage"] = self.service.public_message(assistant)
@@ -1217,7 +1101,7 @@ class _SendOperation:
         model = str(getattr(result, "model", "") or self.chat.get("model") or "")
         run_id = str(getattr(result, "run_id", "") or "")
         node_id = str(getattr(result, "node_id", "") or "")
-        turn_id = str(self.user_entry.get("id") or "")
+        turn_id = str(self.turn.user_entry.get("id") or "")
         pending = self._builtin_pending(result, turn_id)
         with self.service.repository.lock:
             chat = self.service.repository.get(self.chat_id)
@@ -1260,7 +1144,7 @@ class _SendOperation:
                 chat["completedTurnCount"] = self.service.next_completed_turn_count(
                     {"completedTurnCount": self.completed_turn_count_before},
                     retry=self.options.retry,
-                    command=self.command,
+                    command=self.turn.input.command,
                     is_side_agent=self.is_side_agent,
                 )
                 chat.pop("pendingQuestion", None)
@@ -1317,9 +1201,9 @@ class _SendOperation:
                     "assistantMessages": payload.get("assistantMessages") or [],
                     "retry": self.options.retry,
                     "retryReplacedMessageIds": sorted(
-                        self.retry_replaced_message_ids
+                        self.turn.retry_replaced_message_ids
                     ),
-                    "truncateAfterMessageId": self.truncate_after_id,
+                    "truncateAfterMessageId": self.turn.truncate_after_id,
                 }
             )
             return
@@ -1329,8 +1213,8 @@ class _SendOperation:
         saved = {
             "type": "saved",
             **payload,
-            "retryReplacedMessageIds": sorted(self.retry_replaced_message_ids),
-            "truncateAfterMessageId": self.truncate_after_id,
+            "retryReplacedMessageIds": sorted(self.turn.retry_replaced_message_ids),
+            "truncateAfterMessageId": self.turn.truncate_after_id,
         }
         run.outcome = {"kind": "reply", "payload": payload}
         await run.publish(saved)
@@ -1346,7 +1230,7 @@ class _SendOperation:
 
     async def _run_builtin(self, run: ChatRun) -> None:
         before = await self.service.capture_workspace_changes_baseline(
-            self.workspace_dir,
+            self.environment.workspace_dir,
             run.run_id,
         )
         await run.mark_timing("snapshot_complete")
@@ -1358,7 +1242,7 @@ class _SendOperation:
                 await self.service.finalize_workspace_changes(
                     chat_id=self.chat_id,
                     run_id=str(getattr(result, "run_id", "") or run.run_id),
-                    workspace_dir=self.workspace_dir,
+                    workspace_dir=self.environment.workspace_dir,
                     before=before,
                     status="awaiting_user",
                     run=run,
@@ -1367,7 +1251,7 @@ class _SendOperation:
                 self.controller._schedule_workspace_finalize(
                     chat_id=self.chat_id,
                     run_id=str(getattr(result, "run_id", "") or run.run_id),
-                    workspace_dir=self.workspace_dir,
+                    workspace_dir=self.environment.workspace_dir,
                     before=before,
                     status="completed",
                 )
@@ -1398,7 +1282,7 @@ class _SendOperation:
             await self.service.finalize_workspace_changes(
                 chat_id=self.chat_id,
                 run_id=run.run_id,
-                workspace_dir=self.workspace_dir,
+                workspace_dir=self.environment.workspace_dir,
                 before=before,
                 status="cancelled",
                 run=run,
@@ -1413,7 +1297,7 @@ class _SendOperation:
             await self.service.finalize_workspace_changes(
                 chat_id=self.chat_id,
                 run_id=run.run_id,
-                workspace_dir=self.workspace_dir,
+                workspace_dir=self.environment.workspace_dir,
                 before=before,
                 status="error",
                 run=run,
@@ -1499,11 +1383,11 @@ class _SendOperation:
             ack.update(
                 {
                     "retry": True,
-                    "truncateAfterMessageId": self.truncate_after_id,
+                    "truncateAfterMessageId": self.turn.truncate_after_id,
                 }
             )
         else:
-            ack["userMessage"] = self.service.public_message(self.user_entry)
+            ack["userMessage"] = self.service.public_message(self.turn.user_entry)
 
         async def runner(run: ChatRun) -> None:
             await self._run_builtin(run)
@@ -1532,7 +1416,7 @@ class _SendOperation:
             run_id=run.run_id,
             run_status="running",
             chatSummary=self.service.public_chat_light(self.chat),
-            userMessage=self.service.public_message(self.user_entry),
+            userMessage=self.service.public_message(self.turn.user_entry),
         )
         if self.options.wants_stream:
             if self.detached:
@@ -1616,16 +1500,16 @@ class _SendOperation:
             ChatRunLifecycleRequest(
                 chat_id=self.chat_id,
                 project_id=self.project_id,
-                workspace_dir=self.workspace_dir,
+                workspace_dir=self.environment.workspace_dir,
                 lang=self.options.lang,
                 client_request_id=self.origin.client_request_id,
                 retry=self.options.retry,
                 detached=self.detached,
                 wants_stream=self.options.wants_stream,
                 is_external_agent=self.is_external_agent,
-                user_entry=self.user_entry,
-                retry_replaced_message_ids=self.retry_replaced_message_ids,
-                truncate_after_id=self.truncate_after_id,
+                user_entry=self.turn.user_entry,
+                retry_replaced_message_ids=self.turn.retry_replaced_message_ids,
+                truncate_after_id=self.turn.truncate_after_id,
                 state_ids_before=self.state_ids_before,
                 awaiting_user_sentinel=self.routes.awaiting_user_sentinel,
                 run_turn=self._run_turn,

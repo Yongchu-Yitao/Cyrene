@@ -146,7 +146,7 @@ hash.
 Additional release-relevant checks:
 
 ```bash
-node --test electron/app-use.test.js
+node --test electron/automation/app-use.test.js
 uv run python -m compileall -q src
 npm --prefix src/cyrene/workbench/webui test
 npm --prefix src/cyrene/workbench/webui run build
@@ -220,7 +220,7 @@ Keep source and checked-in compiled WebUI output synchronized. The focused
 control-plane checks are:
 
 ```bash
-node --test electron/ui-surface.test.js electron/host-control.test.js
+node --test electron/tests/ui-surface.test.js electron/desktop/host-control.test.js
 uv run pytest -q tests/test_app_control.py \
   tests/test_plugins.py \
   tests/test_tool_package_settings.py \

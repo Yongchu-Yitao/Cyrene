@@ -7,6 +7,8 @@ OAuth access/refresh tokens directly.
 
 from __future__ import annotations
 
+from .codex_turn_output import CodexTurnOutput
+
 import asyncio
 import json
 import logging
@@ -1167,12 +1169,7 @@ class CodexAppServer:
             if not turn_id:
                 raise RuntimeError("Codex did not start a provider turn")
 
-            text_parts: list[str] = []
-            reasoning_parts: list[str] = []
-            final_text = ""
-            usage: dict[str, Any] = {}
-            reasoning_started = False
-            upstream_signal_seen = False
+            output = CodexTurnOutput(stream_callback, action_schema, action_tools, emit_transport)
             if stream_callback and action_schema is None:
                 await stream_callback({"type": "reply_start"})
             loop = asyncio.get_running_loop()
@@ -1190,7 +1187,7 @@ class CodexAppServer:
                     )
                     raise TimeoutError("Codex model request timed out")
                 notification_timeout = remaining
-                if not upstream_signal_seen:
+                if not output.upstream_signal_seen:
                     first_signal_remaining = first_signal_deadline - now
                     if first_signal_remaining <= 0:
                         await interrupt_turn()
@@ -1215,7 +1212,7 @@ class CodexAppServer:
                 if not completed:
                     await interrupt_turn()
                     await settle_notification_wait()
-                    if not upstream_signal_seen:
+                    if not output.upstream_signal_seen:
                         message = (
                             "Codex produced no upstream model signal within "
                             f"{notification_timeout:.0f}s"
@@ -1230,30 +1227,9 @@ class CodexAppServer:
                 method = str(notification.method or "")
                 params = _model_dump(notification.payload)
                 if method == "item/agentMessage/delta":
-                    delta = str(params.get("delta") or "")
-                    if delta:
-                        if not upstream_signal_seen:
-                            upstream_signal_seen = True
-                            await emit_transport("connected")
-                        text_parts.append(delta)
-                        if stream_callback and action_schema is None:
-                            await stream_callback(
-                                {"type": "reply_delta", "delta": delta}
-                            )
+                    await output.text_delta(params)
                 elif method == "item/reasoning/summaryTextDelta":
-                    delta = str(params.get("delta") or "")
-                    if delta:
-                        if not upstream_signal_seen:
-                            upstream_signal_seen = True
-                            await emit_transport("connected")
-                        if stream_callback and not reasoning_started:
-                            await stream_callback({"type": "reasoning_start"})
-                        reasoning_started = True
-                        reasoning_parts.append(delta)
-                        if stream_callback:
-                            await stream_callback(
-                                {"type": "reasoning_delta", "delta": delta}
-                            )
+                    await output.reasoning_delta(params)
                 elif method == "error":
                     error = params.get("error") or {}
                     error = error if isinstance(error, dict) else {}
@@ -1291,10 +1267,10 @@ class CodexAppServer:
                 elif method == "item/completed":
                     item = params.get("item") or {}
                     if item.get("type") == "agentMessage":
-                        final_text = str(item.get("text") or final_text)
+                        output.final_text = str(item.get("text") or output.final_text)
                 elif method == "thread/tokenUsage/updated":
                     breakdown = ((params.get("tokenUsage") or {}).get("last") or {})
-                    usage = {
+                    output.usage = {
                         "prompt_tokens": int(breakdown.get("inputTokens") or 0),
                         "completion_tokens": int(breakdown.get("outputTokens") or 0),
                         "total_tokens": int(breakdown.get("totalTokens") or 0),
@@ -1318,55 +1294,18 @@ class CodexAppServer:
                         if availability_error is not None:
                             raise availability_error
                         raise RuntimeError(message)
-                    if not upstream_signal_seen:
-                        upstream_signal_seen = True
+                    if not output.upstream_signal_seen:
+                        output.upstream_signal_seen = True
                         await emit_transport("connected")
                     for item in completed_turn.get("items") or []:
                         if (
                             isinstance(item, dict)
                             and item.get("type") == "agentMessage"
                         ):
-                            final_text = str(item.get("text") or final_text)
+                            output.final_text = str(item.get("text") or output.final_text)
                     break
 
-            content = final_text or "".join(text_parts)
-            reasoning_content = "".join(reasoning_parts)
-            response = {
-                "role": "assistant",
-                "content": content,
-                "usage": usage,
-            }
-            if action_schema is not None:
-                response = _normalize_provider_action(
-                    content,
-                    action_tools,
-                    usage=usage,
-                )
-            if reasoning_started and stream_callback:
-                await stream_callback(
-                    {
-                        "type": "reasoning_done",
-                        "response": reasoning_content,
-                    }
-                )
-            if stream_callback and action_schema is None:
-                await stream_callback({"type": "reply_done", "response": content})
-            elif (
-                stream_callback
-                and not response.get("tool_calls")
-                and str(response.get("content") or "")
-            ):
-                visible_content = str(response["content"])
-                await stream_callback({"type": "reply_start"})
-                await stream_callback(
-                    {"type": "reply_delta", "delta": visible_content}
-                )
-                await stream_callback(
-                    {"type": "reply_done", "response": visible_content}
-                )
-            if reasoning_content:
-                response["reasoning_content"] = reasoning_content
-            return response
+            return await output.finish(_normalize_provider_action)
         except asyncio.CancelledError:
             # Keep cancellation responsive without orphaning the SDK's
             # thread-backed queue read in the event loop's default executor.

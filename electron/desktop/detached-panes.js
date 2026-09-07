@@ -420,7 +420,7 @@ class DetachedPanes {
       fullscreenable: true,
       backgroundColor: '#111418',
       webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
+        preload: path.join(__dirname, '../preload.js'),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,

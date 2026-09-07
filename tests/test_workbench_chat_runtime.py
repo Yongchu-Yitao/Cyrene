@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from cyrene.workbench.http.workbench.chat_routes.send_input import SendInput, PreparedUserTurn
+
 import asyncio
 from types import SimpleNamespace
 
@@ -10,6 +12,7 @@ from cyrene.model.error_details import ModelCallError, classify_model_error
 from cyrene.plugins import ensure_model_router, model_router
 from cyrene.workbench.core_adapter import chat_runtime
 from cyrene.workbench.core_adapter import conversation_runtime
+from cyrene.workbench.http.workbench.chat_routes.send_request import PreparedSendEnvironment, SelectedSendModel
 
 
 def run(coroutine):
@@ -902,10 +905,11 @@ def test_send_operation_uses_session_route_instead_of_exact_model_identity():
     from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin, SendOptions
 
     operation = object.__new__(_SendOperation)
+    operation.environment = PreparedSendEnvironment("/tmp/workspace", {}, {}, SelectedSendModel(None, False))
     operation.origin = SendOrigin.parse({})
     operation.options = SendOptions.parse({})
     operation.chat_id = "chat-preferred-route"
-    operation.workspace_dir = "/tmp/workspace"
+    operation.turn = PreparedUserTurn(SendInput("hello", "hello", "", [], []), {}, "")
     operation.context = SimpleNamespace(
         db_path="/tmp/workbench.sqlite3",
         bot=None,
@@ -913,12 +917,7 @@ def test_send_operation_uses_session_route_instead_of_exact_model_identity():
     operation.routes = SimpleNamespace(chat_id="host-chat")
     operation.origin = replace(operation.origin, client_request_id="request-1")
     operation.mode = "default"
-    operation.command = ""
-    operation.public_message = "hello"
-    operation.normalized = []
     operation.chat = {"title": "Chat", "remoteDeviceIds": []}
-    operation.context_activations = {}
-    operation.resolved_context_activations = {}
     operation.project_id = "project-1"
     operation.is_side_agent = False
     operation.options = replace(operation.options, retry=False)
@@ -1049,24 +1048,18 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin, SendOptions
 
     operation = object.__new__(_SendOperation)
+    operation.environment = PreparedSendEnvironment(str(tmp_path / "workspace"), {"skills": ["writer"]}, {"skills": ["writer"]}, SelectedSendModel(None, False))
     operation.origin = SendOrigin.parse({})
     operation.options = SendOptions.parse({})
     operation.chat_id = "chat-route"
+    operation.turn = PreparedUserTurn(SendInput("hello", "hello", "", [], []), {}, "")
     operation.origin = replace(operation.origin, client_request_id="request-route")
     operation.is_external_agent = False
     operation.is_side_agent = False
     operation.agent_message = "hello"
-    operation.public_message = "hello"
-    operation.public_attachments = []
-    operation.normalized = []
-    operation.command = ""
     operation.mode = "default"
-    operation.workspace_dir = str(tmp_path / "workspace")
     operation.origin = replace(operation.origin, ui_instance_id="ui-route")
     operation.origin = replace(operation.origin, conversation_source="")
-    operation.context_activations = {"skills": ["writer"]}
-    operation.resolved_context_activations = {"skills": ["writer"]}
-    operation.dynamic_command_prompt = ""
     operation.project_id = "project-route"
     operation.options = replace(operation.options, retry=False)
     operation.options = replace(operation.options, fork_replay=False)
@@ -1182,8 +1175,14 @@ def test_failed_plugin_workflow_atomically_restores_the_user_turn(tmp_path):
 
     operation._parse_request = ok
     operation._load_chat = lambda _permission_modes: ok()
-    operation._load_project_and_model = ok
-    operation._prepare_user_turn = ok
+    async def prepare_environment():
+        return PreparedSendEnvironment("", {}, {}, SelectedSendModel(None, False)), None
+
+    operation._load_project_and_model = prepare_environment
+    async def prepare_turn():
+        return PreparedUserTurn(SendInput("", "", "", [], []), {}, ""), None
+
+    operation._prepare_user_turn = prepare_turn
     operation._persist_user_turn = persist
     operation._begin_plugin_workflow = fail_workflow
     operation._finalize_persisted_user_turn = finalize

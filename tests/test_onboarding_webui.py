@@ -1,5 +1,7 @@
 import sys
 import types
+import base64
+import io
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -374,6 +376,15 @@ async def test_vision_capability_probe_sends_an_image(monkeypatch):
     content = calls[0]["kwargs"]["messages"][0]["content"]
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    # A valid prefix alone can hide corrupt PNG data that real providers reject.
+    from PIL import Image
+
+    encoded = content[1]["image_url"]["url"].split(",", 1)[1]
+    with Image.open(io.BytesIO(base64.b64decode(encoded, validate=True))) as image:
+        image.verify()
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+        image.load()
+        assert image.width >= 32 and image.height >= 32
 
 
 @pytest.mark.parametrize(

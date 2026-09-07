@@ -1,3 +1,5 @@
+import { prepareComposerSubmission, wbcAvailableContextIds, wbcParseSlashCommandText } from "./composer-submission.jsx"
+import { handleComposerKey } from "./composer-keyboard.jsx"
 import { useWbcComposerSettings, resolveComposerSettings, wbcNormalizeContextActivations } from "./composer-settings.jsx"
 import { useWbcComposerDraft } from "./composer-draft.jsx"
 import { useWbcComposerContextResource, useWbcComposerCommandCatalog } from "./composer-resources.jsx"
@@ -25,22 +27,6 @@ function wbcAuthoredContextTranslation(item, field) {
 function wbcContextCatalogItems(catalog, key) {
   return catalog && typeof catalog === "object" && Array.isArray(catalog[key])
     ? catalog[key] : [];
-}
-
-function wbcAvailableContextIds(items) {
-  return new Set((items || []).filter(function (item) {
-    return item && item.available === true;
-  }).map(function (item) { return String(item.id || ""); }).filter(Boolean));
-}
-
-function wbcParseSlashCommandText(text, commands) {
-  var source = String(text || "").trim();
-  if (source.indexOf("/") !== 0) return null;
-  var match = source.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
-  if (!match) return null;
-  var id = match[1];
-  var command = (commands || []).find(function (item) { return item.id === id; });
-  return command ? { command: command, message: String(match[2] || "").trim() } : null;
 }
 
 function wbcCommandOptionId(commandId) {
@@ -449,54 +435,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       });
       return;
     }
-    var parsedSlash = !command ? wbcParseSlashCommandText(text, slashPool) : null;
-    var submittedCommand = command || (parsedSlash && parsedSlash.command.id) || "";
-    var submittedDescriptor = command
-      ? slashPool.find(function (item) { return item.id === command; })
-      : parsedSlash && parsedSlash.command;
-    if (parsedSlash) text = parsedSlash.message;
-    if (!text && attachments.length === 0 && !submittedCommand) return;
-    var submittedContextActivations = wbcNormalizeContextActivations(contextActivationsRef.current);
-    if (!mcpAvailable) submittedContextActivations.mcpServers = [];
-    if (!skillsAvailable) submittedContextActivations.skills = [];
-    if (!pluginPacksAvailable) submittedContextActivations.pluginPacks = [];
-    if (submittedDescriptor && submittedDescriptor.activation) {
-      var activationKind = String(submittedDescriptor.activation.kind || "");
-      var activationId = String(submittedDescriptor.activation.id || "");
-      var activationOwnerAvailable = (activationKind === "mcpServers" && mcpAvailable)
-        || (activationKind === "skills" && skillsAvailable)
-        || (activationKind === "pluginPacks" && pluginPacksAvailable);
-      if (activationOwnerAvailable
-          && wbcAvailableContextIds(contextCatalog[activationKind]).has(activationId)
-          && submittedContextActivations[activationKind]
-          && activationId
-          && submittedContextActivations[activationKind].indexOf(activationId) < 0) {
-        submittedContextActivations[activationKind] = submittedContextActivations[activationKind].concat([activationId]);
-        contextActivationsRef.current = submittedContextActivations;
-        setContextActivations(submittedContextActivations);
-      }
-    }
-    var payload = {
-      message: text,
-      attachments: attachments,
-      mode: mode,
-      command: submittedCommand,
-      model: agentManagedModels ? "" : selectedModelId,
-      reasoningEffort: agentManagedModels ? "" : reasoningEffort,
-    };
-    if (soulAvailable) payload.soulActive = personaOn;
-    if (workspaceAvailable) {
-      payload.workspaceOverride = workspaceOverride;
-      payload.workspaceActive = workspaceOn;
-    }
-    if (memoryAvailable) {
-      payload.shortTermMemoryActive = shortTermMemoryOn;
-      payload.projectMemoryActive = projectMemoryOn;
-    }
-    if (composerContextAvailable) {
-      payload.remoteDeviceIds = remoteAvailable ? remoteDeviceIdsRef.current.slice() : [];
-      payload.contextActivations = submittedContextActivations;
-    }
+    var payload = prepareComposerSubmission(text, { command, slashPool, attachments, contextActivationsRef, mcpAvailable, skillsAvailable, pluginPacksAvailable, contextCatalog, mode, agentManagedModels, selectedModelId, reasoningEffort, soulAvailable, personaOn, workspaceAvailable, workspaceOverride, workspaceOn, memoryAvailable, shortTermMemoryOn, projectMemoryOn, composerContextAvailable, remoteAvailable, remoteDeviceIdsRef }, function (activations) {
+      contextActivationsRef.current = activations;
+      setContextActivations(activations);
+    });
+    if (!payload) return;
     // Optimistically clear on send; restored in the running-transition effect
     // if the send fails (error). The quick-chat surface passes clearOnSend=false
     // and manages its own draft lifecycle.
@@ -527,51 +470,11 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var toggleVoiceInput = composerVoice.toggleVoiceInput;
 
   function onKeyDown(event) {
-    if (slashDraftOpen && slashItems.length && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        var direction = event.key === "ArrowDown" ? 1 : -1;
-        setSlashActiveIndex(function (current) {
-          return (current + direction + slashItems.length) % slashItems.length;
-        });
-        return;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        if (event.nativeEvent && event.nativeEvent.isComposing) return;
-        event.preventDefault();
-        chooseSlashCommand(slashItems[Math.min(slashActiveIndex, slashItems.length - 1)]);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setSlashDismissedDraft(draft);
-        return;
-      }
-    }
-    var sc = workbenchServices.shortcuts();
-    if (sc && sc.matches(event, "composer-send")) {
-      if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
-      event.preventDefault();
-      submit();
-      return;
-    }
-    if (sc && sc.matches(event, "composer-newline")) {
-      // Allow the textarea's default Shift+Enter behavior (insert newline).
-      return;
-    }
-    // Fallback when the shortcut module is unavailable: plain Enter sends,
-    // Shift/Cmd/Ctrl+Enter inserts a newline.
-    if (!sc && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
-      if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
-      event.preventDefault();
-      submit();
-      return;
-    }
-    if (event.key === "Escape") {
-      setToolsOpen(false);
-      setModelOpen(false);
-      setModelPanel("root");
-    }
+    return handleComposerKey(event, {
+      slashDraftOpen, slashItems, slashActiveIndex, draft,
+      setSlashActiveIndex, chooseSlashCommand, setSlashDismissedDraft,
+      submit, setToolsOpen, setModelOpen, setModelPanel,
+    });
   }
 
   function chooseSlashCommand(item) {

@@ -233,206 +233,7 @@ class MiniMaxProvider(MediaProvider):
                 state={**state_context, "status": "resuming"},
             )
         else:
-            prompt = str(request.get("prompt") or "").strip()
-            if not prompt:
-                raise MediaProviderError("MiniMax video requires a prompt.", code="missing_prompt")
-            prompt_limit = 7000 if is_h3 else 2000
-            if len(prompt) > prompt_limit:
-                raise MediaProviderError(
-                    f"{model} video prompt exceeds {prompt_limit} characters.",
-                    code="minimax_prompt_too_long",
-                )
-            references = request_references(request)
-            roles = reference_roles(request, len(references))
-            if is_h3:
-                classified = [(reference, roles[index], _media_class(reference, roles[index])) for index, reference in enumerate(references)]
-                has_explicit_frames = any(role in {"first_frame", "last_frame"} for _ref, role, _kind in classified)
-                reference_mode = any(
-                    media_kind in {"video", "audio"}
-                    or role
-                    in {
-                        "subject",
-                        "character",
-                        "audio",
-                        "video",
-                        "reference_image",
-                        "reference_video",
-                        "reference_audio",
-                    }
-                    for _ref, role, media_kind in classified
-                ) or (not has_explicit_frames and sum(kind == "image" for _ref, _role, kind in classified) > 2)
-                if has_explicit_frames and reference_mode:
-                    raise MediaProviderError(
-                        "MiniMax-H3 cannot mix first/last frames with reference media.",
-                        code="minimax_invalid_references",
-                    )
-                for frame_role in ("first_frame", "last_frame"):
-                    if sum(role == frame_role for _ref, role, _kind in classified) > 1:
-                        raise MediaProviderError(
-                            f"MiniMax-H3 accepts at most one {frame_role.replace('_', '-')} image.",
-                            code="minimax_invalid_references",
-                        )
-                if reference_mode:
-                    counts = {media_kind: sum(kind == media_kind for _ref, _role, kind in classified) for media_kind in ("image", "video", "audio")}
-                    if counts["image"] > 9 or counts["video"] > 3 or counts["audio"] > 3 or len(classified) > 12:
-                        raise MediaProviderError(
-                            "MiniMax-H3 reference mode accepts at most 9 images, 3 videos, 3 audio clips, and 12 files total.",
-                            code="minimax_invalid_references",
-                        )
-
-                content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-                used_frame_roles: set[str] = {role for _reference, role, media_kind in classified if media_kind == "image" and role in {"first_frame", "last_frame"}}
-                for reference, requested_role, media_kind in classified:
-                    media_type = f"{media_kind}_url"
-                    if requested_role in {"first_frame", "last_frame"}:
-                        if media_kind != "image":
-                            raise MediaProviderError(
-                                "MiniMax-H3 first/last-frame inputs must be images.",
-                                code="minimax_invalid_references",
-                            )
-                        role = requested_role
-                    elif reference_mode:
-                        role = {
-                            "image": "reference_image",
-                            "video": "reference_video",
-                            "audio": "reference_audio",
-                        }[media_kind]
-                    else:
-                        role = "first_frame" if "first_frame" not in used_frame_roles else "last_frame"
-                        if role in used_frame_roles:
-                            raise MediaProviderError(
-                                "MiniMax-H3 supports at most two first/last-frame images.",
-                                code="minimax_invalid_references",
-                            )
-                        used_frame_roles.add(role)
-                    content.append(
-                        {
-                            "type": media_type,
-                            media_type: {"url": reference_as_url(reference)},
-                            "role": role,
-                        }
-                    )
-
-                resolution = str(request.get("resolution") or "2K").upper()
-                if resolution not in {"768P", "2K"}:
-                    raise MediaProviderError(
-                        "MiniMax-H3 resolution must be 768P or 2K.",
-                        code="minimax_invalid_resolution",
-                    )
-                payload: dict[str, Any] = {
-                    "model": model,
-                    "content": content,
-                    "resolution": resolution,
-                    "duration": _h3_duration(request.get("duration")),
-                }
-                requested_ratio = request.get("aspect_ratio") or request_value(request, "ratio")
-                ratio = str(requested_ratio or "").strip()
-                valid_ratios = {"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
-                if ratio and ratio not in valid_ratios:
-                    raise MediaProviderError(
-                        "MiniMax-H3 ratio must be adaptive, 21:9, 16:9, 4:3, 1:1, 3:4, or 9:16.",
-                        code="minimax_invalid_ratio",
-                    )
-                if has_explicit_frames or (references and not reference_mode):
-                    payload["ratio"] = "adaptive"
-                elif reference_mode:
-                    payload["ratio"] = ratio or "adaptive"
-                else:
-                    if ratio == "adaptive":
-                        raise MediaProviderError(
-                            "MiniMax-H3 text-to-video requires a concrete ratio, not adaptive.",
-                            code="minimax_invalid_ratio",
-                        )
-                    payload["ratio"] = ratio or "16:9"
-            else:
-                payload = {"model": model, "prompt": prompt}
-                normalized_model = model.casefold()
-                legacy_resolution = str(request.get("resolution") or "").upper()
-                if request.get("duration") is not None and request.get("duration") != "":
-                    if normalized_model in {
-                        "minimax-hailuo-2.3",
-                        "minimax-hailuo-2.3-fast",
-                        "minimax-hailuo-02",
-                    }:
-                        legacy_duration = _hailuo_duration(request.get("duration"), model)
-                        if legacy_duration == 10 and legacy_resolution == "1080P":
-                            raise MediaProviderError(
-                                f"{model} supports 10-second output at 768P only.",
-                                code="minimax_invalid_duration",
-                            )
-                    else:
-                        legacy_duration = bounded_int(request.get("duration"), 6, 1, 30)
-                    payload["duration"] = legacy_duration
-                if legacy_resolution:
-                    if normalized_model in {
-                        "minimax-hailuo-2.3",
-                        "minimax-hailuo-2.3-fast",
-                    } and legacy_resolution not in {"768P", "1080P"}:
-                        raise MediaProviderError(
-                            f"{model} resolution must be 768P or 1080P.",
-                            code="minimax_invalid_resolution",
-                        )
-                    if normalized_model == "minimax-hailuo-02" and legacy_resolution not in {
-                        "512P",
-                        "768P",
-                        "1080P",
-                    }:
-                        raise MediaProviderError(
-                            f"{model} resolution must be 512P, 768P, or 1080P.",
-                            code="minimax_invalid_resolution",
-                        )
-                    payload["resolution"] = legacy_resolution
-                for key in ("prompt_optimizer", "fast_pretreatment"):
-                    value = request_value(request, key)
-                    if value is not None and value != "":
-                        payload[key] = value
-                subject_images: list[str] = []
-                image_index = 0
-                for index, reference in enumerate(references):
-                    role = roles[index]
-                    media_class = _media_class(reference, role)
-                    if role == "reference" and media_class == "image":
-                        role = "first_frame" if image_index == 0 else "last_frame" if image_index == 1 else "reference"
-                        image_index += 1
-                    if role == "first_frame":
-                        payload["first_frame_image"] = reference_as_url(reference)
-                    elif role == "last_frame":
-                        payload["last_frame_image"] = reference_as_url(reference)
-                    elif role in {"subject", "character"}:
-                        subject_images.append(reference_as_url(reference))
-                    else:
-                        raise MediaProviderError(
-                            "MiniMax v1 video supports first/last-frame images or S2V-01 subject images only; use MiniMax-H3 for reference image, video, or audio inputs.",
-                            code="minimax_unsupported_reference",
-                        )
-                if subject_images:
-                    if "first_frame_image" in payload or "last_frame_image" in payload:
-                        raise MediaProviderError(
-                            "MiniMax v1 cannot mix subject references with first/last frames.",
-                            code="minimax_invalid_references",
-                        )
-                    if normalized_model != "s2v-01":
-                        raise MediaProviderError(
-                            "MiniMax v1 subject references require model S2V-01; use MiniMax-H3 for general reference generation.",
-                            code="minimax_invalid_model_for_reference",
-                        )
-                    payload["subject_reference"] = [{"type": "character", "image": subject_images}]
-                if "last_frame_image" in payload:
-                    if "first_frame_image" not in payload:
-                        raise MediaProviderError(
-                            "MiniMax v1 last-frame generation also requires a first-frame image.",
-                            code="minimax_invalid_references",
-                        )
-                    if normalized_model != "minimax-hailuo-02":
-                        raise MediaProviderError(
-                            "MiniMax v1 last-frame generation requires model MiniMax-Hailuo-02.",
-                            code="minimax_invalid_model_for_reference",
-                        )
-                    if legacy_resolution == "512P":
-                        raise MediaProviderError(
-                            "MiniMax-Hailuo-02 first/last-frame generation does not support 512P.",
-                            code="minimax_invalid_resolution",
-                        )
+            payload = _video_payload(request, model, is_h3)
             await emit_progress(progress, "Submitting MiniMax video generation")
             created = await _minimax_request_json(
                 "POST",
@@ -636,3 +437,230 @@ class MiniMaxProvider(MediaProvider):
 
 
 __all__ = ["MiniMaxProvider"]
+
+
+def _video_payload(request, model, is_h3):
+    prompt = str(request.get("prompt") or "").strip()
+    if not prompt:
+        raise MediaProviderError("MiniMax video requires a prompt.", code="missing_prompt")
+    prompt_limit = 7000 if is_h3 else 2000
+    if len(prompt) > prompt_limit:
+        raise MediaProviderError(
+            f"{model} video prompt exceeds {prompt_limit} characters.",
+            code="minimax_prompt_too_long",
+        )
+    references = request_references(request)
+    roles = reference_roles(request, len(references))
+    if is_h3:
+        return _h3_video_payload(request, model, prompt, references, roles)
+    return _v1_video_payload(request, model, prompt, references, roles)
+
+
+def _h3_video_payload(request, model, prompt, references, roles):
+    classified, has_explicit_frames, reference_mode = _h3_reference_mode(references, roles)
+    content = _h3_reference_content(prompt, classified, reference_mode)
+
+    resolution = str(request.get("resolution") or "2K").upper()
+    if resolution not in {"768P", "2K"}:
+        raise MediaProviderError(
+            "MiniMax-H3 resolution must be 768P or 2K.",
+            code="minimax_invalid_resolution",
+        )
+    payload: dict[str, Any] = {
+        "model": model,
+        "content": content,
+        "resolution": resolution,
+        "duration": _h3_duration(request.get("duration")),
+    }
+    requested_ratio = request.get("aspect_ratio") or request_value(request, "ratio")
+    ratio = str(requested_ratio or "").strip()
+    valid_ratios = {"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
+    if ratio and ratio not in valid_ratios:
+        raise MediaProviderError(
+            "MiniMax-H3 ratio must be adaptive, 21:9, 16:9, 4:3, 1:1, 3:4, or 9:16.",
+            code="minimax_invalid_ratio",
+        )
+    if has_explicit_frames or (references and not reference_mode):
+        payload["ratio"] = "adaptive"
+    elif reference_mode:
+        payload["ratio"] = ratio or "adaptive"
+    else:
+        if ratio == "adaptive":
+            raise MediaProviderError(
+                "MiniMax-H3 text-to-video requires a concrete ratio, not adaptive.",
+                code="minimax_invalid_ratio",
+            )
+        payload["ratio"] = ratio or "16:9"
+    return payload
+
+
+def _v1_video_payload(request, model, prompt, references, roles):
+    payload = {"model": model, "prompt": prompt}
+    normalized_model = model.casefold()
+    legacy_resolution = str(request.get("resolution") or "").upper()
+    if request.get("duration") is not None and request.get("duration") != "":
+        if normalized_model in {
+            "minimax-hailuo-2.3",
+            "minimax-hailuo-2.3-fast",
+            "minimax-hailuo-02",
+        }:
+            legacy_duration = _hailuo_duration(request.get("duration"), model)
+            if legacy_duration == 10 and legacy_resolution == "1080P":
+                raise MediaProviderError(
+                    f"{model} supports 10-second output at 768P only.",
+                    code="minimax_invalid_duration",
+                )
+        else:
+            legacy_duration = bounded_int(request.get("duration"), 6, 1, 30)
+        payload["duration"] = legacy_duration
+    if legacy_resolution:
+        if normalized_model in {
+            "minimax-hailuo-2.3",
+            "minimax-hailuo-2.3-fast",
+        } and legacy_resolution not in {"768P", "1080P"}:
+            raise MediaProviderError(
+                f"{model} resolution must be 768P or 1080P.",
+                code="minimax_invalid_resolution",
+            )
+        if normalized_model == "minimax-hailuo-02" and legacy_resolution not in {
+            "512P",
+            "768P",
+            "1080P",
+        }:
+            raise MediaProviderError(
+                f"{model} resolution must be 512P, 768P, or 1080P.",
+                code="minimax_invalid_resolution",
+            )
+        payload["resolution"] = legacy_resolution
+    for key in ("prompt_optimizer", "fast_pretreatment"):
+        value = request_value(request, key)
+        if value is not None and value != "":
+            payload[key] = value
+    _apply_v1_references(payload, references, roles, normalized_model, legacy_resolution)
+    return payload
+
+
+def _h3_reference_mode(references, roles):
+    classified = [(reference, roles[index], _media_class(reference, roles[index])) for index, reference in enumerate(references)]
+    has_explicit_frames = any(role in {"first_frame", "last_frame"} for _ref, role, _kind in classified)
+    reference_mode = any(
+        media_kind in {"video", "audio"}
+        or role
+        in {
+            "subject",
+            "character",
+            "audio",
+            "video",
+            "reference_image",
+            "reference_video",
+            "reference_audio",
+        }
+        for _ref, role, media_kind in classified
+    ) or (not has_explicit_frames and sum(kind == "image" for _ref, _role, kind in classified) > 2)
+    if has_explicit_frames and reference_mode:
+        raise MediaProviderError(
+            "MiniMax-H3 cannot mix first/last frames with reference media.",
+            code="minimax_invalid_references",
+        )
+    for frame_role in ("first_frame", "last_frame"):
+        if sum(role == frame_role for _ref, role, _kind in classified) > 1:
+            raise MediaProviderError(
+                f"MiniMax-H3 accepts at most one {frame_role.replace('_', '-')} image.",
+                code="minimax_invalid_references",
+            )
+    if reference_mode:
+        counts = {media_kind: sum(kind == media_kind for _ref, _role, kind in classified) for media_kind in ("image", "video", "audio")}
+        if counts["image"] > 9 or counts["video"] > 3 or counts["audio"] > 3 or len(classified) > 12:
+            raise MediaProviderError(
+                "MiniMax-H3 reference mode accepts at most 9 images, 3 videos, 3 audio clips, and 12 files total.",
+                code="minimax_invalid_references",
+            )
+
+    return classified, has_explicit_frames, reference_mode
+
+
+def _h3_reference_content(prompt, classified, reference_mode):
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    used_frame_roles: set[str] = {role for _reference, role, media_kind in classified if media_kind == "image" and role in {"first_frame", "last_frame"}}
+    for reference, requested_role, media_kind in classified:
+        media_type = f"{media_kind}_url"
+        if requested_role in {"first_frame", "last_frame"}:
+            if media_kind != "image":
+                raise MediaProviderError(
+                    "MiniMax-H3 first/last-frame inputs must be images.",
+                    code="minimax_invalid_references",
+                )
+            role = requested_role
+        elif reference_mode:
+            role = {
+                "image": "reference_image",
+                "video": "reference_video",
+                "audio": "reference_audio",
+            }[media_kind]
+        else:
+            role = "first_frame" if "first_frame" not in used_frame_roles else "last_frame"
+            if role in used_frame_roles:
+                raise MediaProviderError(
+                    "MiniMax-H3 supports at most two first/last-frame images.",
+                    code="minimax_invalid_references",
+                )
+            used_frame_roles.add(role)
+        content.append(
+            {
+                "type": media_type,
+                media_type: {"url": reference_as_url(reference)},
+                "role": role,
+            }
+        )
+
+    return content
+
+
+def _apply_v1_references(payload, references, roles, normalized_model, legacy_resolution):
+    subject_images: list[str] = []
+    image_index = 0
+    for index, reference in enumerate(references):
+        role = roles[index]
+        media_class = _media_class(reference, role)
+        if role == "reference" and media_class == "image":
+            role = "first_frame" if image_index == 0 else "last_frame" if image_index == 1 else "reference"
+            image_index += 1
+        if role == "first_frame":
+            payload["first_frame_image"] = reference_as_url(reference)
+        elif role == "last_frame":
+            payload["last_frame_image"] = reference_as_url(reference)
+        elif role in {"subject", "character"}:
+            subject_images.append(reference_as_url(reference))
+        else:
+            raise MediaProviderError(
+                "MiniMax v1 video supports first/last-frame images or S2V-01 subject images only; use MiniMax-H3 for reference image, video, or audio inputs.",
+                code="minimax_unsupported_reference",
+            )
+    if subject_images:
+        if "first_frame_image" in payload or "last_frame_image" in payload:
+            raise MediaProviderError(
+                "MiniMax v1 cannot mix subject references with first/last frames.",
+                code="minimax_invalid_references",
+            )
+        if normalized_model != "s2v-01":
+            raise MediaProviderError(
+                "MiniMax v1 subject references require model S2V-01; use MiniMax-H3 for general reference generation.",
+                code="minimax_invalid_model_for_reference",
+            )
+        payload["subject_reference"] = [{"type": "character", "image": subject_images}]
+    if "last_frame_image" in payload:
+        if "first_frame_image" not in payload:
+            raise MediaProviderError(
+                "MiniMax v1 last-frame generation also requires a first-frame image.",
+                code="minimax_invalid_references",
+            )
+        if normalized_model != "minimax-hailuo-02":
+            raise MediaProviderError(
+                "MiniMax v1 last-frame generation requires model MiniMax-Hailuo-02.",
+                code="minimax_invalid_model_for_reference",
+            )
+        if legacy_resolution == "512P":
+            raise MediaProviderError(
+                "MiniMax-Hailuo-02 first/last-frame generation does not support 512P.",
+                code="minimax_invalid_resolution",
+            )

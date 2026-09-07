@@ -2,3 +2,9 @@ node_modules/
 app-use-macos-hit-test
 out/
 dist/
+
+# Source directories override repository-wide scratch directory rules.
+!scripts/
+!scripts/*
+!tests/
+!tests/*

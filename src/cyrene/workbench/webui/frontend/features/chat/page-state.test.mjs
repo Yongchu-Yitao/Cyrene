@@ -9,6 +9,7 @@ test('project projections retain identity and never overwrite another project ca
   const a=[{id:'a1',projectId:'a',messages:[]}];
   h.value.chatsProjectIdRef.current='a';h.value.setChats(a);h.value.setActiveChat(a[0]);h.flush();
   assert.equal(cache.lists.a,a);assert.equal(cache.details.a1,a[0]);assert.equal(h.value.chatsRef.current,a);
+  assert.deepEqual(notifications.at(-1),['a',a]);
   const count=notifications.length;
   project='b';h.flush();
   assert.equal(notifications.length,count);assert.equal(cache.lists.b,undefined);
@@ -21,8 +22,21 @@ test('project projections retain identity and never overwrite another project ca
   assert.equal(cache.lists.b,undefined);
   const b=[{id:'b1',projectId:'b'}];h.value.setChats(b);h.value.setActiveChat(b[0]);h.flush();
   assert.equal(cache.lists.b,b);assert.equal(cache.details.b1,b[0]);
+  assert.deepEqual(notifications.at(-1),['b',b]);
   h.value.setChats([]);h.flush();assert.equal(cache.lists.b.length,0);
+  assert.deepEqual(notifications.at(-1),['b',[]]);
   h.unmount();
+});
+
+test('chat projections tolerate a missing callback and do not notify without a project', () => {
+  const notifications=[];
+  for (const [project, callback] of [['a',undefined],['',(...args)=>notifications.push(args)]]) {
+    const h=harness('./page-state.jsx');
+    h.run(mod=>mod.useWbcChatProjections(project,{lists:{},details:{}},callback));
+    h.value.setChats([{id:'a1',projectId:'a'}]);h.flush();
+    h.unmount();
+  }
+  assert.deepEqual(notifications,[]);
 });
 
 test('draft Agent choice persists per project while consumption only clears active state', () => {

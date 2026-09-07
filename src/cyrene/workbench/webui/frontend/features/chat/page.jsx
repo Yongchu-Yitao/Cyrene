@@ -1,10 +1,11 @@
+import { beginFloatingPanelSplit as beginFloatingPaneHandoff, restoreFloatingPanelSplit as restoreFloatingPaneHandoff, abandonFloatingPaneHandoff } from "./floating-pane-handoff.jsx"
 import { useWbcSplitSelection } from "./split-selection-state.jsx"
 import { useWbcChatProjections, useWbcDraftAgentBinding, useWbcSplitSide } from "./page-state.jsx"
 import { resolveRefreshedChatSelection as wbcResolveRefreshedChatSelection } from "./behavior.mjs"
 import { wbcWorkspaceSurfaceDescriptor, useWbcWorkspaceSurfaceState, useWbcSurfaceIntentListener, useWbcResourceObservations, wbcOpenStartedWorkspace } from "./workspace-surface-controller.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { PluginFrontendService, PluginView, pluginLocalizedField } from "../../platform/plugins.jsx"
-import { WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcCaptureConversationViewport, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPinPageSplitLayout, wbcPinSplitMotionOpen, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcReleasePinnedPageSplitLayout, wbcReleasePinnedSplitMotion, wbcRestoreConversationViewport, wbcT } from "../../workbench-chat.jsx"
+import { WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcT } from "../../workbench-chat.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcChatSplit, WbcChatSplitHost, WbcMapPaneContent, WbcMapSplitHost, WbcPaneCardFrame, WbcPaneColumnResizer, WbcPaneContextTrackDropSurface, WbcPaneRowResizer, WbcSide, WbcSideAgentSplit, WbcSideAgentSplitHost, WbcSplitGripBar, WbcSubagentsSplitHost, WbcSubagentsTab, wbcArtifactFileKey, wbcChatArtifactFiles, wbcDiscardProjectFileDraft, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { WorkbenchChatRuntimes, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence } from "./file-resources.jsx"
 
@@ -1382,261 +1383,13 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   function selectResourceSplit(type, payload, skipPane) { return wbcSelectResourceSplit(splitSelectionContext(), type, payload, skipPane); }
   function splitStateSnapshot(chatId) { return wbcSplitStateSnapshot(splitSelectionContext(), chatId); }
   function restoreSplitState(chatId, snapshot) { return wbcRestoreSplitState(splitSelectionContext(), chatId, snapshot); }
+  function floatingPaneContext() {
+    return { activeChatIdRef, pageRef, chatCache, floatingSplitRestoreRef, activeChat, splitSide, sideAgentSplitWidth, splitStateSnapshot, setFloatingConversationPanelOpen, setActiveChat, setChatLoading, selectChat, setSideAgentSplitWidth, setSplitSideDirect, restoreSplitState };
+  }
   function beginFloatingPanelSplit(openSplit, sourceChatId, sourceChatSnapshot) {
-    var activeId = String(activeChatIdRef.current || "");
-    var sourceId = String(sourceChatId || activeId);
-    if (!activeId || !sourceId || typeof openSplit !== "function") return;
-    var page = pageRef.current;
-    var currentMainPane = page && page.querySelector(":scope > .wbc-main");
-    var currentMainRect = currentMainPane && currentMainPane.getBoundingClientRect();
-    var sourceChat = sourceChatSnapshot && String(sourceChatSnapshot.id || "") === sourceId
-      ? sourceChatSnapshot
-      : (chatCache.details[sourceId] || null);
-    if (!floatingSplitRestoreRef.current) {
-      floatingSplitRestoreRef.current = {
-        // `chatId` is the temporary content owner and therefore the only
-        // selection that should keep this restore transaction alive.
-        chatId: sourceId,
-        activeChatId: activeId,
-        activeChat: activeChat && String(activeChat.id || "") === activeId
-          ? activeChat
-          : (chatCache.details[activeId] || null),
-        splitSide: splitSide,
-        // Opening a resource swaps the two track widths as well as their
-        // contents. The promoted conversation therefore keeps the exact same
-        // rectangle and can travel as one rigid pane instead of being scaled
-        // or reflowed during the handoff. Closing restores this width.
-        splitWidth: sideAgentSplitWidth,
-        promotedResourceWidth: Math.round((currentMainRect && currentMainRect.width) || sideAgentSplitWidth),
-        activeSplit: splitStateSnapshot(activeId),
-        sourceSplit: sourceId === activeId ? null : splitStateSnapshot(sourceId),
-      };
-    }
-    setFloatingConversationPanelOpen(false);
-    // The conversation that opened the resource becomes the left pane while
-    // the resource owns the right track. Swap the track widths in the same
-    // atomic commit: the source and destination conversation rectangles then
-    // have identical dimensions, so the shared layer performs only a rigid
-    // horizontal translation of the complete conversation UI.
-    function commitPromotion() {
-      if (sourceId !== activeId) {
-        // The split conversation already owns a complete, live transcript.
-        // Hand that exact snapshot to the main pane in the same commit as the
-        // selection change; otherwise the main pane paints an empty loading
-        // state before its hydration effect can reuse the cache.
-        if (sourceChat) {
-          chatCache.details[sourceId] = sourceChat;
-          setActiveChat(sourceChat);
-          setChatLoading(false);
-        }
-        selectChat(sourceId);
-        setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(
-          floatingSplitRestoreRef.current.promotedResourceWidth,
-          pageRef.current
-        ));
-      }
-      setSplitSideDirect("right");
-      openSplit();
-    }
-    function commitPromotionNow() {
-      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
-        window.ReactDOM.flushSync(commitPromotion);
-      } else {
-        commitPromotion();
-      }
-    }
-    function promoteSourceAndOpenContent() {
-      var reducedMotion = !!(window.matchMedia
-        && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-      var page = pageRef.current;
-      var sourcePane = page && page.querySelector(".wbc-side-agent-split-motion.open .wbc-chat-split");
-      var canTransitionHandoff = !!(
-        sourceId !== activeId
-        && !reducedMotion
-        && sourcePane
-        && document.startViewTransition
-        && window.ReactDOM
-        && typeof window.ReactDOM.flushSync === "function"
-      );
-      if (!canTransitionHandoff) {
-        commitPromotionNow();
-        return;
-      }
-
-      // The conversation changes React owners here (split pane -> main pane).
-      // Give both complete panes one shared transition identity. Their widths
-      // are swapped with the resource track in commitPromotion, so Chromium
-      // translates this snapshot without resizing or reflowing it.
-      var transitionName = "wbc-promoted-conversation";
-      var displacedName = "wbc-displaced-conversation";
-      var resourceName = "wbc-promoted-resource";
-      var displacedPane = page && page.querySelector(":scope > .wbc-main");
-      var targetPane = null;
-      var targetResourcePane = null;
-      var promotedViewport = wbcCaptureConversationViewport(sourcePane);
-      sourcePane.style.viewTransitionName = transitionName;
-      if (displacedPane) displacedPane.style.viewTransitionName = displacedName;
-      document.documentElement.classList.add("wbc-split-view-transition");
-      document.documentElement.classList.add("wbc-split-view-transition-opening");
-      wbcPinPageSplitLayout(page);
-      function clearTransitionIdentity() {
-        sourcePane.style.viewTransitionName = "";
-        if (displacedPane) displacedPane.style.viewTransitionName = "";
-        if (targetPane) targetPane.style.viewTransitionName = "";
-        if (targetResourcePane) {
-          targetResourcePane.style.viewTransitionName = "";
-          wbcReleasePinnedSplitMotion(targetResourcePane);
-        }
-        document.documentElement.classList.remove("wbc-split-view-transition");
-        document.documentElement.classList.remove("wbc-split-view-transition-opening");
-        wbcReleasePinnedPageSplitLayout(page);
-      }
-      try {
-        var transition = document.startViewTransition(function () {
-          // The old snapshot has already captured the split pane. Remove its
-          // name before the final DOM is captured, then assign it to the main
-          // pane created by the atomic promotion commit.
-          sourcePane.style.viewTransitionName = "";
-          if (displacedPane) displacedPane.style.viewTransitionName = "";
-          commitPromotionNow();
-          targetPane = pageRef.current && pageRef.current.querySelector(":scope > .wbc-main");
-          wbcRestoreConversationViewport(targetPane, promotedViewport);
-          if (targetPane) targetPane.style.viewTransitionName = transitionName;
-          var resourceContent = pageRef.current && pageRef.current.querySelector(
-            '.wbc-side-agent-split-motion[data-split-open="true"] .wbc-side-agent-split:not(.wbc-chat-split)'
-          );
-          targetResourcePane = resourceContent && resourceContent.closest(".wbc-side-agent-split-motion");
-          if (targetResourcePane) {
-            // Resource hosts normally enter on the next animation frame. Make
-            // the final snapshot measurable now and suppress that independent
-            // entrance, otherwise the resource is captured one track-width
-            // offscreen and visibly slides again after the handoff.
-            wbcPinSplitMotionOpen(targetResourcePane);
-            targetResourcePane.style.viewTransitionName = resourceName;
-          }
-        });
-        // Passive mount effects and transcript measurement can try to restore
-        // the live tail after the atomic owner handoff. Reapply the visual
-        // anchor once the new snapshot is ready and again before its overlay
-        // is removed, so the final live pane cannot reveal another position.
-        Promise.resolve(transition.ready).then(function () {
-          wbcRestoreConversationViewport(targetPane, promotedViewport);
-        }).catch(function () {});
-        Promise.resolve(transition.finished).catch(function () {}).then(function () {
-          wbcRestoreConversationViewport(targetPane, promotedViewport);
-          clearTransitionIdentity();
-        });
-      } catch (error) {
-        clearTransitionIdentity();
-        commitPromotionNow();
-      }
-    }
-    promoteSourceAndOpenContent();
+    return beginFloatingPaneHandoff(floatingPaneContext(), openSplit, sourceChatId, sourceChatSnapshot);
   }
-
-  function restoreFloatingPanelSplit() {
-    var snapshot = floatingSplitRestoreRef.current;
-    var chatId = String(activeChatIdRef.current || "");
-    if (!snapshot || !chatId) return false;
-    if (snapshot.chatId !== chatId) return false;
-    var restoredChat = snapshot.activeChat || chatCache.details[snapshot.activeChatId] || null;
-    function commitRestore() {
-      floatingSplitRestoreRef.current = null;
-      restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);
-      setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(snapshot.splitWidth, pageRef.current));
-      if (snapshot.chatId !== snapshot.activeChatId) {
-        restoreSplitState(snapshot.chatId, snapshot.sourceSplit);
-        if (restoredChat) {
-          setActiveChat(restoredChat);
-          setChatLoading(false);
-        }
-        selectChat(snapshot.activeChatId);
-      }
-      setSplitSideDirect(snapshot.splitSide === "left" ? "left" : "right");
-    }
-    function commitRestoreNow() {
-      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
-        window.ReactDOM.flushSync(commitRestore);
-      } else {
-        commitRestore();
-      }
-    }
-    var reducedMotion = !!(window.matchMedia
-      && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-    var page = pageRef.current;
-    var sourcePane = page && page.querySelector(":scope > .wbc-main");
-    var sourceResourcePane = page && page.querySelector(".wbc-side-agent-split-motion.open");
-    var canTransitionRestore = !!(
-      snapshot.chatId !== snapshot.activeChatId
-      && !reducedMotion
-      && sourcePane
-      && document.startViewTransition
-      && window.ReactDOM
-      && typeof window.ReactDOM.flushSync === "function"
-    );
-    if (!canTransitionRestore) {
-      commitRestoreNow();
-      return true;
-    }
-
-    // Exact inverse of promotion: the current main conversation returns to
-    // its original split rectangle, the resource fades out, and the displaced
-    // main conversation fades back into the left track.
-    var transitionName = "wbc-promoted-conversation";
-    var displacedName = "wbc-displaced-conversation";
-    var resourceName = "wbc-promoted-resource";
-    var targetPane = null;
-    var targetMainPane = null;
-    var restoredViewport = wbcCaptureConversationViewport(sourcePane);
-    sourcePane.style.viewTransitionName = transitionName;
-    if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = resourceName;
-    document.documentElement.classList.add("wbc-split-view-transition");
-    document.documentElement.classList.add("wbc-split-view-transition-closing");
-    wbcPinPageSplitLayout(page);
-    function clearRestoreTransitionIdentity() {
-      sourcePane.style.viewTransitionName = "";
-      if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = "";
-      if (targetPane) {
-        targetPane.style.viewTransitionName = "";
-        wbcReleasePinnedSplitMotion(targetPane.closest(".wbc-side-agent-split-motion"));
-      }
-      if (targetMainPane) targetMainPane.style.viewTransitionName = "";
-      document.documentElement.classList.remove("wbc-split-view-transition");
-      document.documentElement.classList.remove("wbc-split-view-transition-closing");
-      wbcReleasePinnedPageSplitLayout(page);
-    }
-    try {
-      var transition = document.startViewTransition(function () {
-        sourcePane.style.viewTransitionName = "";
-        if (sourceResourcePane) sourceResourcePane.style.viewTransitionName = "";
-        commitRestoreNow();
-        targetPane = pageRef.current && pageRef.current.querySelector(
-          '.wbc-side-agent-split-motion[data-split-open="true"] .wbc-chat-split'
-        );
-        var targetMotion = targetPane && targetPane.closest(".wbc-side-agent-split-motion");
-        // Capture the restored conversation at its settled right-hand
-        // rectangle. Without pinning, the host's own enter transition makes
-        // the shared layer target x=offscreen, so closing is not the inverse
-        // of opening and the pane snaps back after the View Transition.
-        wbcPinSplitMotionOpen(targetMotion);
-        wbcRestoreConversationViewport(targetPane, restoredViewport);
-        if (targetPane) targetPane.style.viewTransitionName = transitionName;
-        targetMainPane = pageRef.current && pageRef.current.querySelector(":scope > .wbc-main");
-        if (targetMainPane) targetMainPane.style.viewTransitionName = displacedName;
-      });
-      Promise.resolve(transition.ready).then(function () {
-        wbcRestoreConversationViewport(targetPane, restoredViewport);
-      }).catch(function () {});
-      Promise.resolve(transition.finished).catch(function () {}).then(function () {
-        wbcRestoreConversationViewport(targetPane, restoredViewport);
-        clearRestoreTransitionIdentity();
-      });
-    } catch (error) {
-      clearRestoreTransitionIdentity();
-      commitRestoreNow();
-    }
-    return true;
-  }
+  function restoreFloatingPanelSplit() { return restoreFloatingPaneHandoff(floatingPaneContext()); }
 
   function closeSideAgentSplit() { return wbcCloseNamedSplit(splitSelectionContext(), "side-agent"); }
   function closeArtifactSplit() { return wbcCloseNamedSplit(splitSelectionContext(), "artifact"); }
@@ -2270,14 +2023,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
 
   useWbcEffect(function () {
     setFloatingConversationPanelOpen(false);
-    var snapshot = floatingSplitRestoreRef.current;
-    if (!snapshot || snapshot.chatId === String(activeChatId || "")) return;
-    floatingSplitRestoreRef.current = null;
-    setSideAgentSplitWidth(wbcClampSideSplitWidthForPage(snapshot.splitWidth, pageRef.current));
-    restoreSplitState(snapshot.activeChatId, snapshot.activeSplit);
-    if (snapshot.chatId !== snapshot.activeChatId) {
-      restoreSplitState(snapshot.chatId, snapshot.sourceSplit);
-    }
+    abandonFloatingPaneHandoff(floatingPaneContext(), activeChatId);
   }, [activeChatId]);
 
   // The browser page is an Electron WebContentsView, so it does not

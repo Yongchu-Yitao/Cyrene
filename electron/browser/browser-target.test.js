@@ -88,7 +88,7 @@ test('target reports when another element covers its click point', () => {
 });
 
 test('browser click dispatch waits for movement and press before sending input', () => {
-  const source = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   assert.doesNotThrow(() => new vm.Script(source, { filename: 'electron/main.js' }));
   const dispatch = source.slice(source.indexOf('async _dispatchClick'), source.indexOf('async prepareUpload'));
   const moveIndex = dispatch.indexOf('await this._waitForAgentCursor');

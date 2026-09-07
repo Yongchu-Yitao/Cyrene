@@ -1047,7 +1047,7 @@ def test_electron_main_wires_app_rpc_and_quick_chat_origin():
     from pathlib import Path
 
     main = (Path(__file__).resolve().parents[1] / "electron" / "main.js").read_text(encoding="utf-8")
-    assert "require('./app-use')" in main
+    assert "require('./automation/app-use')" in main
     assert "'/app/rpc'" in main
     assert "handleAppUseRpc" in main
     assert "captureQuickChatOrigin" in main
@@ -1058,21 +1058,21 @@ def test_platform_provider_scripts_exist():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "electron"
-    assert (root / "app-use-macos.jxa").is_file()
-    assert (root / "app-use-windows.ps1").is_file()
+    assert (root / "automation/app-use-macos.jxa").is_file()
+    assert (root / "automation/app-use-windows.ps1").is_file()
     package = json.loads((root / "package.json").read_text(encoding="utf-8"))
     extra_resources = package["build"]["extraResources"]
     assert {
-        "from": "app-use-macos.jxa",
+        "from": "automation/app-use-macos.jxa",
         "to": "app-use/app-use-macos.jxa",
     } in extra_resources
     assert {
-        "from": "app-use-windows.ps1",
+        "from": "automation/app-use-windows.ps1",
         "to": "app-use/app-use-windows.ps1",
     } in extra_resources
     # osascript and PowerShell cannot execute scripts from Electron's ASAR FS.
-    assert "app-use-macos.jxa" not in package["build"]["files"]
-    assert "app-use-windows.ps1" not in package["build"]["files"]
+    assert "automation/app-use-macos.jxa" not in package["build"]["files"]
+    assert "automation/app-use-windows.ps1" not in package["build"]["files"]
 
 
 def test_app_use_localizes_public_errors_and_hides_bridge_diagnostics():

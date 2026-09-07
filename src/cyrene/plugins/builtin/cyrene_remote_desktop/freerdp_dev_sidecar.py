@@ -52,7 +52,7 @@ def main() -> None:
 
     electron = str(os.environ.get("CYRENE_ELECTRON_PATH") or "").strip()
     resources = str(os.environ.get("CYRENE_ELECTRON_RESOURCES_DIR") or "").strip()
-    sidecar = os.path.join(resources, "remote-desktop-rdp-sidecar.js")
+    sidecar = os.path.join(resources, "remote-desktop", "remote-desktop-rdp-sidecar.js")
     xvfb = shutil.which("Xvfb")
     if not electron or not os.path.isfile(electron) or not os.path.isfile(sidecar) or not xvfb:
         _fail("freerdp_sidecar_missing", "The Electron FreeRDP development bridge is incomplete.")

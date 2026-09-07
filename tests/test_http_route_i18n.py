@@ -94,14 +94,13 @@ def test_side_agent_prompt_is_not_forced_to_chinese() -> None:
     )
     operation.origin = SendOrigin.parse({})
     operation.options = SendOptions.parse({})
-    operation.message = "What does this imply?"
+    from cyrene.workbench.http.workbench.chat_routes.send_input import SendInput, PreparedUserTurn
+    operation.turn = PreparedUserTurn(SendInput("What does this imply?", "What does this imply?", "", [], []), {}, "")
     operation.is_external_agent = False
-    operation.command = ""
     operation.is_side_agent = True
     operation.chat = {"sourceQuote": "selected text"}
     operation.parent_transcript = "User: context"
     operation.options = replace(operation.options, lang="en")
-    operation.normalized = []
 
     operation._build_agent_message()
 

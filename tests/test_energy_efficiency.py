@@ -14,7 +14,7 @@ def test_electron_background_renderers_are_throttled():
         Path(__file__).resolve().parents[1] / "electron" / "main.js"
     ).read_text(encoding="utf-8")
 
-    source += (Path(__file__).resolve().parents[1] / "electron/browser-tab-picker-owner.js").read_text(encoding="utf-8")
+    source += (Path(__file__).resolve().parents[1] / "electron/browser/browser-tab-picker-owner.js").read_text(encoding="utf-8")
     assert "backgroundThrottling: false" not in source
     # Main renderer, browser page, native tab picker, and browser chat overlay
     # all retain Chromium's background throttling.

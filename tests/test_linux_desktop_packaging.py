@@ -20,8 +20,8 @@ def test_linux_packages_include_appimage_deb_and_rpm():
     assert package["build"]["linux"]["artifactName"] == "Cyrene-${version}-x64.${ext}"
     assert package["desktopName"] == "cyrene.desktop"
     assert package["build"]["linux"]["syncDesktopName"] is True
-    assert package["build"]["deb"]["afterInstall"] == "linux-after-install.sh"
-    assert package["build"]["rpm"]["afterInstall"] == "linux-after-install.sh"
+    assert package["build"]["deb"]["afterInstall"] == "scripts/linux-after-install.sh"
+    assert package["build"]["rpm"]["afterInstall"] == "scripts/linux-after-install.sh"
 
     deb_dependencies = set(package["build"]["deb"]["depends"])
     assert {
@@ -70,14 +70,14 @@ def test_electron_package_includes_main_process_modules():
 
     packaged_files = set(package["build"]["files"])
     assert {
-        "agent-cursor.js",
-        "app-use.js",
-        "backend-port-waiters.js",
-        "browser-input.js",
-        "browser-target.js",
-        "host-control.js",
+        "automation/agent-cursor.js",
+        "automation/app-use.js",
+        "backend/backend-port-waiters.js",
+        "browser/browser-input.js",
+        "browser/browser-target.js",
+        "desktop/host-control.js",
         "main.js",
-        "main-window-lifecycle.js",
+        "desktop/main-window-lifecycle.js",
     } <= packaged_files
 
 
@@ -227,7 +227,7 @@ def test_linux_appimage_update_targets_the_image_instead_of_temporary_mount():
 
 
 def test_linux_install_script_repairs_chromium_sandbox_permissions():
-    script = (ROOT / "electron" / "linux-after-install.sh").read_text(
+    script = (ROOT / "electron" / "scripts/linux-after-install.sh").read_text(
         encoding="utf-8"
     )
 

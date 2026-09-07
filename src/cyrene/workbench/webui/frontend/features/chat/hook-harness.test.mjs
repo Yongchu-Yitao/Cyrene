@@ -38,6 +38,7 @@ export function harness(file, extras = {}) {
     wbcT: (_key, fallback) => fallback,
     ...extras,
   };
+  dependencies.useWbcLayoutEffect ||= dependencies.useWbcEffect;
   const context = {module:{exports:{}}, require: () => dependencies, window:eventTarget,
     document:{...eventTarget, visibilityState:'visible'}, AbortController, localStorage:extras.localStorage};
   vm.runInNewContext(transformSync(readFileSync(new URL(file, import.meta.url),'utf8'),{loader:'jsx',format:'cjs'}).code,context);
