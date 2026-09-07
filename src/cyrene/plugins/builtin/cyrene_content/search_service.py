@@ -134,10 +134,11 @@ class SearXNGManager:
             settings_path = _write_simplexng_settings(port, host)
             launch_cmd = _build_simplexng_launch_cmd(port, host, settings_path=settings_path)
             env = _build_simplexng_env(settings_path)
+            env["CYRENE_SIMPLEXNG_LOG_PATH"] = log_path
             with open(log_path, "w") as stderr_file:
                 self._process = subprocess.Popen(
                     launch_cmd,
-                    stdout=subprocess.DEVNULL,
+                    stdout=stderr_file,
                     stderr=stderr_file,
                     env=env,
                     creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
@@ -196,7 +197,7 @@ class SearXNGManager:
         if not path:
             return
         try:
-            text = open(path).read()
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
             if text.strip():
                 logger.error("SimpleXNG stderr (%s):\n%s", path, text[-4000:])
         except Exception:

@@ -225,7 +225,7 @@ jobs:
                   content = f.read()
               content = content.replace(
                   'mp_fork = multiprocessing.get_context("fork")',
-                  'mp_fork = multiprocessing.get_context("fork" if sys.platform != "win32" else "spawn")'
+                  'mp_fork = multiprocessing.get_context("spawn")'
               )
               with open(calc_py, "w") as f:
                   f.write(content)
@@ -267,6 +267,14 @@ jobs:
         run: |
           python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, simplexng, mcp, google.genai, numpy, numpy._core._multiarray_umath, openai_codex; print('imports-ok')"
 
+      - name: Verify Windows SimpleXNG startup and JSON search
+        run: |
+          $output = python build/simplexng_smoke.py
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0 -or "$output" -notmatch 'CYRENE_SIMPLEXNG_SMOKE=ok') {
+            throw "SimpleXNG smoke test failed"
+          }
+
       - name: Benchmark sustained Windows ConPTY output
         id: windows_conpty_benchmark
         continue-on-error: true
@@ -289,6 +297,14 @@ jobs:
 
       - name: Full build (PyInstaller + Electron)
         run: python build/build.py
+
+      - name: Verify frozen Windows SimpleXNG startup and JSON search
+        run: |
+          $output = python build/simplexng_smoke.py --executable dist/Cyrene/Cyrene.exe
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0 -or "$output" -notmatch 'CYRENE_SIMPLEXNG_SMOKE=ok') {
+            throw "Frozen SimpleXNG smoke test failed"
+          }
 
       - name: Install and smoke test Windows package
         id: windows_package_smoke

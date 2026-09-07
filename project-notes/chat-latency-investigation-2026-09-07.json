@@ -1,0 +1,123 @@
+{
+  "before": [
+    {
+      "run_id": "run_6ca4e81a7e5f4d039cbd6bc1e2d150ce",
+      "snapshot_ms": 66.548,
+      "provider_sent_ms": 147.932,
+      "bridge_close_ms": 808.339,
+      "model_latency_ms": 590.4790000058711,
+      "prompt_tokens": 5090,
+      "completion_tokens": 8,
+      "cached_tokens": 4864,
+      "bridge_close_minus_model_ms": 217.859999994129,
+      "request_event_to_first_reply_delta_ms": 540.2940000000001,
+      "first_reply_delta_to_done_ms": 71.005
+    },
+    {
+      "run_id": "run_5f1ccc5d72fb44dbb19a66674094fe0d",
+      "snapshot_ms": 89.796,
+      "provider_sent_ms": 170.209,
+      "bridge_close_ms": 875.187,
+      "model_latency_ms": 636.6646249662153,
+      "prompt_tokens": 5246,
+      "completion_tokens": 8,
+      "cached_tokens": 4992,
+      "bridge_close_minus_model_ms": 238.52237503378467,
+      "request_event_to_first_reply_delta_ms": 588.011,
+      "first_reply_delta_to_done_ms": 69.279
+    },
+    {
+      "run_id": "run_b2266f6198c04f0e956f685222dcbdd1",
+      "snapshot_ms": 89.232,
+      "provider_sent_ms": 183.132,
+      "bridge_close_ms": 818.976,
+      "model_latency_ms": 572.7025829837658,
+      "prompt_tokens": 5402,
+      "completion_tokens": 8,
+      "cached_tokens": 5248,
+      "bridge_close_minus_model_ms": 246.27341701623425,
+      "request_event_to_first_reply_delta_ms": 541.537,
+      "first_reply_delta_to_done_ms": 51.52
+    }
+  ],
+  "after": [
+    {
+      "run_id": "run_470e5acf116740328f68108874a56d79",
+      "snapshot_ms": 74.417,
+      "provider_sent_ms": 151.206,
+      "bridge_close_ms": 1110.12,
+      "model_latency_ms": 893.5733329853974,
+      "prompt_tokens": 5090,
+      "completion_tokens": 8,
+      "cached_tokens": 4864,
+      "bridge_close_minus_model_ms": 216.54666701460246,
+      "request_event_to_first_reply_delta_ms": 849.0680000000001,
+      "first_reply_delta_to_done_ms": 64.697
+    },
+    {
+      "run_id": "run_216cb5ef50254b64a968a18f2078bfd0",
+      "snapshot_ms": 84.122,
+      "provider_sent_ms": 163.945,
+      "bridge_close_ms": 1084.941,
+      "model_latency_ms": 849.7797499876469,
+      "prompt_tokens": 5245,
+      "completion_tokens": 8,
+      "cached_tokens": 4992,
+      "bridge_close_minus_model_ms": 235.1612500123531,
+      "request_event_to_first_reply_delta_ms": 801.293,
+      "first_reply_delta_to_done_ms": 68.672
+    },
+    {
+      "run_id": "run_0427ac3b960643cbb7f2c60a87ed8755",
+      "snapshot_ms": 87.608,
+      "provider_sent_ms": 183.353,
+      "bridge_close_ms": 1128.056,
+      "model_latency_ms": 874.1727090091445,
+      "prompt_tokens": 5400,
+      "completion_tokens": 8,
+      "cached_tokens": 5248,
+      "bridge_close_minus_model_ms": 253.88329099085558,
+      "request_event_to_first_reply_delta_ms": 834.207,
+      "first_reply_delta_to_done_ms": 61.493
+    }
+  ],
+  "poll_experiment": [
+    {
+      "scheduled_ms": 600,
+      "dom_ready_ms": 602.0999999642372,
+      "observed_ms": 790.2999999523163,
+      "detection_lag_ms": 188.19999998807907
+    },
+    {
+      "scheduled_ms": 800,
+      "dom_ready_ms": 801.5,
+      "observed_ms": 817.6999999880791,
+      "detection_lag_ms": 16.19999998807907
+    },
+    {
+      "scheduled_ms": 900,
+      "dom_ready_ms": 901.6999999880791,
+      "observed_ms": 1295.699999988079,
+      "detection_lag_ms": 394
+    },
+    {
+      "scheduled_ms": 1100,
+      "dom_ready_ms": 1101.699999988079,
+      "observed_ms": 1293.3999999761581,
+      "detection_lag_ms": 191.69999998807907
+    },
+    {
+      "scheduled_ms": 1300,
+      "dom_ready_ms": 1301.3999999761581,
+      "observed_ms": 1792.699999988079,
+      "detection_lag_ms": 491.30000001192093
+    }
+  ],
+  "method": {
+    "run_selection": "Exclude warmup; select the three chronological CYRENE_ROUND_1/2/3 runs per isolated database.",
+    "event_encoding": "CYE1 plus zlib compressed JSON, as implemented by chat_runs.py.",
+    "clock_warning": "Server stage durations, provider latency, and Playwright wall-clock observations have different origins. Do not subtract their independent medians as an additive decomposition.",
+    "provider_latency_boundary": "Complete provider call through normalized stream result, including network, server generation, local parsing and callbacks. Not a pure network timer.",
+    "poll_version": "@playwright/cli 0.1.19; installed playwright-core retry backoff [20,50,100,100,500] then repeated 500 ms."
+  }
+}

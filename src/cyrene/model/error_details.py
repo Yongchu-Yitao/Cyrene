@@ -301,6 +301,7 @@ def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
     if stream_kind == "transport_interrupted":
         return _details("model_connection_failed", True, status)
     if stream_kind in {
+        "protocol_invalid_utf8",
         "protocol_invalid_json",
         "protocol_invalid_event",
     }:

@@ -307,6 +307,9 @@ def _setup_playwright_browsers_path() -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     _setup_playwright_browsers_path()
 
     if "--smoke-test" in sys.argv:

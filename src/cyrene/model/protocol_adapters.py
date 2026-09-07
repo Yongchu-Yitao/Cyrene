@@ -21,6 +21,8 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+from .stream_encoding import ModelStreamError, strict_utf8_lines
+
 from cyrene.model.stream_decoder import StreamDecoder
 
 
@@ -49,20 +51,6 @@ _OPENCODE_GO_RESPONSES_MODEL_PREFIXES = (
 class PreparedRequest:
     payload: dict[str, Any]
     headers: dict[str, str]
-
-
-class ModelStreamError(RuntimeError):
-    """A failed streaming response with content-free protocol diagnostics."""
-
-    def __init__(
-        self,
-        kind: str,
-        message: str,
-        diagnostics: Mapping[str, Any],
-    ) -> None:
-        super().__init__(message)
-        self.kind = str(kind)
-        self.diagnostics = dict(diagnostics)
 
 
 def runtime_adapter_for_provider(
@@ -1041,7 +1029,7 @@ async def _stream_payloads(
 ):
     data_lines: list[str] = []
     try:
-        async for raw_line in response.aiter_lines():
+        async for raw_line in strict_utf8_lines(response, diagnostics):
             if diagnostics is not None:
                 diagnostics["line_count"] = int(diagnostics.get("line_count") or 0) + 1
             line = str(raw_line or "").strip()

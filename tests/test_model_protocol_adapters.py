@@ -950,6 +950,77 @@ async def test_stream_distinguishes_local_protocol_decode_failure() -> None:
     assert captured.value.diagnostics["invalid_json_line_count"] == 1
 
 
+class _ChunkedBytes(httpx.AsyncByteStream):
+    def __init__(self, *chunks: bytes):
+        self.chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_stream_preserves_utf8_characters_split_across_transport_chunks() -> None:
+    encoded = (
+        'data: {"choices":[{"delta":{"content":"隅田川"},'
+        '"finish_reason":"stop"}]}\r\n\r\n'
+    ).encode("utf-8")
+    split = encoded.index("隅".encode("utf-8")) + 1
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ChunkedBytes(encoded[:split], encoded[split:split + 1], encoded[split + 1:]),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        parsed = await handle_stream(
+            "openai_compatible",
+            client,
+            "https://provider.test/v1/chat/completions",
+            PreparedRequest({"stream": True}, {}),
+            None,
+        )
+
+    assert parsed["content"] == "隅田川"
+    assert parsed["stream_diagnostics"]["line_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_invalid_utf8_before_emitting_corrupted_text() -> None:
+    callbacks: list[dict[str, object]] = []
+    stream = _ChunkedBytes(
+        b'data: {"choices":[{"delta":{"content":"before ',
+        b'\xff',
+        b' after"},"finish_reason":"stop"}]}\n\n',
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ModelStreamError) as captured:
+            await handle_stream(
+                "openai_compatible",
+                client,
+                "https://provider.test/v1/chat/completions",
+                PreparedRequest({"stream": True}, {}),
+                lambda event: _record_event(callbacks, event),
+            )
+
+    assert callbacks == []
+    assert captured.value.kind == "protocol_invalid_utf8"
+    assert classify_model_error(captured.value).code == "model_response_invalid"
+    assert captured.value.diagnostics["termination_reason"] == "invalid_utf8_stream"
+    assert captured.value.diagnostics["invalid_utf8_sequence_count"] == 1
+    assert captured.value.diagnostics["stream_completed"] is False
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish", ["tool_calls", "length", "max_tokens", "max_output_tokens"])
 async def test_stream_rejects_malformed_tool_arguments_with_safe_diagnostics(finish) -> None:

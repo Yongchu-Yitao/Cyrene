@@ -12,7 +12,6 @@ import runpy
 import sys
 import threading
 import time
-import types
 
 
 _PARENT_PID_ENV = "CYRENE_SIMPLEXNG_PARENT_PID"
@@ -21,6 +20,8 @@ _PARENT_PID_ENV = "CYRENE_SIMPLEXNG_PARENT_PID"
 def _pid_exists(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _windows_pid_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -30,6 +31,27 @@ def _pid_exists(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _windows_pid_exists(pid: int) -> bool:
+    """Probe without signals: os.kill(pid, 0) terminates processes on Windows."""
+    import _winapi
+
+    try:
+        # SYNCHRONIZE is sufficient to wait on a process; no terminate access.
+        handle = _winapi.OpenProcess(0x00100000, False, pid)
+    except PermissionError:
+        return True
+    except OSError as exc:
+        # ERROR_INVALID_PARAMETER means the PID no longer exists. Other errors
+        # cannot establish death, so keep the child running and retry later.
+        return getattr(exc, "winerror", None) != 87
+    try:
+        return _winapi.WaitForSingleObject(handle, 0) != _winapi.WAIT_OBJECT_0
+    except OSError:
+        return True
+    finally:
+        _winapi.CloseHandle(handle)
 
 
 def _parent_is_alive(parent_pid: int) -> bool:
@@ -50,43 +72,26 @@ def _watch_parent(parent_pid: int, interval: float = 1.0) -> None:
 
 
 def _install_windows_compat_patches() -> None:
-    """Patch SimpleXNG's vendored SearXNG assumptions for Windows."""
     if sys.platform != "win32":
         return
+    from cyrene.platform.simplexng_calculator import install, prepare_windows_runtime
 
-    try:
-        import winloop
-
-        # simplexng._vendor.searx.network.client imports uvloop unconditionally.
-        # Windows builds ship winloop instead; exposing it under the uvloop name
-        # keeps the vendored import path working without editing site-packages.
-        sys.modules.setdefault("uvloop", winloop)
-    except Exception:
-        pass
-
-    if "pwd" not in sys.modules:
-        pwd_stub = types.ModuleType("pwd")
-
-        def getpwuid(uid: int):
-            name = os.environ.get("USERNAME", "unknown")
-            return type("pw", (), {"pw_name": name, "pw_uid": uid})()
-
-        pwd_stub.getpwuid = getpwuid  # type: ignore[attr-defined]
-        sys.modules["pwd"] = pwd_stub
-
-    import multiprocessing
-
-    original_get_context = multiprocessing.get_context
-
-    def get_context(method: str | None = None):
-        if method == "fork":
-            method = "spawn"
-        return original_get_context(method)
-
-    multiprocessing.get_context = get_context
+    prepare_windows_runtime()
+    install()
 
 
 def main() -> None:
+    # PyInstaller windowed executables set Python's standard streams to None,
+    # even when Popen supplied redirected OS handles. Restore the managed log
+    # before upstream log_setup(), which writes startup errors to stdout.
+    log_path = os.environ.get("CYRENE_SIMPLEXNG_LOG_PATH")
+    if log_path and (sys.stdout is None or sys.stderr is None):
+        stream = open(log_path, "a", encoding="utf-8", buffering=1)
+        if sys.stdout is None:
+            sys.stdout = stream
+        if sys.stderr is None:
+            sys.stderr = stream
+
     raw_parent_pid = os.environ.get(_PARENT_PID_ENV, "").strip()
     try:
         parent_pid = int(raw_parent_pid)

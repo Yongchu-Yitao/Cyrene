@@ -296,6 +296,9 @@ def test_simplexng_child_installs_windows_compat_patches(monkeypatch):
     from cyrene import simplexng_child
     import multiprocessing
 
+    from cyrene.platform import simplexng_calculator
+    installed = []
+    monkeypatch.setattr(simplexng_calculator, "install", lambda: installed.append(True))
     fake_winloop = types.ModuleType("winloop")
     monkeypatch.delitem(sys.modules, "uvloop", raising=False)
     monkeypatch.delitem(sys.modules, "pwd", raising=False)
@@ -305,6 +308,7 @@ def test_simplexng_child_installs_windows_compat_patches(monkeypatch):
 
     simplexng_child._install_windows_compat_patches()
 
+    assert installed == [True]
     assert sys.modules["uvloop"] is fake_winloop
     assert sys.modules["pwd"].getpwuid(1000).pw_uid == 1000
     assert multiprocessing.get_context("fork") == "spawn"
