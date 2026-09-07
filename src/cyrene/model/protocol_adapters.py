@@ -722,6 +722,34 @@ def _gemini_messages(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return system_parts, contents
 
 
+def _anthropic_output_budget(model: str, max_tokens: int | None) -> int | None:
+    """Omit client caps for compatible providers; Claude requires a budget.
+
+    Claude values are the standard streaming output ceilings, not context sizes.
+    https://platform.claude.com/docs/en/models/overview
+    Keep explicit caller budgets (including probes) intact.
+    """
+    if max_tokens is not None:
+        return int(max_tokens)
+    model_id = str(model).lower().rsplit("/", 1)[-1]
+    if not model_id.startswith("claude-"):
+        return None
+    ceilings = (
+        (("claude-fable-5", "claude-opus-5", "claude-sonnet-5",
+          "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+          "claude-sonnet-4-6"), 128_000),
+        (("claude-sonnet-4", "claude-haiku-4-5", "claude-opus-4-5",
+          "claude-3-7-sonnet"), 64_000),
+        (("claude-opus-4",), 32_000),
+        (("claude-3-5",), 8_192),
+        (("claude-3",), 4_096),
+    )
+    for prefixes, ceiling in ceilings:
+        if model_id.startswith(prefixes):
+            return ceiling
+    raise ValueError("Unknown Claude output ceiling; specify max_tokens explicitly")
+
+
 def prepare_request(
     adapter_id: str,
     *,
@@ -751,9 +779,11 @@ def prepare_request(
         payload: dict[str, Any] = {
             "model": model,
             "messages": converted,
-            "max_tokens": max(1, int(max_tokens or 4096)),
             "stream": bool(stream),
         }
+        output_budget = _anthropic_output_budget(model, max_tokens)
+        if output_budget is not None:
+            payload["max_tokens"] = output_budget
         if system:
             payload["system"] = system
         if anthropic_tools:

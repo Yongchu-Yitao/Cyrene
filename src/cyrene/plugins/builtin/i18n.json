@@ -2208,11 +2208,11 @@
     "Write": {
       "en": {
         "name": "Write",
-        "description": "Write one UTF-8 text chunk of at most 8,000 characters. For a larger file, overwrite with the first chunk, then append later chunks in separate tool-call turns."
+        "description": "Write UTF-8 text without a fixed character limit. When splitting a file, overwrite with the first chunk, then append later chunks in separate tool-call turns."
       },
       "zh": {
         "name": "写入文件",
-        "description": "写入一个不超过 8,000 字符的 UTF-8 文本块。大文件先覆盖写入首块，再在后续工具调用轮次中追加其余块。"
+        "description": "写入 UTF-8 文本，无固定字符数限制。如需分块，先覆盖写入首块，再在后续工具调用轮次中追加其余块。"
       }
     },
     "app_use": {

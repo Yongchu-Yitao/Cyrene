@@ -64,8 +64,8 @@ with exactly one newline; keep or add it unless the user explicitly requests a
 different byte-level format. Do not introduce a Git change that only removes the
 final newline.
 
-Write accepts at most 8,000 characters per call. For a larger file, call Write
-with mode=overwrite for the first complete chunk, then use mode=append for later
+Write has no fixed character limit. If a file needs multiple calls to fit the
+model output budget, use mode=overwrite for the first complete chunk, then mode=append for later
 complete chunks in separate tool-call turns. End chunks at stable boundaries,
 never use overwrite to continue a file, and verify the assembled file before
 reporting completion.

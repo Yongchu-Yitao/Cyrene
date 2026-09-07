@@ -38,6 +38,46 @@ TOOLS = [
 ]
 
 
+@pytest.mark.parametrize(
+    ("adapter", "model", "expected"),
+    [
+        ("anthropic", "MiniMax-M3", None),
+        ("anthropic", "MiniMax-M2.7", None),
+        ("anthropic", "qwen3.6-plus", None),
+        ("openai_responses", "gpt-5", None),
+        ("gemini", "gemini-2.5-pro", None),
+        ("anthropic", "claude-opus-4-6", 128_000),
+        ("anthropic", "claude-sonnet-4-6", 128_000),
+        ("anthropic", "claude-sonnet-4-5-20250929", 64_000),
+        ("anthropic", "claude-haiku-4-5-20251001", 64_000),
+        ("anthropic", "claude-opus-4-1", 32_000),
+        ("anthropic", "claude-3-5-sonnet-latest", 8_192),
+        ("anthropic", "claude-3-haiku-20240307", 4_096),
+    ],
+)
+def test_default_output_budget_uses_provider_default_or_claude_ceiling(adapter, model, expected):
+    request = prepare_request(
+        adapter, api_key="test", messages=[{"role": "user", "content": "Write a file"}],
+        tools=TOOLS, model=model, max_tokens=None, stream=True, response_format=None,
+    )
+    if expected is None:
+        assert "max_tokens" not in request.payload
+        assert "max_output_tokens" not in request.payload
+        assert "maxOutputTokens" not in request.payload.get("generationConfig", {})
+    else:
+        assert request.payload["max_tokens"] == expected
+
+
+@pytest.mark.parametrize("model", ["MiniMax-M3", "claude-sonnet-4-5", "claude-custom"])
+@pytest.mark.parametrize("budget", [16, 100_000])
+def test_anthropic_preserves_explicit_output_budget(model, budget):
+    request = prepare_request(
+        "anthropic", api_key="test", messages=[{"role": "user", "content": "OK"}],
+        tools=None, model=model, max_tokens=budget, stream=True, response_format=None,
+    )
+    assert request.payload["max_tokens"] == budget
+
+
 def test_protocol_endpoints_use_native_provider_routes() -> None:
     base = "https://provider.example/v1/"
 

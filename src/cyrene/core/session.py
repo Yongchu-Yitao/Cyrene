@@ -82,7 +82,7 @@ from .localization import localized, normalize_language, system_language
 logger = logging.getLogger(__name__)
 _DEFAULT_INITIAL_ROOT = object()
 _AGENT_LIFECYCLE_STATE_ID = "agent.lifecycle"
-_MODEL_RESPONSE_INVALID_RETRY_LIMIT = 1
+_MODEL_RESPONSE_INVALID_RETRY_LIMIT = 3
 _MODEL_RESPONSE_RETRY_STATE_KEY = "_model_response_retry"
 _MODEL_TOOL_CALL_CORRECTION_TYPE = "cyrene.tool_call_correction"
 
@@ -93,6 +93,8 @@ def _l(en: str, zh: str, **values: Any) -> str:
 
 def _tool_call_correction_payload(
     details: Mapping[str, Any],
+    attempt: int = 1,
+    previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a content-free recovery instruction for malformed tool calls."""
 
@@ -133,28 +135,49 @@ def _tool_call_correction_payload(
 
     previous_attempt: dict[str, Any] = {
         "status": "rejected",
-        "error_code": "model_response_invalid",
+        "error_code": str(details.get("code") or "model_response_invalid"),
         "retry_scope": "different_arguments",
         "tool_calls_executed": False,
     }
     if tool_calls:
         previous_attempt["tool_calls"] = tool_calls
+    instructions = [
+        "Regenerate every required tool call with complete JSON object arguments.",
+        "Match the available tool schema exactly.",
+        "Keep every string argument within its schema length limit.",
+        "Do not assume that any tool call from the rejected attempt ran.",
+        "Preserve successful earlier tool results and file chunks; do not repeat completed writes.",
+        "Return corrected tool calls instead of merely explaining the error.",
+    ]
+    action: dict[str, Any] = {
+        "action": "regenerate_tool_calls", "instructions": instructions,
+    }
+    if details.get("code") == "model_output_truncated":
+        action["action"] = "reduce_output"
+        instructions.extend([
+            "The previous response exhausted its output budget. Produce a smaller complete response.",
+            "For Write, emit only one complete chunk in this turn. Append subsequent chunks in separate turns; use overwrite only for the first chunk of a new file.",
+        ])
+        lengths = [call["arguments_length"] for call in tool_calls
+                   if call.get("name") == "Write" and call.get("arguments_length", 0) > 0]
+        previous_action = (previous or {}).get("required_action", {})
+        previous_target = previous_action.get("target_content_chars") if isinstance(previous_action, Mapping) else None
+        targets = [max(1, length // 2) for length in lengths]
+        if isinstance(previous_target, int) and previous_target > 0:
+            targets.append(max(1, previous_target // 2))
+        if targets:
+            target = min(targets)
+            action["target_content_chars"] = target
+            instructions.append(f"Aim for at most {target} content characters in this recovery chunk; this is a recovery target, not a tool schema limit.")
+        else:
+            instructions.append(f"Recovery attempt {attempt}: reduce output to at most 1/{2 ** attempt} of the attempted response and defer remaining work to later turns.")
     return {
         "type": _MODEL_TOOL_CALL_CORRECTION_TYPE,
         "version": 1,
         "previous_attempt": previous_attempt,
-        "required_action": {
-            "action": "regenerate_tool_calls",
-            "instructions": [
-                "Regenerate every required tool call with complete JSON object arguments.",
-                "Match the available tool schema exactly.",
-                "Keep every string argument within its schema length limit.",
-                "For Write, send at most 8,000 content characters per call; overwrite the first chunk and append later chunks in separate tool-call turns.",
-                "Do not assume that any tool call from the rejected attempt ran.",
-                "Return corrected tool calls instead of merely explaining the error.",
-            ],
-        },
+        "required_action": action,
     }
+
 
 
 def _model_failure_projection(
@@ -2984,7 +3007,7 @@ class AgentSession:
         run_id: str,
         transition_key: str,
     ) -> bool:
-        """Retry one protocol-invalid model result through ContextChange Hooks.
+        """Recover protocol-invalid model results through bounded ContextChange Hooks.
 
         Updating the original trigger gives the retry a new transition key and
         lets the durable ``agent-session-transition`` Hook schedule it.  The
@@ -3025,13 +3048,15 @@ class AgentSession:
                 return False
             attempt = attempts + 1
             retry_state: dict[str, Any] = {
-                "code": "model_response_invalid",
+                "code": str(details.get("code") or "model_response_invalid"),
                 "attempts": attempt,
                 "limit": _MODEL_RESPONSE_INVALID_RETRY_LIMIT,
                 "retry_scope": retry_scope,
             }
             if retry_scope == "different_arguments":
-                retry_state["correction"] = _tool_call_correction_payload(details)
+                retry_state["correction"] = _tool_call_correction_payload(
+                    details, attempt, state.get("correction")
+                )
             value[_MODEL_RESPONSE_RETRY_STATE_KEY] = retry_state
             retrying_state = self._set_state_locked(
                 "queued",
@@ -3054,7 +3079,7 @@ class AgentSession:
                 node_id=trigger.id,
                 data={
                     "reset": True,
-                    "recovery": "model_response_invalid",
+                    "recovery": str(details.get("code") or "model_response_invalid"),
                     "attempt": attempt,
                 },
             )
@@ -3067,7 +3092,7 @@ class AgentSession:
             tree_id=self.tree.id,
             run_id=run_id,
             node_id=trigger.id,
-            failure_kind="model_response_invalid",
+            failure_kind=str(details.get("code") or "model_response_invalid"),
             retry_scope=retry_scope,
             attempt=attempt,
             limit=_MODEL_RESPONSE_INVALID_RETRY_LIMIT,

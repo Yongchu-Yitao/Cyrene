@@ -175,7 +175,7 @@ def test_invalid_model_response_retries_same_node_through_context_hook(tmp_path)
     assert user["_model_response_retry"] == {
         "code": "model_response_invalid",
         "attempts": 1,
-        "limit": 1,
+        "limit": 3,
         "retry_scope": "immediate",
     }
     reset_events = [
@@ -235,7 +235,7 @@ def test_invalid_model_response_retry_is_bounded(tmp_path, error_text, code):
     session.submit("hello", run_id="invalid-response-bounded")
     run(session.drain())
 
-    assert model_calls == 2
+    assert model_calls == 4
     output = session.final_output("invalid-response-bounded")
     assert output is not None
     assert output["error"] is True
@@ -361,7 +361,7 @@ def test_invalid_tool_call_correction_retry_is_bounded(tmp_path):
     session.submit("hello", run_id="invalid-tool-call-bounded")
     run(session.drain())
 
-    assert model_calls == 2
+    assert model_calls == 4
     output = session.final_output("invalid-tool-call-bounded")
     assert output is not None
     assert output["error"] is True
@@ -1285,3 +1285,29 @@ def test_normal_failure_after_committed_retry_does_not_restore_older_branch(tmp_
     assert reopened.snapshot()["leaf_id"] == failed_leaf
     assert reopened.snapshot()["run_id"] == "run-3"
     reopened.close()
+
+
+def test_truncation_recovery_shrinks_without_replaying_successful_writes():
+    from cyrene.core.session import _tool_call_correction_payload
+
+    details = {
+        'code': 'model_output_truncated',
+        'stream_diagnostics': {'tool_calls': [
+            {'name': 'Write', 'arguments_length': 16000, 'arguments_validation': 'invalid_json'},
+        ]},
+    }
+    previous = None
+    targets = []
+    for attempt in range(1, 4):
+        previous = _tool_call_correction_payload(details, attempt, previous)
+        targets.append(previous['required_action']['target_content_chars'])
+        assert previous['previous_attempt']['tool_calls_executed'] is False
+        assert previous['previous_attempt']['error_code'] == 'model_output_truncated'
+        instructions = ' '.join(previous['required_action']['instructions'])
+        assert 'Preserve successful earlier tool results' in instructions
+        assert 'only one complete chunk' in instructions
+    assert targets == [8000, 4000, 2000]
+    details['code'] = 'model_response_invalid'
+    correction = _tool_call_correction_payload(details)
+    assert 'target_content_chars' not in correction['required_action']
+    assert correction['required_action']['action'] == 'regenerate_tool_calls'

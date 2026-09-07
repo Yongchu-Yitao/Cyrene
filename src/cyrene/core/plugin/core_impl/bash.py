@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,24 @@ from cyrene.platform.subprocess_environment import external_process_environment
 
 from ..plugin import Plugin, PluginContext
 from .permission_boundaries import bash_boundary
+
+
+async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
+    """Stop descendants as well as the shell, including inherited output pipes."""
+    if os.name == "nt":
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill", "/PID", str(process.pid), "/T", "/F",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await killer.wait()
+        if process.returncode is None:
+            process.kill()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    await process.wait()
 
 
 async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, Any]:
@@ -42,6 +61,7 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
         env=environment,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **({"start_new_session": True} if os.name != "nt" else {}),
     )
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -49,13 +69,10 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
             timeout=timeout_ms / 1000,
         )
     except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+        await _kill_process_tree(process)
         raise TimeoutError(f"command timed out after {timeout_ms} ms") from None
     except asyncio.CancelledError:
-        if process.returncode is None:
-            process.kill()
-        await process.wait()
+        await asyncio.shield(_kill_process_tree(process))
         raise
     return {
         "exit_code": int(process.returncode or 0),
@@ -74,7 +91,7 @@ BASH_PLUGIN = Plugin(
         "type": "object",
         "properties": {
             "command": {"type": "string"},
-            "timeout_ms": {"type": "integer"},
+            "timeout_ms": {"type": "integer", "minimum": 1, "description": "Command timeout in milliseconds; defaults to 120000. Longer explicit timeouts are honored."},
         },
         "required": ["command"],
         "additionalProperties": False,
@@ -82,7 +99,8 @@ BASH_PLUGIN = Plugin(
     handler=bash,
     permission_boundary=bash_boundary,
     allow_parallel=True,
-    timeout_seconds=310.0,
+    # The command owns its deadline; a second plugin timer would override it.
+    timeout_seconds=None,
 )
 
 

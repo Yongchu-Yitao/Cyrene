@@ -41,7 +41,7 @@ def write_permission_boundary(
 WRITE_PLUGIN = Plugin(
     name="Write",
     description=(
-        "Write one UTF-8 text chunk of at most 8,000 characters. For a larger "
+        "Write UTF-8 text without a fixed character limit. When splitting a "
         "file, overwrite with the first chunk, then append later chunks in "
         "separate tool-call turns."
     ),
@@ -51,7 +51,7 @@ WRITE_PLUGIN = Plugin(
             "path": {"type": "string"},
             "content": {
                 "type": "string",
-                "description": "One complete chunk, at most 8,000 characters.",
+                "description": "Complete UTF-8 text or one complete chunk.",
             },
             "mode": {
                 "type": "string",
