@@ -2,6 +2,41 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta14] - 2026-09-07
+
+beta14 improves application updates, Windows web search, and panel resizing in long Conversations. Updates can now use a separately selected proxy and provide clearer failure information. Windows updates wait for the application to exit and handle temporary file locks, while built-in search fixes startup and unexpected-exit problems. This release also fixes application status refreshes, image capability checks, and damaged model responses, while preserving the existing chat, split-view, tool, model settings, and desktop workflows.
+
+### Application updates and proxy settings
+
+- The proxy settings section now includes a separate “Cyrene updates” switch for version checks and update downloads, helping users on networks that cannot reach the update service directly. Search, the browser, and extension integrations retain their independent proxy choices.
+- Update proxy changes apply to the next request without interrupting a download already in progress. Existing update checks, download progress, resumable downloads, package verification, and “Restart to update” remain available.
+- The About page now shows the actual reason when an update check fails. Timeouts, connection failures, server errors, and update package permission or file errors provide more specific guidance for checking the network, proxy, disk space, or directory permissions.
+- After a failed Windows installation, the next launch shows a notification explaining that the previous update did not finish, including its failed stage, reason, and log location. The same failure is not repeatedly reported, and reporting it does not require contacting the update server again.
+
+### Windows updates, startup, and web search
+
+- “Restart to update” now waits for the application to actually exit before installing on Windows, avoiding file replacement while an exit confirmation is still pending. If the application does not exit in time, installation stops instead of continuing over a running application.
+- Updates close Cyrene’s terminal service after the main window exits, reducing cases where the installer still reports that the application is running. Updating ends commands running in those terminals; ordinary application exits retain the existing terminal persistence behavior.
+- Portable Windows updates wait and retry when exit cleanup or temporary file locks prevent replacement. If replacement ultimately fails, the downloaded package is retained for another attempt.
+- Background process window handling during Windows startup and updates has been adjusted to reduce unnecessary command window flashes. Normal terminals and installation authorization prompts remain available.
+- Built-in Windows web search fixes compatibility problems, including a process check that could unexpectedly terminate the main application after search started. Search startup errors in desktop packages also retain logs for troubleshooting.
+- Windows search retains calculator answers, including arithmetic, comparisons, and mathematical constants. Excessively long calculations are still stopped; restoring web search does not disable calculator functionality.
+
+### Conversations, split views, and interface details
+
+- Resizing the right panel, split-view columns, or vertically stacked panes in a long Conversation reduces repeated layout work for distant history. Both the main chat and split chats protect the current reading position and retain following of the latest response when already at the bottom.
+- When closing a pane promotes a split Conversation into the main chat, previously measured history sizes are carried across the transition, reducing concentrated layout work and jumps in long chats.
+- Chat content returns to normal display when a separator is held, a drag is cancelled, or focus leaves the window during resizing. Scrolling, text selection, keyboard interaction, and editing remain available.
+- The bottom shortcut area in the collapsed sidebar has adjusted spacing and alignment for more consistent side and bottom margins.
+- Fixed missing application status responses affecting the chat page and command-line status queries. Model information and conversation message counts can be read and refreshed normally. Connection checks also distinguish Cyrene from other local services and recognize expired application credentials.
+- Live conversation-list and application-status refreshes make fewer duplicate requests. Older responses cannot overwrite newer state, and a failed status read does not discard a successfully loaded conversation list.
+
+### Model connections and response reliability
+
+- Fixed an invalid test image that could cause image capability checks to fail for models that actually support images. Checks continue to use independent test content rather than images or text from real Conversations.
+- Damaged text encoding in a streamed model response is now recognized as a response-format failure and handled by the existing error and recovery flow, instead of silently saving damaged text as a normal reply. Valid Chinese text, characters split across chunks, and different line endings remain supported.
+- Fixed rejected chat timing submissions so performance diagnostics can record the relevant stages and help distinguish local processing from time spent waiting for a model.
+
 ## [0.9.0-beta13] - 2026-09-07
 
 Beta13 introduces Cyrene Doctor, a unified place to inspect, explain, and safely recover from configuration, Plugin, Conversation, and project-memory problems. Basic checks remain available even when the Agent or model is unavailable, and a separate recovery page now opens when the desktop backend cannot start instead of showing an error and immediately quitting. Error messages can carry their supporting evidence directly into diagnostics, and failed project-memory work can be retried against its original material. Long Conversations also open, expand activity details, and animate sidebar changes with less work while preserving the existing reading position and interaction state.
