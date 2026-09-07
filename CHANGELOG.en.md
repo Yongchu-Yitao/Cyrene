@@ -19,7 +19,7 @@ beta14 improves application updates, Windows web search, and panel resizing in l
 - Updates close Cyrene’s terminal service after the main window exits, reducing cases where the installer still reports that the application is running. Updating ends commands running in those terminals; ordinary application exits retain the existing terminal persistence behavior.
 - Portable Windows updates wait and retry when exit cleanup or temporary file locks prevent replacement. If replacement ultimately fails, the downloaded package is retained for another attempt.
 - Background process window handling during Windows startup and updates has been adjusted to reduce unnecessary command window flashes. Normal terminals and installation authorization prompts remain available.
-- Built-in Windows web search fixes compatibility problems, including a process check that could unexpectedly terminate the main application after search started. Search startup errors in desktop packages also retain logs for troubleshooting.
+- Built-in Windows web search fixes compatibility problems, including a process check that could unexpectedly terminate the main application after search started. The ARM64 search component also includes missing networking dependencies, fixing a case where the component could load but could not actually start search. Search startup errors in desktop packages retain logs for troubleshooting.
 - Windows search retains calculator answers, including arithmetic, comparisons, and mathematical constants. Excessively long calculations are still stopped; restoring web search does not disable calculator functionality.
 
 ### Conversations, split views, and interface details

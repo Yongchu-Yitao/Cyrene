@@ -372,7 +372,10 @@ jobs:
         run: |
           pip install "pyinstaller>=6.0" rapidocr onnxruntime-directml opencv-python-headless pyclipper pillow numpy
           pip install winloop simplexng --no-deps
+          pip install sniffio
           pip install babel==2.17.0 brotli==1.1.0 "clideps>=0.1.6" flask==3.1.1 flask-babel==4.0.0 "httpx-socks[asyncio]==0.10.0" isodate==0.7.2 lxml==6.0.0 markdown-it-py==3.0.0 msgspec==0.19.0 "platformdirs>=4.3.8" pygments==2.19.2 "python-dateutil==2.9.0.post0" pyyaml==6.0.2 "rich>=14.0.0" setproctitle==1.3.6 typer-slim==0.16.0 valkey==6.1.0 whitenoise==6.9.0 "waitress>=3.0.2" fasttext-predict==0.9.2.4
+      - name: Verify search networking dependencies
+        run: python -c "import sniffio, httpx_socks, python_socks; from httpx_socks import AsyncProxyTransport; print('search-network-imports-ok')"
       - name: Build x64 compatibility sidecars
         run: python build/build.py --woa-x64-sidecars-only
       - name: Smoke test x64 compatibility sidecars
