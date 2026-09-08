@@ -13,6 +13,7 @@ PRE_TOOL_USE = "PreToolUse"
 POST_TOOL_USE = "PostToolUse"
 SESSION_START = "SessionStart"
 TURN_START = "TurnStart"
+MODEL_START = "ModelStart"
 SESSION_END = "SessionEnd"
 CONVERSATION_TURN_COMMITTED = "ConversationTurnCommitted"
 STOP = "Stop"
@@ -25,6 +26,7 @@ HOOK_EVENTS = frozenset(
         POST_TOOL_USE,
         SESSION_START,
         TURN_START,
+        MODEL_START,
         SESSION_END,
         CONVERSATION_TURN_COMMITTED,
         STOP,
@@ -60,6 +62,7 @@ class HookEvent:
     payload: Any = None
     node_id: str | None = None
     is_root: bool = False
+    runtime: Any = field(default=None, repr=False, compare=False)
 
 
 HookPlugin: TypeAlias = Callable[[HookEvent], Any | Awaitable[Any]]

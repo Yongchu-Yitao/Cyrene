@@ -111,23 +111,18 @@
   "src/cyrene/core/context/store.py::ContextTreeStore": {
     "methods": 38
   },
-  "src/cyrene/core/context/tasks.py::TaskContexts.execute": {
-    "decisions": 22,
-    "nesting": 8
-  },
   "src/cyrene/core/context/tasks.py::fork_task_state": {
-    "decisions": 23,
+    "decisions": 25,
     "nesting": 7
   },
   "src/cyrene/core/context/tasks.py::project_tasks": {
-    "decisions": 47,
-    "nesting": 6
+    "decisions": 52
   },
   "src/cyrene/core/hook/registry.py": {
-    "module_lines": 1679
+    "module_lines": 1688
   },
   "src/cyrene/core/hook/registry.py::HookSet": {
-    "methods": 44
+    "methods": 46
   },
   "src/cyrene/core/hook/registry.py::HookSet._run_pre_tool": {
     "lines": 129
@@ -187,19 +182,19 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 4806
+    "module_lines": 4869
   },
   "src/cyrene/core/session.py::AgentSession": {
-    "methods": 121,
-    "fields": 46
+    "methods": 122,
+    "fields": 47
   },
   "src/cyrene/core/session.py::AgentSession.__init__": {
-    "lines": 249,
+    "lines": 250,
     "decisions": 33
   },
   "src/cyrene/core/session.py::AgentSession._advance": {
-    "lines": 230,
-    "decisions": 58
+    "lines": 248,
+    "decisions": 59
   },
   "src/cyrene/core/session.py::AgentSession._answer": {
     "lines": 118,
@@ -210,7 +205,7 @@
     "decisions": 29
   },
   "src/cyrene/core/session.py::AgentSession._continue_reflection": {
-    "decisions": 22
+    "decisions": 25
   },
   "src/cyrene/core/session.py::AgentSession._continue_tools": {
     "lines": 193,
@@ -237,8 +232,8 @@
     "decisions": 31
   },
   "src/cyrene/core/session.py::AgentSession._restore": {
-    "lines": 156,
-    "decisions": 33
+    "lines": 163,
+    "decisions": 37
   },
   "src/cyrene/core/session.py::AgentSession._restore_run_context": {
     "decisions": 31
@@ -253,7 +248,8 @@
     "lines": 110
   },
   "src/cyrene/core/session.py::AgentSession.submit": {
-    "lines": 110
+    "lines": 118,
+    "decisions": 21
   },
   "src/cyrene/core/session.py::_tool_call_correction_payload": {
     "decisions": 30
@@ -1032,11 +1028,11 @@
     "decisions": 37
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py": {
-    "module_lines": 1270
+    "module_lines": 1273
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::_complete_stream_endpoint": {
-    "lines": 139,
-    "decisions": 22
+    "lines": 142,
+    "decisions": 24
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::complete_model": {
     "lines": 158,
@@ -1357,13 +1353,13 @@
     "decisions": 31
   },
   "src/cyrene/plugins/builtin/cyrene_subagent/manager.py": {
-    "module_lines": 1834
+    "module_lines": 1842
   },
   "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager": {
     "methods": 48
   },
   "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager._deliver_inbox": {
-    "decisions": 21
+    "decisions": 22
   },
   "src/cyrene/plugins/builtin/cyrene_subagent/manager.py::SubagentManager._on_child_event": {
     "decisions": 27,
@@ -1615,19 +1611,19 @@
     "decisions": 37
   },
   "src/cyrene/workbench/chat/run_timeline.py::RunTimeline.apply": {
-    "decisions": 45,
-    "nesting": 14
+    "decisions": 52,
+    "nesting": 15
   },
   "src/cyrene/workbench/core_adapter/bridge.py": {
-    "module_lines": 1103
+    "module_lines": 1109
   },
   "src/cyrene/workbench/core_adapter/bridge.py::_turn_metrics": {
     "lines": 102,
     "decisions": 40
   },
   "src/cyrene/workbench/core_adapter/bridge.py::workbench_events": {
-    "lines": 195,
-    "decisions": 60
+    "lines": 198,
+    "decisions": 62
   },
   "src/cyrene/workbench/core_adapter/chat_runtime.py::run_workbench_chat": {
     "lines": 199,

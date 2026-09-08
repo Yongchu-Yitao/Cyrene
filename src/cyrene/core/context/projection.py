@@ -13,7 +13,7 @@ def context_is_turn(value: Mapping[str, Any]) -> bool:
 
     lifecycle = str(value.get("context_lifecycle") or "").strip().lower()
     if lifecycle:
-        return lifecycle == "turn"
+        return lifecycle in {"turn", "model"}
     source = str(value.get("context_source") or "")
     kind = str(value.get("context_kind") or "")
     return (
@@ -55,6 +55,11 @@ def project_context_message(
 
     content = str(value.get("content") or "").strip()
     if not content:
+        return
+    if value.get("context_lifecycle") == "model":
+        # Mid-turn plugin guidance appends to the request; it must not rewrite
+        # the earlier user message and invalidate its cached tool-chain prefix.
+        messages.append({"role": "user", "content": content})
         return
     target_role = "user" if context_is_turn(value) else "system"
     target = next(

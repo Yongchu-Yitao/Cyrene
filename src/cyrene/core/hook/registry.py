@@ -30,6 +30,7 @@ from .hook import (
     SESSION_START,
     STOP,
     TURN_START,
+    MODEL_START,
     Hook,
     HookEvent,
     HookPlugin,
@@ -1541,13 +1542,21 @@ class HookSet:
     ) -> tuple[dict[str, str], ...]:
         """Return ordered context contributions for the current user turn."""
 
+        return await self._lifecycle_mounts(TURN_START, details, time=time)
+
+    async def model_start_mounts(self, details=None, *, time=None, runtime=None):
+        """Collect plugin context immediately before each model transition."""
+        return await self._lifecycle_mounts(MODEL_START, details, time=time, runtime=runtime)
+
+    async def _lifecycle_mounts(self, name, details, *, time=None, runtime=None):
         event = HookEvent(
-            TURN_START,
+            name,
             self.tree_id,
             time or _utc_now(),
             payload=dict(details or {}),
             node_id=self.root_id,
             is_root=True,
+            runtime=runtime,
         )
         contexts: list[tuple[int, int, dict[str, str]]] = []
         for index, result in enumerate(await self.dispatch(event)):

@@ -293,7 +293,8 @@ def test_deep_reflect_tool_rewrites_context_then_continues_without_changing_ui(
     assert nodes[-1].value["content"] == "final answer from better direction"
     assert len(model_inputs) == 2
     assert "[Cyrene Reflect Pack]" in str(model_inputs[-1])
-    assert "visible pre-reflection reply" in str(model_inputs[-1])
+    # Task-local prose was replaced by reflection; the UI transcript below stays exact.
+    assert "visible pre-reflection reply" not in str(model_inputs[-1])
     assert len(gateway.calls) == 2
     assert session.task_contexts.read()["shared"]["body"] == shared
     assert all(sum(shared in str(m.get("content", "")) for m in messages) == 1 for messages in model_inputs)

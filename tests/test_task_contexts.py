@@ -84,7 +84,7 @@ def test_unload_clip_edit_any_context_and_idempotency(tmp_path):
         reopened.close()
 
 
-def test_real_switch_preserves_prose_isolates_tools_and_snapshots(tmp_path):
+def test_real_switch_isolates_prose_and_restores_truncated_calls(tmp_path):
     source = tmp_path / "source.txt"
     source.write_text("secret evidence " * 1000)
     inputs = []
@@ -106,14 +106,15 @@ def test_real_switch_preserves_prose_isolates_tools_and_snapshots(tmp_path):
         assert len(inputs) == 3
         assert "secret evidence " * 100 in str(inputs[1])
         assert "secret evidence" not in str(inputs[2])
-        assert "shared prose" in str(inputs[2])
+        assert "shared prose" not in str(inputs[2])
         state = s.task_contexts.read()
         assert len(state["documents"]) == 2
         a = next(key for key in state["documents"] if key != state["active"])
         command(s, "unload_context", {"summary": "pause new task"}, "pause")
         command(s, "load_context", {"context_id": a}, "restore")
         messages = s._messages(s.snapshot()["leaf_id"])
-        assert "snapshot_path" in str(messages)
+        assert "Historical tool calls" in str(messages)
+        assert "snapshot_path" not in str(messages)
         assert "secret evidence " * 100 not in str(messages)
         path = s.store.get_path(s.tree.id, s.snapshot()["leaf_id"])
         assert project_model_messages(path) == messages
@@ -128,16 +129,15 @@ def test_real_switch_preserves_prose_isolates_tools_and_snapshots(tmp_path):
     assert not directory.exists()
 
 
-def test_missing_artifact_load_keeps_inactive_state(tmp_path):
+def test_discarded_tool_artifact_is_not_a_load_dependency(tmp_path):
     s = make_session(tmp_path)
     try:
         a = s.task_contexts.ensure("a")
         s.store.mount(s.tree.id, s.tree.root_id, {"role": "tool_results", "task_context_id": a,
             "results": [{"task_reference": {"snapshot_path": str(tmp_path / "missing")}}]})
         command(s, "unload_context", {"summary": "pause"}, "pause")
-        with pytest.raises(OSError):
-            command(s, "load_context", {"context_id": a}, "restore")
-        assert s.task_contexts.read()["active"] is None
+        command(s, "load_context", {"context_id": a}, "restore")
+        assert s.task_contexts.read()["active"] == a
     finally:
         s.close()
 
@@ -230,7 +230,7 @@ def test_serial_gate_covers_read_through_commit(tmp_path):
         s.close()
 
 
-def test_shared_budget_changes_only_on_unload(tmp_path):
+def test_task_dialogue_is_hidden_on_unload_and_restored_on_load(tmp_path):
     s = make_session(tmp_path)
     try:
         s.submit("old request " * 1000, run_id="old")
@@ -245,8 +245,9 @@ def test_shared_budget_changes_only_on_unload(tmp_path):
         messages = s._messages(s._leaf_id)
         assert "old request " * 100 not in str(messages)
         assert "current request" in str(messages)
-        archive = Path(s.task_contexts.read()["shared_snapshot"])
-        assert "old request " * 100 in archive.read_text()
+        assert not s.task_contexts.read().get('shared_snapshot')
+        command(s, 'load_context', {'context_id': state['active']}, 'restore')
+        assert 'old request ' * 100 in str(s._messages(s._leaf_id))
     finally:
         s.close()
 
@@ -269,8 +270,13 @@ def test_legacy_history_migrates_without_rewriting_prose(tmp_path):
         assert "legacy question" in str(messages) and "legacy tool" in str(messages)
         command(s, "unload_context", {"summary": "old paused"}, "unload")
         messages = s._messages(end.id)
-        assert "legacy question" in str(messages) and "legacy answer" in str(messages)
+        assert "legacy answer" not in str(messages)
         assert "legacy tool" not in str(messages)
+        owner = next(iter(s.task_contexts.read()['documents']))
+        command(s, 'load_context', {'context_id': owner}, 'restore')
+        restored = str(s._messages(end.id))
+        assert 'legacy question' in restored and 'legacy answer' in restored
+        assert 'legacy tool' not in restored
     finally:
         s.close()
 
@@ -383,15 +389,18 @@ def test_repeated_tool_call_ids_do_not_import_other_task_results(tmp_path):
             return s.store.mount(s.tree.id, call.id, {"role": "tool_results", "task_context_id": owner,
                 "results": [{"call_id": "repeated", "name": "Read", "success": True, "value": result}]})
         first = episode(s.tree.root_id, a, "A evidence")
+        s._leaf_id = first.id
         command(s, "unload_context", {"summary": "pause"}, "pause")
         b = s.task_contexts.ensure("b")
         second = episode(first.id, b, "B secret evidence")
+        s._leaf_id = second.id
         command(s, "unload_context", {"summary": "pause"}, "pause-b")
         command(s, "load_context", {"context_id": a}, "load-a")
         messages = s._messages(second.id)
-        assert "A evidence" in str(messages)
+        assert 'Historical tool calls' in str(messages)
+        assert "A evidence" not in str(messages)
         assert "B secret evidence" not in str(messages)
-        assert len([m for m in messages if m.get("role") == "tool"]) == 1
+        assert not [m for m in messages if m.get("role") == "tool"]
     finally:
         s.close()
 
@@ -504,10 +513,13 @@ def test_snapshot_reference_is_visible_before_and_after_reload(tmp_path):
         payload = json.loads(tool["content"])
         assert payload["value"] == "reading evidence"
         assert Path(payload["reference"]["snapshot_path"]).is_file()
+        s._leaf_id = node.id
         command(s, "unload_context", {"summary": "paused"}, "pause")
         command(s, "load_context", {"context_id": owner}, "load")
-        tool = next(m for m in s._messages(node.id) if m.get("role") == "tool")
-        assert json.loads(tool["content"])["value"] == payload["reference"]
+        restored = s._messages(node.id)
+        assert not any(m.get('role') == 'tool' for m in restored)
+        assert 'Historical tool calls' in str(restored)
+        assert 'reading evidence' not in str(restored)
     finally:
         s.close()
 

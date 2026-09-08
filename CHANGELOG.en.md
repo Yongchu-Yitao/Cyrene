@@ -2,6 +2,39 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta17] - 2026-09-09
+
+beta17 focuses on context management for long tasks and parallel workstreams. Separate goals or substantial subtasks now have isolated conversation histories that can be paused and resumed independently, and work can continue in a fresh segment near the context limit without losing source material or mixing in another task. This release also improves recovery from temporary model failures, mid-generation guidance, failed runs, and subagent shutdown, while fixing practical issues across model settings, notifications, the conversation rail, and split agents.
+
+### Long tasks, context isolation, and capacity protection
+
+- The Agent now manages substantial workstreams with independent progress, evidence, and decisions separately, such as frontend, backend, or security work within one request. Closely related explanations, corrections, tests, and reports remain together instead of splitting every checklist item mechanically.
+- After switching workstreams, user messages, replies, and tool results from inactive tasks no longer remain in the current model input. Resuming restores only the matching task and its material, reducing cross-task contamination, accidental reuse of obsolete requirements, and exposure of unrelated results.
+- The current user request remains available exactly as written through switches and restores. A paused task restores its user and assistant messages in order; historical calls retain only the tool name and a shortened argument preview, so old results are not treated as pending work or reintroduced as bulky output.
+- Reopening the app restores the correct active task. Context records created by older versions are read under the new isolation rules without manual migration, and missing legacy tool attachments no longer block a resume because discarded results are not injected again.
+- When a task approaches the model's available context capacity, Cyrene warns the Agent before the next model step to save unfinished progress and evidence paths, then continue the same task in a fresh segment. This is a continuation rather than completion and does not require the user to restate the goal.
+- An oversized historical task is not forced wholesale into the current working context. Loading leaves the current state unchanged and provides a complete read-only snapshot for bounded reading. The snapshot keeps the task document and necessary conversation evidence without restoring discarded tool results or full oversized arguments.
+- Large cross-task shared material is automatically preserved in a verifiable read-only snapshot while the active input keeps its location and usage guidance. Editing shared material creates a new complete snapshot without deleting older evidence; a missing or damaged snapshot is repaired from the still-authoritative content instead of silently hiding constraints.
+- Capacity checks, task switches, and deep reflection affect only their relevant workstream; other tasks and shared agreements remain unchanged. Short conversations and models without a known context limit continue normally without unnecessary switching.
+
+### Model replies, retries, and run recovery
+
+- If a model service has a temporary server failure before returning any content, Cyrene now performs the same bounded connection retries used for transient network failures and keeps the retry status visible in the conversation. Definite configuration, authorization, and request errors are not retried pointlessly.
+- Once a model has emitted content, a later connection error does not automatically replay the whole request, avoiding duplicate replies, tool calls, or external actions. Retries remain strictly limited, and a final failure settles normally so a new turn can begin.
+- When the user adds guidance while the model is reasoning or replying, partial output from the superseded attempt is immediately marked cancelled and no longer leaves a stale thinking animation. Tools already running are not cancelled by mistake, and the revised answer continues from the new guidance.
+- Failed and cancelled runs are now firm terminal states. Late subagent messages, queued results, or background events remain auditable but cannot overwrite the failure, revive the old run, or return the conversation to a processing state; a new user run can still start normally.
+- If the main Agent fails, remaining subagents from that run are stopped instead of allowing a late result to turn the failure into an intermediate state. Reopening the conversation also restores the true failure or cancellation node rather than a later invalid background message.
+- After a failure, Retry shows that it is waiting while the original run is still settling. Trying again during an active run or while another retry is already being prepared produces a clear explanation instead of starting overlapping requests; normal retry behavior is unchanged once settlement completes.
+
+### Settings, notifications, and conversation UI fixes
+
+- The Model ID selector in model settings now follows the current interface language, so search prompts, loading text, empty results, and selection guidance no longer unexpectedly appear in English in the Chinese interface.
+- Fixed the notification center failing to open because of a missing UI dependency. Opening it refreshes current notifications, Escape, outside click, and page exit close it reliably, and any browser window temporarily obscured by the popover is restored correctly.
+- Fixed missing dependencies that could crash or disable controls in certain conversation, rail, split-pane, and top-bar entry paths. Unclassified errors again use the shared localized error presentation.
+- Dragging a conversation group immediately persists the new order and announces the moved group to assistive technology; the order remains after returning to the project.
+- A split Agent opened from selected text now always binds to its own conversation, so its files, messages, and live state cannot accidentally reference the main conversation or another split Agent.
+- The Agent selected for a new conversation is now saved correctly with its draft. Existing notification, group movement, split-question, and error-retry entry points remain usable in packaged builds.
+
 ## [0.9.0-beta16] - 2026-09-08
 
 Beta16 focuses on dependable long-running work, tool execution, app shutdown, and failure recovery. A disconnected client, a local plugin failure, or a result-saving problem is far less likely to strand a Conversation, and Cyrene no longer blindly repeats an operation whose outcome is uncertain. The Agent now follows the app's current language on every turn. Cyrene Doctor can gather local run evidence, investigate the actual plugin involved, and resume verification after a restart, while its interface presents the problem and next steps in clearer language. Plugin installation, activation, application-service state, and source validation are also more consistent without changing existing features, permissions, or normal workflows.

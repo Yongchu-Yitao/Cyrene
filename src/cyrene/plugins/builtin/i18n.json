@@ -3178,21 +3178,21 @@
     "load_context": {
       "en": {
         "name": "Load task context",
-        "description": "Resume an earlier goal by restoring its saved task context before answering or using its evidence. Match the goal to the catalog's exact ID; unload a different active context first. Never load an unrelated context as a placeholder for a new goal. Do not call for the already active task or shared. Call alone and wait for success."
+        "description": "Resume a goal or subtask using its exact catalog ID, restoring its messages and truncated historical calls in order without old tool results. Unload a different active context first. Never load shared, an unrelated placeholder or the already active context. Oversized loads fail without changing state: read the returned snapshot in small sections instead. Call alone and wait for success."
       },
       "zh": {
         "name": "加载任务上下文",
-        "description": "恢复较早目标时，在回答或使用其资料前加载已保存的任务上下文。将目标与目录中的准确 ID 对应，并先卸载另一个活动任务；不要为新目标加载无关任务作为占位。当前任务和 shared 不需要加载。此工具必须单独调用并等待成功。"
+        "description": "使用目录中的准确 ID 恢复目标或子任务，并按原顺序还原消息和截断后的历史调用，不带入旧工具结果。先卸载另一个活动上下文；不要加载 shared、无关占位任务或已在活动的上下文。上下文过大时会保持状态不变并返回快照，应分段读取。此工具必须单独调用并等待成功。"
       }
     },
     "unload_context": {
       "en": {
         "name": "Save and unload task context",
-        "description": "Save a checkpoint and pause the active task before starting an independent goal or loading an earlier one, including text-only work. Do not unload merely to save, finish, report results or wait for the user. Do not call for the first task, acknowledgments, or explanations, corrections and tests serving the current goal. Subsequent task work creates a context unless you load one. Call alone and wait for success."
+        "description": "Pause before another workstream, or checkpoint a continuation segment when warned about capacity. Save task messages in order; retain tool names and truncated arguments, discard results from restored context. Do not unload merely to save, finish or wait. Then load an existing context or start work to create one; after a capacity warning, continue in a new segment and read old evidence by path. Call alone and wait for success."
       },
       "zh": {
         "name": "保存并卸载任务上下文",
-        "description": "开始独立目标或恢复较早任务前，保存交接摘要并暂停当前任务，也适用于纯文字工作。不要仅为了保存、结束、报告结果或等待用户而卸载。首次任务、简单确认，以及服务于当前目标的说明、修正和测试不需要切换。后续工作自动新建上下文，除非加载已有任务。此工具必须单独调用并等待成功。"
+        "description": "切换到其他工作流前暂停当前上下文；收到容量提醒时也可保存续接检查点。任务消息按顺序保存，历史调用只保留工具名和截断参数，不恢复旧结果。不要仅为了保存、完成或等待而卸载。随后加载已有上下文或开始工作以创建新上下文；容量提醒后在新分段继续并按路径读取旧证据。此工具必须单独调用并等待成功。"
       }
     },
     "append_context": {

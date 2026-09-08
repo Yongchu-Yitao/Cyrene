@@ -489,7 +489,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain": {
     "lines": 607,
-    "decisions": 61,
+    "decisions": 65,
     "hooks": 33
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain.<anonymous>#5": {
@@ -532,10 +532,10 @@
     "decisions": 26
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx": {
-    "module_lines": 1776
+    "module_lines": 1784
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx::<anonymous>": {
-    "lines": 1383
+    "lines": 1391
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx::<anonymous>.appendIntermediate.<anonymous>": {
     "decisions": 30
@@ -580,7 +580,7 @@
     "decisions": 31
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx::<anonymous>.streamHandlers": {
-    "lines": 278
+    "lines": 286
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx::<anonymous>.streamHandlers.onAwaitingUser": {
     "decisions": 29
@@ -620,7 +620,7 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcErrorNotice": {
-    "decisions": 43
+    "decisions": 47
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcLiveActivityCard": {
     "decisions": 46
@@ -669,7 +669,7 @@
     "decisions": 35
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx": {
-    "module_lines": 3103
+    "module_lines": 3104
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage": {
     "lines": 3037,
@@ -790,13 +790,13 @@
     "decisions": 36
   },
   "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx": {
-    "module_lines": 2824
+    "module_lines": 2825
   },
   "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcProjectRail": {
     "lines": 126
   },
   "src/cyrene/workbench/webui/frontend/features/chat/rail.jsx::WbcRail": {
-    "lines": 2617,
+    "lines": 2618,
     "decisions": 235,
     "hooks": 81
   },
@@ -915,7 +915,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx::WbcSideAgentTab": {
     "lines": 242,
-    "decisions": 29
+    "decisions": 30
   },
   "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx::WbcSideAgentTab.answerPendingQuestion": {
     "decisions": 33
@@ -1204,7 +1204,7 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx": {
-    "module_lines": 1682
+    "module_lines": 1683
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchNotificationCenter": {
     "decisions": 33
@@ -1416,10 +1416,10 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4280
+    "module_lines": 4283
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4280
+    "module_lines": 4283
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
     "module_lines": 1234

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from ..plugin import PluginPack
 from .context import CONTEXT_PLUGINS
+from .capacity import setup_capacity
 from .bash import BASH_PLUGIN
 from .permission import (
     PERMISSION_BATCH_DECIDE_TOOL,
@@ -35,6 +36,7 @@ def create_core_plugin_pack(registry: PluginRegistry) -> PluginPack:
     return PluginPack(
         id="core",
         description="Fixed tools required by the agent kernel.",
+        setup=setup_capacity,
         plugins=(
             *CONTEXT_PLUGINS,
             BASH_PLUGIN,

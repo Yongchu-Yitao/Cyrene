@@ -2798,7 +2798,7 @@ class AgentSession:
             }
 
         # A task body is replaceable even without tool episodes. The current
-        # user request is outside this document and remains exact in shared prose.
+        # request remains exact while older task-local dialogue may be compacted.
         compact_input = messages
         if len(messages) == 1 and messages[0].get("role") == "user":
             compact_input = [*messages, {"role": "assistant", "content": ""}]
@@ -3256,6 +3256,19 @@ class AgentSession:
                 if mounted_guidance is not None:
                     return
         prepared = self._prepare_model_input(trigger)
+        model_start_runtime = {"prepared_model_input": prepared}
+        contributions = await self.hooks.model_start_mounts({
+            "node_id": trigger.id, "run_id": run_id,
+        }, runtime=model_start_runtime)
+        mounts = self._contribution_mounts(
+            contributions, system_kind="model_system", ordinary_kind="model_context",
+            system_source="ModelStart", ordinary_source="ModelStart", lifecycle="model",
+        )
+        if mounts:
+            self._mount_context_nodes(trigger, run_id, mounts)
+            return
+        # Plugins may replace the prepared snapshot after offloading task data.
+        prepared = model_start_runtime["prepared_model_input"]
         trigger_value = trigger.value if isinstance(trigger.value, Mapping) else {}
         if trigger_value.get("role") not in {
             "context_compaction",
@@ -3858,10 +3871,15 @@ class AgentSession:
                 return
             run_id = self._node_run_id(assistant)
             path = self.store.get_path(self.tree.id, assistant.id)
-            owned = [n for n in path if n.value.get("task_context_id") == active]
-            runs = {n.value.get("run_id") for n in owned}
-            source = [n for n in path if n in owned or
-                      (n.value.get("role") == "user" and n.value.get("run_id") in runs)]
+            from .context.tasks import archived_calls, historical_assistant
+            owned = task_nodes(path, state, active)
+            current_user = next((n.id for n in reversed(path) if n.value.get('role') == 'user'), None)
+            source = [n for n in path if n in owned or n.id == current_user]
+            archived = archived_calls(path, state['documents'][active])
+            source = [replace(n, value=historical_assistant(n.value))
+                      if n.value.get('role') == 'assistant' and n.id in archived else n
+                      for n in source
+                      if n.value.get('role') != 'tool_results' or n.parent_id not in archived]
             doc = state["documents"][active]
             task_text = json.dumps(task_messages(path, state, active), ensure_ascii=False)
             source.append(replace(assistant, id=assistant.id + ":task-data", value={
@@ -3898,7 +3916,7 @@ class AgentSession:
                     return
                 doc["body"] = str(pack.get("rendered_model_context") or "")
                 doc["messages"] = []
-                doc["covered"] = list(dict.fromkeys([*doc["covered"], *(n.id for n in owned)]))
+                doc["covered"] = list(dict.fromkeys([*doc["covered"], *(n.id for n in task_nodes(path, state, active))]))
                 state["receipts"][receipt] = {"context_id": active}
                 self.task_contexts.write(state)
                 self._persist_auxiliary_model_usage(assistant.id, {"usage": pack.get("reflection_usage", {})})
