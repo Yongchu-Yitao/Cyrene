@@ -749,6 +749,9 @@ async def _complete_stream_endpoint(
             ) or (
                 isinstance(exc, ModelStreamError)
                 and exc.kind == "transport_interrupted"
+            ) or (
+                isinstance(exc, httpx.HTTPStatusError)
+                and exc.response.status_code in {500, 502, 503, 504}
             )
             retry_count = int(status_state.get("count") or 0)
             if (

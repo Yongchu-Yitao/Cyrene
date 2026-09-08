@@ -143,6 +143,9 @@ def _failed_run_payload(data: Mapping[str, Any]) -> dict[str, Any]:
         "detail_key": str(data.get("detail_key") or ""),
         "detail_params": dict(data.get("detail_params") or {}),
         "retryable": bool(data.get("retryable", True)),
+        # The core failure precedes child cancellation and bridge teardown.
+        # Workbench emits its terminal error after that ownership is released.
+        "settled": False,
     }
     retry_scope = str(data.get("retry_scope") or "").strip()
     if retry_scope:

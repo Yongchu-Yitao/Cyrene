@@ -7424,7 +7424,8 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
     assert 'context.setErrorKind("message");' in runtime_error
     assert 'onRetry={errorKind === "message" ? handleRetryMessage : (errorKind === "memory" ? handleGenerateMemory : retryLoad)}' in main_props
     assert 'errorKind={errorKind}' in main_props
-    assert '<WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} onDiagnose={() => openDoctor(failureScope(project, chat, error))} />' in source
+    assert 'retryBlockedReason={errorKind === "message" && running ?' in source
+    assert 'disabled={!!retryBlockedReason}' in source
     assert 'wbcT("workbenchChat.error.messageTitle", "Message processing failed")' in source
     assert 'wbcT("workbenchChat.error.messageBody"' in source
 
@@ -7455,9 +7456,53 @@ def test_workbench_chat_waits_for_terminal_failure_and_retains_it_until_retry():
     assert "if (terminal)" in page_error
     assert 'runStatus: "failed"' in page_error
     assert 'wbcSettleChatListItem(chat, "failed", error)' in page_error
-    assert "if (terminal && String(context.activeChatIdRef.current" in page_error
+    assert "terminal || (failureState && failureState.finalizing)" in page_error
     assert "runtimeEngine.getFailure(activeChatId)" in selection_load
     assert "clearFailure(chatId);" in start_run
+
+
+def test_builtin_failure_keeps_retry_blocked_until_run_settles():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  let handlers;
+  const errors = [];
+  WorkbenchChatRuntimes.setHooks({onError: (_id, _error, state) => errors.push(state)});
+  const model = {sendMessage: (_id, _input, callbacks) => {
+    handlers = callbacks;
+    return new Promise(() => {});
+  }};
+  WorkbenchChatRuntimes.start("failure", {message: "work"}, model);
+  handlers.onError(Object.assign(new Error("unavailable"), {code: "model_service_unavailable", awaitingSettlement: true}));
+  const finalizing = WorkbenchChatRuntimes.isRunning("failure") && WorkbenchChatRuntimes.get("failure").finalizing;
+  handlers.onError(Object.assign(new Error("unavailable"), {code: "model_service_unavailable"}));
+  return {finalizing, running: WorkbenchChatRuntimes.isRunning("failure"), errors,
+    failure: WorkbenchChatRuntimes.getFailure("failure").code};
+})()
+"""
+    )
+    assert result == {"finalizing": True, "running": False,
+                      "errors": [{"terminal": False, "finalizing": True}, {"terminal": True}],
+                      "failure": "model_service_unavailable"}
+
+
+def test_retry_busy_guard_explains_why_without_starting_another_run():
+    source = frontend_module_source("features/chat/chat-action-controller.jsx")
+    handler = "function wbcHandleRetryMessage(" + source.split("function wbcHandleRetryMessage(", 1)[1].split("\nfunction ", 1)[0]
+    script = f"""
+const notices = [];
+const workbenchServices = {{feedback: () => ({{showToast: (text) => notices.push(text)}})}};
+function wbcT(_key, fallback) {{return fallback;}}
+{handler}
+for (const running of [true, false]) {{
+  wbcHandleRetryMessage({{activeChat: {{id: 'chat'}},
+    runtimeEngine: {{isRunning: () => running}},
+    retryPendingChatIdRef: {{current: running ? '' : 'chat'}}}});
+}}
+process.stdout.write(JSON.stringify(notices));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert json.loads(result.stdout) == ["Wait for the run to end, or stop it before retrying.", "Retry is already being prepared."]
 
 
 def test_builtin_permission_notification_waits_for_persisted_question():

@@ -219,7 +219,7 @@ function wbcRuntimeError(context, chatId, error, failureState) {
       });
     });
   }
-  if (terminal && String(context.activeChatIdRef.current || "") === String(chatId || "")) {
+  if ((terminal || (failureState && failureState.finalizing)) && String(context.activeChatIdRef.current || "") === String(chatId || "")) {
     context.setErrorKind("message");
     context.setError(error || wbcT("workbenchChat.agentError.failed", "Agent run failed"));
     WbcVoice.stop();

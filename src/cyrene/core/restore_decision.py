@@ -7,6 +7,32 @@ from dataclasses import dataclass
 from typing import Any
 
 
+class RunTerminatedError(RuntimeError):
+    """A new input attempted to reuse a failed or cancelled run."""
+
+
+def terminal_run_ancestor(leaf, nodes):
+    """A late descendant cannot supersede its run's failure/cancellation.
+
+    Stop at a different run so an explicit new turn remains authoritative.
+    Successful answers are not barriers: child coordination can continue them.
+    """
+    by_id = {node.id: node for node in nodes}
+    current = leaf
+    run_id = ""
+    while current is not None:
+        value = current.value if isinstance(current.value, Mapping) else {}
+        current_run = str(value.get("run_id") or "")
+        if current_run:
+            if run_id and current_run != run_id:
+                break
+            run_id = current_run
+        if run_id and (value.get("cancelled") is True or value.get("error") is True):
+            return current
+        current = by_id.get(current.parent_id)
+    return leaf
+
+
 @dataclass(frozen=True, slots=True)
 class RestoreDecision:
     action: str

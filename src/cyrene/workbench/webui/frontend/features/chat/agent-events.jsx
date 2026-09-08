@@ -217,6 +217,7 @@ function wbcAgentRunFailedError(event) {
   var err = new Error(message || wbcT("workbenchChat.agentError.failed", "Agent run failed"));
   err.code = failureKind || "agent_run_failed";
   err.failureKind = failureKind || err.code;
+  err.awaitingSettlement = payload.settled === false;
   err.detailKey = String(payload.detail_key || payload.detailKey || "");
   err.detailParams = payload.detail_params || payload.detailParams || {};
   err.errorType = String(payload.error || "");

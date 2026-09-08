@@ -1305,6 +1305,14 @@ var WorkbenchChatRuntimes = (function () {
         fire("onInterrupted", chatId);
       },
       onError: function (err) {
+        if (err && err.awaitingSettlement) {
+          failures[chatId] = err;
+          update(chatId, function (cur) {
+            return cur ? { ...wbcFinalizeRuntime(cur), lastEventAt: Date.now() } : null;
+          });
+          fire("onError", chatId, err, { terminal: false, finalizing: true });
+          return;
+        }
         failRun(chatId, err, generation);
       },
     };

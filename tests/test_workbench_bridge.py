@@ -55,6 +55,7 @@ def test_failed_run_projects_model_error_metadata_to_workbench() -> None:
     assert payload["detail_key"] == "workbenchChat.error.modelAuthenticationFailed"
     assert payload["retryable"] is False
     assert payload["status_code"] == 401
+    assert payload["settled"] is False
 
 
 def test_usage_normalization_preserves_openai_compatible_cache_details():

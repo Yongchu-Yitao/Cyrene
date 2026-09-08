@@ -72,8 +72,9 @@ async def test_model_status_seam_persists_one_card_and_promotes_fallback(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [None, 500, 502, 503, 504])
 async def test_transient_provider_retry_publishes_retry_card_status(
-    monkeypatch,
+    monkeypatch, status_code,
 ) -> None:
     attempts = 0
     published: list[dict[str, object]] = []
@@ -82,6 +83,9 @@ async def test_transient_provider_retry_publishes_retry_card_status(
         nonlocal attempts
         attempts += 1
         if attempts == 1:
+            if status_code is not None:
+                response = httpx.Response(status_code, request=httpx.Request("POST", "https://provider.example"))
+                response.raise_for_status()
             raise httpx.ConnectError("temporary disconnect")
         return {
             "role": "assistant",
@@ -143,8 +147,9 @@ async def test_transient_provider_retry_publishes_retry_card_status(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [None, 500])
 async def test_model_connect_retry_waits_ten_seconds_and_stops_after_five(
-    monkeypatch,
+    monkeypatch, status_code,
 ) -> None:
     attempts = 0
     delays: list[float] = []
@@ -153,6 +158,8 @@ async def test_model_connect_retry_waits_ten_seconds_and_stops_after_five(
     async def always_disconnected(*_args, **_kwargs):
         nonlocal attempts
         attempts += 1
+        if status_code is not None:
+            httpx.Response(status_code, request=httpx.Request("POST", "https://provider.example")).raise_for_status()
         raise httpx.ConnectError("still disconnected")
 
     async def capture_status(chat_id, round_id, **status):
@@ -165,7 +172,7 @@ async def test_model_connect_retry_waits_ten_seconds_and_stops_after_five(
     monkeypatch.setattr("cyrene.model.status.persist_model_status", capture_status)
     monkeypatch.setattr(_shared.asyncio, "sleep", capture_sleep)
 
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(httpx.HTTPStatusError if status_code else httpx.ConnectError):
         await _shared._complete_stream_endpoint(
             adapter="openai",
             client=None,
@@ -192,6 +199,33 @@ async def test_model_connect_retry_waits_ten_seconds_and_stops_after_five(
     assert delays == [10.0] * 5
     assert [item["retry_count"] for item in published] == [1, 2, 3, 4, 5]
     assert {item["retry_limit"] for item in published} == {5}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code, emitted", [(400, False), (401, False), (403, False), (501, False), (500, True)])
+async def test_provider_does_not_retry_permanent_errors_or_emitted_output(monkeypatch, status_code, emitted):
+    attempts = 0
+
+    async def reject(_adapter, _client, _endpoint, _request, callback, _timing):
+        nonlocal attempts
+        attempts += 1
+        if emitted:
+            await callback({"type": "reply_delta", "text": "partial"})
+        httpx.Response(status_code, request=httpx.Request("POST", "https://provider.example")).raise_for_status()
+
+    async def receive(_event):
+        pass
+
+    monkeypatch.setattr(protocol_adapters, "handle_stream", reject)
+    with pytest.raises(httpx.HTTPStatusError):
+        await _shared._complete_stream_endpoint(
+            adapter="openai", client=None, endpoint="https://provider.example",
+            request=object(), stream_callback=receive,
+            provider=ModelProvider(id="test", name="Test", plugin_name="Test", adapter="openai", default_base_url="https://provider.example"),
+            context=PluginContext(), model="test", started=time.perf_counter(),
+            has_fallback=False,
+        )
+    assert attempts == 1
 
 
 @pytest.mark.asyncio

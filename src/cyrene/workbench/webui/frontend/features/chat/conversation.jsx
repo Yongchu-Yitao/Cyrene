@@ -2336,7 +2336,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
           {wbcT("workbenchChat.dropToOpen", "Release to open this conversation")}
         </div>
       )}
-      {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} onDiagnose={() => openDoctor(failureScope(project, chat, error))} />}
+      {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} retryBlockedReason={errorKind === "message" && running ? wbcT("workbenchChat.error.retryWaiting", "Waiting for the run to end") : ""} onDiagnose={() => openDoctor(failureScope(project, chat, error))} />}
       <div
         className={"wbc-thread-stage" + (browserWindowMode === "maximized" ? " browser-window-maximized" : "")}
         ref={stageRef}

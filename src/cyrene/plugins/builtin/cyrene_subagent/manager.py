@@ -1284,26 +1284,34 @@ class SubagentManager:
                 record = self._records[agent_id]
                 child_run_id = record.current_run_id or record.round_id
             run_id = str(message.get("round_id") or child_run_id or "")
-        session.submit(
-            rendered,
-            run_id=run_id or None,
-            node_id=node_id,
-            permission_user_request=(
-                self.owner.permission_user_request
-                if (
-                    agent_id == self.owner.agent_id
-                    or str(message.get("from") or "") == self.owner.agent_id
-                )
-                else session.permission_user_request
-            ),
-            metadata={
-                "source": "agent_inbox",
-                "message_id": message_id,
-                "from_agent": str(message.get("from") or ""),
-                "message_type": str(message.get("type") or "message"),
-                "message": deepcopy(message),
-            },
-        )
+        from cyrene.core.restore_decision import RunTerminatedError
+
+        try:
+            session.submit(
+                rendered,
+                run_id=run_id or None,
+                node_id=node_id,
+                permission_user_request=(
+                    self.owner.permission_user_request
+                    if (
+                        agent_id == self.owner.agent_id
+                        or str(message.get("from") or "") == self.owner.agent_id
+                    )
+                    else session.permission_user_request
+                ),
+                metadata={
+                    "source": "agent_inbox",
+                    "message_id": message_id,
+                    "from_agent": str(message.get("from") or ""),
+                    "message_type": str(message.get("type") or "message"),
+                    "message": deepcopy(message),
+                },
+            )
+        except RunTerminatedError:
+            # Keep the message in the inbox audit, but acknowledge it without
+            # creating a new context node or reactivating the participant.
+            await mark_read_count(agent_id, 1, session_id=self.session_id)
+            return True
         await mark_read_count(agent_id, 1, session_id=self.session_id)
         if agent_id != self.owner.agent_id:
             with self._lock:

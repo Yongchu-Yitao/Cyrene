@@ -52,7 +52,7 @@ from .hook import (
 )
 from .observability import log_operation, operation
 from .session_events import SessionEvents
-from .restore_decision import select_restore_action
+from .restore_decision import RunTerminatedError, select_restore_action, terminal_run_ancestor
 from .plugin import (
     PluginBatchRunner,
     PluginCall,
@@ -395,6 +395,7 @@ class AgentSession:
             raise ValueError("Plugin service name is reserved: permission")
         self._plugin_service_values["permission"] = self
         self._cancelled_run_ids: set[str] = set()
+        self._failed_run_ids: set[str] = set()
         self._model_calls = 0
         self._max_model_calls = (
             None if max_model_calls is None else max(1, int(max_model_calls))
@@ -404,7 +405,7 @@ class AgentSession:
         self._stream_attempts: dict[str, int] = {}
         self._transitions = TransitionDriver(tree_id, TransitionCallbacks(
             key=self._transition_key, run_id=self._node_run_id,
-            cancelled=self._is_cancelled, coroutine=self._transition_coroutine,
+            cancelled=self._is_run_terminated, coroutine=self._transition_coroutine,
             failure=self._transition_failure, idle=self._transitions_idle,
             snapshot=lambda: {"status": self._status, "leaf_id": self._leaf_id},
         ))
@@ -1564,6 +1565,10 @@ class AgentSession:
         with self._state_lock:
             return bool(run_id and run_id in self._cancelled_run_ids)
 
+    def _is_run_terminated(self, run_id: str) -> bool:
+        with self._state_lock:
+            return run_id in self._cancelled_run_ids or run_id in self._failed_run_ids
+
 
 
 
@@ -1801,6 +1806,7 @@ class AgentSession:
             }
         ]
         leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+        leaf = terminal_run_ancestor(leaf, nodes)
         committed_leaf_id, _committed_run_id = self.store.committed_state(
             self.tree.id
         )
@@ -1950,6 +1956,13 @@ class AgentSession:
             for node in nodes
             if isinstance(node.value, Mapping)
             and node.value.get("cancelled") is True
+            and node.value.get("run_id")
+        }
+        self._failed_run_ids = {
+            str(node.value["run_id"])
+            for node in nodes
+            if isinstance(node.value, Mapping)
+            and node.value.get("error") is True
             and node.value.get("run_id")
         }
         leaf = self._select_restore_leaf(nodes)
@@ -2114,7 +2127,7 @@ class AgentSession:
                 else self._permission_request_for_run(normalized_run_id) or public_request
             )
         has_session_context = self._has_context_provider()
-        with self._state_lock:
+        with self._linearized_context_commit():
             if self._transitions.closed:
                 raise RuntimeError(_l("The Agent session is closed.", "Agent 会话已关闭。"))
             if self._status != "idle":
@@ -2122,6 +2135,14 @@ class AgentSession:
                     "The Agent is still processing the previous message.",
                     "Agent 仍在处理上一条消息。",
                 ))
+            path = self.store.get_path(self.tree.id, self._leaf_id)
+            terminal = terminal_run_ancestor(path[-1], path)
+            terminal_value = terminal.value if isinstance(terminal.value, Mapping) else {}
+            if self._is_run_terminated(normalized_run_id) or (
+                str(terminal_value.get("run_id") or "") == normalized_run_id
+                and (terminal_value.get("error") is True or terminal_value.get("cancelled") is True)
+            ):
+                raise RunTerminatedError(f"Run {normalized_run_id!r} has ended; start a new run.")
             parent_id = self._leaf_id
             self._status = "queued"
             self._detail = _l("User context mounted", "用户上下文已挂载")
@@ -2129,66 +2150,66 @@ class AgentSession:
             self._current_run_id = normalized_run_id
             self._run_permission_user_request = authorization_request
             self._model_calls = 0
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "submit",
-            phase="started",
-            tree_id=self.tree.id,
-            run_id=normalized_run_id,
-            parent_id=parent_id,
-            content=content,
-            metadata=dict(metadata or {}),
-        )
-        try:
-            node = self.store.mount(
-                self.tree.id,
-                parent_id,
-                {
-                    "role": "user",
-                    "content": content,
-                    # Context providers get the first transition. Their Hook
-                    # mounts durable child nodes and only the final child
-                    # triggers the model, so Hook ordering is irrelevant even
-                    # for trees created before the provider was registered.
-                    "trigger_model": not has_session_context,
-                    "run_id": normalized_run_id,
-                    "authorization_request": authorization_request,
-                    "metadata": normalized_metadata,
-                },
-                node_id=node_id,
-            )
-        except Exception as exc:
             log_operation(
                 logger,
                 "cyrene.core.session",
                 "submit",
-                phase="failed",
-                level=logging.ERROR,
-                exc_info=True,
+                phase="started",
                 tree_id=self.tree.id,
                 run_id=normalized_run_id,
                 parent_id=parent_id,
-                error=exc,
+                content=content,
+                metadata=dict(metadata or {}),
             )
-            self._set_state("idle", _l("Mount failed", "挂载失败"))
-            raise
-        self._set_state(
-            "queued",
-            _l("Waiting for ContextChange hook", "正在等待 ContextChange Hook"),
-            leaf_id=node.id,
-        )
-        log_operation(
-            logger,
-            "cyrene.core.session",
-            "submit",
-            phase="completed",
-            tree_id=self.tree.id,
-            run_id=normalized_run_id,
-            parent_id=parent_id,
-            node_id=node.id,
-        )
-        return node
+            try:
+                node = self.store.mount(
+                    self.tree.id,
+                    parent_id,
+                    {
+                        "role": "user",
+                        "content": content,
+                        # Context providers get the first transition. Their Hook
+                        # mounts durable child nodes and only the final child
+                        # triggers the model, so Hook ordering is irrelevant even
+                        # for trees created before the provider was registered.
+                        "trigger_model": not has_session_context,
+                        "run_id": normalized_run_id,
+                        "authorization_request": authorization_request,
+                        "metadata": normalized_metadata,
+                    },
+                    node_id=node_id,
+                )
+            except Exception as exc:
+                log_operation(
+                    logger,
+                    "cyrene.core.session",
+                    "submit",
+                    phase="failed",
+                    level=logging.ERROR,
+                    exc_info=True,
+                    tree_id=self.tree.id,
+                    run_id=normalized_run_id,
+                    parent_id=parent_id,
+                    error=exc,
+                )
+                self._set_state("idle", _l("Mount failed", "挂载失败"))
+                raise
+            self._set_state(
+                "queued",
+                _l("Waiting for ContextChange hook", "正在等待 ContextChange Hook"),
+                leaf_id=node.id,
+            )
+            log_operation(
+                logger,
+                "cyrene.core.session",
+                "submit",
+                phase="completed",
+                tree_id=self.tree.id,
+                run_id=normalized_run_id,
+                parent_id=parent_id,
+                node_id=node.id,
+            )
+            return node
 
     def answer(self, question_id: str, answer: str) -> ContextNode:
         """Resolve one durable pending Plugin result and continue the same run."""
@@ -3018,7 +3039,7 @@ class AgentSession:
         value = node.value if isinstance(node.value, Mapping) else {}
         if value.get("trigger_model") is not True:
             return
-        if self._is_cancelled(self._node_run_id(node)):
+        if self._is_run_terminated(self._node_run_id(node)):
             return
         self._enqueue_transition("advance", node)
 
@@ -3465,10 +3486,18 @@ class AgentSession:
         with self._state_lock:
             if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
+            if terminal_status == "failed":
+                self._failed_run_ids.add(run_id)
         guidance_service = self._guidance_service()
         driver = self._plugins.driver if self._plugins.owns_driver else None
+        # A failed owner cannot consume child results or user guidance in this
+        # run. Stop its children before publishing the settled session state;
+        # otherwise drain() can turn the failure into an intermediate answer.
+        if terminal_status == "failed" and driver is not None:
+            driver.request_cancel_all("parent_run_failed")
+            await driver.cancel_all("parent_run_failed")
         driver_pending = bool(driver is not None and driver.has_pending_work)
-        if guidance_service is not None and value.get("intermediate") is not True:
+        if terminal_status != "failed" and guidance_service is not None and value.get("intermediate") is not True:
             guidance_events: list[dict[str, Any]] = []
             if driver_pending:
                 if bool(guidance_service.has_pending):
@@ -4716,6 +4745,15 @@ class AgentSession:
                             status=status,
                             leaf_id=self._leaf_id,
                         )
+                        return
+                    # Failure is terminal even when an inbox still contains
+                    # messages. Only successful answers may resume coordination.
+                    with self._state_lock:
+                        leaf_id = self._leaf_id
+                    leaf = self.store.get_node(self.tree.id, leaf_id)
+                    value = leaf.value if isinstance(leaf.value, Mapping) else {}
+                    if value.get("error") is True or value.get("cancelled") is True:
+                        op.finish(attempts=attempt, status=status, leaf_id=leaf_id)
                         return
                     if (
                         self._plugins.owns_driver

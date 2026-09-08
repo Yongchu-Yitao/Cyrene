@@ -731,6 +731,71 @@ def test_parent_cancel_cascades_while_main_is_idle(tmp_path, monkeypatch):
             assert len(cancelled) == 1
             assert cancelled[0]["cancel_reason"] == "user_stop"
             assert session.final_output("cancel-run")["cancelled"] is True
+            before = len(session.store.get_subtree(session.tree.id, session.tree.root_id))
+            await inbox.send_message(
+                "worker", "main", "result", "user_interrupted",
+                round_id="cancel-run", session_id="cancel-chat",
+            )
+            assert await session.plugin_services["subagents"]._deliver_inbox(session, "main")
+            assert inbox.get_unread_count("main", session_id="cancel-chat") == 0
+            assert len(session.store.get_subtree(session.tree.id, session.tree.root_id)) == before
+            assert session.final_output("cancel-run")["cancelled"] is True
+        finally:
+            session.close()
+
+    run(scenario())
+
+
+def test_parent_failure_stops_children_without_resuming_inbox(tmp_path, monkeypatch):
+    from cyrene.model.error_details import ModelCallError, classify_model_error
+
+    async def scenario() -> None:
+        monkeypatch.setattr(inbox, "INBOX_DIR", tmp_path / "inbox")
+        plugin_directory = tmp_path / "plugin_impl"
+        copy_subagent_pack(plugin_directory)
+        child_started = threading.Event()
+        child_cancelled = threading.Event()
+        main_calls = 0
+
+        async def model(_arguments, context):
+            nonlocal main_calls
+            if context.data.get("model_call_kind") == "permission":
+                return allow()
+            if str(context.data.get("agent_id") or "main") != "main":
+                child_started.set()
+                try:
+                    await asyncio.sleep(60)
+                finally:
+                    child_cancelled.set()
+                return answer("too late")
+            main_calls += 1
+            manager = context.services["subagents"]
+            await manager.spawn("main", "worker", "wait")
+            assert await asyncio.to_thread(child_started.wait, 2)
+            await inbox.send_message("main", "worker", "message", "pending guidance", session_id="failed-chat")
+            raise ModelCallError(classify_model_error("HTTP 500 Internal Server Error"))
+
+        session = AgentSession(
+            tmp_path / "data", tmp_path / "workspace", plugin_directory,
+            tree_id="failed-chat", registry=model_registry(model),
+            plugin_context_data={"session_id": "failed-chat"},
+        )
+        try:
+            session.submit("work", run_id="failed-run")
+            await asyncio.wait_for(session.drain(), 5)
+            output = session.final_output("failed-run")
+            assert output is not None and output["error"] is True
+            assert output["failure_kind"] == "model_service_unavailable"
+            assert output.get("intermediate") is not True
+            assert output.get("waiting_for_subagents") is not True
+            assert session.is_idle
+            assert child_cancelled.is_set()
+            record = session.snapshot()["subagents"]["subagents"][0]
+            assert record["status"] == "cancelled"
+            # A later drain must not revive the failed owner or its child,
+            # even though a child inbox still has an unread message.
+            await asyncio.wait_for(session.drain(), 2)
+            assert main_calls == 1
         finally:
             session.close()
 

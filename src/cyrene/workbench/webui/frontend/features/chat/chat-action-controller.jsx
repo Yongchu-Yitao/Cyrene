@@ -124,7 +124,15 @@ function wbcAnswerQuestionForChat(context, chatId, questionId, optionText, resum
 
 function wbcHandleRetryMessage(context, messageId) {
   var chat = context.activeChat;
-  if (!chat || context.runtimeEngine.isRunning(chat.id) || context.retryPendingChatIdRef.current) return;
+  if (!chat) return;
+  if (context.runtimeEngine.isRunning(chat.id)) {
+    workbenchServices.feedback().showToast(wbcT("workbenchChat.error.retryRunning", "Wait for the run to end, or stop it before retrying."), "info");
+    return;
+  }
+  if (context.retryPendingChatIdRef.current) {
+    workbenchServices.feedback().showToast(wbcT("workbenchChat.error.retryPending", "Retry is already being prepared."), "info");
+    return;
+  }
   var chatId = String(chat.id || "");
   var targetMessageId = typeof messageId === "string" ? messageId : "";
   var selection = wbcRetryTurnSelection(chat, targetMessageId);

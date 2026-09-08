@@ -108,6 +108,9 @@ def context_checkpoint_from_nodes(nodes: Sequence[Any]) -> dict[str, Any] | None
     if not dialogue:
         return None
     leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+    from cyrene.core.restore_decision import terminal_run_ancestor
+
+    leaf = terminal_run_ancestor(leaf, nodes)
     by_id = {node.id: node for node in nodes}
     current = leaf
     run_id = ""

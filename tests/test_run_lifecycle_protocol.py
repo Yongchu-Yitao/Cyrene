@@ -16,6 +16,60 @@ def drain(session):
     asyncio.run(asyncio.wait_for(session.drain(), 5))
 
 
+@pytest.mark.parametrize("terminal_flag,status", [("cancelled", "cancelled"), ("error", "failed")])
+def test_late_inbox_cannot_override_terminal_checkpoint_or_block_new_run(tmp_path, terminal_flag, status):
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.core.restore_decision import RunTerminatedError
+
+    calls = []
+
+    async def model(arguments, context):
+        calls.append(context.data.get("run_id"))
+        return {"content": "answer", "tool_calls": []}
+
+    session = make_session(tmp_path, model)
+    session.submit("work", run_id="old")
+    drain(session)
+    tree_id, root_id = session.tree.id, session.tree.root_id
+    parent_id = session.snapshot()["leaf_id"]
+    session.close()
+    # Reproduce the old installed version's durable shape without executing
+    # the obsolete delivery code: terminal -> late inbox -> context node.
+    store = ContextStoreRouter(tmp_path / "data" / "context")
+    try:
+        terminal = store.mount(tree_id, parent_id, {
+            "role": "assistant", "run_id": "old", terminal_flag: True,
+            "content": "ended", "session_end_complete": True,
+        })
+        late = store.mount(tree_id, terminal.id, {
+            "role": "user", "run_id": "old", "trigger_model": False,
+            "metadata": {"source": "agent_inbox"}, "content": "user_interrupted",
+        })
+        store.mount(tree_id, late.id, {"role": "context", "trigger_model": False})
+        checkpoint = context_checkpoint_from_nodes(store.get_subtree(tree_id, root_id))
+        assert checkpoint == {"status": status, "run_id": "old", "node_id": terminal.id}
+    finally:
+        store.close()
+
+    reopened = make_session(tmp_path, model, tree_id=tree_id)
+    try:
+        assert reopened.snapshot()["leaf_id"] == terminal.id
+        before = len(reopened.store.get_subtree(tree_id, root_id))
+        with pytest.raises(RunTerminatedError):
+            reopened.submit("late result", run_id="old", metadata={"source": "agent_inbox"})
+        assert len(reopened.store.get_subtree(tree_id, root_id)) == before
+        assert reopened.is_idle
+        reopened.submit("retry", run_id="new")
+        drain(reopened)
+        assert reopened.final_output("new")["content"] == "answer"
+        assert len(calls) == 2
+        checkpoint = context_checkpoint_from_nodes(reopened.store.get_subtree(tree_id, root_id))
+        assert checkpoint["run_id"] == "new"
+        assert checkpoint["status"] == "completed"
+    finally:
+        reopened.close()
+
+
 @pytest.mark.parametrize("event", [SESSION_START, TURN_START])
 def test_required_context_failure_is_a_failed_transition_not_a_stuck_hook(tmp_path, event):
     requests = []
