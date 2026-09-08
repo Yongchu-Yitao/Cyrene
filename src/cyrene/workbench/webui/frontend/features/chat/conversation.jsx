@@ -2341,7 +2341,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
         ref={stageRef}
       >
       <div
-        className="wbc-thread"
+        className={"wbc-thread" + (messages.length ? " wbc-thread-messages" : "")}
         data-cyrene-revision-volatile="true"
         ref={scrollRef}
         onScroll={onScroll}

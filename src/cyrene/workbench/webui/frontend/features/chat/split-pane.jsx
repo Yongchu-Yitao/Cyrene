@@ -496,7 +496,7 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
         </div>
       )}
       <div className="wbc-thread-stage wbc-chat-split-stage">
-        <div className="wbc-thread" data-cyrene-revision-volatile="true" ref={scrollRef}>
+        <div className={"wbc-thread" + (messages.length ? " wbc-thread-messages" : "")} data-cyrene-revision-volatile="true" ref={scrollRef}>
         {loading && !messages.length && (
           <div className="wbc-chat-split-state" role="status">
             <span className="wbc-spinner" aria-hidden="true" />

@@ -46,6 +46,17 @@
   gap: 16px;
 }
 
+/* A height animation in a nested disclosure otherwise makes the column flex
+   algorithm revisit intrinsic sizes throughout the history. One fixed-width
+   grid track keeps the same message widths and 16px gap without that pass.
+   Empty/loading surfaces keep their existing flexible layout. */
+.wbc-thread.wbc-thread-messages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: max-content;
+  align-content: start;
+}
+
 .wbc-thread::-webkit-scrollbar {
   width: 0;
   height: 0;
