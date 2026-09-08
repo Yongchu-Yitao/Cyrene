@@ -258,6 +258,84 @@ def test_system_message_framing_overhead_is_not_split_across_prompt_sections(tmp
     }
 
 
+@pytest.mark.parametrize("mounted", [False, True])
+def test_tool_protocol_does_not_absorb_later_behavior_paragraphs(tmp_path, mounted):
+    service = _context_service(tmp_path, {"id": "chat_1", "model": "model"})
+    prompt = (
+        "You are Cyrene.\nFollow the user's request.\n\n"
+        "Bash, Read, Write, and toolbox are always exposed directly.\n"
+        "Use toolbox.list to discover tools.\nWait for the result.\n\n"
+        "Keep intermediate files separate from deliverables.\n"
+        "Preserve existing files.\n"
+    )
+    state = {
+        "messages": [{"role": "system", "content": prompt}],
+        "rootSystemPrompt": "" if mounted else prompt,
+        "contextMounts": [{"kind": "system_prompt", "content": prompt}] if mounted else [],
+    }
+    layer = service._agent_blocks({"model": "model"}, state)["layers"][0]
+    blocks = {block["id"]: block for block in layer["blocks"]}
+    assert "Wait for the result." in blocks["system.tools"]["content"]
+    assert "Keep intermediate files" not in blocks["system.tools"]["content"]
+    assert "Keep intermediate files" in blocks["system.behavior"]["content"]
+    assert "Preserve existing files." in blocks["system.behavior"]["content"]
+    assert sum(block["tokens_est"] for block in layer["blocks"]) == layer["totalTokens"]
+    assert "system.task_context" not in blocks
+
+
+@pytest.mark.parametrize("task_enabled", [False, True])
+def test_projected_task_instructions_have_their_own_token_block(tmp_path, task_enabled):
+    from cyrene.core.context.projection import project_model_messages
+    from cyrene.core.context.tasks import PROMPT, STATE_KEY
+    from cyrene.observability.context_trace import approx_token_count
+    from cyrene.plugins.builtin.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
+
+    root_value = {"role": "system", "content": ""}
+    if task_enabled:
+        root_value[STATE_KEY] = {"active": None, "documents": {}}
+    learned = "## Learned Skills\n- Export report: Export a report as PDF."
+    path = [
+        SimpleNamespace(id="root", value=root_value),
+        SimpleNamespace(id="user", value={"role": "user", "content": "hello", "run_id": "r"}),
+        SimpleNamespace(id="prompt", value={
+            "role": "context", "context_kind": "system_prompt", "run_id": "r",
+            "content": SYSTEM_PROMPT.strip(),
+        }),
+        SimpleNamespace(id="skills", value={
+            "role": "context", "context_kind": "learned_skills", "run_id": "r",
+            "content": learned,
+        }),
+    ]
+    messages = project_model_messages(path)
+    state = {
+        "messages": messages,
+        "rootSystemPrompt": "",
+        "contextMounts": [
+            {"kind": "system_prompt", "content": SYSTEM_PROMPT.strip()},
+            {"kind": "learned_skills", "content": learned},
+        ],
+    }
+    service = ConversationContextQueryService(
+        chats=_Chats({"id": "chat_1", "model": "model"}),
+        agent_states=AgentContextRepository(tmp_path / "missing"),
+        default_model=lambda: "model",
+        context_limit=lambda _: 128_000,
+        approx_token_count=approx_token_count,
+    )
+    result = service._agent_blocks({"model": "model"}, state)
+    layer = result["layers"][0]
+    blocks = {block["id"]: block for block in layer["blocks"]}
+    assert ("system.task_context" in blocks) is task_enabled
+    if task_enabled:
+        assert blocks["system.task_context"]["content"] == PROMPT
+        assert blocks["system.task_context"]["tokens_est"] == approx_token_count(PROMPT)
+    assert blocks["system.message_overhead"]["tokens_est"] == 6
+    assert blocks["context.learned_skills"]["tokens_est"] == approx_token_count(learned)
+    assert sum(block["tokens_est"] for block in layer["blocks"]) == layer["totalTokens"]
+    assert result["contextUsed"] == sum(item["totalTokens"] for item in result["layers"])
+    assert state["messages"] == messages
+
+
 def test_plugin_session_context_is_disclosed_per_contributor(tmp_path):
     service = _context_service(tmp_path, {"id": "chat_1", "model": "model"})
     state = {

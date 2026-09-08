@@ -17,6 +17,7 @@ test("visible system-prefix blocks receive distinct categorical colors", () => {
     { id: "system.identity", type: "identity" },
     { id: "system.behavior", type: "instructions" },
     { id: "system.tools", type: "tools" },
+    { id: "system.task_context", type: "instructions" },
     { id: "context.persona", type: "system" },
     { id: "context.memory", type: "memory" },
     { id: "context.learned_skills", type: "system" },

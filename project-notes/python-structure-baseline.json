@@ -1573,7 +1573,7 @@
     "decisions": 21
   },
   "src/cyrene/workbench/chat/conversation_context_service.py": {
-    "module_lines": 2012
+    "module_lines": 2041
   },
   "src/cyrene/workbench/chat/conversation_context_service.py::AgentContextRepository._read_tree": {
     "lines": 177,
@@ -1595,7 +1595,8 @@
     "decisions": 23
   },
   "src/cyrene/workbench/chat/conversation_context_service.py::_agent_system_prefix_layer": {
-    "decisions": 22
+    "lines": 108,
+    "decisions": 28
   },
   "src/cyrene/workbench/chat/conversation_context_service.py::_agent_turn_context_layer": {
     "decisions": 35

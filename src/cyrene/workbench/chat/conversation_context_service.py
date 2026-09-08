@@ -1138,6 +1138,10 @@ def _system_prompt_blocks(
         else:
             section = mode
         sections[section].append(line)
+        # Tool instructions can span lines, but must not claim every subsequent
+        # paragraph (file hygiene, completion rules, plan execution, etc.).
+        if not stripped:
+            mode = "behavior"
 
     populated = [
         (key, "".join(lines))
@@ -1299,6 +1303,31 @@ def _agent_system_prefix_layer(
             "metadata": copy.deepcopy(dict(root_metadata)),
         })
     system_blocks.extend(context_blocks)
+    # Task projection appends these instructions after the persisted mounts.
+    # They are real prompt content, not message framing. Only recognize the
+    # exact suffix emitted by project_tasks; ordinary/legacy prompts stay intact.
+    from cyrene.core.context.tasks import PROMPT as task_context_prompt
+
+    system_content = str(system_message.get("content") or "")
+    if system_content == task_context_prompt or system_content.endswith(
+        "\n\n" + task_context_prompt
+    ):
+        framing_tokens = 4 + max(0, int(approx_token_count("system") or 0))
+        task_tokens = min(
+            max(0, overhead_tokens - framing_tokens),
+            max(0, int(approx_token_count(task_context_prompt) or 0)),
+        )
+        if task_tokens > 0:
+            system_blocks.append({
+                "id": "system.task_context",
+                "type": "instructions",
+                "tokens_est": task_tokens,
+                "chars": len(task_context_prompt),
+                "source": "task_context_projection",
+                "reason": "task_context",
+                "content": task_context_prompt,
+            })
+            overhead_tokens -= task_tokens
     if overhead_tokens > 0:
         system_blocks.append({
             "id": "system.message_overhead",

@@ -5,6 +5,7 @@ const CONTEXT_BLOCK_COLOR_BY_ID = Object.freeze({
   "context.memory": 1,
   "system.behavior": 2,
   "system.tools": 3,
+  "system.task_context": 6,
   "context.learned_skills": 4,
   "context.persona": 5,
   "system.workspace": 6,

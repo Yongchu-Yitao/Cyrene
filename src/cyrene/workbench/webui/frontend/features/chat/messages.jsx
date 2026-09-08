@@ -1192,7 +1192,7 @@ function WbcContinuationIndicator() {
       trace={[]}
       live={true}
       running={true}
-      label={wbcT("workbenchChat.continueProcessing", "Continuing to process")}
+      label={wbcT("workbenchChat.continueProcessing", "Processing")}
       reasoning=""
     />
   );

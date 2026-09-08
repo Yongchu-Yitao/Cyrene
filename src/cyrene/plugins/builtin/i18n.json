@@ -323,6 +323,16 @@
         "description": "安全查看和控制已配对 Cyrene 设备的桌面。"
       }
     },
+    "cyrene_user_language": {
+      "en": {
+        "name": "User language",
+        "description": "Mount the user's current language preference for Agent replies."
+      },
+      "zh": {
+        "name": "用户语言",
+        "description": "每轮自动挂载用户的语言设置，让 Agent 使用相应语言回复。"
+      }
+    },
     "pinned_topbar_context": {
       "en": {
         "name": "Pinned topbar context",
