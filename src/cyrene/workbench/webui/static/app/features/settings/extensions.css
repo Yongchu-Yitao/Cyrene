@@ -90,6 +90,8 @@
   background: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-control-bg));
 }
 
+.wb-extension-brand-icon { fill: currentColor; }
+
 .wb-extension-brand-icon,
 .wb-extension-brand-icon svg {
   width: 27px;
@@ -100,7 +102,6 @@
 .wb-extension-brand-icon svg {
   max-width: 100%;
   max-height: 100%;
-  fill: currentColor;
 }
 
 .wb-extension-brand-icon.icon-python { color: #3776ab; }
@@ -622,7 +623,7 @@
    styling while dropping every popover affordance from the primary surface. */
 .settings-overlay .settings-panel.wb-plugin-center-page-shell {
   width: 100%;
-  max-width: 1320px;
+  max-width: 920px;
   margin: 0 auto;
   gap: 0;
 }
@@ -645,14 +646,14 @@
 }
 
 .wb-plugin-center-popover.wb-plugin-center-page .wb-plugin-center-popover-head h3 {
-  font-size: calc(24px * var(--wb-ui-font-scale, 1));
-  letter-spacing: -.035em;
+  font-size: calc(20px * var(--wb-ui-font-scale, 1));
+  letter-spacing: -.02em;
 }
 
 .wb-plugin-center-popover.wb-plugin-center-page .wb-plugin-center-tabs {
   margin-bottom: 16px;
   border: 1px solid var(--wb-line);
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--wb-card-bg);
 }
 
@@ -663,7 +664,7 @@
 }
 
 .wb-plugin-center-back {
-  min-width: 92px;
+  min-width: 72px;
   justify-content: center;
   gap: 7px;
 }
@@ -743,37 +744,38 @@
 }
 
 .wb-plugin-center-tabs {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  padding: 8px 12px;
+  padding: 4px;
   border-bottom: 1px solid var(--wb-line);
   background: color-mix(in srgb, var(--wb-control-bg) 52%, transparent);
 }
 
 .wb-plugin-center-tabs button {
   min-width: 0;
-  min-height: 44px;
+  flex: 1 0 auto;
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   border: 1px solid transparent;
   border-radius: 9px;
   background: transparent;
   color: var(--wb-muted);
   font: inherit;
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  font-weight: 680;
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .wb-plugin-center-tabs .wb-plugin-center-glyph-icon {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
 }
 
 .wb-plugin-center-tab-label {
@@ -1278,7 +1280,7 @@
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 68%, transparent);
-  border-radius: 15px;
+  border-radius: 12px;
   background: color-mix(in srgb, var(--wb-card-bg) 86%, var(--wb-surface));
   transition: border-color .16s ease, background-color .16s ease;
 }
@@ -1295,20 +1297,20 @@
 }
 
 .wb-plugin-center-popover .wb-extension-card-main {
-  min-height: 94px;
+  min-height: 80px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 .wb-plugin-center-popover .wb-extension-card-summary {
   min-width: 0;
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr);
+  grid-template-columns: 40px minmax(0, 1fr);
   align-items: center;
   flex: 1;
-  gap: 12px;
+  gap: 10px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1318,15 +1320,30 @@
 }
 
 .wb-plugin-center-popover .wb-extension-glyph {
-  width: 46px;
-  height: 46px;
+  width: 40px;
+  height: 40px;
   display: grid;
-  flex: 0 0 46px;
+  flex: 0 0 40px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--wb-line-2) 72%, transparent);
-  border-radius: 12px;
+  border-radius: 9px;
   background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-control-bg));
   color: var(--wb-accent);
+}
+
+.wb-plugin-center-popover .wb-extension-brand-icon,
+.wb-plugin-center-popover .wb-extension-brand-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.wb-plugin-center-popover .wb-extension-meta > .mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.wb-plugin-center-popover .wb-extension-actions:empty {
+  display: none;
 }
 
 .wb-plugin-center-popover .wb-extension-glyph.mcp { color: var(--wb-blue); }
@@ -1338,7 +1355,7 @@
 }
 
 .wb-plugin-center-popover .wb-extension-glyph-text {
-  font-size: calc(18px * var(--wb-ui-font-scale, 1));
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
   font-weight: 750;
 }
 
@@ -1347,7 +1364,7 @@
   display: flex;
   flex-direction: column;
   flex: 1;
-  gap: 5px;
+  gap: 3px;
 }
 
 .wb-plugin-center-popover .wb-extension-title-row {
@@ -1355,14 +1372,14 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .wb-plugin-center-popover .wb-extension-title-row strong {
   min-width: 0;
   overflow: hidden;
   color: var(--wb-text);
-  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
   text-overflow: ellipsis;
 }
 
@@ -1387,7 +1404,7 @@
 .wb-plugin-center-popover .wb-extension-description {
   overflow: hidden;
   color: var(--wb-muted);
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1471,7 +1488,7 @@
 .wb-plugin-center-popover .wb-extension-details,
 .wb-plugin-center-popover .wb-agent-details {
   min-width: 0;
-  padding: 0 16px 16px 74px;
+  padding: 0 16px 16px 62px;
   border-top: 1px solid color-mix(in srgb, var(--wb-line) 68%, transparent);
 }
 
@@ -2727,8 +2744,15 @@
 .wb-agent-proposal-result pre { max-height: 260px; margin: 0; overflow: auto; overflow-wrap: anywhere; color: var(--wb-muted); font: calc(10.5px * var(--wb-ui-font-scale, 1))/1.55 var(--wb-mono, monospace); white-space: pre-wrap; }
 
 html[data-theme] .settings-overlay .wb-plugin-center-popover :where(.wb-input, .wb-select, .wb-btn) {
-  min-height: 44px;
+  min-height: 36px;
   height: auto;
+}
+
+@media (pointer: coarse) {
+  .wb-plugin-center-tabs button,
+  html[data-theme] .settings-overlay .wb-plugin-center-popover :where(.wb-input, .wb-select, .wb-btn) {
+    min-height: 44px;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -2774,18 +2798,19 @@ html[data-theme] .settings-overlay .wb-plugin-center-popover :where(.wb-input, .
   }
   .wb-plugin-center-popover-actions > .wb-btn { flex: 1; }
   .wb-plugin-center-popover .wb-btn { width: auto; }
-  .wb-plugin-center-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .wb-plugin-center-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .wb-plugin-center-manual-form { grid-template-columns: 1fr; }
   .wb-plugin-center-manual-form label.wide,
   .wb-plugin-center-manual-actions { grid-column: 1; }
 
   .wb-plugin-center-popover .wb-extension-python-callout { grid-template-columns: 1fr; }
   .wb-plugin-center-popover .wb-extension-card-main { align-items: stretch; flex-direction: column; }
+  .wb-plugin-center-popover .wb-extension-card-summary { padding-right: 44px; }
   .wb-plugin-center-popover .wb-extension-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
     padding-right: 48px;
-    padding-left: 58px;
+    padding-left: 50px;
   }
   .wb-plugin-center-popover .wb-agent-card .wb-extension-actions { padding-right: 0; }
   .wb-plugin-center-popover .wb-extension-expand-button { position: absolute; right: 14px; bottom: 14px; }
@@ -2858,8 +2883,8 @@ html[data-theme] .settings-overlay .wb-plugin-center-popover :where(.wb-input, .
   .wb-plugin-center-section-title { align-items: flex-start; flex-direction: column; }
   .wb-plugin-center-adapter-note { grid-template-columns: 1fr; }
 
-  .wb-plugin-center-popover .wb-extension-card-summary { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; }
-  .wb-plugin-center-popover .wb-extension-glyph { width: 42px; height: 42px; flex-basis: 42px; }
+  .wb-plugin-center-popover .wb-extension-card-summary { grid-template-columns: 40px minmax(0, 1fr); gap: 10px; }
+  .wb-plugin-center-popover .wb-extension-glyph { width: 40px; height: 40px; flex-basis: 40px; }
   .wb-plugin-center-popover .wb-extension-title-row strong { overflow-wrap: anywhere; white-space: normal; }
   .wb-plugin-center-popover .wb-extension-description { display: -webkit-box; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .wb-plugin-center-popover .wb-extension-actions { padding-left: 0; }

@@ -69,10 +69,10 @@ const PROVIDER_ICON_FILES = [
   [join(SIMPLE_ICONS_DIR, 'onnx.svg'), 'onnx.svg'],
 ]
 const EXTENSION_ICON_FILES = [
-  [join(SIMPLE_ICONS_DIR, 'python.svg'), 'python.svg'],
-  [join(SIMPLE_ICONS_DIR, 'uv.svg'), 'uv.svg'],
+  [join(ASSETS_DIR, 'extension-icons/python.svg'), 'python.svg'],
+  [join(ASSETS_DIR, 'extension-icons/uv.svg'), 'uv.svg'],
   [join(TABLER_ICONS_DIR, 'tex.svg'), 'tex.svg'],
-  [join(SIMPLE_ICONS_DIR, 'nodedotjs.svg'), 'nodejs.svg'],
+  [join(ASSETS_DIR, 'extension-icons/nodejs.svg'), 'nodejs.svg'],
   [join(SIMPLE_ICONS_DIR, 'bun.svg'), 'bun.svg'],
   [join(SIMPLE_ICONS_DIR, 'github.svg'), 'github.svg'],
   [join(SIMPLE_ICONS_DIR, 'go.svg'), 'go.svg'],
