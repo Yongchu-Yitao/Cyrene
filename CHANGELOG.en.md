@@ -2,6 +2,50 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta15] - 2026-09-08
+
+beta15 expands Cyrene Doctor from identifying and explaining problems into a reviewable, verifiable, and reversible plugin repair workflow, while failed messages can now carry precise run context directly into diagnosis. The Plugin Center adds local file installation, and the Agent's plugin authoring flow now provides clearer installation state, recovery from failed sources, and real host verification. Long replies, larger file writes, and long-running commands are no longer constrained by hidden limits, malformed model output receives more robust staged recovery, and both long-Conversation disclosure performance and Plugin Center presentation have been refined.
+
+### Cyrene Doctor diagnosis, generated repair, and rollback
+
+- Doctor can investigate a selected local plugin and generate candidate repairs. Users can describe symptoms and reproduction steps; generation reads the selected plugin and relevant host rules, builds a reproduction, edits a copy, and validates it without changing installed source during planning.
+- Before applying a repair, the interface shows the complete file diff, reproduction, validation result, and the exact scope covered. “Applied,” “verified,” “static checks only,” “needs review,” “rolled back,” and “partially completed” are reported separately so a successful write is not presented as proof that the original problem is solved.
+- In a macOS source environment, generated reproductions run in an isolated environment with bounded file access, networking, duration, and output, and the same frozen reproduction is used before and after the change. Other platforms or packaged environments clearly fall back to static validation instead of presenting an unexecuted check as passed.
+- After the user confirms an exact repair, Doctor rechecks the reviewed plan, current plugin files, and application state, then preserves the originals before applying it. A plan becomes stale if the plugin changes after generation, preventing newer edits from being overwritten.
+- If applying, reloading, or validating fails, Doctor attempts to restore the original files. When automatic recovery is no longer safe, it retains a clear partial-completion state and rollback option. Plans, originals, and execution records are stored separately, remain available after reopening Doctor, and can support rollback after an interrupted application stage when files still match.
+- Repair generation can be stopped and has explicit limits on candidates, duration, model calls, files read, and edit scope. The current flow only edits existing Python files inside the selected plugin; it does not create or delete files, install dependencies, change business databases, or replay the original Conversation.
+- Opening “Cyrene Doctor” from a failed message now carries the corresponding run and failure context and reads a bounded projection of that run to locate the final failing stage. Older failures stored as a completed run with an error outcome are recognized as well.
+- Successfully completed tools are never replayed during direct failure diagnosis. When one responsible plugin can be identified and the candidate demonstrably changes a failing check into a passing one, the workflow can proceed to apply it; static-only candidates stop for review instead of editing automatically.
+- Model failures are routed to a connection probe, pending questions or permission confirmations are returned to the user rather than answered automatically, and ambiguous ownership preserves the diagnosis without modifying unrelated plugins. Reopening the same failure reconnects to its existing workflow; only “Check again” starts a new one.
+
+### Plugin installation, authoring, and runtime state
+
+- The desktop plugin management page adds “Install from file,” allowing selection of a local plugin folder or ZIP archive. Installation validates archive paths and boundaries, refuses to overwrite an existing plugin, refreshes runtime state afterward, and clearly reports when an application restart is required.
+- The plugin management page refreshes current state when opened, with complete English and Chinese loading, success, and restart messaging. Existing Plugin Center, creation, enable/disable, deletion, and detail controls remain available.
+- When creating a plugin, the Agent now reads the authoring guide for the current host rather than inferring a contract from old workspace examples. Legacy `plugin.json`, activation entry points, and tool indexes are explicitly identified as obsolete with migration guidance to the current plugin format.
+- The authoring workflow now distinguishes workspace drafts from installed source: drafts use regular file tools, while source management is reserved for installed plugins. After static validation and installation, the Agent verifies actual tool invocation, Context behavior, application services, UI connectivity, or model behavior as appropriate instead of treating a simulated call as host acceptance.
+- Invalid, unavailable, or missing tool names now return a correctable discovery message and allow the Agent to list and select a current tool again. One naming mistake no longer disables the entire tool discovery path for that run.
+- Installation results separately report loaded, enabled, application-running, restart-required, setup-error, and startup-error state. An existing disabled choice is preserved across reinstall instead of being unexpectedly enabled by a successful install.
+- When installation fails, problems belonging to the target are separated from failures in other plugins. Failed installed source remains discoverable for repair and can be removed through a constrained failed-source action before reinstalling; that action only accepts an actual top-level failed plugin and cannot delete unrelated files.
+- Installed-source management now resolves editable core tools correctly and reports the real restart state after an ordinary application plugin changes. Plugin listings continue to expose application runtime, restart, and startup failure information, reducing cases where “enabled” is mistaken for operational.
+- The authoring guide now covers tool inputs, persistent data, use of configured models, concurrency and timeouts, permission review, source-change confirmation, and verification for each contribution type, making the full create-install-invoke-recover workflow more reliable.
+
+### Long tasks, model responses, and command reliability
+
+- File writing no longer has a fixed 8,000-character tool limit. Complete content that fits in one model response can be written directly, while genuinely large files can still be assembled safely by overwriting the first chunk and appending later chunks.
+- Anthropic-protocol connections no longer apply an implicit 4,096-token response cap to compatible services. Known Claude models use an output range appropriate to the model, while explicitly configured limits continue to take precedence, reducing premature truncation of long replies and large tool arguments.
+- Recovery attempts for incomplete tool arguments, empty responses, or truncated model output increase from one to as many as three. Recovery requests a complete regenerated call, progressively reduces a repeatedly truncated chunk, and preserves earlier successful tool results and file segments to reduce duplicate writes and abandoned work.
+- Command execution honors explicitly requested longer timeouts instead of being cut off by a second fixed deadline. A timeout or task cancellation now stops the complete child-process tree, preventing descendants from continuing in the background or keeping output pipes open.
+- Permission review can use the user's short reply to the preceding proposal to understand responses such as “yes,” “continue,” or an option letter, while still separating the assistant's claims from actual user authorization. This reduces both incorrect denial of approved work and incorrect approval based only on assistant text.
+- Failed runs and permission reviews have more consistent timeline state: denied permission reviews appear as failed, legacy completed-with-error runs are treated as errors, and failure diagnosis can be associated with the user message that actually started the run.
+
+### Conversation performance, Plugin Center, and interface details
+
+- Expanding or collapsing reasoning, tool calls, and activity groups in a long Conversation now avoids repeatedly laying out the full message history. Main and split Conversations both benefit while preserving message widths, spacing, empty states, and loading behavior.
+- The Plugin Center uses a more readable content width with denser tabs, headings, back controls, cards, icons, typography, and action areas. Wide windows show more useful content, while narrow windows and touch devices retain accessible control sizes and responsive wrapping.
+- Python, Node.js, and uv now use corrected brand artwork and colors, avoiding missing or distorted shapes caused by uniform icon filling. Long plugin identifiers wrap cleanly and empty action areas no longer consume space.
+- Local model service labels, core tool labels, plugin installation, and Doctor repair flows have complete and consistent English and Chinese text across model settings, the Plugin Center, and failure handling.
+
 ## [0.9.0-beta14] - 2026-09-07
 
 beta14 improves application updates, Windows web search, panel resizing, and browsing activity details in long Conversations. Updates can now use a separately selected proxy and provide clearer failure information. Windows updates wait for the application to exit and handle temporary file locks, while built-in search fixes startup and unexpected-exit problems. This release also fixes Agent question option compatibility, application status refreshes, image capability checks, and damaged model responses, while preserving the existing chat, split-view, tool, model settings, and desktop workflows.
