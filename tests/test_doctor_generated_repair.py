@@ -18,7 +18,7 @@ def doctor(tmp_path):
     plugins = tmp_path / 'plugins'
     plugins.mkdir()
     (plugins / 'custom.py').write_text('def value():\n    return "wrong"\n')
-    host = SimpleNamespace(load_failures=[], startup_failures={}, model_gateway=None,
+    host = SimpleNamespace(plugin_directory=plugins, registry=SimpleNamespace(list_packs=lambda: [], list_plugins=lambda: []), load_failures=[], startup_failures={}, model_gateway=None,
                            service=lambda _: None, _stop_pack=AsyncMock(), reload_user_plugins=AsyncMock())
     return DoctorService(data=tmp_path / 'data', database=tmp_path / 'store' / 'runtime.db', plugins=plugins, host=host)
 
@@ -332,3 +332,40 @@ async def test_source_read_and_review_diff_are_not_silently_truncated():
     from cyrene.platform.doctor.repair_service import RepairService
     plan = {'id': 'repair_long', 'status': 'planned', 'changes': [{'path': 'custom.py', 'before': before, 'after': after}]}
     assert '+x = 2' in RepairService.public(plan)['diff']
+
+
+@pytest.mark.asyncio
+async def test_source_identity_restart_and_post_restart_verification(doctor):
+    plan = await prepared(doctor, syntax=True)
+    pack = SimpleNamespace(id='different.id', plugins=(), has_application_contributions=False)
+    doctor.host.registry = SimpleNamespace(list_packs=lambda: [pack],
+        pack_source=lambda _: str(doctor.plugins / 'custom.py'), pack_enabled=lambda _: True,
+        pack_configured_enabled=lambda _: True, plugin_enabled=lambda _: True)
+    doctor.host.pack_running = lambda _: False
+    doctor.host.pack_operational = lambda _: True
+    doctor.host.restart_required_packs = ('different.id',)
+    applied = await doctor.apply_repair(plan['id'], plan['plan_hash'])
+    doctor.host._stop_pack.assert_awaited_once_with('different.id')
+    assert applied['outcome']['status'] == 'restart_required'
+    result = await doctor.repairs.verify_applied(plan['id'])
+    assert result['outcome']['status'] == 'restart_required'
+    doctor.host.restart_required_packs = ()
+    result = await doctor.repairs.verify_applied(plan['id'])
+    assert result['outcome']['status'] == 'verified'
+    assert doctor.host.reload_user_plugins.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_setup_failure_rolls_back_and_json_repair_is_supported(doctor):
+    plan = await prepared(doctor, syntax=True)
+    doctor.host.registry = SimpleNamespace(list_packs=lambda: [SimpleNamespace(id='different.id')],
+        pack_source=lambda _: str(doctor.plugins / 'custom.py'))
+    doctor.host.setup_failures = {'different.id': 'initialization failed'}
+    result = await doctor.apply_repair(plan['id'], plan['plan_hash'])
+    assert result['status'] == 'rolled_back'
+    assert (doctor.plugins / 'custom.py').read_text() == 'def broken(:\n'
+    workspace = RepairWorkspace({'example/settings.json': b'{invalid'})
+    await workspace.call('stage_changes', {'changes': [{'path': 'example/settings.json', 'before': '{invalid', 'after': '{"enabled": true}'}]})
+    await workspace.call('verify_candidate', {})
+    assert workspace.baseline['syntax']['status'] == 'failed'
+    assert workspace.verification['syntax']['status'] == 'passed'

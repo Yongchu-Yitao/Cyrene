@@ -3,8 +3,8 @@
     "nesting": 6
   },
   "src/cyrene/agents/acp_transport.py::AcpStdioTransport": {
-    "methods": 29,
-    "fields": 31
+    "methods": 30,
+    "fields": 33
   },
   "src/cyrene/agents/model_gateway.py::issue_model_gateway_binding": {
     "lines": 130,
@@ -100,16 +100,16 @@
     "nesting": 8
   },
   "src/cyrene/core/context/router.py::ContextStoreRouter": {
-    "methods": 41
+    "methods": 42
   },
   "src/cyrene/core/context/router.py::ContextStoreRouter.create_tree": {
     "lines": 113
   },
   "src/cyrene/core/context/store.py": {
-    "module_lines": 1070
+    "module_lines": 1086
   },
   "src/cyrene/core/context/store.py::ContextTreeStore": {
-    "methods": 37
+    "methods": 38
   },
   "src/cyrene/core/context/tasks.py::TaskContexts.execute": {
     "decisions": 22,
@@ -124,7 +124,7 @@
     "nesting": 6
   },
   "src/cyrene/core/hook/registry.py": {
-    "module_lines": 1646
+    "module_lines": 1679
   },
   "src/cyrene/core/hook/registry.py::HookSet": {
     "methods": 44
@@ -138,13 +138,15 @@
     "nesting": 6
   },
   "src/cyrene/core/hook/registry.py::HookSet._worker_main": {
+    "lines": 117,
+    "decisions": 24,
     "nesting": 7
   },
   "src/cyrene/core/observability.py::safe_log_value": {
     "decisions": 27
   },
   "src/cyrene/core/plugin/batch_runner.py::PluginBatchRunner.run": {
-    "lines": 126,
+    "lines": 139,
     "decisions": 21
   },
   "src/cyrene/core/plugin/core_impl/permission.py::PermissionReviewPlugin.review_batch": {
@@ -159,7 +161,7 @@
     "decisions": 40
   },
   "src/cyrene/core/plugin/registry.py": {
-    "module_lines": 1710
+    "module_lines": 1685
   },
   "src/cyrene/core/plugin/registry.py::PluginRegistry": {
     "methods": 57
@@ -172,10 +174,11 @@
     "decisions": 21
   },
   "src/cyrene/core/plugin/runtime.py::PluginRuntime.execute": {
-    "lines": 117
+    "lines": 126
   },
   "src/cyrene/core/plugin/runtime.py::PluginRuntime.review_batch": {
-    "lines": 208
+    "lines": 214,
+    "decisions": 24
   },
   "src/cyrene/core/plugin/session_plugins.py::SessionPlugins.reconcile_plugins": {
     "decisions": 23
@@ -184,10 +187,10 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 4666
+    "module_lines": 4806
   },
   "src/cyrene/core/session.py::AgentSession": {
-    "methods": 117,
+    "methods": 121,
     "fields": 46
   },
   "src/cyrene/core/session.py::AgentSession.__init__": {
@@ -195,8 +198,8 @@
     "decisions": 33
   },
   "src/cyrene/core/session.py::AgentSession._advance": {
-    "lines": 208,
-    "decisions": 46
+    "lines": 230,
+    "decisions": 58
   },
   "src/cyrene/core/session.py::AgentSession._answer": {
     "lines": 118,
@@ -206,16 +209,15 @@
     "lines": 144,
     "decisions": 29
   },
+  "src/cyrene/core/session.py::AgentSession._continue_reflection": {
+    "decisions": 22
+  },
   "src/cyrene/core/session.py::AgentSession._continue_tools": {
-    "lines": 190,
+    "lines": 193,
     "decisions": 48
   },
   "src/cyrene/core/session.py::AgentSession._event_for_node": {
     "nesting": 6
-  },
-  "src/cyrene/core/session.py::AgentSession._finish_terminal": {
-    "lines": 135,
-    "decisions": 47
   },
   "src/cyrene/core/session.py::AgentSession._mount_guidance": {
     "decisions": 27
@@ -226,6 +228,10 @@
   "src/cyrene/core/session.py::AgentSession._permission_requirement": {
     "lines": 125,
     "decisions": 49
+  },
+  "src/cyrene/core/session.py::AgentSession._postprocess_terminal": {
+    "lines": 122,
+    "decisions": 33
   },
   "src/cyrene/core/session.py::AgentSession._record_permission_review": {
     "decisions": 31
@@ -238,7 +244,7 @@
     "decisions": 31
   },
   "src/cyrene/core/session.py::AgentSession._select_restore_leaf": {
-    "decisions": 22
+    "decisions": 23
   },
   "src/cyrene/core/session.py::AgentSession.drain": {
     "nesting": 7
@@ -360,7 +366,7 @@
     "decisions": 22
   },
   "src/cyrene/platform/doctor/agent_analysis.py::analyze": {
-    "lines": 103
+    "lines": 132
   },
   "src/cyrene/platform/doctor/agent_repair.py::RepairWorkspace.call": {
     "decisions": 21
@@ -378,13 +384,21 @@
     "decisions": 21
   },
   "src/cyrene/platform/doctor/failure_workflow.py::run_evidence": {
-    "decisions": 22
+    "decisions": 32
+  },
+  "src/cyrene/platform/doctor/failure_workflow.py::start_failure": {
+    "lines": 127
   },
   "src/cyrene/platform/doctor/failure_workflow.py::start_failure.work": {
-    "decisions": 23
+    "decisions": 39
   },
   "src/cyrene/platform/doctor/repair_service.py::RepairService._commit": {
+    "lines": 104,
     "decisions": 46,
+    "nesting": 7
+  },
+  "src/cyrene/platform/doctor/runtime_evidence.py::collect_runtime_evidence": {
+    "decisions": 29,
     "nesting": 7
   },
   "src/cyrene/platform/doctor/service.py::DoctorService.diagnose": {
@@ -778,7 +792,7 @@
     "decisions": 24
   },
   "src/cyrene/plugins/builtin/cyrene_extensions/project_plugin_dependencies.py::ensure_project_plugins": {
-    "decisions": 22
+    "decisions": 23
   },
   "src/cyrene/plugins/builtin/cyrene_extensions/search_environment.py::_compact_candidate": {
     "decisions": 23
@@ -996,7 +1010,8 @@
     "decisions": 26
   },
   "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService.context_block": {
-    "decisions": 22
+    "lines": 100,
+    "decisions": 21
   },
   "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService.trigger_project_learning": {
     "lines": 101
@@ -1113,34 +1128,30 @@
     "decisions": 64,
     "nesting": 7
   },
+  "src/cyrene/plugins/builtin/cyrene_plugin_development/inspection.py::inspect_plugins": {
+    "decisions": 39
+  },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py": {
-    "module_lines": 1741
+    "module_lines": 1444
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::_model_source": {
     "lines": 100
-  },
-  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::install": {
-    "decisions": 35
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::manage_hooks": {
     "lines": 184,
     "decisions": 64
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::manage_plugin_source": {
-    "lines": 111,
+    "lines": 112,
     "decisions": 37
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::manage_plugins": {
-    "lines": 119,
-    "decisions": 43
+    "lines": 110,
+    "decisions": 41
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::scaffold": {
     "lines": 102,
     "decisions": 27
-  },
-  "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::validate_pack_directory": {
-    "lines": 108,
-    "decisions": 53
   },
   "src/cyrene/plugins/builtin/cyrene_proactive/outcome.py::outcome_from_result": {
     "decisions": 26
@@ -1150,7 +1161,7 @@
     "decisions": 44
   },
   "src/cyrene/plugins/builtin/cyrene_remote/commands.py": {
-    "module_lines": 2915
+    "module_lines": 2897
   },
   "src/cyrene/plugins/builtin/cyrene_remote/commands.py::RemoteCommandExecutor": {
     "methods": 41
@@ -1163,8 +1174,8 @@
     "decisions": 27
   },
   "src/cyrene/plugins/builtin/cyrene_remote/commands.py::RemoteCommandExecutor._settings_update": {
-    "lines": 149,
-    "decisions": 57,
+    "lines": 131,
+    "decisions": 55,
     "nesting": 6
   },
   "src/cyrene/plugins/builtin/cyrene_remote/commands.py::_remote_agent_context": {
@@ -1393,6 +1404,9 @@
   "src/cyrene/plugins/contributions.py::_validate_project_tools": {
     "decisions": 36
   },
+  "src/cyrene/plugins/installation.py::install_source": {
+    "decisions": 28
+  },
   "src/cyrene/plugins/model_catalog.py::configured_model_candidates": {
     "lines": 106,
     "decisions": 46
@@ -1416,6 +1430,10 @@
   "src/cyrene/plugins/native_tools.py::_seed_canonical_directory": {
     "lines": 193,
     "decisions": 45
+  },
+  "src/cyrene/plugins/validation.py::validate_pack_directory": {
+    "lines": 109,
+    "decisions": 53
   },
   "src/cyrene/workbench/application/app_control.py::_consume_explicit_user_delegation": {
     "lines": 154,
@@ -1522,10 +1540,10 @@
     "decisions": 21
   },
   "src/cyrene/workbench/chat/chat_runs.py": {
-    "module_lines": 1704
+    "module_lines": 1715
   },
   "src/cyrene/workbench/chat/chat_runs.py::ChatRun": {
-    "fields": 29
+    "fields": 30
   },
   "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager._drive": {
     "lines": 162,
@@ -1593,14 +1611,14 @@
     "decisions": 60
   },
   "src/cyrene/workbench/chat/run_timeline.py::RunTimeline._apply_tool": {
-    "decisions": 29
+    "decisions": 37
   },
   "src/cyrene/workbench/chat/run_timeline.py::RunTimeline.apply": {
-    "decisions": 46,
-    "nesting": 15
+    "decisions": 45,
+    "nesting": 14
   },
   "src/cyrene/workbench/core_adapter/bridge.py": {
-    "module_lines": 1132
+    "module_lines": 1103
   },
   "src/cyrene/workbench/core_adapter/bridge.py::_turn_metrics": {
     "lines": 102,
@@ -1618,18 +1636,24 @@
     "lines": 115,
     "decisions": 28
   },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._own_bridge": {
+    "nesting": 6
+  },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.fork_context": {
     "lines": 105
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::context_checkpoint_from_nodes": {
-    "decisions": 22
+    "decisions": 23
   },
   "src/cyrene/workbench/core_adapter/hook_listing.py::update_runtime_hook": {
     "lines": 176,
     "decisions": 47
   },
+  "src/cyrene/workbench/http/plugin_file_install.py::install_plugin_file": {
+    "decisions": 21
+  },
   "src/cyrene/workbench/http/plugins.py::register_plugin_routes": {
-    "lines": 275
+    "lines": 265
   },
   "src/cyrene/workbench/http/settings/plugin_service.py::_activation_update_error": {
     "lines": 110,
@@ -1677,7 +1701,7 @@
     "fields": 31
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
-    "module_lines": 1582
+    "module_lines": 1575
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
     "methods": 36,
@@ -1736,6 +1760,9 @@
   },
   "src/cyrene/workbench/sessions/session_view.py::merge_adjacent_trace_only_messages": {
     "decisions": 39
+  },
+  "src/cyrene/workbench/webui/server.py::create_app": {
+    "lines": 103
   },
   "src/cyrene/workbench/workspaces/workspace_changes.py": {
     "module_lines": 1121

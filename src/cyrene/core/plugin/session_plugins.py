@@ -5,6 +5,8 @@ import threading
 from pathlib import Path
 from typing import Any
 from .plugin import PluginPack
+from .extensions import invoke_setup
+from .source import python_source_signature
 from .session_attachment import SetupHookTracker as _SetupHookTracker, SessionPackAttachment as _SessionPackAttachment
 from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS
 
@@ -173,24 +175,9 @@ class SessionPlugins:
 
         path = Path(source)
         try:
-            if path.is_dir():
-                files = tuple(sorted(path.rglob("*.py")))
-            elif path.is_file():
-                files = (path,)
-            else:
-                files = ()
-            if files:
-                return (
-                    "files",
-                    tuple(
-                        (
-                            str(item.relative_to(path) if path.is_dir() else item.name),
-                            item.stat().st_mtime_ns,
-                            item.stat().st_size,
-                        )
-                        for item in files
-                    ),
-                )
+            signature = python_source_signature(path)
+            if signature is not None:
+                return ("files", signature)
         except OSError:
             pass
         return ("callable", tuple(id(setup) for setup in pack.session_setups))
@@ -238,7 +225,7 @@ class SessionPlugins:
         context = self.setup_context(tracker)
         try:
             for setup in pack.session_setups:
-                setup(context)
+                invoke_setup(setup, context)
             driver = self.services.pop("session_driver", None)
             changed = {
                 name: value

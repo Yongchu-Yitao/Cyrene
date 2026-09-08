@@ -37,7 +37,7 @@ async def test_new_message_denies_pending_write_and_reaches_model(tmp_path, monk
     runtime = ConversationRuntime()
     bridge = WorkbenchSessionBridge(session)
 
-    async def use_bridge(_config, operation, *, publish):
+    async def use_bridge(_config, operation, *, publish, expected_run_id=None):
         return await operation(bridge)
 
     async def publish(_event):

@@ -36,6 +36,25 @@ def test_duplicate_delta_is_idempotent():
     assert timeline.messages()[0]["content"] == "a"
 
 
+def test_tool_noop_preserves_record_revision_and_published_snapshots():
+    timeline = RunTimeline("run")
+    started = timeline.apply(event("tool.started", toolCallId="a", name="read", input={"paths": ["a"]}))
+    original = json.loads(json.dumps(started))
+    record_revision = started["messages"][0]["timelineRevision"]
+    noop = timeline.apply(event("tool.updated", 1, toolCallId="a", name="read", input={"paths": ["a"]}))
+    assert noop["messages"] == []
+    assert noop["revision"] == started["revision"] + 1
+    assert timeline.messages()[0]["timelineRevision"] == record_revision
+    completed = timeline.apply(event("tool.completed", 2, toolCallId="a", result={"paths": ["b"]}))
+    assert completed["messages"][0]["trace"][0]["output"] == {"paths": ["b"]}
+    assert started == original
+    # Late progress cannot reopen a completed tool; its settlement timestamp
+    # still follows the existing full-record protocol.
+    late = timeline.apply(event("tool.updated", 3, toolCallId="a"))
+    assert late["messages"][0]["trace"][0]["status"] == "completed"
+    assert late["messages"][0]["endedAt"] == event("", 3)["timestamp"]
+
+
 def test_prose_splits_activity_and_late_tool_completion_stays_in_original_card():
     timeline = RunTimeline("run")
     timeline.apply(event("reasoning_delta", sourceId="a", delta="thought"))

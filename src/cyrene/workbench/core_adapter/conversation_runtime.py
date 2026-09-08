@@ -31,6 +31,8 @@ from .bridge import (
     WorkbenchSessionBridge,
 )
 from cyrene.localization import app_language
+from .publication import PublicationQueue
+from cyrene.platform.task_lifecycle import cancel_and_wait
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +137,9 @@ def context_checkpoint_from_nodes(nodes: Sequence[Any]) -> dict[str, Any] | None
         status = "cancelled"
     elif value.get("error") is True:
         status = "failed"
-    elif value.get("role") == "assistant" and value.get("session_end_complete") is True:
+    elif value.get("role") == "assistant" and (
+        value.get("session_end_complete") is True or value.get("answer_complete") is True
+    ):
         status = "completed"
     elif value.get("role") in {"context_compaction", "context_reflection"} and value.get("resume_model") is not True:
         status = "completed"
@@ -206,6 +210,9 @@ class ConversationRuntime:
         self._configs: dict[str, ConversationConfig] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._outbox_tasks: dict[str, asyncio.Task[int]] = {}
+        self._operations: set[asyncio.Task[Any]] = set()
+        self._shutting_down = False
+        self._stopping = False
 
     def configure(self, db_path: str) -> None:
         with self._active_lock:
@@ -230,10 +237,10 @@ class ConversationRuntime:
         finally:
             router.close()
 
-    def context_checkpoint(self, chat_id: str) -> dict[str, Any] | None:
+    def context_checkpoint(self, chat_id: str, config: ConversationConfig | None = None) -> dict[str, Any] | None:
         """Read a tree's durable outcome without binding Plugins or resuming Hooks."""
 
-        router = ContextStoreRouter(self._state_root() / "context")
+        router = ContextStoreRouter(self._state_root(config) / "context")
         try:
             tree = router.get_tree(str(chat_id))
             nodes = router.get_subtree(tree.id, tree.root_id)
@@ -550,19 +557,56 @@ class ConversationRuntime:
         operation: Callable[[WorkbenchSessionBridge], Awaitable[Any]],
         *,
         publish: WorkbenchPublisher | None,
+        expected_run_id: str | None = None,
+    ) -> Any:
+        if self._stopping or (self._shutting_down and asyncio.current_task() not in self._outbox_tasks.values()):
+            raise RuntimeError("Conversation runtime is shutting down")
+        # The runtime, not a request/waiter, owns the bridge and its chat lock.
+        task = asyncio.create_task(self._own_bridge(config, operation, publish=publish, expected_run_id=expected_run_id))
+        self._operations.add(task)
+        def settled(completed):
+            self._operations.discard(completed)
+            if not completed.cancelled():
+                error = completed.exception()
+                if error is not None:
+                    logger.error("Conversation operation failed", exc_info=(type(error), error, error.__traceback__))
+        task.add_done_callback(settled)
+        return await asyncio.shield(task)
+
+    async def _own_bridge(
+        self,
+        config: ConversationConfig,
+        operation: Callable[[WorkbenchSessionBridge], Awaitable[Any]],
+        *,
+        publish: WorkbenchPublisher | None,
+        expected_run_id: str | None = None,
     ) -> Any:
         chat_id = str(config.session_id or "").strip()
         if not chat_id:
             raise ValueError("session_id cannot be empty")
         owner_loop = asyncio.get_running_loop()
         async with self._chat_lock(chat_id):
+            checkpoint = None
+            if expected_run_id is not None:
+                checkpoint = await asyncio.to_thread(self.context_checkpoint, chat_id, config)
+                if (checkpoint and checkpoint.get("status") == "running"
+                    and checkpoint.get("run_id") != expected_run_id):
+                    raise RuntimeError(
+                        f"Conversation has unfinished run {checkpoint.get('run_id')!r}; "
+                        "resume it or explicitly cancel it before starting a different run."
+                    )
             open_started = time.perf_counter()
-            bridge = await asyncio.to_thread(
-                self._open_bridge,
-                config,
-                owner_loop=owner_loop,
-                raw_publisher=publish,
-            )
+            opening = asyncio.create_task(asyncio.to_thread(
+                self._open_bridge, config, owner_loop=owner_loop, raw_publisher=publish,
+            ))
+            try:
+                bridge = await asyncio.shield(opening)
+            except asyncio.CancelledError:
+                # Cancelling to_thread cannot stop the worker. The operation
+                # retains the lock and owns the acquired bridge through close.
+                bridge = await opening
+                await asyncio.to_thread(bridge.close)
+                raise
             open_duration_ms = max(
                 0.0,
                 (time.perf_counter() - open_started) * 1000,
@@ -570,36 +614,47 @@ class ConversationRuntime:
             with self._active_lock:
                 self._configs[chat_id] = config
                 self._active[chat_id] = bridge
+            timing = PublicationQueue(publish) if publish is not None else None
             try:
-                if publish is not None:
-                    marked = publish(
+                if checkpoint and checkpoint.get("status") == "completed":
+                    # A saved answer may still have compensatory SessionEnd
+                    # work. Settle that work before accepting another turn.
+                    await bridge.session.drain()
+                if timing is not None:
+                    timing.submit(
                         {
                             "type": "chat_timing",
                             "stage": "agent_bridge_open",
                             "durationMs": round(open_duration_ms, 3),
                         }
                     )
-                    if inspect.isawaitable(marked):
-                        await marked
                 return await operation(bridge)
             finally:
-                with self._active_lock:
-                    if self._active.get(chat_id) is bridge:
-                        self._active.pop(chat_id, None)
-                close_started = time.perf_counter()
-                await asyncio.to_thread(bridge.close)
-                close_duration_ms = max(
-                    0.0,
-                    (time.perf_counter() - close_started) * 1000,
-                )
-                if publish is not None:
-                    marked = publish({
-                        "type": "chat_timing",
-                        "stage": "agent_bridge_close",
-                        "durationMs": round(close_duration_ms, 3),
-                    })
-                    if inspect.isawaitable(marked):
-                        await marked
+                try:
+                    close_started = time.perf_counter()
+                    closing = asyncio.create_task(asyncio.to_thread(bridge.close))
+                    try:
+                        await asyncio.shield(closing)
+                    except asyncio.CancelledError:
+                        await closing
+                        raise
+                    finally:
+                        with self._active_lock:
+                            if self._active.get(chat_id) is bridge:
+                                self._active.pop(chat_id, None)
+                    close_duration_ms = max(
+                        0.0,
+                        (time.perf_counter() - close_started) * 1000,
+                    )
+                    if timing is not None and not self._stopping:
+                        timing.submit({
+                            "type": "chat_timing",
+                            "stage": "agent_bridge_close",
+                            "durationMs": round(close_duration_ms, 3),
+                        })
+                finally:
+                    if timing is not None:
+                        await timing.close()
 
     async def send(
         self,
@@ -634,7 +689,10 @@ class ConversationRuntime:
                         publish=event_publisher,
                         cancel_on_caller_cancel=False,
                     )
-                await bridge.cancel("superseded_by_new_workbench_run")
+                raise RuntimeError(
+                    f"Conversation has unfinished run {restored_run_id!r}; "
+                    "resume it or explicitly cancel it before starting a different run."
+                )
             retry_branch = bool(
                 config.retry
                 and not (
@@ -672,7 +730,8 @@ class ConversationRuntime:
             )
 
         try:
-            return await self._with_bridge(config, operate, publish=event_publisher)
+            return await self._with_bridge(config, operate, publish=event_publisher,
+                                           expected_run_id=normalized_run_id)
         finally:
             self.kick_commit_outbox(config.session_id)
 
@@ -750,6 +809,8 @@ class ConversationRuntime:
     def kick_commit_outbox(self, chat_id: str) -> None:
         """Start the durable post-commit consumer without delaying the reply."""
 
+        if self._stopping:
+            return
         target = str(chat_id or "").strip()
         if not target:
             return
@@ -816,11 +877,30 @@ class ConversationRuntime:
         finally:
             self.kick_commit_outbox(config.session_id)
 
-    async def shutdown(self) -> None:
-        """Finish durable commit consumers without putting them on a chat path."""
-        tasks = [task for task in self._outbox_tasks.values() if not task.done()]
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+    def begin_shutdown(self) -> None:
+        """Close admission while existing runs may still enqueue their commits."""
+        self._shutting_down = True
+
+    async def shutdown(self, *, grace_seconds: float = 20.0, timeout: float = 5.0) -> None:
+        """Drain, then stop the owned operations without cancelling durable runs.
+
+        Operation cancellation reaches bridge.close(), which stops process-local
+        Session workers and preserves the ContextTree for startup recovery. It
+        never invokes the explicit user-cancellation protocol. Unacknowledged
+        outbox work remains durable for the next host.
+        """
+        self.begin_shutdown()
+        deadline = asyncio.get_running_loop().time() + max(0.0, grace_seconds)
+        while not self._stopping:
+            tasks = {task for task in (*self._operations, *self._outbox_tasks.values()) if not task.done()}
+            remaining = deadline - asyncio.get_running_loop().time()
+            if not tasks or remaining <= 0:
+                break
+            await asyncio.wait(tasks, timeout=remaining)
+        self._stopping = True
+        await cancel_and_wait(
+            (*self._operations, *self._outbox_tasks.values()), timeout=timeout,
+        )
         self._outbox_tasks.clear()
 
     async def compact(

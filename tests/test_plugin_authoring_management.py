@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("isolated_plugin_settings")
+
 from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry
 
 
@@ -14,6 +16,24 @@ class _FakeHost:
         self.plugin_directory = plugin_directory
         self.db_path = str(plugin_directory / "state.sqlite3")
         self.reloads = 0
+        self.load_failures = []
+        self.startup_failures = {}
+        self._registry = SimpleNamespace(
+            list_packs=lambda: [SimpleNamespace(id=p.name, plugins=(), has_application_contributions=False) for p in plugin_directory.iterdir() if p.is_dir()],
+            pack_enabled=lambda identifier: True,
+            pack_configured_enabled=lambda identifier: True,
+            pack_source=lambda identifier: str(plugin_directory / identifier),
+        )
+
+    def pack_running(self, identifier):
+        return False
+
+    def pack_operational(self, identifier):
+        return False
+
+    @property
+    def registry(self):
+        return self._registry
 
     async def reload_user_plugins(self):
         self.reloads += 1
@@ -285,8 +305,6 @@ async def test_plugin_manager_lists_switches_and_deletes_installed_packs(
     monkeypatch,
 ) -> None:
     from cyrene.plugins.builtin.cyrene_plugin_development import tools
-    from cyrene.platform import settings_store
-
     async def run(_arguments, _context):
         return {"ok": True}
 
@@ -313,6 +331,13 @@ async def test_plugin_manager_lists_switches_and_deletes_installed_packs(
             self.registry = registry
             self.restart_required_packs = ()
             self.reconciles = 0
+            self.active_services = {}
+
+        def pack_running(self, pack_id):
+            return False
+
+        def pack_operational(self, pack_id):
+            return self.registry.pack_enabled(pack_id)
 
         async def reconcile_activation(self):
             self.reconciles += 1
@@ -322,8 +347,6 @@ async def test_plugin_manager_lists_switches_and_deletes_installed_packs(
 
     host = Host()
     monkeypatch.setattr(tools, "application_plugin_scope", lambda: host)
-    monkeypatch.setattr(settings_store, "save_enabled_plugins", lambda _value: None)
-    monkeypatch.setattr(settings_store, "save_enabled_plugin_packs", lambda _value: None)
     context = PluginContext(workspace=tmp_path)
 
     listing = json.loads(await tools.manage_plugins({"action": "list"}, context))

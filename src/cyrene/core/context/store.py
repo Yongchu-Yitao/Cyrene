@@ -591,6 +591,22 @@ class ContextTreeStore:
         )
         return node
 
+    def claim_effect(self, assistant_node_id: str, call_id: str, marker: Any) -> bool:
+        """Write an execution fence before any external side effect can start."""
+        encoded = encode_value(marker)
+        timestamp = self._now().isoformat()
+        with self._lock:
+            self._ensure_available()
+            with transaction(self._connection):
+                self._require_node_row(assistant_node_id)
+                cursor = self._connection.execute(
+                    "INSERT OR IGNORE INTO context_effect_results "
+                    "(assistant_node_id, call_id, result_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (assistant_node_id, call_id, encoded, timestamp, timestamp),
+                )
+        return cursor.rowcount == 1
+
     def save_effect_result(
         self,
         assistant_node_id: str,

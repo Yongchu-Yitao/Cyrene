@@ -53,3 +53,23 @@ def test_exact_grants_consume_once_and_keep_session_grants():
     assert grants.consume(fingerprint)
     assert grants.consume(fingerprint)
     assert grants.fingerprint('', {}, {'fingerprint':'exact'}) == 'exact'
+
+
+def test_transition_failure_preserves_exception_and_stage():
+    received = []
+    async def execute(kind, node):
+        raise ValueError('private exception detail')
+    driver = TransitionDriver('test', TransitionCallbacks(
+        key=lambda node: node.id, run_id=lambda node: 'run', cancelled=lambda _: False,
+        coroutine=execute, failure=lambda node, run, exc, kind: received.append((run, type(exc).__name__, kind)),
+        idle=lambda _: None, snapshot=lambda: {},
+    ))
+    driver.enqueue('tools', SimpleNamespace(id='node'))
+    driver.thread.start()
+    try:
+        driver.wait()
+    finally:
+        with driver.condition:
+            driver.stop_locked()
+        driver.join()
+    assert received == [('run', 'ValueError', 'tools')]

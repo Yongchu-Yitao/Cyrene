@@ -127,3 +127,71 @@ async def test_reopen_deduplicates_and_immediate_cancel_does_not_orphan(doctor):
     result = await doctor.cancel_failure(report['id'])
     assert result['failure']['status'] == 'cancelled'
     assert not doctor.failure_tasks and not doctor.tasks
+
+
+@pytest.mark.asyncio
+async def test_legacy_error_node_collects_durable_failure_and_probes_before_analysis(doctor):
+    chat(doctor, [
+        {'role': 'tool_results', 'results': [{'name': 'Bash', 'success': True}] * 22},
+        {'role': 'assistant', 'error': True, 'session_end_status': 'failed', 'content': 'PRIVATE FAILURE TEXT'},
+    ])
+    with sqlite3.connect(doctor.database) as db:
+        db.execute('CREATE TABLE workbench_chat_run_events (run_id TEXT, seq INTEGER, event_json TEXT)')
+        db.execute('INSERT INTO workbench_chat_run_events VALUES (?, ?, ?)', ('run_1', 1,
+            json.dumps({'type': 'error', 'code': 'agent_run_failed', 'message': 'PRIVATE MESSAGE'})))
+    doctor.probe_model = AsyncMock(return_value={'model_probe': {'status': 'passed'}})
+    async def analyze(report):
+        assert any(f['code'] == 'agent_transition_failed' for f in report['findings'])
+        assert any(f['code'] == 'agent_run_failed' for f in report['findings'])
+        assert any(f['code'] == 'diagnostic_model_probe' and f['status'] == 'passed' for f in report['findings'])
+        assert len([f for f in report['findings'] if f['code'] == 'run_tools_completed']) == 1
+        assert 'PRIVATE' not in json.dumps(report)
+        return {'summary': 'Host transition failure'}
+    doctor.analyzer = analyze
+    report = await finish(doctor, {'chat_id': 'chat_1', 'run_id': 'run_1'})
+    assert report['analysis']['status'] == 'completed'
+    assert report['failure']['reason'] == 'host_transition_failed'
+    doctor.probe_model.assert_awaited_once()
+
+
+def test_runtime_evidence_decodes_compressed_records_and_excludes_other_run(doctor):
+    from cyrene.platform.doctor.runtime_evidence import collect_runtime_evidence
+    from cyrene.workbench.chat.chat_runs import _encode_durable_event
+    chat(doctor, [])
+    with sqlite3.connect(doctor.database) as db:
+        db.execute('CREATE TABLE workbench_chat_run_events (run_id TEXT, seq INTEGER, event_json BLOB)')
+        for run in ['run_1', 'run_other']:
+            db.execute('INSERT INTO workbench_chat_run_events VALUES (?, ?, ?)', (run, 1,
+                _encode_durable_event({'type': 'error', 'code': 'model_timeout' if run == 'run_1' else 'other_error', 'content': 'PRIVATE' * 10000})))
+    result = collect_runtime_evidence(doctor.database, doctor.data, {'chat_id': 'chat_1', 'run_id': 'run_1'})
+    assert any(f['code'] == 'model_timeout' for f in result)
+    assert 'PRIVATE' not in json.dumps(result)
+    assert 'other_error' not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_investigation_can_select_source_after_generic_host_failure(doctor):
+    chat(doctor, [{'role': 'assistant', 'error': True, 'session_end_status': 'failed'}])
+    doctor.probe_model = AsyncMock(return_value={'model_probe': {'status': 'passed'}})
+    doctor.analyzer = AsyncMock(return_value={'summary': 'Source defect found', 'repair_target': 'custom.py',
+        'investigation_findings': [{'id': 'i1', 'code': 'repair_source_inspected', 'status': 'info', 'evidence': {'target': 'custom.py'}}]})
+    plan = {'id': 'repair_selected', 'status': 'planned', 'action': {'kind': 'patch_plugin'}, 'plan_hash': 'b' * 64,
+        'baseline': {'syntax': {'status': 'failed'}}, 'verification': {'syntax': {'status': 'passed'}}}
+    doctor.repairs.save(plan)
+    doctor.repairs.start = AsyncMock(return_value=plan)
+    doctor.apply_repair = AsyncMock(return_value={'outcome': {'status': 'verified'}})
+    report = await finish(doctor, {'chat_id': 'chat_1', 'run_id': 'run_1'})
+    assert report['failure']['status'] == 'completed'
+    doctor.apply_repair.assert_awaited_once_with('repair_selected', 'b' * 64)
+
+
+@pytest.mark.asyncio
+async def test_existing_recovery_action_is_prepared_without_source_generation(doctor):
+    doctor.analyzer = AsyncMock(return_value={'summary': 'Use recovery', 'repair_action': {'finding_id': 'e1', 'action_index': 0}})
+    doctor.plan_repair = AsyncMock(return_value={'id': 'repair_existing'})
+    doctor.repairs.start = AsyncMock()
+    doctor.probe_model = AsyncMock(return_value={'model_probe': {'status': 'passed'}})
+    report = await finish(doctor, {'chat_id': 'chat_1', 'run_id': 'run_1'})
+    assert report['failure']['status'] == 'needs_review'
+    assert report['failure']['fixed_plan_id'] == 'repair_existing'
+    doctor.repairs.start.assert_not_awaited()

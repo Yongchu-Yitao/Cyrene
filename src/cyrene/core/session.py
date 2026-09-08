@@ -1552,6 +1552,7 @@ class AgentSession:
             value = dict(current.value) if isinstance(current.value, Mapping) else {}
             if value.get("intermediate") is not True:
                 value["intermediate"] = True
+                value["answer_complete"] = False
                 value.pop("session_end_complete", None)
                 value.pop("session_end_status", None)
                 current = self.store.update_node(self.tree.id, current.id, value)
@@ -1730,6 +1731,8 @@ class AgentSession:
     def _enqueue_transition(self, kind: str, node: ContextNode) -> None:
         self._transitions.enqueue(kind, node)
     def _transition_coroutine(self, kind: str, node: ContextNode):
+        if kind == "context":
+            return self._mount_turn_context(node)
         if kind == "advance":
             return self._advance(node)
         if kind == "tools":
@@ -1755,9 +1758,16 @@ class AgentSession:
             raise
 
     def _transition_failure_node(self, node, run_id, exc, kind):
+        # Keep content-free failure provenance even when host logging is absent.
+        import traceback
+        diagnostic = {"failure_kind": "agent_transition_failed", "failure_stage": kind,
+                      "exception_type": type(exc).__name__ if exc is not None else "",
+                      "failure_frames": [{"module": Path(frame.filename).name, "line": frame.lineno,
+                                          "function": frame.name}
+                                         for frame in traceback.extract_tb(exc.__traceback__)[-12:]] if exc is not None else []}
         failure = self._mount_assistant(
             node.id, _l("The Agent transition failed.", "Agent 状态转换失败。"),
-            error=True, caused_by=self._transition_key(node), run_id=run_id,
+            error=True, caused_by=self._transition_key(node), run_id=run_id, metadata=diagnostic,
         )
         return failure
 
@@ -1824,7 +1834,8 @@ class AgentSession:
             or self._pending_from_node(leaf) is not None
             or (
                 latest_value.get("role") == "assistant"
-                and latest_value.get("session_end_complete") is True
+                and (latest_value.get("session_end_complete") is True
+                     or latest_value.get("answer_complete") is True)
             )
         )
         if (
@@ -2314,10 +2325,32 @@ class AgentSession:
             return
         try:
             source = self.store.get_node(event.tree_id, str(change.node_id))
-        except Exception:
+        except NodeNotFoundError:
             return
+        except Exception:
+            # Reading a pending context is run work too. Retry the read under
+            # the transition owner so a database error cannot silently ack the
+            # only wake-up for a queued user turn.
+            source = ContextNode(str(change.node_id), event.tree_id, change.parent_id,
+                {"role": "user", "trigger_model": False, "run_id": self.current_run_id},
+                change.time, change.time)
         value = source.value if isinstance(source.value, Mapping) else {}
         if value.get("role") != "user" or value.get("trigger_model") is not False:
+            return
+        self._enqueue_transition("context", source)
+
+    async def _mount_turn_context(self, source: ContextNode) -> None:
+        """Context construction is a run transition, not fire-and-forget Hook work."""
+        source = self.store.get_node(self.tree.id, source.id)
+        value = source.value if isinstance(source.value, Mapping) else {}
+        if (value.get("role") != "user" or value.get("trigger_model") is not False
+            or self._transition_assistant(source) is not None):
+            return
+        # Mounting updates the source before writing its children, so queued
+        # deliveries can carry a newer version than the failed transition.
+        # A terminal failure belongs to the turn, not just that node version.
+        if any(isinstance(child.value, Mapping) and child.value.get("error") is True
+               for child in self.store.get_children(self.tree.id, source.id)):
             return
         metadata = value.get("metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
@@ -3382,7 +3415,8 @@ class AgentSession:
                 {**self._assistant_model_value(
                     output, calls, streamed=streamed, transition_key=transition_key,
                     run_id=run_id, batch_key=batch_key,
-                ), "task_context_id": owner, "task_control": control_batch},
+                ), "task_context_id": owner, "task_control": control_batch,
+                    "answer_complete": not calls},
                 node_id=self._stable_id("assistant", transition_key),
             )
             assistant_state = self._set_state_locked(
@@ -3446,7 +3480,40 @@ class AgentSession:
                 if not driver_pending:
                     await self._finish_terminal(assistant, status=status)
                     return
+        # The answer is already durable. Post-processing has its own receipts
+        # and cannot replace that answer with a generic transition error.
+        try:
+            await self._postprocess_terminal(assistant, terminal_status, run_id)
+        except Exception as exc:
+            logger.exception("SessionEnd post-processing remains unresolved")
+            self._emit_event("session.postprocess_pending", run_id=run_id,
+                node_id=assistant.id, data={"stage": "session_end", "error_type": type(exc).__name__})
+            self._set_state("idle", _l("Answer saved; post-processing pending", "回答已保存；后处理待恢复"),
+                leaf_id=assistant.id)
+
+    async def _postprocess_terminal(self, assistant: ContextNode, terminal_status: str, run_id: str) -> None:
+        value = dict(assistant.value)
         if value.get("session_end_complete") is not True:
+            receipts = self.store.effect_results(self.tree.id, assistant.id)
+            unresolved: set[str] = set()
+
+            def checkpoint(hook_id: str, phase: str) -> bool:
+                key = "session_end:" + hook_id
+                if phase == "started":
+                    previous = receipts.get(key)
+                    if previous is not None:
+                        if previous.get("phase") != "completed":
+                            unresolved.add(hook_id)
+                        return False
+                    if not self.store.claim_effect(self.tree.id, assistant.id, key, {"phase": "started"}):
+                        unresolved.add(hook_id)
+                        return False
+                else:
+                    self.store.save_effect_result(self.tree.id, assistant.id, key, {"phase": phase})
+                    if phase != "completed":
+                        unresolved.add(hook_id)
+                return True
+
             user_value: Mapping[str, Any] = {}
             user_node_id = ""
             path = self.store.get_path(self.tree.id, assistant.id)
@@ -3515,8 +3582,11 @@ class AgentSession:
                     "model_identity": deepcopy(dict(value.get("model_identity") or {})),
                     "usage": deepcopy(dict(value.get("usage") or {})),
                     "metadata": deepcopy(dict(metadata)),
-                }
+                },
+                checkpoint=checkpoint,
             )
+            if unresolved:
+                raise RuntimeError("SessionEnd hooks require reconciliation: " + ", ".join(sorted(unresolved)))
         with self._linearized_context_commit():
             if self._transitions.closed or run_id in self._cancelled_run_ids:
                 return
@@ -3663,6 +3733,17 @@ class AgentSession:
                     call["presentation"] = presentation
             prepared.append(call)
         return prepared
+
+    def _claim_effect(self, assistant_id: str, call: PluginCall) -> PluginCallResult | None:
+        failure = PluginFailure("tool_execution_unknown",
+            "A previous execution started but has no durable result. Do not replay; reconcile external state.",
+            retryable=False, retry_scope="never", circuit_scope="none")
+        unknown = PluginCallResult(call.id, call.name, False, None, failure.message,
+            datetime.now(timezone.utc), failure,
+            {"code": failure.error_code, "retryable": False, "retry_scope": "never", "replay_safe": False})
+        if self.store.claim_effect(self.tree.id, assistant_id, call.id, self._stored_result(unknown)):
+            return None
+        return unknown
 
     def _persist_effect_result(self, assistant_id: str, result: PluginCallResult) -> None:
         with self._state_lock:
@@ -3913,6 +3994,7 @@ class AgentSession:
             ),
             completed=completed,
             on_result=lambda result: self._persist_effect_result(assistant.id, result),
+            before_execute=lambda call: self._claim_effect(assistant.id, call),
         )
         if self._is_cancelled(run_id):
             return
@@ -3960,7 +4042,9 @@ class AgentSession:
                 },
                 node_id=self._stable_id("tool_results", batch_key),
             )
-            self.store.clear_effect_results(self.tree.id, assistant.id)
+            # Retain execution receipts as the replay fence/audit trail. Their
+            # lifetime follows the assistant node (ON DELETE CASCADE), not a
+            # fallible cleanup operation on the completion path.
             if pending_question is not None:
                 tool_state = self._set_state_locked(
                     "awaiting_user",

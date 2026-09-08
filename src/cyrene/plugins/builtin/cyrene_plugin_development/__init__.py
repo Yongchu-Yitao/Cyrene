@@ -5,6 +5,7 @@ from __future__ import annotations
 from cyrene.core.plugin import Plugin, PluginPack
 
 from . import tools
+from .inspection import INSPECTION_PLUGIN
 
 
 def _plugin(name, description, schema, handler, *, read_only):
@@ -96,6 +97,7 @@ plugin_pack = PluginPack(
         "integrations, source files, and Hooks."
     ),
     plugins=(
+        INSPECTION_PLUGIN,
         _plugin(
             "PluginAuthoringGuide",
             "Load the unified Cyrene PluginPack authoring, Workbench view, and RPC contract.",

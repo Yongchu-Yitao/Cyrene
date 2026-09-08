@@ -158,7 +158,7 @@ class DoctorService:
                     if self.host is None:
                         raise RuntimeError("Agent is unavailable")
                     from .agent_analysis import analyze
-                    value = await asyncio.wait_for(analyze(report, self.host.model_gateway, self.data / "doctor" / "analysis" / identifier, on_retry=recovering), ANALYSIS_TIMEOUT)
+                    value = await asyncio.wait_for(analyze(report, self.host.model_gateway, self.data / "doctor" / "analysis" / identifier, on_retry=recovering, host=self.host), ANALYSIS_TIMEOUT)
                 else:
                     value = await asyncio.wait_for(self.analyzer(report), ANALYSIS_TIMEOUT)
                 analysis = {"status": "completed", "retry_count": self.get(identifier)["analysis"].get("retry_count", 0), **redact(value)}
@@ -168,6 +168,7 @@ class DoctorService:
                 code = "model_timeout" if isinstance(exc, TimeoutError) else error_code(exc)
                 analysis = {"status": "unavailable", "code": code, "direction": direction(code)}
             latest = self.get(identifier)
+            latest["findings"].extend(analysis.pop("investigation_findings", []))
             latest["analysis"] = analysis
             self.repository.save(latest)
             self.tasks.pop(identifier, None)
@@ -198,10 +199,10 @@ class DoctorService:
         await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
         await asyncio.gather(*list(self.repairs.commits), return_exceptions=True)
 
-    async def diagnose_failure(self, scope, *, language='zh'):
+    async def diagnose_failure(self, scope, *, language='zh', description=''):
         from .failure_workflow import start_failure
         async with self.failure_start_lock:
-            return await start_failure(self, scope, language=language)
+            return await start_failure(self, scope, language=language, description=description)
 
     async def cancel_failure(self, identifier):
         report = self.get(identifier)

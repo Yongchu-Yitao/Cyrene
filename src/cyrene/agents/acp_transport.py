@@ -162,6 +162,7 @@ class AcpStdioTransport:
         shutdown_grace_seconds: float = DEFAULT_SHUTDOWN_GRACE_SECONDS,
         kill_grace_seconds: float = DEFAULT_KILL_GRACE_SECONDS,
         notification_limit: int = _NOTIFICATION_QUEUE_MAX,
+        write_timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         self.command = str(command or "").strip()
         self.args = tuple(str(arg) for arg in (args or ()))
@@ -176,7 +177,10 @@ class AcpStdioTransport:
         self.stderr_limit = int(stderr_limit_bytes)
         self.shutdown_grace = float(shutdown_grace_seconds)
         self.kill_grace = float(kill_grace_seconds)
-        self.notification_limit = int(notification_limit)
+        self.notification_limit = max(1, int(notification_limit))
+        self.write_timeout = float(write_timeout)
+        if self.write_timeout <= 0:
+            raise ValueError("write_timeout must be positive")
 
         self.process: asyncio.subprocess.Process | None = None
         self.negotiated_protocol_version = 0
@@ -186,7 +190,8 @@ class AcpStdioTransport:
 
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._next_id = 1
-        self._notifications: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._notifications: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self.notification_limit)
+        self._terminal_error: AcpTransportError | None = None
         self._dropped_notifications = 0
         self._stderr_lines: deque[str] = deque()
         self._stderr_bytes = 0
@@ -329,25 +334,20 @@ class AcpStdioTransport:
             "ACP request %s (id=%s) to %s; pending=%d",
             method, request_id, getattr(self.process, "pid", "?"), len(self._pending),
         )
-        try:
-            await self._write_frame(frame)
-        except Exception:
-            self._pending.pop(request_id, None)
-            raise
         effective_timeout = self.request_timeout if timeout is None else float(timeout)
         try:
-            if effective_timeout > 0:
-                result = await asyncio.wait_for(future, timeout=effective_timeout)
-            else:
+            # One deadline owns the complete exchange, including stdin backpressure.
+            # Long-running prompts may omit the response deadline; writes always
+            # have their own finite transport deadline.
+            async with asyncio.timeout(effective_timeout if effective_timeout > 0 else None):
+                await self._write_frame(frame)
                 result = await future
         except asyncio.TimeoutError:
-            if not future.done():
-                future.cancel()
             raise AcpTransportError(
                 "agent_crashed",
                 f"ACP request {method!r} timed out after {effective_timeout:g}s",
                 detail={"method": method, "timeout": effective_timeout, "kind": "timeout"},
-                retryable=True,
+                retryable=not self._closed,
             ) from None
         except JsonRpcError as exc:
             # Remote JSON-RPC errors are wrapped so callers can implement
@@ -364,6 +364,12 @@ class AcpStdioTransport:
             ) from exc
         finally:
             self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
+            elif not future.cancelled():
+                # A write failure can fail the transport before we await this
+                # future. Its exception still belongs to this request.
+                future.exception()
         return result
 
     async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
@@ -379,9 +385,9 @@ class AcpStdioTransport:
     def notifications(self) -> AsyncIterator[dict[str, Any]]:
         """Async iterator over server-to-client notifications.
 
-        Notifications are buffered in a bounded queue so a slow consumer cannot
-        grow memory without limit; overflow drops the oldest notifications and
-        increments ``dropped_notifications``.
+        Output deltas and peer requests are lossless protocol data. Exhausting
+        the bounded queue fails the transport instead of silently corrupting a
+        turn or dropping the only permission request that could unblock it.
         """
         return self._notification_iterator()
 
@@ -407,22 +413,39 @@ class AcpStdioTransport:
         quiet = max(0.0, float(quiet_seconds))
         deadline = asyncio.get_running_loop().time() + max(quiet, float(max_wait_seconds))
         discarded = 0
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                return discarded
-            try:
-                await asyncio.wait_for(
-                    self._notifications.get(),
-                    timeout=min(quiet, remaining) if quiet > 0 else 0,
-                )
-            except (asyncio.TimeoutError, asyncio.QueueEmpty):
-                return discarded
-            discarded += 1
+        requests: list[dict[str, Any]] = []
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return discarded
+                try:
+                    frame = await asyncio.wait_for(
+                        self._notifications.get(),
+                        timeout=min(quiet, remaining) if quiet > 0 else 0,
+                    )
+                except (asyncio.TimeoutError, asyncio.QueueEmpty):
+                    return discarded
+                if frame_kind(frame) == "request":
+                    requests.append(frame)
+                    if len(requests) >= self.notification_limit:
+                        return discarded
+                else:
+                    discarded += 1
+        finally:
+            # Replay filtering applies only to notifications. Peer requests
+            # still require a response even when they arrived during load.
+            queued = []
+            while not self._notifications.empty():
+                queued.append(self._notifications.get_nowait())
+            for frame in (*requests, *queued):
+                self._queue_notification(frame)
 
     async def _notification_iterator(self) -> AsyncIterator[dict[str, Any]]:
         while True:
             if self._closed and self._notifications.empty():
+                if self._terminal_error is not None:
+                    raise self._terminal_error
                 return
             try:
                 frame = await asyncio.wait_for(self._notifications.get(), timeout=0.5)
@@ -438,7 +461,7 @@ class AcpStdioTransport:
         process = self.process
         assert process is not None and process.stdout is not None
         try:
-            while True:
+            while not self._closed:
                 line = await process.stdout.readline()
                 if not line:
                     break
@@ -503,16 +526,28 @@ class AcpStdioTransport:
         self._record_protocol_error("invalid_frame", text[:200])
 
     def _queue_notification(self, frame: dict[str, Any]) -> None:
-        if self._notifications.qsize() >= self.notification_limit:
-            try:
-                self._notifications.get_nowait()
-                self._dropped_notifications += 1
-            except asyncio.QueueEmpty:
-                pass
         try:
             self._notifications.put_nowait(frame)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("ACP notification dropped (%s); pending request may hang", exc)
+        except asyncio.QueueFull:
+            self._fail_transport(AcpTransportError(
+                "agent_crashed",
+                "ACP event consumer exceeded the lossless queue capacity",
+                detail={"kind": "event_overflow", "limit": self.notification_limit},
+                retryable=False,
+            ))
+
+    def _fail_transport(self, error: AcpTransportError) -> None:
+        """Retire a protocol stream that can no longer safely serve requests."""
+        if self._closed:
+            return
+        self._terminal_error = error
+        self._closed = True
+        self._fail_pending(error)
+        if self._process_is_alive():
+            try:
+                self.process.terminate()
+            except ProcessLookupError:
+                pass
 
     async def _drain_stderr(self) -> None:
         process = self.process
@@ -609,8 +644,21 @@ class AcpStdioTransport:
         self._ensure_running()
         assert self.process is not None and self.process.stdin is not None
         try:
-            self.process.stdin.write((json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8"))
-            await self.process.stdin.drain()
+            async with asyncio.timeout(self.write_timeout):
+                self.process.stdin.write((json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8"))
+                await self.process.stdin.drain()
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            # Bytes may already be in the pipe. The stream cannot be reused as
+            # though the cancelled exchange had never been sent.
+            error = AcpTransportError(
+                "agent_crashed", "ACP stdin write did not settle",
+                detail={"kind": "write_interrupted", "timeout": self.write_timeout},
+                retryable=False,
+            )
+            self._fail_transport(error)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise error from exc
         except (BrokenPipeError, ConnectionResetError, RuntimeError) as exc:
             self._on_eof_or_error()
             raise AcpTransportError(

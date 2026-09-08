@@ -622,6 +622,7 @@ class HookSet:
         self,
         hooks: tuple[Hook, ...],
         event: HookEvent,
+        checkpoint: Callable[[str, str], bool] | None = None,
     ) -> tuple[Any, ...]:
         with operation(
             logger,
@@ -637,12 +638,18 @@ class HookSet:
             results: list[Any] = []
             failed: list[str] = []
             for hook in hooks:
+                if checkpoint is not None and not checkpoint(hook.id, "started"):
+                    continue
                 try:
                     results.append(await self._call(hook, event))
-                except asyncio.CancelledError:
-                    raise
-                except PLUGIN_BOUNDARY_ERRORS as exc:
-                    if hook.failure_policy == "closed":
+                except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        task = asyncio.current_task()
+                        if task is not None and task.cancelling():
+                            raise
+                    if checkpoint is not None:
+                        checkpoint(hook.id, "failed")
+                    if hook.failure_policy == "closed" and checkpoint is None:
                         log_operation(
                             logger,
                             "hook.set",
@@ -671,6 +678,9 @@ class HookSet:
                         event=event.name,
                         error=exc,
                     )
+                else:
+                    if checkpoint is not None:
+                        checkpoint(hook.id, "completed")
             op.finish(result_count=len(results), failed_hooks=failed, results=results)
             return tuple(results)
 
@@ -1083,8 +1093,10 @@ class HookSet:
             tree_id=self.tree_id,
             thread=threading.current_thread().name,
         )
+        item: WorkItem | None = None
         try:
             while True:
+                item = None
                 try:
                     item = self._work.get(timeout=_HOOK_WORKER_IDLE_SECONDS)
                 except queue.Empty:
@@ -1144,6 +1156,23 @@ class HookSet:
                     loop.run_until_complete(self._drain_persisted())
                     _settle_future(item.future)
         except BaseException as exc:
+            # A worker owns every accepted request until it settles it. Retire
+            # the failed worker and detach its queue atomically; a later caller
+            # can then start a fresh worker without inheriting orphan waiters.
+            with self._lock:
+                abandoned = [item]
+                while True:
+                    try:
+                        abandoned.append(self._work.get_nowait())
+                    except queue.Empty:
+                        break
+                self._wake_enqueued = False
+                if self._thread is threading.current_thread():
+                    self._thread = None
+            for request in abandoned:
+                future = getattr(request, "future", None)
+                if future is not None:
+                    _settle_future(future, error=exc)
             log_operation(
                 logger,
                 "hook.set",
@@ -1155,7 +1184,8 @@ class HookSet:
                 thread=threading.current_thread().name,
                 error=exc,
             )
-            raise
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
         finally:
             with self._lock:
                 if self._thread is threading.current_thread():
@@ -1550,9 +1580,9 @@ class HookSet:
         details: Mapping[str, Any] | None = None,
         *,
         time: datetime | None = None,
+        checkpoint: Callable[[str, str], bool] | None = None,
     ) -> tuple[Any, ...]:
-        return await self.dispatch(
-            HookEvent(
+        event = HookEvent(
                 SESSION_END,
                 self.tree_id,
                 time or _utc_now(),
@@ -1560,7 +1590,10 @@ class HookSet:
                 node_id=self.root_id,
                 is_root=True,
             )
-        )
+        if checkpoint is None:
+            return await self.dispatch(event)
+        await self._prepare_dispatch()
+        return await self._dispatch_snapshot(self._snapshot(event), event, checkpoint)
 
     async def conversation_turn_committed(
         self,

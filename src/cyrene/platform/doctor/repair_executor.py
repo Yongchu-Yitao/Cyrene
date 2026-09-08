@@ -12,8 +12,10 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import sys
 import tempfile
+import tomllib
 
 from .repair_workspace import materialize
 
@@ -21,8 +23,22 @@ OUTPUT_LIMIT = 16_000
 PROBE_TIMEOUT = 15
 
 
+def python_executable():
+    if not getattr(sys, 'frozen', False):
+        return str(Path(sys.executable).resolve())
+    # Reuse the environment plugin's installed runtimes. Never launch the
+    # frozen app as `python`, install dependencies, or fall back outside isolation.
+    from cyrene.plugins.application import application_plugin_service
+    extensions = application_plugin_service('extensions')
+    env = extensions.process_environment({'PATH': os.environ.get('PATH', '')}) if extensions else os.environ
+    executable = shutil.which('python3', path=env.get('PATH', ''))
+    if executable and Path(executable).resolve() != Path(sys.executable).resolve():
+        return str(Path(executable).resolve())
+    return None
+
+
 def capabilities() -> dict:
-    isolated = sys.platform == 'darwin' and not getattr(sys, 'frozen', False) and Path('/usr/bin/sandbox-exec').is_file()
+    isolated = sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file() and python_executable() is not None
     return {'mode': 'isolated_python' if isolated else 'static_only',
             'network': False, 'probe_timeout_seconds': PROBE_TIMEOUT}
 
@@ -30,22 +46,29 @@ def capabilities() -> dict:
 def syntax_check(files: dict[str, bytes]) -> dict:
     errors = []
     for name, raw in files.items():
-        if not name.endswith('.py'):
+        if not name.endswith(('.py', '.json', '.toml')):
             continue
         try:
-            ast.parse(raw, filename=name)
+            if name.endswith('.json'):
+                json.loads(raw)
+            elif name.endswith('.toml'):
+                tomllib.loads(raw.decode('utf-8'))
+            else:
+                ast.parse(raw, filename=name)
         except (SyntaxError, UnicodeError, ValueError, RecursionError) as exc:
             errors.append({'file': name, 'line': getattr(exc, 'lineno', None), 'type': type(exc).__name__})
     return {'status': 'failed' if errors else 'passed', 'errors': errors}
 
 
-def _profile(source: Path, probe: Path, temporary: Path) -> str:
+def _profile(source: Path, probe: Path, temporary: Path, executable=None, runtime_roots=()) -> str:
     # JSON quoting also safely quotes Seatbelt path strings.
+    executable = executable or sys.executable
     reads = {str(Path(sys.base_prefix).resolve()), str(Path(sys.prefix).resolve()),
              '/System', '/usr/lib', '/usr/share', '/Library/Apple/System/Library',
              str(source), str(probe), str(Path(__file__).resolve().parents[2])}
+    reads.update(str(Path(p).resolve()) for p in runtime_roots)
     rules = ['(version 1)', '(deny default)', '(allow sysctl-read)',
-             '(allow process-exec (literal ' + json.dumps(str(Path(sys.executable).resolve())) + '))',
+             '(allow process-exec (literal ' + json.dumps(str(Path(executable).resolve())) + '))',
              '(allow file-read-metadata)',
              '(allow file-read* (literal "/"))',
              '(allow file-read* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))',
@@ -60,6 +83,8 @@ async def run_probe(files: dict[str, bytes], probe: str) -> dict:
         return {'status': 'unavailable', 'reason': 'isolated_executor_unavailable'}
     if not isinstance(probe, str) or not probe.strip() or len(probe.encode()) > 16_000:
         raise ValueError('Provide a Python reproduction of at most 16000 bytes')
+    executable = python_executable()
+    runtime_roots = [str(Path(executable).resolve().parent.parent)]
     with tempfile.TemporaryDirectory(prefix='cyrene-doctor-probe-') as raw_directory:
         directory = Path(raw_directory).resolve()
         source, temporary = directory / 'source', directory / 'tmp'
@@ -76,8 +101,8 @@ async def run_probe(files: dict[str, bytes], probe: str) -> dict:
             + 'print("CYRENE_PROBE_READY", flush=True)\n'
             + 'exec(compile(' + repr(probe) + ', "<doctor-reproduction>", "exec"))\n', encoding='utf-8')
         process = await asyncio.create_subprocess_exec(
-            '/usr/bin/sandbox-exec', '-p', _profile(source, runner, temporary),
-            sys.executable, '-I', '-B', str(runner),
+            '/usr/bin/sandbox-exec', '-p', _profile(source, runner, temporary, executable, runtime_roots),
+            executable, '-I', '-B', str(runner),
             cwd=source, env={'PATH': '/usr/bin:/bin', 'HOME': str(temporary), 'TMPDIR': str(temporary), 'LANG': 'en_US.UTF-8'},
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
         output = bytearray()

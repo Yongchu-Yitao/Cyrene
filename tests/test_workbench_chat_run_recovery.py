@@ -6,6 +6,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_startup_recovers_crashed_running_chat_and_clears_stale_question(tmp_path):
     from cyrene.platform.database import init_db
@@ -264,6 +266,52 @@ async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
         *(["reply_delta"] * 32),
         "reply_done",
     ]
+
+
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_terminal_flush_does_not_resubmit_inflight_events(monkeypatch, tmp_path, cancel_waiter):
+    from cyrene.workbench.chat.chat_runs import ChatRun, ChatRunEventStore
+
+    store = ChatRunEventStore(str(tmp_path / "inflight.sqlite3"))
+    run = ChatRun("inflight", {"type": "ack"})
+    await run.configure_event_store(store)
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    submitted = []
+    original = store.append_many
+
+    def blocked(run_id, events):
+        submitted.extend(event["_seq"] for event in events)
+        loop.call_soon_threadsafe(entered.set)
+        if not release.wait(5):
+            raise TimeoutError("test did not release the writer")
+        original(run_id, events)
+
+    monkeypatch.setattr(store, "append_many", blocked)
+    waiter = None
+    try:
+        await run.publish({"type": "reply_done", "response": "first"})
+        await asyncio.wait_for(entered.wait(), 2)
+        await run.publish({"type": "saved"})
+        waiter = asyncio.create_task(run.flush_event_store())
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        if cancel_waiter:
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+        assert submitted == [2]
+    finally:
+        release.set()
+        if waiter is not None:
+            await asyncio.gather(waiter, return_exceptions=True)
+        await run.flush_event_store()
+
+    assert submitted == [2, 3]
+    restored = store.load_by_run_id(run.run_id)
+    assert restored is not None
+    assert restored.events == run.events
 
 
 async def test_visible_tool_start_seals_streamed_reply_before_tool_event():

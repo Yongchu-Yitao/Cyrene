@@ -43,3 +43,26 @@ test('structured failure preserves incident and run metadata', () => {
   assert.equal(error.runId, 'run_old');
   assert.equal(error.incidentId, 'incident_old');
 });
+
+test('failure progress and diagnosis share one card', () => {
+  const code = transformSync(readFileSync(new URL('./doctor.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
+  const report = { id: 'one', scope: { run_id: 'run_one' }, findings: [], analysis: { status: 'completed', summary: 'The failed stage', user_summary: 'The reply stopped unexpectedly'  },
+    failure: { status: 'needs_attention', phase: 'diagnosed', reason: 'host_transition_failed' } };
+  const runtime = { ...React, useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
+    useRef: value => ({ current: value }), useEffect: () => {}, useId: () => 'description' };
+  const context = { module: { exports: {} }, React: runtime, require: () => ({ cachedReport: () => report,
+    useWorkbenchI18n: () => ({ lang: 'en', t: key => key }) }) };
+  vm.runInNewContext(code, context);
+  function nodes(node) { return React.isValidElement(node) ? [node, ...React.Children.toArray(node.props.children).flatMap(nodes)] : []; }
+  const rendered = nodes(context.module.exports.DoctorPanel({ scope: {} }));
+  const cards = rendered.filter(n => n.props.className === 'wb-doctor-analysis');
+  assert.equal(cards.length, 1);
+  assert.ok(nodes(cards[0]).some(n => n.props.children === 'The reply stopped unexpectedly'));
+  assert.ok(!nodes(cards[0]).some(n => n.props.children === 'The failed stage'));
+  const technical = rendered.find(n => n.props.className === 'wb-doctor-technical wb-doctor-finding');
+  assert.equal(technical.type, 'details');
+  assert.ok(!technical.props.open);
+  assert.ok(nodes(technical).some(n => n.props.children === 'The failed stage'));
+  assert.ok(nodes(technical).some(n => n.type === 'pre' && n.props.children.includes('run_one')));
+  assert.ok(nodes(cards[0]).some(n => n.props.className === 'wb-doctor-failure-progress'));
+});

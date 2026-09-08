@@ -44,6 +44,7 @@ from cyrene.localization import localized
 from cyrene.model.status import model_status_message, register_model_status_persister
 from cyrene.observability.trace import trace_span
 from cyrene.platform.run_coordinator import RunCoordinator, RunLease, run_coordinator_for
+from cyrene.platform.task_lifecycle import cancel_and_wait, wait_for_tasks
 from cyrene.workbench.chat.chat_application import (
     merge_chat_messages_chronologically,
     utc_now_iso,
@@ -79,7 +80,7 @@ _DURABLE_RETENTION_DAYS = 7
 _DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 1.0
 _DURABLE_EVENT_BATCH_MAX = 512
 _DURABLE_EVENT_BUSY_TIMEOUT_SECONDS = 1.0
-_COMPRESSED_EVENT_PREFIX = b"CYE1"
+DURABLE_EVENT_PREFIX = b"CYE1"
 _COMPRESS_EVENT_MIN_BYTES = 512
 _BATCHABLE_DURABLE_EVENT_TYPES = frozenset({
     "reasoning_delta",
@@ -126,17 +127,17 @@ def _encode_durable_event(event: dict[str, Any]) -> str | memoryview:
     if len(raw) < _COMPRESS_EVENT_MIN_BYTES:
         return raw.decode("utf-8")
     compressed = zlib.compress(raw, level=3)
-    if len(compressed) + len(_COMPRESSED_EVENT_PREFIX) >= len(raw):
+    if len(compressed) + len(DURABLE_EVENT_PREFIX) >= len(raw):
         return raw.decode("utf-8")
-    return sqlite3.Binary(_COMPRESSED_EVENT_PREFIX + compressed)
+    return sqlite3.Binary(DURABLE_EVENT_PREFIX + compressed)
 
 
 def _decode_durable_event(value: Any) -> dict[str, Any]:
     if isinstance(value, memoryview):
         value = value.tobytes()
     if isinstance(value, bytes):
-        if value.startswith(_COMPRESSED_EVENT_PREFIX):
-            value = zlib.decompress(value[len(_COMPRESSED_EVENT_PREFIX):])
+        if value.startswith(DURABLE_EVENT_PREFIX):
+            value = zlib.decompress(value[len(DURABLE_EVENT_PREFIX):])
         text = value.decode("utf-8")
     else:
         text = str(value)
@@ -543,6 +544,7 @@ class ChatRun:
         self._event_store: ChatRunEventStore | None = None
         self._event_store_pending: list[dict[str, Any]] = []
         self._event_store_flush_lock = asyncio.Lock()
+        self._event_store_flush_wake = asyncio.Event()
         self._event_store_flush_task: asyncio.Task[None] | None = None
         self._publish_lock = asyncio.Lock()
         self._persist_live_message = persist_live_message
@@ -597,6 +599,7 @@ class ChatRun:
         run._event_store = None
         run._event_store_pending = []
         run._event_store_flush_lock = asyncio.Lock()
+        run._event_store_flush_wake = asyncio.Event()
         run._event_store_flush_task = None
         run._publish_lock = asyncio.Lock()
         run._persist_live_message = None
@@ -664,12 +667,10 @@ class ChatRun:
     def _schedule_event_store_flush(self, *, immediate: bool = False) -> None:
         task = self._event_store_flush_task
         if task is not None and not task.done():
-            if not immediate:
-                return
-            # A terminal/non-batchable event should not sit behind the normal
-            # batching delay. Cancellation is safe because failed/in-flight
-            # batches are re-queued idempotently by sequence number.
-            task.cancel()
+            if immediate:
+                self._event_store_flush_wake.set()
+            return
+        self._event_store_flush_wake.clear()
         delay = 0.0 if immediate else _DURABLE_EVENT_BATCH_INTERVAL_SECONDS
         task = asyncio.create_task(self._flush_event_store_after_delay(delay))
         self._event_store_flush_task = task
@@ -691,8 +692,17 @@ class ChatRun:
 
     async def _flush_event_store_after_delay(self, delay: float) -> None:
         if delay > 0:
-            await asyncio.sleep(delay)
-        await self._flush_event_store_now()
+            try:
+                await asyncio.wait_for(self._event_store_flush_wake.wait(), delay)
+            except asyncio.TimeoutError:
+                pass
+        while True:
+            self._event_store_flush_wake.clear()
+            await self._flush_event_store_now()
+            # A publish during the write belongs to the next batch. Never
+            # cancel the writer: cancelling to_thread does not stop its work.
+            if not self._event_store_pending:
+                return
 
     async def _flush_event_store_now(self) -> None:
         store = self._event_store
@@ -723,8 +733,8 @@ class ChatRun:
         scheduled = self._event_store_flush_task
         current = asyncio.current_task()
         if scheduled is not None and scheduled is not current and not scheduled.done():
-            scheduled.cancel()
-            await asyncio.gather(scheduled, return_exceptions=True)
+            self._event_store_flush_wake.set()
+            await asyncio.gather(asyncio.shield(scheduled), return_exceptions=True)
         if self._event_store_flush_task is scheduled:
             self._event_store_flush_task = None
         await self._flush_event_store_now()
@@ -1581,6 +1591,7 @@ class ChatRunManager:
         """On graceful shutdown, give in-flight runs a chance to finalize (so a
         planned restart still persists replies) before cancelling the rest."""
         self.closed = True
+        self.conversation_runtime.begin_shutdown()
         tasks = [run.task for run in self.runs.values() if run.task is not None and not run.task.done()]
         if tasks:
             _done, pending = await asyncio.wait(tasks, timeout=self._shutdown_grace_seconds)
@@ -1588,14 +1599,18 @@ class ChatRunManager:
                 for run in self.runs.values():
                     if run.task is task:
                         run.termination_reason = "shutdown_timeout"
-                        self._coordinator.interrupt(
-                            "conversation",
-                            run.chat_id,
-                            reason=run.termination_reason,
-                        )
                         break
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+        # Stop the execution owner before its shielded waiters. Closing a
+        # Session preserves its checkpoint; user cancellation is a different
+        # domain operation and must not be synthesized during host shutdown.
+        await self.conversation_runtime.shutdown(grace_seconds=0)
+        for run in self.runs.values():
+            # An operation's CancelledError also enters _run's finalizer, but
+            # does not increment the waiter's Task.cancelling() counter. The
+            # domain state, not that counter, owns the finalization boundary.
+            if run.status == "running" and run.task in tasks and not run.task.done():
+                run.task.cancel()
+        await wait_for_tasks(tasks)
         for run_id, lease in list(self._leases.items()):
             if lease.task is None or lease.task.done():
                 self._coordinator.finish(
@@ -1604,12 +1619,8 @@ class ChatRunManager:
                     termination_reason=lease.termination_reason or "shutdown",
                 )
                 self._leases.pop(run_id, None)
-        for task in list(self._cleanup_tasks):
-            task.cancel()
-        if self._cleanup_tasks:
-            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+        await cancel_and_wait(self._cleanup_tasks)
         self._cleanup_tasks.clear()
-        await self.conversation_runtime.shutdown()
 
 
 # Detached post-reply bookkeeping (workspace-changes finalize, structured

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from cyrene.plugins.management import pack_status, plugin_status, delete_source
+
 import json
 import logging
 import mimetypes
 import os
 import re
-import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -126,14 +127,8 @@ def _plugin_value(
     registry = host.registry
     plugin = registered.plugin
     source, source_path = _source_values(registered.source, seeded)
-    enabled = registry.plugin_enabled(plugin.name)
     customization = registry.customizations.get(plugin.canonical_name)
     pack_id = registered.pack_id
-    operational = (
-        enabled and host.pack_operational(pack_id)
-        if pack_id is not None
-        else enabled
-    )
     return {
         "id": plugin.canonical_name,
         "name": plugin.name,
@@ -142,20 +137,7 @@ def _plugin_value(
         "kind": plugin.kind,
         "pack_id": pack_id,
         "standalone": pack_id is None,
-        "configured_enabled": registry.plugin_configured_enabled(plugin.name),
-        "effective_enabled": enabled,
-        "operational": operational,
-        "running": (
-            enabled and host.pack_running(pack_id)
-            if pack_id is not None
-            else False
-        ),
-        "startup_error": (
-            host.startup_failures.get(pack_id, "") if pack_id is not None else ""
-        ),
-        "restart_required": (
-            host.pack_restart_required(pack_id) if pack_id is not None else False
-        ),
+        **plugin_status(registry, registered, host),
         "locked": registry.plugin_locked(plugin.name),
         "model_visible": plugin.model_visible,
         "agent_exposure": (
@@ -187,26 +169,13 @@ def _pack_value(
         _plugin_value(host, registered_by_name[plugin.name], seeded)
         for plugin in pack.plugins
     ]
-    configured_enabled = registry.pack_configured_enabled(pack.id)
     return {
         "id": pack.id,
         "name": pack.id,
         "description": pack.description,
         "i18n": dict(pack.metadata.get("i18n", {})),
-        "configured_enabled": configured_enabled,
-        "effective_enabled": (
-            any(plugin["effective_enabled"] for plugin in plugins)
-            if plugins
-            else configured_enabled
-        ),
-        "operational": host.pack_operational(pack.id),
-        "running": host.pack_running(pack.id),
-        "startup_error": host.startup_failures.get(pack.id, ""),
-        "restart_required": host.pack_restart_required(pack.id),
+        **pack_status(registry, pack, host),
         "locked": registry.pack_locked(pack.id),
-        "enabled_count": sum(
-            plugin["effective_enabled"] for plugin in plugins
-        ),
         "plugin_count": len(plugins),
         "tool_count": sum(plugin["kind"] == "tool" for plugin in plugins),
         "model_count": sum(plugin["kind"] == "model" for plugin in plugins),
@@ -636,7 +605,7 @@ def register_plugin_routes(
             body = await request.json()
             if not isinstance(body, dict) or not isinstance(body.get("path"), str):
                 raise ValueError("A local Plugin path is required.")
-            result = await install_plugin_file(body["path"])
+            result = await install_plugin_file(body["path"], host=host)
         except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         if not result.get("ok"):
@@ -673,19 +642,9 @@ def register_plugin_routes(
 
         try:
             source = host.registry.pack_source(pack_id)
-            source_path = Path(source)
-            if source == "core" or source_path.parent != host.plugin_directory:
-                raise PluginRegistryError(
-                    f"Plugin pack is not a managed user pack: {pack_id}"
-                )
-            from cyrene.plugins.native_tools import mark_builtin_plugin_deleted
-
-            mark_builtin_plugin_deleted(host.plugin_directory, source_path.name)
-            if source_path.is_dir() and not source_path.is_symlink():
-                shutil.rmtree(source_path)
-            else:
-                source_path.unlink()
-            seed, _failures = await host.reload_user_plugins()
+            if source == "core":
+                raise PluginRegistryError("Core packs cannot be deleted")
+            seed, _failures = await delete_source(host, Path(source))
         except PluginNotFoundError:
             return localized_error_response(
                 "Plugin pack not found.",

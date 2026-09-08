@@ -677,6 +677,10 @@ class ContextStoreRouter:
         )
         return node
 
+    def claim_effect(self, tree_id: str, assistant_node_id: str, call_id: str, marker: Any) -> bool:
+        with self._lease(tree_id) as store:
+            return store.claim_effect(assistant_node_id, call_id, marker)
+
     def save_effect_result(
         self,
         tree_id: str,

@@ -7,6 +7,7 @@ import threading
 from typing import Any
 
 from cyrene.platform import settings_store
+from cyrene.plugins.management import persist_activation
 from cyrene.plugins import WORKSPACE_PROJECT_TYPE, application_plugin_scope
 from cyrene.plugins.native_tools import restore_builtin_plugin
 
@@ -85,7 +86,7 @@ def ensure_project_plugins(
             installed_now = set(missing) & registered
 
         statuses: list[dict[str, Any]] = []
-        activation_changed = False
+        pack_updates = {}
         for pack_id in sorted(pack_ids):
             if pack_id not in registered:
                 statuses.append({
@@ -98,21 +99,18 @@ def ensure_project_plugins(
             was_enabled = host.registry.pack_enabled(pack_id)
             should_enable = force_enable or pack_id not in reconciled or pack_id in installed_now
             if should_enable and not was_enabled:
-                host.registry.set_pack_enabled(pack_id, True)
-                activation_changed = True
+                pack_updates[pack_id] = True
             reconciled.add(pack_id)
             statuses.append({
                 "packId": pack_id,
                 "installed": True,
                 "installedNow": pack_id in installed_now,
-                "enabled": host.registry.pack_enabled(pack_id),
+                "enabled": was_enabled or pack_id in pack_updates,
                 "enabledNow": should_enable and not was_enabled,
             })
 
-        if activation_changed:
-            snapshot = host.registry.activation.snapshot()
-            settings_store.save_enabled_plugins(snapshot.plugins)
-            settings_store.save_enabled_plugin_packs(snapshot.packs)
+        if pack_updates:
+            persist_activation(host.registry, plugins={}, packs=pack_updates, actor="ui")
         next_links = {**links, dependency: sorted(reconciled)}
         if next_links != links:
             settings_store.set_(_LINK_SETTING, next_links)

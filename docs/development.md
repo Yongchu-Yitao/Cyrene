@@ -195,6 +195,28 @@ project-type plugin contributions.
 Do not add business modules directly to the `cyrene.workbench` package root;
 place each module in its owning domain package.
 
+### Plugin management entry points
+
+Agent, HTTP, and maintenance clients share state queries and mutations from
+`cyrene.plugins.management`. Use `update_activation` to persist a settings patch,
+synchronize the registry, reconcile application lifecycle, and publish a notification.
+Synchronous project dependency discovery uses `persist_activation`; application startup
+and asynchronous management entries remain responsible for lifecycle reconciliation.
+Do not save whole activation snapshots or recalculate runtime state in adapters.
+A pack's `effective_enabled` represents its switch; `enabled_count` separately counts
+its enabled members. Disabling every tool does not disable the pack's application services.
+
+Install with `cyrene.plugins.installation.install_source` and statically validate with
+`cyrene.plugins.validation`. Internal functions return data; path selection, translation,
+and JSON encoding belong to adapters. Registry, Application, and Session share
+`core.plugin.source.python_source_signature` for Python source changes while retaining
+separate lifecycle behavior. Registry additionally tracks the shared i18n catalog.
+
+
+`setup` and `application_setup` must be synchronous. Validation and the host reject
+asynchronous setup, including synchronous wrappers that return a coroutine. Tool handlers,
+Hooks, and application startup callbacks may still be asynchronous.
+
 ### Adding New Tools
 
 1. Add the implementation to the owning pack under

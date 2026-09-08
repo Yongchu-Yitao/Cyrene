@@ -398,3 +398,17 @@ def pytest_runtest_call(item):
         if workers:
             names = ", ".join(worker.name for worker in workers)
             raise RuntimeError(f"aiosqlite workers did not stop during test teardown: {names}")
+
+
+@pytest.fixture
+def isolated_plugin_settings(tmp_path, monkeypatch):
+    """Exercise actual atomic settings updates without touching user configuration."""
+    from cyrene.platform import config_store
+    from cyrene.core import plugin
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
+
+    monkeypatch.setattr(config_store, "_cache", {})
+    monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "config.enc")
+    monkeypatch.setattr(config_store, "_KEY_PATH", tmp_path / ".config_key")
+    monkeypatch.setattr(config_store, "_fernet", None)
+    monkeypatch.setattr(plugin, "application_plugin_scope", lambda: tools.application_plugin_scope())

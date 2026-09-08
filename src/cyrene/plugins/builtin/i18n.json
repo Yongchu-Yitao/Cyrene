@@ -1315,6 +1315,16 @@
         "description": "查看、启用、停用或删除已安装的插件与插件包。"
       }
     },
+    "PluginRepairInspect": {
+      "en": {
+        "name": "Investigate plugin problems",
+        "description": "Investigate installed built-in and custom plugins before choosing a repair. Catalog lists source targets and lifecycle state; search finds literal references inside one target; read inspects a source file."
+      },
+      "zh": {
+        "name": "调查插件问题",
+        "description": "检查已安装插件的状态、搜索相关源码并读取限定范围内的文件，以便安全定位修复方案。"
+      }
+    },
     "PluginSourceManager": {
       "en": {
         "name": "Manage plugin source",

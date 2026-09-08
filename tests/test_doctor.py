@@ -238,11 +238,12 @@ async def test_isolated_agent_can_use_evidence_but_has_no_work_tools(setup, tmp_
             calls += 1
             tools_seen.extend(tool["function"]["name"] for tool in options.get("tools") or [])
             if calls == 1 or (invalid_first and calls == 2):
-                message = {"role": "assistant", "content": "", "tool_calls": [{"id": "call1", "name": "submit_diagnosis", "arguments": {"summary": "基础存储正常，Agent 未验证。", "evidence_ids": [report["findings"][0]["id"]], "next_steps": ["点击数据库写入测试" if invalid_first and calls == 1 else "测试模型连接"]}}]}
+                message = {"role": "assistant", "content": "", "tool_calls": [{"id": "call1", "name": "submit_diagnosis", "arguments": {"summary": "基础存储正常，Agent 未验证。", "user_summary": "已完成初步检查，还需要检查连接。", "user_next_steps": ["检查连接"], "evidence_ids": [report["findings"][0]["id"]], "next_steps": ["点击数据库写入测试" if invalid_first and calls == 1 else "测试模型连接"]}}]}
             else:
                 message = {"role": "assistant", "content": "Diagnosis complete"}
             return message
     result = await asyncio.wait_for(analyze(report, Gateway(), tmp_path / "analysis"), 10)
+    assert result["user_summary"] == "已完成初步检查，还需要检查连接。"
     assert result["evidence_ids"] == [report["findings"][0]["id"]]
     assert result["next_steps"] == ["测试模型连接"]
     assert "submit_diagnosis" in tools_seen

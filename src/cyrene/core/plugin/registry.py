@@ -21,6 +21,7 @@ from cyrene.path_policy import user_data_dir
 
 from ..observability import log_operation
 from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS
+from .source import python_source_signature as _python_source_signature
 from .activation import (
     PluginActivationState,
     active_plugin_activation_state,
@@ -133,36 +134,10 @@ def _contains_python_source(directory: Path) -> bool:
         return True
 
 
-def _python_source_signature(entry: Path) -> str:
-    """Return a stable digest for the Python source owned by one contribution."""
-
-    files = (
-        tuple(
-            candidate
-            for candidate in sorted(entry.rglob("*.py"))
-            if "__pycache__" not in candidate.parts
-        )
-        if entry.is_dir()
-        else (entry,)
-    )
-    digest = hashlib.sha256()
-    for candidate in files:
-        relative = (
-            candidate.relative_to(entry)
-            if entry.is_dir()
-            else Path(candidate.name)
-        )
-        digest.update(relative.as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(candidate.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
 def _contribution_signature(entry: Path, catalog: Path) -> str:
     """Include shared catalog changes in each contribution's reload key."""
 
-    digest = hashlib.sha256(_python_source_signature(entry).encode("ascii"))
+    digest = hashlib.sha256((_python_source_signature(entry) or "").encode("ascii"))
     if catalog.is_file():
         digest.update(catalog.read_bytes())
     return digest.hexdigest()

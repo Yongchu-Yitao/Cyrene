@@ -9,6 +9,7 @@ import os
 from pathlib import Path, PurePosixPath
 import tempfile
 
+EDITABLE_SUFFIXES = {'.py', '.json', '.toml', '.js', '.jsx', '.html', '.css', '.md', '.txt'}
 MAX_FILE = 256_000
 MAX_TOTAL = 4_000_000
 
@@ -75,12 +76,12 @@ def materialize(directory: Path, files: dict[str, bytes]) -> None:
 
 def apply_changes(files: dict[str, bytes], changes: list[dict]) -> dict[str, bytes]:
     if not 1 <= len(changes) <= 8:
-        raise ValueError('A repair must change between one and eight Python files')
+        raise ValueError('A repair must change between one and eight source files')
     result, seen = dict(files), set()
     for change in changes:
         name = relative_path(change['path'])
-        if name in seen or name not in files or not name.endswith('.py'):
-            raise ValueError('Only distinct existing Python files in the selected plugin can be edited')
+        if name in seen or name not in files or PurePosixPath(name).suffix not in EDITABLE_SUFFIXES:
+            raise ValueError('Only distinct existing source files in the selected plugin can be edited')
         seen.add(name)
         before, after = change['before'], change['after']
         if not isinstance(before, str) or not isinstance(after, str) or len(after.encode()) > MAX_FILE:

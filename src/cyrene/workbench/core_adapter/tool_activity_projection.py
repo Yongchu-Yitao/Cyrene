@@ -205,6 +205,7 @@ def _terminal_run_ids(nodes):
         and str(value.get("run_id") or "")
         and (
             value.get("session_end_complete") is True
+            or value.get("answer_complete") is True
             or value.get("error") is True
             or value.get("cancelled") is True
         )

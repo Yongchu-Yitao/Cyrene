@@ -1,6 +1,8 @@
 import json
 import httpx
 import pytest
+
+pytestmark = pytest.mark.usefixtures("isolated_plugin_settings")
 from fastapi import FastAPI, APIRouter
 from cyrene.core import AgentSession
 from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
@@ -28,9 +30,6 @@ async def test_walkthrough(tmp_path,monkeypatch,kind):
         host.app.include_router(router)
         hosts.append(host)
         return host
-    from cyrene.platform import settings_store
-    monkeypatch.setattr(settings_store,'save_enabled_plugins',lambda v:None)
-    monkeypatch.setattr(settings_store,'save_enabled_plugin_packs',lambda v:None)
     host=new_host(registry)
     await host.startup()
     runtime=PluginRuntime(registry)

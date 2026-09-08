@@ -67,11 +67,16 @@ def run_evidence(database: Path, scope: dict) -> list[dict]:
                         {'node_id': node_id, 'run_id': run, 'tool': str(tool.get('name') or ''),
                          'call_id': str(tool.get('call_id') or ''), 'success': tool.get('success'),
                          'code': failure.get('error_code'), 'retry_scope': failure.get('retry_scope'), 'terminal_batch': position == 0}))
-            elif value.get('role') == 'assistant' and value.get('failure_kind'):
-                results.append(finding(str(value['failure_kind']), 'failed', '本次 Agent 终止原因', 'Agent termination in this run',
-                    {'run_id': run, 'node_id': node_id, 'failure_kind': value['failure_kind']}))
+            elif value.get('role') == 'assistant' and (value.get('failure_kind') or value.get('error') is True or value.get('session_end_status') == 'failed'):
+                results.append(finding(str(value.get('failure_kind') or 'agent_transition_failed'), 'failed', '本次 Agent 终止原因', 'Agent termination in this run',
+                    {'run_id': run, 'node_id': node_id, 'failure_kind': value.get('failure_kind'), 'stage': value.get('failure_stage') or 'agent_transition', 'exception_type': value.get('exception_type'), 'frames': value.get('failure_frames', []), 'session_end_status': value.get('session_end_status'), 'caused_by': value.get('caused_by')}))
     except (OSError, ValueError, TypeError, sqlite3.Error):
         return [finding('run_evidence_unavailable', 'unknown', '无法读取本次运行证据', 'Run evidence could not be read')]
+    successful = [item for item in results if item['code'] == 'run_tool_completed']
+    results = [item for item in results if item['code'] != 'run_tool_completed']
+    if successful:
+        results.append(finding('run_tools_completed', 'info', '已完成的工具调用汇总（不会重放）', 'Completed tool calls (not replayed)',
+            {'run_id': run, 'count': len(successful), 'tools': sorted({item['evidence']['tool'] for item in successful})[:30]}))
     return results
 
 
@@ -104,7 +109,9 @@ def implicated_targets(report, host, plugins):
     return sorted(targets)
 
 
-async def start_failure(doctor, scope, *, language='zh'):
+async def start_failure(doctor, scope, *, language='zh', description=''):
+    if not isinstance(description, str) or len(description) > 4000:
+        raise ValueError('Problem description must be at most 4000 characters')
     if not scope.get('chat_id') and not scope.get('incident_id'):
         raise ValueError('Failure diagnosis requires a conversation or incident')
     if doctor.failure_tasks or doctor.tasks or doctor.lock.locked():
@@ -128,10 +135,14 @@ async def start_failure(doctor, scope, *, language='zh'):
         scope = report['scope']
     report = await doctor.diagnose(scope, language=language)
     report['findings'].extend(await asyncio.to_thread(run_evidence, doctor.database, scope))
+    from .runtime_evidence import collect_runtime_evidence
+    report['findings'].extend(await asyncio.to_thread(collect_runtime_evidence, doctor.database, doctor.data, scope))
     for index, item in enumerate(report['findings']):
         item['id'] = 'e' + str(index + 1)
     report['findings'] = redact(report['findings'])
     report['user_description'] = '诊断并尝试修复这次失败运行，定位最后失败阶段；不要重放已成功工具或修改无关插件。' if language == 'zh' else 'Diagnose and attempt repair of this failed run. Locate its failed stage; do not replay successful tools or change unrelated plugins.'
+    if description.strip():
+        report['user_description'] = redact(description.strip())
     report['failure'] = {'status': 'running', 'phase': 'analyzing'}
     doctor.repository.save(report)
 
@@ -143,6 +154,24 @@ async def start_failure(doctor, scope, *, language='zh'):
     async def work():
         repair_id = None
         try:
+            current = doctor.get(report['id'])
+            codes = {f['code'] for f in current['findings'] if f['status'] == 'failed'}
+            # A generic terminal failure also needs a current connectivity check;
+            # do this before analysis so the conclusion includes its result.
+            should_probe = 'run_pending_question' not in codes and (any(c.startswith(('model_', 'llm_')) for c in codes) or not implicated_targets(current, doctor.host, doctor.plugins))
+            if should_probe:
+                update(phase='probing_model')
+                probed = await doctor.probe_model(report['id'])
+                current = doctor.get(report['id'])
+                result = probed['model_probe']
+                current['model_probe'] = result
+                current['findings'].append(finding('diagnostic_model_probe', result['status'],
+                    'Doctor 已主动测试当前模型连接（不重放原任务）', 'Doctor tested the current model connection without replaying the task',
+                    {'run_id': scope.get('run_id'), **result}))
+                for index, item in enumerate(current['findings']):
+                    item['id'] = 'e' + str(index + 1)
+                doctor.repository.save(current)
+            update(phase='analyzing')
             await doctor.start_analysis(report['id'], description=report['user_description'])
             task = doctor.tasks.get(report['id'])
             if task:
@@ -156,15 +185,23 @@ async def start_failure(doctor, scope, *, language='zh'):
             if 'run_pending_question' in failure_codes:
                 update('needs_attention', phase='diagnosed', reason='pending_question_requires_answer')
                 return
-            model_failure = any(code.startswith(('model_', 'llm_')) for code in failure_codes)
-            if model_failure:
-                update(phase='probing_model')
-                probed = await doctor.probe_model(report['id'])
-                update('needs_attention', phase='model_checked', reason='model_probe_passed' if probed['model_probe']['status'] == 'passed' else 'model_probe_failed')
+            action = latest['analysis'].get('repair_action')
+            if action:
+                prepared = await doctor.plan_repair(report['id'], action['finding_id'], action['action_index'])
+                update('needs_review', phase='candidate_ready', fixed_plan_id=prepared['id'], reason='recovery_action_ready')
                 return
             targets = implicated_targets(latest, doctor.host, doctor.plugins)
+            selected = latest['analysis'].get('repair_target')
+            inspected = {f.get('evidence', {}).get('target') for f in latest['findings'] if f['code'] == 'repair_source_inspected'}
+            if selected and selected in inspected and selected in latest.get('plugin_targets', []):
+                targets = [selected]
+            model_failure = any(code.startswith(('model_', 'llm_')) for code in failure_codes)
+            if model_failure and not selected:
+                probed = doctor.get(report['id'])
+                update('needs_attention', phase='model_checked', reason='model_probe_passed' if probed['model_probe']['status'] == 'passed' else 'model_probe_failed')
+                return
             if len(targets) != 1:
-                update('needs_attention', phase='diagnosed', reason='ambiguous_failure_target' if targets else 'failure_target_unavailable')
+                update('needs_attention', phase='diagnosed', reason='ambiguous_failure_target' if targets else ('host_transition_failed' if 'agent_transition_failed' in failure_codes else 'failure_target_unavailable'))
                 return
             target = targets[0]
             update(phase='generating', target=target)
@@ -186,7 +223,8 @@ async def start_failure(doctor, scope, *, language='zh'):
                 return
             update(phase='applying')
             applied = await doctor.apply_repair(repair_id, plan['plan_hash'])
-            update('completed' if applied.get('outcome', {}).get('status') == 'verified' else 'needs_attention', phase='finished')
+            update('completed' if applied.get('outcome', {}).get('status') == 'verified' else 'needs_attention', phase='finished',
+                   reason='restart_required' if applied.get('outcome', {}).get('status') == 'restart_required' else '')
         except asyncio.CancelledError:
             await doctor.cancel_analysis(report['id'])
             if repair_id:

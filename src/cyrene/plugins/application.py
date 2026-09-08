@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
+from cyrene.core.plugin.source import python_source_signature
 import inspect
 import logging
 import threading
@@ -18,7 +18,7 @@ from cyrene.core.plugin.activation import (
     set_active_plugin_activation_state,
 )
 from cyrene.core.plugin_boundary import PLUGIN_BOUNDARY_ERRORS
-from cyrene.core.plugin.extensions import ExtensionPoint, PluginScope
+from cyrene.core.plugin.extensions import ExtensionPoint, PluginScope, invoke_setup
 from cyrene.core.plugin.customization import (
     PluginCustomizationState,
     set_active_plugin_customization_state,
@@ -221,21 +221,7 @@ class PluginApplicationHost:
             return ("logical", source)
         path = Path(source)
         try:
-            files = (
-                tuple(sorted(path.rglob("*.py")))
-                if path.is_dir()
-                else (path,)
-                if path.is_file()
-                else ()
-            )
-            digest = hashlib.sha256()
-            for item in files:
-                relative = item.relative_to(path) if path.is_dir() else Path(item.name)
-                digest.update(str(relative).encode("utf-8"))
-                digest.update(b"\0")
-                digest.update(item.read_bytes())
-                digest.update(b"\0")
-            return ("files", len(files), digest.hexdigest())
+            return ("files", python_source_signature(path))
         except OSError as exc:
             return ("unreadable", source, type(exc).__name__)
 
@@ -543,7 +529,7 @@ class PluginApplicationHost:
                     registry=self.registry,
                 )
                 for setup in pack.application_setups:
-                    setup(context)
+                    invoke_setup(setup, context)
                 service_collisions = {name for name, value in services.items() if name in inherited_services and value is not inherited_services[name]}
                 search_collisions = set(search_providers) & set(self._search_providers)
                 if service_collisions:

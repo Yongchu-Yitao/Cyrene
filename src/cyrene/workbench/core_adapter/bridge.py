@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 import math
 import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -20,6 +18,7 @@ from cyrene.core.session import AgentSession, AgentSessionEvent
 from cyrene.model.protocol_trace import create_model_protocol_trace
 
 from .tool_activity_projection import project_tool_activity_messages
+from .publication import PublicationQueue
 
 WorkbenchPublisher: TypeAlias = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 
@@ -678,22 +677,15 @@ class _PublisherBinding:
         event_stream: _SessionEventStream,
     ) -> None:
         self._session = session
-        self._publish = publish
         self._run_id = str(run_id)
-        self._loop = asyncio.get_running_loop()
         self._lock = threading.RLock()
-        self._futures: list[Future[Any]] = []
+        self._publications = PublicationQueue(publish)
         self._event_ids: set[str] = set()
         self._unsubscribe = event_stream.bind(self._receive, self._run_id)
         if replay:
             for event in session.events():
                 if event.run_id == self._run_id:
                     self._receive(event)
-
-    async def _send(self, payload: dict[str, Any]) -> None:
-        result = self._publish(payload)
-        if inspect.isawaitable(result):
-            await result
 
     def _receive(self, event: AgentSessionEvent) -> None:
         if event.tree_id != self._session.tree.id:
@@ -718,32 +710,11 @@ class _PublisherBinding:
                     continue
                 if event_id:
                     self._event_ids.add(event_id)
-                self._futures.append(
-                    asyncio.run_coroutine_threadsafe(self._send(payload), self._loop)
-                )
+                self._publications.submit(payload)
 
     async def close(self) -> None:
         self._unsubscribe()
-        while True:
-            with self._lock:
-                pending = self._futures
-                self._futures = []
-            if not pending:
-                return
-            results = await asyncio.gather(
-                *(asyncio.wrap_future(future) for future in pending),
-                return_exceptions=True,
-            )
-            failures = [result for result in results if isinstance(result, Exception)]
-            if failures:
-                first = failures[0]
-                logger.error(
-                    "Workbench event projection failed for run %s; "
-                    "%d event(s) were not projected, but the durable Agent result remains valid",
-                    self._run_id,
-                    len(failures),
-                    exc_info=(type(first), first, first.__traceback__),
-                )
+        await self._publications.close()
 
 
 class WorkbenchSessionBridge:

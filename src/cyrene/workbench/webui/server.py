@@ -144,14 +144,25 @@ def create_app(
         startup_chat_runs(db_path)
 
     async def _shutdown_native_runs() -> None:
+        from cyrene.platform.task_lifecycle import TaskShutdownTimeout
+
         try:
             from cyrene.workbench.chat.chat_runs import shutdown_chat_runs
             from cyrene.workbench.chat.chat_service import shutdown_chat_services
 
             try:
                 await shutdown_chat_runs()
-            finally:
+            except TaskShutdownTimeout:
+                raise
+            except BaseException:
                 await shutdown_chat_services()
+                raise
+            else:
+                await shutdown_chat_services()
+        except TaskShutdownTimeout:
+            # Live operation owners still need their Plugin services and
+            # stores. Do not pretend teardown succeeded and close underneath.
+            raise
         except Exception:
             logger.warning("Workbench chat run shutdown failed", exc_info=True)
 

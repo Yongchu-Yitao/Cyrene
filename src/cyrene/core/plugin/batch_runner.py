@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from ..localization import localized
 from ..observability import operation
 from .batch_catcher import PluginBatchCatcher
-from .plugin import PluginCall, PluginCallResult, PluginContext
+from .plugin import PluginCall, PluginCallResult, PluginContext, PluginFailure
 from .runtime import PluginRuntime
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ class PluginBatchRunner:
         *,
         completed: Mapping[str, PluginCallResult] | None = None,
         on_result: Callable[[PluginCallResult], None] | None = None,
+        before_execute: Callable[[PluginCall], PluginCallResult | None] | None = None,
     ) -> tuple[PluginCallResult, ...]:
         batch = tuple(calls)
         context_fields = {
@@ -105,6 +106,18 @@ class PluginBatchRunner:
                     allowed.append(item)
 
             async def execute(item) -> None:
+                if before_execute is not None:
+                    try:
+                        blocked = before_execute(item.call)
+                    except Exception:
+                        failure = PluginFailure("tool_execution_not_started",
+                            "Execution fence could not be saved; tool was not executed.",
+                            retryable=True, retry_scope="after_delay", circuit_scope="none")
+                        blocked = PluginCallResult(item.call.id, item.call.name, False, None,
+                            failure.message, datetime.now(timezone.utc), failure)
+                    if blocked is not None:
+                        catcher.catch(blocked, notify=False)
+                        return
                 catcher.catch(await self.runtime.execute(item, context))
 
             parallel: list = []

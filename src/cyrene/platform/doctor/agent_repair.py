@@ -33,7 +33,7 @@ class RepairWorkspace:
             return {'content': raw[:64000], 'truncated': len(raw) > 64000}
         if name == 'read_plugin_file':
             path = args['path']
-            if path not in self.original or not path.endswith(('.py', '.json', '.toml', '.md', '.txt')):
+            if path not in self.original or Path(path).suffix not in {'.py', '.json', '.toml', '.md', '.txt', '.js', '.jsx', '.html', '.css'}:
                 raise ValueError('Choose a text file from the supplied manifest')
             raw = self.original[path]
             if len(raw) > 64_000:

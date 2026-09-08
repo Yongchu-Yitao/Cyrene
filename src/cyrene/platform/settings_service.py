@@ -627,5 +627,36 @@ __all__ = [
     "AGENT_VISIBLE_SETTINGS_TABS", "NON_MODEL_SETTINGS_TABS", "SHORTCUT_DEFAULTS", "SettingSpec", "SettingControlSpec", "SettingsForbiddenError",
     "PluginSettingsContribution", "SettingsServiceError", "SettingsValidationError", "describe", "plugin_setting_spec", "read_public", "update",
     "setting_control_specs", "setting_spec_by_key", "setting_specs",
-    "validate_changes",
+    "validate_changes", "publish_settings_changed",
 ]
+
+
+async def publish_settings_changed(
+    namespace: str,
+    revision: int | None,
+    changed: list[str],
+) -> None:
+    import inspect
+    from cyrene.core.plugin import application_plugin_scope
+    from cyrene.observability import debug
+
+    # Application Plugins observe generic setting changes through their
+    # service ports. Core does not know which pack owns a changed capability.
+    host = application_plugin_scope()
+    seen: set[int] = set()
+    for service in host.active_services.values() if host is not None else ():
+        if id(service) in seen:
+            continue
+        seen.add(id(service))
+        callback = getattr(service, "settings_changed", None)
+        if not callable(callback):
+            continue
+        result = callback(namespace, tuple(changed))
+        if inspect.isawaitable(result):
+            await result
+    await debug.publish_event({
+        "type": "settings_changed",
+        "namespace": namespace,
+        "revision": revision,
+        "changed": list(changed),
+    })

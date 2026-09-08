@@ -1,6 +1,6 @@
 import { useWorkbenchI18n } from '../../workbench-i18n.jsx';
 
-export function DoctorRepair({ report, description, request }) {
+export function DoctorRepair({ report, description, request, onReportChange }) {
   const { t } = useWorkbenchI18n();
   const [target, setTarget] = React.useState('');
   const [plan, setPlan] = React.useState(null);
@@ -69,6 +69,7 @@ export function DoctorRepair({ report, description, request }) {
       {plan.verification && <details><summary>{t('doctor.verification')}</summary><pre>{JSON.stringify({ before: plan.baseline, candidate: plan.verification, after: plan.outcome?.checks }, null, 2)}</pre></details>}
       {plan.status === 'planned' && <button type="button" className="wb-btn" disabled={active} onClick={() => perform(() =>
         request('repairs/' + plan.id + '/apply', 'POST', { expected_plan_hash: plan.plan_hash }))}>{t('doctor.applyRepair')}</button>}
+      {plan.status === 'applied' && <button type="button" className="wb-btn" disabled={active} onClick={() => perform(async () => { const result = await request('repairs/' + plan.id + '/verify', 'POST'); if (onReportChange && live.current) onReportChange(await request('reports/' + report.id)); return result; })}>{t('doctor.verifyRepair')}</button>}
       {plan.can_rollback && <button type="button" className="wb-btn ghost" disabled={active} onClick={() => perform(() =>
         request('repairs/' + plan.id + '/rollback', 'POST'))}>{t('doctor.rollback')}</button>}
     </>}

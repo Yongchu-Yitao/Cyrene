@@ -14,6 +14,17 @@ from collections.abc import Iterable
 from typing import Any
 
 
+class TaskShutdownTimeout(TimeoutError):
+    """An owner still has live tasks and must retain its resources."""
+
+    def __init__(self, pending: Iterable[asyncio.Task[Any]]) -> None:
+        self.pending = frozenset(pending)
+        super().__init__(
+            "Tasks did not finish shutdown: "
+            + ", ".join(sorted(task.get_name() for task in self.pending))
+        )
+
+
 def track_task(
     task: asyncio.Task[Any],
     registry: set[asyncio.Task[Any]],
@@ -52,8 +63,9 @@ async def cancel_and_wait(
 ) -> None:
     """Cancel tasks owned by the current loop and wait for finalizers.
 
-    Closed-loop tasks can only be discarded; the important production and test
-    teardown paths call this helper before their loop closes.
+    Cancellation is requested once: a second cancel can interrupt a finalizer.
+    A missed deadline raises with the outstanding tasks, rather than reporting
+    success and allowing the caller to close resources still in use.
     """
     current = asyncio.current_task()
     loop = asyncio.get_running_loop()
@@ -66,21 +78,29 @@ async def cancel_and_wait(
         except RuntimeError:
             continue
         if task_loop is loop:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
             owned.append(task)
         elif not task_loop.is_closed():
             task_loop.call_soon_threadsafe(task.cancel)
     if not owned:
         return
-    try:
-        await asyncio.wait_for(
-            asyncio.gather(*owned, return_exceptions=True),
-            timeout=max(0.1, float(timeout)),
-        )
-    except asyncio.TimeoutError:
-        # They are already cancelled.  Do not let a broken finalizer stall the
-        # whole application shutdown indefinitely.
-        pass
+    await wait_for_tasks(owned, timeout=timeout)
+
+
+async def wait_for_tasks(
+    tasks: Iterable[asyncio.Task[Any]], *, timeout: float = 5.0,
+) -> None:
+    """Await an owner's finalizers without injecting additional cancellation."""
+    owned = set(tasks) - {asyncio.current_task()}
+    if not owned:
+        return
+    done, pending = await asyncio.wait(owned, timeout=max(0.0, float(timeout)))
+    for task in done:
+        if not task.cancelled():
+            task.exception()
+    if pending:
+        raise TaskShutdownTimeout(pending)
 
 
 async def drain_or_cancel(

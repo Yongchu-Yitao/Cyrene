@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+from cyrene.platform import settings_store
+
+pytestmark = pytest.mark.usefixtures("isolated_plugin_settings")
+
 from cyrene.core.plugin import PluginPack
 from cyrene.plugins.builtin.cyrene_project_javascript import (
     plugin_pack as javascript_pack,
@@ -43,6 +48,9 @@ class FakeRegistry:
         if pack_id not in self.packs:
             raise KeyError(pack_id)
         self.enabled[pack_id] = bool(enabled)
+
+    def configure_activation(self, *, plugins, packs):
+        self.enabled.update(packs)
 
     def refresh_directory(self, _directory):
         self.refreshes += 1
@@ -122,4 +130,4 @@ def test_passive_reconcile_preserves_manual_disable_but_explicit_enable_restores
     explicit = links.ensure_project_plugins("toolchain", "node", force_enable=True)
     assert explicit[0]["enabled"] is True
     assert explicit[0]["enabledNow"] is True
-    assert saved["packs"][javascript_pack.id] is True
+    assert settings_store.get_enabled_plugin_packs()[javascript_pack.id] is True

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 from fastapi import APIRouter
 
 from cyrene.core.plugin import application_plugin_scope
+from cyrene.platform.settings_service import publish_settings_changed as _publish_settings_changed
 from cyrene.platform.data_reset import DataResetApplicationService
 from cyrene.platform.config_integration_service import (
     ConfigIntegrationApplicationService,
@@ -25,33 +25,6 @@ from cyrene.workbench.http.settings.plugin_service import PluginSettingsApplicat
 from cyrene.workbench.http.settings.plugins import register_plugin_settings_routes
 
 
-async def _publish_settings_changed(
-    namespace: str,
-    revision: int | None,
-    changed: list[str],
-) -> None:
-    from cyrene.observability import debug
-
-    # Application Plugins observe generic setting changes through their
-    # service ports. Core does not know which pack owns a changed capability.
-    host = application_plugin_scope()
-    seen: set[int] = set()
-    for service in host.active_services.values() if host is not None else ():
-        if id(service) in seen:
-            continue
-        seen.add(id(service))
-        callback = getattr(service, "settings_changed", None)
-        if not callable(callback):
-            continue
-        result = callback(namespace, tuple(changed))
-        if inspect.isawaitable(result):
-            await result
-    await debug.publish_event({
-        "type": "settings_changed",
-        "namespace": namespace,
-        "revision": revision,
-        "changed": list(changed),
-    })
 
 
 def register_settings_routes(

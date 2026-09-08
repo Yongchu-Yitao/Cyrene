@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -65,11 +66,37 @@ class ExtensionRegistry:
         return tuple(item.value for item in self.contributions(point))
 
 
+SETUP_SYNC_ERROR = (
+    "Plugin setup/application_setup must be synchronous (use def, not async def); "
+    "put asynchronous work in tool handlers, Hooks, or application startup callbacks."
+)
+
+
+def _validate_setup(value: Any) -> bool:
+    target = value if inspect.isroutine(value) else getattr(value, "__call__", value)
+    if not callable(value) or any(
+        check(candidate) for candidate in (value, target)
+        for check in (inspect.iscoroutinefunction, inspect.isasyncgenfunction, inspect.isgeneratorfunction)
+    ):
+        raise TypeError(SETUP_SYNC_ERROR)
+    return True
+
+
+def invoke_setup(setup: Callable[[Any], None], context: Any) -> None:
+    """Reject lazy results too: a synchronous wrapper can return a coroutine."""
+    _validate_setup(setup)
+    result = setup(context)
+    if inspect.isawaitable(result) or inspect.isasyncgen(result) or inspect.isgenerator(result):
+        if inspect.iscoroutine(result) or inspect.isgenerator(result):
+            result.close()
+        raise TypeError(SETUP_SYNC_ERROR)
+
+
 APPLICATION_SETUP = ExtensionPoint[Callable[[Any], None]](
-    "cyrene.application.setup", PluginScope.APPLICATION, callable
+    "cyrene.application.setup", PluginScope.APPLICATION, _validate_setup
 )
 SESSION_SETUP = ExtensionPoint[Callable[[Any], None]](
-    "cyrene.session.setup", PluginScope.SESSION, callable
+    "cyrene.session.setup", PluginScope.SESSION, _validate_setup
 )
 RUN_SERVICE = ExtensionPoint[Any]("cyrene.run.service", PluginScope.RUN)
 

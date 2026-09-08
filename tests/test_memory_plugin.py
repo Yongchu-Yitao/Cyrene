@@ -303,7 +303,7 @@ def test_memory_context_uses_chat_snapshot_instead_of_live_project_store(
 
     context = service.context_block()
 
-    assert context == (
+    assert context.endswith(
         "frozen short-term memory\n\n"
         "frozen structured memory\n\n"
         "frozen versioned project memory"
@@ -358,8 +358,8 @@ def test_memory_context_respects_per_chat_injection_switches(monkeypatch, tmp_pa
         },
     )
 
-    assert short_only.context_block() == "short-term memory"
-    assert project_only.context_block() == "durable project memory\n\nproject prompt"
+    assert short_only.context_block().endswith("\n\nshort-term memory")
+    assert project_only.context_block().endswith("\n\ndurable project memory\n\nproject prompt")
     assert neither.context_block() == ""
 
 

@@ -33,6 +33,7 @@ def _is_terminal_dialogue(value: Mapping[str, Any]) -> bool:
     if role == "assistant":
         return bool(
             value.get("session_end_complete") is True
+            or value.get("answer_complete") is True
             or value.get("error") is True
             or value.get("cancelled") is True
         )

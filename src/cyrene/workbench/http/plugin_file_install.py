@@ -1,18 +1,16 @@
 """Local file selection adapter for the existing Plugin installer."""
 from __future__ import annotations
 
-import json
 import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from cyrene.core.plugin import PluginContext
+from cyrene.core.plugin import application_plugin_scope
+from cyrene.plugins.installation import install_source
 
 
-async def install_plugin_file(raw_path: str) -> dict:
-    from cyrene.plugins.builtin.cyrene_plugin_development.tools import install
-
+async def install_plugin_file(raw_path: str, *, host=None) -> dict:
     source = Path(raw_path).expanduser().resolve()
     if not raw_path.strip() or not source.exists():
         raise ValueError('Choose an existing Plugin folder, Python file, or ZIP archive.')
@@ -32,4 +30,4 @@ async def install_plugin_file(raw_path: str) -> dict:
             source = root if (root / '__init__.py').is_file() else candidates[0] if len(candidates) == 1 else root
         if source.is_dir() and any(p.is_symlink() for p in source.rglob('*')):
             raise ValueError('Plugin folders must not contain symbolic links.')
-        return json.loads(await install({'path': str(source)}, PluginContext(workspace=source.parent)))
+        return await install_source(host if host is not None else application_plugin_scope(), source)

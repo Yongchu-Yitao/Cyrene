@@ -1598,12 +1598,7 @@ class RemoteCommandExecutor:
 
     async def _settings_update(self, payload: dict[str, Any]) -> dict[str, Any]:
         from cyrene.platform.settings_service import setting_spec_by_key
-        from cyrene.platform.settings_store import (
-            get_enabled_plugin_packs,
-            get_enabled_plugins,
-            save_enabled_plugin_packs,
-            save_enabled_plugins,
-        )
+        from cyrene.plugins.management import update_activation
 
         payload = dict(payload)
         model_payload = payload.pop("models", None)
@@ -1613,8 +1608,6 @@ class RemoteCommandExecutor:
             for field in _REMOTE_SETTING_FIELDS
             if field["key"] in active_keys
         }
-        current_plugins = get_enabled_plugins()
-        current_packs = get_enabled_plugin_packs()
         host = application_plugin_scope()
         if host is None:
             raise RuntimeError("Plugin application host is unavailable")
@@ -1709,17 +1702,13 @@ class RemoteCommandExecutor:
             normalized[key] = value
 
         changed: list[str] = []
-        next_plugins = dict(current_plugins)
-        next_packs = dict(current_packs)
-        plugins_changed = False
-        packs_changed = False
+        next_plugins = {}
+        next_packs = {}
         for key, value in normalized.items():
             if key.startswith("plugin::"):
                 next_plugins[key.removeprefix("plugin::")] = value
-                plugins_changed = True
             elif key.startswith("pluginpack::"):
                 next_packs[key.removeprefix("pluginpack::")] = value
-                packs_changed = True
             elif key.startswith("skill::"):
                 if skills_service is None:
                     raise ValueError("Skills Plugin is disabled or unavailable")
@@ -1731,16 +1720,9 @@ class RemoteCommandExecutor:
             else:
                 set_setting(key, value)
             changed.append(key)
-        if plugins_changed:
-            save_enabled_plugins(next_plugins)
-        if packs_changed:
-            save_enabled_plugin_packs(next_packs)
-        if plugins_changed or packs_changed:
-            host.registry.configure_activation(
-                plugins=next_plugins,
-                packs=next_packs,
-            )
-            await host.reconcile_activation()
+        if next_plugins or next_packs:
+            await update_activation(host.registry, host, plugins=next_plugins,
+                                    packs=next_packs, actor="ui")
 
         result = self._settings_read()
         result["changed"] = (["models"] if model_payload is not None else []) + changed

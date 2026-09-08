@@ -9,19 +9,26 @@ import html
 import json
 import re
 import secrets
-import shutil
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 from cyrene.core.plugin import PluginContext, application_plugin_scope
+from cyrene.core.plugin.extensions import SETUP_SYNC_ERROR
+from cyrene.plugins.management import (
+    pack_status, plugin_status,
+    delete_source, update_activation,
+)
 from cyrene.plugins.native_runtime import (
     plugin_language,
     plugin_localized,
     resolve_workspace_path,
 )
 
+from cyrene.plugins.validation import (
+    LEGACY_PROTOCOL_ERROR, validate_pack_directory, validate_plugin_source,
+    validate_standalone_plugin,
+)
 
 SCAFFOLD_TYPES = (
     "standalone_tool",
@@ -53,6 +60,10 @@ AUTHORING_GUIDE = """# Create a Cyrene Plugin
 
 Do not create `plugin.json` or write the obsolete `custom-tools/.cyrene-tool-index.json`. A standalone file exports `plugin`; a pack directory exports
 `plugin_pack` from `__init__.py`. Keep stable ids ASCII and add English/Chinese `metadata.i18n`.
+
+Setup functions (`setup` and `application_setup`) must use synchronous `def`.
+Use async tool handlers for network requests; setup only registers services and prepares state.
+If asynchronous application initialization is necessary, register it with `context.on_startup`.
 
 ## Choose exactly one scaffold type
 
@@ -185,6 +196,9 @@ AUTHORING_GUIDE_ZH = """# 创建 Cyrene 插件
 
 ## 选择一种脚手架
 
+`setup` 和 `application_setup` 必须使用同步 `def`。网络请求可直接放在异步工具 handler 中；
+setup 只注册服务和准备状态。确需异步应用初始化时，通过 `context.on_startup` 注册。
+
 - `standalone_tool`：单个可被模型调用的 `.py` 工具。
 - `tool_pack`：包含一个工具、可继续扩展多个工具的插件包。
 - `model_plugin`：支持模型发现与补全的 OpenAI-compatible Provider。
@@ -285,11 +299,12 @@ def _json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-_LEGACY_PROTOCOL_ERROR = "Legacy plugin.json protocol is unsupported; migrate to Plugin / PluginPack using PluginAuthoringGuide."
+
 
 
 _VALIDATION_ZH = {
-    _LEGACY_PROTOCOL_ERROR: "旧版 plugin.json 协议已废弃；请读取 PluginAuthoringGuide，将源码迁移为 Plugin / PluginPack。",
+    SETUP_SYNC_ERROR: "setup/application_setup 必须是同步函数（使用 def，不使用 async def）；异步操作放在工具 handler、Hook 或应用 startup 回调中。",
+    LEGACY_PROTOCOL_ERROR: "旧版 plugin.json 协议已废弃；请读取 PluginAuthoringGuide，将源码迁移为 Plugin / PluginPack。",
     "standalone Plugin must be a Python file": "独立 Plugin 必须是 Python 文件",
     "standalone module must construct Plugin and expose it as plugin": "独立模块必须构造 Plugin，并通过 plugin 导出",
     "Plugin kind must be tool or model": "Plugin kind 必须是 tool 或 model",
@@ -339,237 +354,6 @@ def _localized_validation(value: dict[str, Any], context: PluginContext) -> dict
         if isinstance(items, list):
             result[field] = [_validation_message(item, context) for item in items]
     return result
-
-
-def _find_pack_call(tree: ast.AST) -> ast.Call | None:
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        function = node.func
-        if isinstance(function, ast.Name) and function.id == "PluginPack":
-            return node
-        if isinstance(function, ast.Attribute) and function.attr == "PluginPack":
-            return node
-    return None
-
-
-def _constructor_name(call: ast.Call) -> str:
-    function = call.func
-    if isinstance(function, ast.Name):
-        return function.id
-    if isinstance(function, ast.Attribute):
-        return function.attr
-    return ""
-
-
-def _assigned_constructor(tree: ast.AST, variable: str, constructor: str) -> ast.Call | None:
-    for node in getattr(tree, "body", ()):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
-        if not any(isinstance(target, ast.Name) and target.id == variable for target in targets):
-            continue
-        value = node.value
-        if isinstance(value, ast.Call) and _constructor_name(value) == constructor:
-            return value
-    return None
-
-
-def _literal_keyword(call: ast.Call, name: str, default: Any = None) -> Any:
-    for keyword in call.keywords:
-        if keyword.arg == name:
-            try:
-                return ast.literal_eval(keyword.value)
-            except (ValueError, TypeError):
-                return default
-    return default
-
-
-def _plugin_calls(trees: dict[Path, ast.AST]) -> tuple[ast.Call, ...]:
-    return tuple(
-        node
-        for tree in trees.values()
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and _constructor_name(node) == "Plugin"
-    )
-
-
-def validate_standalone_plugin(source: Path) -> dict[str, Any]:
-    source = source.resolve()
-    errors: list[str] = []
-    warnings: list[str] = []
-    if not source.is_file() or source.suffix != ".py":
-        return {
-            "ok": False,
-            "installable": False,
-            "path": str(source),
-            "errors": ["standalone Plugin must be a Python file"],
-            "warnings": [],
-        }
-    try:
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    except (OSError, UnicodeError, SyntaxError) as exc:
-        return {
-            "ok": False,
-            "installable": False,
-            "path": str(source),
-            "errors": [str(exc)],
-            "warnings": [],
-        }
-    call = _assigned_constructor(tree, "plugin", "Plugin")
-    if call is None:
-        errors.append("standalone module must construct Plugin and expose it as plugin")
-        plugin_name = source.stem
-        plugin_kind = "tool"
-    else:
-        plugin_name = str(_literal_keyword(call, "name", source.stem) or source.stem)
-        plugin_kind = str(_literal_keyword(call, "kind", "tool") or "tool")
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", plugin_name):
-            errors.append(f"Plugin name contains unsupported characters: {plugin_name}")
-        if plugin_kind not in {"tool", "model"}:
-            errors.append("Plugin kind must be tool or model")
-        metadata = _literal_keyword(call, "metadata", None)
-        if metadata is None:
-            warnings.append("metadata is dynamic; i18n requires runtime validation")
-        elif not isinstance(metadata, dict) or not isinstance(metadata.get("i18n", {}), dict):
-            errors.append("Plugin metadata.i18n must be an object")
-    if source.name.startswith((".", "_")):
-        errors.append("standalone Plugin filename cannot start with . or _")
-    return {
-        "ok": not errors,
-        "installable": not errors,
-        "path": str(source),
-        "source_type": "standalone",
-        "plugin_name": plugin_name,
-        "plugin_kind": plugin_kind,
-        "errors": errors,
-        "warnings": warnings,
-    }
-
-
-def validate_pack_directory(root: Path) -> dict[str, Any]:
-    root = root.resolve()
-    errors: list[str] = []
-    warnings: list[str] = []
-    initializer = root / "__init__.py"
-    if not initializer.is_file():
-        return {"ok": False, "path": str(root), "errors": [_LEGACY_PROTOCOL_ERROR if (root / "plugin.json").is_file() else "PluginPack directory requires __init__.py"], "warnings": []}
-    trees: dict[Path, ast.AST] = {}
-    for source in sorted(root.rglob("*.py")):
-        if "__pycache__" in source.parts:
-            continue
-        try:
-            trees[source] = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        except (OSError, UnicodeError, SyntaxError) as exc:
-            errors.append(f"{source.relative_to(root)}: {exc}")
-    tree = trees.get(initializer)
-    call = _find_pack_call(tree) if tree is not None else None
-    if call is None:
-        errors.append("__init__.py must construct PluginPack and expose it as plugin_pack")
-        pack_id = root.name
-        metadata: Any = {}
-    else:
-        pack_id = str(_literal_keyword(call, "id", root.name) or root.name)
-        metadata = _literal_keyword(call, "metadata", None)
-        if metadata is None:
-            warnings.append("metadata is dynamic; frontend contributions require runtime validation")
-            metadata = {}
-    assigned_pack = _assigned_constructor(tree, "plugin_pack", "PluginPack") if tree is not None else None
-    if assigned_pack is None:
-        errors.append("__init__.py must expose the PluginPack as plugin_pack")
-    if not pack_id or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in pack_id):
-        errors.append("PluginPack id contains unsupported characters")
-    elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", pack_id):
-        errors.append("PluginPack id contains unsupported characters")
-    views = metadata.get("frontend_views", ()) if isinstance(metadata, dict) else ()
-    tools = metadata.get("project_tools", ()) if isinstance(metadata, dict) else ()
-    view_ids: set[str] = set()
-    if not isinstance(views, (list, tuple)):
-        errors.append("metadata.frontend_views must be an array")
-        views = ()
-    for raw in views:
-        if not isinstance(raw, dict):
-            errors.append("each frontend view must be an object")
-            continue
-        view_id = str(raw.get("id") or "")
-        entry = str(raw.get("entry") or "").replace("\\", "/")
-        if not view_id or view_id in view_ids:
-            errors.append(f"invalid or duplicate frontend view id: {view_id}")
-        view_ids.add(view_id)
-        candidate = (root / entry).resolve()
-        if not entry or (candidate != root and root not in candidate.parents) or not candidate.is_file():
-            errors.append(f"frontend view entry does not exist inside the pack: {entry}")
-        if not isinstance(raw.get("i18n", {}), dict):
-            errors.append(f"frontend view {view_id} i18n must be an object")
-    if not isinstance(tools, (list, tuple)):
-        errors.append("metadata.project_tools must be an array")
-        tools = ()
-    tool_ids: set[str] = set()
-    for raw in tools:
-        if not isinstance(raw, dict):
-            errors.append("each project tool must be an object")
-            continue
-        tool_id = str(raw.get("id") or "")
-        view_id = str(raw.get("view") or "")
-        if not tool_id or tool_id in tool_ids:
-            errors.append(f"invalid or duplicate project tool id: {tool_id}")
-        tool_ids.add(tool_id)
-        if view_id not in view_ids:
-            errors.append(f"project tool {tool_id} references missing view: {view_id}")
-        if not isinstance(raw.get("i18n", {}), dict):
-            errors.append(f"project tool {tool_id} i18n must be an object")
-    plugin_calls = _plugin_calls(trees)
-    for item in plugin_calls:
-        component_name = str(_literal_keyword(item, "name", "") or "")
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", component_name):
-            errors.append(f"Plugin name contains unsupported characters: {component_name}")
-        component_metadata = _literal_keyword(item, "metadata", None)
-        if component_metadata is None:
-            warnings.append(f"Plugin {component_name or '<dynamic>'} metadata is dynamic")
-        elif not isinstance(component_metadata, dict) or not isinstance(
-            component_metadata.get("i18n", {}), dict
-        ):
-            errors.append(f"Plugin {component_name} metadata.i18n must be an object")
-    tool_count = sum(
-        1 for item in plugin_calls if str(_literal_keyword(item, "kind", "tool")) == "tool"
-    )
-    model_count = sum(
-        1 for item in plugin_calls if str(_literal_keyword(item, "kind", "tool")) == "model"
-    )
-    has_setup = bool(call and any(keyword.arg == "setup" for keyword in call.keywords))
-    has_application = bool(
-        call and any(keyword.arg == "application_setup" for keyword in call.keywords)
-    )
-    return {
-        "ok": not errors,
-        "installable": not errors,
-        "path": str(root),
-        "source_type": "pack",
-        "pack_id": pack_id,
-        "tool_count": tool_count,
-        "model_count": model_count,
-        "has_context_setup": has_setup,
-        "has_application_setup": has_application,
-        "frontend_view_count": len(view_ids),
-        "project_tool_count": len(tool_ids),
-        "errors": errors,
-        "warnings": warnings,
-    }
-
-
-def validate_plugin_source(source: Path) -> dict[str, Any]:
-    source = source.resolve()
-    if source.is_file():
-        return validate_standalone_plugin(source)
-    if source.is_dir():
-        return validate_pack_directory(source)
-    return {
-        "ok": False,
-        "installable": False,
-        "path": str(source),
-        "errors": ["Plugin source does not exist"],
-        "warnings": [],
-    }
 
 
 def _component_identifier(value: str, suffix: str = "") -> str:
@@ -871,6 +655,7 @@ async def shutdown() -> None:
 
 
 def setup_application(context: PluginApplicationContext) -> None:
+    # Keep setup synchronous; register async initialization with on_startup.
     @context.router.get({f'/{pack_id}/status'!r})
     async def status():
         return {{"ok": True}}
@@ -1049,23 +834,12 @@ async def validate(arguments: dict[str, Any], context: PluginContext) -> str:
 
 
 def _pack_status(host: Any, pack_id: str) -> dict[str, Any]:
-    pack = next(pack for pack in host.registry.list_packs() if pack.id == pack_id)
-    application = pack.has_application_contributions
-    return {
-        "enabled": host.registry.pack_enabled(pack_id),
-        "restart_required": pack_id in host.restart_required_packs,
-        "application_running": host.pack_running(pack_id) if application else None,
-        "setup_error": host.setup_failures.get(pack_id, "") if application else "",
-        "startup_error": host.startup_failures.get(pack_id, "") if application else "",
-    }
+    pack = next(p for p in host.registry.list_packs() if p.id == pack_id)
+    return pack_status(host.registry, pack, host)
 
 
-def _plugin_status(host: Any, plugin: Any) -> dict[str, Any]:
-    status = _pack_status(host, plugin.pack_id) if plugin.pack_id else {
-        "restart_required": False, "application_running": None,
-        "setup_error": "", "startup_error": "",
-    }
-    return {**status, "enabled": host.registry.plugin_enabled(plugin.plugin.name)}
+def _plugin_status(host: Any, registered: Any) -> dict[str, Any]:
+    return plugin_status(host.registry, registered, host)
 
 
 def _failed_sources(host: Any) -> list[dict[str, Any]]:
@@ -1083,81 +857,18 @@ def _failed_sources(host: Any) -> list[dict[str, Any]]:
 
 
 async def install(arguments: dict[str, Any], context: PluginContext) -> str:
+    from cyrene.plugins.installation import install_source
+
     source = resolve_workspace_path(str(arguments.get("path") or ""), context)
-    validation = _localized_validation(validate_plugin_source(source), context)
-    if not validation.get("ok"):
-        return _json(validation)
-    host = application_plugin_scope()
-    if host is None:
-        return _json({"ok": False, "error": plugin_localized(
-            context,
-            "The Plugin application host is unavailable.",
-            "Plugin 应用宿主当前不可用。",
-        )})
-    source_type = str(validation.get("source_type") or "")
-    identity = str(validation.get("pack_id") or validation.get("plugin_name") or source.stem)
-    target = host.plugin_directory / (identity if source_type == "pack" else source.name)
-    if target.exists():
-        return _json({
-            "ok": False,
-            "error": plugin_localized(
-                context,
-                "Plugin source already exists; edit or delete it instead.",
-                "插件源码已存在；请改用编辑或删除。",
-            ),
-            "path": str(target),
-        })
-    staging_root = Path(tempfile.mkdtemp(prefix=f".{identity}.install-", dir=host.plugin_directory))
-    staged = staging_root / target.name
-    backup = host.plugin_directory / f".{target.name}.backup"
-    try:
-        if source_type == "pack":
-            shutil.copytree(source, staged, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
-        else:
-            shutil.copy2(source, staged)
-        if backup.exists():
-            shutil.rmtree(backup) if backup.is_dir() else backup.unlink()
-        if target.exists():
-            target.rename(backup)
-        staged.rename(target)
-        if backup.is_dir():
-            shutil.rmtree(backup, ignore_errors=True)
-        elif backup.exists():
-            backup.unlink()
-    except Exception:
-        if not target.exists() and backup.exists():
-            backup.rename(target)
-        raise
-    finally:
-        shutil.rmtree(staging_root, ignore_errors=True)
-    seed, failures = await host.reload_user_plugins()
-    target_failures = [item for item in failures if Path(item.path).resolve() == target.resolve()]
-    other_failures = [item for item in failures if item not in target_failures]
-    if source_type == "pack":
-        loaded = any(pack.id == identity and Path(host.registry.pack_source(pack.id)).resolve() == target.resolve()
-                     for pack in host.registry.list_packs())
-        status = _pack_status(host, identity) if loaded else {}
-    else:
-        registered = next((item for item in host.registry.list_plugins()
-                           if item.plugin.name == identity and Path(item.source).resolve() == target.resolve()), None)
-        loaded = registered is not None
-        status = _plugin_status(host, registered) if loaded else {}
-    return _json({
-        "ok": loaded and not target_failures,
-        "loaded": loaded,
-        "enabled": False,
-        "restart_required": False,
-        **status,
-        "source_type": source_type,
-        "identity": identity,
-        "path": str(target),
-        "failures": [{"path": str(item.path), "error": item.error} for item in target_failures],
-        "other_failures": [{"path": str(item.path), "error": item.error} for item in other_failures],
-        "recovery": ({"source_path": target.name,
-                      "delete": {"action": "delete", "kind": "source", "id": target.name}}
-                     if target_failures else None),
-        "seeded": {"created": [str(path) for path in seed.created], "updated": [str(path) for path in seed.updated]},
-    })
+    result = await install_source(application_plugin_scope(), source)
+    result = _localized_validation(result, context)
+    messages = {
+        "The Plugin application host is unavailable.": "Plugin 应用宿主当前不可用。",
+        "Plugin source already exists; edit or delete it instead.": "插件源码已存在；请改用编辑或删除。",
+    }
+    if result.get("error") in messages:
+        result["error"] = plugin_localized(context, result["error"], messages[result["error"]])
+    return _json(result)
 
 
 async def reload_plugins(_arguments: dict[str, Any], _context: PluginContext) -> str:
@@ -1187,8 +898,6 @@ async def reload_plugins(_arguments: dict[str, Any], _context: PluginContext) ->
 async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> str:
     """Manage the installed state without introducing update/rollback semantics."""
 
-    from cyrene.plugins.native_tools import mark_builtin_plugin_deleted
-    from cyrene.platform import settings_store
 
     host = application_plugin_scope()
     if host is None:
@@ -1232,7 +941,7 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
         enabled = action == "enable"
         try:
             if kind == "pack":
-                registry.set_pack_enabled(identity, enabled)
+                plugin_updates, pack_updates = {}, {identity: enabled}
             else:
                 match = next(
                     (
@@ -1243,11 +952,9 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
                 )
                 if match is None:
                     raise ValueError("Plugin not found")
-                registry.set_plugin_enabled(match.plugin.name, enabled)
-            snapshot = registry.activation.snapshot()
-            settings_store.save_enabled_plugins(snapshot.plugins)
-            settings_store.save_enabled_plugin_packs(snapshot.packs)
-            await host.reconcile_activation()
+                plugin_updates, pack_updates = {match.plugin.name: enabled}, {}
+            await update_activation(registry, host, plugins=plugin_updates,
+                                    packs=pack_updates, actor="agent")
         except Exception as exc:
             return _json({"ok": False, "error": str(exc)})
         return _json({"ok": True, "action": action, "kind": kind, "id": identity,
@@ -1287,12 +994,7 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
         if match.source == "core" or source_path.parent != plugin_root:
             return _json({"ok": False, "error": "Plugin is not a managed installed Plugin"})
     try:
-        mark_builtin_plugin_deleted(plugin_root, source_path.name)
-        if source_path.is_dir() and not source_path.is_symlink():
-            shutil.rmtree(source_path)
-        else:
-            source_path.unlink()
-        _seed, failures = await host.reload_user_plugins()
+        _seed, failures = await delete_source(host, source_path)
     except Exception as exc:
         return _json({"ok": False, "error": str(exc)})
     return _json({
@@ -1525,7 +1227,8 @@ async def manage_plugin_source(arguments: dict[str, Any], context: PluginContext
     if not restart_required:
         _seed, loaded_failures = await host.reload_user_plugins()
         failures = [{"path": str(item.path), "error": item.error} for item in loaded_failures]
-        restart_required = public_path.split("/", 1)[0] in getattr(host, "restart_required_packs", ())
+        from cyrene.plugins.maintenance import source_health
+        restart_required = source_health(host, public_path.split("/", 1)[0])["restart_required"]
     return _json({
         "ok": not failures,
         "action": action,

@@ -16,6 +16,7 @@ from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS, PluginBoundaryError
 from .execution import bind_plugin_execution
 from .context import plugin_language, plugin_localized
 from .circuit import PluginCircuitBreaker
+from .sync_execution import invoke_sync
 from .plugin import (
     Plugin,
     PluginCall,
@@ -47,6 +48,18 @@ def _dispatches_own_tool_hooks(plugin: Plugin) -> bool:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _local_cancellation(exc: asyncio.CancelledError, *, review: bool = False) -> PluginExecutionError:
+    task = asyncio.current_task()
+    if task is not None and task.cancelling():
+        raise exc
+    return PluginExecutionError(PluginFailure(
+        "plugin_review_cancelled" if review else "plugin_cancelled",
+        "Tool review was cancelled locally; execution was not authorized." if review else
+        "Plugin cancelled its own operation; the run was not cancelled.",
+        retryable=True, retry_scope="after_delay", circuit_scope="none",
+    ))
 
 
 def _context_fields(context: PluginContext) -> dict[str, Any]:
@@ -88,6 +101,8 @@ def _validation_failure(
     context: PluginContext,
     exc: PluginBoundaryError,
 ) -> PluginFailure:
+    if isinstance(exc, PluginExecutionError):
+        return exc.failure
     if isinstance(exc, PluginInputValidationError):
         code = "plugin_invalid_arguments"
         retryable = True
@@ -204,9 +219,12 @@ async def _permission_boundary(
 ) -> dict[str, Any] | None:
     if plugin.permission_boundary is None:
         return None
-    raw_permission = plugin.permission_boundary(arguments, context)
-    if inspect.isawaitable(raw_permission):
-        raw_permission = await raw_permission
+    try:
+        raw_permission = plugin.permission_boundary(arguments, context)
+        if inspect.isawaitable(raw_permission):
+            raw_permission = await raw_permission
+    except asyncio.CancelledError as exc:
+        raise _local_cancellation(exc, review=True) from exc
     if raw_permission is None:
         return None
     if not isinstance(raw_permission, Mapping):
@@ -434,7 +452,9 @@ class PluginRuntime:
                     plugin, normalization, arguments, permission_request = (
                         await _validated_call(self, call, context)
                     )
-                except PLUGIN_BOUNDARY_ERRORS as exc:
+                except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        exc = _local_cancellation(exc, review=True)
                     failure = _validation_failure(context, exc)
                     log_operation(
                         logger,
@@ -500,10 +520,14 @@ class PluginRuntime:
                     review_permissions.append(permission_request)
 
             if review_calls:
-                decisions = await context.hooks.pre_tool_use_batch(
-                    tuple(review_calls),
-                    permissions=tuple(review_permissions),
-                )
+                try:
+                    decisions = await context.hooks.pre_tool_use_batch(
+                        tuple(review_calls),
+                        permissions=tuple(review_permissions),
+                    )
+                except asyncio.CancelledError as exc:
+                    failure = _local_cancellation(exc, review=True)
+                    decisions = tuple(failure for _ in review_calls)
                 for position, decision in zip(review_positions, decisions):
                     item = prepared[position]
                     assert isinstance(item, PreparedPluginCall)
@@ -523,7 +547,7 @@ class PluginRuntime:
                         )
                         continue
                     if isinstance(decision, BaseException):
-                        failure = PluginFailure(
+                        failure = decision.failure if isinstance(decision, PluginExecutionError) else PluginFailure(
                             error_code="plugin_review_rejected",
                             message=str(decision),
                             retryable=False,
@@ -641,13 +665,8 @@ class PluginRuntime:
         plugin = prepared.plugin
         arguments = dict(prepared.arguments)
         with bind_plugin_execution(self, prepared.call, context):
-            if plugin.timeout_seconds is not None and not inspect.iscoroutinefunction(
-                plugin.handler
-            ):
-                value = await asyncio.wait_for(
-                    asyncio.to_thread(plugin.handler, arguments, context),
-                    timeout=plugin.timeout_seconds,
-                )
+            if not inspect.iscoroutinefunction(plugin.handler):
+                value = await invoke_sync(plugin, arguments, context)
             else:
                 value = plugin.handler(arguments, context)
                 if inspect.isawaitable(value):
@@ -659,7 +678,10 @@ class PluginRuntime:
                             timeout=plugin.timeout_seconds,
                         )
             if inspect.isawaitable(value):
-                value = await value
+                if plugin.timeout_seconds is None:
+                    value = await value
+                else:
+                    value = await asyncio.wait_for(value, timeout=plugin.timeout_seconds)
         return value
 
     def _handler_failure(
@@ -752,7 +774,9 @@ class PluginRuntime:
         ) as op:
             try:
                 await self._validate_prepared_call(prepared, context)
-            except PLUGIN_BOUNDARY_ERRORS as exc:
+            except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    exc = _local_cancellation(exc, review=True)
                 failure = _validation_failure(context, exc)
                 op.finish(success=False, rejected=True, error=exc)
                 return PluginCallResult(
@@ -775,12 +799,19 @@ class PluginRuntime:
             try:
                 value = await self._invoke_prepared_handler(prepared, context)
             except asyncio.TimeoutError:
-                error = plugin_localized(
-                    context,
-                    "Plugin timed out after {seconds:g} seconds.",
-                    "插件在 {seconds:g} 秒后超时。",
-                    seconds=plugin.timeout_seconds,
-                )
+                if plugin.timeout_seconds is None:
+                    error = plugin_localized(
+                        context,
+                        "Plugin timed out.",
+                        "插件执行超时。",
+                    )
+                else:
+                    error = plugin_localized(
+                        context,
+                        "Plugin timed out after {seconds:g} seconds.",
+                        "插件在 {seconds:g} 秒后超时。",
+                        seconds=plugin.timeout_seconds,
+                    )
                 failure = PluginFailure(
                     error_code="plugin_timeout",
                     message=error,
@@ -813,14 +844,7 @@ class PluginRuntime:
                 )
             except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
                 if isinstance(exc, asyncio.CancelledError):
-                    task = asyncio.current_task()
-                    if task is not None and task.cancelling():
-                        raise
-                    exc = PluginExecutionError(PluginFailure(
-                        error_code="plugin_cancelled",
-                        message="Plugin cancelled its own operation; the run was not cancelled.",
-                        retryable=True, retry_scope="after_delay", circuit_scope="none",
-                    ))
+                    exc = _local_cancellation(exc)
                 error, failure = self._handler_failure(
                     plugin, call, context, exc
                 )

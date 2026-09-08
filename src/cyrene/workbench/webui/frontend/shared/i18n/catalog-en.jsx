@@ -3364,6 +3364,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "toolName.PluginAuthoringGuide": "Read plugin authoring guide",
     "toolName.HookManager": "Manage automatic triggers",
     "toolName.PluginManager": "Manage plugins",
+    "toolName.PluginRepairInspect": "Investigate plugin problems",
     "toolName.PluginSourceManager": "Manage plugin source",
     "toolName.PluginScaffold": "Scaffold plugin",
     "toolName.PluginValidate": "Validate plugin",

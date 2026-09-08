@@ -1,5 +1,7 @@
 import json
 import pytest
+
+pytestmark = pytest.mark.usefixtures("isolated_plugin_settings")
 from fastapi import FastAPI
 from cyrene.core.plugin import PluginContext, PluginRegistry
 from cyrene.plugins.application import PluginApplicationHost
@@ -15,9 +17,6 @@ def host(tmp_path,monkeypatch):
     async def reload(): return await original(seed=False)
     monkeypatch.setattr(value,'reload_user_plugins',reload)
     monkeypatch.setattr(tools,'application_plugin_scope',lambda:value)
-    from cyrene.platform import settings_store
-    monkeypatch.setattr(settings_store,'save_enabled_plugins',lambda v:None)
-    monkeypatch.setattr(settings_store,'save_enabled_plugin_packs',lambda v:None)
     return value
 
 async def draft(tmp_path,name='sample',kind='tool_pack'):

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from collections.abc import Iterable
 from collections.abc import Callable
 
-from .plugin import PluginCall, PluginCallResult
+from .plugin import PluginCall, PluginCallResult, PluginFailure
+from .result_codec import json_value
 
 
 class PluginBatchCatcher:
@@ -23,6 +25,7 @@ class PluginBatchCatcher:
             raise ValueError("Plugin batch call ids must be unique")
         self._expected = set(self._order)
         self._results: dict[str, PluginCallResult] = {}
+        self.execution_results: dict[str, PluginCallResult] = {}
         self._lock = threading.RLock()
         self._on_result = on_result
 
@@ -33,8 +36,31 @@ class PluginBatchCatcher:
             if result.call_id in self._results:
                 raise ValueError(f"duplicate Plugin call result: {result.call_id}")
             self._results[result.call_id] = result
+            self.execution_results[result.call_id] = result
         if notify and self._on_result is not None:
-            self._on_result(result)
+            try:
+                self._on_result(result)
+            except Exception as exc:
+                # Execution and durability are separate outcomes. Keep the
+                # actual result, but prohibit replay when its receipt is lost.
+                failure = PluginFailure(
+                    "tool_result_not_persisted",
+                    "Tool returned, but its result could not be saved. Do not replay; reconcile external state.",
+                    retryable=False, retry_scope="never", circuit_scope="none",
+                    details={"execution_success": result.success, "persistence_error_type": type(exc).__name__},
+                )
+                try:
+                    execution_value = json_value(result.value)
+                except Exception:
+                    execution_value = {"unserializable_type": type(result.value).__name__}
+                with self._lock:
+                    self._results[result.call_id] = replace(
+                        result, success=False, error=failure.message, failure=failure,
+                        value={"execution_success": result.success, "execution_value": execution_value,
+                               "execution_error": result.error},
+                        error_details={"code": failure.error_code, "retryable": False,
+                                       "retry_scope": "never", "replay_safe": False},
+                    )
 
     @property
     def complete(self) -> bool:

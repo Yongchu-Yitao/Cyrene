@@ -383,10 +383,10 @@ class PluginPack:
         names = [plugin.name for plugin in plugins]
         if len(names) != len(set(names)):
             raise ValueError(f"Plugin pack contains duplicate names: {pack_id}")
-        if self.setup is not None and not callable(self.setup):
-            raise TypeError("Plugin pack setup must be callable or None")
-        if self.application_setup is not None and not callable(self.application_setup):
-            raise TypeError("Plugin pack application_setup must be callable or None")
+        if self.setup is not None:
+            SESSION_SETUP.validate(self.setup)
+        if self.application_setup is not None:
+            APPLICATION_SETUP.validate(self.application_setup)
         contributions = tuple(self.contributions)
         ExtensionRegistry(contributions)
         if not isinstance(self.metadata, Mapping):

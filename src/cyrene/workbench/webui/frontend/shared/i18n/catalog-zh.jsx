@@ -3372,6 +3372,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "toolName.PluginAuthoringGuide": "读取插件开发规范",
     "toolName.HookManager": "管理自动触发",
     "toolName.PluginManager": "管理插件",
+    "toolName.PluginRepairInspect": "调查插件问题",
     "toolName.PluginSourceManager": "管理插件源码",
     "toolName.PluginScaffold": "创建插件骨架",
     "toolName.PluginValidate": "校验插件",

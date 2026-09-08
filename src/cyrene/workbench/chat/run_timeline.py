@@ -113,7 +113,7 @@ class RunTimeline:
         self.activity_id = ""
         self.reply_id = ""
 
-    def _apply_tool(self, kind: str, payload: dict[str, Any], at: str, source: str, event_id: str) -> None:
+    def _apply_tool(self, kind: str, payload: dict[str, Any], at: str, source: str, event_id: str) -> list[dict[str, Any]]:
         if kind == "permission.reviewed":
             payload = {**payload, "toolCallId": "permission:" + str(payload.get("id") or event_id),
                        "name": "Permission review", "detailKey": "workbenchChat.permissionReview",
@@ -121,9 +121,16 @@ class RunTimeline:
         call = str(payload.get("toolCallId") or payload.get("tool_call_id") or payload.get("call_id") or "")
         if call:
             owner = self.tools.get(call)
+            previous_counter = self.counter
             record = self.records[owner] if owner else self._activity(at, source)
+            # Tool events only mutate this entry and the activity's status.
+            # Nested input/output values are replaced, never edited in place,
+            # so shallow before-images preserve exact change detection without
+            # copying unrelated tools or the accumulated conversation.
+            before_record = {key: value for key, value in record.items() if key != "trace"}
             self.tools[call] = record["id"]
             entry = next((t for t in record["trace"] if t["toolCallId"] == call), None)
+            before_entry = dict(entry) if entry is not None else None
             if entry is None:
                 entry = {"kind": "permission" if kind == "permission.reviewed" else "tool", "toolCallId": call, "startedAt": at}
                 record["trace"].append(entry)
@@ -143,6 +150,10 @@ class RunTimeline:
             if status != "running":
                 entry["endedAt"] = at
             self._settle_activity(record, at)
+            after_record = {key: value for key, value in record.items() if key != "trace"}
+            if self.counter != previous_counter or before_entry != entry or before_record != after_record:
+                return [record]
+        return []
 
     def _apply_artifact(self, payload: dict[str, Any], at: str, source: str) -> None:
         attachment = payload.get("attachment")
@@ -195,6 +206,8 @@ class RunTimeline:
             identity = None
         if delta_kind and identity in self.records:
             return self._append_text(identity, kind, payload)
+        if kind in {"tool.started", "tool.updated", "tool.completed", "tool_call_started", "tool_call_progress", "tool_call_finished", "permission.reviewed"}:
+            return self._changed_patch(self._apply_tool(kind, payload, at, source, event_id))
         # Structural events may close memberships or settle several records.
         before = copy.deepcopy(self.records)
         if kind in {"reply_start", "message.started"}:
@@ -218,8 +231,6 @@ class RunTimeline:
                 record["reasoning"] = str(payload.get("response", payload.get("text", record["reasoning"])))
             record["reasoningActive"] = kind not in {"reasoning_done", "reasoning.completed"}
             self._settle_activity(record, at)
-        elif kind in {"tool.started", "tool.updated", "tool.completed", "tool_call_started", "tool_call_progress", "tool_call_finished", "permission.reviewed"}:
-            self._apply_tool(kind, payload, at, source, event_id)
         elif kind in {"notification.created", "notification"}:
             identity = str(payload.get("id") or event_id)
             record = self._new("notification", at, identity)
@@ -242,6 +253,9 @@ class RunTimeline:
                         if entry.get("status") == "running":
                             entry.update(status=self.status, endedAt=at)
         changed = [r for key, r in self.records.items() if before.get(key) != r]
+        return self._changed_patch(changed)
+
+    def _changed_patch(self, changed: list[dict[str, Any]]) -> dict[str, Any]:
         self.revision += 1
         for record in changed:
             record["timelineRevision"] = self.revision

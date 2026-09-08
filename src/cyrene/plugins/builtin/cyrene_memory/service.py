@@ -229,7 +229,15 @@ class MemoryService:
                     parts.append(prompt)
             except Exception:
                 logger.exception("Failed to render project-memory prompt")
-        return "\n\n".join(part for part in parts if part).strip()
+        if not parts:
+            return ""
+        attribution = localized(
+            "[Memory provenance: Shared history, not the current conversation transcript; "
+            "do not invent a speaker or conversation.]",
+            "[记忆来源说明：共享历史，不是当前对话记录；不要猜测记录者或来源对话。]",
+            language=language,
+        )
+        return "\n\n".join([attribution, *parts]).strip()
 
     def _path(self, node_id: str) -> tuple[Any, ...]:
         if self.tree is None or not self.tree_id or not node_id:

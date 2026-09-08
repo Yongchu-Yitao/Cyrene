@@ -12,6 +12,7 @@ class DoctorRequest(BaseModel):
     client_code: str = Field(default="", pattern=r"^(|frontend_error|unhandled_rejection|network_error|http_[45][0-9]{2}|ui_error)$")
     language: str = "zh"
     auto_repair: bool = False
+    description: str = Field(default="", max_length=4000)
 
 
 class AnalysisRequest(BaseModel):
@@ -44,9 +45,9 @@ def register_doctor_routes(router: APIRouter, service):
 
     @router.post("/api/doctor/reports")
     async def diagnose(request: DoctorRequest):
-        scope = request.model_dump(exclude={'language', 'auto_repair'})
+        scope = request.model_dump(exclude={'language', 'auto_repair', 'description'})
         if request.auto_repair:
-            return await invoke(service.diagnose_failure(scope, language=request.language))
+            return await invoke(service.diagnose_failure(scope, language=request.language, description=request.description))
         return await invoke(service.diagnose(scope, language=request.language))
 
     @router.delete('/api/doctor/reports/{identifier}/failure-workflow')
@@ -80,6 +81,10 @@ def register_doctor_routes(router: APIRouter, service):
     @router.post("/api/doctor/repairs/{identifier}/apply")
     async def apply(identifier: str, request: ApplyRepairRequest | None = None):
         return await invoke(service.apply_repair(identifier, request.expected_plan_hash if request else None))
+
+    @router.post('/api/doctor/repairs/{identifier}/verify')
+    async def verify_repair(identifier: str):
+        return await invoke(service.repairs.verify_applied(identifier))
 
     @router.post("/api/doctor/repairs/{identifier}/rollback")
     async def rollback(identifier: str):

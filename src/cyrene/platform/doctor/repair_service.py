@@ -5,7 +5,6 @@ import asyncio
 from datetime import datetime, timezone
 import difflib
 import json
-from pathlib import Path
 from uuid import uuid4
 
 from .agent_repair import RepairWorkspace, generate_repair
@@ -134,6 +133,36 @@ class RepairService:
         self.doctor.tasks.pop(identifier, None)
         return self.public(plan)
 
+    async def verify_applied(self, identifier):
+        """Resume verification after restart without applying the patch twice."""
+        doctor = self.doctor
+        from cyrene.plugins.maintenance import source_health
+        async with doctor.lock:
+            plan = self.get(identifier)
+            if plan['status'] != 'applied' or plan.get('plan_hash') != plan_hash(plan):
+                raise ValueError('Only an intact applied repair can be checked')
+            candidate = apply_changes(decode_snapshot(plan['original']), plan['changes'])
+            target = plan['action']['target']
+            if snapshot(doctor.plugins, target) != candidate:
+                raise ValueError('Source changed after repair')
+            health = source_health(doctor.host, target)
+            checks = {'syntax': syntax_check(candidate), 'lifecycle': health}
+            if plan.get('probe') and not health['restart_required'] and not health['errors']:
+                checks['probe'] = await run_probe(candidate, plan['probe'])
+            if snapshot(doctor.plugins, target) != candidate:
+                raise ValueError('Source changed during verification')
+            fixed = (plan['baseline']['syntax']['status'] == 'failed' and checks['syntax']['status'] == 'passed') or (
+                plan['baseline'].get('probe', {}).get('status') == 'failed' and checks.get('probe', {}).get('status') == 'passed')
+            status = 'restart_required' if health['restart_required'] else ('verified' if fixed and not health['errors'] else 'unverified')
+            plan['outcome'] = {'status': status, 'checks': checks}
+            self.save(plan, 'verification_resumed')
+            report = doctor.get(plan['report_id'])
+            if report.get('failure', {}).get('repair_id') == identifier:
+                report['failure'].update(status='completed' if status == 'verified' else 'needs_attention', phase='finished',
+                    reason='restart_required' if status == 'restart_required' else ('' if status == 'verified' else 'runtime_not_verified'))
+                doctor.repository.save(report)
+            return self.public(plan)
+
     async def commit(self, identifier, expected_hash, *, rollback=False):
         # A disconnected HTTP client must not strand a partially written plugin.
         task = asyncio.create_task(self._commit(identifier, expected_hash, rollback=rollback))
@@ -178,7 +207,10 @@ class RepairService:
                     plan['commit_started'] = True
                     self.save(plan, plan['status'])
                     try:
-                        await doctor.host._stop_pack(plan['action']['target'])
+                        from cyrene.plugins.maintenance import source_pack_ids, source_health
+                        pack_ids = source_pack_ids(doctor.host, plan['action']['target'])
+                        for pack_id in pack_ids:
+                            await doctor.host._stop_pack(pack_id)
                         wanted = original if rollback else candidate
                         for change in plan['changes']:
                             name = change['path']
@@ -199,10 +231,10 @@ class RepairService:
                             plan['status'] = 'rolled_back'
                             plan['outcome'] = {'status': 'rolled_back'}
                         else:
-                            failures = doctor.host.startup_failures
                             target = plan['action']['target']
-                            if target in failures or any(Path(f.path).name == target for f in doctor.host.load_failures):
-                                raise ValueError('Repaired plugin still fails to load')
+                            health = source_health(doctor.host, target)
+                            if health['errors']:
+                                raise ValueError('Repaired plugin failed lifecycle checks: ' + ', '.join(health['errors']))
                             live = snapshot(doctor.plugins, target)
                             if live != candidate:
                                 raise ValueError('Plugin changed during reload; verification is stale')
@@ -217,6 +249,8 @@ class RepairService:
                             probe_fixed = plan['baseline'].get('probe', {}).get('status') == 'failed' and checks.get('probe', {}).get('status') == 'passed'
                             plan['outcome'] = {'status': 'verified' if syntax_fixed or probe_fixed else 'unverified',
                                                'basis': 'syntax' if syntax_fixed else 'reproduction' if probe_fixed else 'static_only', 'checks': checks}
+                            if health['restart_required']:
+                                plan['outcome'] = {'status': 'restart_required', 'checks': checks, 'pack_ids': health['pack_ids']}
                             plan['status'] = 'applied'
                         self.save(plan, plan['status'])
                     except Exception as exc:

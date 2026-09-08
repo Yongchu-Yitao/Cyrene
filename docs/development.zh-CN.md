@@ -160,6 +160,23 @@ State，Project Action 属于 Project-type Plugin Contribution。
 - `cyrene.platform.inbox` Agent Message；
 - SQLite/Document Store 持久化。
 
+### 插件管理入口
+
+Agent、HTTP 和维护工具共享 `cyrene.plugins.management` 的状态查询与管理操作。
+启停使用 `update_activation`：增量保存设置，再同步 Registry、协调应用生命周期并发布通知。
+同步的项目依赖发现只调用 `persist_activation`；应用启动和异步管理入口仍负责生命周期协调。
+不要在入口中保存整份启停快照或重新计算插件运行状态。包的 `effective_enabled` 表示包开关，
+`enabled_count` 单独表示已启用成员数；关闭全部工具不等于关闭包的应用服务。
+
+安装调用 `cyrene.plugins.installation.install_source`，静态检查调用
+`cyrene.plugins.validation`。内部函数返回数据，路径选择、翻译和 JSON 编解码留在入口。
+Registry、Application 和 Session 共用 `core.plugin.source.python_source_signature` 检测
+Python 源码变化，各自保留生命周期处理；Registry 另行纳入 i18n 目录文件的变化。
+
+
+`setup` 和 `application_setup` 必须是同步函数；验证器和宿主会拒绝异步 setup，
+包括同步包装函数返回的协程。工具 handler、Hook 和应用 startup 回调仍可使用异步函数。
+
 ### 新增 Tool
 
 1. 在对应的 `src/cyrene/plugins/builtin/<pack>/` 中增加实现，或在应用

@@ -10,7 +10,8 @@ from typing import Any
 
 from cyrene.platform.subprocess_environment import external_process_environment
 
-from ..plugin import Plugin, PluginContext
+from ..context import plugin_localized
+from ..plugin import Plugin, PluginContext, PluginExecutionError, PluginFailure
 from .permission_boundaries import bash_boundary
 
 
@@ -70,7 +71,21 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
         )
     except asyncio.TimeoutError:
         await _kill_process_tree(process)
-        raise TimeoutError(f"command timed out after {timeout_ms} ms") from None
+        seconds = timeout_ms / 1000
+        message = plugin_localized(
+            context,
+            "Bash command timed out after {seconds:g} seconds.",
+            "Bash 命令在 {seconds:g} 秒后超时。",
+            seconds=seconds,
+        )
+        raise PluginExecutionError(PluginFailure(
+            error_code="plugin_timeout",
+            message=message,
+            retryable=True,
+            retry_scope="after_delay",
+            circuit_scope="run_plugin",
+            details={"timeout_ms": timeout_ms},
+        )) from None
     except asyncio.CancelledError:
         await asyncio.shield(_kill_process_tree(process))
         raise

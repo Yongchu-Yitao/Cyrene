@@ -23,7 +23,7 @@ async def test_send_never_waits_for_commit_outbox(tmp_path, monkeypatch):
     async def fail_if_drained(*_args, **_kwargs):
         raise AssertionError("the foreground send path must not drain the outbox")
 
-    async def use_bridge(_config, _operation, *, publish):
+    async def use_bridge(_config, _operation, *, publish, expected_run_id=None):
         assert publish is not None
         return result
 

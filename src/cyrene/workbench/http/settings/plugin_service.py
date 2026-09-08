@@ -14,8 +14,9 @@ from cyrene.core.plugin import (
     PluginRegistryError,
     RegisteredPlugin,
 )
+from cyrene.plugins.management import pack_status, plugin_status, update_activation
 from cyrene.localization import localized
-from cyrene.platform import config_store, settings_service, settings_store
+from cyrene.platform import config_store, settings_service
 from cyrene.workbench.http.errors import localized_error_response
 
 SettingsChangedPublisher = Callable[[str, int | None, list[str]], Awaitable[None]]
@@ -37,13 +38,8 @@ def _plugin_value(
 ) -> dict[str, Any]:
     plugin = registered.plugin
     source, source_path = _source_values(registered.source)
-    enabled = registry.plugin_enabled(plugin.name)
+    state = plugin_status(registry, registered, host)
     pack_id = registered.pack_id
-    operational = (
-        enabled and bool(host.pack_operational(pack_id))
-        if host is not None and pack_id is not None
-        else enabled
-    )
     return {
         "id": plugin.canonical_name,
         "name": plugin.name,
@@ -52,20 +48,8 @@ def _plugin_value(
         "kind": plugin.kind,
         "pack_id": pack_id,
         "standalone": pack_id is None,
-        "configured_enabled": registry.plugin_configured_enabled(plugin.name),
-        "effective_enabled": enabled,
-        "operational": operational,
-        "running": (
-            enabled and bool(host.pack_running(pack_id))
-            if host is not None and pack_id is not None
-            else False
-        ),
+        **state,
         "startup_error": _startup_error(host, pack_id),
-        "restart_required": (
-            bool(host.pack_restart_required(pack_id))
-            if host is not None and pack_id is not None
-            else False
-        ),
         "locked": registry.plugin_locked(plugin.name),
         "model_visible": plugin.model_visible,
         "main_only": plugin.main_only,
@@ -81,30 +65,14 @@ def _pack_value(
 ) -> dict[str, Any]:
     source, source_path = _source_values(registry.pack_source(pack.id))
     plugin_names = [plugin.canonical_name for plugin in pack.plugins]
-    enabled_count = sum(
-        registry.plugin_enabled(name) for name in plugin_names
-    )
-    effective = (
-        enabled_count > 0
-        if plugin_names
-        else registry.pack_configured_enabled(pack.id)
-    )
+    state = pack_status(registry, pack, host)
     return {
         "id": pack.id,
         "name": pack.id,
         "description": pack.description,
         "plugins": plugin_names,
-        "configured_enabled": registry.pack_configured_enabled(pack.id),
-        "effective_enabled": effective,
-        "operational": (
-            bool(host.pack_operational(pack.id)) if host is not None else effective
-        ),
-        "running": bool(host.pack_running(pack.id)) if host is not None else False,
+        **state,
         "startup_error": _startup_error(host, pack.id),
-        "restart_required": (
-            bool(host.pack_restart_required(pack.id)) if host is not None else False
-        ),
-        "enabled_count": enabled_count,
         "plugin_count": len(plugin_names),
         "tool_count": sum(plugin.kind == "tool" for plugin in pack.plugins),
         "model_count": sum(plugin.kind == "model" for plugin in pack.plugins),
@@ -294,27 +262,15 @@ class PluginSettingsApplicationService:
             str(name): enabled
             for name, enabled in (body.get("packs") or {}).items()
         }
-        changes: dict[str, Any] = {}
-        if plugin_updates:
-            changes["enabled_plugins"] = plugin_updates
-        if pack_updates:
-            changes["enabled_plugin_packs"] = pack_updates
         try:
-            result = settings_service.update(
-                "runtime",
-                changes,
-                actor="ui",
-                expected_revision=body.get("expected_revision"),
-            )
-            self._registry.configure_activation(
-                plugins=settings_store.get_enabled_plugins(),
-                packs=settings_store.get_enabled_plugin_packs(),
-            )
             from cyrene.core.plugin import application_plugin_scope
 
-            host = application_plugin_scope()
-            if host is not None and host.registry is self._registry:
-                await host.reconcile_activation()
+            result = await update_activation(
+                self._registry, application_plugin_scope(),
+                plugins=plugin_updates, packs=pack_updates, actor="ui",
+                expected_revision=body.get("expected_revision"),
+                publish_settings_changed=self._publish_settings_changed,
+            )
         except config_store.SettingsRevisionConflict as exc:
             return localized_error_response(
                 "Plugin settings were changed by another client.",
@@ -331,11 +287,6 @@ class PluginSettingsApplicationService:
                 "invalid_plugin_activation",
             )
 
-        await self._publish_settings_changed(
-            "runtime",
-            result["revision"],
-            list(changes),
-        )
         return {
             "ok": True,
             "revision": result["revision"],

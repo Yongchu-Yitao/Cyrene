@@ -12,6 +12,36 @@ from cyrene.model.error_details import ModelCallError
 from cyrene.plugins.model_router import request_token_estimate
 
 
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+@pytest.mark.parametrize("frozen", [False, True])
+def test_memory_provenance_wraps_live_and_frozen_context(monkeypatch, language, frozen):
+    from cyrene.plugins.builtin.cyrene_memory import short_term
+
+    content = "I recorded a pending weather plugin check."
+    monkeypatch.setattr(short_term, "get_context", lambda **_: content)
+    data = {"language": language, "memory_project_enabled": False}
+    if frozen:
+        data["project_memory_snapshot"] = {"shortTermContext": content}
+    before = deepcopy(data)
+    memory = MemoryService(workspace=None, tree=None, tree_id="", data=data)
+
+    context = memory.context_block()
+
+    assert context.endswith("\n\n" + content)
+    if language == "en":
+        assert context.startswith("[Memory provenance:")
+        assert "not the current conversation transcript" in context
+        assert "do not invent a speaker or conversation" in context
+    else:
+        assert context.startswith("[记忆来源说明：")
+        assert "不是当前对话记录" in context
+        assert "不要猜测记录者或来源对话" in context
+    assert data == before
+    monkeypatch.setattr(short_term, "get_context", lambda **_: "")
+    data.pop("project_memory_snapshot", None)
+    assert memory.context_block() == ""
+
+
 @pytest.mark.parametrize("replacement_role", ["context_compaction", "context_reflection"])
 @pytest.mark.parametrize("run_id", ["old", "current"])
 def test_memory_and_agent_share_effective_history(replacement_role, run_id):

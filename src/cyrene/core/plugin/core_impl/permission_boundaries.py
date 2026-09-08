@@ -250,6 +250,84 @@ def _write_targets(command: str) -> list[str]:
     return candidates
 
 
+_FILESYSTEM_READ_COMMANDS = {
+    "cat", "du", "file", "find", "grep", "head", "less", "ls", "more",
+    "rg", "sed", "stat", "tail", "wc",
+}
+
+
+def _read_targets(command: str) -> list[tuple[str, str]]:
+    """Return path-like arguments used by common filesystem-reading commands."""
+
+    targets: list[tuple[str, str]] = []
+    for segment in re.split(r"\s*(?:&&|\|\||[;|])\s*", str(command or "")):
+        try:
+            tokens = shlex.split(segment, posix=True)
+        except ValueError:
+            continue
+        if not tokens:
+            continue
+        command_index = 0
+        if _first_command(tokens[command_index]) == "sudo":
+            command_index += 1
+            while command_index < len(tokens) and tokens[command_index].startswith("-"):
+                command_index += 1
+        if command_index >= len(tokens):
+            continue
+        executable = _first_command(tokens[command_index])
+        if executable not in _FILESYSTEM_READ_COMMANDS:
+            continue
+        for token in tokens[command_index + 1:]:
+            value = token.strip()
+            if value in {".", ".."} or value.startswith(("/", "~/", "./", "../")):
+                targets.append((executable, value))
+    return targets
+
+
+def _outside_read_targets(
+    command: str,
+    workspace: Path | None,
+) -> list[tuple[str, str, Path]]:
+    resolution_root = workspace or Path.cwd().resolve()
+    outside: list[tuple[str, str, Path]] = []
+    for executable, token in _read_targets(command):
+        expanded = os.path.expandvars(os.path.expanduser(token.strip("'\"")))
+        if expanded.rstrip("/") == os.devnull:
+            continue
+        candidate = Path(expanded)
+        resolved = (
+            candidate if candidate.is_absolute() else resolution_root / candidate
+        ).resolve()
+        if workspace is None or not _within(resolved, workspace):
+            outside.append((executable, token, resolved))
+    return outside
+
+
+def _is_recursive_read(executable: str, command: str) -> bool:
+    if executable in {"find", "du", "rg"}:
+        return True
+    if executable not in {"grep", "ls"}:
+        return False
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    return any(
+        token == "--recursive"
+        or (token.startswith("-") and "r" in token.lower().lstrip("-"))
+        for token in tokens
+    )
+
+
+def _is_broad_read_root(path: Path) -> bool:
+    home = Path.home().resolve()
+    return (
+        path == Path(path.anchor)
+        or path == home
+        or (path.is_absolute() and len(path.parts) <= 2)
+    )
+
+
 def bash_boundary(
     arguments: dict[str, Any],
     context: PluginContext,
@@ -271,13 +349,38 @@ def bash_boundary(
             "requires_human": True,
             "single_use": False,
         }
-    if not _requires_write_guard(command):
-        return None
     workspace = (
         Path(context.workspace).expanduser().resolve()
         if context.workspace is not None
         else None
     )
+    outside_reads = _outside_read_targets(command, workspace)
+    broad_reads = [
+        (token, resolved)
+        for executable, token, resolved in outside_reads
+        if _is_recursive_read(executable, command) and _is_broad_read_root(resolved)
+    ]
+    if broad_reads:
+        paths = ", ".join(dict.fromkeys(token for token, _path in broad_reads))
+        return {
+            "kind": "broad_read_confirmation",
+            "operation": "递归扫描大范围目录",
+            "path_hint": paths,
+            "reason": command[:240],
+            "requires_human": True,
+            "single_use": True,
+        }
+    if not _requires_write_guard(command):
+        if not outside_reads:
+            return None
+        paths = ", ".join(dict.fromkeys(token for _exe, token, _path in outside_reads))
+        return {
+            "kind": "read_elevation",
+            "operation": "读取 workspace 之外的文件或目录",
+            "path_hint": paths,
+            "reason": command[:240],
+            "requires_human": False,
+        }
     if workspace is None:
         return {
             "kind": "write_permission_request",
