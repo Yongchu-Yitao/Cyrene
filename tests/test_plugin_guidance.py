@@ -95,7 +95,8 @@ class _ScriptedChannel:
         self.acknowledged.extend(str(event.get("event_id") or "") for event in events)
 
 
-def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path):
+@pytest.mark.parametrize("output_channel", ["reasoning", "reply"])
+def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path, output_channel):
     async def scenario() -> None:
         started = threading.Event()
         cancelled = threading.Event()
@@ -104,6 +105,9 @@ def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path):
         async def model(arguments, _context):
             captured.append(list(arguments["messages"]))
             if len(captured) == 1:
+                stream = _context.services["model_stream"]
+                await stream({"type": output_channel + "_start"})
+                await stream({"type": output_channel + "_delta", "delta": "partial output"})
                 started.set()
                 try:
                     await asyncio.sleep(30)
@@ -115,6 +119,8 @@ def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path):
         channel = WorkbenchGuidanceChannel(inbox)
         channel.bind_owner_loop(asyncio.get_running_loop())
         session = _session(tmp_path, _registry(model), channel)
+        observed_events = []
+        session.subscribe(observed_events.append)
         try:
             session.submit("original request", run_id="run-guidance")
             draining = asyncio.create_task(session.drain())
@@ -130,6 +136,29 @@ def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path):
             assert "use the corrected requirement" in captured[-1][-1]["content"]
             assert session.final_output("run-guidance")["content"] == "revised answer"
             assert any(event.type == "guidance.applied" for event in session.events())
+            from cyrene.workbench.chat.run_timeline import RunTimeline
+            from cyrene.workbench.core_adapter.bridge import workbench_events
+
+            timeline = RunTimeline("run-guidance")
+            cancellation_seen = False
+            for observation in observed_events:
+                for projected in workbench_events(observation):
+                    timeline.apply(projected)
+                if observation.type == "assistant.stream.cancelled":
+                    cancellation_seen = True
+                    start_event = next(e for e in observed_events
+                                       if e.type == ("assistant.reasoning.started" if output_channel == "reasoning"
+                                                     else "assistant.stream.started"))
+                    assert observation.data["sourceId"] == start_event.data["sourceId"]
+                    partial = [m for m in timeline.messages()
+                               if m.get("reasoning") == "partial output" or m.get("content") == "partial output"]
+                    assert len(partial) == 1
+                    assert partial[0]["status"] == "cancelled"
+                    assert not partial[0].get("reasoningActive")
+                    assert timeline.status == "running"
+                if observation.type == "guidance.applied":
+                    assert cancellation_seen
+            assert cancellation_seen
             assert inbox._guidance_pending_count == 0
             with pytest.raises(GuidanceAdmissionClosed):
                 await inbox.put_guidance(

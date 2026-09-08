@@ -218,6 +218,7 @@ AgentEventType = Literal[
     "assistant.stream.started",
     "assistant.stream.delta",
     "assistant.stream.done",
+    "assistant.stream.cancelled",
     "assistant.reasoning.started",
     "assistant.reasoning.delta",
     "assistant.reasoning.done",
@@ -1086,6 +1087,7 @@ class AgentSession:
             "reply_start": "assistant.stream.started",
             "reply_delta": "assistant.stream.delta",
             "reply_done": "assistant.stream.done",
+            "stream_cancelled": "assistant.stream.cancelled",
             "reasoning_start": "assistant.reasoning.started",
             "reasoning_delta": "assistant.reasoning.delta",
             "reasoning_done": "assistant.reasoning.done",
@@ -3326,6 +3328,11 @@ class AgentSession:
                 if wait_task.done() and bool(wait_task.result()) and not model_task.done():
                     model_task.cancel()
                     await asyncio.gather(model_task, return_exceptions=True)
+                    # Guidance cancels this model attempt, not the run or its
+                    # tools. Close its visible output before mounting guidance.
+                    await model_services["model_stream"]({
+                        "type": "stream_cancelled", "reason": "user_guidance",
+                    })
                     with self._state_lock:
                         self._streamed_transition_keys.discard(transition_key)
                     guidance_events = await self._collect_guidance()

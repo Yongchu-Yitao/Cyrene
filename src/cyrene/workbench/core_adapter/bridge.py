@@ -430,6 +430,9 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
     stream_projection = _stream_events(event, data)
     if stream_projection is not None:
         return stream_projection
+    if event.type == "assistant.stream.cancelled":
+        return (_envelope(event, "message.cancelled", f"{event_id}:{event.sequence}",
+                          {"reason": str(data.get("reason") or "cancelled")}),)
     if event.type == "input.accepted":
         return (_envelope(event, "run.started", event_id, {"status": "running"}),)
     if event.type == "model.requested":

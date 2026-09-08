@@ -239,6 +239,22 @@ class RunTimeline:
             self._apply_artifact(payload, at, source)
         elif kind == "guidance_received":
             self._apply_guidance(payload, at)
+        elif kind == "message.cancelled" and source:
+            # A cancelled model attempt may own reasoning and prose in
+            # separate records. Never cancel tools sharing its activity card.
+            # Cancellation always names its model stream. Never infer an
+            # owner from the latest message or change membership/order here.
+            reasoning_id = self.reasonings.get(source)
+            activity = self.records.get(reasoning_id)
+            if activity is not None and activity.get("reasoningActive"):
+                activity["reasoningActive"] = False
+                self._settle_activity(activity, at)
+                if activity["status"] == "completed":
+                    activity["status"] = "cancelled"
+            reply_id = self.sources.get(f"message:{source}")
+            reply = self.records.get(reply_id)
+            if reply is not None and reply["status"] == "running":
+                reply.update(status="cancelled", endedAt=at)
         elif kind in {"permission.requested", "elicitation.requested", "awaiting_user", "run.awaiting_input"}:
             self.status = "waiting"
         elif kind in {"permission.resolved", "elicitation.resolved"}:

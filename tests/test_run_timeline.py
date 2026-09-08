@@ -312,3 +312,74 @@ process.stdout.write(JSON.stringify(states));
     states = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
     activity_id = timeline.messages()[0]["id"]
     assert states == [[activity_id], [activity_id, "guide"], [activity_id, "guide", "guided-wait:continuation"]]
+
+
+@pytest.mark.parametrize("running_tool", [False, True])
+def test_cancelled_model_stream_settles_only_its_output(running_tool):
+    timeline = RunTimeline("guided-cancellation")
+    delivered = RunTimeline(timeline.run_id)
+
+    def publish(kind, second, **payload):
+        delivered.ingest(timeline.apply(event(kind, second, **payload)))
+        assert delivered.messages() == timeline.messages()
+
+    publish("reasoning_start", 0, sourceId="old")
+    publish("reasoning_delta", 1, sourceId="old", delta="partial thought")
+    original_id = timeline.reasonings["old"]
+    if running_tool:
+        publish("tool.started", 2, sourceId="old", toolCallId="in-flight", name="Read")
+    publish("reply_start", 3, sourceId="old")
+    publish("reply_delta", 4, sourceId="old", delta="partial reply")
+    publish("guidance_received", 5, userMessage={"id": "guide", "role": "user", "content": "change direction"})
+    publish("reasoning_start", 6, sourceId="new")
+    before_cancel = timeline.messages()
+    owners_before = (dict(timeline.sources), dict(timeline.reasonings), dict(timeline.tools),
+                     timeline.activity_id, timeline.reasoning_id, timeline.reply_id, timeline.counter)
+    publish("message.cancelled", 7, sourceId="old", reason="user_guidance")
+    assert owners_before == (timeline.sources, timeline.reasonings, timeline.tools,
+                             timeline.activity_id, timeline.reasoning_id, timeline.reply_id, timeline.counter)
+    # Only lifecycle fields may change. This also protects IDs, list order,
+    # timestamps used for sorting, content, membership and intermediate flags.
+    lifecycle_fields = {"status", "reasoningActive", "endedAt", "timelineRevision"}
+    def presentation_records(records):
+        return [{k: v for k, v in record.items() if k not in lifecycle_fields}
+                for record in records]
+    assert presentation_records(timeline.messages()) == presentation_records(before_cancel)
+    old = timeline.records[original_id]
+    assert old["reasoning"] == "partial thought"
+    assert old["reasoningActive"] is False
+    assert old["status"] == ("running" if running_tool else "cancelled")
+    reply = timeline.records[timeline.sources["message:old"]]
+    assert reply["status"] == "cancelled"
+    assert reply["content"] == "partial reply"
+    assert timeline.records[timeline.reasonings["new"]]["status"] == "running"
+    assert timeline.status == "running"
+    if running_tool:
+        assert old["trace"][0]["status"] == "running"
+        publish("tool.completed", 8, toolCallId="in-flight")
+        assert old["status"] == "completed"
+    publish("reasoning_done", 9, sourceId="new", response="new thought")
+    assert not any(m["status"] == "running" for m in timeline.messages())
+    from conftest import frontend_module_source
+
+    source = frontend_module_source("features/chat/runtime-timeline.jsx")
+    helpers = "function wbcConfirmOptimisticMessage(" + source.split("function wbcConfirmOptimisticMessage(", 1)[1].split("export {", 1)[0]
+    script = f"""
+eval({json.dumps(helpers)});
+const runtime = wbcApplyTimeline({{}}, {json.dumps(timeline.snapshot())});
+const projected = wbcProjectTranscript([], runtime);
+process.stdout.write(JSON.stringify(projected.filter(m => m.runtimeContinuation).map(m => m.id)));
+"""
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == ["guided-cancellation:continuation"]
+
+
+@pytest.mark.parametrize("source", ["", "unknown-stream"])
+def test_cancellation_without_a_known_owner_does_not_touch_latest_messages(source):
+    timeline = RunTimeline("cancel-owner")
+    timeline.apply(event("reasoning_start", 0, sourceId="active"))
+    timeline.apply(event("reply_delta", 1, sourceId="active", delta="current reply"))
+    before = timeline.messages()
+    patch = timeline.apply(event("message.cancelled", 2, sourceId=source))
+    assert patch["messages"] == []
+    assert timeline.messages() == before
