@@ -162,3 +162,9 @@ test("JSX does not expose untranslated English text nodes", () => {
   }
   assert.deepEqual(missing, [])
 })
+
+test("model ID combobox receives the settings translator", () => {
+  const source = fs.readFileSync(path.join(FRONTEND_ROOT, "settings-model-configuration.jsx"), "utf8")
+  const invocation = source.split("h(ModelIdCombobox, {", 2)[1].split("})", 1)[0]
+  assert.match(invocation, /\bt:\s*props\.t\b/)
+})
