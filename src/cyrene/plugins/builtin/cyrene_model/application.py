@@ -82,6 +82,12 @@ def setup_application(context: PluginApplicationContext) -> None:
     if context.registry is None:
         raise RuntimeError("cyrene_model requires the active Plugin registry")
 
+    from cyrene.model.http_clients import ModelHttpClients
+
+    http_clients = ModelHttpClients()
+    context.provide("model_http_clients", http_clients)
+    context.on_shutdown(http_clients.aclose)
+
     gateway = context.services.get("model")
     runtime = getattr(gateway, "runtime", None) or application_model_runtime(
         context.registry

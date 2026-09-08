@@ -43,7 +43,9 @@ WRITE_PLUGIN = Plugin(
     description=(
         "Write UTF-8 text without a fixed character limit. When splitting a "
         "file, overwrite with the first chunk, then append later chunks in "
-        "separate tool-call turns."
+        "separate tool-call turns. End chunks at stable boundaries, never use "
+        "overwrite to continue a file, and verify the assembled file before "
+        "reporting completion."
     ),
     input_schema={
         "type": "object",

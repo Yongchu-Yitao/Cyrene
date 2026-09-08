@@ -500,19 +500,23 @@ def _build_proactive_user_prompt(
             "material result or risk; otherwise finish with decision suppress."
         )
 
-    return f"""## Objective
+    return f"""This is a scheduler-initiated proactive check-in.
+
+## Objective
 - This is an autonomous work cycle, not a social check-in. Work on exactly one item from the authoritative work-item snapshot below.
 - The snapshot is the complete work queue for this cycle. Memories, old conversations, knowledge records, project files, and inferred user interests are supporting evidence only and must never create another task.
 - Before doing work, compare the selected item with the authoritative recent-chat snapshot and current project state. If they prove it completed, superseded, cancelled, or no longer applicable, update the entity lifecycle accordingly and suppress delivery.
 - When the selected item remains actionable, use tools and complete bounded work now. Do not merely suggest work, offer to help, or describe what you could do.
 - After completing it, update that entity to done. If it genuinely requires user input, update it to paused and deliver the one concrete blocker once.
-- Prefer bounded work with a verifiable result. Respect the proactive write-safety boundary in the system instructions.
+- Prefer bounded work with a verifiable result. Use tools only to validate or advance the selected item and update its lifecycle.
+- Work must be incremental: never modify, overwrite, move, rename or delete existing files. Create files only at new paths; use Write only when the file does not already exist.
 - Report only a concrete completed result, a newly verified material fact, or a specific blocker/risk that genuinely needs the user's attention. State what changed or was found and why it matters.
-- Finish every cycle by calling finish_proactive exactly once. Use decision=deliver and put only the exact concise user-visible report in report when there is a material result. Use decision=suppress and report="" when nothing should be shown.
-- After finish_proactive succeeds, return an empty assistant response. Ordinary assistant text is not a delivery decision and will be ignored.
+- Finish every cycle by calling finish_proactive exactly once. Use decision=deliver and put only the exact concise user-visible report in report when there is a material result or concrete risk/blocker. Use decision=suppress and report="" when nothing should be shown.
+- After finish_proactive succeeds, return an empty assistant response. Ordinary assistant text cannot authorize delivery and will be ignored.
 - Do not greet the user, make small talk, ask how they are, send lifestyle reminders, or revive a casual topic merely to have something to say.
 - No new user message triggered this round. Never claim or imply that the user just woke up, came online, returned, became available, finished work, is currently busy, or is currently doing anything.
 - Treat the current time and silence duration only as scheduling/deadline context; they are not evidence of the user's present state.
+- Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.
 {unanswered_note}
 
 ## Current situation
@@ -761,24 +765,13 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> dict[str, Any]:
             proactive_lang = str(_get_setting("app_language", "") or "").strip()
         except Exception:
             proactive_lang = ""
-        proactive_prompt = (
-            "This is a scheduler-initiated proactive check-in.\n"
-            "Treat it as an autonomous work cycle, not a social check-in.\n"
-            "The authoritative work-item snapshot in this request is the only source of work. Do not infer another task from memory, knowledge, files, or conversation history.\n"
-            "Use tools only to validate or advance one listed work item and to update its durable lifecycle.\n"
-            "Any proactive task must be incremental: do not modify, overwrite, move, rename, or delete existing files. If creating a file, choose a new path and use Write only when the file does not already exist.\n"
-            "Do not send a greeting, check-in, small talk, or an unsupported guess about the user's current state.\n"
-            "At the end, call finish_proactive exactly once. Use decision=deliver and put only the exact concise user-visible report in report when there is a material result or concrete risk/blocker. Use decision=suppress and report=\"\" when nothing should be shown.\n"
-            "After finish_proactive succeeds, return an empty assistant response. Ordinary assistant text is ignored and can never authorize delivery.\n"
-            "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
-            + _build_proactive_user_prompt(
-                silence_h,
-                work_items=work_items,
-                source_chat_context=_source_chat_context(target_session_id),
-                consecutive_unanswered=int(
-                    _LOTTERY_STATE.get("consecutive_unanswered", 0)
-                ),
-            )
+        proactive_prompt = _build_proactive_user_prompt(
+            silence_h,
+            work_items=work_items,
+            source_chat_context=_source_chat_context(target_session_id),
+            consecutive_unanswered=int(
+                _LOTTERY_STATE.get("consecutive_unanswered", 0)
+            ),
         )
         delivered_target: dict[str, str] | None = None
         proactive_session_id = f"wbchat_{uuid.uuid4().hex[:10]}"

@@ -115,8 +115,8 @@ def test_skill_validation_and_default_soul_follow_requested_language(tmp_path):
 
     assert result["code"] == "invalid_skill_source"
     assert result["error"] == "技能来源路径无效。"
-    assert "personal AI companion" in default_soul(language="en")
-    assert "私人 AI 伙伴" in default_soul(language="zh")
+    assert "universal assistant" in default_soul(language="en")
+    assert "通用助手" in default_soul(language="zh")
 
 
 def test_entity_reminder_prompt_follows_session_language(tmp_path):

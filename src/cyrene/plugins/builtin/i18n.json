@@ -2228,11 +2228,11 @@
     "Write": {
       "en": {
         "name": "Write",
-        "description": "Write UTF-8 text without a fixed character limit. When splitting a file, overwrite with the first chunk, then append later chunks in separate tool-call turns."
+        "description": "Write UTF-8 text without a fixed character limit. When splitting a file, overwrite with the first chunk, then append later chunks in separate tool-call turns. End chunks at stable boundaries, never use overwrite to continue a file, and verify the assembled file before reporting completion."
       },
       "zh": {
         "name": "写入文件",
-        "description": "写入 UTF-8 文本，无固定字符数限制。如需分块，先覆盖写入首块，再在后续工具调用轮次中追加其余块。"
+        "description": "写入 UTF-8 文本，无固定字符数限制。如需分块，先覆盖写入首块，再在后续工具调用轮次中追加其余块；每块应在稳定边界结束，不得用覆盖方式续写，并在完成前检查组合后的文件。"
       }
     },
     "app_use": {
@@ -3118,11 +3118,11 @@
     "toolbox": {
       "en": {
         "name": "Tool capability catalog",
-        "description": "Gateway to deferred Plugins. Use list to inspect every current Plugin pack and standalone tool, describe to load current input schemas, and invoke to execute a Plugin."
+        "description": "Gateway to deferred Plugins. toolbox.list returns discoverable Plugin pack names, a one-sentence purpose for each pack, and standalone Plugin names. Choose by those descriptions, then use toolbox.describe on the pack or standalone Plugin to load its current input schema before toolbox.invoke. If discovery fails, correct the request and retry toolbox.list."
       },
       "zh": {
         "name": "工具能力目录",
-        "description": "列出延迟加载的 Plugin、读取当前输入结构并调用指定 Plugin。"
+        "description": "通过延迟加载的 Plugin 扩展能力。先用 toolbox.list 查看可发现的插件包名称、每个包的一句话用途和独立插件名称，按说明选择后，再用 toolbox.describe 读取当前输入结构并通过 toolbox.invoke 调用；发现失败时修正请求并重试 toolbox.list。"
       }
     },
     "track_entity": {

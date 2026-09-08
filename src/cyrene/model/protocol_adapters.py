@@ -9,6 +9,7 @@ Chat Completions for the editable model Provider Plugins.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -1056,10 +1057,11 @@ async def _stream_payloads(
     response: httpx.Response,
     diagnostics: dict[str, Any] | None = None,
     protocol_trace: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    byte_stream: AsyncIterator[bytes] | None = None,
 ):
     data_lines: list[str] = []
     try:
-        async for raw_line in strict_utf8_lines(response, diagnostics):
+        async for raw_line in strict_utf8_lines(response, diagnostics, byte_stream):
             if diagnostics is not None:
                 diagnostics["line_count"] = int(diagnostics.get("line_count") or 0) + 1
             line = str(raw_line or "").strip()
@@ -1338,10 +1340,12 @@ async def handle_stream(
                 })
             except Exception:
                 pass
+        byte_stream = response.aiter_bytes()
         async for data in _stream_payloads(
             response,
             stream_diagnostics,
             protocol_trace,
+            byte_stream,
         ):
             if timing is not None and "ttft_ms" not in timing:
                 timing["ttft_ms"] = (time.monotonic() - request_started) * 1000
@@ -1354,6 +1358,18 @@ async def handle_stream(
             stream_diagnostics["finish_reason"] = finish
             if stream_diagnostics.get("terminal_event_seen"):
                 break
+
+        if stream_diagnostics.get("terminal_event_seen") or stream_diagnostics.get("saw_done_marker"):
+            # A protocol terminal event can precede HTTP's final chunk. Read
+            # that tail so HTTPX can return the connection to its pool. Never
+            # let a server keeping SSE open delay an already complete answer,
+            # and never decode trailing data into additional model output.
+            try:
+                async with asyncio.timeout(0.1):
+                    async for _ in byte_stream:
+                        pass
+            except (TimeoutError, httpx.TransportError, OSError):
+                pass
 
         normalized_finish = (
             "length"

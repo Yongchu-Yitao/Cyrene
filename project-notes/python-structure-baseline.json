@@ -281,7 +281,7 @@
     "decisions": 38
   },
   "src/cyrene/model/protocol_adapters.py": {
-    "module_lines": 1444
+    "module_lines": 1460
   },
   "src/cyrene/model/protocol_adapters.py::_anthropic_messages": {
     "decisions": 28
@@ -305,8 +305,8 @@
     "decisions": 32
   },
   "src/cyrene/model/protocol_adapters.py::handle_stream": {
-    "lines": 140,
-    "decisions": 30
+    "lines": 154,
+    "decisions": 34
   },
   "src/cyrene/model/protocol_adapters.py::parse_discovery_response": {
     "decisions": 39
@@ -1032,14 +1032,14 @@
     "decisions": 37
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py": {
-    "module_lines": 1238
+    "module_lines": 1270
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::_complete_stream_endpoint": {
     "lines": 139,
     "decisions": 22
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::complete_model": {
-    "lines": 160,
+    "lines": 158,
     "decisions": 32
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::discover_models": {
@@ -1157,7 +1157,7 @@
     "decisions": 26
   },
   "src/cyrene/plugins/builtin/cyrene_proactive/service.py::_heartbeat_proactive_check": {
-    "lines": 278,
+    "lines": 267,
     "decisions": 44
   },
   "src/cyrene/plugins/builtin/cyrene_remote/commands.py": {

@@ -14,6 +14,7 @@ import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -198,6 +199,7 @@ def _client_options(
     provider: ModelProvider,
     *,
     discovery: bool,
+    create_transport: bool = True,
 ) -> dict[str, Any]:
     timeout = httpx.Timeout(20.0, connect=5.0) if discovery else _timeout(context, provider)
     # Provider connections must not silently inherit OS or environment proxy
@@ -225,9 +227,41 @@ def _client_options(
             proxy = ""
         if proxy:
             options["proxy"] = proxy
-    if "proxy" not in options:
+    if "proxy" not in options and create_transport:
         options["transport"] = _IPv4FallbackTransport()
     return options
+
+
+@asynccontextmanager
+async def _model_client(context: PluginContext, provider: ModelProvider, *, base_url: str,
+                        api_key: str):
+    pool = context.services.get("model_http_clients")
+    # Standalone callers and injected test transports retain explicit ownership.
+    if pool is None or isinstance(context.data.get("http_transport"), httpx.AsyncBaseTransport):
+        async with httpx.AsyncClient(**_client_options(context, provider, discovery=False)) as client:
+            yield client
+        return
+    from cyrene.model.http_clients import MODEL_HTTP_LIMITS
+
+    options = _client_options(context, provider, discovery=False, create_transport=False)
+    connection = _connection(context)
+    scope = (provider.id, str(connection.get("id") or connection.get("connection_id") or base_url))
+    # Credentials are request headers, never client defaults or readable pool keys.
+    key = (base_url, hashlib.sha256(api_key.encode()).digest(),
+           str(options.get("proxy") or ""),
+           tuple(sorted(httpx.Timeout(options["timeout"]).as_dict().items())))
+
+    def create_client():
+        configured = {**options, "limits": MODEL_HTTP_LIMITS}
+        if "proxy" not in configured:
+            configured["transport"] = _IPv4FallbackTransport(
+                primary=httpx.AsyncHTTPTransport(limits=MODEL_HTTP_LIMITS),
+                ipv4=httpx.AsyncHTTPTransport(limits=MODEL_HTTP_LIMITS, local_address="0.0.0.0"),
+            )
+        return httpx.AsyncClient(**configured)
+
+    async with pool.lease(scope, key, create_client) as client:
+        yield client
 
 
 def _tool_choice(value: Any) -> str | dict[str, Any]:
@@ -883,9 +917,7 @@ async def complete_model(
     public_failures: list[ModelErrorDetails] = []
     failure_diagnostics: list[Mapping[str, Any] | None] = []
     retry_state: dict[str, int] = {}
-    async with httpx.AsyncClient(
-        **_client_options(context, provider, discovery=False)
-    ) as client:
+    async with _model_client(context, provider, base_url=base_url, api_key=api_key) as client:
         for endpoint_index, endpoint in enumerate(ordered_endpoints):
             try:
                 request = (

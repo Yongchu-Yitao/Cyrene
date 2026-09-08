@@ -58,7 +58,7 @@ AUTHORING_GUIDE = """# Create a Cyrene Plugin
    Python script with FakeContext does not prove host integration. Report load failures,
    unverified behavior, and required restart explicitly.
 
-Do not create `plugin.json` or write the obsolete `custom-tools/.cyrene-tool-index.json`. A standalone file exports `plugin`; a pack directory exports
+Do not use obsolete `activate(context)` entry points, create `plugin.json`, or write the obsolete `custom-tools/.cyrene-tool-index.json`. A standalone file exports `plugin`; a pack directory exports
 `plugin_pack` from `__init__.py`. Keep stable ids ASCII and add English/Chinese `metadata.i18n`.
 
 Setup functions (`setup` and `application_setup`) must use synchronous `def`.
@@ -191,7 +191,7 @@ AUTHORING_GUIDE_ZH = """# 创建 Cyrene 插件
 5. 按下方贡献类型验收。静态校验或 FakeContext 脚本不等于宿主集成成功；
    如实报告加载失败、尚未验证的行为和需要重启的状态。
 
-不要创建 `plugin.json`，也不要写入废弃的 `custom-tools/.cyrene-tool-index.json`。独立文件必须导出 `plugin`；插件包目录必须从 `__init__.py`
+不要使用废弃的 `activate(context)` 入口、创建 `plugin.json`，也不要写入废弃的 `custom-tools/.cyrene-tool-index.json`。独立文件必须导出 `plugin`；插件包目录必须从 `__init__.py`
 导出 `plugin_pack`。稳定 ID 使用 ASCII，并提供中英文 `metadata.i18n`。
 
 ## 选择一种脚手架

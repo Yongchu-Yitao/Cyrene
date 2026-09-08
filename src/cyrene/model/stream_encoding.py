@@ -40,6 +40,7 @@ def _raise_invalid_stream_encoding(
 async def strict_utf8_lines(
     response: httpx.Response,
     diagnostics: dict[str, Any] | None,
+    byte_stream: AsyncIterator[bytes] | None = None,
 ) -> AsyncIterator[str]:
     """Decode the provider stream without allowing lossy text replacement.
 
@@ -69,7 +70,7 @@ async def strict_utf8_lines(
         return buffered[:index], buffered[index + separator_length:]
 
     try:
-        async for chunk in response.aiter_bytes():
+        async for chunk in byte_stream if byte_stream is not None else response.aiter_bytes():
             buffered += decoder.decode(chunk, final=False)
             while (line_and_rest := complete_line()) is not None:
                 line, buffered = line_and_rest

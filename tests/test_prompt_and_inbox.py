@@ -32,10 +32,17 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
     assert "current" in SYSTEM_PROMPT
     assert "external information" in SYSTEM_PROMPT
     assert "do not rely on memory" in SYSTEM_PROMPT
-    assert "toolbox.list" in SYSTEM_PROMPT
-    assert "toolbox.describe" in SYSTEM_PROMPT
-    assert "toolbox.invoke" in SYSTEM_PROMPT
-    assert "a one-sentence purpose for each pack" in SYSTEM_PROMPT
+    from cyrene.core.plugin import PluginRegistry
+    from cyrene.core.plugin.core_impl.toolbox import create_toolbox_plugin
+    from cyrene.core.plugin.core_impl.write import WRITE_PLUGIN
+
+    toolbox = create_toolbox_plugin(PluginRegistry()).description
+    assert "toolbox.list" in toolbox
+    assert "toolbox.describe" in toolbox
+    assert "toolbox.invoke" in toolbox
+    assert "a one-sentence purpose for each pack" in toolbox
+    assert "correct the request and retry" in toolbox
+    assert "toolbox.list" not in SYSTEM_PROMPT
     assert "WebSearch proactively" in SYSTEM_PROMPT
     assert "use it at the beginning" in SYSTEM_PROMPT
     assert "Prefer frequent useful updates" in SYSTEM_PROMPT
@@ -45,9 +52,14 @@ def test_default_prompt_requires_plugin_discovery_for_external_information():
     assert "treat the edit as a successful idempotent no-op" in prompt
     assert "Still complete the display obligation" in prompt
     assert "An argument error does not mean the tool is unavailable" in prompt
-    assert "Write has no fixed character limit" in prompt
-    assert "mode=append" in prompt
-    assert "never use overwrite to continue a file" in prompt
+    assert "without a fixed character limit" in WRITE_PLUGIN.description
+    assert "first chunk" in WRITE_PLUGIN.description
+    assert "append later chunks" in WRITE_PLUGIN.description
+    assert "separate tool-call turns" in WRITE_PLUGIN.description
+    assert "stable boundaries" in WRITE_PLUGIN.description
+    assert "never use overwrite to continue a file" in WRITE_PLUGIN.description
+    assert "verify the assembled file" in WRITE_PLUGIN.description
+    assert "overwrite to continue" not in prompt
 
 
 def test_default_prompt_keeps_internal_work_out_of_user_facing_messages():
@@ -68,6 +80,24 @@ def test_bash_prompt_does_not_claim_shell_output_opens_workspace_files():
 
     assert "Shell file-printing output does not satisfy" in BASH_PLUGIN.description
     assert "workspace UI" in BASH_PLUGIN.description
+
+
+def test_identity_is_owned_by_soul_and_existing_personas_are_preserved(tmp_path, monkeypatch):
+    from cyrene.plugins.builtin.cyrene_soul import store
+    from cyrene.plugins.builtin.cyrene_system_prompt.system_prompt import SYSTEM_PROMPT
+
+    assert not SYSTEM_PROMPT.lower().startswith("you are")
+    assert "universal assistant" not in SYSTEM_PROMPT
+    assert "universal assistant" in store.default_soul(language="en")
+    assert "not an assistant" not in store.default_soul(language="en")
+    assert "通用助手" in store.default_soul(language="zh")
+    path = tmp_path / "SOUL.md"
+    custom = "# Custom persona\n\n## SELF:IDENTITY\nI am a patient tutor.\n"
+    path.write_text(custom)
+    monkeypatch.setattr(store, "soul_path", lambda: path)
+    store.ensure_soul()
+    assert path.read_text() == custom
+    assert store.read_persona_context() == custom.strip()
 
 
 def test_web_search_and_mid_run_message_are_direct_tools():

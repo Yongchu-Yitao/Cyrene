@@ -492,9 +492,11 @@ def create_toolbox_plugin(registry: PluginRegistry) -> Plugin:
     return Plugin(
         name=TOOLBOX_PLUGIN_NAME,
         description=(
-            "Gateway to deferred Plugins. Use list to inspect every current Plugin pack "
-            "and standalone tool, describe to load current input schemas, and invoke "
-            "to execute a Plugin."
+            "Gateway to deferred Plugins. toolbox.list returns discoverable Plugin pack "
+            "names, a one-sentence purpose for each pack, and standalone Plugin names. "
+            "Choose by those descriptions, then use toolbox.describe on the pack or "
+            "standalone Plugin to load its current input schema before toolbox.invoke. "
+            "If discovery fails, correct the request and retry toolbox.list."
         ),
         input_schema=_TOOLBOX_INPUT_SCHEMA,
         handler=_ToolboxHandler(registry),

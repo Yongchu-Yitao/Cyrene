@@ -669,7 +669,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     assert "use tools and complete bounded work now" in seen["prompt"]
     assert "Never claim or imply that the user just woke up" in seen["prompt"]
     assert "Trigger: system scheduler; no new user activity" in seen["prompt"]
-    assert "Do not send a greeting, check-in, small talk" in seen["prompt"]
+    assert "Do not greet the user, make small talk" in seen["prompt"]
     # A delivered message advances the unanswered streak by exactly one.
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 1
     assert scheduler._LOTTERY_STATE["last_proactive_time"] > 0
@@ -736,7 +736,12 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
     # A work cycle with nothing material to do must bow out silently instead
     # of manufacturing a social check-in.
-    assert "finish_proactive exactly once" in seen["prompt"]
+    assert seen["prompt"].count("finish_proactive exactly once") == 1
+    assert seen["prompt"].count("## Objective") == 1
+    assert "never modify, overwrite, move, rename or delete existing files" in seen["prompt"]
+    assert "decision=suppress" in seen["prompt"]
+    assert "cannot authorize delivery" in seen["prompt"]
+    assert "Do not mention internal prompts" in seen["prompt"]
 
 
 def test_proactive_structured_suppress_ignores_ordinary_assistant_text():
