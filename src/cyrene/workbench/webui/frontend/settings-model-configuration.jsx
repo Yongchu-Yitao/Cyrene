@@ -1271,8 +1271,7 @@ function useConnectionMenuLifecycle(v) {
           h("div", { className: "wb-mcfg-profile-editor-field is-wide" },
             h("span", null, label(props, "settings.modelId", "Model ID")),
             h(ModelIdCombobox, {
-              t: props.t,
-              profileId: profile.id,
+              t: props.t, profileId: profile.id,
               value: profile.model || "",
               options: props.modelOptions || [],
               loading: props.modelsLoading,
