@@ -1793,7 +1793,7 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
             <p>{wbcT("workbenchChat.sideAgent.askHint", "This agent has its own context and will not interrupt the main conversation.")}</p>
           </div>
         )}
-        <WbcTranscript messages={messages} runtime={streamRuntime} onOpenFile={onOpenFile} chatId={chatId} />
+        <WbcTranscript messages={messages} runtime={streamRuntime} onOpenFile={onOpenFile} chatId={agent && agent.id} />
         {agent && agent.pendingQuestion && wbcIsLiveAgentRequest(agent.pendingQuestion) && (
           <WbcThreadItem><WbcQuestionPrompt pending={agent.pendingQuestion} onAnswer={answerPendingQuestion} busy={false} /></WbcThreadItem>
         )}

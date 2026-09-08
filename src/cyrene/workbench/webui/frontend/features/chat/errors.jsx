@@ -1,4 +1,5 @@
 import { wbcT } from "./core.jsx"
+import { workbenchServices } from "../../shared/runtime/services.jsx"
 
 var WORKBENCH_BUDGET_CODES = {
   budget_monthly_exhausted: "monthly",

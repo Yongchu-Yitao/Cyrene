@@ -191,6 +191,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
     setAnnouncement: setAnnouncement,
   });
   var chatMap = ordering.chatMap;
+  var commitGroupOrder = ordering.commitGroupOrder;
   var commitOrder = ordering.commitOrder;
   var defaultOrder = ordering.defaultOrder;
   var defaultOrderKey = ordering.defaultOrderKey;

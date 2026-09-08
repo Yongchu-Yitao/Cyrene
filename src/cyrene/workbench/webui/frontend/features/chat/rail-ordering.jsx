@@ -56,6 +56,13 @@ function useWbcRailOrdering({ chats, groups, pinnedChatIds, projectId, query, se
     }
   }
 
+  function commitGroupOrder(nextOrder, group) {
+    commitOrder(nextOrder)
+    if (group) {
+      setAnnouncement(wbcT("workbenchChat.groupMoved", "{title} moved.", { title: group.title }))
+    }
+  }
+
   function moveByKeyboard(event, id) {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false
     var visibleOrder = filtered.map(function (chat) { return String(chat.id) })
@@ -71,6 +78,7 @@ function useWbcRailOrdering({ chats, groups, pinnedChatIds, projectId, query, se
 
   return {
     chatMap: chatMap,
+    commitGroupOrder: commitGroupOrder,
     commitOrder: commitOrder,
     defaultOrder: defaultOrder,
     defaultOrderKey: defaultOrderKey,

@@ -3,6 +3,7 @@ import { useTopbarHoverPreview } from "./topbar-hover-preview.jsx"
 import { useTopbarBrowserSubscription } from "./topbar-browser-subscription.jsx"
 import { wbSessionStatusLabel, wbSessionActivityCopy, WorkbenchSessionStatusIcon, WorkbenchAssetIcon, WorkbenchSessionActivityPreview } from "./topbar-session-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { wbSetBrowserOverlayObscured } from "../../shared/browser/overlays.jsx"
 import { WbVoiceCommand, wbcSetPluginViewDrag } from "../../workbench-chat.jsx"
 import { WbcHoverMarquee } from "../chat/rail.jsx"
 import {
