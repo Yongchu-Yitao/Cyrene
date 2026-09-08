@@ -324,6 +324,8 @@ import { wbcErrorText } from "./errors.jsx"
         streamError.detailKey = event.detail_key || event.detailKey || "";
         streamError.detailParams = event.detail_params || event.detailParams || {};
         streamError.errorType = event.error || "";
+        streamError.runId = event.runId || event.run_id || "";
+        streamError.incidentId = event.incidentId || event.incident_id || "";
         handlers.onError(streamError);
       }
       else if (

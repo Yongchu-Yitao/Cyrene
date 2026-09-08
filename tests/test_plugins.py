@@ -588,7 +588,9 @@ plugin = Plugin(
             {"operation": "describe", "name": "RenamedTool"},
         )
         assert unavailable_description.success is False
-        assert unavailable_description.error == "Plugin execution failed."
+        assert unavailable_description.failure.error_code == "toolbox_invalid_target"
+        assert unavailable_description.failure.circuit_scope == "none"
+        assert "toolbox.list" in unavailable_description.error
         unavailable_call = await runtime.call(
             "toolbox",
             {
@@ -598,7 +600,9 @@ plugin = Plugin(
             },
         )
         assert unavailable_call.success is False
-        assert unavailable_call.error == "Plugin execution failed."
+        assert unavailable_call.failure.error_code == "toolbox_invalid_target"
+        assert unavailable_call.failure.circuit_scope == "none"
+        assert "toolbox.list" in unavailable_call.error
 
         write_plugin(4, "RepairedTool")
         repaired = await runtime.call("toolbox", {"operation": "list"})
@@ -619,7 +623,9 @@ plugin = Plugin(
             },
         )
         assert unavailable.success is False
-        assert unavailable.error == "Plugin execution failed."
+        assert unavailable.failure.error_code == "toolbox_invalid_target"
+        assert unavailable.failure.circuit_scope == "none"
+        assert "toolbox.list" in unavailable.error
 
         old_search = await runtime.call("toolbox", {"operation": "search"})
         assert old_search.success is False
@@ -1214,7 +1220,9 @@ plugin_pack = PluginPack(
             },
         )
         assert unavailable.success is False
-        assert unavailable.error == "Plugin execution failed."
+        assert unavailable.failure.error_code == "toolbox_invalid_target"
+        assert unavailable.failure.circuit_scope == "none"
+        assert "toolbox.list" in unavailable.error
 
     run(scenario())
 
@@ -2231,4 +2239,49 @@ def test_model_provider_retries_mixed_transport_failures_before_streaming():
         assert attempts == 5
         assert result["content"] == "ok"
 
+    run(scenario())
+
+
+@pytest.mark.parametrize('bad_request', [
+    {'operation': 'describe', 'name': 'missing'},
+    {'operation': 'describe'},
+    {'operation': 'invoke', 'name': 'missing'},
+    {'operation': 'invoke'},
+    {'operation': 'describe', 'name': 'Read'},
+])
+def test_toolbox_recovers_from_invalid_target_in_same_run(bad_request):
+    async def scenario():
+        registry = PluginRegistry()
+        registry.register_plugin(Plugin(
+            name='AuditEcho', description='Echo', input_schema={'type': 'object'},
+            handler=lambda args, ctx: {'echo': True},
+        ), source='test')
+        runtime = PluginRuntime(registry)
+        context = PluginContext(data={'run_id': 'recover'})
+        failed = await runtime.call('toolbox', bad_request, context)
+        assert failed.failure.retry_scope == 'different_arguments'
+        assert failed.failure.circuit_scope == 'none'
+        listing = await runtime.call('toolbox', {'operation': 'list'}, context)
+        assert listing.success
+        described = await runtime.call('toolbox', {'operation': 'describe', 'name': 'AuditEcho'}, context)
+        assert described.success
+        invoked = await runtime.call('toolbox', {'operation': 'invoke', 'name': 'AuditEcho'}, context)
+        assert invoked.value['result'] == {'echo': True}
+    run(scenario())
+
+
+def test_target_failure_does_not_close_toolbox_discovery():
+    async def scenario():
+        def fail(args, ctx):
+            raise RuntimeError('target unavailable')
+        registry = PluginRegistry()
+        registry.register_plugin(Plugin(
+            name='AuditFailure', description='Failure', input_schema={'type': 'object'}, handler=fail,
+        ), source='test')
+        runtime = PluginRuntime(registry)
+        context = PluginContext(data={'run_id': 'target-failure'})
+        invoked = await runtime.call('toolbox', {'operation': 'invoke', 'name': 'AuditFailure'}, context)
+        assert invoked.value['error']['error_code'] == 'plugin_execution_failed'
+        assert (await runtime.call('toolbox', {'operation': 'list'}, context)).success
+        assert (await runtime.call('toolbox', {'operation': 'describe', 'name': 'AuditFailure'}, context)).success
     run(scenario())

@@ -39,11 +39,19 @@ AUTHORING_GUIDE = """# Create a Cyrene Plugin
 ## Fast path
 
 1. Call `PluginScaffold` with a new workspace path, `pack_id`, display `name`, and one type below.
-2. Use `PluginSourceManager` to read/edit generated text files.
+2. Use `Read` / `Write` to edit generated workspace files. Use `PluginSourceManager` only for installed source files.
 3. Call `PluginValidate`; fix every reported error.
-4. Call `PluginInstall`. Use `PluginManager` only to list, enable, disable, or delete installed contributions.
+4. Call `PluginInstall`. Use `PluginManager` to check or change the installed activation state.
+   Check loaded/enabled separately: installation preserves existing activation switches.
+   other_failures belong to other sources. PluginManager list reports application_running,
+   restart_required and setup/startup errors; enabled alone does not mean operational.
+   A failed installation remains editable through PluginSourceManager; use failed_sources
+   from PluginManager list and delete with kind="source", id=<listed id> before reinstalling.
+5. Verify the installed contribution according to its type below. Static validation or a
+   Python script with FakeContext does not prove host integration. Report load failures,
+   unverified behavior, and required restart explicitly.
 
-Do not create `plugin.json`. A standalone file exports `plugin`; a pack directory exports
+Do not create `plugin.json` or write the obsolete `custom-tools/.cyrene-tool-index.json`. A standalone file exports `plugin`; a pack directory exports
 `plugin_pack` from `__init__.py`. Keep stable ids ASCII and add English/Chinese `metadata.i18n`.
 
 ## Choose exactly one scaffold type
@@ -69,6 +77,92 @@ For standalone automatic triggers outside a pack, call `HookManager(action="gene
 `hook={name, event, action_instruction, matcher?}`. For `PreToolUse`/`PostToolUse`, set
 `matcher` to an exact runtime tool name; omit it or use `*` to match every tool. System source changes require exact diff review;
 system Hook changes additionally require the matching one-time confirmation token.
+## Tool contract
+
+A tool is `Plugin(name, description, input_schema, handler)`; its sync or async handler
+receives `(arguments: dict, context: PluginContext)`. Declare an object input_schema with
+properties, required fields and additionalProperties=False; the Runtime validates inputs.
+Prefer JSON-serializable return values. An `{ok: False}` business result is still a returned
+value: inspect it during verification. For runtime failure use PluginExecutionError with
+PluginFailure; choose retry_scope/circuit_scope deliberately. Do not expose secrets in errors.
+Set timeout_seconds for bounded work and HTTP timeouts for network requests. Use async I/O
+in async handlers; a runtime timeout cannot undo external side effects. Set allow_parallel=True
+only if concurrent calls are safe, especially when sharing files or mutable state.
+metadata.read_only=True is only for tools without writes; privileged effects should declare
+permission_boundary rather than assuming arbitrary Python I/O inherits Read/Write review.
+
+## Context, storage, and existing models
+
+PluginContext has workspace, data and services; it does NOT have the old context.data_dir.
+Keep user deliverables in context.workspace, checking that it is available and constraining
+user-controlled paths. For plugin-owned persistent state, use application_setup's
+PluginApplicationContext.data_directory / "plugin_data" / <pack_id>. This is a shared host
+root, so namespace your files and publish the path/service with context.provide("<pack_id>.state", path).
+The handler consumes context.services["<pack_id>.state"]. Create directories explicitly;
+never write state into installed Python source or guess a user's Library path. Application
+setup adds an application contribution and may require restart. A session setup may publish
+session-local services via PluginSetupContext.provide; its data_directory belongs to that
+session host and should not be assumed identical to the application root. Services can be
+absent in standalone tests or disabled configurations; report the missing requirement.
+
+To use a configured model, keep an ordinary tool and call context.services["model"].complete;
+model_plugin is for implementing a Provider, not for every tool that calls a model.
+For helper output consumed by the tool, remove only model_stream from a copied context:
+
+```python
+from dataclasses import replace
+
+async def summarize(arguments, context):
+    gateway = context.services.get("model")
+    if gateway is None:
+        raise RuntimeError("Configured model service is unavailable")
+    helper_context = replace(context, services={
+        key: value for key, value in context.services.items() if key != "model_stream"
+    })
+    response = await gateway.complete(
+        [{"role": "user", "content": arguments["text"]}],
+        route="secondary", caller="plugin:example_summary",
+        session_id=str(context.data.get("session_id") or context.tree_id or ""),
+        max_tokens=600, context=helper_context,
+    )
+    return {"summary": str(response.get("content") or "")}
+```
+
+primary follows the selected conversation model; secondary uses the configured helper route;
+vision is for image-capable requests. Do not read API keys for this Gateway path. Returned tool
+calls are not automatically executed by the Gateway.
+
+## Editing and review
+
+Use PluginManager list and PluginSourceManager list/read to find installed source. Before
+replacing or deleting an existing file, submit its read-time expected_sha256; on mismatch,
+read again and reconcile the changes. SourceManager takes paths relative to plugin_directory,
+or @core/<path> when editable core sources exist. PluginInstall refuses an existing target.
+Each source mutation reloads immediately (core changes require restart); complete the edit
+plan first and avoid incompatible intermediate files. There is no automatic rollback: retain
+the original content, inspect failures, and repair through the same source tools.
+
+System source edits require review of the exact diff before user_confirmed=True; system Hook
+changes also require the returned matching confirmation_token. These fields do not replace
+actual user approval. If a preview is truncated, show the remaining diff before confirmation.
+For pending permission approval, resume the exact approved operation; do not rewrite the
+command, switch to Bash, or edit an obsolete index to evade a denial. Report a denied action
+and its reason; inspect the correct supported workflow or request genuinely missing approval.
+
+## Verify by contribution type
+
+- Tool: check PluginManager activation, discover with toolbox.list/describe, and invoke with
+  suitable authorized arguments through toolbox.invoke or the direct entry. Check both Runtime
+  failure and the returned business result. Read-only verification should be preferred.
+- Context: open a session with the pack enabled and verify the actual Hook output/context.
+  SessionStart runs once; TurnStart is for per-turn values. Keep Hook ids stable on rebind.
+- Application: after any required restart, verify the registered service/route and startup;
+  check shutdown cleanup when applicable. Registry loading alone does not prove startup worked.
+- UI: verify the view opens and its actual frontend RPC works, including backend availability.
+- Model Provider: configure its connection, verify discovery when supported and a completion.
+- Full pack: verify each contributed capability; a pack with no executable tools need not
+  invent a dummy tool for acceptance.
+
 """
 
 AUTHORING_GUIDE_ZH = """# 创建 Cyrene 插件
@@ -76,11 +170,17 @@ AUTHORING_GUIDE_ZH = """# 创建 Cyrene 插件
 ## 最短流程
 
 1. 调用 `PluginScaffold`，提供新的工作区路径、`pack_id`、显示名称和下列一种类型。
-2. 用 `PluginSourceManager` 读取或编辑生成的文本源码。
+2. 用 `Read` / `Write` 编辑工作区生成文件；`PluginSourceManager` 仅用于已安装的源码。
 3. 调用 `PluginValidate`，修复全部错误。
-4. 调用 `PluginInstall`；安装后只用 `PluginManager` 查看、启用、停用或删除。
+4. 调用 `PluginInstall`；用 `PluginManager` 检查或修改安装后的启用状态。
+   分别检查 loaded/enabled，安装会保留原有启停设置；other_failures 属于其他源码。
+   PluginManager list 返回 application_running、restart_required 和 setup/startup 错误，
+   enabled 不等于实际运行。失败安装可通过 PluginSourceManager 修复；需要重装时，从
+   PluginManager list 的 failed_sources 获取 id，以 kind="source" 删除该条目后再安装。
+5. 按下方贡献类型验收。静态校验或 FakeContext 脚本不等于宿主集成成功；
+   如实报告加载失败、尚未验证的行为和需要重启的状态。
 
-不要创建 `plugin.json`。独立文件必须导出 `plugin`；插件包目录必须从 `__init__.py`
+不要创建 `plugin.json`，也不要写入废弃的 `custom-tools/.cyrene-tool-index.json`。独立文件必须导出 `plugin`；插件包目录必须从 `__init__.py`
 导出 `plugin_pack`。稳定 ID 使用 ASCII，并提供中英文 `metadata.i18n`。
 
 ## 选择一种脚手架
@@ -105,6 +205,79 @@ typed `WORKBENCH_SURFACE` contribution 接入动态分屏，再用 `provide_fron
 `hook={name, event, action_instruction, matcher?}`。对于 `PreToolUse`/`PostToolUse`，
 `matcher` 填运行时工具名称；省略或填 `*` 表示所有工具。系统源码修改必须先审核完整差异；系统 Hook
 修改还必须携带与该修改完全匹配的一次性确认令牌。
+## 工具契约
+
+工具定义为 `Plugin(name, description, input_schema, handler)`；同步或异步 handler
+接收 `(arguments: dict, context: PluginContext)`。input_schema 使用 object，明确 properties、
+required 和 additionalProperties=False；Runtime 会校验输入。返回值优先使用可 JSON 序列化数据。
+`{ok: False}` 仍是正常返回值，验收时必须检查业务结果；需要 Runtime 失败时使用
+PluginExecutionError 和 PluginFailure，并明确选择 retry_scope/circuit_scope，错误中不要暴露凭据。
+为有界操作设置 timeout_seconds，网络请求另设 HTTP 超时；异步 handler 使用异步 I/O。
+超时无法撤销外部副作用。只有并发安全时才设置 allow_parallel=True，尤其注意共享文件和状态。
+metadata.read_only=True 只适用于无写入工具；需要权限提升的副作用应声明 permission_boundary，
+不能假设任意 Python 文件操作自动继承 Read/Write 的审核。
+
+## Context、数据与现有模型
+
+PluginContext 提供 workspace、data、services，没有旧接口 context.data_dir。
+用户交付物放在 context.workspace，先检查工作区可用，并约束用户输入路径。插件私有持久数据可放在
+application_setup 收到的 PluginApplicationContext.data_directory / "plugin_data" / <pack_id>。
+这是共享宿主根，必须按包隔离；用 context.provide("<pack_id>.state", path) 发布路径或服务，
+handler 从 context.services["<pack_id>.state"] 获取。显式创建目录，不把数据写进已安装源码，
+不猜测用户 Library 路径。增加 application_setup 属于应用贡献，可能需要重启。
+会话 setup 可通过 PluginSetupContext.provide 发布会话服务；其 data_directory 属于会话宿主，
+不能假定与应用数据根相同。独立测试或配置禁用时服务可能缺失，应明确报告缺少的条件。
+
+调用已配置模型只需普通工具使用 context.services["model"].complete；model_plugin 用于实现
+Provider，并非所有调用模型的工具都需要创建 Provider。辅助模型输出由工具消费时，复制 Context，
+仅移除 model_stream，避免流式内容进入主回复：
+
+```python
+from dataclasses import replace
+
+async def summarize(arguments, context):
+    gateway = context.services.get("model")
+    if gateway is None:
+        raise RuntimeError("已配置的模型服务不可用")
+    helper_context = replace(context, services={
+        key: value for key, value in context.services.items() if key != "model_stream"
+    })
+    response = await gateway.complete(
+        [{"role": "user", "content": arguments["text"]}],
+        route="secondary", caller="plugin:example_summary",
+        session_id=str(context.data.get("session_id") or context.tree_id or ""),
+        max_tokens=600, context=helper_context,
+    )
+    return {"summary": str(response.get("content") or "")}
+```
+
+primary 沿用对话模型，secondary 使用辅助路由，vision 用于需要图像能力的请求。
+使用 Gateway 不需要读取 API Key；Gateway 返回的工具调用不会被自动执行。
+
+## 修改与审核
+
+用 PluginManager list 和 PluginSourceManager list/read 定位已安装源码。替换或删除现有文件时
+提交读取时的 expected_sha256；不匹配就重新读取并合并变化。SourceManager 路径相对
+plugin_directory；存在可编辑核心源码时可使用 @core/<path>。PluginInstall 不覆盖已有目标。
+每次源码修改立即重载，核心源码修改需要重启；先完成修改计划，避免不兼容的中间文件状态。
+没有自动回滚：保留原内容，检查 failures，并通过同一源码工具修复。
+
+系统源码必须让用户审核具体 diff 后才能设置 user_confirmed=True；系统 Hook 修改还需匹配返回的
+confirmation_token。这些字段不能代替实际用户授权。预览被截断时，确认前补齐剩余差异。
+权限等待获准后恢复原操作，不要改写命令、换用 Bash 或写旧索引来规避拒绝。被拒绝时说明具体操作
+和原因，检查正确的受支持流程，或仅在确实缺少授权时请求用户补充。
+
+## 按贡献类型验收
+
+- 工具：检查 PluginManager 启用状态，toolbox.list/describe 发现后，以合适且获授权的参数通过
+  toolbox.invoke 或直接入口调用；同时检查 Runtime 失败和业务返回值，优先采用只读验收。
+- Context：启用后打开会话，检查真实 Hook 输出和上下文。SessionStart 只运行一次，动态每轮内容
+  使用 TurnStart；恢复绑定时保持 Hook id 稳定。
+- 应用：完成必要重启后，验证服务/路由和 startup；适用时检查 shutdown 清理。注册成功不代表启动成功。
+- UI：验证视图实际打开、前端 RPC 成功及后端可用。
+- 模型 Provider：配置连接后，验证支持的模型发现和一次补全。
+- 组合包：逐项验收贡献；没有可执行工具的包不需要为了验收增加虚拟工具。
+
 """
 
 
@@ -112,7 +285,11 @@ def _json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
+_LEGACY_PROTOCOL_ERROR = "Legacy plugin.json protocol is unsupported; migrate to Plugin / PluginPack using PluginAuthoringGuide."
+
+
 _VALIDATION_ZH = {
+    _LEGACY_PROTOCOL_ERROR: "旧版 plugin.json 协议已废弃；请读取 PluginAuthoringGuide，将源码迁移为 Plugin / PluginPack。",
     "standalone Plugin must be a Python file": "独立 Plugin 必须是 Python 文件",
     "standalone module must construct Plugin and expose it as plugin": "独立模块必须构造 Plugin，并通过 plugin 导出",
     "Plugin kind must be tool or model": "Plugin kind 必须是 tool 或 model",
@@ -276,7 +453,7 @@ def validate_pack_directory(root: Path) -> dict[str, Any]:
     warnings: list[str] = []
     initializer = root / "__init__.py"
     if not initializer.is_file():
-        return {"ok": False, "path": str(root), "errors": ["PluginPack directory requires __init__.py"], "warnings": []}
+        return {"ok": False, "path": str(root), "errors": [_LEGACY_PROTOCOL_ERROR if (root / "plugin.json").is_file() else "PluginPack directory requires __init__.py"], "warnings": []}
     trees: dict[Path, ast.AST] = {}
     for source in sorted(root.rglob("*.py")):
         if "__pycache__" in source.parts:
@@ -871,6 +1048,40 @@ async def validate(arguments: dict[str, Any], context: PluginContext) -> str:
     return _json(_localized_validation(validate_plugin_source(source), context))
 
 
+def _pack_status(host: Any, pack_id: str) -> dict[str, Any]:
+    pack = next(pack for pack in host.registry.list_packs() if pack.id == pack_id)
+    application = pack.has_application_contributions
+    return {
+        "enabled": host.registry.pack_enabled(pack_id),
+        "restart_required": pack_id in host.restart_required_packs,
+        "application_running": host.pack_running(pack_id) if application else None,
+        "setup_error": host.setup_failures.get(pack_id, "") if application else "",
+        "startup_error": host.startup_failures.get(pack_id, "") if application else "",
+    }
+
+
+def _plugin_status(host: Any, plugin: Any) -> dict[str, Any]:
+    status = _pack_status(host, plugin.pack_id) if plugin.pack_id else {
+        "restart_required": False, "application_running": None,
+        "setup_error": "", "startup_error": "",
+    }
+    return {**status, "enabled": host.registry.plugin_enabled(plugin.plugin.name)}
+
+
+def _failed_sources(host: Any) -> list[dict[str, Any]]:
+    """Only expose failed top-level plugin entries as deletion targets."""
+    root = Path(host.plugin_directory).resolve()
+    entries = []
+    for failure in getattr(host, "load_failures", ()):
+        path = Path(failure.path).resolve()
+        if (path.parent != root or path.name.startswith((".", "_"))
+                or not (path.is_dir() or (path.is_file() and path.suffix == ".py"))):
+            continue
+        entries.append({"kind": "source", "id": path.name, "source": str(path),
+                        "loaded": False, "error": failure.error})
+    return entries
+
+
 async def install(arguments: dict[str, Any], context: PluginContext) -> str:
     source = resolve_workspace_path(str(arguments.get("path") or ""), context)
     validation = _localized_validation(validate_plugin_source(source), context)
@@ -920,21 +1131,31 @@ async def install(arguments: dict[str, Any], context: PluginContext) -> str:
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
     seed, failures = await host.reload_user_plugins()
+    target_failures = [item for item in failures if Path(item.path).resolve() == target.resolve()]
+    other_failures = [item for item in failures if item not in target_failures]
+    if source_type == "pack":
+        loaded = any(pack.id == identity and Path(host.registry.pack_source(pack.id)).resolve() == target.resolve()
+                     for pack in host.registry.list_packs())
+        status = _pack_status(host, identity) if loaded else {}
+    else:
+        registered = next((item for item in host.registry.list_plugins()
+                           if item.plugin.name == identity and Path(item.source).resolve() == target.resolve()), None)
+        loaded = registered is not None
+        status = _plugin_status(host, registered) if loaded else {}
     return _json({
-        "ok": not failures,
+        "ok": loaded and not target_failures,
+        "loaded": loaded,
+        "enabled": False,
+        "restart_required": False,
+        **status,
         "source_type": source_type,
         "identity": identity,
         "path": str(target),
-        "failures": [{
-            "path": str(item.path),
-            "error": plugin_localized(
-                context,
-                "Plugin source failed to load: {detail}",
-                "Plugin 源码加载失败：{detail}",
-                detail=item.error,
-            ),
-        } for item in failures],
-        "restart_required": source_type == "pack" and host.pack_restart_required(identity),
+        "failures": [{"path": str(item.path), "error": item.error} for item in target_failures],
+        "other_failures": [{"path": str(item.path), "error": item.error} for item in other_failures],
+        "recovery": ({"source_path": target.name,
+                      "delete": {"action": "delete", "kind": "source", "id": target.name}}
+                     if target_failures else None),
         "seeded": {"created": [str(path) for path in seed.created], "updated": [str(path) for path in seed.updated]},
     })
 
@@ -983,7 +1204,7 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
             "kind": "pack",
             "id": pack.id,
             "description": pack.description,
-            "enabled": registry.pack_enabled(pack.id),
+            **_pack_status(host, pack.id),
             "locked": registry.pack_locked(pack.id),
             "source": registry.pack_source(pack.id),
             "plugins": [plugin.canonical_name for plugin in pack.plugins],
@@ -994,16 +1215,20 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
             "name": item.plugin.name,
             "plugin_kind": item.plugin.kind,
             "pack_id": item.pack_id or "",
-            "enabled": registry.plugin_enabled(item.plugin.name),
+            **_plugin_status(host, item),
             "locked": registry.plugin_locked(item.plugin.name),
             "source": item.source,
         } for item in registry.list_plugins()]
-        return _json({"ok": True, "packs": packs, "plugins": plugins})
+        return _json({"ok": True, "packs": packs, "plugins": plugins, "failed_sources": _failed_sources(host),
+                      "load_failures": [{"path": str(item.path), "error": item.error}
+                                        for item in getattr(host, "load_failures", ())]})
     if action not in {"enable", "disable", "delete"}:
         return _json({"ok": False, "error": "action must be list, enable, disable, or delete"})
-    if kind not in {"pack", "plugin"} or not identity:
+    if kind not in {"pack", "plugin", "source"} or not identity:
         return _json({"ok": False, "error": "kind and id are required"})
     if action in {"enable", "disable"}:
+        if kind == "source":
+            return _json({"ok": False, "error": "Repair failed source with PluginSourceManager, then PluginReload before enabling it."})
         enabled = action == "enable"
         try:
             if kind == "pack":
@@ -1025,10 +1250,16 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
             await host.reconcile_activation()
         except Exception as exc:
             return _json({"ok": False, "error": str(exc)})
-        return _json({"ok": True, "action": action, "kind": kind, "id": identity})
+        return _json({"ok": True, "action": action, "kind": kind, "id": identity,
+                      **(_pack_status(host, identity) if kind == "pack" else _plugin_status(host, match))})
 
     plugin_root = Path(host.plugin_directory).resolve()
-    if kind == "pack":
+    if kind == "source":
+        failed = next((item for item in _failed_sources(host) if item["id"] == identity), None)
+        if failed is None:
+            return _json({"ok": False, "error": "Not a failed installed source; use an id from PluginManager.failed_sources."})
+        source_path = Path(failed["source"])
+    elif kind == "pack":
         try:
             source = registry.pack_source(identity)
         except Exception as exc:
@@ -1065,12 +1296,12 @@ async def manage_plugins(arguments: dict[str, Any], context: PluginContext) -> s
     except Exception as exc:
         return _json({"ok": False, "error": str(exc)})
     return _json({
-        "ok": not failures,
+        "ok": not source_path.exists(),
         "action": "delete",
         "kind": kind,
         "id": identity,
-        "restart_required": bool(host.restart_required_packs),
-        "failures": [{"path": str(item.path), "error": item.error} for item in failures],
+        "restart_required": source_path.name in host.restart_required_packs,
+        "other_failures": [{"path": str(item.path), "error": item.error} for item in failures],
     })
 
 
@@ -1124,6 +1355,15 @@ def _consume_system_hook_confirmation(token: Any, value: Any) -> bool:
     )
 
 
+def _core_source_root() -> Path:
+    from cyrene.core.plugin import core_impl
+
+    source = Path(getattr(core_impl, "__file__", None) or "").resolve()
+    if not source.is_file() or source.suffix != ".py":
+        raise RuntimeError("Editable core Plugin sources are unavailable in this installation")
+    return source.parent
+
+
 def _source_target(raw_path: Any) -> tuple[Path, Path, str, bool]:
     value = str(raw_path or "").strip().replace("\\", "/")
     if not value:
@@ -1133,7 +1373,7 @@ def _source_target(raw_path: Any) -> tuple[Path, Path, str, bool]:
         raise RuntimeError("Plugin application host is unavailable")
     is_core = value.startswith("@core/")
     if is_core:
-        root = (Path(__file__).resolve().parents[2] / "core_impl").resolve()
+        root = _core_source_root()
         relative = value.removeprefix("@core/")
         system = True
     else:
@@ -1195,10 +1435,13 @@ async def manage_plugin_source(arguments: dict[str, Any], context: PluginContext
         )})
     if action == "list":
         user_root = Path(host.plugin_directory).resolve()
-        core_root = (Path(__file__).resolve().parents[2] / "core_impl").resolve()
+        try:
+            core_root = _core_source_root()
+        except RuntimeError:
+            core_root = None
         items: list[dict[str, Any]] = []
         for root, prefix in ((user_root, ""), (core_root, "@core/")):
-            if not root.is_dir():
+            if root is None or not root.is_dir():
                 continue
             for candidate in sorted(root.rglob("*")):
                 if len(items) >= 1000:
@@ -1282,6 +1525,7 @@ async def manage_plugin_source(arguments: dict[str, Any], context: PluginContext
     if not restart_required:
         _seed, loaded_failures = await host.reload_user_plugins()
         failures = [{"path": str(item.path), "error": item.error} for item in loaded_failures]
+        restart_required = public_path.split("/", 1)[0] in getattr(host, "restart_required_packs", ())
     return _json({
         "ok": not failures,
         "action": action,

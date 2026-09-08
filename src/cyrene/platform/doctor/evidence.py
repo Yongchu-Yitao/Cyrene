@@ -7,6 +7,11 @@ from typing import Any
 _SECRET = re.compile(r"(?:bearer\s+\S+|sk-[\w.-]+|(?:api[_-]?key|password|token|secret|authorization)\s*[:=]\s*[^\s,;]+)", re.I)
 
 
+def redact_text(value: str, *, limit: int | None = 4000) -> str:
+    """Redact text with an explicit bound; reviewed source diffs must not truncate."""
+    return _SECRET.sub('[REDACTED]', value[:limit])
+
+
 def redact(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): "[REDACTED]" if re.search(r"secret|password|token|authorization|cookie|api.?key|prompt|content|messages", str(k), re.I)
@@ -14,7 +19,7 @@ def redact(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [redact(item) for item in value[:100]]
     if isinstance(value, str):
-        return _SECRET.sub("[REDACTED]", value[:4000])
+        return redact_text(value)
     return value if isinstance(value, (int, float, bool)) or value is None else type(value).__name__
 
 

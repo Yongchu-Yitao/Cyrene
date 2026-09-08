@@ -152,8 +152,8 @@ plugin_pack = PluginPack(
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["list", "enable", "disable", "delete"]},
-                    "kind": {"type": "string", "enum": ["pack", "plugin"]},
-                    "id": {"type": "string", "description": "PluginPack id or Plugin canonical name."},
+                    "kind": {"type": "string", "enum": ["pack", "plugin", "source"]},
+                    "id": {"type": "string", "description": "PluginPack id, Plugin canonical name, or failed_sources id for deleting a failed source. kind=source only supports delete."},
                 },
                 "required": ["action"],
                 "additionalProperties": False,

@@ -197,6 +197,7 @@ def test_builtin_i18n_catalog_is_seeded_and_user_edits_are_preserved(tmp_path) -
 
     assert catalog_path in seeded.created
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    assert catalog["packs"]["core"]["zh"]["name"] == "核心工具"
     assert catalog["packs"]["cyrene_application"]["zh"]["name"]
     assert catalog["plugins"]["Edit"]["en"]["name"] == "Edit"
     assert catalog["plugins"]["Edit"]["zh"]["description"] == (

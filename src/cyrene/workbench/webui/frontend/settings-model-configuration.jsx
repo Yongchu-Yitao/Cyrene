@@ -55,7 +55,7 @@ function renderModelConnectionPane(v) {
         var count = local
           ? v.localModels.filter(function (model) { return model.ready === true; }).length
           : v.config.profiles.filter(function (profile) { return profile.connection_id === connection.id; }).length;
-        var serviceLabel = local ? "Local" : (adapter && adapter.name || connection.adapter);
+        var serviceLabel = local ? v.label(v.props, "settings.localProvider", "Local") : (adapter && adapter.name || connection.adapter);
         return h("button", {
           type: "button", role: "option", key: connection.id,
           className: "wb-mcfg-connection-item" + (v.selectedId === connection.id ? " is-selected" : ""),

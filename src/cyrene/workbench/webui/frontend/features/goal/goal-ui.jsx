@@ -142,7 +142,7 @@ function WbcGoalConfirmationDialog({ chat, onGoalChanged }) {
       <form className="wbc-goal-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="wbc-goal-confirm-title" onSubmit={confirm}>
         <header>
           <div>
-            <span className="wbc-goal-eyebrow">GOAL LOOP</span>
+            <span className="wbc-goal-eyebrow">{wbcT("goal.loop", "GOAL LOOP")}</span>
             <h2 id="wbc-goal-confirm-title">{wbcT("goal.confirmTitle", "Confirm the Goal")}</h2>
             <p>{wbcT("goal.confirmHint", "Continuous execution and independent review start only after confirmation.")}</p>
           </div>

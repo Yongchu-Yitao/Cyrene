@@ -410,6 +410,7 @@ class AgentSession:
         permission = PermissionReviewPlugin(
             self._permission_model,
             user_request=lambda _event: self.permission_user_request,
+            conversation_context=self._permission_conversation_context,
             policy=self._permission_requirement,
             on_review=self._record_permission_review,
         )
@@ -1350,6 +1351,29 @@ class AgentSession:
             if run_id:
                 return run_id
         return ""
+
+    def _permission_conversation_context(self, event: HookEvent) -> list[dict[str, str]]:
+        """Give the reviewer the proposal preceding the latest user reply on this branch."""
+        if not event.node_id:
+            return []
+        path = self.store.get_path(event.tree_id, event.node_id)
+        reply: dict[str, str] | None = None
+        for node in reversed(path):
+            value = node.value if isinstance(node.value, Mapping) else {}
+            role = value.get("role")
+            content = value.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            if reply is None:
+                metadata = value.get("metadata")
+                metadata = metadata if isinstance(metadata, Mapping) else {}
+                if role == "user" and not metadata.get("agent_originated"):
+                    reply = {"role": "user", "content": content}
+            elif role == "assistant":
+                return [{"role": "assistant", "content": content}, reply]
+            elif role == "user":
+                break
+        return [reply] if reply is not None else []
 
     def _permission_request_for_run(self, run_id: str) -> str:
         target_run_id = str(run_id or "")

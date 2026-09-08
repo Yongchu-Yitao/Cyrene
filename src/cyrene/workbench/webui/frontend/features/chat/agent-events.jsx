@@ -220,6 +220,8 @@ function wbcAgentRunFailedError(event) {
   err.detailKey = String(payload.detail_key || payload.detailKey || "");
   err.detailParams = payload.detail_params || payload.detailParams || {};
   err.errorType = String(payload.error || "");
+  err.runId = String(event.runId || event.run_id || payload.runId || payload.run_id || "");
+  err.incidentId = String(event.incidentId || event.incident_id || payload.incidentId || payload.incident_id || "");
   err.agentId = String(event.agentId || payload.agentId || "");
   err.installationId = String(event.installationId || payload.installationId || "");
   return err;

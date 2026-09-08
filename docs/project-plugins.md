@@ -283,8 +283,10 @@ The host replies with `init` and `response` messages whose source is
 ## Authoring flow
 
 The Agent uses
-`PluginAuthoringGuide → PluginScaffold → PluginValidate → PluginInstall` to
-create and install plugins. `PluginScaffold.plugin_type` supports:
+`PluginAuthoringGuide → PluginScaffold → Read/Write → PluginValidate → PluginInstall → toolbox invocation` to
+create and verify tool plugins. Edit workspace drafts with Read/Write; use PluginSourceManager
+only for installed sources. Static validation or FakeContext tests do not prove host integration.
+Report load failures and required restarts explicitly. `PluginScaffold.plugin_type` supports:
 
 - `standalone_tool`: one directly registered tool file;
 - `tool_pack`: a pack containing one or more tools;

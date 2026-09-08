@@ -12,6 +12,7 @@ from uuid import uuid4
 from .checks import finding, run_checks
 from .evidence import direction, error_code, redact
 from .repository import ReportRepository
+from .repair_workspace import repair_lock
 
 
 class DoctorService:
@@ -20,12 +21,16 @@ class DoctorService:
         self.host = host
         self.repository = ReportRepository(self.data / "doctor" / "reports")
         self.tasks = {}
+        self.failure_tasks = {}
+        self.failure_start_lock = asyncio.Lock()
         self.lock = asyncio.Lock()
         self.analyzer = analyzer
         self.ephemeral = {}
+        from .repair_service import RepairService
+        self.repairs = RepairService(self)
 
     async def diagnose(self, scope=None, *, language="zh", persist=True):
-        scope = {key: str(value) for key, value in (scope or {}).items() if key in {"project_id", "chat_id", "job_id", "incident_id", "client_code"} and value}
+        scope = {key: str(value) for key, value in (scope or {}).items() if key in {"project_id", "chat_id", "run_id", "job_id", "incident_id", "client_code"} and value}
         if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", value) for value in scope.values()):
             raise ValueError("Invalid diagnostic scope")
         requested_scope = dict(scope)
@@ -73,11 +78,36 @@ class DoctorService:
                 findings.append(finding("model_configuration_unknown", "unknown", "无法读取模型配置", "Model configuration could not be inspected"))
         else:
             findings.append(finding("runtime_offline", "unknown", "离线诊断：未检查 Agent 和网络连接", "Offline diagnosis: Agent and network were not tested"))
+        # Restore is only meaningful for bundled contributions. Third-party
+        # plugins remain eligible for generated source patches.
+        availability = {}
+        for item in findings:
+            for action in item['actions']:
+                if self.host is None:
+                    action.update(available=False, reason='This repair requires the online service')
+                    continue
+                if action['kind'] == 'restore_plugin':
+                    from cyrene.plugins.plugin_restore import plan_builtin_plugin_restore
+                    target = action['target']
+                    if target not in availability:
+                        try:
+                            plan_builtin_plugin_restore(self.plugins, target)
+                            availability[target] = None
+                        except (ValueError, OSError) as exc:
+                            availability[target] = redact(str(exc))
+                    if availability[target]:
+                        action.update(available=False, reason=availability[target])
         for index, item in enumerate(findings):
             item["id"] = "e" + str(index + 1)
         report = {"id": "doctor_" + uuid4().hex, "created_at": datetime.now(timezone.utc).isoformat(),
                   "language": "zh" if language == "zh" else "en", "scope": scope,
                   "findings": redact(findings), "analysis": {"status": "idle"}, "repairs": [], "online": self.host is not None}
+        from .repair_executor import capabilities
+        report['repair_executor'] = capabilities()
+        report['repair_sessions'] = self.repairs.recent(scope) if persist else []
+        report['plugin_targets'] = sorted(p.name for p in self.plugins.iterdir()
+                                          if not p.name.startswith('.') and p.name != '__pycache__'
+                                          and not p.is_symlink() and (p.is_dir() or p.suffix == '.py'))[:200] if self.plugins.is_dir() else []
         if persist:
             try:
                 self.repository.save(report)
@@ -87,9 +117,17 @@ class DoctorService:
         return report
 
     def get(self, identifier):
+        if identifier.startswith('repair_'):
+            try:
+                return self.repairs.get(identifier)
+            except FileNotFoundError:
+                return self.repository.get(identifier)  # Existing releases stored plans with reports.
         if identifier in self.ephemeral:
             return deepcopy(self.ephemeral[identifier])
         report = self.repository.get(identifier)
+        if report.get('failure', {}).get('status') == 'running' and identifier not in self.failure_tasks:
+            report['failure'].update(status='interrupted', phase='interrupted')
+            self.repository.save(report)
         if report.get("analysis", {}).get("status") == "running" and identifier not in self.tasks:
             report["analysis"] = {"status": "unavailable", "code": "process_restarted", "direction": direction("process_restarted")}
             self.repository.save(report)
@@ -152,9 +190,33 @@ class DoctorService:
         return self.get(identifier)
 
     async def close(self):
+        for task in list(self.failure_tasks.values()):
+            task.cancel()
+        await asyncio.gather(*list(self.failure_tasks.values()), return_exceptions=True)
         for task in list(self.tasks.values()):
             task.cancel()
         await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
+        await asyncio.gather(*list(self.repairs.commits), return_exceptions=True)
+
+    async def diagnose_failure(self, scope, *, language='zh'):
+        from .failure_workflow import start_failure
+        async with self.failure_start_lock:
+            return await start_failure(self, scope, language=language)
+
+    async def cancel_failure(self, identifier):
+        report = self.get(identifier)
+        if report.get('failure', {}).get('phase') == 'applying':
+            return report
+        task = self.failure_tasks.get(identifier)
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self.failure_tasks.pop(identifier, None)
+            report = self.repository.get(identifier)
+            if report.get('failure', {}).get('status') == 'running':
+                report['failure'].update(status='cancelled', phase='cancelled')
+                self.repository.save(report)
+        return self.get(identifier)
 
     async def probe_model(self, identifier):
         if self.tasks:
@@ -185,6 +247,8 @@ class DoctorService:
         if item is None or action_index < 0 or action_index >= len(item["actions"]):
             raise ValueError("Unknown repair action")
         action = item["actions"][action_index]
+        if action.get('available') is False:
+            raise ValueError(action['reason'])
         plan = {"id": "repair_" + uuid4().hex, "status": "planned", "action": action,
                 "report_id": identifier, "scope": report["scope"]}
         if action["kind"] == "restore_plugin":
@@ -205,20 +269,25 @@ class DoctorService:
                 raise ValueError("Memory Plugin is unavailable")
         else:
             raise ValueError("Unsupported action")
-        self.repository.save(plan)
+        self.repairs.repository.save(plan)
         report["repairs"].append(plan["id"])
         self.repository.save(report)
         return self.public_plan(plan)
 
     @staticmethod
     def public_plan(plan):
+        if plan.get('action', {}).get('kind') == 'patch_plugin':
+            from .repair_service import RepairService
+            return RepairService.public(plan)
         return {key: redact(value) for key, value in plan.items() if key not in {"before", "plugin_plan", "rollback_plan"}} | {
             "files": [plan["action"]["target"] if value == "." else value for value in (plan.get("plugin_plan") or {}).get("replaced_files", [])],
             "bundled_files": list((plan.get("plugin_plan") or {}).get("bundled_files", [])),
             "can_rollback": bool(plan.get("rollback_plan") or plan.get("after_revision") is not None),
         }
 
-    async def apply_repair(self, plan_id):
+    async def apply_repair(self, plan_id, expected_plan_hash=None):
+        if self.get(plan_id).get('action', {}).get('kind') == 'patch_plugin':
+            return await self.repairs.commit(plan_id, expected_plan_hash)
         async with self.lock:
             plan = self.get(plan_id)
             if plan.get("status") != "planned":
@@ -230,23 +299,23 @@ class DoctorService:
             from cyrene.platform.run_coordinator import run_coordinator_for
             from cyrene.plugins.background import maintenance_lock
             async with maintenance_lock():
-                with run_coordinator_for(str(self.database)).maintenance():
+                with repair_lock(self.repairs.repository.directory), run_coordinator_for(str(self.database)).maintenance():
                     memory = self.host.service("memory")
                     if memory is not None and memory.project_memory.has_active_learning():
                         raise ValueError("Wait for active memory learning to finish")
                     plan["status"] = "applying"
-                    self.repository.save(plan)
+                    self.repairs.repository.save(plan)
                     try:
                         await self._apply(plan)
                         plan["status"] = "applied"
                     except Exception as exc:
                         plan["status"] = "failed"
                         plan["error"] = {"code": error_code(exc), "type": type(exc).__name__, "message": redact(str(exc))}
-                    self.repository.save(plan)
+                    self.repairs.repository.save(plan)
             report = self.get(plan["report_id"])
             check = await self.diagnose(report["scope"], language=report["language"])
             plan["verification_report_id"] = check["id"]
-            self.repository.save(plan)
+            self.repairs.repository.save(plan)
             return self.public_plan(plan)
 
     async def _apply(self, plan):
@@ -263,7 +332,7 @@ class DoctorService:
                 result = apply_builtin_plugin_restore(BuiltinPluginRestorePlan(**value))
                 plan["backup_directory"] = str(result.backup_directory)
                 plan["rollback_plan"] = {**asdict(plan_builtin_plugin_restore(self.plugins, target)), "directory": str(self.plugins)}
-                self.repository.save(plan)
+                self.repairs.repository.save(plan)
             finally:
                 await self.host.reload_user_plugins(seed=False)
             plan["rollback_plan"] = {**asdict(plan_builtin_plugin_restore(self.plugins, target)), "directory": str(self.plugins)}
@@ -277,7 +346,7 @@ class DoctorService:
             values.pop(target)
             revision, _ = settings_store.update_atomic({"plugin_tool_customizations": values}, expected_revision=plan["revision"])
             plan["after_revision"] = revision
-            self.repository.save(plan)
+            self.repairs.repository.save(plan)
             await self.host.reload_user_plugins(seed=False)
         elif kind == "retry_memory":
             service = self.host.service("memory")
@@ -289,6 +358,8 @@ class DoctorService:
                 raise RuntimeError("Learning still failed: " + str(result.get("errorType") or "internal_error"))
 
     async def rollback_repair(self, identifier):
+        if self.get(identifier).get('action', {}).get('kind') == 'patch_plugin':
+            return await self.repairs.commit(identifier, None, rollback=True)
         async with self.lock:
             plan = self.get(identifier)
             if plan["status"] not in {"applied", "failed"} or self.host is None:
@@ -298,7 +369,7 @@ class DoctorService:
             from cyrene.platform.run_coordinator import run_coordinator_for
             from cyrene.plugins.background import maintenance_lock
             async with maintenance_lock():
-                with run_coordinator_for(str(self.database)).maintenance():
+                with repair_lock(self.repairs.repository.directory), run_coordinator_for(str(self.database)).maintenance():
                     memory = self.host.service("memory")
                     if memory is not None and memory.project_memory.has_active_learning():
                         raise ValueError("Wait for active memory learning to finish")
@@ -320,9 +391,9 @@ class DoctorService:
                     else:
                         raise ValueError("This operation has no automatic rollback")
             plan["status"] = "rolled_back"
-            self.repository.save(plan)
+            self.repairs.repository.save(plan)
             report = self.get(plan["report_id"])
             verification = await self.diagnose(report["scope"], language=report["language"])
             plan["verification_report_id"] = verification["id"]
-            self.repository.save(plan)
+            self.repairs.repository.save(plan)
             return self.public_plan(plan)

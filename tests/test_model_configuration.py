@@ -1216,7 +1216,7 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert ".wb-mcfg-toggle.is-on span {\n  transform: translateX(18px);\n  background: #fff;\n}" in styles
     assert 'label: "Adapter"' not in settings
     assert 'label(props, "settings.localModels", "Local models")' in settings
-    assert 'var serviceLabel = local ? "Local"' in settings
+    assert 'var serviceLabel = local ? v.label(v.props, "settings.localProvider", "Local")' in settings
     assert 'localModels.filter(function (model) { return model.ready === true; }).length' in settings
     assert "localConnectionSignature" not in settings
     assert 'useEffect(function () { refreshLocalModels(); }, []);' in settings

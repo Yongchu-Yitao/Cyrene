@@ -7,6 +7,8 @@ from cyrene.workbench.http.workbench.chat_routes.send_input import SendInput, Pr
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from cyrene.core.plugin import Plugin, PluginContext, PluginRegistry, PluginRuntime
 from cyrene.model.error_details import ModelCallError, classify_model_error
 from cyrene.plugins import ensure_model_router, model_router
@@ -999,11 +1001,16 @@ def test_model_selection_rejects_unknown_candidate_without_mutating_chat(monkeyp
     assert chat == before
 
 
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("question_kind", [None, "destructive_confirmation", "clarification"])
 def test_builtin_workbench_route_always_uses_new_runtime(
     tmp_path,
     monkeypatch,
+    retry,
+    question_kind,
 ):
     from cyrene.platform import host_bridge
+    from cyrene.workbench.core_adapter.bridge import WorkbenchPendingQuestion
     from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
 
     captured = {}
@@ -1017,6 +1024,17 @@ def test_builtin_workbench_route_always_uses_new_runtime(
             publish=publish,
         )
         return SimpleNamespace(
+            pending_question=(
+                WorkbenchPendingQuestion.from_mapping({
+                    "id": "question-route",
+                    "kind": question_kind,
+                    "round_id": run_id,
+                    "turn_id": metadata["turn_id"],
+                    "retry": metadata["retry"],
+                    "original_user_message": metadata["public_user_message"],
+                })
+                if question_kind else None
+            ),
             text="new-kernel-reply",
             usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             latest_request_usage={
@@ -1052,7 +1070,10 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     operation.origin = SendOrigin.parse({})
     operation.options = SendOptions.parse({})
     operation.chat_id = "chat-route"
-    operation.turn = PreparedUserTurn(SendInput("hello", "hello", "", [], []), {}, "")
+    message_id = "msg-original" if retry else "msg-new"
+    operation.turn = PreparedUserTurn(
+        SendInput("hello", "hello", "", [], []), {"id": message_id}, ""
+    )
     operation.origin = replace(operation.origin, client_request_id="request-route")
     operation.is_external_agent = False
     operation.is_side_agent = False
@@ -1061,7 +1082,7 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     operation.origin = replace(operation.origin, ui_instance_id="ui-route")
     operation.origin = replace(operation.origin, conversation_source="")
     operation.project_id = "project-route"
-    operation.options = replace(operation.options, retry=False)
+    operation.options = replace(operation.options, retry=retry)
     operation.options = replace(operation.options, fork_replay=False)
     operation.completed_turn_count_before = 2
     operation.chat = {
@@ -1107,6 +1128,17 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     assert captured["run_id"] == "run-route"
     assert captured["publish"] is workbench_run.publish
     assert captured["text"] == "hello"
+    assert captured["metadata"]["turn_id"] == message_id
+    assert captured["metadata"]["retry"] is retry
+    pending = operation._builtin_pending(result, operation.turn.user_entry["id"])
+    if question_kind:
+        assert pending["turnId"] == message_id
+        assert pending["roundId"] == "run-route"
+        assert pending["kind"] == question_kind
+        assert pending["retry"] is retry
+        assert pending["originalUserMessage"] == "hello"
+    else:
+        assert pending is None
     config = captured["config"]
     assert config.session_id == "chat-route"
     assert config.host_chat_id == "host-route"
@@ -1122,7 +1154,22 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     assert config.memory_archive_enabled is True
     assert config.memory_short_term_enabled is False
     assert config.memory_project_enabled is False
-    assert config.completed_turn_count == 3
+    assert config.completed_turn_count == (2 if retry else 3)
+
+
+@pytest.mark.parametrize("pending_turn_id", ["", "msg-other"])
+def test_builtin_pending_rejects_missing_or_different_turn_identity(pending_turn_id):
+    from cyrene.workbench.core_adapter.bridge import WorkbenchPendingQuestion
+    from cyrene.workbench.http.workbench.chat_routes.run_send_routes import _SendOperation
+
+    operation = object.__new__(_SendOperation)
+    result = SimpleNamespace(pending_question=WorkbenchPendingQuestion.from_mapping({
+        "id": "permission-question",
+        "kind": "destructive_confirmation",
+        "turn_id": pending_turn_id,
+    }))
+    with pytest.raises(RuntimeError, match="wrong turn identity"):
+        operation._builtin_pending(result, "msg-current")
 
 
 def test_failed_plugin_workflow_atomically_restores_the_user_turn(tmp_path):

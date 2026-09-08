@@ -1,5 +1,6 @@
 import { wbcProjectRuntimeTranscript, wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { openDoctor } from "../doctor/doctor.jsx"
+import { failureScope } from '../doctor/failure-scope.mjs'
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserAvoidancePlan, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserWindowTitle, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcClampBrowserWindowFrame, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcHasAgentCapabilitySnapshot, wbcHasChatDrag, wbcIsBuiltinAgent, wbcKeepBrowserWindowClearOfComposer, wbcLoadBrowserWindowFrame, wbcMergeChronologicalMessages, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcNotifyResourceShelfPointerDrag, wbcPointInsideResourceShelf, wbcReadChatDrag, wbcReconcileLiveUserMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcSaveBrowserWindowFrame, wbcT, wbcTraceDedupeKey } from "../../workbench-chat.jsx"
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
@@ -2335,7 +2336,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
           {wbcT("workbenchChat.dropToOpen", "Release to open this conversation")}
         </div>
       )}
-      {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} onDiagnose={() => openDoctor({ project_id: project && project.id, chat_id: chat && chat.id })} />}
+      {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} onDiagnose={() => openDoctor(failureScope(project, chat, error))} />}
       <div
         className={"wbc-thread-stage" + (browserWindowMode === "maximized" ? " browser-window-maximized" : "")}
         ref={stageRef}

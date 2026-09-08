@@ -1161,7 +1161,9 @@ function wbcLocalizedUsedPluginName(pluginId, snapshot) {
     return [item && item.id, item && item.name, item && item.canonical_name]
       .some(function (value) { return String(value || "") === id; });
   });
-  return descriptor ? (pluginLocalizedField(descriptor, "name") || id) : id;
+  return descriptor
+    ? (pluginLocalizedField(descriptor, "name") || wbcT("toolName." + id, id))
+    : wbcT("toolName." + id, id);
 }
 
 function WbcContextTab({ chat, contextBlocks, inboxView }) {

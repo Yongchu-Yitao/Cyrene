@@ -240,7 +240,7 @@ parent.postMessage({source:'cyrene-plugin',type:'call',requestId,method,args}, '
 
 ## 创建流程
 
-Agent 使用 `PluginAuthoringGuide → PluginScaffold → PluginValidate → PluginInstall` 创建和安装插件。`PluginScaffold.plugin_type` 支持：
+Agent 使用 `PluginAuthoringGuide → PluginScaffold → Read/Write → PluginValidate → PluginInstall → toolbox 实际调用` 创建并验收工具插件。工作区草稿使用 Read/Write；PluginSourceManager 只编辑已安装源码。静态验证或 FakeContext 测试不等于宿主调用成功；加载失败和需要重启必须如实报告。`PluginScaffold.plugin_type` 支持：
 
 - `standalone_tool`：直接注册的独立工具文件；
 - `tool_pack`：包含一个或多个普通工具的工具包；

@@ -827,14 +827,7 @@ class _SendOperation:
                 "public_attachments": [dict(item) for item in self.turn.input.public_attachments],
                 "command": self.turn.input.command,
                 "retry": self.options.retry,
-                "turn_id": str(
-                    (
-                        getattr(self, "user_entry", {})
-                        if isinstance(getattr(self, "user_entry", {}), Mapping)
-                        else {}
-                    ).get("id")
-                    or ""
-                ),
+                "turn_id": str(self.turn.user_entry["id"]),
                 "fork_replay": self.options.fork_replay,
                 "ephemeral_context": "\n\n".join(
                     part for part in turn_system_extras if part

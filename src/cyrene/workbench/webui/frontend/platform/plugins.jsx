@@ -387,7 +387,7 @@ function PluginView(props) {
   }
   if (!view) {
     return <div className="wbc-plugin-view-state" role="status">
-      <strong>{payload.title || viewId || packId || "Plugin"}</strong>
+      <strong>{payload.title || viewId || packId || pluginLocalizedField({ title: "Plugin", i18n: { zh: { title: "插件" } } }, "title")}</strong>
       <span>{pluginLocalizedField({ title: "This Plugin view is disabled or unavailable.", i18n: { zh: { title: "该插件视图已禁用或不可用。" } } }, "title")}</span>
     </div>
   }

@@ -352,3 +352,118 @@ def test_plugin_development_pack_exposes_reviewed_source_and_hook_managers() -> 
     assert by_name["PluginSourceManager"].main_only is True
     assert by_name["HookManager"].metadata["read_only"] is False
     assert by_name["HookManager"].main_only is True
+
+
+@pytest.mark.asyncio
+async def test_authoring_scaffold_install_and_runtime_invocation(tmp_path, monkeypatch):
+    from cyrene.core.plugin import PluginRuntime
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
+
+    root = tmp_path / 'installed'
+    root.mkdir()
+    registry = PluginRegistry()
+
+    class Host(_FakeHost):
+        restart_required_packs = ()
+
+        @property
+        def registry(self):
+            return registry
+
+        def pack_restart_required(self, identity):
+            return False
+
+        async def reload_user_plugins(self):
+            return SimpleNamespace(created=(), updated=()), registry.refresh_directory(root)
+
+    monkeypatch.setattr(tools, 'application_plugin_scope', lambda: Host(root))
+    context = PluginContext(workspace=tmp_path, data={'run_id': 'authoring-test'})
+    scaffolded = json.loads(await tools.scaffold({
+        'path': 'sample', 'plugin_type': 'tool_pack', 'pack_id': 'sample', 'name': 'Sample',
+    }, context))
+    assert scaffolded['ok']
+    # The draft is an ordinary workspace file, not installed source.
+    source = tmp_path / 'sample' / 'tool.py'
+    source.write_text(source.read_text().replace('return {', 'return {"verified": True,', 1))
+    assert json.loads(await tools.validate({'path': 'sample'}, context))['ok']
+    assert json.loads(await tools.install({'path': 'sample'}, context))['ok']
+    runtime = PluginRuntime(registry)
+    listing = await runtime.call('toolbox', {'operation': 'list'}, context)
+    assert 'sample' in listing.value['packs']
+    description = await runtime.call('toolbox', {'operation': 'describe', 'name': 'sample'}, context)
+    tool_name = description.value['plugins'][0]['name']
+    result = await runtime.call('toolbox', {
+        'operation': 'invoke', 'name': tool_name, 'arguments': {'message': 'hello'},
+    }, context)
+    assert result.success
+    assert result.value['result']['verified'] is True
+
+
+@pytest.mark.asyncio
+async def test_source_manager_reads_real_core_and_reports_application_restart(tmp_path, monkeypatch):
+    from cyrene.core.plugin import core_impl
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
+
+    host = _FakeHost(tmp_path)
+    host.restart_required_packs = ('dashboard',)
+    monkeypatch.setattr(tools, 'application_plugin_scope', lambda: host)
+    context = PluginContext(workspace=tmp_path)
+    core = json.loads(await tools.manage_plugin_source({'action': 'read', 'path': '@core/read.py'}, context))
+    assert core['ok'] and core['system']
+    assert core['content'] == (Path(core_impl.__file__).parent / 'read.py').read_text()
+    source = tmp_path / 'dashboard' / 'application.py'
+    source.parent.mkdir()
+    source.write_text('value = 1\n')
+    inspected = json.loads(await tools.manage_plugin_source({'action': 'read', 'path': 'dashboard/application.py'}, context))
+    updated = json.loads(await tools.manage_plugin_source({
+        'action': 'write', 'path': 'dashboard/application.py',
+        'expected_sha256': inspected['sha256'], 'content': 'value = 2\n',
+    }, context))
+    assert updated['ok'] and updated['restart_required']
+
+
+def test_legacy_plugin_has_actionable_validation_error(tmp_path):
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
+
+    (tmp_path / 'plugin.json').write_text('{"apiVersion": 1}')
+    result = tools.validate_plugin_source(tmp_path)
+    assert not result['ok']
+    assert 'PluginAuthoringGuide' in result['errors'][0]
+    assert 'plugin.json' in result['errors'][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('language', ['en', 'zh'])
+async def test_authoring_guide_model_example_preserves_host_context(language):
+    import re
+    from cyrene.plugins.builtin.cyrene_plugin_development import tools
+
+    calls = []
+
+    class Gateway:
+        async def complete(self, messages, **kwargs):
+            calls.append((messages, kwargs))
+            return {'content': 'summarized'}
+
+    gateway = Gateway()
+    state = object()
+    context = PluginContext(
+        tree_id='tree',
+        data={'language': language, 'session_id': 'conversation'},
+        services={'model': gateway, 'model_stream': object(), 'example.state': state},
+    )
+    payload = json.loads(await tools.authoring_guide({}, context))
+    examples = re.findall(r'```python\n(.*?)```', payload['guide'], re.DOTALL)
+    assert len(examples) == 1
+    namespace = {}
+    exec(compile(examples[0], '<authoring-guide>', 'exec'), namespace)
+    result = await namespace['summarize']({'text': 'hello'}, context)
+    assert result == {'summary': 'summarized'}
+    messages, kwargs = calls[0]
+    assert messages == [{'role': 'user', 'content': 'hello'}]
+    assert kwargs['route'] == 'secondary'
+    assert kwargs['session_id'] == 'conversation'
+    assert kwargs['context'].services == {'model': gateway, 'example.state': state}
+    assert 'model_stream' in context.services
+    with pytest.raises(RuntimeError):
+        await namespace['summarize']({'text': 'hello'}, PluginContext())

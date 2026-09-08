@@ -6308,7 +6308,8 @@ if (!gotSingleInstanceLock) {
       const directory = !!(info && info.directory);
       const result = await dialog.showOpenDialog(owner || mainWindow, {
         title: String(info && info.title || desktopT(directory ? 'selectExtensionFolder' : 'selectExecutable', settings)),
-        properties: [directory ? 'openDirectory' : 'openFile'],
+        properties: info && info.plugin ? ['openFile', 'openDirectory'] : [directory ? 'openDirectory' : 'openFile'],
+        ...(info && info.plugin ? { filters: [{ name: 'Cyrene Plugin', extensions: ['zip', 'py'] }] } : {}),
       });
       if (result.canceled || !result.filePaths.length) return { path: '', cancelled: true };
       return { path: result.filePaths[0] };

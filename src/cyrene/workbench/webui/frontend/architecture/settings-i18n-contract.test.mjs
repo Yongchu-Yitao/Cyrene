@@ -144,3 +144,21 @@ test("literal frontend translation calls are backed by the merged catalog", asyn
   }
   assert.deepEqual(missing, [])
 })
+
+test("JSX does not expose untranslated English text nodes", () => {
+  const allowedTechnicalLabels = new Set([
+    "Cyrene", "ESC", "Git", "SKILL", "SSE", "Streamable HTTP", "URL", "stdio",
+  ])
+  const missing = []
+  for (const filename of frontendSourceFiles(FRONTEND_ROOT)) {
+    if (filename.endsWith(".test.mjs") || filename.endsWith(".test.jsx")) continue
+    const source = fs.readFileSync(filename, "utf8")
+    for (const match of source.matchAll(/<[A-Za-z][^>]*>([^<>{}\n]*[A-Za-z][^<>{}\n]*)<\//g)) {
+      const text = match[1].trim()
+      if (!/^[A-Za-z][A-Za-z ]+$/.test(text) || allowedTechnicalLabels.has(text)) continue
+      const line = source.slice(0, match.index).split("\n").length
+      missing.push(`${path.relative(FRONTEND_ROOT, filename)}:${line} ${text}`)
+    }
+  }
+  assert.deepEqual(missing, [])
+})

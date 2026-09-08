@@ -6120,7 +6120,7 @@ def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     assert '"/api/plugins/packs/" + encodeURIComponent(packId) + "/call"' in plugin_service
     assert 'settingsFetch("/api/plugins/activation", {' in plugin_settings
     assert 'import { PluginCenterAddButton, PluginCenterPage } from "./plugin-center-add.jsx"' in plugin_settings
-    assert plugin_settings.index("React.createElement(PluginCenterAddButton") < plugin_settings.index('t("settings.pluginReload",')
+    assert plugin_settings.index("React.createElement(PluginCenterAddButton") < plugin_settings.index('c.t("settings.pluginInstallFromFile",')
     assert "if (showCenter)" in plugin_settings
     assert "React.createElement(PluginCenterPage" in plugin_settings
     assert 'onClose: function () { setShowCenter(false) }' in plugin_settings
@@ -6194,7 +6194,7 @@ def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     assert "registry.standalonePlugins" in plugin_settings
     assert "projectId" not in plugin_settings
     for removed_api in (
-        "/api/plugins/install",
+        'settingsFetch("/api/plugins/install",',
         "/api/plugins/contributions",
         "/api/plugins/events",
         "/enabled",
@@ -7424,7 +7424,7 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
     assert 'context.setErrorKind("message");' in runtime_error
     assert 'onRetry={errorKind === "message" ? handleRetryMessage : (errorKind === "memory" ? handleGenerateMemory : retryLoad)}' in main_props
     assert 'errorKind={errorKind}' in main_props
-    assert '<WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} onDiagnose={() => openDoctor({ project_id: project && project.id, chat_id: chat && chat.id })} />' in source
+    assert '<WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} onDiagnose={() => openDoctor(failureScope(project, chat, error))} />' in source
     assert 'wbcT("workbenchChat.error.messageTitle", "Message processing failed")' in source
     assert 'wbcT("workbenchChat.error.messageBody"' in source
 

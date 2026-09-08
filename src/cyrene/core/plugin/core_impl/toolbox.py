@@ -54,6 +54,16 @@ _TOOLBOX_INPUT_SCHEMA = {
 }
 
 
+def _request_error(message: str) -> PluginExecutionError:
+    return PluginExecutionError(PluginFailure(
+        error_code="toolbox_invalid_target",
+        message=f"{message}. Use toolbox.list, then describe a current name before invoking it.",
+        retryable=True,
+        retry_scope="different_arguments",
+        circuit_scope="none",
+    ))
+
+
 class _ToolboxHandler:
     def __init__(self, registry: PluginRegistry) -> None:
         self._registry = registry
@@ -84,7 +94,12 @@ class _ToolboxHandler:
         *,
         agent_id: str = "main",
     ) -> RegisteredPlugin:
-        registered = self._registry.registered(name)
+        from ..registry import PluginNotFoundError
+
+        try:
+            registered = self._registry.registered(name)
+        except PluginNotFoundError as exc:
+            raise _request_error(f"Plugin is not registered: {name}") from exc
         if (
             registered.plugin.kind != "tool"
             or not registered.plugin.model_visible
@@ -92,7 +107,7 @@ class _ToolboxHandler:
             or registered.plugin.agent_exposure != "discoverable"
             or not self._registry.plugin_accessible(name, agent_id=agent_id)
         ):
-            raise ValueError(f"Plugin is not available through toolbox: {name}")
+            raise _request_error(f"Plugin is not available through toolbox: {name}")
         failed_source = next(
             (
                 failure
@@ -187,7 +202,7 @@ class _ToolboxHandler:
             if normalized and normalized not in requested:
                 requested.append(normalized)
         if not requested:
-            raise ValueError("toolbox describe requires name or names")
+            raise _request_error("toolbox describe requires name or names")
 
         descriptions: list[dict[str, Any]] = []
         described: set[str] = set()
@@ -331,7 +346,7 @@ class _ToolboxHandler:
     ) -> dict[str, Any]:
         name = str(arguments.get("name") or "").strip()
         if not name:
-            raise ValueError("toolbox invoke requires name")
+            raise _request_error("toolbox invoke requires name")
         nested_arguments = arguments.get("arguments") or {}
         if not isinstance(nested_arguments, Mapping):
             raise TypeError("toolbox invoke arguments must be an object")

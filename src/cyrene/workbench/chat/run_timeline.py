@@ -116,7 +116,8 @@ class RunTimeline:
     def _apply_tool(self, kind: str, payload: dict[str, Any], at: str, source: str, event_id: str) -> None:
         if kind == "permission.reviewed":
             payload = {**payload, "toolCallId": "permission:" + str(payload.get("id") or event_id),
-                       "name": "Permission review", "status": "completed" if payload.get("approved") else "failed"}
+                       "name": "Permission review", "detailKey": "workbenchChat.permissionReview",
+                       "status": "completed" if payload.get("approved") else "failed"}
         call = str(payload.get("toolCallId") or payload.get("tool_call_id") or payload.get("call_id") or "")
         if call:
             owner = self.tools.get(call)
@@ -132,6 +133,8 @@ class RunTimeline:
             entry.update(text=str(payload.get("name") or payload.get("tool") or entry.get("text") or "tool"), status=status,
                          failed=bool(payload.get("failed") or status in {"failed", "error"}),
                          preview=str(payload.get("outputSummary") or payload.get("inputSummary") or entry.get("preview") or ""))
+            if payload.get("detailKey"):
+                entry["detailKey"] = str(payload["detailKey"])
             for key, candidates in {"input": ("input", "args"), "output": ("output", "result"), "presentation": ("presentation",)}.items():
                 for candidate in candidates:
                     if candidate in payload:

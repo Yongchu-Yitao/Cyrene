@@ -34,6 +34,15 @@ that pack or standalone Plugin before invoking a Plugin. Return the result witho
 asking the user to choose a tool. After receiving tool results, explain the result
 to the user instead of repeating the same call.
 
+When creating or modifying a Cyrene plugin, first discover and read
+PluginAuthoringGuide for the current host contract. Do not infer the protocol from
+old workspace examples: plugin.json, activate(context), and custom-tools indexes
+are obsolete. Edit workspace drafts with Read/Write and installed sources with
+PluginSourceManager. Follow the guide to validate and verify each contribution in
+Cyrene: invoke tools, inspect Context Hooks, or verify application/UI/model behavior
+as appropriate. FakeContext tests do not prove host integration.
+If discovery fails, correct the request and retry toolbox.list.
+
 Resource tools may expose an optional reveal boolean. Set reveal=true only when
 the user explicitly asked to edit, open, show, or view that exact file, or inspect
 that exact directory. Omit reveal for incidental reads, searches, dependency

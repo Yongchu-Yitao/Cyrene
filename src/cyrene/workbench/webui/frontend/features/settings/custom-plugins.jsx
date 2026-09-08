@@ -333,12 +333,38 @@ function usePluginRegistryMutations(model) {
     model.setNotice(message || "")
     model.setNoticeKind(kind || "info")
   }
-  function reloadRegistry() {
+  function reloadRegistry(quiet) {
     model.setBusy("reload")
     model.setNotice("")
     model.pluginService.reload().then(function (next) {
       if (next.applicationRestartRequired) tell(t("settings.pluginRestartRequired", "Plugin files were reloaded. Restart the application to apply Application Host changes."), "info")
-      else tell(t("settings.pluginReloaded", "Plugin Center reloaded"), "success")
+      else if (!quiet) tell(t("settings.pluginReloaded", "Plugin Center reloaded"), "success")
+    }).catch(function (error) {
+      tell(error && error.message || String(error), "error")
+    }).finally(function () { model.setBusy("") })
+  }
+  function installFromFile() {
+    if (!window.cyrene || typeof window.cyrene.pickExtensionPath !== "function") {
+      tell(t("settings.pluginInstallDesktop", "Open Cyrene desktop to select a local Plugin folder or ZIP archive."), "info")
+      return
+    }
+    model.setBusy("install")
+    Promise.resolve(window.cyrene.pickExtensionPath({
+      plugin: true, title: t("settings.pluginInstallFromFile", "Install from file"),
+    })).then(function (picked) {
+      if (!picked || picked.cancelled || !picked.path) return
+      return settingsFetch("/api/plugins/install-file", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: picked.path }),
+      }).then(readSettingsResponse).then(function () {
+        return model.pluginService.refresh()
+      }).then(function (next) {
+        if (next.error) throw new Error(next.error)
+        tell(next.applicationRestartRequired
+          ? t("settings.pluginRestartRequired", "Restart the application to apply changes.")
+          : t("settings.pluginInstalledFromFile", "Plugin installed and reloaded."),
+        next.applicationRestartRequired ? "info" : "success")
+      })
     }).catch(function (error) {
       tell(error && error.message || String(error), "error")
     }).finally(function () { model.setBusy("") })
@@ -396,12 +422,13 @@ function usePluginRegistryMutations(model) {
       tell(error && error.message || String(error), "error")
     }).finally(function () { model.setBusy("") })
   }
-  return { tell: tell, reloadRegistry: reloadRegistry, updateEnabled: updateEnabled, updateTool: updateTool, deleteTool: deleteTool, updateWorkbenchEntry: updateWorkbenchEntry }
+  return { tell: tell, reloadRegistry: reloadRegistry, installFromFile: installFromFile, updateEnabled: updateEnabled, updateTool: updateTool, deleteTool: deleteTool, updateWorkbenchEntry: updateWorkbenchEntry }
 }
 
 function usePluginRegistryController(props) {
   var model = usePluginRegistryState(props)
   var mutations = usePluginRegistryMutations(model)
+  useEffectSt(function () { mutations.reloadRegistry(true) }, [])
   var view = registryViewModel(model.registry, model.query, model.t)
   return Object.assign({}, model, mutations, view, { disabled: !!model.busy || model.registry.reloading === true })
 }
@@ -414,8 +441,8 @@ function PluginRegistryHeader(props) {
     React.createElement("div", { className: "wb-extensions-header-actions" },
       props.onAdd && React.createElement(PluginCenterAddButton, { t: c.t, disabled: c.disabled, onClick: props.onAdd }),
       React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button",
-        disabled: c.disabled, onClick: c.reloadRegistry },
-      c.busy === "reload" || c.registry.reloading ? c.t("settings.loading", "Loading…") : c.t("settings.pluginReload", "Reload"))
+        disabled: c.disabled, onClick: c.installFromFile },
+      c.busy || c.registry.reloading ? c.t("settings.loading", "Loading…") : c.t("settings.pluginInstallFromFile", "Install from file"))
     )
   )
 }

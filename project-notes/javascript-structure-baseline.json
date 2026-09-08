@@ -88,10 +88,13 @@
     "nesting": 10
   },
   "electron/main.js": {
-    "module_lines": 6518
+    "module_lines": 6519
+  },
+  "electron/main.js::<anonymous>.<anonymous>#34": {
+    "decisions": 23
   },
   "electron/main.js::<anonymous>#2": {
-    "lines": 354
+    "lines": 355
   },
   "electron/main.js::BrowserTabManager": {
     "methods": 113,
@@ -313,6 +316,9 @@
   "src/cyrene/workbench/webui/frontend/features/chat/agent-events.jsx::wbcAgentElicitationPayload": {
     "decisions": 21
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/agent-events.jsx::wbcAgentRunFailedError": {
+    "decisions": 26
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/agent-events.jsx::wbcAgentPermissionReviewPayload": {
     "decisions": 24
   },
@@ -383,7 +389,7 @@
     "decisions": 23
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx": {
-    "module_lines": 1564
+    "module_lines": 1566
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx::useWbcLiveChatMetrics": {
     "lines": 130
@@ -447,7 +453,7 @@
     "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx": {
-    "module_lines": 2588
+    "module_lines": 2589
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::useWbcConversationProjection": {
     "decisions": 31
@@ -483,7 +489,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain": {
     "lines": 607,
-    "decisions": 58,
+    "decisions": 61,
     "hooks": 33
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain.<anonymous>#5": {
@@ -526,10 +532,10 @@
     "decisions": 26
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx": {
-    "module_lines": 1775
+    "module_lines": 1776
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx::<anonymous>": {
-    "lines": 1382
+    "lines": 1383
   },
   "src/cyrene/workbench/webui/frontend/features/chat/file-resources.jsx::<anonymous>.appendIntermediate.<anonymous>": {
     "decisions": 30
@@ -653,10 +659,10 @@
     "decisions": 26
   },
   "src/cyrene/workbench/webui/frontend/features/chat/model-api.jsx::consumeEventStream": {
-    "lines": 101
+    "lines": 103
   },
   "src/cyrene/workbench/webui/frontend/features/chat/model-api.jsx::consumeEventStream.handleLine": {
-    "decisions": 75,
+    "decisions": 79,
     "nesting": 21
   },
   "src/cyrene/workbench/webui/frontend/features/chat/model-api.jsx::sendMessage": {
@@ -876,7 +882,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx::WbcChatSplit": {
     "lines": 389,
-    "decisions": 44,
+    "decisions": 47,
     "hooks": 22
   },
   "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx::WbcChatSplit.answerPendingQuestion": {
@@ -984,8 +990,11 @@
     "decisions": 56
   },
   "src/cyrene/workbench/webui/frontend/features/doctor/doctor.jsx::DoctorPanel": {
-    "lines": 111,
-    "decisions": 45
+    "lines": 119,
+    "decisions": 59
+  },
+  "src/cyrene/workbench/webui/frontend/features/doctor/repair.jsx::DoctorRepair": {
+    "decisions": 28
   },
   "src/cyrene/workbench/webui/frontend/features/goal/goal-ui.jsx::WbcGoalConfirmationDialog": {
     "decisions": 25
@@ -1407,13 +1416,13 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4276
+    "module_lines": 4278
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4276
+    "module_lines": 4278
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
-    "module_lines": 1228
+    "module_lines": 1234
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/format.jsx::<anonymous>.formatLocalizedSpend": {
     "decisions": 22

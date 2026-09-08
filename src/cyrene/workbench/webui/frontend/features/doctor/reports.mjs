@@ -2,7 +2,7 @@
 const reports = new Map();
 const pending = new Map();
 export function reportKey(scope, language) {
-  return JSON.stringify([language, ...['project_id','chat_id','job_id','incident_id','client_code'].map(k => scope[k] || '')]);
+  return JSON.stringify([language, !!scope.auto_repair, ...['project_id','chat_id','run_id','job_id','incident_id','client_code'].map(k => scope[k] || '')]);
 }
 export function cachedReport(scope, language) { return reports.get(reportKey(scope, language)) || null; }
 export function rememberReport(scope, language, report) {
@@ -10,11 +10,11 @@ export function rememberReport(scope, language, report) {
   reports.delete(key); reports.set(key, report);
   if (reports.size > 12) reports.delete(reports.keys().next().value);
 }
-export function loadReport(scope, language, request) {
+export function loadReport(scope, language, request, force = false) {
   const key = reportKey(scope, language);
   if (pending.has(key)) return pending.get(key);
   const previous = reports.get(key);
-  const operation = previous?.analysis.status === 'running'
+  const operation = previous && !force && (scope.auto_repair || previous.analysis.status === 'running')
     ? request('reports/' + previous.id)
     : request('reports', 'POST', { ...scope, language });
   const task = operation.then(report => { rememberReport(scope, language, report); return report; }).finally(() => pending.delete(key));

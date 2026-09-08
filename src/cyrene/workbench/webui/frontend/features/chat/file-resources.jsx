@@ -549,7 +549,8 @@ var WorkbenchChatRuntimes = (function () {
   function failRun(chatId, err, generation) {
     if (!chatId || !ownsStreamGeneration(chatId, generation)) return;
     clearReconnectTimer(chatId);
-    failures[chatId] = err || new Error(wbcT("workbenchChat.agentError.failed", "Agent run failed"));
+    failures[chatId] = err && typeof err === 'object' ? err : new Error(String(err || wbcT("workbenchChat.agentError.failed", "Agent run failed")));
+    if (!failures[chatId].runId) failures[chatId].runId = String(runtimes[chatId] && runtimes[chatId].runId || '');
     // The provider has exhausted its bounded retries and emitted the terminal
     // run failure; this is no longer a recoverable transport gap.
     // Remove the live runtime before ownStream.finally so it cannot enter the

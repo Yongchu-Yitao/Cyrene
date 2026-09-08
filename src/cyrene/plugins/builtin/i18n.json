@@ -7,7 +7,7 @@
         "description": "Fixed tools required by the Agent kernel."
       },
       "zh": {
-        "name": "core",
+        "name": "核心工具",
         "description": "Agent 内核运行所必需的固定工具。"
       }
     },

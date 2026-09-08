@@ -627,6 +627,25 @@ def register_plugin_routes(
             )
         return {"ok": True, "result": result}
 
+    @router.post("/api/plugins/install-file")
+    async def api_install_plugin_file(request: Request):
+        from cyrene.workbench.http.plugin_file_install import install_plugin_file
+        import zipfile
+
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or not isinstance(body.get("path"), str):
+                raise ValueError("A local Plugin path is required.")
+            result = await install_plugin_file(body["path"])
+        except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if not result.get("ok"):
+            return JSONResponse({
+                **result,
+                "error": result.get("error") or "; ".join(result.get("errors") or []) or str(result.get("failures") or "Plugin installation failed"),
+            }, status_code=400)
+        return result
+
     @router.post("/api/plugins/reload")
     async def api_reload_plugins():
         try:

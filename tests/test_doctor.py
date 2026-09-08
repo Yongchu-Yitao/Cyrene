@@ -69,7 +69,9 @@ async def test_syntax_error_does_not_execute_plugin(setup):
     report = await service(setup).diagnose(persist=False)
     item = codes(report)["plugin_syntax_error"]
     assert item["evidence"]["line"] == 3
-    assert item["actions"] == [{"kind": "restore_plugin", "target": "sample.py"}]
+    assert item["actions"][0]["kind"] == "restore_plugin"
+    assert item["actions"][0]["target"] == "sample.py"
+    assert item["actions"][0]["available"] is False
     assert not Path("DO_NOT_CREATE").exists()
 
 

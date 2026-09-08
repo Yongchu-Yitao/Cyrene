@@ -1,6 +1,7 @@
 import { cachedReport, rememberReport, loadReport } from "./reports.mjs"
 import { wbSetBrowserOverlayObscured } from "../../shared/browser/overlays.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
+import { DoctorRepair } from './repair.jsx'
 
 async function request(path, method = "GET", body) {
   const response = await fetch("/api/doctor/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -24,21 +25,21 @@ export function DoctorPanel({ scope = {}, onClose }) {
   React.useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   async function perform(operation) {
     setBusy(true); setError("");
-    try { await operation(); } catch (e) { if (live.current) setError(t("doctor.requestFailed")); }
+    try { await operation(); } catch (e) { if (live.current) setError(e.message || t("doctor.requestFailed")); }
     finally { if (live.current) setBusy(false); }
   }
-  async function scan() {
+  async function scan(force = false) {
     const version = ++scanVersion.current;
     setRefreshing(true); setError("");
     try {
-      const result = await loadReport(scope, lang, request);
+      const result = await loadReport(scope, lang, request, force);
       if (live.current && version === scanVersion.current) { setReport(result); setPlan(null); }
     } catch (_) { if (live.current && version === scanVersion.current) setError(t("doctor.requestFailed")); }
     finally { if (live.current && version === scanVersion.current) setRefreshing(false); }
   }
-  React.useEffect(() => { setReport(cachedReport(scope, lang)); scan(); return () => { scanVersion.current += 1; }; }, [scope.project_id, scope.chat_id, scope.job_id, scope.incident_id, scope.client_code, lang]);
+  React.useEffect(() => { setReport(cachedReport(scope, lang)); scan(); return () => { scanVersion.current += 1; }; }, [scope.project_id, scope.chat_id, scope.run_id, scope.job_id, scope.incident_id, scope.client_code, scope.auto_repair, lang]);
   React.useEffect(() => {
-    if (!report || report.analysis.status !== "running") return;
+    if (!report || (report.analysis.status !== "running" && report.failure?.status !== "running")) return;
     let stopped = false;
     let timer;
     async function poll() {
@@ -48,7 +49,7 @@ export function DoctorPanel({ scope = {}, onClose }) {
     }
     timer = setTimeout(poll, 1500);
     return () => { stopped = true; clearTimeout(timer); };
-  }, [report && report.id, report && report.analysis.status]);
+  }, [report && report.id, report && report.analysis.status, report?.failure?.status]);
   const button = (label, action, disabled = busy) => <button type="button" className="wb-btn ghost" disabled={disabled} onClick={action}>{label}</button>;
   function exportReport() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
@@ -62,15 +63,15 @@ export function DoctorPanel({ scope = {}, onClose }) {
 
         {["failed", "unknown"].includes(item.status) && <p>{item.direction[lang]}</p>}
         <details><summary>{t("doctor.details")}</summary><small>{item.id} · {item.code}</small><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(item.evidence, null, 2)}</pre></details>
-        {item.actions.map((action, index) => <span key={index}>{button(t("doctor.reviewRepair"), () => perform(async () => setPlan(await request("reports/" + report.id + "/repair-plan", "POST", { finding_id: item.id, action_index: index }))))}</span>)}
+        {item.actions.map((action, index) => <span key={index}>{action.available === false ? <small>{action.reason}</small> : button(t("doctor.reviewRepair"), () => perform(async () => setPlan(await request("reports/" + report.id + "/repair-plan", "POST", { finding_id: item.id, action_index: index }))))}</span>)}
       </article>;
   return <section className="wb-doctor-panel" aria-label={t("doctor.title")}>
     <header className="wb-doctor-head"><div className="wb-doctor-title"><span className="wb-doctor-mark" aria-hidden="true">✚</span><div><span className="wb-doctor-eyebrow">{t("doctor.eyebrow")}</span><h2>{t("doctor.title")}</h2></div></div>{onClose && <button type="button" className="workbench-icon-btn" aria-label={t("doctor.close")} onClick={onClose}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 6 12 12M18 6 6 18" /></svg></button>}</header><div className="wb-doctor-body">
     <p>{t("doctor.intro")}</p>
     <div className="wb-doctor-actions">
-      {button(t("doctor.recheck"), scan, busy || refreshing || (report && report.analysis.status === "running"))}
+      {button(t("doctor.recheck"), () => scan(true), busy || refreshing || report?.failure?.status === "running" || (report && report.analysis.status === "running"))}
 
-      {report && report.analysis.status === "running" && button(t("doctor.stop"), () => perform(async () => setReport(await request("reports/" + report.id + "/analysis", "DELETE"))))}
+      {report && (report.analysis.status === "running" || report.failure?.status === "running") && button(t("doctor.stop"), () => perform(async () => setReport(await request("reports/" + report.id + (report.failure?.status === "running" ? "/failure-workflow" : "/analysis"), "DELETE"))), busy || report.failure?.phase === "applying")}
       {report && button(t("doctor.probe"), () => perform(async () => setReport(await request("reports/" + report.id + "/probe", "POST"))))}
       {report && button(t("doctor.export"), exportReport)}
     </div>
@@ -88,10 +89,17 @@ export function DoctorPanel({ scope = {}, onClose }) {
         <strong>{t(attention.length ? "doctor.needsAttention" : "doctor.noFailures")}</strong>
         <span>{t("doctor.counts", { issues: attention.length, passed: report.findings.filter(f => f.status === "passed").length, total: report.findings.length })}</span>
       </div>
+      {report.failure && <div className="wb-doctor-analysis" aria-live="polite">
+        <h3>{t('doctor.failureTitle')}</h3>
+        <p>{t('doctor.failureStatus.' + report.failure.status)} · {t('doctor.failurePhase.' + report.failure.phase)}</p>
+        {report.scope.run_id && <small>{t('doctor.failedRun')}{report.scope.run_id}</small>}
+        {report.failure.target && <p>{t('doctor.repairTarget')}：{report.failure.target}</p>}
+        {report.failure.reason && <p>{['pending_question_requires_answer', 'model_probe_passed', 'model_probe_failed', 'ambiguous_failure_target', 'failure_target_unavailable', 'candidate_unavailable', 'runtime_not_verified'].includes(report.failure.reason) ? t('doctor.failureReason.' + report.failure.reason) : report.failure.reason}</p>}
+      </div>}
       {report.persistence_unavailable && <p role="alert">{t("doctor.storageFailure")}</p>}
       {report.model_probe && <p role="status">{t("doctor.modelConnection")}{statusLabel(report.model_probe.status)}{report.model_probe.direction && " · " + report.model_probe.direction[lang]}</p>}
       <div className="wb-doctor-analysis" aria-live="polite">
-        <div className="wb-doctor-analysis-head"><h3>{t("doctor.analysis")}</h3>{report && button(t("doctor.analyze"), () => perform(async () => setReport(await request("reports/" + report.id + "/analysis", "POST", { description }))), busy || report.analysis.status === "running")}</div>
+        <div className="wb-doctor-analysis-head"><h3>{t("doctor.analysis")}</h3>{report && button(t("doctor.analyze"), () => perform(async () => setReport(await request("reports/" + report.id + "/analysis", "POST", { description }))), busy || report.analysis.status === "running" || report.failure?.status === "running")}</div>
         <label className="wb-doctor-description-label" htmlFor={descriptionId}>{t("doctor.descriptionLabel")}</label>
         <textarea id={descriptionId} className="wb-doctor-description" rows={3} maxLength={4000} value={description} onChange={event => setDescription(event.target.value)} disabled={busy || report.analysis.status === "running"} placeholder={t("doctor.descriptionPlaceholder")} aria-describedby={descriptionId + "-hint"} />
         <small className="wb-doctor-description-hint" id={descriptionId + "-hint"}>{t("doctor.descriptionHint")} <span>{description.length}/4000</span></small>
@@ -103,6 +111,7 @@ export function DoctorPanel({ scope = {}, onClose }) {
         {report.analysis.next_steps && <ul>{report.analysis.next_steps.map((step, i) => <li key={i}>{step}</li>)}</ul>}
       </div>
       <h3>{t("doctor.checks")}</h3>
+      {(!report.failure || report.failure.repair_id) && <DoctorRepair key={JSON.stringify(report.scope)} report={report} description={description} request={request} />}
       {attention.map(renderFinding)}
       {remaining.length > 0 && <details className="wb-doctor-other"><summary>{t("doctor.otherChecks", { count: remaining.length })}</summary>{remaining.map(renderFinding)}</details>}
       <details className="wb-doctor-report-meta"><summary>{t("doctor.reportDetails")}</summary><code>{report.id}</code></details>

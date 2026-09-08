@@ -67,6 +67,15 @@ def test_failure_retains_partial_content_and_settles_activity():
     assert timeline.messages()[1]["trace"][0]["status"] == "failed"
 
 
+def test_permission_review_trace_carries_a_localizable_detail_key():
+    timeline = RunTimeline("run")
+    timeline.apply(event("permission.reviewed", id="review-1", approved=True))
+
+    entry = timeline.messages()[0]["trace"][0]
+    assert entry["text"] == "Permission review"
+    assert entry["detailKey"] == "workbenchChat.permissionReview"
+
+
 def test_live_records_are_the_terminal_records_and_are_checkpointed():
     async def scenario():
         checkpoints = []
