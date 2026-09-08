@@ -811,9 +811,16 @@ class PluginRuntime:
                     _utc_now(),
                     failure,
                 )
-            except asyncio.CancelledError:
-                raise
-            except PLUGIN_BOUNDARY_ERRORS as exc:
+            except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise
+                    exc = PluginExecutionError(PluginFailure(
+                        error_code="plugin_cancelled",
+                        message="Plugin cancelled its own operation; the run was not cancelled.",
+                        retryable=True, retry_scope="after_delay", circuit_scope="none",
+                    ))
                 error, failure = self._handler_failure(
                     plugin, call, context, exc
                 )
@@ -939,9 +946,11 @@ class PluginRuntime:
                     failure=(failure.as_dict() if failure is not None else None),
                 )
                 op.finish(hook_result_count=len(results))
-            except asyncio.CancelledError:
-                raise
-            except PLUGIN_BOUNDARY_ERRORS as exc:
+            except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise
                 op.finish(dispatch_success=False, error=exc)
                 log_operation(
                     logger,

@@ -21,7 +21,7 @@ class TransitionCallbacks:
     run_id: Callable[[ContextNode], str]
     cancelled: Callable[[str], bool]
     coroutine: Callable[[str, ContextNode], Coroutine[Any, Any, None]]
-    failure: Callable[[ContextNode, str], Coroutine[Any, Any, None] | None]
+    failure: Callable[[ContextNode, str, BaseException, str], Coroutine[Any, Any, None] | None]
     idle: Callable[[str], None]
     snapshot: Callable[[], dict[str, str]]
 
@@ -178,6 +178,8 @@ class TransitionDriver:
                 transition_kind=kind,
                 reason=exc,
             )
+            if not self.closed and not self.callbacks.cancelled(run_id):
+                self._handle_failure(loop, node, run_id, exc, kind)
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
@@ -194,9 +196,7 @@ class TransitionDriver:
                 transition_kind=kind,
                 error=exc,
             )
-            failure = self.callbacks.failure(node, run_id)
-            if failure is not None:
-                loop.run_until_complete(failure)
+            self._handle_failure(loop, node, run_id, exc, kind)
         finally:
             with self.condition:
                 self.active_task = None
@@ -205,10 +205,21 @@ class TransitionDriver:
                 no_pending_transitions = not self.pending
                 self.condition.notify_all()
             if no_pending_transitions:
-                self.callbacks.idle(run_id)
+                try:
+                    self.callbacks.idle(run_id)
+                except Exception:
+                    logger.exception("Transition idle callback failed")
+
+    def _handle_failure(self, loop, node, run_id, exc, kind) -> None:
+        try:
+            failure = self.callbacks.failure(node, run_id, exc, kind)
+            if failure is not None:
+                loop.run_until_complete(failure)
+        except (Exception, asyncio.CancelledError):
+            # A failed diagnostic write/hook must not kill the queue worker.
+            logger.exception("Transition failure callback failed")
 
     def wait(self) -> None:
         with self.condition:
             while self.pending:
                 self.condition.wait()
-

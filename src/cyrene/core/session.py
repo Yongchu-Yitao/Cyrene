@@ -18,7 +18,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -58,6 +58,7 @@ from .plugin import (
     PluginCall,
     PluginCallResult,
     PluginContext,
+    PluginFailure,
     PluginRegistry,
     PluginRuntime,
     PluginSetupContext,
@@ -1737,13 +1738,28 @@ class AgentSession:
             return self._finish_success(node)
         raise RuntimeError(f"unsupported Agent transition: {kind}")
 
-    def _transition_failure(self, node: ContextNode, run_id: str):
+    async def _transition_failure(self, node: ContextNode, run_id: str, exc: BaseException | None = None, kind: str = ""):
+        try:
+            failure = self._transition_failure_node(node, run_id, exc, kind)
+            if failure is not None:
+                await self._finish_terminal(failure, status="failed")
+        except BaseException:
+            # Even broken persistence/lifecycle hooks must not strand drain().
+            # Do not retry a transition whose side effects may already exist.
+            settled = None
+            with self._state_lock:
+                if self._current_run_id == run_id and self._status not in {"idle", "awaiting_user"}:
+                    settled = self._set_state_locked("idle", _l("Agent transition failed", "Agent 状态转换失败"))
+            if settled is not None:
+                self._emit_state_snapshot(settled)
+            raise
+
+    def _transition_failure_node(self, node, run_id, exc, kind):
         failure = self._mount_assistant(
             node.id, _l("The Agent transition failed.", "Agent 状态转换失败。"),
             error=True, caused_by=self._transition_key(node), run_id=run_id,
         )
-        if failure is not None:
-            return self._finish_terminal(failure, status="failed")
+        return failure
 
     def _transitions_idle(self, run_id: str) -> None:
         with self._state_lock:
@@ -3322,6 +3338,27 @@ class AgentSession:
             return
         output = dict(result.value)
         calls = output.get("tool_calls")
+        invalid_calls = calls is not None and not isinstance(calls, list)
+        ids: set[str] = set()
+        for call in calls if isinstance(calls, list) else []:
+            if (not isinstance(call, Mapping)
+                or not isinstance(call.get("id"), str) or not call["id"]
+                or call["id"] in ids
+                or not isinstance(call.get("name"), str) or not call["name"]
+                or not isinstance(call.get("arguments", {}), Mapping)):
+                invalid_calls = True
+                break
+            ids.add(call["id"])
+        if invalid_calls:
+            invalid = replace(result, success=False, value=None,
+                error="Invalid tool calls: require unique nonempty IDs, names and object arguments.",
+                error_details={"code": "model_response_invalid", "retryable": True, "retry_scope": "immediate"},
+                failure=PluginFailure(error_code="model_response_invalid",
+                    message="Invalid tool call batch; no tools were executed.",
+                    retryable=True, retry_scope="different_arguments", circuit_scope="none"))
+            if not await self._retry_invalid_model_response(trigger, invalid, run_id, transition_key):
+                await self._finish_model_failure(trigger, invalid, run_id)
+            return
         calls = self._prepare_resource_tool_calls(
             calls if isinstance(calls, list) else []
         )
@@ -3527,13 +3564,17 @@ class AgentSession:
         project_id = str(self._plugin_context_data.get("project_id") or "")
         if not plugin.resource_effects or not project_id:
             return {}
-        locations = workspace_resource_locations(
-            plugin.resource_effects,
-            dict(call.get("resource_arguments") or call.get("arguments") or {}),
-            workspace=self.workspace,
-            project_id=project_id,
-            phase=phase,
-        )
+        try:
+            locations = workspace_resource_locations(
+                plugin.resource_effects,
+                dict(call.get("resource_arguments") or call.get("arguments") or {}),
+                workspace=self.workspace,
+                project_id=project_id,
+                phase=phase,
+            )
+        except Exception:
+            logger.warning("Resource presentation unavailable", exc_info=True)
+            return {}
         if not locations:
             return {}
         return {
@@ -3710,17 +3751,32 @@ class AgentSession:
                 "role": "assistant", "content": "[Current task data]\n" + task_text}))
             services = self._plugin_services()
             service = services.get("deep_reflection")
-            if not callable(getattr(service, "reflect", None)):
-                raise RuntimeError("DeepReflect Plugin service is unavailable")
             self._set_state("reflecting", _l("Reflecting on task context", "正在反思任务上下文"), leaf_id=assistant.id)
             receipt = "reflect:" + assistant.id
             if receipt not in state["receipts"]:
-                pack = await service.reflect(source, dict(call.get("arguments") or {}), PluginContext(
-                    workspace=self.workspace, tree=self.store, tree_id=self.tree.id,
-                    node_id=assistant.id, hooks=self.hooks,
-                    data={**self._plugin_data(run_id=run_id, model_call_kind="deep_reflection",
-                                             user_request=self.current_user_request), "task_context_id": active},
-                    services=services))
+                try:
+                    if not callable(getattr(service, "reflect", None)):
+                        raise RuntimeError("DeepReflect Plugin service is unavailable")
+                    pack = await service.reflect(source, dict(call.get("arguments") or {}), PluginContext(
+                        workspace=self.workspace, tree=self.store, tree_id=self.tree.id,
+                        node_id=assistant.id, hooks=self.hooks,
+                        data={**self._plugin_data(run_id=run_id, model_call_kind="deep_reflection",
+                                                 user_request=self.current_user_request), "task_context_id": active},
+                        services=services))
+                    if (not isinstance(pack, Mapping)
+                        or not isinstance(pack.get("rendered_model_context"), str)
+                        or not pack["rendered_model_context"].strip()):
+                        raise ValueError("DeepReflect returned an empty or invalid context pack")
+                except (Exception, asyncio.CancelledError) as exc:
+                    task = asyncio.current_task()
+                    if self._is_cancelled(run_id) or (isinstance(exc, asyncio.CancelledError)
+                                                     and task is not None and task.cancelling()):
+                        raise
+                    logger.warning("DeepReflect failed; preserving task context", exc_info=True)
+                    self._context_control_error(assistant, [call],
+                        "DeepReflect failed; original task context is unchanged. "
+                        "Continue with the existing context or retry reflection. " + str(exc))
+                    return
                 if self._is_cancelled(run_id):
                     return
                 doc["body"] = str(pack.get("rendered_model_context") or "")
