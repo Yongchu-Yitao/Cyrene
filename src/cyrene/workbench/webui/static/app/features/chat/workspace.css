@@ -750,6 +750,81 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
   }
 }
 
+/* The mobile drawer keeps the full settings navigation, not the legacy
+   horizontal icon strip used by the standalone narrow settings layout. */
+@media (max-width: 767px) {
+  .workbench-shell[data-mobile-drawer] .settings-overlay-panel {
+    isolation: auto;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] .settings-overlay-nav-head {
+    display: flex;
+    flex: 0 0 56px;
+    align-items: center;
+    padding: 0 16px;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] .workbench-sidebar-collapse-control {
+    display: none;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] .settings-overlay-nav-scroll {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0 12px 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] .settings-overlay-nav-section {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 16px;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] .settings-overlay-nav-section.first {
+    padding-top: 2px;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] .settings-overlay-tab {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    height: auto;
+    padding: 10px 12px;
+    gap: 12px;
+    justify-content: flex-start;
+    box-sizing: border-box;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] :is(.settings-overlay-nav-head > b, .settings-overlay-nav-label, .settings-overlay-tab > span:not(.settings-overlay-tab-icon)) {
+    display: block;
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .workbench-shell[data-mobile-drawer] .settings-overlay-nav[data-mobile-card] .settings-overlay-nav-label {
+    padding: 0 12px 6px;
+  }
+}
+
 /* Unified Work + Board navigation -----------------------------------------
    The account card no longer owns a second Dock row. Keep the existing five
    destination pill, but let it sit lower and reserve only its real height. */

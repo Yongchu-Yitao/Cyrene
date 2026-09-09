@@ -1555,7 +1555,6 @@ import { createPendingMemorySelection } from "./shared/runtime/pending-module-se
       onExit: function () { setActivePanel(""); },
     }) : h("div", { className: "wb-mem-main" },
       h("div", { className: "wb-workbench-filterbar wb-mem-toolbar" },
-        h("button", { type: "button", className: "wb-btn ghost", onClick: function () { openDoctor({ project_id: learningProject }); } }, t("doctor.title")),
         h("div", { className: "wb-workbench-searchbox wb-mem-searchbox" },
           svg({ width: 15, height: 15, strokeWidth: 1.9 }, h("circle", { cx: 11, cy: 11, r: 7 }), h("path", { d: "m20 20-3.2-3.2" })),
           h("input", { type: "text", placeholder: t("memory.searchPlaceholder", "Search memory…"), value: query, onChange: function (e) { setQuery(e.target.value); } })),

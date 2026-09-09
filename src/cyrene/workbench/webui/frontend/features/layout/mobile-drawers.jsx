@@ -31,7 +31,7 @@ export function MobileDrawerControls({ state }) {
     if (!state.compact || !root.current) return;
     const shell = root.current.closest('.workbench-shell');
     const leftSelector = '.workbench-integrated-rail, .workbench-sidebar-dock.is-persistent';
-    const rightSelector = '.wbc-page > .wbc-side, .wbc-pane-layout.split > .wbc-pane-column.right, .workbench-right-panel, .wb-lib-right';
+    const rightSelector = '.wbc-page > .wbc-side, .wbc-pane-layout.split > .wbc-pane-column.right, .workbench-right-panel, .wb-lib-right, .wb-mem-detail';
     const saved = new Map();
     const background = new Map();
     const sync = () => {
@@ -40,7 +40,10 @@ export function MobileDrawerControls({ state }) {
         if (!saved.has(node)) saved.set(node, node.inert);
         const which = node.matches(leftSelector) ? 'left' : 'right';
         node.dataset.mobileCard = which;
-        const active = !node.closest('.workbench-stable-surface.is-hidden');
+        const active = !node.closest('.workbench-stable-surface.is-hidden, [hidden]')
+          && !node.matches('.empty, [aria-hidden="true"]')
+          && !node.querySelector(':scope > .wb-floating-detail-card.empty')
+          && getComputedStyle(node).display !== 'none';
         if (active) { if (which === 'left') left = true; else right = true; }
         node.inert = !active || sideRef.current !== which;
       });
@@ -49,13 +52,21 @@ export function MobileDrawerControls({ state }) {
         if (!background.has(node)) background.set(node, node.inert);
         node.inert = !!sideRef.current;
       });
+      if (sideRef.current && !(sideRef.current === 'left' ? left : right)) state.setSide('');
       setAvailable(old => old.left === left && old.right === right ? old : { left, right });
     };
+    const dock = shell.querySelector('.workbench-sidebar-dock.is-persistent');
+    const sizeDock = () => shell.style.setProperty('--wb-mobile-dock-reserve', (dock ? dock.getBoundingClientRect().height + 20 : 12) + 'px');
+    const resize = new ResizeObserver(sizeDock);
+    if (dock) resize.observe(dock);
+    sizeDock();
     syncCards.current = sync;
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(shell, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     return () => {
+      resize.disconnect();
+      shell.style.removeProperty('--wb-mobile-dock-reserve');
       syncCards.current = null;
       observer.disconnect();
       background.forEach((inert, node) => { node.inert = inert; });
