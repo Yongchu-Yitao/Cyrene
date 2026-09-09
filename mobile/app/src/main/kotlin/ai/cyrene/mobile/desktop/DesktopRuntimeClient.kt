@@ -1,4 +1,4 @@
-package ai.cyrene.mobile.localagent.runtime
+package ai.cyrene.mobile.desktop
 
 import android.content.Context
 import android.content.ComponentName
@@ -7,7 +7,7 @@ import ai.cyrene.mobile.runtime.protocol.GuestOperation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Full Python backend access, independent of the existing Kotlin agent/UI. */
+/** Android lifecycle bridge to the shared Python backend. */
 class DesktopRuntimeClient(private val context: Context) : AutoCloseable {
     private val companion = RuntimeCompanionClient(context)
 

@@ -3,7 +3,7 @@ package ai.cyrene.mobile
 import android.app.Activity
 import android.os.Bundle
 import android.util.Log
-import ai.cyrene.mobile.localagent.runtime.RuntimeCompanionClient
+import ai.cyrene.mobile.desktop.RuntimeCompanionClient
 import ai.cyrene.mobile.runtime.protocol.GuestOperation
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject

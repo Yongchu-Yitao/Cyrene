@@ -99,7 +99,8 @@ jobs:
         working-directory: mobile
         run: |
           python3 ci/verify-runtime.py build/unified-assets
-          ./gradlew :app:testDebugUnitTest --tests 'ai.cyrene.mobile.ConversationTimelineTest' --tests 'ai.cyrene.mobile.localagent.GoldenContractTest' --tests 'ai.cyrene.mobile.desktop.*' :runtime-app:testDebugUnitTest :app:assembleDebug -Dorg.gradle.jvmargs=-Xmx6g --max-workers=2 --no-daemon
+          ./gradlew -p buildSrc test --no-daemon
+          ./gradlew :app:testDebugUnitTest --tests 'ai.cyrene.mobile.desktop.*' :runtime-app:testDebugUnitTest :app:assembleDebug -Dorg.gradle.jvmargs=-Xmx6g --max-workers=2 --no-daemon
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify app/build/outputs/apk/debug/app-debug.apk
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/Cyrene-Android-debug.apk

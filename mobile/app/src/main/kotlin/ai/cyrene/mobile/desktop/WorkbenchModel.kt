@@ -3,7 +3,7 @@ package ai.cyrene.mobile.desktop
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import ai.cyrene.mobile.localagent.runtime.DesktopRuntimeClient
+import ai.cyrene.mobile.desktop.DesktopRuntimeClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

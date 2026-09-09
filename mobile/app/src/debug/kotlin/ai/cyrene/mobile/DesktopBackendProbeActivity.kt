@@ -2,7 +2,7 @@ package ai.cyrene.mobile
 
 import android.app.Activity
 import android.os.Bundle
-import ai.cyrene.mobile.localagent.runtime.DesktopRuntimeClient
+import ai.cyrene.mobile.desktop.DesktopRuntimeClient
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.File

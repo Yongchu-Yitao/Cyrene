@@ -1,4 +1,4 @@
-package ai.cyrene.mobile.localagent.runtime
+package ai.cyrene.mobile.desktop
 
 import android.content.*
 import android.os.IBinder
@@ -43,7 +43,7 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
                 .setComponent(ComponentName(context.packageName, RUNTIME_SERVICE_CLASS))
                 .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             bound = bindService(intent)
-            check(bound) { context.getString(R.string.local_agent_runtime_service_unavailable) }
+            check(bound) { context.getString(R.string.workbench_runtime_service_unavailable) }
 
         }
         withTimeout(timeoutMs) {
@@ -54,7 +54,7 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
     private fun bindService(intent: Intent): Boolean = try {
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE).also { bound = it }
     } catch (_: SecurityException) {
-        throw IllegalStateException(context.getString(R.string.local_agent_runtime_signature_mismatch))
+        throw IllegalStateException(context.getString(R.string.workbench_runtime_signature_mismatch))
     }
 
     suspend fun submit(
@@ -97,7 +97,5 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
     companion object {
         const val ACTION_BIND = "ai.cyrene.mobile.runtime.BIND"
         const val RUNTIME_SERVICE_CLASS = "ai.cyrene.mobile.runtime.CyreneRuntimeService"
-        const val RUNTIME_BOOTSTRAP_ACTIVITY_CLASS =
-            "ai.cyrene.mobile.runtime.RuntimeBootstrapActivity"
     }
 }

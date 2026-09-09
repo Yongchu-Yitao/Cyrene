@@ -47,15 +47,6 @@ class DesktopWorkbenchActivity : ComponentActivity() {
     private var proxy: WorkbenchProxy? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var downloadUrl: String? = null
-    override fun attachBaseContext(base: android.content.Context) {
-        val language = ai.cyrene.mobile.data.SecureStore(base).uiLanguage()
-        val localized = if (language.isBlank()) base else {
-            val config = android.content.res.Configuration(base.resources.configuration)
-            config.setLocale(java.util.Locale.forLanguageTag(language))
-            base.createConfigurationContext(config)
-        }
-        super.attachBaseContext(localized)
-    }
     private val picker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         fileCallback?.onReceiveValue(uris.takeIf { it.isNotEmpty() }?.toTypedArray()); fileCallback = null
     }

@@ -7,7 +7,7 @@
 
 Android 上的桌面 Workbench：复用现有前端，在本机 ARM64 QEMU / Debian 中运行 Python 后端。
 
-## 0.3.0：单 APK
+## 单 APK
 
 只安装 `app/build/outputs/apk/debug/app-debug.apk`。运行时模块现在是 Android Library，
 其签名镜像、JNI 引擎和后台服务随主 APK 打包；无需另外安装 Runtime APK。
@@ -20,8 +20,8 @@ Android 上的桌面 Workbench：复用现有前端，在本机 ARM64 QEMU / Deb
 移动端顶栏整合项目切换、标签中心和其他按钮。左右卡片通过边缘滑动进入。
 
 Android 的 `versionName` 在 Gradle 配置时读取主仓库 `pyproject.toml` 的
-`[project].version`，无需单独维护。`versionCode` 独立维护在 `app/build.gradle.kts`，
-每次分发新的 Android 版本时递增；修改显示版本不会自动增加它。
+`[project].version`，无需单独维护。`versionCode` 也由该版本自动派生，
+不再维护独立版本序号。所有平台的新修订都更新主项目版本。
 
 ## 构建
 
@@ -47,3 +47,10 @@ Debug 包仅供实验，正式发布还需配置发布签名和完整验收。�
 
 旧双 APK 的会话和工作目录仍留在旧包的数据目录，不自动迁移，也不自动删除旧包。
 历史版本信息见 CHANGELOG.md，最新单包验证见 project-notes/android-single-apk.zh-CN.md。
+
+## Android 外壳职责
+
+仅维护 Workbench WebView、系统文件选择/保存、键盘避让、外部链接、
+Binder 生命周期与内置 ARM64 运行时。模型配置、会话、工具和 Agent 逻辑全部由共享 Python 后端负责。
+旧 Kotlin Agent、模型配置/OAuth、会话数据库、桌面连接客户端与独立更新器及其测试已移除。
+旧设备数据不会被主动删除或自动迁移。详见[收尾记录](../project-notes/android-shell-cleanup.zh-CN.md)。

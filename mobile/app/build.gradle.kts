@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
 }
 
 // Keep the user-visible version in sync with the shared backend.
@@ -23,9 +22,7 @@ android {
         applicationId = "ai.cyrene.mobile"
         minSdk = 28
         targetSdk = 35
-        // Android update ordering is independent of the shared display version.
-        // Increment this for each distributed Android release.
-        versionCode = 11
+        versionCode = CyreneVersion.androidCode(cyreneVersion)
         versionName = cyreneVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -47,7 +44,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions.jvmTarget = "17"
-    buildFeatures.compose = true
     androidResources.noCompress += "gzip"
     packaging.jniLibs.useLegacyPackaging = true
     packaging.resources.excludes += setOf(
@@ -63,20 +59,10 @@ android {
 dependencies {
     implementation(project(":runtime-protocol"))
     implementation(project(":runtime-app"))
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
-    implementation(libs.compose.ui.tooling.preview)
-    implementation(libs.compose.material3)
-    implementation(libs.compose.material.icons.extended)
-    implementation(libs.activity.compose)
-    implementation(libs.lifecycle.runtime.compose)
-    implementation(libs.lifecycle.viewmodel.compose)
+    implementation(libs.activity.ktx)
+    implementation(libs.lifecycle.viewmodel.ktx)
     implementation(libs.coroutines.android)
-    implementation(libs.bouncycastle)
-    implementation(libs.markwon.core)
-    implementation(libs.markwon.ext.tables)
     implementation(libs.androidx.core.ktx)
-    debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.json)
 }
