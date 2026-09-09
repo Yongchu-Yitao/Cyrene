@@ -91,7 +91,7 @@ class DesktopWorkbenchActivity : ComponentActivity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(dp(64), dp(64)))
         loading.addView(TextView(this).apply {
-            text = "Cyrene"; textSize = 28f
+            setText(R.string.app_name); textSize = 28f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             gravity = android.view.Gravity.CENTER
             setPadding(0, dp(16), 0, dp(8))

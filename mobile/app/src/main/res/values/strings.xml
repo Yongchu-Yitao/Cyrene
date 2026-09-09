@@ -1,5 +1,5 @@
 <resources>
-  <string name="app_name">Cyrene</string>
+  <string name="app_name">Cyrene Mobile</string>
   <string name="startup_tagline">Your desktop Agent, always within reach</string>
   <string name="workbench_runtime_service_unavailable">Unable to connect to the embedded runtime. Reopen Cyrene and try again.</string>
   <string name="workbench_runtime_signature_mismatch">The system denied access to the embedded runtime. Reinstall Cyrene.</string>
