@@ -41,6 +41,9 @@ APK 保留 7 天，中间运行时资源保留 3 天。失败运行不会标记�
 
 这些是实验 Debug 包；CI 的 Android debug 签名不是稳定的发行签名，不能保证跨运行覆盖安装。
 正式分发需要另行配置持久发行签名、版本号递增和发布策略。
+Android 显示版本 `versionName` 已直接读取根目录 `pyproject.toml` 的 `[project].version`；
+Android 安装更新序号 `versionCode` 保持独立，在 `mobile/app/build.gradle.kts` 中维护，
+每次分发必须递增。显示版本读取失败会中止构建，不会回退到旧移动端版本。
 自动构建不等于自动更新已安装的手机 App，也没有添加应用内更新器。
 
 ## 本地构建

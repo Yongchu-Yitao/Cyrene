@@ -4,6 +4,17 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Keep the user-visible version in sync with the shared backend.
+val projectMetadata = providers.fileContents(
+    rootProject.layout.projectDirectory.file("../pyproject.toml"),
+).asText.get()
+val projectSection = Regex("(?ms)^\\[project]\\s*\\n(.*?)(?=^\\[|\\z)")
+    .find(projectMetadata)?.groupValues?.get(1)
+    ?: throw GradleException("Missing [project] section in pyproject.toml")
+val cyreneVersion = Regex("(?m)^version\\s*=\\s*\"([^\"]+)\"\\s*(?:#.*)?$")
+    .find(projectSection)?.groupValues?.get(1)
+    ?: throw GradleException("Missing literal project.version in pyproject.toml")
+
 android {
     namespace = "ai.cyrene.mobile"
     compileSdk = 35
@@ -12,8 +23,10 @@ android {
         applicationId = "ai.cyrene.mobile"
         minSdk = 28
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.3.1"
+        // Android update ordering is independent of the shared display version.
+        // Increment this for each distributed Android release.
+        versionCode = 11
+        versionName = cyreneVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }

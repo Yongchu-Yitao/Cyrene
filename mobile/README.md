@@ -19,6 +19,10 @@ Android 上的桌面 Workbench：复用现有前端，在本机 ARM64 QEMU / Deb
 
 移动端顶栏整合项目切换、标签中心和其他按钮。左右卡片通过边缘滑动进入。
 
+Android 的 `versionName` 在 Gradle 配置时读取主仓库 `pyproject.toml` 的
+`[project].version`，无需单独维护。`versionCode` 独立维护在 `app/build.gradle.kts`，
+每次分发新的 Android 版本时递增；修改显示版本不会自动增加它。
+
 ## 构建
 
 要求 JDK 17、Android SDK 35，以及签名后的桌面运行时资源。
