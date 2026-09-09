@@ -57,11 +57,13 @@
 }
 
 @media (max-width: 767px) {
-  /* Both drawers share the conversation card's top and bottom bounds. */
+  /* The inspector follows its content height while keeping the shared top/outer edge. */
   .workbench-shell[data-mobile-drawer] .wbc-side[data-mobile-card] {
-    bottom: 8px !important; max-height: calc(100dvh - var(--wb-mobile-top) - 8px) !important;
+    bottom: auto !important; max-height: calc(100dvh - var(--wb-mobile-top) - 8px) !important;
     background: var(--wb-surface); overflow-y: auto; border-radius: 18px; box-shadow: 0 12px 36px rgb(0 0 0 / .18);
   }
+  /* The fixed mobile dock already has an 84px reserve; remove the desktop slot. */
+  .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock-slot { display: none; }
   .workbench-shell[data-mobile-drawer] .workbench-integrated-rail[data-mobile-card] {
     padding-bottom: 84px; box-shadow: 0 12px 36px rgb(0 0 0 / .18);
   }
