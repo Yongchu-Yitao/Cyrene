@@ -13,3 +13,10 @@ test('taps, vertical scrolling, diagonals, and outward edge motion do not naviga
     assert.equal(drawerSwipe(edge, '', dx, dy), null);
   }
 });
+
+test('center gestures open either side without treating taps or vertical motion as navigation', () => {
+  assert.equal(drawerSwipe('center', '', 80, 5), 'left');
+  assert.equal(drawerSwipe('center', '', -80, 5), 'right');
+  assert.equal(drawerSwipe('center', '', 20, 0), null);
+  assert.equal(drawerSwipe('center', '', 80, 90), null);
+});

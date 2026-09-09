@@ -94,12 +94,12 @@ export function MobileDrawerControls({ state }) {
     };
     const down = event => {
       pointer = null;
-      if (event.touches.length !== 1 || scrollOwns(event.target)) return;
+      if (event.touches.length !== 1 || scrollOwns(event.target) || event.target.closest('.workbench-topbar')) return;
       const panel = event.target.closest('[data-mobile-card]');
       const touch = event.touches[0];
       const bounds = shell.getBoundingClientRect();
-      const edge = touch.clientX <= bounds.left + 48 ? 'left' : touch.clientX >= bounds.right - 48 ? 'right' : '';
-      if (state.side ? panel && panel.dataset.mobileCard === state.side : edge && available[edge]) {
+      const edge = touch.clientX <= bounds.left + 48 ? 'left' : touch.clientX >= bounds.right - 48 ? 'right' : 'center';
+      if (state.side ? panel && panel.dataset.mobileCard === state.side : (edge === 'center' ? available.left || available.right : available[edge])) {
         pointer = { x: touch.clientX, y: touch.clientY, dx: 0, dy: 0, edge: state.side || edge };
       }
     };
@@ -107,7 +107,9 @@ export function MobileDrawerControls({ state }) {
       if (!pointer || event.touches.length !== 1) { pointer = null; return; }
       pointer.dx = event.touches[0].clientX - pointer.x;
       pointer.dy = event.touches[0].clientY - pointer.y;
-      const reverse = state.side ? (state.side === 'left' ? pointer.dx < 0 : pointer.dx > 0) : (pointer.edge === 'left' ? pointer.dx > 0 : pointer.dx < 0);
+      if (Math.abs(pointer.dy) > 12 && Math.abs(pointer.dy) > Math.abs(pointer.dx)) { pointer = null; return; }
+      const wanted = pointer.dx > 0 ? 'left' : 'right';
+      const reverse = state.side ? (state.side === 'left' ? pointer.dx < 0 : pointer.dx > 0) : available[wanted] && (pointer.edge === 'center' || pointer.edge === wanted);
       if (reverse && Math.abs(pointer.dx) > 12 && Math.abs(pointer.dx) > Math.abs(pointer.dy) * 1.5) event.preventDefault();
     };
     const up = event => {
@@ -127,13 +129,13 @@ export function MobileDrawerControls({ state }) {
     const mouseUp = event => { if (mouseActive) { mouseActive = false; up(event); } };
 
     // Trackpads provide wheel rather than pointer swipes. Only own horizontal
-    // motion near an edge, or over an open card; nested scrollers keep theirs.
+    // motion over content or an open card; nested scrollers keep theirs.
     const wheel = event => {
-      if (scrollOwns(event.target) || Math.abs(event.deltaX) <= Math.abs(event.deltaY) * 1.5) return;
+      if (event.target.closest('.workbench-topbar') || scrollOwns(event.target) || Math.abs(event.deltaX) <= Math.abs(event.deltaY) * 1.5) return;
       const bounds = shell.getBoundingClientRect();
-      const edge = event.clientX < bounds.left + 56 ? 'left' : event.clientX > bounds.right - 56 ? 'right' : '';
+      const edge = event.clientX < bounds.left + 56 ? 'left' : event.clientX > bounds.right - 56 ? 'right' : 'center';
       const panel = event.target.closest('[data-mobile-card]');
-      if (state.side ? !panel : !edge) return;
+      if (state.side && (!panel || panel.dataset.mobileCard !== state.side)) return;
       const now = Date.now();
       if (now - wheelAt > 180 || Math.sign(wheelTotal) !== Math.sign(event.deltaX)) wheelTotal = 0;
       wheelAt = now; wheelTotal += event.deltaX;
