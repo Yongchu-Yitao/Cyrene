@@ -2,6 +2,10 @@
 
 更新时间：2026-09-10。
 
+后续整合：Android 源码及完整历史现已合入本仓库 `mobile/`，后续统一在 Cyrene 开发。
+以下双仓库提交和旧本地路径是迁移前的交付记录；新构建入口及自动化见
+[Android 统一仓库与自动构建](android-monorepo.zh-CN.md)。
+
 ## 当前成果
 
 Android 已能通过一个 APK 启动内置 ARM64 Linux 运行时和 Cyrene Python 后端，
