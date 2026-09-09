@@ -1,0 +1,7 @@
+{
+  "schema": "cyrene-model-event-v1",
+  "model_turn_id": "mt_example",
+  "sequence": 1,
+  "type": "turn.started",
+  "payload": {"phase": "decision"}
+}

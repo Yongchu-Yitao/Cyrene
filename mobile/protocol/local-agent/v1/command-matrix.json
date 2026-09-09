@@ -1,0 +1,16 @@
+{
+  "schema": "cyrene-mobile-local-command-matrix-v1",
+  "desktop_commands": ["settings.models.copy", "settings.update"],
+  "payload_contracts": {
+    "settings.models.copy": {
+      "request": {},
+      "response_models": "model-configuration.example.json"
+    },
+    "settings.update": {
+      "request_models": "model-configuration.example.json"
+    }
+  },
+  "local_session_commands": [],
+  "arbitrary_command": false,
+  "project_scope": ""
+}

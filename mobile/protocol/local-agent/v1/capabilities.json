@@ -1,0 +1,12 @@
+{
+  "mobile_local_agent": {
+    "protocol": 1,
+    "model_event_schema": "cyrene-model-event-v1",
+    "guest_protocol": 1,
+    "session_authority": "android",
+    "provider_execution": "android",
+    "model_configuration": "cyrene-canonical-model-graph-v10",
+    "runtime": "qemu-5.1.0-alpine-3.24-shared-persistent-v2",
+    "desktop_dependency": "model_configuration_copy_only"
+  }
+}

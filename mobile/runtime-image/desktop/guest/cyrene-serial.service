@@ -1,0 +1,16 @@
+[Unit]
+Description=Cyrene Android private serial control
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/python /opt/cyrene-mobile/serial.py
+Restart=on-failure
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/ttyS0
+TTYReset=yes
+
+[Install]
+WantedBy=multi-user.target

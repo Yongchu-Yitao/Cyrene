@@ -1,0 +1,73 @@
+#!/bin/sh
+
+# Cyrene's persistent guest PID 1. Android owns the agent control plane; this
+# Alpine system owns Linux files, packages, networking, and process execution.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root
+export TERM=dumb
+
+mkdir -p /dev/pts /run /tmp /workspace /root
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /tmp
+hostname cyrene-linux
+
+network_state=unavailable
+if [ -d /sys/class/net/eth0 ]; then
+    ip link set eth0 up 2>/dev/null || true
+    if udhcpc -i eth0 -q -n -t 5 -T 2 >/dev/null 2>&1; then
+        network_state=ready
+    fi
+fi
+printf 'nameserver 10.0.2.3\n' > /etc/resolv.conf
+
+workspace_state=unavailable
+if [ -d /workspace ] && [ -w /workspace ]; then workspace_state=ready; fi
+
+# The serial channel is a deliberately tiny typed protocol. Commands are
+# base64-encoded so model-provided shell text cannot break the envelope.
+exec </dev/ttyS0 >/dev/ttyS0 2>&1
+stty -echo -icanon min 1 time 0 2>/dev/null || true
+printf 'CYRENE_VM_READY alpine-3.24-qemu-x86_64-v2 %s %s\n' "$network_state" "$workspace_state"
+
+while IFS=' ' read -r operation request_id payload; do
+    case "$operation" in
+        CYRENE_PING)
+            printf 'CYRENE_PONG %s alpine-3.24-qemu-x86_64-v2 %s %s\n' \
+                "$request_id" "$network_state" "$workspace_state"
+            ;;
+        CYRENE_EXEC)
+            command_file="/tmp/cyrene-command-$request_id.sh"
+            stdout_file="/tmp/cyrene-stdout-$request_id"
+            stderr_file="/tmp/cyrene-stderr-$request_id"
+            if ! printf '%s' "$payload" | base64 -d > "$command_file" 2>/dev/null; then
+                printf 'CYRENE_RESULT %s 126 - %s\n' "$request_id" \
+                    "$(printf '%s' 'invalid command payload' | base64 | tr -d '\n')"
+                continue
+            fi
+            chmod 700 "$command_file"
+            (
+                cd /workspace || exit 125
+                /bin/sh "$command_file"
+            ) >"$stdout_file" 2>"$stderr_file"
+            exit_code=$?
+            # Make both workspace changes and apk-installed packages durable
+            # before acknowledging the request.
+            sync
+            stdout_payload=$(head -c 393216 "$stdout_file" | base64 | tr -d '\n')
+            stderr_payload=$(head -c 393216 "$stderr_file" | base64 | tr -d '\n')
+            [ -n "$stdout_payload" ] || stdout_payload=-
+            [ -n "$stderr_payload" ] || stderr_payload=-
+            printf 'CYRENE_RESULT %s %s %s %s\n' \
+                "$request_id" "$exit_code" "$stdout_payload" "$stderr_payload"
+            rm -f "$command_file" "$stdout_file" "$stderr_file"
+            ;;
+        CYRENE_SHUTDOWN)
+            sync
+            printf 'CYRENE_BYE %s\n' "$request_id"
+            poweroff -f
+            ;;
+    esac
+done
+
+sync
+poweroff -f

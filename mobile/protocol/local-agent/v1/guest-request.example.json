@@ -1,0 +1,10 @@
+{
+  "protocol": 1,
+  "request_id": "req_example",
+  "session_id": "ls_example",
+  "subagent_id": "",
+  "operation": "health_check",
+  "deadline_epoch_ms": 4102444800000,
+  "sequence": 1,
+  "payload": {}
+}

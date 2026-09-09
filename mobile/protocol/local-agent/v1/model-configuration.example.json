@@ -1,0 +1,40 @@
+{
+  "version": 10,
+  "revision": 42,
+  "connections": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "adapter": "openai",
+      "enabled": true,
+      "use_proxy": false,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "",
+      "options": {"provider_preset": "openai"}
+    }
+  ],
+  "profiles": [
+    {
+      "id": "openai-primary",
+      "connection_id": "openai",
+      "model": "gpt-5",
+      "name": "GPT-5",
+      "enabled": true,
+      "capabilities": ["chat", "vision", "tools", "reasoning"],
+      "context_limit": 400000,
+      "ctx": "400K",
+      "dimensions": 0,
+      "reasoning_effort": "medium",
+      "description": "",
+      "price": "",
+      "max_concurrency": 0,
+      "options": {}
+    }
+  ],
+  "routes": {
+    "primary": ["openai-primary"],
+    "secondary": [],
+    "vision": ["openai-primary"],
+    "embedding": []
+  }
+}

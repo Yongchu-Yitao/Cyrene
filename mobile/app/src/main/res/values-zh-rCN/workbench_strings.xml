@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="workbench_retry">重试</string>
+    <string name="workbench_starting">正在准备你的工作空间…</string>
+    <string name="workbench_error">暂时无法打开工作空间，请重试。</string>
+    <string name="workbench_download_saved">文件已保存</string>
+    <string name="workbench_download_failed">文件未能保存，请重试。</string>
+    <string name="workbench_download_unsupported">暂不支持保存此文件。</string>
+</resources>

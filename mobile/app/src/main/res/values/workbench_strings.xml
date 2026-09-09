@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="workbench_retry">Try again</string>
+    <string name="workbench_starting">Preparing your workspace…</string>
+    <string name="workbench_error">Your workspace could not be opened. Please try again.</string>
+    <string name="workbench_download_saved">File saved</string>
+    <string name="workbench_download_failed">Could not save the file. Please try again.</string>
+    <string name="workbench_download_unsupported">This file cannot be saved yet.</string>
+</resources>

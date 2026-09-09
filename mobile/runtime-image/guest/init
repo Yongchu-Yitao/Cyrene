@@ -1,0 +1,45 @@
+#!/bin/sh
+
+# Minimal initramfs bootstrap. It loads the drivers needed to mount the signed
+# persistent Alpine root disk, then hands PID 1 to the runtime init on that disk.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /newroot
+
+# Alpine stores modules compressed. The compact BusyBox modprobe in the
+# minirootfs cannot read .ko.gz, so load the pinned dependency chain directly.
+load_module() {
+    module_path="/lib/modules/6.18.41-0-virt/$1"
+    module_file="/tmp/$(basename "$1" .gz)"
+    gzip -dc "$module_path" > "$module_file" 2>/dev/null || return 0
+    insmod "$module_file" 2>/dev/null || true
+}
+mkdir -p /tmp
+load_module kernel/lib/crc/crc16.ko.gz
+load_module kernel/fs/mbcache.ko.gz
+load_module kernel/fs/jbd2/jbd2.ko.gz
+load_module kernel/fs/ext4/ext4.ko.gz
+load_module kernel/net/core/failover.ko.gz
+load_module kernel/drivers/net/net_failover.ko.gz
+load_module kernel/drivers/net/virtio_net.ko.gz
+load_module kernel/drivers/block/virtio_blk.ko.gz
+load_module kernel/net/packet/af_packet.ko.gz
+
+for _attempt in 1 2 3 4 5; do
+    [ -b /dev/vda ] && break
+    sleep 1
+done
+
+if ! mount -t ext4 -o rw,noatime /dev/vda /newroot; then
+    printf 'CYRENE_VM_BOOT_ERROR persistent-root-unavailable\n' >/dev/ttyS0
+    poweroff -f
+fi
+
+mkdir -p /newroot/dev /newroot/proc /newroot/sys
+mount --move /dev /newroot/dev
+mount --move /proc /newroot/proc
+mount --move /sys /newroot/sys
+exec switch_root /newroot /sbin/cyrene-runtime-init

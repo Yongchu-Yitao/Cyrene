@@ -1,0 +1,10 @@
+Cyrene Linux Runtime bundle
+
+QEMU Android engine: Limbo Emulator 6.0.1 / QEMU 5.1.0 (GPL-2.0)
+Source: https://github.com/limboemu/limbo/tree/v6.0.1-LimboEmulator
+Guest userspace: Alpine Linux 3.24 (see /etc/apk for package licenses)
+Guest kernel package: linux-virt 6.18.41-r0 (GPL-2.0-only)
+
+The pinned build inputs and source location are recorded in
+runtime-image/build-runtime-bundle.sh so the corresponding native engine can
+be audited and rebuilt.

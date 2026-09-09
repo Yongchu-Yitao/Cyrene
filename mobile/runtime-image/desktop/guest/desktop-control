@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in
+  start)
+    token=${2:?authentication token required}
+    case "$token" in *[!A-Za-z0-9_-]*|'') exit 64;; esac
+    [ "${#token}" -ge 40 ] || exit 64
+    # Repeated starts must not rotate credentials under an active backend.
+    if systemctl is-active --quiet cyrene-desktop; then exit 0; fi
+    umask 077
+    mkdir -p /run/cyrene /workspace
+    printf 'CYRENE_AUTH_TOKEN=%s\nCYRENE_BASE_DIR=/workspace/.cyrene-desktop\nCYRENE_INSTALL_RESOURCES_DIR=/opt/cyrene\n' "$token" > /run/cyrene/backend.env
+    cat > /run/systemd/system/cyrene-desktop.service <<'EOF'
+[Unit]
+Description=Full Cyrene Python backend
+[Service]
+EnvironmentFile=/run/cyrene/backend.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/workspace
+ExecStart=/usr/local/bin/python -m cyrene --port 4242
+KillMode=control-group
+TimeoutStopSec=5
+EOF
+    cat > /run/systemd/system/cyrene-desktop-forward.service <<'EOF'
+[Unit]
+Description=Guest ingress to authenticated loopback backend
+BindsTo=cyrene-desktop.service
+After=cyrene-desktop.service
+[Service]
+ExecStart=/usr/bin/socat TCP4-LISTEN:4243,bind=0.0.0.0,reuseaddr,fork TCP4:127.0.0.1:4242
+EOF
+    systemctl daemon-reload
+    systemctl start cyrene-desktop cyrene-desktop-forward
+    ;;
+  stop)
+    systemctl stop cyrene-desktop-forward cyrene-desktop 2>/dev/null || true
+    rm -f /run/cyrene/backend.env
+    ;;
+  status)
+    systemctl is-active cyrene-desktop
+    ;;
+  *) exit 64;;
+esac
