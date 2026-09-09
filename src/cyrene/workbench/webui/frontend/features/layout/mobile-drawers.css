@@ -177,6 +177,134 @@
 
 @media (max-width: 767px) {
   .workbench-shell[data-mobile-drawer] .workbench-topbar-extra-controls .workbench-theme-btn { display: none; }
+
+  /* Mobile help is a compact sheet. Its close control must not inherit the
+     icon-and-label tile used by the topbar overflow menu. */
+  .workbench-topbar-extra-controls .workbench-help-popover {
+    overflow: hidden;
+  }
+  .workbench-topbar-extra-controls .workbench-help-popover-arrow,
+  .workbench-topbar-extra-controls .workbench-notif-popover-arrow {
+    display: none;
+  }
+  .workbench-topbar-extra-controls .workbench-help-head {
+    min-height: 56px;
+    padding: 8px 10px 4px 16px;
+    box-sizing: border-box;
+  }
+  .workbench-topbar-extra-controls .workbench-help-head b {
+    font-size: calc(18px * var(--wb-ui-font-scale, 1));
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar-extra-controls .workbench-help-head > .workbench-icon-btn {
+    display: inline-flex;
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    gap: 0;
+    border-radius: 12px;
+    background: transparent;
+  }
+  .workbench-topbar-extra-controls .workbench-help-head > .workbench-icon-btn::after {
+    display: none;
+    content: none;
+  }
+  .workbench-topbar-extra-controls .workbench-help-head > .workbench-icon-btn > svg {
+    grid-row: auto;
+    grid-column: auto;
+  }
+  .workbench-topbar-extra-controls .workbench-help-body {
+    padding: 0 12px 12px;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+  }
+  .workbench-topbar-extra-controls .workbench-help-section-title {
+    padding: 8px 4px;
+  }
+  .workbench-topbar-extra-controls .workbench-help-quick {
+    gap: 0;
+  }
+  .workbench-topbar-extra-controls .workbench-help-quick-item {
+    grid-template-columns: 40px minmax(0, 1fr) 16px;
+    min-height: 64px;
+    gap: 12px;
+    padding: 8px 4px;
+    touch-action: manipulation;
+  }
+  .workbench-topbar-extra-controls .workbench-help-quick-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+  }
+  .workbench-topbar-extra-controls .workbench-help-quick-main small {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .workbench-topbar-extra-controls .workbench-help-divider {
+    margin: 8px 4px;
+  }
+  .workbench-topbar-extra-controls .workbench-help-shortcut,
+  .workbench-topbar-extra-controls .workbench-help-link {
+    min-height: 44px;
+    padding: 6px 4px;
+    box-sizing: border-box;
+  }
+  .workbench-topbar-extra-controls .workbench-help-foot {
+    padding: 10px 16px;
+  }
+
+  /* Give every notification filter the same row, center and text baseline.
+     The responsive font range keeps the longest English label on one line. */
+  .workbench-topbar-extra-controls .workbench-notif-popover {
+    overflow: hidden;
+  }
+  .workbench-topbar-extra-controls .workbench-notif-head {
+    min-height: 56px;
+    padding: 10px 16px 4px;
+    box-sizing: border-box;
+  }
+  .workbench-topbar-extra-controls .workbench-notif-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) 44px;
+    align-items: stretch;
+    gap: 0;
+    padding: 0 8px;
+  }
+  .workbench-topbar-extra-controls .workbench-notif-tab,
+  .workbench-topbar-extra-controls .workbench-notif-settings {
+    width: 100%;
+    min-width: 0;
+    height: 48px;
+    margin: 0;
+    padding: 0 2px;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: center;
+    touch-action: manipulation;
+  }
+  .workbench-topbar-extra-controls .workbench-notif-tab {
+    font-size: clamp(11px, 3.25vw, 13px);
+    line-height: 1;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+  .workbench-topbar-extra-controls .workbench-notif-tab > span {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .workbench-topbar-extra-controls .workbench-notif-tab.active::after {
+    left: 6px;
+    right: 6px;
+  }
 }
 
 .workbench-top-project-actions.is-floating {
@@ -185,4 +313,40 @@
 }
 @media (max-width: 767px) {
   .workbench-top-project-actions.is-floating button { min-height: 44px; }
+}
+
+/* Settings scroll vertically; the left navigation remains a swipe-out drawer. */
+@media (max-width: 767px) {
+  .workbench-shell[data-mobile-drawer] .settings-overlay-content {
+    min-width: 0; max-width: 100%; box-sizing: border-box;
+    overflow-x: hidden; padding: 20px 16px 32px;
+  }
+  .workbench-shell[data-mobile-drawer] .settings-overlay-content[data-settings-active-tab="profile"] { padding: 0; }
+  .workbench-shell[data-mobile-drawer] .settings-profile-panel .wbp-page,
+  .workbench-shell[data-mobile-drawer] .wbp-page {
+    padding: 24px 16px 32px; box-sizing: border-box; overflow-x: hidden;
+  }
+  .wbp-inner, .wbp-inner > *, .wbp-lists > * { min-width: 0; max-width: 100%; }
+  .wbp-handle, .wbp-bio { overflow-wrap: anywhere; }
+  .wbp-kpis, .wbp-insights-grid {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  }
+  .wbp-kpis { border: 0; border-radius: 0; background: transparent; margin-top: 20px; overflow: visible; }
+  .wbp-kpi, .wbp-kpi:first-child {
+    min-width: 0; padding: 14px; border: 1px solid var(--wb-line);
+    border-radius: 12px; background: var(--wb-card-bg); text-align: left;
+  }
+  .wbp-kpi:first-child { grid-column: 1 / -1; }
+  .wbp-kpi b { white-space: normal; overflow-wrap: anywhere; overflow: visible; }
+  .wbp-kpi span, .wbp-insight-label { line-height: 1.45; overflow-wrap: anywhere; }
+  .wbp-insight-card { min-width: 0; padding: 14px; gap: 8px; }
+  .wbp-insight-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .wbp-insight-val { overflow-wrap: anywhere; }
+  .wbp-activity { margin-top: 24px; }
+  .wbp-activity-head { align-items: flex-start; flex-wrap: wrap; gap: 8px 16px; }
+  .wbp-hm-row { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; }
+  .wbp-hm-cells { grid-template-columns: repeat(28, minmax(0, 1fr)); gap: 2px; }
+  .wbp-hm-cell { min-width: 0; border-radius: 2px; }
+  .wbp-lists { margin-top: 24px; gap: 24px; }
+  .wbp-toolbar-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; }
 }
