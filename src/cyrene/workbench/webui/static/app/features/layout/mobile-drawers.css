@@ -95,8 +95,24 @@
   .workbench-mobile-current span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .workbench-mobile-current svg { flex-shrink: 0; }
   .workbench-shell[data-mobile-drawer] .workbench-mobile-more { width: 44px; }
-  .workbench-mobile-current:focus-visible, .workbench-mobile-more:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
-  .workbench-mobile-current[aria-expanded="true"], .workbench-mobile-more[aria-expanded="true"] { background: var(--wb-surface); }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar :is(.workbench-brand-btn, .workbench-mobile-current, .workbench-mobile-more) {
+    -webkit-tap-highlight-color: transparent;
+    border-radius: 10px;
+    transition: background-color 120ms ease-out;
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar :is(.workbench-brand-btn, .workbench-mobile-current, .workbench-mobile-more):focus-visible {
+    outline: 2px solid currentColor; outline-offset: -2px;
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar :is(.workbench-brand-btn, .workbench-mobile-current, .workbench-mobile-more)[aria-expanded="true"] {
+    background-color: color-mix(in srgb, var(--wb-text) 5%, transparent);
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar :is(.workbench-brand-btn, .workbench-mobile-current, .workbench-mobile-more):active {
+    background-color: color-mix(in srgb, var(--wb-text) 10%, transparent);
+    transition-duration: 60ms;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .workbench-shell[data-mobile-drawer] .workbench-topbar :is(.workbench-brand-btn, .workbench-mobile-current, .workbench-mobile-more) { transition: none; }
+  }
   .workbench-topbar-extras { display: block; flex: 0 0 44px; }
   .workbench-topbar-extra-controls { display: none; }
   .workbench-topbar-extras.is-open .workbench-topbar-extra-controls {
