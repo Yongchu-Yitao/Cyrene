@@ -16,6 +16,9 @@ export function useMobileDrawers(page) {
 // Preserve the module DOM (and its scroll position); only change its presentation.
 export function MobileDrawerControls({ state }) {
   const root = React.useRef(null);
+  const sideRef = React.useRef(state.side);
+  sideRef.current = state.side;
+  const syncCards = React.useRef(null);
   // The Android shell shades system insets outside the WebView with the same scrim.
   React.useEffect(() => {
     window.CyreneAndroid?.setDrawerOpen?.(!!(state.compact && state.side));
@@ -39,24 +42,27 @@ export function MobileDrawerControls({ state }) {
         node.dataset.mobileCard = which;
         const active = !node.closest('.workbench-stable-surface.is-hidden');
         if (active) { if (which === 'left') left = true; else right = true; }
-        node.inert = !active || state.side !== which;
+        node.inert = !active || sideRef.current !== which;
       });
       shell.querySelectorAll('.workbench-topbar, .wbc-pane-column.left, .wbc-page > .wbc-main, .wb-lib-main, .wb-sched-main, .wb-mem-main, .workbench-conversation-board').forEach(node => {
         if (node.closest('[data-mobile-card]')) return;
         if (!background.has(node)) background.set(node, node.inert);
-        node.inert = !!state.side;
+        node.inert = !!sideRef.current;
       });
       setAvailable(old => old.left === left && old.right === right ? old : { left, right });
     };
+    syncCards.current = sync;
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(shell, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     return () => {
+      syncCards.current = null;
       observer.disconnect();
       background.forEach((inert, node) => { node.inert = inert; });
       saved.forEach((inert, node) => { node.inert = inert; delete node.dataset.mobileCard; });
     };
-  }, [state.compact, state.side]);
+  }, [state.compact]);
+  React.useLayoutEffect(() => { syncCards.current?.(); }, [state.side]);
   React.useEffect(() => {
     if (!state.side || !root.current) return;
     const shell = root.current.closest('.workbench-shell');

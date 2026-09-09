@@ -8,7 +8,7 @@
   :where(button, a[href], [role="button"], summary):not(:disabled):not([aria-disabled="true"]):not(.wb-mobile-scrim):active {
     opacity: .78;
   }
-  .workbench-shell[data-mobile-drawer] { --wb-topbar-height: 58px; --wb-mobile-top: 58px; padding-top: 0; height: 100dvh; overflow: hidden; }
+  .workbench-shell[data-mobile-drawer] { --wb-topbar-height: 58px; --wb-mobile-top: 58px; --wb-mobile-travel: min(360px, calc(100vw - 36px)); padding-top: 0; height: 100dvh; overflow: hidden; }
   .workbench-shell[data-mobile-drawer] .workbench-topbar {
     display: flex; overflow: visible; gap: 8px; padding-inline: 8px;
     height: 58px; width: 100%; inset: 0 0 auto; -webkit-app-region: no-drag;
@@ -39,13 +39,13 @@
     height: auto !important; max-height: none !important; min-width: 0 !important;
     margin: 0 !important; box-sizing: border-box; z-index: 240 !important;
     visibility: hidden; pointer-events: none; background: var(--wb-surface); border-radius: 18px; overflow: hidden; touch-action: pan-y;
-    transition: transform 220ms ease-out, visibility 220ms;
+    transition: transform 220ms linear, visibility 0s linear 220ms;
   }
   .workbench-shell[data-mobile-drawer] .wbc-side[data-mobile-card] { display: flex !important; flex-direction: column; opacity: 1 !important; padding: 0; }
-  .workbench-shell[data-mobile-drawer] [data-mobile-card="left"] { left: 8px !important; right: auto !important; transform: translateX(calc(-100% - 20px)); }
-  .workbench-shell[data-mobile-drawer] [data-mobile-card="right"] { right: 8px !important; left: auto !important; transform: translateX(calc(100% + 20px)); }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card="left"] { left: 8px !important; right: auto !important; transform: translateX(calc(-1 * var(--wb-mobile-travel))); }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card="right"] { right: 8px !important; left: auto !important; transform: translateX(var(--wb-mobile-travel)); }
   .workbench-shell[data-mobile-drawer="left"] [data-mobile-card="left"],
-  .workbench-shell[data-mobile-drawer="right"] [data-mobile-card="right"] { transform: translateX(0); visibility: visible; pointer-events: auto; }
+  .workbench-shell[data-mobile-drawer="right"] [data-mobile-card="right"] { transform: translateX(0); visibility: visible; pointer-events: auto; transition-delay: 0s; }
   .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock.is-persistent[data-mobile-card] {
     top: auto !important; bottom: 16px !important; height: auto !important; min-height: 0 !important; z-index: 241 !important;
   }
