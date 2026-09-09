@@ -4,7 +4,7 @@
   "scripts": {
     "build": "node build-jsx.mjs",
     "check:complexity": "node build/javascript-structure.mjs && node build/complexity-report.mjs",
-    "test": "node --test frontend/architecture/*.test.mjs frontend/features/chat/*.test.mjs frontend/features/doctor/*.test.mjs"
+    "test": "node --test frontend/architecture/*.test.mjs frontend/features/chat/*.test.mjs frontend/features/doctor/*.test.mjs frontend/features/layout/*.test.mjs"
   },
   "dependencies": {
     "@aiden0z/pptx-renderer": "1.2.4",

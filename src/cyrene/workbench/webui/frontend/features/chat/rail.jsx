@@ -1,3 +1,4 @@
+import { useNativeWheel } from "../../shared/native-wheel.jsx"
 import { pluginToolKey, useRailPluginCollections } from "./rail-plugin-collections.jsx"
 import { renderTerminalCard } from "./rail-terminal-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
@@ -448,6 +449,8 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       if (pluginTool) setPluginToolExpanded(pluginTool, true);
     }
   }
+
+  var toolsWheelRef = useNativeWheel(handleProjectToolWheel, projectToolsRef);
 
   function handleProjectToolWheel(event) {
     var pull = projectToolPullRef.current;
@@ -2473,7 +2476,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       </div>}
       {(fileEntryAvailable || terminalEntryAvailable || projectSectionPluginTools.length) && railMode === "chat" && !collapsed ? (
         <section
-          ref={projectToolsRef}
+          ref={toolsWheelRef}
           className={"wbc-project-tools"
             + (anyProjectToolExpanded ? " has-expanded-tool" : "")
             + (fileToolsExpanded ? " expanded-file" : "")
@@ -2481,7 +2484,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             + (projectSectionPluginExpanded ? " expanded-plugin" : "")
             + (terminalToolsExpanded && String(menuId).indexOf("terminal:") === 0 ? " menu-active" : "")}
           aria-label={wbcT("rail.projectTools", "Tools")}
-          onWheel={handleProjectToolWheel}
+
           onTouchStart={handleProjectToolTouchStart}
           onTouchMove={handleProjectToolTouchMove}
           onTouchEnd={resetProjectToolPull}

@@ -273,10 +273,25 @@ class ScheduleRuntimeService:
                 else task.prompt
             )
         result: dict[str, Any] = {"workbench": False, "bot": False}
+        delivery_lease = None
+        coordinator = None
         try:
+            from cyrene.platform.run_coordinator import run_coordinator_for
             from cyrene.workbench.sessions.context import resolve_workbench_project_id_for_data_key
             from .projection import create_scheduled_chat
 
+            if task.origin_session_id:
+                coordinator = run_coordinator_for(self.db_path)
+                while delivery_lease is None:
+                    delivery_lease = coordinator.try_acquire(
+                        "conversation",
+                        task.origin_session_id,
+                        f"schedule_delivery_{run_id}",
+                        request_id=run_id,
+                        run_type="schedule_delivery",
+                    )
+                    if delivery_lease is None:
+                        await asyncio.sleep(0.1)
             public_project_id = (
                 resolve_workbench_project_id_for_data_key(task.project_id)
                 or task.project_id
@@ -294,6 +309,9 @@ class ScheduleRuntimeService:
                 result["chat_id"] = projected.get("chat_id")
         except Exception:
             logger.exception("Failed to project scheduled run %s into Workbench", run_id)
+        finally:
+            if delivery_lease is not None and coordinator is not None:
+                coordinator.finish(delivery_lease)
 
         if self.bot is not None and task.chat_id >= 0:
             try:

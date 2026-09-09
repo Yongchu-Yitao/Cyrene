@@ -1,3 +1,4 @@
+import { ProjectActionPopover } from "./project-action-popover.jsx"
 import { useTopbarMenus } from "./topbar-menus.jsx"
 import { useTopbarHoverPreview } from "./topbar-hover-preview.jsx"
 import { useTopbarBrowserSubscription } from "./topbar-browser-subscription.jsx"
@@ -103,11 +104,34 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
   var candidates = Array.isArray(sessionCandidates) && sessionCandidates.length
     ? sessionCandidates : fallbackTabs;
   var selectedTabKey = String(activeTabKey || (activePage === "chat" && activeChatId ? "chat:" + activeChatId : ""));
+  var [compactTopbar, setCompactTopbar] = useWorkbenchState(() => window.matchMedia('(max-width: 767px)').matches);
+  var [moreOpen, setMoreOpen] = useWorkbenchState(false);
+  var moreRef = useWorkbenchRef(null);
+  useWorkbenchEffect(function () {
+    var query = window.matchMedia('(max-width: 767px)');
+    function change() { setCompactTopbar(query.matches); setMoreOpen(false); }
+    query.addEventListener('change', change);
+    return () => query.removeEventListener('change', change);
+  }, []);
+  useWorkbenchEffect(function () {
+    if (!moreOpen) return;
+    function dismiss(event) {
+      if (event.type === 'keydown' && event.key !== 'Escape') return;
+      if (event.type !== 'keydown' && moreRef.current?.contains(event.target)) return;
+      setMoreOpen(false);
+      if (event.type === 'keydown') moreRef.current?.querySelector('.workbench-mobile-more')?.focus();
+    }
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', dismiss);
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', dismiss); };
+  }, [moreOpen]);
   var [tabStripWidth, setTabStripWidth] = useWorkbenchState(0);
   var adaptiveTabs = wbVisibleSessionTabsByWidth(candidates, selectedTabKey, tabStripWidth);
   var tabs = adaptiveTabs.visible;
   var overflowTabs = adaptiveTabs.overflow;
-  var overflowGroups = wbSplitOverflowSessions(overflowTabs);
+  var centerTabs = compactTopbar ? tabs.concat(overflowTabs) : overflowTabs;
+  var currentMobileTab = candidates.find(item => wbTopbarTabKey(item) === selectedTabKey);
+  var overflowGroups = wbSplitOverflowSessions(centerTabs);
   var resources = (Array.isArray(pinnedResources) ? pinnedResources : []).filter(function (resource) {
     return browserAvailable || !resource || resource.kind !== "browser";
   });
@@ -117,6 +141,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
   var [resourceDropActive, setResourceDropActive] = useWorkbenchState(false);
   var [chatSideHidden, setChatSideHidden] = useWorkbenchState(false);
   var [projectMenuOpen, setProjectMenuOpen] = useWorkbenchState(false);
+  var [projectActionAnchor, setProjectActionAnchor] = useWorkbenchState(null);
   var [projectActionId, setProjectActionId] = useWorkbenchState("");
   var [voiceCommand, setVoiceCommand] = useWorkbenchState(function () { return WbVoiceCommand.snapshot(); });
   var [browserManagerState, setBrowserManagerState] = useWorkbenchState({ ok: true, pageCount: 0, downloadCount: 0, pages: [], downloads: [] });
@@ -161,7 +186,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
     if (!projectMenuOpen) return undefined;
     function closeProjectMenu(event) {
       if (event.key && event.key !== "Escape") return;
-      if (!event.key && projectMenuRef.current && projectMenuRef.current.contains(event.target)) return;
+      if (!event.key && (projectMenuRef.current?.contains(event.target) || event.target.closest?.(".workbench-top-project-actions.is-floating"))) return;
       setProjectMenuOpen(false);
       setProjectActionId("");
     }
@@ -859,7 +884,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
         >
           <div className="workbench-session-overflow-head">
             <b>{t("workbench.sessionOverflow.title", "Tab Center")}</b>
-            <small>{t("workbench.sessionOverflow.count", { count: overflowTabs.length }, "{count} more")}</small>
+            <small>{t("workbench.sessionOverflow.count", { count: centerTabs.length }, "{count} more")}</small>
           </div>
           <div className={"workbench-session-overflow-list" + (overflowGroups.regular.length ? " has-regular" : "") + (overflowGroups.exceptional.length ? " has-exceptions" : "")}>
             {overflowGroups.exceptional.length ? (
@@ -1113,7 +1138,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
           data-cyrene-node-id="project_switcher"
           type="button"
           className={"workbench-brand-btn workbench-project-switcher-btn" + (projectMenuOpen ? " active" : "")}
-          onClick={function () { setProjectActionId(""); setProjectMenuOpen(function (open) { return !open; }); }}
+          onClick={function () { setMoreOpen(false); closeOverflowMenu(); setProjectActionId(""); setProjectMenuOpen(function (open) { return !open; }); }}
           title={t("rail.projects")}
           aria-label={t("rail.projects")}
           aria-haspopup="menu"
@@ -1163,12 +1188,13 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
                     </button>
                     <button type="button" className="workbench-top-project-more" aria-label={t("rail.projectActions")} onClick={function (event) {
                       event.stopPropagation();
+                      setProjectActionAnchor(event.currentTarget);
                       setProjectActionId(actionsOpen ? "" : project.id);
                     }}>
                       <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
                     </button>
                     {actionsOpen && (
-                      <div className="workbench-top-project-actions" role="menu">
+                      <ProjectActionPopover anchor={projectActionAnchor} theme={readTopbarPortalTheme()} onClose={() => setProjectActionId("")}>
                         <button type="button" role="menuitem" onClick={function () { setProjectActionId(""); setProjectMenuOpen(false); if (onEditProject) onEditProject(project); }}>
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                           <span>{t("rail.editProject")}</span>
@@ -1181,7 +1207,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                           <span>{t("rail.deleteProject")}</span>
                         </button> : null}
-                      </div>
+                      </ProjectActionPopover>
                     )}
                   </div>
                 );
@@ -1190,6 +1216,12 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
           </div>
         )}
       </div>
+      <button type="button" className="workbench-mobile-current" aria-haspopup="menu" aria-expanded={!!overflowMenu}
+        title={t("workbench.sessionOverflow.title", "Tab Center")}
+        onClick={function (event) { setProjectMenuOpen(false); setMoreOpen(false); if (overflowMenu) closeOverflowMenu(); else openOverflowMenu(event); }}>
+        <span>{currentMobileTab ? currentMobileTab.title : t("workbench.page.chat", "Conversation")}</span>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
       <nav ref={tabStripRef} className="workbench-session-tabs" aria-label={t("workbench.recentSessions", "Recent sessions")}>
         {tabs.map(function (item) {
           var isActive = wbTopbarTabKey(item) === selectedTabKey;
@@ -1340,6 +1372,13 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
           </button>
         ) : null}
       </nav>
+      <div ref={moreRef} className={"workbench-topbar-extras" + (moreOpen ? " is-open" : "")}>
+      <button type="button" className="workbench-mobile-more" aria-label={t("common.more", "More")}
+        aria-expanded={moreOpen} aria-controls="workbench-topbar-extra-controls"
+        onClick={function () { setProjectMenuOpen(false); closeOverflowMenu(); setMoreOpen(!moreOpen); }}>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+      <div id="workbench-topbar-extra-controls" className="workbench-topbar-extra-controls">
       <div
         data-tour="topbar_resources"
         className={"workbench-resource-shelf" + (resourceDropActive ? " drop-active" : "")}
@@ -1493,7 +1532,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
           <WorkbenchHelpCenter onNewProject={onNewProject} onOpenPage={onOpenPage} onSettings={onSettings} />
         </div>
         <WorkbenchNotificationCenter notifications={notifications} onReload={onReloadNotifications} onOpenNotification={onOpenNotification} onSettings={onSettings} />
-        <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={themeTitle}>{themeIcon}</button>
+        <button type="button" className="workbench-icon-btn workbench-theme-btn" onClick={onToggleTheme} title={themeTitle}>{themeIcon}</button>
         {voiceCommand.ready ? (
           <button
             type="button"
@@ -1516,6 +1555,8 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
             ? React.createElement(workbenchServices.profile().Avatar, { user: dataState.user, size: 30 })
             : <span className="workbench-avatar">{WorkbenchModel.initials(dataState.user && dataState.user.name)}</span>}
         </button>
+      </div>
+      </div>
       </div>
       {sessionMenuPortal}
       {overflowMenuPortal}

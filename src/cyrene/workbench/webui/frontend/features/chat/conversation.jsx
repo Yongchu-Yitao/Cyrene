@@ -1,3 +1,4 @@
+import { useNativeWheel } from "../../shared/native-wheel.jsx"
 import { wbcProjectRuntimeTranscript, wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { openDoctor } from "../doctor/doctor.jsx"
 import { failureScope } from '../doctor/failure-scope.mjs'
@@ -2283,7 +2284,10 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
     if (payload && onOpenDroppedChat) onOpenDroppedChat(payload.id);
   }
 
+  var threadWheelRef = useNativeWheel(handleConversationHorizontalWheel, scrollRef);
+
   function handleConversationHorizontalWheel(event) {
+    if (event.target && event.target.closest && event.target.closest("[data-mobile-drawer]")) return;
     if (event.target && event.target.closest && event.target.closest(
       "pre, .wbc-table-wrap, .wbc-browser-window, input, textarea, select"
     )) return;
@@ -2344,9 +2348,9 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
       <div
         className={"wbc-thread" + (messages.length ? " wbc-thread-messages" : "")}
         data-cyrene-revision-volatile="true"
-        ref={scrollRef}
+        ref={threadWheelRef}
         onScroll={onScroll}
-        onWheel={handleConversationHorizontalWheel}
+
         onAnimationEnd={function (event) {
           if (event.animationName === "wbc-retry-output-clear" && onRetryClearAnimationEnd) {
             onRetryClearAnimationEnd();

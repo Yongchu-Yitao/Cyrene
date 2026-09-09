@@ -1,3 +1,4 @@
+import { useNativeWheel } from "../../shared/native-wheel.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 
 var { useEffect: useWorkbenchEffect, useMemo: useWorkbenchMemo, useState: useWorkbenchState } = React;
@@ -213,6 +214,8 @@ function ConversationBoard({ project, chats, loading, error, onOpenChat, onCreat
     setDropTarget(null);
   }
 
+  var boardWheelRef = useNativeWheel(handleBoardWheel);
+
   function handleBoardWheel(event) {
     var viewport = event.currentTarget;
     var deltaX = Number(event.deltaX || 0);
@@ -260,7 +263,7 @@ function ConversationBoard({ project, chats, loading, error, onOpenChat, onCreat
       {loading && conversations.length === 0 ? (
         <div className="wb-board-loading">{t("workbenchChat.loading")}</div>
       ) : (
-        <div className="wb-board-scroll" onWheel={handleBoardWheel}>
+        <div className="wb-board-scroll" ref={boardWheelRef}>
           <div className="wb-board-columns">
             {WB_CONVERSATION_BOARD_COLUMNS.map(function (column) {
               var orderedIds = layout.columns && Array.isArray(layout.columns[column.id]) ? layout.columns[column.id] : [];

@@ -164,6 +164,104 @@ async def create_completed_background_chat(
     return await _store_completed_chat(service, chat, message, db_path, stable_chat_id, normalized_project_id, title, now)
 
 
+async def append_completed_background_message(
+    db_path: str,
+    chat_id: str,
+    text: str,
+    *,
+    delivery_id: str,
+    model: str = "",
+    message_fields: Callable[[], Mapping[str, Any]] | None = None,
+) -> dict[str, str] | None:
+    """Append one idempotent scheduler result to an existing public chat."""
+
+    content = str(text or "").strip()
+    target_chat_id = str(chat_id or "").strip()
+    identity = str(delivery_id or "").strip()
+    if not content or not target_chat_id or not identity:
+        return None
+
+    service = ChatService(str(db_path or ""))
+    now = _utc_now_iso()
+    message_id = f"msg_{identity}"
+    context_id = f"context_{identity}"
+    message = {
+        "id": message_id,
+        "role": "assistant",
+        "content": content,
+        "createdAt": now,
+        "model": str(model or ""),
+        "proactive": True,
+        "scheduled": True,
+        "systemInitiated": True,
+        **(message_fields() if message_fields is not None else {}),
+    }
+    mutation_result: dict[str, Any] = {"created": False}
+
+    def append(chat: dict[str, Any]) -> None:
+        messages = [
+            item for item in chat.get("messages") or () if isinstance(item, dict)
+        ]
+        stored = next(
+            (
+                item
+                for item in messages
+                if str(item.get("id") or "") == message_id
+            ),
+            None,
+        )
+        if stored is None:
+            service.merge_chat_messages_chronologically(chat, [message])
+            chat["updatedAt"] = max(str(chat.get("updatedAt") or ""), now)
+            mutation_result["created"] = True
+            stored = message
+        mutation_result["message"] = stored
+        mutation_result["project_id"] = str(chat.get("projectId") or "")
+        mutation_result["title"] = str(chat.get("title") or "")
+        mutation_result["summary"] = service.public_chat_light(chat)
+
+    updated = await asyncio.to_thread(
+        service.repository.mutate_one,
+        target_chat_id,
+        append,
+    )
+    if updated is None:
+        return None
+
+    stored_message = dict(mutation_result.get("message") or message)
+    await asyncio.to_thread(
+        append_context_record,
+        str(db_path or ""),
+        target_chat_id,
+        {
+            "role": "assistant",
+            "content": str(stored_message.get("content") or ""),
+            "model": str(stored_message.get("model") or ""),
+            "run_id": identity,
+            "message_id": context_id,
+            "public_message_id": str(stored_message.get("id") or message_id),
+            "session_end_complete": True,
+            "system_initiated": True,
+            "scheduled": True,
+        },
+        node_id=context_id,
+        require_idle=True,
+    )
+    if mutation_result["created"]:
+        await publish_chat_changed(
+            target_chat_id,
+            mutation_result["project_id"],
+            "scheduled_message",
+            chatSummary=mutation_result["summary"],
+            assistantMessages=[service.public_message(stored_message)],
+        )
+    return {
+        "chat_id": target_chat_id,
+        "project_id": mutation_result["project_id"],
+        "title": mutation_result["title"],
+    }
+
+
 async def _store_completed_chat(
     service: ChatService, chat: dict[str, Any], message: dict[str, Any],
     db_path: str, stable_chat_id: str, normalized_project_id: str, title: str, now: str,
@@ -217,4 +315,3 @@ async def _store_completed_chat(
         session_id=stable_chat_id,
     )
     return result
-

@@ -1,0 +1,161 @@
+/* A presentation-only overlay: desktop widths and persisted pane layouts survive. */
+@media (max-width: 767px) {
+  .workbench-shell[data-mobile-drawer] { --wb-topbar-height: 58px; --wb-mobile-top: 58px; padding-top: 0; height: 100dvh; overflow: hidden; }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar {
+    display: flex; overflow: visible; gap: 8px; padding-inline: 8px;
+    height: 58px; width: 100%; inset: 0 0 auto; -webkit-app-region: no-drag;
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar > * { flex-shrink: 0; }
+  .workbench-shell[data-mobile-drawer] .workbench-grid.integrated-sidebars {
+    --wb-rail-w: 0px; --wb-conversation-board-rail-reserve: 0px;
+    display: block; isolation: auto; margin-top: 0; padding-top: var(--wb-mobile-top);
+    height: 100dvh; box-sizing: border-box; min-width: 0;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-page {
+    --wbc-rail-width: 0px; --wbc-side-track-width: 0px; --wbc-main-min-width: 0px;
+    --wbc-card-top-inset: 0px; --wbc-topbar-clearance: 0px;
+    display: block; height: 100%; min-width: 0; padding: 0; margin: 0;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-page > .wbc-pane-layout {
+    position: static; z-index: auto; overflow: visible; display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; height: 100%;
+    margin: 0; padding: 0 8px 8px; box-sizing: border-box;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-pane-column { min-width: 0; grid-column: 1; grid-row: 1; }
+  .workbench-shell[data-mobile-drawer] .wbc-pane-card { min-width: 0; }
+  .workbench-shell[data-mobile-drawer] .wbc-pane-column-resizer,
+  .workbench-shell[data-mobile-drawer] .wb-col-resizer,
+  .workbench-shell[data-mobile-drawer] .workbench-sidebar-collapse-control { display: none; }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card] {
+    position: fixed !important; top: calc(var(--wb-mobile-top) + 8px) !important;
+    bottom: 12px !important; width: min(340px, calc(100vw - 56px)) !important;
+    height: auto !important; max-height: none !important; min-width: 0 !important;
+    margin: 0 !important; box-sizing: border-box; z-index: 240 !important;
+    visibility: hidden; pointer-events: none; background: var(--wb-surface); border-radius: 18px; overflow: hidden; touch-action: pan-y;
+    transition: transform 220ms ease-out, visibility 220ms;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-side[data-mobile-card] { display: flex !important; flex-direction: column; opacity: 1 !important; padding: 0; }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card="left"] { left: 12px !important; right: auto !important; transform: translateX(calc(-100% - 20px)); }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card="right"] { right: 12px !important; left: auto !important; transform: translateX(calc(100% + 20px)); }
+  .workbench-shell[data-mobile-drawer="left"] [data-mobile-card="left"],
+  .workbench-shell[data-mobile-drawer="right"] [data-mobile-card="right"] { transform: translateX(0); visibility: visible; pointer-events: auto; }
+  .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock.is-persistent[data-mobile-card] {
+    top: auto !important; bottom: 16px !important; height: auto !important; min-height: 0 !important; z-index: 241 !important;
+  }
+  .wb-mobile-scrim { position: fixed; inset: var(--wb-mobile-top) 0 0; border: 0; background: rgb(0 0 0 / .22); z-index: 230; }
+  /* Leave the outer 24px to OS navigation. Swipes elsewhere belong to content. */
+  .wb-mobile-edge { position: fixed; top: calc(var(--wb-mobile-top) + 12px); bottom: 28px; width: 20px; z-index: 245; touch-action: pan-y; }
+  .wb-mobile-edge.left { left: 24px; }
+  .wb-mobile-edge.right { right: 24px; }
+  .workbench-shell[data-mobile-drawer] .wbc-page.wbc-external-workspace { display: block; }
+  .workbench-shell[data-mobile-drawer] .wbc-external-workspace-host { height: 100%; }
+  .workbench-shell[data-mobile-drawer] .wbc-page.wbc-external-workspace .wbc-pane-layout { display: none; }
+  .workbench-shell[data-mobile-drawer] .wbc-main { min-width: 0; }
+  .workbench-shell[data-mobile-drawer] .wbc-composer { max-width: 100%; box-sizing: border-box; }
+}
+@media (max-width: 767px) and (prefers-reduced-motion: reduce) {
+  .workbench-shell[data-mobile-drawer] [data-mobile-card] { transition: none; }
+}
+
+@media (max-width: 767px) {
+  /* Retain the inspector's own card instead of painting an empty full-height slab. */
+  .workbench-shell[data-mobile-drawer] .wbc-side[data-mobile-card] {
+    bottom: auto !important; max-height: calc(100dvh - var(--wb-mobile-top) - 24px) !important;
+    background: var(--wb-surface); overflow-y: auto; border-radius: 18px; box-shadow: 0 12px 36px rgb(0 0 0 / .18);
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-integrated-rail[data-mobile-card] {
+    padding-bottom: 84px; box-shadow: 0 12px 36px rgb(0 0 0 / .18);
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock.is-persistent[data-mobile-card] {
+    width: min(318px, calc(100vw - 80px)) !important; left: 24px !important; bottom: 24px !important;
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar { scrollbar-width: none; }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar::-webkit-scrollbar { display: none; }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card] :is(pre, textarea, input, .wbc-table-wrap, .xterm, .cm-editor) { touch-action: auto; }
+  .wb-mobile-accessibility { position: fixed; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .wb-mobile-accessibility:focus-within { inset: 58px 8px auto; width: auto; height: auto; clip-path: none; z-index: 260; background: var(--wb-surface); }
+}
+
+/* Reuse the same controls and popovers; only the narrow topbar is folded. */
+.workbench-mobile-current, .workbench-mobile-more { display: none; }
+.workbench-topbar-extras, .workbench-topbar-extra-controls { display: contents; }
+@media (max-width: 767px) {
+  .workbench-shell[data-mobile-drawer] .workbench-topbar { box-sizing: border-box; }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar .workbench-session-tabs,
+  .workbench-shell[data-mobile-drawer] .workbench-traffic-space { display: none; }
+  .workbench-shell[data-mobile-drawer] .workbench-brand { flex: 0 1 38%; min-width: 0; width: auto; }
+  .workbench-shell[data-mobile-drawer] .workbench-brand-btn { min-width: 0; width: 100%; height: 44px; gap: 6px; padding: 0 4px; }
+  .workbench-shell[data-mobile-drawer] .workbench-brand-btn strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+  .workbench-shell[data-mobile-drawer] .workbench-brand-btn .workbench-top-project-icon { width: 24px; height: 24px; flex-shrink: 0; }
+  .workbench-shell[data-mobile-drawer] .workbench-mobile-current,
+  .workbench-shell[data-mobile-drawer] .workbench-mobile-more {
+    display: flex; align-items: center; justify-content: center; gap: 6px; height: 44px;
+    border: 0; border-radius: 10px; background: transparent; color: var(--wb-text); font: inherit; cursor: pointer;
+  }
+  .workbench-shell[data-mobile-drawer] .workbench-mobile-current { flex: 1 1 0; min-width: 0; padding: 0 8px; }
+  .workbench-mobile-current span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .workbench-mobile-current svg { flex-shrink: 0; }
+  .workbench-shell[data-mobile-drawer] .workbench-mobile-more { width: 44px; }
+  .workbench-mobile-current:focus-visible, .workbench-mobile-more:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+  .workbench-mobile-current[aria-expanded="true"], .workbench-mobile-more[aria-expanded="true"] { background: var(--wb-surface); }
+  .workbench-topbar-extras { display: block; flex: 0 0 44px; }
+  .workbench-topbar-extra-controls { display: none; }
+  .workbench-topbar-extras.is-open .workbench-topbar-extra-controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px; position: absolute;
+    top: 58px; right: 8px; left: 8px; padding: 12px; border: 1px solid var(--wb-line);
+    border-radius: 16px; background: var(--wb-surface); box-shadow: 0 12px 32px #0003; z-index: 210;
+  }
+  .workbench-topbar-extra-controls .workbench-resource-shelf { flex: 1 1 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
+  .workbench-topbar-extra-controls .workbench-resource-shelf:not(:has(button)) { display: none; }
+  .workbench-topbar-extra-controls .workbench-top-actions { flex-wrap: wrap; margin: 0; gap: 8px; }
+  .workbench-topbar-extra-controls .workbench-icon-btn,
+  .workbench-topbar-extra-controls .workbench-avatar-btn { min-width: 44px; min-height: 44px; }
+  .workbench-shell[data-mobile-drawer] .workbench-top-project-menu { position: fixed; top: 58px; left: 8px; right: 8px; width: auto; max-width: none; max-height: calc(100dvh - 74px); overflow-y: auto; }
+  .workbench-session-overflow-menu { width: calc(100vw - 16px) !important; max-width: calc(100vw - 16px); }
+  .workbench-session-overflow-group-items { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
+@media (max-width: 767px) {
+  .workbench-topbar-extra-controls .workbench-help-popover,
+  .workbench-topbar-extra-controls .workbench-notif-popover {
+    position: fixed; top: 122px; left: 8px; right: 8px; width: auto;
+    max-width: calc(100vw - 16px); max-height: calc(100dvh - 138px); overflow-y: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  .workbench-topbar-extras.is-open .workbench-topbar-extra-controls {
+    display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto;
+  }
+  .workbench-topbar-extra-controls .workbench-resource-shelf { flex: 0 0 auto; width: auto; }
+  .workbench-topbar-extra-controls .workbench-top-actions,
+  .workbench-topbar-extra-controls .workbench-top-action-group { display: contents; }
+  .workbench-topbar-extra-controls .workbench-help-anchor,
+  .workbench-topbar-extra-controls .workbench-notif-anchor { flex: 1 0 64px; min-width: 0; width: auto; }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar-extra-controls .workbench-icon-btn,
+  .workbench-shell[data-mobile-drawer] .workbench-topbar-extra-controls .workbench-avatar-btn {
+    display: grid; grid-template-rows: 30px 18px; justify-items: center; align-items: center;
+    flex: 1 0 64px; width: 100%; height: 76px; min-height: 76px; max-height: none; gap: 8px;
+    padding: 10px 4px; border: 0; border-radius: 12px; box-sizing: border-box;
+    background: var(--wb-control-bg); color: var(--wb-text);
+  }
+  .workbench-topbar-extra-controls .workbench-icon-btn::after,
+  .workbench-topbar-extra-controls .workbench-avatar-btn::after {
+    content: attr(title); grid-row: 2; font-size: 12px; line-height: 18px; white-space: nowrap;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  }
+  .workbench-topbar-extra-controls .workbench-icon-btn > svg,
+  .workbench-topbar-extra-controls .workbench-avatar-btn > :first-child { grid-row: 1; grid-column: 1; align-self: center; justify-self: center; }
+  .workbench-topbar-extra-controls .workbench-avatar-btn > :first-child { width: 30px; height: 30px; box-sizing: border-box; }
+}
+
+@media (max-width: 767px) {
+  .workbench-shell[data-mobile-drawer] .workbench-topbar-extra-controls .workbench-theme-btn { display: none; }
+}
+
+.workbench-top-project-actions.is-floating {
+  z-index: 2200; width: max-content; min-width: 160px; box-sizing: border-box;
+  overflow-y: auto; color: var(--wb-text); border-radius: 12px;
+}
+@media (max-width: 767px) {
+  .workbench-top-project-actions.is-floating button { min-height: 44px; }
+}

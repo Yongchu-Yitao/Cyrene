@@ -1,7 +1,7 @@
 """Delivery regressions: producer metadata, duplicate/racing insert, context repair."""
 from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -15,10 +15,23 @@ def delivery(monkeypatch):
     payload = {'chats': []}
     def find(data, chat_id):
         return next((chat for chat in data['chats'] if chat['id'] == chat_id), None)
-    repository = SimpleNamespace(get=lambda chat_id: find(payload, chat_id), find=find, mutate=lambda fn: fn(payload))
+    def mutate_one(chat_id, fn):
+        chat = find(payload, chat_id)
+        if chat is None:
+            return None
+        fn(chat)
+        return chat
+    repository = SimpleNamespace(
+        get=lambda chat_id: find(payload, chat_id),
+        find=find,
+        mutate=lambda fn: fn(payload),
+        mutate_one=mutate_one,
+    )
     service = SimpleNamespace(repository=repository,
         create_chat=lambda project, title, model: {'projectId': project, 'title': title, 'model': model},
-        public_chat_light=lambda chat: dict(chat))
+        public_chat_light=lambda chat: dict(chat),
+        public_message=lambda message: dict(message),
+        merge_chat_messages_chronologically=lambda chat, additions: chat.setdefault('messages', []).extend(additions))
     monkeypatch.setattr(projection, 'ChatService', lambda db: service)
     monkeypatch.setattr(projection, 'application_plugin_service', lambda name: None)
     repair = AsyncMock()
@@ -59,6 +72,43 @@ async def test_racing_insert_projects_the_winner_and_does_not_publish(delivery):
     assert payload['chats'] == [winner]
     assert repair.await_args.args[2]['content'] == 'winner text'
     publish.assert_not_awaited()
+
+
+async def test_scheduled_result_returns_to_its_existing_source_chat(delivery, monkeypatch):
+    payload, _, _, publish = delivery
+    payload['chats'].append({
+        'id': 'source',
+        'projectId': 'project',
+        'title': 'Original chat',
+        'updatedAt': '2026-01-01T00:00:00+00:00',
+        'messages': [{'id': 'user', 'role': 'user', 'content': 'remind me'}],
+    })
+    append_context = Mock(return_value=True)
+    monkeypatch.setattr(projection, 'append_context_record', append_context)
+
+    result = await create_scheduled_chat(
+        'db', 'project', 'scheduled result',
+        chat_id='wbschedule_run', source_chat_id='source', lang='en',
+    )
+    repeated = await create_scheduled_chat(
+        'db', 'project', 'replacement must not win',
+        chat_id='wbschedule_run', source_chat_id='source', lang='en',
+    )
+
+    assert result == repeated == {
+        'chat_id': 'source',
+        'project_id': 'project',
+        'title': 'Original chat',
+    }
+    assert [chat['id'] for chat in payload['chats']] == ['source']
+    messages = payload['chats'][0]['messages']
+    assert [message['content'] for message in messages] == [
+        'remind me', 'scheduled result',
+    ]
+    assert messages[-1]['systemInitiated'] is True
+    assert messages[-1]['scheduled'] is True
+    assert append_context.call_count == 2
+    assert publish.await_count == 1
 
 
 async def test_invalid_or_already_delivered_input_does_not_evaluate_usage(delivery, monkeypatch):

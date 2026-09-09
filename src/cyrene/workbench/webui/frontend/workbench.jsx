@@ -1,3 +1,5 @@
+import { useNativeWheel } from "./shared/native-wheel.jsx"
+import { useMobileDrawers, MobileDrawerControls } from "./features/layout/mobile-drawers.jsx"
 import { workbenchServices } from "./shared/runtime/services.jsx"
 import { WbColResizer, wbApplyStoredRightWidth } from "./features/layout/right-panel-resizer.jsx"
 import { WorkbenchFullPage, WorkbenchSidebarCollapseControl, WorkbenchSidebarDock } from "./features/shell/support.jsx"
@@ -98,13 +100,15 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     } catch (e) { return "chat"; }
   });
   var sidebarModuleWheelRef = useWorkbenchRef({ delta: 0, direction: 0, lockedUntil: 0 });
-  var [railCollapsed, setRailCollapsed] = useWorkbenchState(function () {
+  var [desktopRailCollapsed, setRailCollapsed] = useWorkbenchState(function () {
     // Default to collapsed (icon strip); honour the user's stored choice once set.
     try {
       var v = localStorage.getItem("wb-rail-collapsed");
       return v === null ? true : v === "1";
     } catch (e) { return true; }
   });
+  var mobileDrawers = useMobileDrawers(fullPage);
+  var railCollapsed = mobileDrawers.compact ? false : desktopRailCollapsed;
   var [searchOpen, setSearchOpen] = useWorkbenchState(false);
   var [settingsTab, setSettingsTab] = useWorkbenchState(function () {
     try { return localStorage.getItem("wb-active-page") === "profile" ? "profile" : ""; }
@@ -149,7 +153,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     enabledModules
   );
   var handleOpenPage = navigationActions.openPage;
-  var toggleWorkspaceSidebar = navigationActions.toggleSidebar;
+  var mobileGridRef = useNativeWheel(function (event) {
+    if (!mobileDrawers.compact) handleSidebarModuleWheel(event);
+  }, wbApplyStoredRightWidth);
+  var toggleWorkspaceSidebar = function () {
+    if (mobileDrawers.compact) mobileDrawers.setSide(mobileDrawers.side === "left" ? "" : "left");
+    else navigationActions.toggleSidebar();
+  };
   var handleSidebarModuleWheel = navigationActions.onModuleWheel;
 
   useWorkbenchEffect(function () {
@@ -480,12 +490,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   };
 
   return (
-    <div className="workbench-shell" data-screen-label="Cyrene · workbench">
+    <div className="workbench-shell" data-mobile-drawer={mobileDrawers.compact ? mobileDrawers.side || "closed" : undefined} data-screen-label="Cyrene · workbench">
       <WorkbenchShellTopbar context={shellContext} />
+      <MobileDrawerControls state={mobileDrawers} />
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div ref={wbApplyStoredRightWidth} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat || modulePresentation.isBoard ? " is-chat" : "") + (modulePresentation.isBoard ? " is-conversation-board" : "") + (isSettings ? " is-settings" : "")} onWheel={handleSidebarModuleWheel}>
+        <div ref={mobileGridRef} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat || modulePresentation.isBoard ? " is-chat" : "") + (modulePresentation.isBoard ? " is-conversation-board" : "") + (isSettings ? " is-settings" : "")}>
           <WorkbenchSidebarDock
             persistent={true}
             collapsed={railCollapsed}
