@@ -1,5 +1,13 @@
 /* A presentation-only overlay: desktop widths and persisted pane layouts survive. */
 @media (max-width: 767px) {
+  /* Inherit through all controls and body-portaled menus, not just the topbar. */
+  html { -webkit-tap-highlight-color: transparent; }
+  :where(button, a[href], [role="button"], summary):not(.wb-mobile-scrim) {
+    transition: opacity 120ms ease-out;
+  }
+  :where(button, a[href], [role="button"], summary):not(:disabled):not([aria-disabled="true"]):not(.wb-mobile-scrim):active {
+    opacity: .78;
+  }
   .workbench-shell[data-mobile-drawer] { --wb-topbar-height: 58px; --wb-mobile-top: 58px; padding-top: 0; height: 100dvh; overflow: hidden; }
   .workbench-shell[data-mobile-drawer] .workbench-topbar {
     display: flex; overflow: visible; gap: 8px; padding-inline: 8px;
@@ -54,6 +62,7 @@
 }
 @media (max-width: 767px) and (prefers-reduced-motion: reduce) {
   .workbench-shell[data-mobile-drawer] [data-mobile-card] { transition: none; }
+  :where(button, a[href], [role="button"], summary):not(.wb-mobile-scrim) { transition: none; }
 }
 
 @media (max-width: 767px) {
