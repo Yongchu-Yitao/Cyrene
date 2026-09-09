@@ -26,22 +26,22 @@
   .workbench-shell[data-mobile-drawer] .wb-col-resizer,
   .workbench-shell[data-mobile-drawer] .workbench-sidebar-collapse-control { display: none; }
   .workbench-shell[data-mobile-drawer] [data-mobile-card] {
-    position: fixed !important; top: calc(var(--wb-mobile-top) + 8px) !important;
-    bottom: 12px !important; width: min(340px, calc(100vw - 56px)) !important;
+    position: fixed !important; top: var(--wb-mobile-top) !important;
+    bottom: 8px !important; width: min(340px, calc(100vw - 56px)) !important;
     height: auto !important; max-height: none !important; min-width: 0 !important;
     margin: 0 !important; box-sizing: border-box; z-index: 240 !important;
     visibility: hidden; pointer-events: none; background: var(--wb-surface); border-radius: 18px; overflow: hidden; touch-action: pan-y;
     transition: transform 220ms ease-out, visibility 220ms;
   }
   .workbench-shell[data-mobile-drawer] .wbc-side[data-mobile-card] { display: flex !important; flex-direction: column; opacity: 1 !important; padding: 0; }
-  .workbench-shell[data-mobile-drawer] [data-mobile-card="left"] { left: 12px !important; right: auto !important; transform: translateX(calc(-100% - 20px)); }
-  .workbench-shell[data-mobile-drawer] [data-mobile-card="right"] { right: 12px !important; left: auto !important; transform: translateX(calc(100% + 20px)); }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card="left"] { left: 8px !important; right: auto !important; transform: translateX(calc(-100% - 20px)); }
+  .workbench-shell[data-mobile-drawer] [data-mobile-card="right"] { right: 8px !important; left: auto !important; transform: translateX(calc(100% + 20px)); }
   .workbench-shell[data-mobile-drawer="left"] [data-mobile-card="left"],
   .workbench-shell[data-mobile-drawer="right"] [data-mobile-card="right"] { transform: translateX(0); visibility: visible; pointer-events: auto; }
   .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock.is-persistent[data-mobile-card] {
     top: auto !important; bottom: 16px !important; height: auto !important; min-height: 0 !important; z-index: 241 !important;
   }
-  .wb-mobile-scrim { position: fixed; inset: var(--wb-mobile-top) 0 0; border: 0; background: rgb(0 0 0 / .22); z-index: 230; }
+  .wb-mobile-scrim { position: fixed; inset: 0; border: 0; border-radius: 0; padding: 0; background: rgb(0 0 0 / .22); z-index: 230; -webkit-tap-highlight-color: transparent; }
   /* Leave the outer 24px to OS navigation. Swipes elsewhere belong to content. */
   .wb-mobile-edge { position: fixed; top: calc(var(--wb-mobile-top) + 12px); bottom: 28px; width: 20px; z-index: 245; touch-action: pan-y; }
   .wb-mobile-edge.left { left: 24px; }
@@ -57,16 +57,16 @@
 }
 
 @media (max-width: 767px) {
-  /* Retain the inspector's own card instead of painting an empty full-height slab. */
+  /* Both drawers share the conversation card's top and bottom bounds. */
   .workbench-shell[data-mobile-drawer] .wbc-side[data-mobile-card] {
-    bottom: auto !important; max-height: calc(100dvh - var(--wb-mobile-top) - 24px) !important;
+    bottom: 8px !important; max-height: calc(100dvh - var(--wb-mobile-top) - 8px) !important;
     background: var(--wb-surface); overflow-y: auto; border-radius: 18px; box-shadow: 0 12px 36px rgb(0 0 0 / .18);
   }
   .workbench-shell[data-mobile-drawer] .workbench-integrated-rail[data-mobile-card] {
     padding-bottom: 84px; box-shadow: 0 12px 36px rgb(0 0 0 / .18);
   }
   .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock.is-persistent[data-mobile-card] {
-    width: min(318px, calc(100vw - 80px)) !important; left: 24px !important; bottom: 24px !important;
+    width: min(318px, calc(100vw - 80px)) !important; left: 20px !important; bottom: 20px !important;
   }
   .workbench-shell[data-mobile-drawer] .workbench-topbar { scrollbar-width: none; }
   .workbench-shell[data-mobile-drawer] .workbench-topbar::-webkit-scrollbar { display: none; }

@@ -43,6 +43,7 @@ class DesktopWorkbenchActivity : ComponentActivity() {
     private lateinit var loading: LinearLayout
     private var pageFailed = false
     private var web: WebView? = null
+    private var insetScrim: ai.cyrene.mobile.desktop.SystemInsetScrim? = null
     private var loadedOrigin: String? = null
     private var proxy: WorkbenchProxy? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -150,6 +151,14 @@ class DesktopWorkbenchActivity : ComponentActivity() {
         val browser = WebView(this)
         if (android.os.Build.VERSION.SDK_INT >= 33) browser.setAutoHandwritingEnabled(false)
         web = browser
+        insetScrim = ai.cyrene.mobile.desktop.SystemInsetScrim(window.decorView, browser)
+        // Cosmetic-only bridge; navigation and subresources are restricted to our proxy origin.
+        browser.addJavascriptInterface(object {
+            @android.webkit.JavascriptInterface
+            fun setDrawerOpen(open: Boolean) {
+                runOnUiThread { if (web === browser) insetScrim?.show(open) }
+            }
+        }, "CyreneAndroid")
         browser.visibility = View.GONE
         browser.settings.apply {
             javaScriptEnabled = true; domStorageEnabled = true
@@ -247,6 +256,7 @@ class DesktopWorkbenchActivity : ComponentActivity() {
     }
 
     private fun destroyWeb() {
+        insetScrim?.close(); insetScrim = null
         proxy?.let { CookieManager.getInstance().setCookie(it.origin, "${it.cookieName}=; Path=/; Max-Age=0") }
         web?.let { root.removeView(it); it.stopLoading(); it.destroy() }
         web = null; loadedOrigin = null; proxy = null

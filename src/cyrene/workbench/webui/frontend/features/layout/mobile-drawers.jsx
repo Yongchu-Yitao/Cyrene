@@ -16,6 +16,11 @@ export function useMobileDrawers(page) {
 // Preserve the module DOM (and its scroll position); only change its presentation.
 export function MobileDrawerControls({ state }) {
   const root = React.useRef(null);
+  // The Android shell shades system insets outside the WebView with the same scrim.
+  React.useEffect(() => {
+    window.CyreneAndroid?.setDrawerOpen?.(!!(state.compact && state.side));
+  }, [state.compact, state.side]);
+  React.useEffect(() => () => window.CyreneAndroid?.setDrawerOpen?.(false), []);
   const [available, setAvailable] = React.useState({ left: false, right: false });
   const zh = (document.documentElement.lang || navigator.language).startsWith('zh');
   const labels = zh ? ['左侧卡片', '右侧卡片', '关闭侧栏'] : ['Left cards', 'Right cards', 'Close sidebar'];
