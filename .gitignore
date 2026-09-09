@@ -11,3 +11,9 @@ tmp/
 *.idsig
 qa/*.png
 qa/*.xml
+
+# Local browser verification artifacts
+/.playwright-cli/
+/output/
+__pycache__/
+*.py[cod]

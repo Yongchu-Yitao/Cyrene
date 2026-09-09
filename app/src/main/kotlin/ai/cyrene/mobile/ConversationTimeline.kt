@@ -121,4 +121,14 @@ internal fun withoutDurableDuplicates(
     }
 }
 
+internal fun isConversationActivityMessage(message: JSONObject): Boolean {
+    if (message.optBoolean("activityCard")) return true
+    if (message.optString("content").isNotBlank()) return false
+    if (message.optString("reasoning").isNotBlank()) return true
+    if ((message.optJSONArray("trace")?.length() ?: 0) > 0) return true
+    val id = message.optString("id")
+    return message.optBoolean("intermediate") &&
+        (id.startsWith("reasoning_msg_") || id.startsWith("activity_msg_"))
+}
+
 private fun String.normalizeTimelineContent(): String = trim().replace(Regex("\\s+"), " ")

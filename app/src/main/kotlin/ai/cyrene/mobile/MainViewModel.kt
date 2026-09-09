@@ -10,6 +10,9 @@ import ai.cyrene.mobile.data.DesktopDataCache
 import ai.cyrene.mobile.data.DesktopDataSnapshot
 import ai.cyrene.mobile.data.SecureStore
 import ai.cyrene.mobile.data.MobileOpenAiOAuthClient
+import ai.cyrene.mobile.data.canonicalModelConfiguration
+import ai.cyrene.mobile.data.mergeModelConfigurationSecrets
+import ai.cyrene.mobile.data.resolvedModelCandidates
 import ai.cyrene.mobile.localagent.database.LocalAgentDatabase
 import ai.cyrene.mobile.localagent.database.LocalSessionEntity
 import ai.cyrene.mobile.localagent.model.RunState
@@ -393,8 +396,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun localProviderName(): String = store.localModelConfigurationPublic()
-        ?.optJSONArray("custom_models")?.optJSONObject(0)
-        ?.optString("provider").orEmpty()
+        ?.let { resolvedModelCandidates(it, "primary").firstOrNull() }
+        ?.let { candidate ->
+            candidate.optString("connection_name")
+                .ifBlank { candidate.optString("adapter") }
+        }.orEmpty()
 
     private fun localTraceEntry(trace: ai.cyrene.mobile.localagent.database.LocalTraceEntity): JSONObject? {
         val raw = runCatching { JSONObject(trace.payloadJson) }.getOrNull() ?: return null
@@ -749,11 +755,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateLocalModels(models: JSONObject) =
         launchBusy(text(R.string.status_saving_models)) {
-            val localModels = mergeLocalModelSecrets(models, store.localModelConfiguration())
+            var localModels = mergeModelConfigurationSecrets(
+                models,
+                store.localModelConfiguration(),
+            )
             store.saveLocalModelConfiguration(localModels)
             _state.value = _state.value.copy(
                 desktopModels = store.localModelConfigurationPublic(),
                 status = text(R.string.status_local_models_saved),
+            )
+            val peer = _state.value.peer
+            var desktopSettings = _state.value.desktopSettings
+            var desktopSettingsSchema = _state.value.desktopSettingsSchema
+            if (peer != null) {
+                val result = client.command(
+                    peer,
+                    "settings.update",
+                    payload = JSONObject().put("models", localModels),
+                )
+                result.optJSONObject("models")?.let { publicGraph ->
+                    localModels = mergeModelConfigurationSecrets(publicGraph, localModels)
+                    store.saveLocalModelConfiguration(localModels)
+                }
+                desktopSettings = result.optJSONObject("settings") ?: desktopSettings
+                desktopSettingsSchema = result.optJSONObject("schema") ?: desktopSettingsSchema
+            }
+            _state.value = _state.value.copy(
+                desktopModels = store.localModelConfigurationPublic(),
+                desktopSettings = desktopSettings,
+                desktopSettingsSchema = desktopSettingsSchema,
+                status = if (peer == null) {
+                    text(R.string.status_local_models_saved)
+                } else {
+                    text(R.string.status_settings_saved)
+                },
             )
         }
 
@@ -918,7 +953,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             client.command(peer, "settings.models.copy").optJSONObject("models")
         }.getOrNull() ?: return false
         ensureCurrentPeer(peer)
-        store.saveLocalModelConfiguration(models)
+        store.saveLocalModelConfiguration(canonicalModelConfiguration(models))
         _state.value = _state.value.copy(
             desktopModels = store.localModelConfigurationPublic(),
         )
@@ -1306,12 +1341,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _state.value.selectedProject?.optString("id") == projectId &&
                     _state.value.selectedChat?.optString("id") == chatId
                 ) {
+                    // Update commands return metadata; preserve the latest
+                    // loaded transcript and files without serializing them.
+                    val currentChat = _state.value.selectedChat
+                    val mergedChat = JSONObject().apply {
+                        currentChat?.let { current ->
+                            current.keys().forEach { key -> put(key, current.opt(key)) }
+                        }
+                        updatedChat.keys().forEach { key -> put(key, updatedChat.opt(key)) }
+                    }
                     updateCache(peer.deviceId) { previous ->
                         previous.copy(
-                            chatDetails = previous.chatDetails + (chatId to updatedChat),
+                            chatDetails = previous.chatDetails + (chatId to mergedChat),
                         )
                     }
-                    _state.value = _state.value.copy(selectedChat = updatedChat)
+                    _state.value = _state.value.copy(selectedChat = mergedChat)
                 }
             }.onFailure { error ->
                 if (_state.value.peer?.deviceId == peer.deviceId) {
@@ -2867,38 +2911,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         client.close()
         super.onCleared()
     }
-}
-
-private fun mergeLocalModelSecrets(incoming: JSONObject, previous: JSONObject?): JSONObject {
-    val merged = JSONObject(incoming.toString())
-    fun mergeArray(key: String) {
-        val next = merged.optJSONArray(key) ?: return
-        val old = previous?.optJSONArray(key)
-        for (index in 0 until next.length()) {
-            val candidate = next.optJSONObject(index) ?: continue
-            if (candidate.optString("api_key").isNotBlank()) continue
-            val id = candidate.optString("id")
-            val model = candidate.optString("model")
-            val prior = (0 until (old?.length() ?: 0)).mapNotNull { old?.optJSONObject(it) }
-                .firstOrNull {
-                    (id.isNotBlank() && it.optString("id") == id) ||
-                        (model.isNotBlank() && it.optString("model") == model)
-                }
-            prior?.optString("api_key")?.takeIf(String::isNotBlank)?.let {
-                candidate.put("api_key", it)
-            }
-            candidate.remove("api_key_configured")
-        }
-    }
-    mergeArray("custom_models")
-    mergeArray("vision_models")
-    val secondary = merged.optJSONObject("secondary_model")
-    if (secondary != null && secondary.optString("api_key").isBlank()) {
-        previous?.optJSONObject("secondary_model")?.optString("api_key")
-            ?.takeIf(String::isNotBlank)?.let { secondary.put("api_key", it) }
-        secondary.remove("api_key_configured")
-    }
-    return merged
 }
 
 private fun JSONArray?.objects(): List<JSONObject> =

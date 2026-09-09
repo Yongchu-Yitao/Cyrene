@@ -11,14 +11,20 @@ local data. They are not Desktop conversations and do not use
 ## ADR-02 — Mobile calls the model provider
 
 Android owns the agent loop and LLM request. It uses a Keystore-encrypted local
-copy of the Desktop model configuration. Desktop transfers configuration only;
-it is never the model gateway for a local session.
+copy of the Desktop canonical `{version, connections, profiles, routes}` model
+graph. Mobile resolves local inference through route → profile → connection.
+Desktop transfers and synchronizes configuration only; it is never the model
+gateway for a local session.
 
 ## ADR-03 — Copy API keys, never OAuth tokens
 
 `settings.models.copy` uses the paired E2EE channel and the existing
 `settings:read` grant. Ordinary provider API keys may be copied. Codex OAuth
 credentials and unrelated secrets never leave Desktop.
+
+Mobile edits use the `models` payload of `settings.update` with the graph
+revision for atomic writeback. UI projections may redact connection secrets, but the encrypted
+runtime copy and wire payload never use a second, mobile-only model shape.
 
 ## ADR-04 — Separate signed Runtime APK
 

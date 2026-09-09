@@ -139,7 +139,7 @@ App 退出或被 Android 杀死不会终止桌面端已经开始的 Chat Run 或
 - 在移动端保存桌面 Provider Credential 或 OAuth Token。
 
 远程 Shell 是当前版本明确加入的能力，但必须同时满足：已授权项目 Scope、
-`toolpack:code_tools` Grant、桌面端按设备隔离 Shell，以及工作目录限制在该项目中。
+`pluginpack:cyrene_code` Grant、桌面端按设备隔离 Shell，以及工作目录限制在该项目中。
 
 ## 3. 实际源码结构
 
@@ -360,7 +360,7 @@ Desktop → Android LegacyResponseListener → encrypted response
 
 - `capabilities.read`；
 - `runs.read`、`runs.events`；
-- `harness.discover`、`harness.describe`、`harness.invoke`。
+- `harness.list`、`harness.describe`、`harness.invoke`。
 
 这些命令存在于桌面 Allowlist 不等于移动端已经提供对应界面。不得只依据桌面端
 Handler 宣称移动功能完成。

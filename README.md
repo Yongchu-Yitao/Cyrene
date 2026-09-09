@@ -1,68 +1,40 @@
 # Cyrene Mobile
 
-Cyrene 的 Android 工作台。App 支持与桌面端安全配对、远程对话、任务、设置和
-项目终端，也可在手机本地保存会话、直接调用模型，并通过独立 Runtime APK 在
-QEMU + Alpine Linux 中执行文件与命令工具。
+Android 上的桌面 Workbench：复用现有前端，在本机 ARM64 QEMU / Debian 中运行 Python 后端。
 
-## 0.2.5 功能
+## 0.3.0：单 APK
 
-- 与桌面端一致的对话信息层级、Markdown、工具调用、附件和图片查看体验。
-- “本地”项目可在桌面离线时运行 Agent；会话数据保存在手机，模型配置由
-  Android Keystore 加密，文件与 Bash 工具在独立 Linux Runtime 中执行。
-- 无阴影悬浮输入框，可切换自动/默认/Plan 权限模式、处理桌面端提权确认、
-  上传多个附件并停止正在运行的回复；首次安装默认启用自动模式。
-- 左侧菜单统一显示设备、对话、任务、终端与所有会话；全部授权项目的任务和对话
-  标注所属项目后按时间混排。新对话可从中央胶囊切换项目，任务可在创建卡片内切换。
-- 会话长按菜单支持重命名和删除；新对话标题由第一条消息自动生成。
-- 向左滑动打开桌面式右侧栏，提供概览、上下文，以及按数据动态出现的子 Agent、
-  变更、查看器、地图、计划、产物和分支页签。
-- 任务详情复用对话输入框，支持附件派发、暂停、恢复、取消和产物下载。
-- 支持多台桌面设备、安全切换、浅色/深色/跟随系统主题和中英文界面。
-- 移动终端支持项目切换、实时白色输入、长命令换行和键盘上沿快捷控制栏。
-- 设置页可从 GitHub Release 检查、以 Markdown 展示说明，并一次下载 Runtime 与
-  主 App 两个 APK，依次进入各自的系统安装界面。
-- 本地模型支持自定义 OpenAI-compatible API 或手机 OpenAI OAuth；本地对话可上传附件，
-  并通过右侧“变更的文件”面板把 Agent 发布的最终文件保存到 Android 存储。
+只安装 `app/build/outputs/apk/debug/app-debug.apk`。运行时模块现在是 Android Library，
+其签名镜像、JNI 引擎和后台服务随主 APK 打包；无需另外安装 Runtime APK。
+运行时仍在私有 `:qemu` 进程中运行，主界面通过 Binder 和带认证的回环代理访问它。
+
+首次启动会校验并解压内置镜像，需要数分钟和充足存储空间。当前是 ARM64 实验构建，
+包含压缩镜像、模板盘及可写盘；建议至少预留 12 GB 可用空间。
+模型配置需在 Workbench 内自行设置；安装包不包含开发者的会话、API 密钥或设备数据。
+
+移动端顶栏整合项目切换、标签中心和其他按钮。左右卡片通过边缘滑动进入。
 
 ## 构建
 
-要求 JDK 17 与 Android SDK 35：
+要求 JDK 17、Android SDK 35，以及签名后的桌面运行时资源。
+默认资源目录为 `build/unified-assets`，缺失时构建会报错，不会退回 Alpine 镜像。
 
-```bash
-./gradlew test lint assembleDebug
+```sh
+# 完整镜像生成方式见 runtime-image/desktop/README.md。
+# 可显式指定另一份已签名桌面资源：
+./gradlew :app:assembleDebug -PcyreneDesktopAssets=/absolute/path/to/assets \
+  -Dorg.gradle.jvmargs=-Xmx6g --max-workers=2 --no-daemon
 ```
 
-调试 APK 输出到：
+`runtime-image/desktop/refresh-webui.py` 可在经过签名和摘要验证的干净模板中刷新静态前端，
+逐文件验证写入结果，并用提供的镜像签名密钥生成新版本。它不读取手机数据盘。
 
-- 主 App：`app/build/outputs/apk/debug/app-debug.apk`
-- Linux Runtime：`runtime-app/build/outputs/apk/debug/runtime-app-debug.apk`
+## 验证与边界
 
-正式发布使用 `v0.2.5` 标签。首次手动安装时先装 Runtime APK，再装主 App APK；
-App 内更新会自动下载两个包并按此顺序打开安装界面，但 Android 仍要求用户分别确认。
-只使用远程功能时可仅安装主 App。完整说明见仓库的 GitHub Releases。
+运行时测试使用 `:runtime-app:testDebugUnitTest`；安装验证必须在未安装旧 Runtime 包的设备上进行。
+Debug 包仅供实验，正式发布还需配置发布签名和完整验收。当前 QEMU 为软件模拟，
+不能把 ARM64 或 8 GB 模拟器验证等同于真机性能保证。此前 MCP/Chromium 联合探测存在
+原生 SIGILL 问题，单 APK 整合不代表这些限制已经解决。
 
-## 使用
-
-1. 在桌面 Cyrene 打开「设置 → 连接」，开启远程访问。
-2. 选择授权能力和 Project Scope，生成十位短密钥。
-3. Android 输入桌面 LAN 或 Tailscale 数字 IP、端口和短密钥。
-4. 核对两端 Fingerprint，确认配对。
-
-客户端通过配对后的加密连接调用桌面 RemoteGateway。App 退出不会停止桌面端
-Run；重新进入终端时会在当前授权项目内建立新的交互式 Shell 会话。
-
-> 完整使用移动端权限确认和桌面模型配置复制，需要同步更新支持对应远程命令的 Cyrene
-> Desktop。手机 OpenAI OAuth 与本地会话不依赖桌面端；模型配置保存后可离线于桌面使用。
-
-## 安全边界
-
-- 只接受 RFC1918、IPv6 本地地址、Loopback 和 Tailscale `100.64.0.0/10`。
-- 不接受 URL、域名、Redirect、公网 IP、任意 Route 或任意 Tool。
-- Shell 仅能在当前授权项目目录中打开，并按配对设备隔离会话。
-- Identity 私钥由 Android Keystore AES-256-GCM Master Key 加密。
-- App 数据不参与 Auto Backup 或设备迁移。
-- 所有控制命令使用 Ed25519 签名与 X25519/HKDF/ChaCha20-Poly1305 E2EE。
-
-## 更新记录
-
-参见 [CHANGELOG.md](CHANGELOG.md)。
+旧双 APK 的会话和工作目录仍留在旧包的数据目录，不自动迁移，也不自动删除旧包。
+历史版本信息见 CHANGELOG.md，最新单包验证见 project-notes/android-single-apk.zh-CN.md。

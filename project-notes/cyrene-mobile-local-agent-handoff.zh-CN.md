@@ -36,7 +36,8 @@ Cyrene Desktop             Android 主 App                     Runtime Companion
 
 - `SecureStore.kt` 使用 Android Keystore 中不可导出的 AES Key 加密完整模型配置，对 UI 只返回 Secret 隐藏后的投影。
 - 设置页分为“本地设置”和“桌面端设置”，模型配置是独立区块，不再出现两套含义重复的“模型设置”。
-- 手机读取桌面设置时调用 `settings.models.copy`，把可直接调用的 OpenAI-compatible 配置复制到本地；移动端编辑后同时更新本机加密副本并通过既有 `settings.update` 回写桌面。
+- 手机读取桌面设置时调用 `settings.models.copy`，完整复制 `{version, connections, profiles, routes}` 模型图及 revision；移动端按 route → profile → connection 解析并编辑，随后同时更新本机加密副本并通过 `settings.update` 的 `models` payload 按 revision 回写桌面。
+- 手机本地 Provider 当前直接执行 `codex_oauth`、`openai` 和 `openai_compatible` 主要路由；其他 Provider 及 secondary、vision、embedding 路由仍原样保存在同一张模型图中并与桌面同步。
 - `MobileProviderClient.kt` 从手机直接调用 `/chat/completions`，支持 decision → execution → tool result → continue → final。
 - Provider 配置和 API Key 永不发送给 Runtime APK 或 Linux guest。
 

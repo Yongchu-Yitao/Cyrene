@@ -40,29 +40,11 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
     suspend fun bind(timeoutMs: Long = 5_000) = withContext(Dispatchers.Main) {
         if (!bound) {
             val intent = Intent(ACTION_BIND)
-                .setComponent(ComponentName(RUNTIME_PACKAGE, RUNTIME_SERVICE_CLASS))
+                .setComponent(ComponentName(context.packageName, RUNTIME_SERVICE_CLASS))
                 .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             bound = bindService(intent)
-            if (!bound) {
-                @Suppress("DEPRECATION")
-                val installed = runCatching {
-                    context.packageManager.getPackageInfo(RUNTIME_PACKAGE, 0)
-                }.isSuccess
-                if (!installed) {
-                    throw IllegalStateException(context.getString(R.string.local_agent_runtime_not_installed))
-                }
-                // Some Android variants keep service-only packages stopped even for an
-                // explicit bind. Starting the companion's transparent bootstrap Activity
-                // lets the installed package activate itself, then this client retries.
-                activateRuntimePackage()
-                for (attempt in 0 until 30) {
-                    kotlinx.coroutines.delay(100)
-                    if (bindService(intent)) break
-                }
-                if (!bound) {
-                    throw IllegalStateException(context.getString(R.string.local_agent_runtime_service_unavailable))
-                }
-            }
+            check(bound) { context.getString(R.string.local_agent_runtime_service_unavailable) }
+
         }
         withTimeout(timeoutMs) {
             while (service == null) kotlinx.coroutines.delay(20)
@@ -73,23 +55,6 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE).also { bound = it }
     } catch (_: SecurityException) {
         throw IllegalStateException(context.getString(R.string.local_agent_runtime_signature_mismatch))
-    }
-
-    private fun activateRuntimePackage() {
-        val intent = Intent()
-            .setComponent(ComponentName(RUNTIME_PACKAGE, RUNTIME_BOOTSTRAP_ACTIVITY_CLASS))
-            .addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                    Intent.FLAG_INCLUDE_STOPPED_PACKAGES,
-            )
-        try {
-            context.startActivity(intent)
-        } catch (_: SecurityException) {
-            throw IllegalStateException(context.getString(R.string.local_agent_runtime_signature_mismatch))
-        } catch (_: ActivityNotFoundException) {
-            throw IllegalStateException(context.getString(R.string.local_agent_runtime_update_required))
-        }
     }
 
     suspend fun submit(
@@ -131,7 +96,6 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
 
     companion object {
         const val ACTION_BIND = "ai.cyrene.mobile.runtime.BIND"
-        const val RUNTIME_PACKAGE = "ai.cyrene.mobile.runtime"
         const val RUNTIME_SERVICE_CLASS = "ai.cyrene.mobile.runtime.CyreneRuntimeService"
         const val RUNTIME_BOOTSTRAP_ACTIVITY_CLASS =
             "ai.cyrene.mobile.runtime.RuntimeBootstrapActivity"

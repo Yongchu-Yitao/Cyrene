@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity android:name=".DesktopBackendProbeActivity" android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <activity
             android:name=".RuntimeIntegrationProbeActivity"
             android:exported="true"

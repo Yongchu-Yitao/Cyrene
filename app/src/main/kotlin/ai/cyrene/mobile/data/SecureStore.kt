@@ -167,7 +167,7 @@ class SecureStore(context: Context) {
     fun saveLocalModelConfiguration(value: JSONObject) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, masterKey())
-        val plaintext = value.toString().toByteArray(Charsets.UTF_8)
+        val plaintext = canonicalModelConfiguration(value).toString().toByteArray(Charsets.UTF_8)
         preferences.edit()
             .putString(LOCAL_MODELS_CIPHER, b64Url(cipher.doFinal(plaintext)))
             .putString(LOCAL_MODELS_IV, b64Url(cipher.iv))
@@ -183,14 +183,20 @@ class SecureStore(context: Context) {
             cipher.init(Cipher.DECRYPT_MODE, masterKey(), GCMParameterSpec(128, b64UrlDecode(iv)))
             val plaintext = cipher.doFinal(b64UrlDecode(encrypted))
             try {
-                JSONObject(plaintext.toString(Charsets.UTF_8))
+                val stored = JSONObject(plaintext.toString(Charsets.UTF_8))
+                if (!stored.has("connections") || !stored.has("profiles") || !stored.has("routes")) {
+                    null
+                } else {
+                    canonicalModelConfiguration(stored)
+                }
             } finally {
                 plaintext.fill(0)
             }
         }.getOrNull()
     }
 
-    fun localModelConfigurationPublic(): JSONObject? = localModelConfiguration()?.let(::redactModelSecrets)
+    fun localModelConfigurationPublic(): JSONObject? =
+        localModelConfiguration()?.let(::redactModelConfigurationSecrets)
 
     /** OAuth credentials are device-local and never participate in desktop settings sync. */
     fun saveOpenAiOAuthCredentials(value: JSONObject) = saveEncryptedJson(
@@ -239,15 +245,17 @@ class SecureStore(context: Context) {
 
     fun hasRunnableLocalModel(): Boolean {
         val models = localModelConfiguration() ?: return false
-        if (models.optString("source", "custom") == "codex") {
-            return openAiOAuthCredentials()?.optString("refresh_token").orEmpty().isNotBlank()
+        return resolvedModelCandidates(models, "primary").any { candidate ->
+            when (candidate.optString("adapter")) {
+                "codex_oauth" -> openAiOAuthCredentials()
+                    ?.optString("refresh_token").orEmpty().isNotBlank()
+                "openai", "openai_compatible" ->
+                    candidate.optString("model").isNotBlank() &&
+                        candidate.optString("base_url").startsWith("http") &&
+                        candidate.optString("api_key").isNotBlank()
+                else -> false
+            }
         }
-        val custom = models.optJSONArray("custom_models") ?: return false
-        if (custom.length() == 0) return false
-        val primary = custom.optJSONObject(0) ?: return false
-        return primary.optString("model").isNotBlank() &&
-            primary.optString("base_url").startsWith("http") &&
-            primary.optString("api_key").isNotBlank()
     }
 
     companion object {
@@ -257,27 +265,6 @@ class SecureStore(context: Context) {
         private const val OPENAI_OAUTH_CIPHER = "openai_oauth_cipher"
         private const val OPENAI_OAUTH_IV = "openai_oauth_iv"
     }
-}
-
-private fun redactModelSecrets(value: JSONObject): JSONObject {
-    val result = JSONObject(value.toString())
-    listOf("custom_models", "vision_models").forEach { key ->
-        val array = result.optJSONArray(key) ?: return@forEach
-        for (index in 0 until array.length()) {
-            array.optJSONObject(index)?.let { candidate ->
-                val configured = candidate.optString("api_key").isNotBlank()
-                candidate.remove("api_key")
-                candidate.put("api_key_configured", configured)
-            }
-        }
-    }
-    result.optJSONObject("secondary_model")?.let { candidate ->
-        val configured = candidate.optString("api_key").isNotBlank()
-        candidate.remove("api_key")
-        candidate.put("api_key_configured", configured)
-    }
-    result.optJSONObject("codex_model")?.remove("api_key")
-    return result
 }
 
 fun Peer.toJson(): JSONObject = JSONObject()
@@ -302,6 +289,3 @@ fun JSONObject.toPeer(): Peer = Peer(
     capabilities = optJSONArray("capabilities").strings(),
     projectScopes = optJSONArray("project_scopes").strings(),
 )
-
-fun JSONArray?.strings(): List<String> =
-    if (this == null) emptyList() else (0 until length()).map { getString(it) }

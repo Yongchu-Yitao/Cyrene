@@ -26,6 +26,13 @@ class RuntimeIntegrationProbeActivity : Activity() {
                             timeoutMs = 180_000,
                         )
                         check(mountWriter.status == "success") { mountWriter.message ?: "writer mount failed" }
+                        intent.getStringExtra("command_b64")?.let { encoded ->
+                            val command = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT).toString(Charsets.UTF_8)
+                            val execution = runtime.submit(writerSession, GuestOperation.EXEC_START,
+                                JSONObject().put("command", command), timeoutMs = 120_000)
+                            return@runBlocking JSONObject().put("status", execution.status)
+                                .put("message", execution.message).put("execution", execution.payload).toString()
+                        }
                         val write = runtime.submit(
                             writerSession,
                             GuestOperation.FS_WRITE,

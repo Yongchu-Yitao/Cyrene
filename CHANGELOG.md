@@ -198,7 +198,7 @@
 - 主 App 版本为 `0.2.0`（versionCode 3），支持 Android 9（API 28）或更新版本。
 - 远程控制功能只需安装 `Cyrene-Mobile-0.2.0.apk`；使用本地 Linux 工具时还需安装
   同一 Release 中的 `Cyrene-Mobile-Runtime-0.2.0.apk`，两者必须使用相同签名。
-- 本地 Agent 的模型配置复制仍需要兼容 `settings.models.copy` 的 Cyrene Desktop；
+- 本地 Agent 通过 `settings.models.copy` 读取桌面的 canonical 模型图；
   配置已安全保存到手机后，桌面离线不影响本地会话。
 
 ### 验证

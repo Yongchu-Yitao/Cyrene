@@ -6,7 +6,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Base64
 import androidx.core.app.NotificationCompat
-import ai.cyrene.mobile.MainActivity
+import ai.cyrene.mobile.DesktopWorkbenchActivity
 import ai.cyrene.mobile.R
 import ai.cyrene.mobile.data.SecureStore
 import ai.cyrene.mobile.localagent.database.DatabaseRuntimeStore
@@ -275,7 +275,7 @@ class LocalAgentForegroundService : Service() {
 
     private fun notification(runId: String, title: String, status: String): Notification {
         val openIntent = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
+            this, 0, Intent(this, DesktopWorkbenchActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val stopIntent = PendingIntent.getService(

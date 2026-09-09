@@ -2,6 +2,7 @@ package ai.cyrene.mobile.localagent.runtime
 
 import ai.cyrene.mobile.data.SecureStore
 import ai.cyrene.mobile.data.MobileOpenAiOAuthClient
+import ai.cyrene.mobile.data.resolvedModelCandidates
 import ai.cyrene.mobile.localagent.model.MODEL_EVENT_SCHEMA
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -96,10 +97,10 @@ class MobileProviderClient(private val store: SecureStore) : LocalModelTransport
         val phase = payload.getString("phase")
         val configuration = store.localModelConfiguration()
             ?: throw IllegalStateException("请先在设置中配置模型")
-        if (configuration.optString("source", "custom") == "codex") {
-            return@withContext completeCodex(payload, configuration)
-        }
         val candidate = primaryCandidate(configuration)
+        if (candidate.optString("adapter") == "codex_oauth") {
+            return@withContext completeCodex(payload, candidate)
+        }
         val transcriptKey = transcriptKey(payload, phase)
         val transcript = chatTranscripts.computeIfAbsent(transcriptKey) {
             ProviderTranscript(chatInput(payload, phase))
@@ -157,12 +158,26 @@ class MobileProviderClient(private val store: SecureStore) : LocalModelTransport
     }
 
     private fun primaryCandidate(models: JSONObject): JSONObject {
-        val candidate = models.optJSONArray("custom_models")?.optJSONObject(0)
-            ?: throw IllegalStateException("移动端没有可用的模型配置")
-        require(candidate.optString("provider", "openai_compatible") == "openai_compatible") {
-            "移动端当前仅支持 OpenAI-compatible API"
+        val candidates = resolvedModelCandidates(models, "primary")
+        val candidate = candidates.firstOrNull { item ->
+            when (item.optString("adapter")) {
+                "codex_oauth" -> store.openAiOAuthCredentials()
+                    ?.optString("refresh_token").orEmpty().isNotBlank()
+                "openai", "openai_compatible" -> item.optString("api_key").isNotBlank()
+                else -> false
+            }
+        } ?: candidates.firstOrNull()
+            ?: throw IllegalStateException("主要模型路由中没有可用的模型配置")
+        require(candidate.optString("adapter") in setOf("openai", "openai_compatible", "codex_oauth")) {
+            "移动端暂不支持 ${candidate.optString("adapter")} 模型适配器"
         }
         require(candidate.optString("model").isNotBlank()) { "模型标识为空" }
+        if (candidate.optString("adapter") == "codex_oauth") {
+            require(
+                store.openAiOAuthCredentials()?.optString("refresh_token").orEmpty().isNotBlank(),
+            ) { "请先在移动端登录 OpenAI" }
+            return candidate
+        }
         require(candidate.optString("api_key").isNotBlank()) { "请在移动端模型设置中重新输入 API Key" }
         val uri = URI(candidate.optString("base_url"))
         require(uri.scheme in setOf("http", "https") && !uri.host.isNullOrBlank() && uri.userInfo == null) {
@@ -171,11 +186,10 @@ class MobileProviderClient(private val store: SecureStore) : LocalModelTransport
         return candidate
     }
 
-    private fun completeCodex(payload: JSONObject, models: JSONObject): JSONObject {
+    private fun completeCodex(payload: JSONObject, candidate: JSONObject): JSONObject {
         val turnId = payload.getString("model_turn_id")
         val phase = payload.getString("phase")
-        val candidate = models.optJSONObject("codex_model") ?: JSONObject()
-        val model = candidate.optString("model").ifBlank { "gpt-5.1-codex" }
+        val model = candidate.optString("model")
         val transcriptKey = transcriptKey(payload, phase)
         val transcript = responsesTranscripts.computeIfAbsent(transcriptKey) {
             ProviderTranscript(responsesInput(payload))

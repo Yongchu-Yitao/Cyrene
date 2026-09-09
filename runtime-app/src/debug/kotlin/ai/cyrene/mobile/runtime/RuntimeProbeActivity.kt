@@ -19,7 +19,8 @@ class RuntimeProbeActivity : Activity() {
             val result = try {
                 runCatching {
                 val sessionId = "ls_runtime_probe"
-                val deadline = System.currentTimeMillis() + 180_000
+                val timeoutMs = intent.getLongExtra("timeout_ms", 180_000).coerceIn(180_000, 900_000)
+                val deadline = System.currentTimeMillis() + timeoutMs
                 val mount = manager.handle(request(sessionId, GuestOperation.SESSION_MOUNT, JSONObject(), deadline))
                 check(mount.status == "success") { mount.message ?: "mount failed" }
                 val sharedContent = "shared-by-$sessionId"

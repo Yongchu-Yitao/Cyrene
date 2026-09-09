@@ -12,8 +12,8 @@ android {
         applicationId = "ai.cyrene.mobile"
         minSdk = 28
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.2.5"
+        versionCode = 10
+        versionName = "0.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
@@ -35,6 +35,8 @@ android {
     }
     kotlinOptions.jvmTarget = "17"
     buildFeatures.compose = true
+    androidResources.noCompress += "gzip"
+    packaging.jniLibs.useLegacyPackaging = true
     packaging.resources.excludes += setOf(
         "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
         "META-INF/DEPENDENCIES",
@@ -47,6 +49,7 @@ android {
 
 dependencies {
     implementation(project(":runtime-protocol"))
+    implementation(project(":runtime-app"))
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)

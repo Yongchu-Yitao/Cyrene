@@ -11,6 +11,7 @@ enum class GuestOperation(val wireName: String) {
     FS_STAT("fs_stat"), FS_LIST("fs_list"), FS_READ("fs_read"), FS_WRITE("fs_write"),
     FS_WRITE_CHUNK("fs_write_chunk"), FS_PATCH("fs_patch"),
     FS_GLOB("fs_glob"), FS_GREP("fs_grep"), ARTIFACT_EXPORT("artifact_export"),
+    DESKTOP_START("desktop_start"), DESKTOP_STATUS("desktop_status"), DESKTOP_STOP("desktop_stop"),
     RESOURCE_USAGE("resource_usage"), HEALTH_CHECK("health_check"), SHUTDOWN("shutdown");
 
     companion object {

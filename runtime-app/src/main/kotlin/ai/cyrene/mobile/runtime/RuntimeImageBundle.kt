@@ -18,6 +18,9 @@ data class RuntimeImageBundle(
     val version: String,
     val engine: String,
     val guestArch: String,
+    val desktopBackend: Boolean = false,
+    val memoryMiB: Int = 256,
+    val kernelAppend: String = "console=ttyS0 rdinit=/init panic=-1 loglevel=4",
 )
 
 class RuntimeImageVerifier(private val context: Context) {
@@ -61,6 +64,11 @@ class RuntimeImageVerifier(private val context: Context) {
             version = manifest.getString("version"),
             engine = manifest.getString("engine"),
             guestArch = manifest.getString("guest_arch"),
+            desktopBackend = manifest.optBoolean("desktop_backend", false),
+            memoryMiB = manifest.optInt("memory_mib", 256).also {
+                require(it in 256..4096) { "Invalid guest memory budget" }
+            },
+            kernelAppend = manifest.optString("kernel_append", "console=ttyS0 rdinit=/init panic=-1 loglevel=4"),
         )
     }
 
@@ -73,11 +81,16 @@ class RuntimeImageVerifier(private val context: Context) {
             val temp = File(output, ".$name.tmp")
             context.assets.open("runtime/$name").use { input -> temp.outputStream().use(input::copyTo) }
             check(sha256(temp) == expected) { "Runtime asset digest mismatch: $name" }
-            check(temp.renameTo(target) || run { temp.copyTo(target, overwrite = true); temp.delete() }) {
+            check(temp.renameTo(target) || run {
+                temp.copyTo(target, overwrite = true)
+                check(sha256(target) == expected) { "Runtime copied asset digest mismatch: $name" }
+                temp.delete()
+            }) {
                 "Unable to install runtime asset: $name"
             }
         }
-        check(sha256(target) == expected) { "Installed runtime asset digest mismatch: $name" }
+        // Either the existing file or the atomically renamed temporary file
+        // has already been hashed. Avoid hashing multi-GB assets twice.
         return target
     }
 
@@ -89,15 +102,18 @@ class RuntimeImageVerifier(private val context: Context) {
         val target = File(output, installedName)
         if (!target.isFile || sha256(target) != expected) {
             val temp = File(output, ".$installedName.tmp")
-            GZIPInputStream(compressed.inputStream()).use { input ->
-                temp.outputStream().use(input::copyTo)
+            GZIPInputStream(compressed.inputStream(), 64 * 1024).use { input ->
+                SparseDisk.copy(input, temp)
             }
             check(sha256(temp) == expected) { "Runtime unpacked digest mismatch: $installedName" }
-            check(temp.renameTo(target) || run { temp.copyTo(target, overwrite = true); temp.delete() }) {
+            check(temp.renameTo(target) || run {
+                temp.inputStream().use { SparseDisk.copy(it, target) }
+                check(sha256(target) == expected) { "Runtime copied disk digest mismatch" }
+                temp.delete()
+            }) {
                 "Unable to install runtime output: $installedName"
             }
         }
-        check(sha256(target) == expected) { "Installed runtime output digest mismatch: $installedName" }
         return target
     }
 

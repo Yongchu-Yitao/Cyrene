@@ -19,6 +19,7 @@ class QemuRuntimeManager(private val context: Context) {
     private val vmLock = Any()
     @Volatile private var image: RuntimeImageBundle? = null
     @Volatile private var vm: QemuVirtualMachine? = null
+    @Volatile private var desktopEndpoint: DesktopBackendEndpoint? = null
 
     fun handle(request: GuestRequest): GuestResponse {
         if (System.currentTimeMillis() >= request.deadlineEpochMs) {
@@ -26,6 +27,9 @@ class QemuRuntimeManager(private val context: Context) {
         }
         return try {
             when (request.operation) {
+                GuestOperation.DESKTOP_START -> desktopStart(request)
+                GuestOperation.DESKTOP_STATUS -> desktopStatus(request)
+                GuestOperation.DESKTOP_STOP -> desktopStop(request)
                 GuestOperation.HELLO, GuestOperation.HEALTH_CHECK -> health(request)
                 GuestOperation.SESSION_MOUNT -> mount(request)
                 GuestOperation.SESSION_UNMOUNT -> unmount(request)
@@ -58,6 +62,7 @@ class QemuRuntimeManager(private val context: Context) {
         synchronized(vmLock) {
             vm?.close()
             vm = null
+            desktopEndpoint = null
         }
     }
 
@@ -65,6 +70,7 @@ class QemuRuntimeManager(private val context: Context) {
         synchronized(vmLock) {
             vm?.close()
             vm = null
+            desktopEndpoint = null
         }
         mounted.clear()
     }
@@ -74,6 +80,7 @@ class QemuRuntimeManager(private val context: Context) {
         val guest = vm?.lastHealth
         return success(request, JSONObject()
             .put("runtime_available", true)
+            .put("desktop_backend_available", verified.desktopBackend)
             .put("vm_running", vm != null)
             .put("image_signature_verified", true)
             .put("image_version", verified.version)
@@ -85,6 +92,40 @@ class QemuRuntimeManager(private val context: Context) {
             .put("session_running", request.sessionId in mounted)
             .put("active_sessions", mounted.size)
             .put("free_bytes", root.usableSpace))
+    }
+
+    private fun desktopStart(request: GuestRequest): GuestResponse = synchronized(vmLock) {
+        require(ensureImage().desktopBackend) { "Install a Runtime APK built with signed desktop assets" }
+        ensureVm(request.deadlineEpochMs)
+        val endpoint = checkNotNull(desktopEndpoint)
+        val result = checkNotNull(vm).execute(
+            "/opt/cyrene-mobile/desktop-control start ${quote(endpoint.token)}", request.deadlineEpochMs
+        )
+        check(result.exitCode == 0) { "Desktop backend failed to start: ${result.stderr}" }
+        while (System.currentTimeMillis() < request.deadlineEpochMs) {
+            val remaining = (request.deadlineEpochMs - System.currentTimeMillis()).coerceIn(1, 5000).toInt()
+            if (endpoint.healthy(remaining)) {
+                return@synchronized success(request, JSONObject().put("ready", true)
+                    .put("url", endpoint.url).put("token", endpoint.token)
+                    .put("auth_header", "X-Cyrene-Token"))
+            }
+            // Each health connection creates a guest socat worker. Fast polling
+            // competes with Python startup on the single emulated CPU.
+            Thread.sleep(1000)
+        }
+        error(request, "desktop_start_timeout", "Backend health deadline expired; inspect guest journalctl -u cyrene-desktop")
+    }
+
+    private fun desktopStatus(request: GuestRequest): GuestResponse = success(request, JSONObject()
+        .put("available", ensureImage().desktopBackend)
+        .put("ready", desktopEndpoint?.healthy() ?: false))
+
+    private fun desktopStop(request: GuestRequest): GuestResponse = synchronized(vmLock) {
+        if (ensureImage().desktopBackend && vm != null) {
+            val result = checkNotNull(vm).execute("/opt/cyrene-mobile/desktop-control stop", request.deadlineEpochMs)
+            check(result.exitCode == 0) { "Unable to stop desktop backend" }
+        }
+        success(request, JSONObject().put("ready", false))
     }
 
     private fun mount(request: GuestRequest): GuestResponse {
@@ -293,9 +334,10 @@ class QemuRuntimeManager(private val context: Context) {
         val current = vm
         if (current != null) return@synchronized current.ping(deadlineEpochMs)
         ensureRootDisk()
-        val created = QemuVirtualMachine(context, ensureImage(), rootfsDisk())
+        val endpoint = if (ensureImage().desktopBackend) DesktopBackendEndpoint() else null
+        val created = QemuVirtualMachine(context, ensureImage(), rootfsDisk(), endpoint?.port)
         try {
-            created.start(deadlineEpochMs).also { vm = created }
+            created.start(deadlineEpochMs).also { vm = created; desktopEndpoint = endpoint }
         } catch (error: Throwable) {
             created.close()
             throw IllegalStateException("Unable to boot signed Linux VM: ${error.message}", error)
@@ -308,8 +350,10 @@ class QemuRuntimeManager(private val context: Context) {
         val template = ensureImage().rootfsTemplate
         disk.parentFile?.mkdirs()
         val temp = File(disk.parentFile, ".rootfs.ext4.tmp")
-        template.inputStream().use { input -> temp.outputStream().use(input::copyTo) }
-        check(temp.renameTo(disk) || run { temp.copyTo(disk, overwrite = true); temp.delete() }) {
+        template.inputStream().use { SparseDisk.copy(it, temp) }
+        check(temp.renameTo(disk) || run {
+            temp.inputStream().use { SparseDisk.copy(it, disk) }; temp.delete()
+        }) {
             "Unable to create persistent Linux root disk"
         }
     }

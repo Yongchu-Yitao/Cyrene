@@ -67,5 +67,27 @@ class ConversationTimelineTest {
         assertFalse(timeline.single().has("liveReply"))
     }
 
+    @Test
+    fun recognizesDurableActivityWhenTransportDropsMarker() {
+        val reasoning = JSONObject()
+            .put("id", "reasoning_msg_1")
+            .put("role", "assistant")
+            .put("content", "")
+            .put("reasoning", "Inspecting the repository")
+        val tool = JSONObject()
+            .put("id", "activity_msg_1")
+            .put("role", "assistant")
+            .put("content", "")
+            .put("trace", JSONArray().put(JSONObject().put("tool", "Read")))
+        val prose = JSONObject()
+            .put("id", "message_1")
+            .put("role", "assistant")
+            .put("content", "Visible reply")
+
+        assertTrue(isConversationActivityMessage(reasoning))
+        assertTrue(isConversationActivityMessage(tool))
+        assertFalse(isConversationActivityMessage(prose))
+    }
+
     private fun event(type: String) = JSONObject().put("type", type)
 }
