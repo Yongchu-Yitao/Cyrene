@@ -1,5 +1,5 @@
 <resources>
-  <string name="app_name">Cyrene Mobile</string>
+  <string name="app_name">Cyrene</string>
   <string name="startup_tagline">你的桌面 Agent，随时在线</string>
   <string name="workbench_runtime_service_unavailable">无法连接应用内运行环境，请重新打开 Cyrene 后重试。</string>
   <string name="workbench_runtime_signature_mismatch">应用内运行环境连接被系统拒绝，请重新安装 Cyrene。</string>
