@@ -1,0 +1,124 @@
+name: Android single APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'src/cyrene/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'SOUL.default.md'
+      - 'LICENSE'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - 'src/cyrene/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'SOUL.default.md'
+      - 'LICENSE'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Build signed ARM64 desktop image
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - name: Reclaim preinstalled tools unused by the image build
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 20 * 1024**3, "The full desktop image needs at least 20 GiB free disk"'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.12'
+          cache: npm
+          cache-dependency-path: src/cyrene/workbench/webui/package-lock.json
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: '0.11.28'
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and check the shared Workbench and image source boundary
+        run: |
+          npm ci --prefix src/cyrene/workbench/webui
+          npm run build --prefix src/cyrene/workbench/webui
+          node --test src/cyrene/workbench/webui/frontend/features/layout/mobile-gesture.test.mjs src/cyrene/workbench/webui/frontend/features/layout/native-wheel.test.mjs
+          uv run --isolated --no-project --with pytest pytest mobile/runtime-image/desktop/test_build.py -q
+      - name: Build clean image from this checkout
+        run: |
+          umask 077
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$RUNNER_TEMP/runtime-ci.pem"
+          python mobile/runtime-image/desktop/build.py --arch arm64 --output mobile/build/unified-assets --signing-key "$RUNNER_TEMP/runtime-ci.pem"
+          git rev-parse HEAD > mobile/build/unified-assets/source-commit.txt
+      - name: Remove temporary image signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/runtime-ci.pem"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-runtime-${{ github.sha }}
+          path: mobile/build/unified-assets/
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+  apk:
+    name: Test and package Android
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-runtime-${{ github.sha }}
+          path: mobile/build/unified-assets
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Verify signed inputs, test and assemble
+        working-directory: mobile
+        run: |
+          python3 ci/verify-runtime.py build/unified-assets
+          ./gradlew :app:testDebugUnitTest --tests 'ai.cyrene.mobile.ConversationTimelineTest' --tests 'ai.cyrene.mobile.localagent.GoldenContractTest' --tests 'ai.cyrene.mobile.desktop.*' :runtime-app:testDebugUnitTest :app:assembleDebug -Dorg.gradle.jvmargs=-Xmx6g --max-workers=2 --no-daemon
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/Cyrene-Android-debug.apk
+          cp build/unified-assets/source-commit.txt dist/
+          cp build/unified-assets/runtime/manifest.json dist/runtime-manifest.json
+          cd dist
+          sha256sum Cyrene-Android-debug.apk > Cyrene-Android-debug.apk.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Cyrene-Android-debug-${{ github.sha }}
+          path: mobile/dist/
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: android-test-results-${{ github.sha }}
+          path: |
+            mobile/app/build/test-results/
+            mobile/runtime-app/build/test-results/
+          if-no-files-found: ignore

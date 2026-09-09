@@ -59,7 +59,7 @@ python3 runtime-image/desktop/install-arm64-engine.py
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/cyrene-desktop-dev.pem
 python3 runtime-image/desktop/build.py \
   --arch arm64 \
-  --source ../Cyrene \
+  --source .. \
   --output "$PWD/build/desktop-assets" \
   --signing-key /tmp/cyrene-desktop-dev.pem
 ./gradlew :app:assembleDebug -PcyreneDesktopAssets="$PWD/build/desktop-assets" \
@@ -104,7 +104,7 @@ remain device acceptance work. Never publish an old probe result as a new run.
 ## Local verification
 
 ```sh
-uv run --project ../Cyrene pytest runtime-image/desktop/test_build.py -q
+uv run --project .. pytest runtime-image/desktop/test_build.py -q
 ./gradlew :runtime-app:testDebugUnitTest :app:assembleDebug
 ```
 

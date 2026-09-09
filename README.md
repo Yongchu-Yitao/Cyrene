@@ -148,3 +148,7 @@ see [Installation](docs/installation.md) and
 ## License
 
 [Apache License 2.0](LICENSE)
+
+## Android
+
+Android development now lives in [`mobile/`](mobile/README.md), sharing this checkout’s Workbench and Python backend. See the [monorepo build guide](project-notes/android-monorepo.zh-CN.md).

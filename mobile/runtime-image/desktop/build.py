@@ -37,7 +37,8 @@ def copy_source(source, target):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="arm64")
-    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[3],
+                        help="Cyrene checkout (defaults to the enclosing monorepo)")
     parser.add_argument("--output", type=Path, required=True, help="New Android assets root; runtime/ is created inside it")
     parser.add_argument("--signing-key", type=Path, required=True)
     parser.add_argument("--disk-mib", type=int, default=8192)

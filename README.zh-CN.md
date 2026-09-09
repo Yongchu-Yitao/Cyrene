@@ -135,3 +135,7 @@ uv run cyrene status
 ## License
 
 [Apache License 2.0](LICENSE)
+
+## Android
+
+Android 移动端已整合到 [`mobile/`](mobile/README.md)，与桌面端共用当前提交的 Workbench 和 Python 后端。参见[统一仓库与自动构建说明](project-notes/android-monorepo.zh-CN.md)。

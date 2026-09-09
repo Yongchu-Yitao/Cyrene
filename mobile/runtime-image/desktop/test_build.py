@@ -24,6 +24,8 @@ class BuildTests(unittest.TestCase):
             (source / "src/cyrene/workbench/webui/static/app").mkdir(parents=True)
             for name in ("pyproject.toml", "LICENSE", "SOUL.default.md", ".env", "db.sqlite3"):
                 (source / name).write_text("private" if name.startswith((".", "db")) else "source")
+            (source / "mobile/build").mkdir(parents=True)
+            (source / "mobile/build/private-image").write_text("device data")
             for name in (".env", "runtime.db", "cache.sqlite3-wal", "module.py"):
                 (source / "src/cyrene" / name).write_text(name)
             target = root / "context"
@@ -31,6 +33,7 @@ class BuildTests(unittest.TestCase):
             self.assertTrue((target / "src/cyrene/module.py").exists())
             self.assertFalse((target / ".env").exists())
             self.assertFalse((target / "db.sqlite3").exists())
+            self.assertFalse((target / "mobile").exists())
             for name in (".env", "runtime.db", "cache.sqlite3-wal"):
                 self.assertFalse((target / "src/cyrene" / name).exists())
 
