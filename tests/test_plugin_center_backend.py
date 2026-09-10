@@ -750,6 +750,9 @@ def test_cli_hook_listing_includes_existing_runtime_bindings(tmp_path, monkeypat
             )
 
             hooks = runtime_hook_listing(str(state_root / "db.sqlite3"))
+            assert hook_listing_module.runtime_hook_listing_state(str(state_root / "db.sqlite3")) == {
+                "system_hooks": hooks, "system_hooks_status": "ready",
+            }
 
             by_id = {item["id"]: item for item in hooks}
             assert set(by_id) == {

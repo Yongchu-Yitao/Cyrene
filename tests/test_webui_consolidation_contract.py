@@ -16,6 +16,8 @@ WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
 BROWSER_AND_VENDOR_GLOBALS = {
+    "visualViewport",  # Browser API used to track the mobile keyboard.
+    "CyreneAndroid",  # Optional bridge supplied by the Android WebView host.
     "AudioContext",
     "CustomEvent",
     "CyreneCodeMirror",

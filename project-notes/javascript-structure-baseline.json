@@ -1223,18 +1223,8 @@
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>.handleSessionShortcut": {
     "decisions": 22
   },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#35": {
-    "decisions": 37
-  },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#39": {
     "decisions": 30
-  },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#40": {
-    "lines": 126,
-    "decisions": 53
-  },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.<anonymous>#45": {
-    "decisions": 35
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.handleTopbarItemKeyDown": {
     "decisions": 29
@@ -1669,5 +1659,15 @@
     "lines": 460,
     "decisions": 38,
     "hooks": 41
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderBrowserDownload": {
+    "decisions": 37
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderSessionTab": {
+    "lines": 126,
+    "decisions": 53
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderPinnedResource": {
+    "decisions": 35
   }
 }

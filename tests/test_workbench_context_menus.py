@@ -181,7 +181,10 @@ def test_existing_item_action_menus_are_available_from_right_click():
     assert 'className="workbench-top-project-more"' in project_entry
     assert "event.stopPropagation();" in project_entry
     assert "setProjectActionId(actionsOpen ? \"\" : project.id);" in project_entry
-    assert 'className="workbench-top-project-actions" role="menu"' in project_entry
+    assert "<ProjectActionPopover" in project_entry
+    popover = frontend_module_source("features/shell/project-action-popover.jsx")
+    assert 'role="menu"' in popover
+    assert "createPortal" in popover
     conversation_board_card = board.split('className={"wb-board-card is-"', 1)[1].split(
         "</article>", 1
     )[0]
@@ -490,8 +493,8 @@ def test_project_memory_editor_and_manual_chat_trigger_are_wired_end_to_end():
     assert 't("projectMemory.versionSelector")' in modal
     assert "readOnly={!!selectedVersion}" in modal
 
-    top_actions = topbar.split('className="workbench-top-project-actions"', 1)[1].split(
-        "</div>", 1
+    top_actions = topbar.split("<ProjectActionPopover", 1)[1].split(
+        "</ProjectActionPopover>", 1
     )[0]
     assert top_actions.index('t("rail.editProject")') < top_actions.index(
         't("rail.editMemory")'

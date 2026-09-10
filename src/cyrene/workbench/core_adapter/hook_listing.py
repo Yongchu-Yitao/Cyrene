@@ -107,7 +107,7 @@ def runtime_hook_action(hook: Hook):
     return execute
 
 
-def runtime_hook_listing(db_path: str) -> list[dict[str, Any]]:
+def runtime_hook_listing(db_path: str, *, strict: bool = False) -> list[dict[str, Any]]:
     """Return a newest-first, de-duplicated view of all persisted bindings."""
 
     normalized_db_path = str(db_path or "").strip()
@@ -126,6 +126,8 @@ def runtime_hook_listing(db_path: str) -> list[dict[str, Any]]:
         if not rows:
             return []
     except sqlite3.Error:
+        if strict:
+            raise
         logger.debug("Unable to read runtime Hook bindings", exc_info=True)
         return []
 
@@ -146,6 +148,8 @@ def runtime_hook_listing(db_path: str) -> list[dict[str, Any]]:
                     "ORDER BY created_at, hook_id"
                 ).fetchall()
         except sqlite3.Error:
+            if strict:
+                raise
             logger.debug("Unable to read Hook bindings from %s", tree_path, exc_info=True)
             continue
         for record in records:
@@ -186,6 +190,18 @@ def runtime_hook_listing(db_path: str) -> list[dict[str, Any]]:
             str(item["id"]),
         ),
     )
+
+
+def runtime_hook_listing_state(db_path: str) -> dict[str, Any]:
+    """Describe persisted bindings without creating an Agent session or database."""
+    try:
+        hooks = runtime_hook_listing(db_path, strict=True)
+        index = workbench_agent_data_directory(db_path) / "context" / "index.sqlite3"
+        status = "ready" if hooks else "empty" if index.is_file() else "uninitialized"
+        return {"system_hooks": hooks, "system_hooks_status": status}
+    except (sqlite3.Error, OSError, ValueError):
+        logger.warning("Unable to load persisted system Hooks", exc_info=True)
+        return {"system_hooks": [], "system_hooks_status": "error"}
 
 
 def update_runtime_hook(
@@ -368,6 +384,7 @@ def update_runtime_hook(
 
 __all__ = [
     "runtime_hook_listing",
+    "runtime_hook_listing_state",
     "runtime_hook_action",
     "runtime_hook_override",
     "update_runtime_hook",

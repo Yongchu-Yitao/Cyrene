@@ -10,7 +10,7 @@ test('wheel listener cancels natively, uses latest render and is removed on ref 
     useMemo(create) { return memo ||= create(); },
   };
   const source = fs.readFileSync(new URL('../../shared/native-wheel.jsx', import.meta.url), 'utf8');
-  const hook = vm.runInNewContext(source.replace('export function', 'function') + '\nuseNativeWheel;', { React });
+  const hook = vm.runInNewContext(source.replaceAll('export function', 'function') + '\nuseNativeWheel;', { React });
   const target = new EventTarget();
   const originalAdd = target.addEventListener.bind(target);
   target.addEventListener = (type, listener, settings) => { options = settings; originalAdd(type, listener, settings); };

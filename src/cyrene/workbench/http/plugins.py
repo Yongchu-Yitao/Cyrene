@@ -24,7 +24,7 @@ from cyrene.core.plugin import (
 from cyrene.plugins import PluginApplicationHost
 from cyrene.core.plugin.registry import PluginNotFoundError
 from cyrene.workbench.core_adapter.hook_listing import (
-    runtime_hook_listing,
+    runtime_hook_listing_state,
     runtime_hook_action,
     runtime_hook_override,
     update_runtime_hook,
@@ -500,7 +500,7 @@ def register_plugin_routes(
             }
         return {
             **payload,
-            "system_hooks": runtime_hook_listing(host.db_path),
+            **runtime_hook_listing_state(host.db_path),
             "tools": _hook_tool_options(host),
             "custom_available": callable(custom_listing),
         }

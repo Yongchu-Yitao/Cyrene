@@ -1,4 +1,4 @@
-import { useNativeWheel } from "../../shared/native-wheel.jsx"
+import { useNativeWheelElement } from "../../shared/native-wheel.jsx"
 import { wbcProjectRuntimeTranscript, wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { openDoctor } from "../doctor/doctor.jsx"
 import { failureScope } from '../doctor/failure-scope.mjs'
@@ -1343,7 +1343,6 @@ function wbcShouldStickToConversationBottom(wasSticking, previousScrollTop, scro
   return wasSticking === true;
 }
 
-
 function wbcSelectionTextRect(range) {
   if (!range) return null;
   var rects = typeof range.getClientRects === "function" ? range.getClientRects() : null;
@@ -1834,7 +1833,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
   var running = !!runtime;
   var mainRef = useWbcRef(null);
   var stageRef = useWbcRef(null);
-  var scrollRef = useWbcRef(null);
+  var [scrollRef, threadWheelRef] = useNativeWheelElement(handleConversationHorizontalWheel);
   var selectionMenuRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var lastObservedScrollTopRef = useWbcRef(null);
@@ -2284,8 +2283,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
     if (payload && onOpenDroppedChat) onOpenDroppedChat(payload.id);
   }
 
-  var threadWheelRef = useNativeWheel(handleConversationHorizontalWheel, scrollRef);
-
   function handleConversationHorizontalWheel(event) {
     if (event.target && event.target.closest && event.target.closest("[data-mobile-drawer]")) return;
     if (event.target && event.target.closest && event.target.closest(
@@ -2350,7 +2347,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
         data-cyrene-revision-volatile="true"
         ref={threadWheelRef}
         onScroll={onScroll}
-
         onAnimationEnd={function (event) {
           if (event.animationName === "wbc-retry-output-clear" && onRetryClearAnimationEnd) {
             onRetryClearAnimationEnd();

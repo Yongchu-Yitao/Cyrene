@@ -15,3 +15,9 @@ export function useNativeWheel(handler, forwardedRef) {
     };
   }, [forwardedRef]);
 }
+
+export function useNativeWheelElement(handler) {
+  const elementRef = React.useRef(null);
+  const wheelRef = useNativeWheel(handler, elementRef);
+  return [elementRef, wheelRef];
+}

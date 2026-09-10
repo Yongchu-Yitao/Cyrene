@@ -1,3 +1,5 @@
+import { readTopbarPortalTheme, topbarCandidates } from "./topbar-presentation.jsx"
+import { useMobileTopbar } from "./mobile-topbar.jsx"
 import { ProjectActionPopover } from "./project-action-popover.jsx"
 import { useTopbarMenus } from "./topbar-menus.jsx"
 import { useTopbarHoverPreview } from "./topbar-hover-preview.jsx"
@@ -16,7 +18,6 @@ import {
   wbVisibleSessionTabsByWidth,
 } from "../session/activity.jsx"
 import { WorkbenchHelpCenter } from "./support.jsx"
-
 var {
   useEffect: useWorkbenchEffect,
   useLayoutEffect: useWorkbenchLayoutEffect,
@@ -25,11 +26,9 @@ var {
 } = React;
 var WorkbenchModel = workbenchServices.model();
 var WORKBENCH_TOPBAR_TAB_DRAG_MIME = "application/x-cyrene-topbar-tab+json";
-
 function wbTopbarTabKey(item) {
   return String(item && item.kind || "") + ":" + String(item && item.id || "");
 }
-
 function WorkbenchTabKindIcon({ item }) {
   var resolvedKind = String(item && item.kind || "");
   var payload = item && item.payload && typeof item.payload === "object" ? item.payload : {};
@@ -98,34 +97,8 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
   var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
   var browserAvailable = pluginModules.indexOf("browser") >= 0;
   var memoryAvailable = pluginModules.indexOf("memory") >= 0;
-  var fallbackTabs = (Array.isArray(recentSessions) ? recentSessions : []).concat(
-    Array.isArray(overflowSessions) ? overflowSessions : []
-  );
-  var candidates = Array.isArray(sessionCandidates) && sessionCandidates.length
-    ? sessionCandidates : fallbackTabs;
-  var selectedTabKey = String(activeTabKey || (activePage === "chat" && activeChatId ? "chat:" + activeChatId : ""));
-  var [compactTopbar, setCompactTopbar] = useWorkbenchState(() => window.matchMedia('(max-width: 767px)').matches);
-  var [moreOpen, setMoreOpen] = useWorkbenchState(false);
-  var moreRef = useWorkbenchRef(null);
-  useWorkbenchEffect(function () {
-    var query = window.matchMedia('(max-width: 767px)');
-    function change() { setCompactTopbar(query.matches); setMoreOpen(false); }
-    query.addEventListener('change', change);
-    return () => query.removeEventListener('change', change);
-  }, []);
-  useWorkbenchEffect(function () {
-    if (!moreOpen) return;
-    function dismiss(event) {
-      if (event.type === 'keydown' && event.key !== 'Escape') return;
-      if (event.type !== 'keydown' && moreRef.current?.contains(event.target)) return;
-      setMoreOpen(false);
-      if (event.type === 'keydown') moreRef.current?.querySelector('.workbench-mobile-more')?.focus();
-    }
-    document.addEventListener('pointerdown', dismiss);
-    document.addEventListener('keydown', dismiss);
-    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', dismiss); };
-  }, [moreOpen]);
-  var [tabStripWidth, setTabStripWidth] = useWorkbenchState(0);
+  var { candidates, selectedTabKey } = topbarCandidates(recentSessions, overflowSessions, sessionCandidates, activeTabKey, activePage, activeChatId);
+  var { compactTopbar, moreOpen, setMoreOpen, moreRef, tabStripWidth, setTabStripWidth, projectActionAnchor, setProjectActionAnchor } = useMobileTopbar();
   var adaptiveTabs = wbVisibleSessionTabsByWidth(candidates, selectedTabKey, tabStripWidth);
   var tabs = adaptiveTabs.visible;
   var overflowTabs = adaptiveTabs.overflow;
@@ -141,7 +114,6 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
   var [resourceDropActive, setResourceDropActive] = useWorkbenchState(false);
   var [chatSideHidden, setChatSideHidden] = useWorkbenchState(false);
   var [projectMenuOpen, setProjectMenuOpen] = useWorkbenchState(false);
-  var [projectActionAnchor, setProjectActionAnchor] = useWorkbenchState(null);
   var [projectActionId, setProjectActionId] = useWorkbenchState("");
   var [voiceCommand, setVoiceCommand] = useWorkbenchState(function () { return WbVoiceCommand.snapshot(); });
   var [browserManagerState, setBrowserManagerState] = useWorkbenchState({ ok: true, pageCount: 0, downloadCount: 0, pages: [], downloads: [] });
@@ -405,23 +377,6 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
   ) : (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
   );
-
-  function readTopbarPortalTheme() {
-    var portalTheme = {};
-    var themeSource = document.querySelector(".workbench-shell");
-    if (themeSource && typeof getComputedStyle === "function") {
-      var computedTheme = getComputedStyle(themeSource);
-      [
-        "--wb-surface", "--wb-card-bg", "--wb-card-bg-strong", "--wb-line", "--wb-line-2",
-        "--wb-text", "--wb-muted", "--wb-faint",
-        "--wb-control-bg", "--wb-control-hover-bg", "--wb-row-hover-bg",
-        "--wb-flyout-bg", "--wb-flyout-border", "--wb-flyout-shadow",
-        "--wb-green", "--wb-amber", "--wb-red", "--wb-accent", "--wb-ui-font-scale",
-      ].forEach(function (name) { portalTheme[name] = computedTheme.getPropertyValue(name); });
-      portalTheme.fontFamily = computedTheme.fontFamily;
-    }
-    return portalTheme;
-  }
 
   function browserOwnerSession(page) {
     return (Array.isArray(browserOwners) ? browserOwners : tabs.concat(overflowTabs)).find(function (item) {
@@ -1085,7 +1040,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
                 <b>{browserManagerDownloads.length}</b>
               </header>
               <div className="workbench-browser-manager-download-list">
-                {browserManagerDownloads.map(function (download) {
+                {browserManagerDownloads.map(function renderBrowserDownload(download) {
                   var total = Math.max(0, Number(download.totalBytes) || 0);
                   var received = Math.max(0, Number(download.receivedBytes) || 0);
                   var percent = total > 0 ? Math.max(0, Math.min(100, Math.round(received / total * 100))) : 0;
@@ -1223,7 +1178,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       <nav ref={tabStripRef} className="workbench-session-tabs" aria-label={t("workbench.recentSessions", "Recent sessions")}>
-        {tabs.map(function (item) {
+        {tabs.map(function renderSessionTab(item) {
           var isActive = wbTopbarTabKey(item) === selectedTabKey;
           var kindLabel = topbarTabKindLabel(item);
           var activity = item.activity || { phase: "idle" };
@@ -1413,7 +1368,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
           if (resource && onPinResource) onPinResource(resource);
         }}
       >
-        {resources.map(function (resource) {
+        {resources.map(function renderPinnedResource(resource) {
           var label = resource.kind === "file"
             ? (resource.name || resource.title || "file")
             : resource.kind === "conversation"

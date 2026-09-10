@@ -72,9 +72,8 @@ export function DoctorPanel({ scope = {}, onClose }) {
         <details><summary>{t("doctor.details")}</summary><small>{item.id} · {item.code}</small><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(item.evidence, null, 2)}</pre></details>
         {item.actions.map((action, index) => <span key={index}>{action.available === false ? <small>{action.reason}</small> : button(t("doctor.reviewRepair"), () => perform(async () => setPlan(await request("reports/" + report.id + "/repair-plan", "POST", { finding_id: item.id, action_index: index }))))}</span>)}
       </article>;
-  return <section className="wb-doctor-panel" aria-label={t("doctor.title")}>
-    <header className="wb-doctor-head"><div className="wb-doctor-title"><span className="wb-doctor-mark" aria-hidden="true">✚</span><div><span className="wb-doctor-eyebrow">{t("doctor.eyebrow")}</span><h2>{t("doctor.title")}</h2></div></div>{onClose && <button type="button" className="workbench-icon-btn" aria-label={t("doctor.close")} onClick={onClose}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 6 12 12M18 6 6 18" /></svg></button>}</header><div className="wb-doctor-body">
-    <p>{t("doctor.intro")}</p>
+  return <section className="settings-panel wb-doctor-panel" aria-label={t("doctor.title")}>
+    <header className="wb-doctor-head"><div className="wb-section-title"><h3>{t("doctor.title")}</h3><p>{t("doctor.intro")}</p></div>{onClose && <button type="button" className="workbench-icon-btn" aria-label={t("doctor.close")} onClick={onClose}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 6 12 12M18 6 6 18" /></svg></button>}</header><div className="wb-doctor-body">
     <div className="wb-doctor-actions">
       {button(t("doctor.recheck"), () => scan(true), busy || refreshing || report?.failure?.status === "running" || (report && report.analysis.status === "running"))}
 
@@ -100,9 +99,8 @@ export function DoctorPanel({ scope = {}, onClose }) {
         <p>{t('doctor.failureStatus.' + report.failure.status)}{report.failure.status === 'running' && ' · ' + t('doctor.failurePhase.' + report.failure.phase)}</p>
         {report.failure.reason && <p>{['recovery_action_ready', 'restart_required', 'host_transition_failed', 'pending_question_requires_answer', 'model_probe_passed', 'model_probe_failed', 'ambiguous_failure_target', 'failure_target_unavailable', 'candidate_unavailable', 'runtime_not_verified'].includes(report.failure.reason) ? t('doctor.failureReason.' + report.failure.reason) : t("doctor.furtherHelp")}</p>}
       </div>}
-        <details open={!report.failure}><summary>{t("doctor.descriptionLabel")}</summary>
-        <label className="wb-doctor-description-label" htmlFor={descriptionId}>{t("doctor.descriptionLabel")}</label>
-        <textarea id={descriptionId} className="wb-doctor-description" rows={3} maxLength={4000} value={description} onChange={event => setDescription(event.target.value)} disabled={busy || report.analysis.status === "running"} placeholder={t("doctor.descriptionPlaceholder")} aria-describedby={descriptionId + "-hint"} />
+        <details open={!report.failure}><summary id={descriptionId + "-label"}>{t("doctor.descriptionLabel")}</summary>
+        <textarea id={descriptionId} className="wb-textarea wb-doctor-description" aria-labelledby={descriptionId + "-label"} rows={3} maxLength={4000} value={description} onChange={event => setDescription(event.target.value)} disabled={busy || report.analysis.status === "running"} placeholder={t("doctor.descriptionPlaceholder")} aria-describedby={descriptionId + "-hint"} />
         <small className="wb-doctor-description-hint" id={descriptionId + "-hint"}>{t("doctor.descriptionHint")} <span>{description.length}/4000</span></small>
         </details>
         <p>{({ idle: t("doctor.idle"), running: t("doctor.running"), completed: t("doctor.completed"), cancelled: t("doctor.cancelled"), unavailable: t("doctor.unavailable") })[report.analysis.status]}</p>

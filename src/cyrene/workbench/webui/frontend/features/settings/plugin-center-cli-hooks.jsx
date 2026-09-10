@@ -314,6 +314,13 @@ function CliHookEditor(props) {
   </form>
 }
 
+function useHookEditor() {
+  var [editing, setEditing] = useStateSt(""), [draft, setDraft] = useStateSt(emptyDraft)
+  var [expanded, setExpanded] = useStateSt({})
+  var [query, setQuery] = useStateSt("")
+  return { editing, setEditing, draft, setDraft, expanded, setExpanded, query, setQuery };
+}
+
 function CliHooksPanel(props) {
   var t = props.t
   var [hooks, setHooks] = useStateSt([]), [systemHooks, setSystemHooks] = useStateSt([]), [proposals, setProposals] = useStateSt([])
@@ -321,14 +328,14 @@ function CliHooksPanel(props) {
   var [results, setResults] = useStateSt({}), [audit, setAudit] = useStateSt([])
   var [loading, setLoading] = useStateSt(true), [busy, setBusy] = useStateSt("")
   var [customAvailable, setCustomAvailable] = useStateSt(false)
-  var [editing, setEditing] = useStateSt(""), [draft, setDraft] = useStateSt(emptyDraft)
-  var [expanded, setExpanded] = useStateSt({})
-  var [query, setQuery] = useStateSt("")
-
+  var [loadError, setLoadError] = useStateSt(false), [systemStatus, setSystemStatus] = useStateSt("empty")
+  var { editing, setEditing, draft, setDraft, expanded, setExpanded, query, setQuery } = useHookEditor();
   function tell(message, level) { if (props.notify) props.notify(message, level || "info") }
   function load(silent) {
     if (!silent) setLoading(true)
     return request("/api/hooks").then(function (payload) {
+      setLoadError(false)
+      setSystemStatus(payload.system_hooks_status || "empty")
       var available = payload.custom_available === true
       setCustomAvailable(available)
       setHooks(Array.isArray(payload.hooks) ? payload.hooks : [])
@@ -337,8 +344,8 @@ function CliHooksPanel(props) {
       setProposals(Array.isArray(payload.proposals) ? payload.proposals.filter(function (item) { return item.status === "pending" }) : [])
       setResults(payload.configuration_results && typeof payload.configuration_results === "object" ? payload.configuration_results : {})
       if (!available) { setAudit([]); return null }
-      return request("/api/plugin-center/cli/hooks/audit?limit=30").then(function (auditPayload) { setAudit(Array.isArray(auditPayload.records) ? auditPayload.records : []) })
-    }).catch(function (error) { tell(error.message || String(error), "error") }).finally(function () { if (!silent) setLoading(false) })
+      return request("/api/plugin-center/cli/hooks/audit?limit=30").then(function (auditPayload) { setAudit(Array.isArray(auditPayload.records) ? auditPayload.records : []) }).catch(function (error) { tell(error.message || String(error), "error") })
+    }).catch(function (error) { setLoadError(true); tell(error.message || String(error), "error") }).finally(function () { if (!silent) setLoading(false) })
   }
   useEffectSt(function () { load() }, [])
   var generationSignature = hooks.filter(function (item) { return item.configuration_status === "configuring" }).map(function (item) { return item.id }).join("|")
@@ -347,7 +354,6 @@ function CliHooksPanel(props) {
     var timer = window.setInterval(function () { load(true) }, 2000)
     return function () { window.clearInterval(timer) }
   }, [generationSignature])
-
   function mutate(key, path, init, success) {
     setBusy(key)
     return request(path, init).then(function () { if (success) tell(success, "success"); return load() }).catch(function (error) { tell(error.message || String(error), "error") }).finally(function () { setBusy("") })
@@ -465,7 +471,6 @@ function CliHooksPanel(props) {
       setEditing(""); tell(t("settings.systemHookSaved"), "success"); return load()
     }).catch(function (error) { tell(error.message || String(error), "error") }).finally(function () { setBusy("") })
   }
-
   var recentResults = Object.keys(results).map(function (key) { return { key: key, value: results[key] } }).slice(-4).reverse()
   var normalizedQuery = query.trim().toLowerCase()
   var visibleHooks = hooks.filter(function (item) { return !normalizedQuery || hookSearchText(item, t).indexOf(normalizedQuery) >= 0 })
@@ -475,10 +480,11 @@ function CliHooksPanel(props) {
   return <section className={'wb-cli-hooks-panel' + (standalone ? ' wb-cli-hooks-page' : '')}>
     <header><div>{standalone ? <h2>{t("settings.hooks", "Automatic triggers")}</h2> : <h4>{t("settings.agentHooks", "CLI Hooks")}</h4>}<p>{standalone ? t("settings.hooksSubtitle", "Review every system and user-defined lifecycle trigger in one place.") : t("settings.agentHooksSubtitle", "Run approved CLI commands through tree-local Hooks.")}</p></div>{customAvailable && <button type="button" className={'wb-btn' + (standalone ? ' primary' : '')} disabled={!!busy} onClick={function () { setEditing(editing === "new" ? "" : "new"); setDraft(emptyRequestDraft()) }}>{editing === "new" ? t("common.cancel", "Cancel") : t("settings.addHook", "Add trigger")}</button>}</header>
     {editing === "new" && <HookRequestEditor t={t} tools={tools} draft={draft} setDraft={setDraft} busy={busy === "generate"} onSave={submitGeneration} onCancel={function () { setEditing("") }} />}
-    {standalone && <div className="wb-hook-filter"><input className="wb-input" value={query} disabled={loading} onChange={function (event) { setQuery(event.target.value) }} placeholder={t("settings.hookFilter", "Filter Hooks")} aria-label={t("settings.hookFilter", "Filter Hooks")} /><span>{t("settings.hookCount", { n: totalVisible }, String(totalVisible) + " Hooks")}</span></div>}
-    <div className="wb-cli-hook-group"><h5>{t("settings.userHooks", "User triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !visibleHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t(customAvailable ? "settings.hookEmpty" : "settings.hookCustomUnavailable")}</div>}{visibleHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} manageable={customAvailable} expanded={expanded[key] === true} editing={editing === item.id} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={edit} onSave={save} onSaveTuning={function (event) { saveTuning(event, item) }} onCancelEdit={function () { setEditing("") }} onToggle={toggle} onTest={test} onDelete={remove} onRetry={retry} /> })}</div>
+    <HookFilter {...{ standalone, query, loading, setQuery, t, loadError, systemStatus, totalVisible }} />
+    {!loading && loadError && <div className="wb-extensions-empty" role="alert"><p>{t("settings.hookLoadError")}</p><button type="button" className="wb-btn" onClick={function () { load() }}>{t("settings.hookReload")}</button></div>}
+    <div className="wb-cli-hook-group"><h5>{t("settings.userHooks", "User triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !loadError && !visibleHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t(customAvailable ? "settings.hookEmpty" : "settings.hookCustomUnavailable")}</div>}{visibleHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} manageable={customAvailable} expanded={expanded[key] === true} editing={editing === item.id} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={edit} onSave={save} onSaveTuning={function (event) { saveTuning(event, item) }} onCancelEdit={function () { setEditing("") }} onToggle={toggle} onTest={test} onDelete={remove} onRetry={retry} /> })}</div>
     {proposals.length > 0 && <div className="wb-cli-hook-group"><h5>{t("settings.hookPendingApprovals", "Pending approvals")}</h5>{proposals.map(function (item) { return <CliHookProposal key={item.id} item={item} t={t} busy={!!busy} onDecide={decide} /> })}</div>}
-    {standalone && <div className="wb-cli-hook-group"><h5>{t("settings.systemHooks", "System triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !visibleSystemHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t("settings.hookSystemEmpty", "No persisted system triggers found.")}</div>}{visibleSystemHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} expanded={expanded[key] === true} editing={editing === "system:" + key} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={editSystem} onSaveSystem={function (event) { saveSystem(event, item) }} onCancelEdit={function () { setEditing("") }} /> })}</div>}
+    <SystemHookGroup {...{ standalone, visibleSystemHooks, systemHooks, loading, loadError, systemStatus, load, t, tools, busy, expanded, editing, draft, setDraft, toggleExpanded, editSystem, saveSystem, setEditing, normalizedQuery }} />
     {recentResults.length > 0 && <div className="wb-cli-hook-group"><h5>{t("settings.extensionHookTitle", "Automatic integration")}</h5>{recentResults.map(function (item) { return <div key={item.key} className="wb-cli-hook-result"><code>{item.key}</code><span>{String(item.value && (item.value.reason || item.value.status) || "")}</span></div> })}</div>}
     {audit.length > 0 && <details className="wb-cli-hook-audit"><summary>{t("settings.hookExecutionLog", "Execution and audit log")}</summary>{audit.slice(0, 10).map(function (item, index) { return <div key={String(item.timestamp || index)}><code>{item.event ? hookEventLabel(item.event, t) : item.action || item.kind}</code><span>{item.status || item.result || item.hook_id}</span></div> })}</details>}
   </section>
@@ -491,3 +497,11 @@ function HooksPanel(props) {
 }
 
 export { CliHooksPanel, HooksPanel }
+
+function SystemHookGroup({ standalone, visibleSystemHooks, systemHooks, loading, loadError, systemStatus, load, t, tools, busy, expanded, editing, draft, setDraft, toggleExpanded, editSystem, saveSystem, setEditing, normalizedQuery }) {
+  return standalone && <div className="wb-cli-hook-group"><h5>{t("settings.systemHooks", "System triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !loadError && !visibleSystemHooks.length && <div className="wb-extensions-empty">{systemStatus === "error" ? t("settings.hookSystemLoadError") : systemStatus === "uninitialized" ? t("settings.hookSystemUninitialized") : normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t("settings.hookSystemEmpty", "No persisted system triggers found.")}{(systemStatus === "error" || systemStatus === "uninitialized") && <p><button type="button" className="wb-btn" onClick={function () { load() }}>{t("settings.hookReload")}</button></p>}</div>}{visibleSystemHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} expanded={expanded[key] === true} editing={editing === "system:" + key} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={editSystem} onSaveSystem={function (event) { saveSystem(event, item) }} onCancelEdit={function () { setEditing("") }} /> })}</div>;
+}
+
+function HookFilter({ standalone, query, loading, setQuery, t, loadError, systemStatus, totalVisible }) {
+  return standalone && <div className="wb-hook-filter"><input className="wb-input" value={query} disabled={loading} onChange={function (event) { setQuery(event.target.value) }} placeholder={t("settings.hookFilter", "Filter Hooks")} aria-label={t("settings.hookFilter", "Filter Hooks")} /><span>{loading ? t("settings.loading", "Loading…") : loadError || systemStatus === "error" ? t("settings.hookCountUnavailable") : t("settings.hookCount", { n: totalVisible }, String(totalVisible) + " Hooks")}</span></div>;
+}

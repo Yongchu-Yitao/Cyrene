@@ -583,7 +583,9 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "var horizontalSessionWheelRef = useWbcRef({" in page
     assert "horizontalSessionWheelGesture={horizontalSessionWheelRef.current}" in page
     assert "function handleConversationHorizontalWheel(event)" in source
-    assert 'onWheel={handleConversationHorizontalWheel}' in source
+    assert "useNativeWheelElement(handleConversationHorizontalWheel)" in source
+    assert 'ref={threadWheelRef}' in source
+    assert "passive: false" in frontend_module_source("shared/native-wheel.jsx")
     assert "horizontalSessionWheelGesture," in source
     assert "wbcCycleTopbarSessionTab" in source
     assert 'className="wbc-chat-list-group-region"' in rail
@@ -5012,7 +5014,7 @@ def test_project_terminal_menu_is_above_the_outside_click_scrim():
     source = workbench_chat_source()
     styles = workbench_style_source()
 
-    project_tools = source.split('<section\n          ref={projectToolsRef}', 1)[1].split(
+    project_tools = source.split('<section\n          ref={toolsWheelRef}', 1)[1].split(
         'aria-label={wbcT("rail.projectTools"', 1
     )[0]
     assert 'String(menuId).indexOf("terminal:") === 0 ? " menu-active" : ""' in project_tools
@@ -6324,7 +6326,6 @@ def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
     source = workbench_shell_source()
     navigation = frontend_module_source("features/shell/navigation-controller.jsx")
 
-    grid_markup = source.split('className={"workbench-grid integrated-sidebars"', 1)[1]
     assert "var handleSidebarModuleWheel = navigationActions.onModuleWheel" in source
     sidebar_wheel = navigation.split("function onModuleWheel(event) {", 1)[1].split(
         "return { openPage:", 1
@@ -6336,7 +6337,10 @@ def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
     assert "Math.abs(gesture.delta) < 44" in sidebar_wheel
     assert "gesture.lockedUntil = now + 420" in sidebar_wheel
     assert "openPage(moduleOrder[nextIndex])" in sidebar_wheel
-    assert "onWheel={handleSidebarModuleWheel}" in grid_markup
+    assert "ref={mobileGridRef}" in source
+    drawer_wheel = frontend_module_source("features/layout/workspace-drawers.jsx")
+    assert "getWheelHandler()(event)" in drawer_wheel
+    assert "useNativeWheel" in drawer_wheel
 
 
 def test_active_conversation_rail_and_board_use_their_current_menu_dismissal_surfaces():
@@ -6602,13 +6606,15 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "WorkbenchModuleAccount" not in module_dock
     assert "function renderSidebarDockSlot()" in source
     assert 'return <div className="workbench-sidebar-dock-slot" aria-hidden="true" />;' in source
-    assert "var [railCollapsed, setRailCollapsed] = useWorkbenchState" in source
+    assert "var [desktopRailCollapsed, setRailCollapsed] = useWorkbenchState" in source
     navigation = frontend_module_source("features/shell/navigation-controller.jsx")
-    assert "var toggleWorkspaceSidebar = navigationActions.toggleSidebar" in source
+    assert "getToggleSidebar()()" in source
+    assert "mobileDrawers.setSide" in source
     assert "function toggleSidebar()" in navigation
     assert 'localStorage.setItem("wb-rail-collapsed", next ? "1" : "0")' in navigation
     assert '(railCollapsed ? " rail-collapsed" : "")' in source
-    assert 'ref={wbApplyStoredRightWidth}' in source
+    assert 'ref={mobileGridRef}' in source
+    assert 'wbApplyStoredRightWidth' in source
     assert grid_markup.count("<WorkbenchSidebarDock") == 1
     assert "persistent={true}" in grid_markup
     assert "collapsed={railCollapsed}" in grid_markup
@@ -6782,7 +6788,7 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "background: color-mix(in srgb, var(--wb-accent) 10%, transparent);" in project_row_hover_styles
     assert "box-shadow:" not in project_row_active_styles
     assert ".workbench-top-project-row:nth-last-child(-n + 2) .workbench-top-project-actions {" in styles
-    project_actions_markup = source.split('className="workbench-top-project-actions"', 1)[1].split("</div>", 1)[0]
+    project_actions_markup = source.split("<ProjectActionPopover", 1)[1].split("</ProjectActionPopover>", 1)[0]
     assert project_actions_markup.count("<svg") == 3
     assert '<span>{t("rail.editProject")}</span>' in project_actions_markup
     assert '<span>{t("rail.editMemory")}</span>' in project_actions_markup
@@ -11372,12 +11378,13 @@ def test_board_scroll_canvas_reaches_behind_floating_rail_gutter():
     assert "margin-inline: calc(0px - var(--wb-conversation-board-canvas-gutter));" in scroll_rule
     assert "background: var(--wb-floating-rail-bg);" in floating_rail_rule
     assert "opacity:" not in floating_rail_rule
+    source += frontend_module_source("features/chat/board-wheel.jsx")
     assert "function handleBoardWheel(event)" in source
     assert 'target.closest(".wb-board-column-body")' in source
     assert "columnBody.scrollTop < maxColumnTop - 1" in source
     assert "viewport.scrollWidth - viewport.clientWidth" in source
     assert "viewport.scrollLeft = nextLeft;" in source
-    assert 'className="wb-board-scroll" onWheel={handleBoardWheel}' in source
+    assert 'className="wb-board-scroll" ref={boardWheelRef}' in source
 
 
 def test_conversation_status_preview_controls_share_floating_material():

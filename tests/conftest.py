@@ -117,6 +117,9 @@ _WORKBENCH_CHAT_SOURCE_FILES = (
 )
 
 _WORKBENCH_SHELL_SOURCE_FILES = (
+    "features/layout/workspace-drawers.jsx",
+    "features/shell/mobile-topbar.jsx",
+    "features/shell/topbar-presentation.jsx",
     "shared/runtime/services.jsx",
     "shared/browser/overlays.jsx",
     "shared/errors.jsx",
@@ -166,6 +169,7 @@ _WORKBENCH_STYLE_FILES = (
 )
 
 _WORKBENCH_I18N_SOURCE_FILES = (
+    "shared/i18n/hook-labels.jsx",
     "shared/i18n/extension-translations.jsx",
     "shared/i18n/doctor-translations.jsx",
     "shared/i18n/catalog-en.jsx",

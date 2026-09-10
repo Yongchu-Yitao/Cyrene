@@ -320,6 +320,10 @@ class ScheduleRuntimeService:
             except Exception:
                 logger.exception("Failed to deliver scheduled run %s through bot", run_id)
 
+        await self._notify_delivery(task, body, run_id, error, language, result)
+        return result
+
+    async def _notify_delivery(self, task, body, run_id, error, language, result):
         try:
             from cyrene.platform.notifications import notify
             from cyrene.workbench.application.notifications import append_notification
@@ -360,7 +364,6 @@ class ScheduleRuntimeService:
         except Exception:
             logger.exception("Failed to notify scheduled run %s", run_id)
             result["notified"] = False
-        return result
 
 
 __all__ = ["ScheduleRuntimeService", "ScheduleScope"]

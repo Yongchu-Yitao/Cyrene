@@ -516,7 +516,7 @@ def test_workspace_tab_open_waits_for_its_owner_and_records_the_selected_card():
 
 def test_topbar_tab_keeps_click_activation_while_the_whole_card_is_draggable():
     shell = workbench_shell_source()
-    visible_tabs = shell.split("{tabs.map(function (item)", 1)[1].split(
+    visible_tabs = shell.split("{tabs.map(function renderSessionTab(item)", 1)[1].split(
         "{overflowTabs.length ?", 1
     )[0]
 
@@ -561,7 +561,7 @@ def test_topbar_tab_drag_exposes_the_existing_bottom_split_target():
     split_pane = _frontend_source("features/chat/split-pane.jsx")
     pane_drop = _frontend_source("features/chat/pane-drop-controller.jsx")
 
-    visible_tabs = shell.split("{tabs.map(function (item)", 1)[1].split(
+    visible_tabs = shell.split("{tabs.map(function renderSessionTab(item)", 1)[1].split(
         "{overflowTabs.length ?", 1
     )[0]
     assert 'draggable="true"' in visible_tabs

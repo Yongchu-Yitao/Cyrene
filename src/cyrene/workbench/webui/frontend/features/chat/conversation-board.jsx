@@ -1,3 +1,4 @@
+import { handleBoardWheel } from "./board-wheel.jsx"
 import { useNativeWheel } from "../../shared/native-wheel.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 
@@ -216,25 +217,6 @@ function ConversationBoard({ project, chats, loading, error, onOpenChat, onCreat
 
   var boardWheelRef = useNativeWheel(handleBoardWheel);
 
-  function handleBoardWheel(event) {
-    var viewport = event.currentTarget;
-    var deltaX = Number(event.deltaX || 0);
-    var deltaY = Number(event.deltaY || 0);
-    if (!viewport || Math.abs(deltaY) <= Math.abs(deltaX) || Math.abs(deltaY) < 1) return;
-    var columnBody = event.target && event.target.closest ? event.target.closest(".wb-board-column-body") : null;
-    if (columnBody) {
-      var maxColumnTop = Math.max(0, columnBody.scrollHeight - columnBody.clientHeight);
-      var canScrollColumn = deltaY < 0 ? columnBody.scrollTop > 1 : columnBody.scrollTop < maxColumnTop - 1;
-      if (canScrollColumn) return;
-    }
-    var maxBoardLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
-    if (!maxBoardLeft) return;
-    var scale = event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? viewport.clientWidth : 1);
-    var nextLeft = Math.max(0, Math.min(maxBoardLeft, viewport.scrollLeft + deltaY * scale));
-    if (nextLeft === viewport.scrollLeft) return;
-    event.preventDefault();
-    viewport.scrollLeft = nextLeft;
-  }
 
   if (!project) {
     return <main className="workbench-conversation-board wb-board-no-project"><div className="wb-board-empty-overall"><b>{t("conversationBoard.noProject")}</b><span>{t("conversationBoard.noProjectHint")}</span></div></main>;
