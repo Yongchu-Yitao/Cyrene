@@ -40,7 +40,7 @@ Android 的 `versionName` 在 Gradle 配置时读取主仓库 `pyproject.toml` �
 
 ## 统一发布
 
-从后续版本开始，主仓库 `release.yml` 的 `build-android` 任务会调用同一套 Android
+从 beta19 开始，主仓库 `release.yml` 的 `build-android` 任务会调用同一套 Android
 镜像构建、测试和打包流程，与 macOS、Windows、Linux 一起出现在发布任务图中。
 推送版本标签后，验证通过的实验 APK 和 SHA-256 校验文件会自动上传到同一 GitHub Release，
 最终发布汇总包含 Android；Android 构建或上传失败时，整次发布不会报告为全部成功。

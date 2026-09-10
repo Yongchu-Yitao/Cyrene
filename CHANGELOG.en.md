@@ -2,6 +2,61 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta19] - 2026-09-11
+
+beta19 moves Cyrene for Android beyond simply opening the desktop Workbench and toward a workspace that can be used continuously. Startup now reports its current stage and measurable progress, an in-app native browser shares pages with the Agent, and recovery, reconnection, and long-running stability have been improved throughout. Web Search adds per-engine selection and custom sources, while the mobile toolbar, side cards, Schedule, Board, project tools, composer, and Doctor receive another focused interface pass. Desktop and Android continue to use the same projects, conversations, features, and settings; the reliability work in this release does not change the meaning or entry points of existing features.
+
+### Android startup, workspace, and runtime stability
+
+- Android's startup screen now follows the real preparation sequence: preparing application resources, verifying resources, unpacking, creating the workspace, starting the environment and services, preparing tools, connecting services, and loading the interface. A percentage is shown when progress can be measured, replacing a generic wait through long first-time preparation.
+- First launch still prepares the complete local workspace. Later entries reuse prepared resources and a healthy running connection instead of starting the same workspace again. Resource verification, unpacking, disk creation, and service preparation avoid unnecessary repeated reads and waits.
+- A brief failed health check no longer immediately clears the current page or tears down a connection that can recover. If the backend is genuinely unavailable, the app performs one coordinated reconnect, while simultaneous entries share the same startup or recovery rather than competing with one another.
+- Explicitly stopping the workspace cancels preparation without allowing it to reappear later. It can be started normally on the next entry, with more stable connections across foreground/background transitions, recovery, and consecutive requests.
+- Improved uploads, form submissions, consecutive requests, and live bidirectional connections between the phone and local workspace. Larger bodies, chunked transfers, and back-to-back operations are less likely to be truncated or attached to the following request.
+- The default Android project is now consistently named “Cyrene,” including automatic correction of the internal directory label shown by early experimental builds. This changes only the default project's title: it does not move the workspace, change its identity, or rename user-created projects.
+
+### Android native browser and shared Agent pages
+
+- Android Workbench now has an in-app native browser. Tabs, address bar, Back, Forward, Refresh, Close, Switch, Maximize, and page previews use the existing Workbench entry points without requiring a desktop browser or a browser service on another computer.
+- Users can touch pages directly, type with the system keyboard, and use Android's file picker when a web page requests a file. The user and Agent operate the same pages and share their sign-in state and cookies.
+- The Agent can open pages in the browser tabs belonging to the current conversation, read page text and interactive elements, click, type, scroll, wait for changes, and capture the current viewport. A page opened by the Agent appears directly in Workbench, and content changed manually by the user can be read and handled by the Agent afterward.
+- Browser tabs remember their conversation, address, and selection and can be reloaded as needed after the Activity is recreated. Returning to an app that is still running reuses its existing pages. Tabs remain grouped by conversation, with up to 12 retained tabs.
+- Navigation is limited to ordinary HTTP and HTTPS pages. Local addresses, internal application files, and other privileged links are blocked from ordinary web content, which also cannot directly invoke Workbench browser controls.
+- The native browser currently covers everyday top-level page interactions. Cross-origin embedded pages, complex web components, Agent-driven file upload and download management, full-page screenshots, and some desktop-only features remain limited. Unsupported operations are reported explicitly instead of being presented as successful, and some sites may require signing in again on Android.
+
+### Web Search and custom sources
+
+- Settings → Web Search → SimpleXNG now has an expandable Search engines area that shows the available-engine count and lets users enable or disable each built-in engine. The default selection can be restored in one action, and changes apply to the next search.
+- Added custom SimpleXNG sources for JSON search APIs and HTML results pages parsed with XPath. Users can configure a name, search address, result collection, title, link, optional snippet, and relative-link prefix, then edit, remove, or independently disable each source.
+- Custom sources support GET, POST JSON, and POST form requests, including request content type and query placement. Authentication headers such as `Authorization` and `X-API-Key` are supported. Saved secrets are never shown again and can be kept, replaced, or explicitly cleared.
+- Adding, editing, or removing a custom source reloads the local search service automatically. If reload does not complete, the interface shows a visible warning instead of presenting the saved source as fully active. Sources for an external SimpleXNG instance remain managed on that server.
+- Search results continue to preserve source ordering and evidence links, with a clearer distinction between result previews and full-page reading. When a proxy is configured, searches keep that selected route instead of being unexpectedly replaced by another proxy from the system environment.
+
+### Mobile interface, Settings, and Doctor
+
+- The phone toolbar now uses a fixed-width project icon, a centered current-conversation control, and More. The project name no longer pushes the conversation title off center, while the original project icon and project-selection menu remain available.
+- Side cards, bottom navigation, and detail cards now share the desktop floating-card background, radius, and shadow. Right-side details no longer paint a second border or background, and bottom navigation is no longer clipped by an extra moving container.
+- Selecting a Settings section from the left mobile card now closes navigation and reveals the chosen page automatically. Drawer gestures and layout synchronization are also smoother while pages change or card content updates frequently.
+- Schedule rearranges its date heading, Today, previous/next, Day/Week/Month, and New controls for narrow screens, with tighter and more consistent button sizing and readable long dates. Board gives Search its own row and places Tools and New on the following row so they no longer crowd one another.
+- Expanded project tools use a more compact mobile header with consistent Back, title, and action placement. Tools such as Terminal retain their complete extra controls without duplicated backgrounds or clipping as the floating card moves.
+- The mobile conversation composer reserves a taller multi-line area even while empty, making longer requests easier to review and edit. Guidance and action rows inside the composer are more compact.
+- Doctor's dialog is narrower and adds consistent icons to its heading, Check again, Stop, Connection, Export, description, and details controls. Connection state and failure progress are easier to distinguish, and mobile actions retain comfortable touch height. Analysis, repair, stop, export, and technical-detail capabilities are all preserved.
+- Model IDs can now be fully edited before committing with Enter or by leaving the field. Clearing, replacing, or typing an intermediate value no longer triggers autosave mid-edit. Escape discards the uncommitted change, while choosing a discovered model still applies immediately.
+
+### Conversations, background work, and overall reliability
+
+- Live conversation refreshes are now merged in order. When replies, activity, and session summaries change rapidly, an older refresh cannot overwrite a newer view, and refresh work stops after the page or event stream closes.
+- If application shutdown exceeds its wait period, an unfinished conversation is saved with an explicit cancelled state and will not appear to still be running after restart. Retrying an interrupted run safely settles the old state and starts a new attempt while preserving history, preventing the old run from later resuming on top of the retry.
+- Failed, cancelled, and completed runs remain terminal. Late background messages and queued results cannot reactivate them or prevent a new turn. If part of result persistence fails, already completed parallel results and a generated final answer remain available rather than causing completed actions to run again.
+- Conversation lists, context summaries, and detail views reuse unchanged data, making projects with many conversations or long contexts lighter to open, refresh, and update live. Clearing or exporting a conversation still includes its associated context.
+- Concurrent saving by Schedule, analytics, projects, and background results is more reliable, reducing database-busy errors, delayed results, and failed page refreshes during long use or when the Android local workspace is under load.
+- Plugin startup and validation avoid rereading unchanged files and rules. Disabled choices, custom settings, and failed-source visibility remain intact; the startup optimization does not re-enable, overwrite, or hide them.
+
+### Downloads and prerelease delivery
+
+- The Android APK now joins macOS, Windows x64, Windows ARM64, and Linux in one GitHub prerelease with the same version tag and release notes, instead of requiring users to find a separate Android build location.
+- The Android download includes its SHA-256 checksum. The package is published only when its version, source, and checksum match the current tag, and a failed build or upload for any target platform prevents the overall release from being reported as fully successful.
+
 ## [0.9.0-beta18] - 2026-09-10
 
 beta18 brings Cyrene's desktop Workbench to Android and improves the responsive experience across phones, narrow windows, and desktop displays. Mobile uses the familiar projects, conversations, schedule, board, knowledge, memory, and settings pages, with swipe gestures for side cards. This release also aligns Doctor with the rest of Settings, improves scheduled-result delivery, and makes model connection checks and system Hook status clearer.
