@@ -343,6 +343,11 @@
     gap: 10px;
   }
 
+  /* The desktop 260px flex basis becomes height in this column layout. */
+  .wb-search-provider-label {
+    flex: 0 0 auto;
+  }
+
   .wb-controls.wb-search-provider-controls {
     width: 100%;
     flex-basis: auto;
