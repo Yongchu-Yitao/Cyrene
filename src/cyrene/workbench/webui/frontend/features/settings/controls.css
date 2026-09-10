@@ -1303,6 +1303,11 @@
 
 /* Segmented control — inset track with a floating active pill */
 .wb-seg {
+  /* Keep the track snug even inside stretched settings control columns. */
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  flex-wrap: wrap;
   display: inline-flex;
   gap: 2px;
   padding: 3px;
