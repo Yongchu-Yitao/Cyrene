@@ -1,5 +1,9 @@
 import json
+import re
+
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -79,9 +83,6 @@ def test_windows_release_installs_required_native_runtime_packages():
     assert "platforms:" in workflow
     assert "- windows-x64" in workflow
     assert "- windows-arm64" in workflow
-    assert workflow.count("inputs.platforms == '' || inputs.platforms == 'all'") == 2
-    assert "inputs.platforms != 'windows-arm64'" in workflow
-    assert workflow.count("inputs.platforms != 'windows-x64'") == 2
 
     build = (ROOT / "build" / "build.py").read_text(encoding="utf-8")
     assert 'os.environ["CYRENE_WOA_NATIVE_CORE"] = "1"' in build
@@ -272,3 +273,27 @@ def test_woa_core_excludes_x64_only_features_and_packages_sidecars():
     assert '"httpx", "httpcore", "httpx_socks", "anyio", "sniffio", "certifi"' in search_spec
     assert "from cyrene.simplexng_child import main" in search_entry
     assert "cyrene.plugins" not in search_entry
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("", {"macos", "linux", "windows", "windows-arm", "windows-arm-sidecars", "android"}),
+        ("all", {"macos", "linux", "windows", "windows-arm", "windows-arm-sidecars", "android"}),
+        ("windows", {"windows", "windows-arm", "windows-arm-sidecars"}),
+        ("windows-x64", {"windows"}),
+        ("windows-arm64", {"windows-arm", "windows-arm-sidecars"}),
+        ("android", {"android"}),
+    ],
+)
+def test_release_dispatch_selects_only_requested_platforms(platform, expected):
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    selected = set()
+    for job in ("macos", "linux", "windows", "windows-arm", "windows-arm-sidecars", "android"):
+        body = workflow.split(f"  build-{job}:\n", 1)[1]
+        condition = re.search(r"^    if: \$\{\{ (.+) \}\}$", body, re.MULTILINE).group(1)
+        choices = re.findall(r"inputs\.platforms == '([^']*)'", condition)
+        assert condition == " || ".join(f"inputs.platforms == '{choice}'" for choice in choices)
+        if platform in choices:
+            selected.add(job)
+    assert selected == expected
