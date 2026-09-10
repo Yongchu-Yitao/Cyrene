@@ -90,10 +90,10 @@
 .workbench-mobile-current, .workbench-mobile-more { display: none; }
 .workbench-topbar-extras, .workbench-topbar-extra-controls { display: contents; }
 @media (max-width: 767px) {
-  .workbench-shell[data-mobile-drawer] .workbench-topbar { box-sizing: border-box; }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar { box-sizing: border-box; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .workbench-shell[data-mobile-drawer] .workbench-topbar .workbench-session-tabs,
   .workbench-shell[data-mobile-drawer] .workbench-traffic-space { display: none; }
-  .workbench-shell[data-mobile-drawer] .workbench-brand { flex: 0 1 38%; min-width: 0; width: auto; }
+  .workbench-shell[data-mobile-drawer] .workbench-brand { min-width: 0; width: 100%; }
   .workbench-shell[data-mobile-drawer] .workbench-brand-btn { min-width: 0; width: 100%; height: 44px; gap: 6px; padding: 0 4px; }
   .workbench-shell[data-mobile-drawer] .workbench-brand-btn strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
   .workbench-shell[data-mobile-drawer] .workbench-brand-btn .workbench-top-project-icon { width: 24px; height: 24px; flex-shrink: 0; }
@@ -124,7 +124,7 @@
   @media (prefers-reduced-motion: reduce) {
     .workbench-shell[data-mobile-drawer] .workbench-topbar :is(.workbench-brand-btn, .workbench-mobile-current, .workbench-mobile-more) { transition: none; }
   }
-  .workbench-topbar-extras { display: block; flex: 0 0 44px; }
+  .workbench-topbar-extras { display: block; justify-self: end; width: 44px; }
   .workbench-topbar-extra-controls { display: block; position: absolute; top: 58px; left: 8px; right: 8px; visibility: hidden; pointer-events: none; }
   .workbench-topbar-extras.is-open .workbench-topbar-extra-controls {
     display: flex; visibility: visible; pointer-events: auto; flex-wrap: wrap; align-items: center; gap: 12px; position: absolute;
