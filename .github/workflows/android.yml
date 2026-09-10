@@ -41,7 +41,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.source_run || 'build' }}
   cancel-in-progress: true
 
 jobs:
