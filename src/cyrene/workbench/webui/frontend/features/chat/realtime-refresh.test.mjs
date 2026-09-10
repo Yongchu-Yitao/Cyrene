@@ -27,6 +27,25 @@ test('event bursts use one request with the same debounce and one coherent notif
   assert.equal(context.DATA.sessions[0].id,'a');assert.equal(context.DATA.status.model,'new');assert.equal(context.bumps,1);
 });
 
+test('events during a slow refresh coalesce into one follow-up without cancelling work',async()=>{
+  const {context,requests,timers,respond}=harness();
+  context.schedule();timers[0].fn();
+  for(let i=0;i<20;i++) context.schedule();
+  assert.equal(requests.length,1);assert.equal(timers.length,1);
+  assert.equal(requests[0].options.signal.aborted,false);
+  respond(0,{sessions:[{id:'first'}]});await new Promise(setImmediate);
+  assert.equal(timers.length,2);timers[1].fn();assert.equal(requests.length,2);
+  respond(1,{sessions:[{id:'latest'}]});await new Promise(setImmediate);
+  assert.equal(context.DATA.sessions[0].id,'latest');assert.equal(timers.length,2);
+});
+
+test('disposing during a pending event refresh does not schedule more work',async()=>{
+  const {context,requests,timers,respond}=harness();
+  context.schedule();timers[0].fn();context.schedule();context.dispose();
+  respond(0,{},false);await new Promise(setImmediate);
+  assert.equal(timers.length,1);assert.equal(requests.length,1);
+});
+
 test('standalone session refresh cannot cancel a shared current status response',async()=>{
   const {context,requests,respond}=harness();
   const combined=context.refreshSessions(true),sessions=context.refreshSessions();

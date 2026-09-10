@@ -1,6 +1,7 @@
 """FastAPI app factory and WebBot adapter for the scheduler."""
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -81,6 +82,7 @@ def create_app(
     *,
     enable_background_plugins: bool = False,
 ) -> FastAPI:
+    app_started = time.perf_counter()
     from cyrene.workbench.http.registry import register_routes
 
     from cyrene.workbench.webui.auth import LocalAuthMiddleware
@@ -124,11 +126,14 @@ def create_app(
         db_path=db_path,
         data_directory=DATA_DIR,
     )
+    from cyrene.platform.startup_progress import report_startup_progress
+    report_startup_progress("backend_services")
     app.state.plugin_application_host = plugin_application_host
     set_application_plugin_scope(plugin_application_host)
     # ``ui_mode`` remains in the Python call signature for historical callers,
     # but Workbench is now the only served UI.
     _configure_app(app, LocalAuthMiddleware, register_routes, bot, db_path, instance_id)
+    logger.info("Workbench initialization app_configured elapsed_ms=%.1f", (time.perf_counter() - app_started) * 1000)
     if enable_background_plugins:
         from cyrene.plugins.background import setup_background_plugin_scheduler
 

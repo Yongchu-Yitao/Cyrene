@@ -133,8 +133,11 @@ class PluginApplicationHost:
         data_directory: str | Path,
         plugin_directory: str | Path | None = None,
     ) -> "PluginApplicationHost":
+        started = time.perf_counter()
         root = Path(plugin_directory or default_plugin_impl_directory()).expanduser().resolve()
         seed_builtin_plugin_directory(root)
+        seeded = time.perf_counter()
+        logger.info("Plugin initialization stage=seed elapsed_ms=%.1f", (seeded - started) * 1000)
         from cyrene.platform import settings_store
 
         customization_state = PluginCustomizationState(
@@ -146,7 +149,11 @@ class PluginApplicationHost:
             customizations=customization_state,
         )
         ensure_model_router(registry)
+        configured = time.perf_counter()
+        logger.info("Plugin initialization stage=configuration elapsed_ms=%.1f", (configured - seeded) * 1000)
         failures = registry.load_directory(root)
+        loaded = time.perf_counter()
+        logger.info("Plugin initialization stage=load elapsed_ms=%.1f", (loaded - configured) * 1000)
         registry.configure_activation(
             plugins=settings_store.get_enabled_plugins(),
             packs=settings_store.get_enabled_plugin_packs(),
@@ -156,7 +163,7 @@ class PluginApplicationHost:
                 "Some Plugin application contributions failed to load: %s",
                 "; ".join(f"{item.path}: {item.error}" for item in failures),
             )
-        return cls(
+        host = cls(
             app=app,
             registry=registry,
             bot=bot,
@@ -165,6 +172,8 @@ class PluginApplicationHost:
             plugin_directory=root,
             load_failures=failures,
         )
+        logger.info("Plugin initialization stage=attach elapsed_ms=%.1f", (time.perf_counter() - loaded) * 1000)
+        return host
 
     async def reload_user_plugins(
         self,

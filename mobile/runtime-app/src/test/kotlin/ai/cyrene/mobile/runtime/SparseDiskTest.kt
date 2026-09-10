@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.security.MessageDigest
 
 class SparseDiskTest {
     @Test fun preservesDataAndTrailingHolesAcrossShortReads() {
@@ -19,7 +20,12 @@ class SparseDiskTest {
         val output = File.createTempFile("cyrene-sparse-", ".disk")
         try {
             output.writeBytes(ByteArray(300_000) { 7 })
-            SparseDisk.copy(source, output)
+            val digest = MessageDigest.getInstance("SHA-256")
+            val counts = mutableListOf<Long>()
+            SparseDisk.copy(source, output, digest) { counts.add(it) }
+            assertArrayEquals(MessageDigest.getInstance("SHA-256").digest(bytes), digest.digest())
+            assertEquals(bytes.size.toLong(), counts.last())
+            assertEquals(true, counts.zipWithNext().all { (a, b) -> b > a })
             assertEquals(bytes.size.toLong(), output.length())
             assertArrayEquals(bytes, output.readBytes())
         } finally { output.delete() }

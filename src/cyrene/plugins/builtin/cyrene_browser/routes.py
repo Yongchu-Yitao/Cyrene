@@ -64,6 +64,33 @@ def register_browser_routes(
 ) -> BrowserLiveApplicationService:
     service = service or BrowserLiveApplicationService()
 
+    @router.websocket("/ws/browser/native-host")
+    async def ws_native_browser(websocket: WebSocket):
+        from cyrene.platform.native_browser import native_browser_host
+
+        await websocket.accept()
+        try:
+            native_browser_host.attach(websocket)
+        except RuntimeError:
+            await websocket.close(code=1008)
+            return
+        try:
+            await websocket.send_json({"type": "ready"})
+            while True:
+                raw = await websocket.receive_text()
+                if len(raw) > 8 * 1024 * 1024:
+                    await websocket.close(code=1009)
+                    break
+                message = json.loads(raw)
+                if not isinstance(message, dict):
+                    await websocket.close(code=1008)
+                    break
+                native_browser_host.receive(websocket, message)
+        except (WebSocketDisconnect, ValueError):
+            pass
+        finally:
+            native_browser_host.detach(websocket)
+
     @router.websocket("/ws/browser")
     async def ws_browser(websocket: WebSocket):
         await websocket.accept()

@@ -8,6 +8,28 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class DesktopBackendEndpointTest {
+    @Test fun healthDeadlineIncludesTheEntireStatusLine() {
+        val endpoint = DesktopBackendEndpoint()
+        ServerSocket(endpoint.port, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            val worker = Executors.newSingleThreadExecutor()
+            val response = worker.submit {
+                server.accept().use { socket ->
+                    try {
+                        for (byte in "HTTP/1.1 200 OK\r\n".toByteArray()) {
+                            socket.getOutputStream().write(byte.toInt())
+                            Thread.sleep(40)
+                        }
+                    } catch (_: java.io.IOException) { /* Client deadline closed the socket. */ }
+                }
+            }
+            try {
+                // Each individual read is faster than 250 ms, but the full
+                // response is slower. It must not renew the timeout per byte.
+                assertFalse(endpoint.healthy(250))
+            } finally { response.cancel(true); worker.shutdownNow() }
+        }
+    }
+
     @Test fun healthUsesAuthenticatedLoopbackRequest() {
         val endpoint = DesktopBackendEndpoint()
         ServerSocket(endpoint.port, 1, InetAddress.getByName("127.0.0.1")).use { server ->

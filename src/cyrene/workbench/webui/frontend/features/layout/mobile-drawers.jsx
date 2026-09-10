@@ -10,6 +10,16 @@ export function useMobileDrawers(page) {
     return () => query.removeEventListener('change', change);
   }, []);
   React.useEffect(() => { setSide(''); }, [page]);
+  React.useEffect(() => {
+    if (!compact || side !== 'left') return;
+    const selectSettingsTab = event => {
+      const tab = event.target.closest?.('.settings-overlay-tab');
+      if (tab && !tab.disabled && tab.getAttribute('aria-disabled') !== 'true'
+        && tab.closest('[data-mobile-card="left"]')) setSide('');
+    };
+    document.addEventListener('click', selectSettingsTab);
+    return () => document.removeEventListener('click', selectSettingsTab);
+  }, [compact, side]);
   return { compact, side, setSide };
 }
 

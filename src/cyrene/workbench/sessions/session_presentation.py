@@ -402,7 +402,8 @@ class WorkbenchSessionPresentation:
         ]
         try:
             states = AgentContextRepository(self.context_directory).read_many(
-                tuple(str(chat.get("id") or "") for chat in source_chats)
+                tuple(str(chat.get("id") or "") for chat in source_chats),
+                summary_only=True,
             )
         except Exception:
             logger.debug(

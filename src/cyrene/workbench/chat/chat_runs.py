@@ -1599,10 +1599,17 @@ class ChatRunManager:
                 for run in self.runs.values():
                     if run.task is task:
                         run.termination_reason = "shutdown_timeout"
+                        # A timed-out Chat run is reported as cancelled below.
+                        # Persist that same terminal state while the execution
+                        # owner still holds its Session, before closing workers
+                        # or publishing the terminal Chat projection.
+                        self.conversation_runtime.request_cancel(
+                            run.chat_id, "shutdown_timeout",
+                        )
                         break
-        # Stop the execution owner before its shielded waiters. Closing a
-        # Session preserves its checkpoint; user cancellation is a different
-        # domain operation and must not be synthesized during host shutdown.
+        # Stop the execution owner before its shielded waiters. Runtime-only
+        # shutdown may preserve checkpoints, but Chat runs declared terminated
+        # above must already have their durable cancellation marker.
         await self.conversation_runtime.shutdown(grace_seconds=0)
         for run in self.runs.values():
             # An operation's CancelledError also enters _run's finalizer, but

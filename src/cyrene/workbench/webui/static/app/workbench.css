@@ -5342,7 +5342,7 @@ html[data-theme="dark"] .workbench-project-memory-modal {
 /* Doctor uses the shared workbench modal and theme palette. */
 .wb-doctor-dialog {
   position: fixed; inset: 0; margin: auto; padding: 0;
-  width: min(820px, calc(100vw - 40px)); max-width: none;
+  width: min(680px, calc(100vw - 32px)); max-width: none;
   max-height: min(860px, calc(100dvh - 48px)); overflow: auto;
   border: 1px solid var(--wb-modal-border, var(--line));
   border-radius: var(--wb-modal-radius, 16px);
@@ -5411,3 +5411,33 @@ html[data-theme="dark"] .wb-doctor-panel { --doctor-accent: #f19cbd; --doctor-ti
 .wb-doctor-panel .wb-btn { max-width: 100%; white-space: normal; }
 .wb-doctor-description-hint { flex-wrap: wrap; font-size: calc(12px * var(--wb-ui-font-scale, 1)); }
 .wb-doctor-description-hint span { margin-left: auto; }
+
+/* Compact Doctor layout; icons reuse the bundled settings Tabler assets. */
+.wb-doctor-dialog .wb-doctor-panel { width: 100%; max-width: none; margin: 0; padding: 20px; }
+.wb-doctor-head { align-items: center; margin-bottom: 20px; }
+.wb-doctor-head .wb-section-title { flex: 1; margin: 0; }
+.wb-doctor-head .wb-section-title h3 { margin: 0; font-size: calc(18px * var(--wb-ui-font-scale, 1)); }
+.wb-doctor-head .wb-section-title p { margin: 4px 0 0; font-size: calc(13px * var(--wb-ui-font-scale, 1)); }
+.wb-doctor-icon { display: inline-block; width: 18px; height: 18px; flex: 0 0 18px; background: currentColor; mask: var(--doctor-icon) center / contain no-repeat; -webkit-mask: var(--doctor-icon) center / contain no-repeat; }
+.wb-doctor-brand { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 42px; border-radius: 12px; color: var(--doctor-accent); background: var(--doctor-tint); }
+.wb-doctor-brand .wb-doctor-icon { width: 24px; height: 24px; }
+.wb-doctor-panel .wb-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; }
+.wb-doctor-actions { gap: 8px; }
+.wb-doctor-usage { display: flex; align-items: flex-start; gap: 7px; }
+.wb-doctor-usage .wb-doctor-icon { width: 15px; height: 15px; flex-basis: 15px; margin-top: 2px; }
+.wb-doctor-analysis-head { margin-bottom: 12px; }
+.wb-doctor-analysis-head h3 { display: flex; align-items: center; gap: 8px; }
+.wb-doctor-analysis-head h3 .wb-doctor-icon { color: var(--doctor-accent); }
+.wb-doctor-connection { display: flex; align-items: center; gap: 7px; color: var(--wb-muted, var(--text-2)); font-size: calc(12px * var(--wb-ui-font-scale, 1)); }
+.wb-doctor-connection.is-failed { color: var(--err); }
+.wb-doctor-failure-progress { padding: 4px 12px; margin: 12px 0; border-left: 3px solid var(--doctor-accent); background: var(--doctor-tint); border-radius: 0 8px 8px 0; }
+.wb-doctor-panel .wb-doctor-disclosure { display: flex; align-items: center; gap: 8px; min-height: 32px; list-style: none; }
+.wb-doctor-disclosure::-webkit-details-marker { display: none; }
+.wb-doctor-disclosure > .wb-doctor-icon:first-child { width: 14px; height: 14px; flex-basis: 14px; transform: rotate(-90deg); }
+ details[open] > .wb-doctor-disclosure > .wb-doctor-icon:first-child { transform: rotate(0); }
+.wb-doctor-panel .wb-doctor-technical { margin-bottom: 0; padding: 8px 12px; }
+@media (max-width: 560px) {
+  .wb-doctor-dialog .wb-doctor-panel { padding: 14px; }
+  .wb-doctor-head { gap: 10px; }
+  .wb-doctor-actions .wb-btn { flex: 1 1 calc(50% - 8px); min-height: 44px; }
+}

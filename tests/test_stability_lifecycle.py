@@ -269,7 +269,9 @@ async def test_manager_shutdown_reaches_the_execution_owner(tmp_path, monkeypatc
     manager = ChatRunManager(shutdown_grace_seconds=0)
     entered = asyncio.Event()
     closed = []
+    cancelled = []
     class Bridge:
+        session = SimpleNamespace(request_cancel=lambda reason: cancelled.append(reason))
         def close(self):
             closed.append(True)
     monkeypatch.setattr(manager.conversation_runtime, "_open_bridge", lambda *args, **kwargs: Bridge())
@@ -283,6 +285,7 @@ async def test_manager_shutdown_reaches_the_execution_owner(tmp_path, monkeypatc
     await entered.wait()
     await asyncio.wait_for(manager.shutdown(), 2)
     assert closed == [True]
+    assert cancelled == ["shutdown_timeout"]
     assert run.done.is_set()
     assert not manager._leases
     assert not manager.conversation_runtime._operations

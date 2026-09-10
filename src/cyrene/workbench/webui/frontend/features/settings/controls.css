@@ -2080,3 +2080,133 @@
   }
 
 }
+
+.wb-field.wb-search-provider-row.has-engines {
+  row-gap: 6px;
+  flex-wrap: wrap;
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+.wb-simplexng-engines {
+  flex: 0 0 100%;
+  min-width: 0;
+  margin-top: 0;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 400;
+}
+
+.wb-simplexng-engines[hidden] { display: none; }
+.wb-search-engine-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin-left: 8px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  font: inherit;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 400;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wb-search-engine-trigger::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  margin: 0 3px;
+}
+.wb-search-engine-trigger[aria-expanded="true"]::after { transform: rotate(45deg); }
+.wb-search-engine-trigger:hover { color: var(--wb-text); }
+.wb-search-engine-trigger:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; border-radius: 4px; }
+.wb-search-engine-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--wb-faint);
+  font-weight: 400;
+}
+.wb-simplexng-engines > small {
+  display: block;
+  margin: 2px 0 10px;
+  color: var(--wb-muted);
+  font-size: inherit;
+  line-height: 1.6;
+}
+.wb-search-engine-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0 24px;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 16px;
+  margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 65%, transparent);
+  border-radius: 8px;
+}
+.wb-search-engine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 400;
+  border-bottom: 1px solid var(--wb-line);
+}
+.wb-search-engine-row > span { overflow-wrap: anywhere; }
+.wb-search-engine-row .wb-toggle { flex-shrink: 0; }
+@media (max-width: 520px) {
+  .wb-search-engine-list { grid-template-columns: 1fr; }
+}
+
+.wb-custom-sources {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--wb-line);
+}
+.wb-custom-source-toolbar, .wb-custom-source-row, .wb-custom-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wb-custom-source-toolbar, .wb-custom-source-row { justify-content: space-between; }
+.wb-custom-source-toolbar > span, .wb-custom-source-section { font-weight: 500; }
+.wb-custom-source-hint {
+  display: block;
+  color: var(--wb-muted);
+  font-size: inherit;
+  line-height: 1.6;
+  margin: 8px 0 12px;
+}
+.wb-custom-source-row { min-height: 56px; border-bottom: 1px solid var(--wb-line); }
+.wb-custom-source-info { min-width: 0; overflow-wrap: anywhere; }
+.wb-custom-source-info small { display: block; color: var(--wb-muted); margin-top: 4px; }
+.wb-custom-source-actions { flex-shrink: 0; flex-wrap: wrap; }
+.wb-custom-source-form {
+  margin-top: 16px;
+  padding: 20px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-muted) 3%, transparent);
+}
+.wb-custom-source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.wb-custom-source-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-bottom: 14px; font-weight: 400; }
+.wb-custom-source-field .wb-input, .wb-custom-source-field .wb-select { width: 100%; min-width: 0; box-sizing: border-box; }
+.wb-custom-source-field textarea { resize: vertical; min-height: 80px; }
+.wb-custom-source-section { margin-top: 16px; }
+.wb-custom-source-auth { margin: 8px 0 20px; }
+.wb-custom-source-auth summary { margin-bottom: 12px; }
+.wb-custom-source-clear { display: flex; align-items: center; gap: 8px; }
+.wb-custom-source-form > .wb-custom-source-actions { justify-content: flex-end; }
+@media (max-width: 520px) {
+  .wb-custom-source-grid { grid-template-columns: 1fr; gap: 0; }
+  .wb-custom-source-form { padding: 14px; }
+  .wb-custom-source-row { flex-wrap: wrap; padding: 10px 0; }
+}

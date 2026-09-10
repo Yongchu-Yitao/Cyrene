@@ -52,6 +52,7 @@ for abi in arm64-v8a x86_64; do
     unzip -q "$WORK_DIR/limbo.apk" "lib/$abi/*.so" -d "$WORK_DIR/limbo"
     cp "$WORK_DIR/limbo/lib/$abi/"*.so "$JNI_DIR/$abi/"
 done
+python3 "$ROOT_DIR/runtime-image/patch-qemu-cmle.py" "$JNI_DIR"
 for firmware in bios-256k.bin kvmvapic.bin linuxboot.bin linuxboot_dma.bin efi-virtio.rom pxe-virtio.rom; do
     unzip -p "$WORK_DIR/limbo.apk" "assets/roms/$firmware" > "$OUTPUT_DIR/$firmware"
 done
@@ -118,6 +119,7 @@ Cyrene Linux Runtime bundle
 
 QEMU Android engine: Limbo Emulator ${LIMBO_VERSION} / QEMU 5.1.0 (GPL-2.0)
 Source: https://github.com/limboemu/limbo/tree/v6.0.1-LimboEmulator
+Local CMLE encoding backport: runtime-image/QEMU-CMLE-FIX.md and patch-qemu-cmle.py
 Guest userspace: Alpine Linux ${ALPINE_VERSION} (see /etc/apk for package licenses)
 Guest kernel package: linux-virt ${KERNEL_VERSION} (GPL-2.0-only)
 

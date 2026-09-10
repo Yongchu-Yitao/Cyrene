@@ -1,3 +1,4 @@
+import { CustomSearchSources } from "./custom-search-sources.jsx"
 import {
   useStateSt,
   useEffectSt,
@@ -22,6 +23,10 @@ function searchSavePayload(snapshot, revision) {
     enabled: snapshot.config.enabled === true,
     providers: snapshot.config.providers.map(function (provider) {
       var row = { id: provider.id, enabled: provider.enabled === true };
+      if (provider.id === "simplexng") {
+        row.engines = provider.engines ?? null;
+        row.custom_sources = provider.custom_sources || [];
+      }
       var draft = String(snapshot.draftKeys[provider.id] || "").trim();
       if (draft) row.api_key = draft;
       if (snapshot.clearKeys[provider.id]) row.clear_api_key = true;
@@ -65,6 +70,7 @@ function persistSearchSave(queue) {
   }).then(readSettingsResponse).then(function (payload) {
     queue.inFlight = false;
     if (!queue.mounted) return;
+    if (payload.runtime_warning) showSettingsToast(queue.t("settings.customSource.restartFailed"), "error");
     if (Number.isInteger(payload.revision)) queue.revision = payload.revision;
     if (queue.version === version) {
       queue.acceptSaved(payload);
@@ -223,18 +229,73 @@ function SearchClearIcon() {
     React.createElement("path", { d: "M6 6l12 12M18 6 6 18" }));
 }
 
+function useSimplexngEngines(p) {
+  var [engines, setEngines] = useStateSt(null);
+  var [error, setError] = useStateSt(false);
+  var [attempt, setAttempt] = useStateSt(0);
+  useEffectSt(function () {
+    if (p.provider.id !== "simplexng") return;
+    var active = true;
+    setError(false);
+    settingsFetch("/api/settings/search/engines").then(readSettingsResponse).then(function (payload) {
+      if (active) setEngines(payload.engines);
+    }).catch(function () { if (active) setError(true); });
+    return function () { active = false; };
+  }, [attempt, JSON.stringify(p.provider.custom_sources || [])]);
+  var selected = p.provider.engines;
+  var defaults = (engines || []).filter(function (engine) { return engine.enabled && !engine.name.startsWith("custom-"); }).map(function (engine) { return engine.name; });
+  var customIds = (p.provider.custom_sources || []).map(function (source) { return source.id; });
+  var enabled = selected == null ? Array.from(new Set(defaults.concat(customIds))) : selected;
+  var rows = (engines || []).filter(function (engine) { return !engine.name.startsWith("custom-"); });
+  (selected || []).forEach(function (name) {
+    if (!name.startsWith("custom-") && !rows.some(function (engine) { return engine.name === name; })) rows.push({ name: name });
+  });
+  return { engines, error, attempt, setAttempt, selected, enabled, rows, customIds };
+}
+
+function SimplexngEngines(p) {
+  var { engines, error, attempt, setAttempt, selected, enabled, rows } = p.engineState;
+  return React.createElement("div", { className: "wb-simplexng-engines", id: "simplexng-engine-options", hidden: !p.expanded },
+    error ? React.createElement("div", { role: "alert" },
+      p.t("settings.searchEnginesUnavailable"),
+      React.createElement("button", { type: "button", className: "wb-btn muted", onClick: function () { setAttempt(attempt + 1); } }, p.t("settings.searchRetrySave")))
+      : !engines ? React.createElement("small", null, p.t("settings.loading"))
+      : React.createElement("div", { className: "wb-search-engine-list" }, rows.map(function (engine) {
+        var on = enabled.includes(engine.name);
+        return React.createElement("div", { className: "wb-search-engine-row", key: engine.name },
+          React.createElement("span", null, engine.name),
+          Toggle(on, function () {
+            p.updateProvider("simplexng", { engines: on ? enabled.filter(function (name) { return name !== engine.name; }) : enabled.concat(engine.name) });
+          }, false, engine.name));
+      })),
+    selected != null && React.createElement("button", {
+      type: "button", className: "wb-btn muted",
+      onClick: function () { p.updateProvider("simplexng", { engines: null }); },
+    }, p.t("settings.searchEnginesReset")),
+    React.createElement(CustomSearchSources, { ...p, enabledEngines: enabled, catalogReady: !!engines }));
+}
+
 function SearchProviderRow(p) {
   var provider = p.provider;
+  var [expanded, setExpanded] = useStateSt(false);
+  var engineState = useSimplexngEngines(p);
+  var isSimplexng = provider.id === "simplexng";
   var providerName = SEARCH_PROVIDER_NAMES[provider.id] || provider.id;
   var keyConfigured = provider.api_key_configured && !p.clearKeys[provider.id];
   return React.createElement("div", {
-    className: "wb-field wb-search-provider-row",
+    className: "wb-field wb-search-provider-row" + (provider.id === "simplexng" ? " has-engines" : ""),
     key: provider.id,
   },
     React.createElement("div", { className: "wb-label wb-search-provider-label" },
       React.createElement("span", { className: "wb-search-provider-name" },
         React.createElement("span", { className: "wb-search-priority mono" }, String(p.index + 1)),
-        providerName),
+        providerName,
+        isSimplexng && React.createElement("button", {
+          type: "button", className: "wb-search-engine-trigger",
+          "aria-expanded": expanded, "aria-controls": "simplexng-engine-options",
+          onClick: function () { setExpanded(!expanded); },
+        }, p.t("settings.searchEngines"),
+          engineState.engines && React.createElement("span", { className: "wb-search-engine-count" }, engineState.enabled.length + "/" + (engineState.rows.length + engineState.customIds.length)))),
       React.createElement("small", null, p.t("settings.searchProviderHint." + provider.id))),
     React.createElement("div", { className: "wb-controls wb-search-provider-controls" },
       provider.requires_api_key && React.createElement("div", {
@@ -277,7 +338,8 @@ function SearchProviderRow(p) {
         }, SearchMoveIcon("down")),
         Toggle(provider.enabled, function () {
           p.updateProvider(provider.id, { enabled: !provider.enabled });
-        }, false, providerName))));
+        }, false, providerName))),
+    isSimplexng && React.createElement(SimplexngEngines, { ...p, expanded, engineState }));
 }
 
 function SearchPanel(p) {

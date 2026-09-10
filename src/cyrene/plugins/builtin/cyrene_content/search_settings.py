@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from cyrene.core.plugin import (
 from cyrene.platform import config_store
 from fastapi import Request
 from fastapi.responses import JSONResponse
+
+from .custom_search_sources import CustomSourceError, normalize_sources, public_sources, stored_sources
 
 PROVIDER_IDS = ("simplexng", "deepseek", "tavily", "brave")
 PROVIDER_API_KEY_ENV = {
@@ -136,6 +139,27 @@ def runtime_settings(
     )
 
 
+def _normalize_engines(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > 300:
+        raise SearchSettingsError("SimpleXNG engines must be a list of up to 300 names")
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise SearchSettingsError("SimpleXNG engine names must be strings")
+        name = item.strip()
+        if not name or len(name) > 100 or any(c in name for c in ",\n\r\x00"):
+            raise SearchSettingsError("invalid SimpleXNG engine name")
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def simplexng_engines() -> list[str] | None:
+    return _normalize_engines(_stored_search().get("simplexng_engines"))
+
+
 def provider_api_key(provider: str) -> str:
     env_key = PROVIDER_API_KEY_ENV.get(str(provider))
     return (
@@ -143,6 +167,11 @@ def provider_api_key(provider: str) -> str:
         if env_key
         else ""
     )
+
+
+def _custom_sources_supported() -> bool:
+    from .runtime_config import SEARXNG_URL
+    return not bool(str(SEARXNG_URL or "").strip())
 
 
 def public_settings(
@@ -162,6 +191,8 @@ def public_settings(
         "providers": [
             {
                 "id": provider,
+                **({"engines": simplexng_engines(), "custom_sources": public_sources(),
+                    "custom_sources_supported": _custom_sources_supported()} if provider == "simplexng" else {}),
                 "enabled": bool(enabled_map.get(provider, False)),
                 "requires_api_key": provider in PROVIDER_API_KEY_ENV,
                 "api_key_configured": (
@@ -236,6 +267,23 @@ def update_settings(
     if master_enabled and not any(enabled_map.values()):
         raise SearchSettingsError("enable at least one search provider")
 
+    search = _stored_search()
+    for row in body["providers"]:
+        if str(row["id"]).strip().lower() == "simplexng" and "engines" in row:
+            search["simplexng_engines"] = _normalize_engines(row["engines"])
+        if str(row["id"]).strip().lower() == "simplexng" and "custom_sources" in row:
+            try:
+                sources = normalize_sources(row["custom_sources"], search.get("custom_sources", []))
+            except CustomSourceError as exc:
+                raise SearchSettingsError(str(exc)) from exc
+            if sources != search.get("custom_sources", []) and not _custom_sources_supported():
+                raise SearchSettingsError("Custom sources can only be managed on local SimpleXNG")
+            removed = {item["id"] for item in search.get("custom_sources", [])} - {item["id"] for item in sources}
+            if search.get("simplexng_engines") is not None:
+                search["simplexng_engines"] = [name for name in search["simplexng_engines"] if name not in removed]
+            search["custom_sources"] = sources
+    search.update(provider_order=order, provider_enabled=enabled_map)
+
     # Resolve the editable display name back to the stable contribution
     # identity, then persist only that identity in generic Plugin activation.
     canonical = registry.registered_by_canonical(
@@ -245,10 +293,7 @@ def update_settings(
     current_plugins[canonical] = master_enabled
     revision, settings = config_store.update_settings_and_env_atomic(
         {
-            "search": {
-                "provider_order": order,
-                "provider_enabled": enabled_map,
-            },
+            "search": search,
             "enabled_plugins": current_plugins,
         },
         env_updates,
@@ -273,6 +318,7 @@ class SearchSettingsApplicationService:
         canonical_name: str,
         publish_settings_changed: SettingsChangedPublisher,
     ) -> None:
+        self._update_lock = asyncio.Lock()
         self._registry = registry
         self._canonical_name = canonical_name
         self._publish_settings_changed = publish_settings_changed
@@ -281,6 +327,11 @@ class SearchSettingsApplicationService:
         return public_settings(self._canonical_name, self._registry)
 
     async def update_settings(self, body: Any) -> dict[str, Any]:
+        async with self._update_lock:
+            return await self._update_settings(body)
+
+    async def _update_settings(self, body: Any) -> dict[str, Any]:
+        previous_sources = stored_sources()
         try:
             result = update_settings(
                 body,
@@ -293,6 +344,12 @@ class SearchSettingsApplicationService:
             ) from exc
         except SearchSettingsError as exc:
             raise SearchSettingsApplicationError(str(exc), 400) from exc
+        if stored_sources() != previous_sources:
+            from .search_service import get_search_service, SEARXNG_PORT, SEARXNG_HOST
+            try:
+                await get_search_service().restart(int(SEARXNG_PORT), str(SEARXNG_HOST))
+            except Exception:
+                result["runtime_warning"] = "custom_sources_restart_failed"
         await self._publish_settings_changed(
             "search",
             result["revision"],
@@ -339,6 +396,18 @@ def install_search_settings(
     @context.router.get("/api/settings/search")
     async def api_get_search_settings():
         return service.get_settings()
+
+    @context.router.get("/api/settings/search/engines")
+    def api_get_search_engines():
+        from .search_backend import get_simplexng_engines
+
+        try:
+            return {"engines": get_simplexng_engines()}
+        except Exception:
+            return JSONResponse(
+                {"error": "SimpleXNG engine list is unavailable. Check the search service and retry."},
+                status_code=503,
+            )
 
     @context.router.put("/api/settings/search")
     async def api_update_search_settings(request: Request):

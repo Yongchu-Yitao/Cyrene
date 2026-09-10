@@ -3,12 +3,45 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
+import json
 import re
+import threading
 from typing import Any
 
 from jsonschema import exceptions, validators
+
+
+# Process-local, bounded successes only. Never retain a caller's mutable schema.
+_SCHEMA_CACHE_LIMIT = 256
+_SCHEMA_CACHE_KEY_LIMIT = 65536
+_SCHEMA_CHECK_CACHE: OrderedDict[tuple[Any, ...], None] = OrderedDict()
+_SCHEMA_CHECK_CACHE_LOCK = threading.Lock()
+
+
+def _schema_check_key(schema: dict[str, Any], validator: Any) -> tuple[Any, ...] | None:
+    # Custom validators may have stateful schema checks; preserve every call.
+    if validator not in (
+        validators.Draft3Validator, validators.Draft4Validator,
+        validators.Draft6Validator, validators.Draft7Validator,
+        validators.Draft201909Validator, validators.Draft202012Validator,
+    ):
+        return None
+    try:
+        encoded = json.dumps(schema, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        meta = json.dumps(validator.META_SCHEMA, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(encoded) + len(meta) > _SCHEMA_CACHE_KEY_LIMIT:
+            return None
+        # Non-JSON Python values (e.g. tuples or integer keys) may have different
+        # validation semantics. They keep the original, uncached path.
+        if json.loads(encoded) != schema:
+            return None
+        check = validator.check_schema
+        return validator, getattr(check, "__func__", check), meta, encoded
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
 
 
 class PluginSchemaError(ValueError):
@@ -88,10 +121,22 @@ def check_input_schema(schema: Mapping[str, Any]) -> None:
 
     normalized = dict(schema)
     validator = validators.validator_for(normalized)
+    key = _schema_check_key(normalized, validator)
+    if key is not None:
+        with _SCHEMA_CHECK_CACHE_LOCK:
+            if key in _SCHEMA_CHECK_CACHE:
+                _SCHEMA_CHECK_CACHE.move_to_end(key)
+                return
     try:
         validator.check_schema(normalized)
     except exceptions.SchemaError as exc:
         raise PluginSchemaError(f"invalid Plugin input_schema: {exc.message}") from exc
+    if key is not None:
+        with _SCHEMA_CHECK_CACHE_LOCK:
+            _SCHEMA_CHECK_CACHE[key] = None
+            _SCHEMA_CHECK_CACHE.move_to_end(key)
+            while len(_SCHEMA_CHECK_CACHE) > _SCHEMA_CACHE_LIMIT:
+                _SCHEMA_CHECK_CACHE.popitem(last=False)
 
 
 def _schema_types(schema: Mapping[str, Any]) -> frozenset[str]:

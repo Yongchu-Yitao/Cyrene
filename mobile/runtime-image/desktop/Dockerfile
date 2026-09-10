@@ -24,8 +24,8 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     python /opt/cyrene-mobile/requirements.py /opt/cyrene/pyproject.toml --apply > /opt/cyrene-mobile/requirements.txt \
     && pip install --timeout 120 --retries 5 uv==0.11.28 \
-    && UV_HTTP_TIMEOUT=120 uv pip install --system -r /opt/cyrene-mobile/requirements.txt \
-    && UV_HTTP_TIMEOUT=120 uv pip install --system --no-deps /opt/cyrene \
+    && UV_HTTP_TIMEOUT=120 uv pip install --system --compile-bytecode -r /opt/cyrene-mobile/requirements.txt \
+    && UV_HTTP_TIMEOUT=120 uv pip install --system --compile-bytecode --no-deps /opt/cyrene \
     && pip check \
     && python -c 'import cyrene, mcp, onnxruntime, sherpa_onnx, pypdfium2, tokenizers' \
     && pip freeze > /opt/cyrene-mobile/installed-requirements.txt

@@ -3801,6 +3801,16 @@ html :is(
   height: 44px;
 }
 
+@media (max-width: 767px) {
+  .workbench-shell .wbc-composer .wbc-composer-box textarea.wbc-composer-textarea {
+    min-height: 72px;
+  }
+
+  .workbench-shell .wbc-composer .wbc-composer-box textarea.wbc-composer-textarea:placeholder-shown {
+    height: 72px;
+  }
+}
+
 .wbc-composer-box textarea::placeholder {
   color: var(--wb-faint);
 }

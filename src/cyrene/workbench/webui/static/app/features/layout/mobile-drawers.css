@@ -69,15 +69,29 @@
   /* The inspector follows its content height while keeping the shared top/outer edge. */
   .workbench-shell[data-mobile-drawer] .wbc-side[data-mobile-card] {
     bottom: auto !important; max-height: calc(100dvh - var(--wb-mobile-top) - 8px) !important;
-    background: var(--wb-surface); overflow-y: auto; border-radius: 18px; box-shadow: 0 12px 36px rgb(0 0 0 / .18);
+    background: var(--wb-floating-rail-bg); overflow-y: auto; border-radius: var(--wb-floating-rail-radius); box-shadow: var(--wb-floating-rail-shadow);
+  }
+  /* Desktop detail shells reserve a grid gutter. The mobile drawer already
+     positions the card, so only the inner detail card paints a surface. */
+  .workbench-shell[data-mobile-drawer] .wb-floating-detail-shell[data-mobile-card="right"] {
+    padding: 0; border: 0; border-radius: 0; background: transparent;
+    box-shadow: none; overflow: visible;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-floating-detail-shell[data-mobile-card="right"] > .wb-floating-detail-card {
+    width: 100%; margin: 0; box-sizing: border-box;
+    max-height: calc(100dvh - var(--wb-mobile-top) - 8px);
   }
   /* Reserve the measured mobile dock once, without the desktop placeholder. */
   .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock-slot { display: none; }
   .workbench-shell[data-mobile-drawer] .workbench-integrated-rail[data-mobile-card] {
-    padding-bottom: var(--wb-mobile-dock-reserve, 84px); box-shadow: 0 12px 36px rgb(0 0 0 / .18);
+    padding-bottom: var(--wb-mobile-dock-reserve, 84px); background: var(--wb-floating-rail-bg); box-shadow: var(--wb-floating-rail-shadow);
   }
   .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock.is-persistent[data-mobile-card] {
     width: min(318px, calc(100vw - 80px)) !important; left: 20px !important; bottom: 20px !important;
+    /* The nav owns its rounded border and shadow, just as on desktop.
+       This moving wrapper must not clip that material a second time. */
+    background: transparent; border: 0; border-radius: 0; box-shadow: none;
+    overflow: visible; padding-top: 0;
   }
   .workbench-shell[data-mobile-drawer] .workbench-topbar { scrollbar-width: none; }
   .workbench-shell[data-mobile-drawer] .workbench-topbar::-webkit-scrollbar { display: none; }
@@ -90,19 +104,19 @@
 .workbench-mobile-current, .workbench-mobile-more { display: none; }
 .workbench-topbar-extras, .workbench-topbar-extra-controls { display: contents; }
 @media (max-width: 767px) {
-  .workbench-shell[data-mobile-drawer] .workbench-topbar { box-sizing: border-box; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .workbench-shell[data-mobile-drawer] .workbench-topbar { box-sizing: border-box; display: grid; grid-template-columns: 56px minmax(0, 1fr) 44px; }
   .workbench-shell[data-mobile-drawer] .workbench-topbar .workbench-session-tabs,
   .workbench-shell[data-mobile-drawer] .workbench-traffic-space { display: none; }
   .workbench-shell[data-mobile-drawer] .workbench-brand { min-width: 0; width: 100%; }
-  .workbench-shell[data-mobile-drawer] .workbench-brand-btn { min-width: 0; width: 100%; height: 44px; gap: 6px; padding: 0 4px; }
-  .workbench-shell[data-mobile-drawer] .workbench-brand-btn strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+  .workbench-shell[data-mobile-drawer] .workbench-brand-btn { min-width: 0; width: 100%; height: 44px; justify-content: center; gap: 6px; padding: 0 4px; }
+  .workbench-shell[data-mobile-drawer] .workbench-brand-btn strong { display: none; }
   .workbench-shell[data-mobile-drawer] .workbench-brand-btn .workbench-top-project-icon { width: 24px; height: 24px; flex-shrink: 0; }
   .workbench-shell[data-mobile-drawer] .workbench-mobile-current,
   .workbench-shell[data-mobile-drawer] .workbench-mobile-more {
     display: flex; align-items: center; justify-content: center; gap: 6px; height: 44px;
     border: 0; border-radius: 10px; background: transparent; color: var(--wb-text); font: inherit; cursor: pointer;
   }
-  .workbench-shell[data-mobile-drawer] .workbench-mobile-current { flex: 1 1 0; min-width: 0; padding: 0 8px; }
+  .workbench-shell[data-mobile-drawer] .workbench-mobile-current { width: 100%; min-width: 0; padding: 0 8px; }
   .workbench-mobile-current span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .workbench-mobile-current svg { flex-shrink: 0; }
   .workbench-shell[data-mobile-drawer] .workbench-mobile-more { width: 44px; }
@@ -336,13 +350,26 @@
   .workbench-shell[data-mobile-drawer] .wb-mem-rail-scroll > * { flex-shrink: 0; }
   .workbench-shell[data-mobile-drawer] .wb-mem-rail-scroll > .wb-mem-card:last-child { margin-top: auto; margin-bottom: 0; }
   .workbench-shell[data-mobile-drawer] .wb-sched-toolbar { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px; }
-  .workbench-shell[data-mobile-drawer] .wb-sched-toolbar-left { flex: none; display: grid; grid-template-columns: auto 40px 40px minmax(0, 1fr); overflow: visible; }
-  .workbench-shell[data-mobile-drawer] :is(.wb-sched-today, .wb-sched-iconbtn) { min-height: 40px; width: auto; }
-  .workbench-shell[data-mobile-drawer] .wb-sched-heading { white-space: normal; overflow-wrap: anywhere; }
-  .workbench-shell[data-mobile-drawer] .wb-sched-toolbar-right { flex: none; min-width: 0; }
-  .workbench-shell[data-mobile-drawer] .wb-sched-viewseg { flex: 1 1 0; min-width: 0; }
-  .workbench-shell[data-mobile-drawer] .wb-sched-viewseg button { flex: 1 1 0; min-width: 0; min-height: 40px; padding-inline: 8px; }
-  .workbench-shell[data-mobile-drawer] .wb-sched-new { min-height: 40px; }
+  .workbench-shell[data-mobile-drawer] .wb-sched-toolbar-left {
+    flex: none; display: grid; grid-template-columns: minmax(0, 1fr) 40px 40px;
+    gap: 10px 8px; overflow: visible;
+  }
+  .workbench-shell[data-mobile-drawer] :is(.wb-sched-today, .wb-sched-iconbtn) {
+    height: 36px; min-height: 36px; width: auto; box-sizing: border-box;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-sched-today { justify-self: start; padding-inline: 16px; }
+  .workbench-shell[data-mobile-drawer] .wb-sched-heading {
+    grid-column: 1 / -1; grid-row: 1; margin: 0;
+    line-height: 1.4; white-space: normal; overflow-wrap: normal; word-break: keep-all;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-sched-toolbar-right { flex: none; min-width: 0; gap: 8px; align-items: center; }
+  .workbench-shell[data-mobile-drawer] .wb-sched-viewseg {
+    flex: 1 1 0; min-width: 0; height: 38px; padding: 2px; gap: 2px; box-sizing: border-box;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-sched-viewseg button {
+    flex: 1 1 0; min-width: 0; height: 32px; min-height: 0; padding: 0 8px; box-sizing: border-box;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-sched-new { height: 38px; min-height: 38px; padding-inline: 14px; }
 }
 
 /* Settings scroll vertically; the left navigation remains a swipe-out drawer. */
@@ -385,5 +412,46 @@
   /* Child dialogs remain usable after the action menu closes. */
   .workbench-topbar-extra-controls :is(.workbench-help-popover, .workbench-notif-popover) {
     visibility: visible; pointer-events: auto; top: 58px; max-height: calc(100dvh - 74px);
+  }
+}
+
+/* Share desktop materials and control styling; only reflow narrow content. */
+@media (max-width: 767px) {
+  .workbench-shell[data-mobile-drawer] .wbc-msg-foot {
+    flex-wrap: wrap; gap: 4px 10px; min-width: 0;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-msg-foot > :is(time, small) {
+    flex: 0 0 auto; white-space: nowrap; line-height: 1.5;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-msg-foot > .wbc-msg-action {
+    flex: 0 0 32px; width: 32px; height: 32px;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-board-toolbar {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; gap: 8px;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-board-search {
+    grid-column: 1 / -1; grid-row: 1; width: 100%; min-width: 0; box-sizing: border-box;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-board-search input { min-width: 0; width: 100%; }
+  .workbench-shell[data-mobile-drawer] :is(.wb-board-tool-btn, .wb-board-new-btn) {
+    width: auto; min-width: 0; min-height: 36px; height: auto; padding: 6px 12px;
+  }
+  .workbench-shell[data-mobile-drawer] .wb-board-tool-btn { justify-self: start; }
+  .workbench-shell[data-mobile-drawer] .wb-board-new-btn { justify-self: end; }
+  .workbench-shell[data-mobile-drawer] .wbc-project-tools.has-expanded-tool > header {
+    top: 0; margin-top: 0; padding-top: 0; background: var(--wb-floating-rail-bg);
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-project-tool-inline-header {
+    background: var(--wb-floating-rail-bg); border-radius: 0; animation: none;
+    grid-template-columns: 28px minmax(0, 1fr) 32px; padding: 6px 7px;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-project-tool-inline-header.is-terminal {
+    grid-template-columns: 28px minmax(0, 1fr) 32px 32px;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-project-tool-inline-header > button {
+    width: 32px; height: 32px; border-color: transparent; background: transparent; box-shadow: none;
+  }
+  .workbench-shell[data-mobile-drawer] .wbc-project-tool-inline-header > button:hover {
+    background: var(--wb-control-hover-bg);
   }
 }

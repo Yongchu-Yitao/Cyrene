@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ComponentName
 import android.content.Intent
 import ai.cyrene.mobile.runtime.protocol.GuestOperation
+import ai.cyrene.mobile.runtime.protocol.StartupProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -17,16 +18,11 @@ class DesktopRuntimeClient(private val context: Context) : AutoCloseable {
         val headers: Map<String, String> get() = mapOf("X-Cyrene-Token" to token)
     }
 
-    suspend fun start(timeoutMs: Long = 180_000): Connection {
-        val capabilities = submit(GuestOperation.HEALTH_CHECK, timeoutMs)
-        check(capabilities.status == "success" && capabilities.payload.optBoolean("desktop_backend_available")) {
-            "Bundled desktop runtime image is unavailable"
-        }
-        // Call from a visible, user-initiated app flow; Android background-start
-        // restrictions must be allowed to surface, rather than bypassed.
+    suspend fun start(timeoutMs: Long = 180_000, onProgress: (StartupProgress) -> Unit = {}): Connection {
+        // Keep long first-run extraction protected once the visible app starts it.
         context.startForegroundService(serviceIntent().setAction("ai.cyrene.mobile.runtime.KEEP_DESKTOP"))
         try {
-            val response = submit(GuestOperation.DESKTOP_START, timeoutMs)
+            val response = submit(GuestOperation.DESKTOP_START, timeoutMs, onProgress)
             check(response.status == "success") { response.message ?: "Desktop backend start failed" }
             return Connection(response.payload.getString("url"), response.payload.getString("token"))
         } catch (failure: Throwable) {
@@ -52,8 +48,8 @@ class DesktopRuntimeClient(private val context: Context) : AutoCloseable {
 
     // Companion cancellation can synchronously stop the VM through Binder.
     // Keep that bounded but potentially slow operation off Android's UI thread.
-    private suspend fun submit(operation: GuestOperation, timeoutMs: Long = 30_000) = withContext(Dispatchers.IO) {
-        companion.submit("ls_desktop_backend", operation, timeoutMs = timeoutMs)
+    private suspend fun submit(operation: GuestOperation, timeoutMs: Long = 30_000, onProgress: (StartupProgress) -> Unit = {}) = withContext(Dispatchers.IO) {
+        companion.submit("ls_desktop_backend", operation, timeoutMs = timeoutMs, onProgress = onProgress)
     }
 
     override fun close() = companion.close()

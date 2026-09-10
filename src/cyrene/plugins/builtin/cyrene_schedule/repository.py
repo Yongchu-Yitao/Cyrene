@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
+from contextlib import closing
+
+from cyrene.platform.persistence.transactions import transaction_outcome
+
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -302,27 +308,57 @@ class ScheduleRepository:
         limit: int = 10,
         lease_seconds: int = 120,
     ) -> list[ClaimedTask]:
+        task = asyncio.create_task(asyncio.to_thread(
+            self._claim_due, now=now, limit=limit, lease_seconds=lease_seconds,
+        ))
+        claims, cancelled = await transaction_outcome(task)
+        if cancelled:
+            # None of these claims has reached an executor. Match their lease
+            # tokens when releasing, so a later owner's lease is never cleared.
+            async def release_unconsumed():
+                for claim in claims:
+                    await self.release_claim(claim, reason="claim cancelled")
+            await transaction_outcome(asyncio.create_task(release_unconsumed()))
+            raise asyncio.CancelledError
+        return claims
+
+    def _claim_due(
+        self, *, now: datetime | None, limit: int, lease_seconds: int,
+    ) -> list[ClaimedTask]:
         instant = now or _utc_now()
         now_iso = _iso(instant)
         lease_until = _iso(instant + timedelta(seconds=max(15, int(lease_seconds))))
         claims: list[ClaimedTask] = []
-        async with aiosqlite.connect(self.db_path) as database:
-            database.row_factory = aiosqlite.Row
-            await database.execute("BEGIN IMMEDIATE")
-            cursor = await database.execute(
+        with closing(sqlite3.connect(self.db_path)) as database, database:
+            database.row_factory = sqlite3.Row
+            # Close the read cursor before starting a fresh write transaction.
+            # A positive precheck is only a hint: the query below revalidates
+            # the complete eligibility condition under the write lock.
+            cursor = database.execute(
+                "SELECT 1 FROM scheduled_tasks "
+                "WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ? "
+                "AND (lease_until IS NULL OR lease_until = '' OR lease_until <= ?) LIMIT 1",
+                (now_iso, now_iso),
+            )
+            candidate = cursor.fetchone()
+            cursor.close()
+            if candidate is None:
+                return []
+            database.execute("BEGIN IMMEDIATE")
+            cursor = database.execute(
                 "SELECT * FROM scheduled_tasks "
                 "WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ? "
                 "AND (lease_until IS NULL OR lease_until = '' OR lease_until <= ?) "
                 "ORDER BY next_run, created_at LIMIT ?",
                 (now_iso, now_iso, max(1, min(int(limit), 100))),
             )
-            rows = await cursor.fetchall()
+            rows = cursor.fetchall()
             for row in rows:
                 task = ScheduledTask.from_row(row)
                 scheduled_for = str(task.next_run or now_iso)
                 run_id = _run_id(task.id, scheduled_for)
                 token = uuid.uuid4().hex
-                updated = await database.execute(
+                updated = database.execute(
                     "UPDATE scheduled_tasks SET lease_token = ?, lease_until = ?, "
                     "current_run_id = ?, scheduled_for = ?, updated_at = ? "
                     "WHERE id = ? AND status = 'active' AND next_run = ? "
@@ -340,14 +376,14 @@ class ScheduleRepository:
                 )
                 if updated.rowcount <= 0:
                     continue
-                await database.execute(
+                database.execute(
                     "INSERT OR IGNORE INTO task_run_logs "
                     "(task_id, run_at, duration_ms, status, result, error, run_id, "
                     "scheduled_for, started_at, completed_at) "
                     "VALUES (?, ?, 0, 'running', NULL, NULL, ?, ?, ?, NULL)",
                     (task.id, now_iso, run_id, scheduled_for, now_iso),
                 )
-                await database.execute(
+                database.execute(
                     "UPDATE task_run_logs SET status = 'running', error = NULL, "
                     "completed_at = NULL WHERE task_id = ? AND run_id = ?",
                     (task.id, run_id),
@@ -370,7 +406,7 @@ class ScheduleRepository:
                         claimed_at=now_iso,
                     )
                 )
-            await database.commit()
+            database.commit()
         return claims
 
     async def renew_lease(

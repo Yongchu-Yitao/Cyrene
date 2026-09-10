@@ -2,54 +2,35 @@ package ai.cyrene.mobile.desktop
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import ai.cyrene.mobile.desktop.DesktopRuntimeClient
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ai.cyrene.mobile.runtime.protocol.StartupProgress
 
-data class WorkbenchState(val phase: String = "idle", val error: String? = null, val proxy: WorkbenchProxy? = null)
+data class WorkbenchState(val phase: String = "idle", val error: String? = null, val proxy: WorkbenchProxy? = null, val startup: StartupProgress = StartupProgress("connect"))
 
+/** Activity models observe one process-owned session; closing a screen cannot cancel startup. */
 class WorkbenchModel(application: Application) : AndroidViewModel(application) {
-    private val client = DesktopRuntimeClient(application)
-    private val mutable = MutableStateFlow(WorkbenchState())
-    val state = mutable.asStateFlow()
-    private var job: Job? = null
+    private val session = getSession(application)
+    val state = session.state
+    fun start() = session.start()
+    fun resume() = session.resume()
+    fun stop() = session.stop()
 
-    fun start() {
-        if (job?.isActive == true || mutable.value.phase == "ready") return
-        mutable.value = WorkbenchState("starting")
-        job = viewModelScope.launch {
-            try {
-                // Experimental TCG images need minutes on cold start. Keep progress visible.
-                val connection = client.start(900_000)
-                val proxy = withContext(Dispatchers.IO) { WorkbenchProxy(connection.url, connection.token) }
-                mutable.value = WorkbenchState("ready", proxy = proxy)
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { mutable.value = WorkbenchState("error", failure.message) }
+    companion object {
+        private var shared: WorkbenchSession? = null
+        @Synchronized private fun getSession(application: Application): WorkbenchSession = shared ?: run {
+            val client = DesktopRuntimeClient(application)
+            WorkbenchSession(
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate),
+                connect = { report ->
+                    val connection = client.start(900_000, report)
+                    withContext(Dispatchers.IO) {
+                        WorkbenchProxy(connection.url, connection.token, application.assets::open)
+                    }
+                },
+                disconnect = { client.stop() },
+                healthy = { client.ready() },
+            ).also { shared = it }
         }
-    }
-
-    fun stop() {
-        val previous = job
-        mutable.value.proxy?.close()
-        mutable.value = WorkbenchState("stopping")
-        job = viewModelScope.launch {
-            previous?.cancel()
-            previous?.join()
-            try { client.stop(); mutable.value = WorkbenchState("stopped") }
-            catch (failure: Exception) { mutable.value = WorkbenchState("error", failure.message) }
-        }
-    }
-
-    override fun onCleared() {
-        mutable.value.proxy?.close()
-        // The foreground Runtime retains running work until its Stop action is used.
-        Thread { client.close() }.start()
-        super.onCleared()
     }
 }

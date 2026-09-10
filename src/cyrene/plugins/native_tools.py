@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -123,6 +124,36 @@ def _collect_canonical_files() -> Mapping[str, bytes]:
 
 def _content_hash(content: bytes) -> str:
     return sha256(content).hexdigest()
+
+
+class _SeedFileHashes:
+    """Reuse reads within one synchronization, only while file identity is stable."""
+
+    def __init__(self) -> None:
+        self._hashes: dict[Path, tuple[tuple[int, ...], str]] = {}
+
+    @staticmethod
+    def _identity(path: Path) -> tuple[int, ...]:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"Not a regular plugin file: {path}")
+        return (
+            info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns,
+        )
+
+    def digest(self, path: Path) -> str:
+        before = self._identity(path)
+        cached = self._hashes.get(path)
+        if cached is not None and cached[0] == before:
+            return cached[1]
+        digest = _content_hash(path.read_bytes())
+        if self._identity(path) != before:
+            # Never use an unstable read to authorize replacing a user's file.
+            self._hashes.pop(path, None)
+            raise OSError(f"Plugin file changed while reading: {path}")
+        self._hashes[path] = (before, digest)
+        return digest
 
 
 def _path_present(path: Path) -> bool:
@@ -334,6 +365,12 @@ def _write_upstream_hashes(
     encoded = (
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False) + "\n"
     ).encode("utf-8")
+    try:
+        if not manifest.is_symlink() and manifest.is_file():
+            if manifest.read_bytes() == encoded:
+                return
+    except OSError:
+        pass
     _atomic_write(manifest, encoded)
 
 
@@ -429,6 +466,7 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
         previous_hashes,
     )
     deleted_contributions = _load_deleted_contributions(manifest)
+    file_hashes = _SeedFileHashes()
     modified_owned_packs: set[str] = set()
     for relative, baseline_hash in previous_hashes.items():
         parts = Path(relative).parts
@@ -438,7 +476,7 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
         if not target.is_file() or target.is_symlink():
             continue
         try:
-            if _content_hash(target.read_bytes()) != baseline_hash:
+            if file_hashes.digest(target) != baseline_hash:
                 modified_owned_packs.add(parts[0])
         except OSError:
             modified_owned_packs.add(parts[0])
@@ -522,14 +560,13 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
                 next_hashes[relative] = previous_hash
             continue
         try:
-            existing_content = target.read_bytes()
+            existing_hash = file_hashes.digest(target)
         except OSError:
             existing.append(target)
             if previous_hash is not None:
                 next_hashes[relative] = previous_hash
             continue
 
-        existing_hash = _content_hash(existing_content)
         if existing_hash == upstream_hash:
             existing.append(target)
             next_hashes[relative] = upstream_hash
@@ -571,12 +608,12 @@ def _seed_canonical_directory(root: Path) -> BuiltinPluginSeedResult:
             next_hashes[relative] = previous_hash
             continue
         try:
-            content = target.read_bytes()
+            existing_hash = file_hashes.digest(target)
         except OSError:
             existing.append(target)
             next_hashes[relative] = previous_hash
             continue
-        if _content_hash(content) != previous_hash:
+        if existing_hash != previous_hash:
             existing.append(target)
             next_hashes[relative] = previous_hash
             continue

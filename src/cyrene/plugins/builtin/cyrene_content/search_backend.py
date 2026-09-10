@@ -23,7 +23,7 @@ import requests
 
 from cyrene.localization import accept_language, locale_tag
 from cyrene.observability.trace import new_trace_id, trace_span
-from .search_settings import provider_api_key, runtime_settings
+from .search_settings import provider_api_key, runtime_settings, simplexng_engines
 from .runtime_config import SEARXNG_URL
 from .deepseek_web_search import (
     DeepSeekWebSearchError,
@@ -294,6 +294,25 @@ def _is_loopback_url(url: str) -> bool:
         return False
 
 
+def get_simplexng_engines() -> list[dict]:
+    """Read the live service's web engines, including its default switches."""
+    base_url = _get_simplexng_url()
+    if not base_url:
+        raise RuntimeError("SimpleXNG is not running")
+    session = requests.Session() if _is_loopback_url(base_url) else _proxied_session()
+    if _is_loopback_url(base_url):
+        session.trust_env = False
+    with session:
+        response = session.get(f"{base_url.rstrip('/')}/config", timeout=5)
+        response.raise_for_status()
+        engines = response.json()["engines"]
+    return sorted([
+        {"name": engine["name"], "enabled": engine.get("enabled") is True}
+        for engine in engines
+        if "general" in engine.get("categories", [])
+    ], key=lambda engine: engine["name"].casefold())
+
+
 def _unresponsive_engine_names(data: dict) -> list[str]:
     failures = data.get("unresponsive_engines") or []
     return sorted({
@@ -315,6 +334,13 @@ async def _search_simplexng(query: str, *, max_results: int = 5) -> list[dict]:
         )
     url = f"{base_url.rstrip('/')}/search"
     search_language = _simplexng_language()
+    engines = simplexng_engines()
+    if engines == []:
+        raise SearchBackendUnavailable(
+            "No SimpleXNG search engines are enabled.",
+            error_code="provider_not_configured",
+            affects_health=False,
+        )
     headers = {
         "Accept": "application/json",
         "Accept-Language": accept_language(search_language),
@@ -336,6 +362,7 @@ async def _search_simplexng(query: str, *, max_results: int = 5) -> list[dict]:
                     "format": "json",
                     "language": search_language,
                     "safesearch": "0",
+                    **({"engines": ",".join(engines)} if engines else {}),
                 },
                 headers=headers,
                 timeout=_HTTP_TIMEOUT,

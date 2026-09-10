@@ -6,4 +6,15 @@
     <string name="workbench_download_saved">文件已保存</string>
     <string name="workbench_download_failed">文件未能保存，请重试。</string>
     <string name="workbench_download_unsupported">暂不支持保存此文件。</string>
+    <string name="workbench_stage_connect">正在连接工作空间…</string>
+    <string name="workbench_stage_assets">正在准备应用资源</string>
+    <string name="workbench_stage_verify">正在校验工作空间资源</string>
+    <string name="workbench_stage_unpack">正在解压工作空间资源</string>
+    <string name="workbench_stage_disk">正在创建工作空间</string>
+    <string name="workbench_stage_boot">正在启动工作空间环境…</string>
+    <string name="workbench_stage_backend">正在启动工作空间服务…</string>
+    <string name="workbench_stage_plugins">正在准备工作空间工具</string>
+    <string name="workbench_stage_services">正在连接工作空间服务…</string>
+    <string name="workbench_stage_page">正在加载工作空间界面</string>
+    <string name="workbench_stage_percent">%1$s · %2$d%%</string>
 </resources>

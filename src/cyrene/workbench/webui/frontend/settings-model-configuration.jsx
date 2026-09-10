@@ -1109,7 +1109,9 @@ function useConnectionMenuLifecycle(v) {
   }
 
   function ModelIdCombobox(props) {
-    var value = String(props.value || "");
+    // Keep partial edits out of the autosave queue until the user commits them.
+    var [draftValue, setDraftValue] = useState(null);
+    var value = draftValue === null ? String(props.value || "") : draftValue;
     var options = listFrom(props.options);
     var rootRef = useRef(null);
     var inputRef = useRef(null);
@@ -1126,6 +1128,7 @@ function useConnectionMenuLifecycle(v) {
     function choose(item) {
       var modelId = String(item && (item.model || item.id || item.name) || "").trim();
       if (!modelId) return;
+      setDraftValue(null);
       if (typeof props.onSelect === "function") props.onSelect(item);
       else props.onChange(modelId);
       setFilter("");
@@ -1134,9 +1137,15 @@ function useConnectionMenuLifecycle(v) {
         if (inputRef.current) inputRef.current.focus();
       });
     }
+    function commitValue() {
+      var next = value.trim();
+      if (next && next !== String(props.value || "")) props.onChange(next);
+      setDraftValue(null);
+    }
     function closeFromBlur(event) {
       var next = event.relatedTarget;
       if (next && rootRef.current && rootRef.current.contains(next)) return;
+      commitValue();
       setOpen(false);
       setFilter("");
     }
@@ -1152,8 +1161,14 @@ function useConnectionMenuLifecycle(v) {
       } else if (event.key === "Enter" && open && filtered[activeIndex]) {
         event.preventDefault();
         choose(filtered[activeIndex]);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        commitValue();
+        setOpen(false);
+        setFilter("");
       } else if (event.key === "Escape") {
         event.preventDefault();
+        setDraftValue(null);
         setOpen(false);
         setFilter("");
       }
@@ -1176,7 +1191,8 @@ function useConnectionMenuLifecycle(v) {
           onFocus: function () { setFilter(""); setActiveIndex(0); setOpen(true); },
           onChange: function (event) {
             var next = event.target.value;
-            props.onChange(next);
+            setDraftValue(next);
+            if (props.draft) props.onChange(next);
             setFilter(next);
             setActiveIndex(0);
             setOpen(true);
@@ -1271,7 +1287,7 @@ function useConnectionMenuLifecycle(v) {
           h("div", { className: "wb-mcfg-profile-editor-field is-wide" },
             h("span", null, label(props, "settings.modelId", "Model ID")),
             h(ModelIdCombobox, {
-              t: props.t, profileId: profile.id,
+              t: props.t, profileId: profile.id, draft: props.draft,
               value: profile.model || "",
               options: props.modelOptions || [],
               loading: props.modelsLoading,

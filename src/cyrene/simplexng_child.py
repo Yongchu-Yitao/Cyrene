@@ -137,6 +137,8 @@ def main() -> None:
         ).start()
 
     _install_windows_compat_patches()
+    from cyrene.platform.simplexng_custom_sources import install as install_custom_sources
+    install_custom_sources()
     runpy.run_module("simplexng.simplexng", run_name="__main__")
 
 

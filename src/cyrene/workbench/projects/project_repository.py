@@ -108,6 +108,8 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
     projects = payload.setdefault("projects", [])
     now = project_runtime._utc_now_iso()
     for project in projects:
+        if project_runtime._workbench_normalize_default_project_name(project):
+            changed = True
         project.setdefault("id", project_runtime._short_id("project"))
         project.setdefault("name", "Workspace")
         project.setdefault("description", "")

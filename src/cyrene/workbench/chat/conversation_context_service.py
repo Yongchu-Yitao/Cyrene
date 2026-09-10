@@ -698,7 +698,7 @@ class AgentContextRepository:
         target = str(tree_id or "").strip()
         return self.read_many((target,)).get(target, {})
 
-    def read_many(self, tree_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    def read_many(self, tree_ids: Sequence[str], *, summary_only: bool = False) -> dict[str, dict[str, Any]]:
         """Read existing trees with one index pass and one shared router."""
 
         if not (self.context_directory / "index.sqlite3").is_file():
@@ -721,7 +721,16 @@ class AgentContextRepository:
                 if tree_id not in existing:
                     continue
                 try:
-                    states[tree_id] = self._read_tree(router, tree_id)
+                    from cyrene.workbench.chat.context_read_cache import CONTEXT_READ_CACHE
+
+                    states[tree_id] = CONTEXT_READ_CACHE.read(
+                        router.tree_database_path(tree_id),
+                        lambda owner: AgentContextRepository(
+                            self.context_directory, plugin_owner=owner,
+                        )._read_tree(router, tree_id, summary_only=summary_only),
+                        self.plugin_owner,
+                        variant="summary" if summary_only else "full",
+                    )
                 except TreeNotFoundError:
                     # The index and tree database can change between the batch
                     # lookup and projection; a concurrent deletion is benign.
@@ -902,7 +911,7 @@ class AgentContextRepository:
             expected_updated_at,
         )
 
-    def _read_tree(self, router: Any, tree_id: str) -> dict[str, Any]:
+    def _read_tree(self, router: Any, tree_id: str, *, summary_only: bool = False) -> dict[str, Any]:
         tree = router.get_tree(tree_id)
         nodes = list(router.get_subtree(tree.id, tree.root_id))
         dialogue = [
@@ -987,6 +996,24 @@ class AgentContextRepository:
                 for node in path
             ]
         })
+        if summary_only:
+            from cyrene.workbench.core_adapter.conversation_runtime import context_checkpoint_from_nodes
+
+            # The list needs counts and status, never duplicated transcripts,
+            # timeline HTML inputs, system prompts or compaction detail.
+            return {
+                "treeId": tree.id, "leafId": leaf.id,
+                "usage": _agent_path_usage(path), "model": model,
+                "usedPluginPacks": used_packs,
+                "usedStandalonePlugins": used_standalone,
+                "subagents": subagents,
+                "activityMessages": [{"trace": [None] * sum(
+                    len(message.get("trace") or []) for message in activity_messages
+                    if isinstance(message, Mapping)
+                )}],
+                "checkpoint": context_checkpoint_from_nodes(nodes),
+                "updatedAt": max((node.updated_at for node in nodes), default=leaf.updated_at).isoformat(),
+            }
         compaction_nodes = [
             node
             for node in path

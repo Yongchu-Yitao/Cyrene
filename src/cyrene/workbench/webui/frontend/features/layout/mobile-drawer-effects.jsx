@@ -36,13 +36,22 @@ export function useDrawerCards(state, root, sideRef, syncCards, setAvailable) {
     sizeDock();
     syncCards.current = sync;
     sync();
-    const observer = new MutationObserver(sync);
+    // Collapse unrelated subtree updates into one layout inspection per frame.
+    // Explicit drawer state changes still synchronize before paint below.
+    let syncFrame = null;
+    const observer = new MutationObserver(() => {
+      if (syncFrame === null) syncFrame = requestAnimationFrame(() => {
+        syncFrame = null;
+        sync();
+      });
+    });
     observer.observe(shell, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     return () => {
       resize.disconnect();
       shell.style.removeProperty('--wb-mobile-dock-reserve');
       syncCards.current = null;
       observer.disconnect();
+      if (syncFrame !== null) cancelAnimationFrame(syncFrame);
       background.forEach((inert, node) => { node.inert = inert; });
       saved.forEach((inert, node) => { node.inert = inert; delete node.dataset.mobileCard; });
     };

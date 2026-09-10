@@ -1079,6 +1079,9 @@
     "lines": 197,
     "decisions": 36
   },
+  "src/cyrene/workbench/webui/frontend/features/settings/custom-search-sources.jsx::CustomSourceForm": {
+    "decisions": 24
+  },
   "src/cyrene/workbench/webui/frontend/features/settings/data.jsx::DataPanel": {
     "lines": 260,
     "decisions": 43
@@ -1298,17 +1301,17 @@
     "decisions": 41
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx": {
-    "module_lines": 2206
+    "module_lines": 2222
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>": {
-    "lines": 1961
+    "lines": 1977
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.LocalModelsSection.<anonymous>": {
     "decisions": 88
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.ModelIdCombobox": {
-    "lines": 109,
-    "decisions": 43
+    "lines": 125,
+    "decisions": 46
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.OAuthSection": {
     "decisions": 86
@@ -1406,10 +1409,10 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4283
+    "module_lines": 4315
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4283
+    "module_lines": 4315
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
     "module_lines": 1234

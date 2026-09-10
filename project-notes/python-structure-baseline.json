@@ -156,14 +156,14 @@
     "decisions": 40
   },
   "src/cyrene/core/plugin/registry.py": {
-    "module_lines": 1685
+    "module_lines": 1687
   },
   "src/cyrene/core/plugin/registry.py::PluginRegistry": {
     "methods": 57
   },
   "src/cyrene/core/plugin/registry.py::PluginRegistry._load_directory": {
-    "lines": 178,
-    "decisions": 30
+    "lines": 180,
+    "decisions": 31
   },
   "src/cyrene/core/plugin/registry.py::PluginRegistry.register_pack": {
     "decisions": 21
@@ -182,15 +182,15 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 4869
+    "module_lines": 4880
   },
   "src/cyrene/core/session.py::AgentSession": {
     "methods": 122,
     "fields": 47
   },
   "src/cyrene/core/session.py::AgentSession.__init__": {
-    "lines": 250,
-    "decisions": 33
+    "lines": 254,
+    "decisions": 34
   },
   "src/cyrene/core/session.py::AgentSession._advance": {
     "lines": 248,
@@ -232,8 +232,8 @@
     "decisions": 31
   },
   "src/cyrene/core/session.py::AgentSession._restore": {
-    "lines": 163,
-    "decisions": 37
+    "lines": 170,
+    "decisions": 39
   },
   "src/cyrene/core/session.py::AgentSession._restore_run_context": {
     "decisions": 31
@@ -501,10 +501,10 @@
     "decisions": 56
   },
   "src/cyrene/plugins/builtin/cyrene_browser/routes.py::register_browser_routes": {
-    "lines": 138
+    "lines": 165
   },
   "src/cyrene/plugins/builtin/cyrene_browser/runtime.py": {
-    "module_lines": 4088
+    "module_lines": 4100
   },
   "src/cyrene/plugins/builtin/cyrene_browser/runtime.py::_BrowserSession": {
     "methods": 60
@@ -643,8 +643,11 @@
   "src/cyrene/plugins/builtin/cyrene_content/pdf_routes.py::register_pdf_routes": {
     "lines": 139
   },
+  "src/cyrene/plugins/builtin/cyrene_content/custom_search_sources.py::normalize_sources": {
+    "decisions": 29
+  },
   "src/cyrene/plugins/builtin/cyrene_content/search_backend.py": {
-    "module_lines": 1106
+    "module_lines": 1133
   },
   "src/cyrene/plugins/builtin/cyrene_content/search_backend.py::_deep_search_simplexng": {
     "lines": 134,
@@ -1536,7 +1539,7 @@
     "decisions": 21
   },
   "src/cyrene/workbench/chat/chat_runs.py": {
-    "module_lines": 1715
+    "module_lines": 1722
   },
   "src/cyrene/workbench/chat/chat_runs.py::ChatRun": {
     "fields": 30
@@ -1569,11 +1572,11 @@
     "decisions": 21
   },
   "src/cyrene/workbench/chat/conversation_context_service.py": {
-    "module_lines": 2041
+    "module_lines": 2068
   },
   "src/cyrene/workbench/chat/conversation_context_service.py::AgentContextRepository._read_tree": {
-    "lines": 177,
-    "decisions": 54
+    "lines": 195,
+    "decisions": 59
   },
   "src/cyrene/workbench/chat/conversation_context_service.py::ConversationContextQueryService._agent_blocks": {
     "decisions": 26
@@ -1615,7 +1618,7 @@
     "nesting": 15
   },
   "src/cyrene/workbench/core_adapter/bridge.py": {
-    "module_lines": 1109
+    "module_lines": 1111
   },
   "src/cyrene/workbench/core_adapter/bridge.py::_turn_metrics": {
     "lines": 102,
@@ -1630,11 +1633,15 @@
     "decisions": 36
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge": {
-    "lines": 115,
+    "lines": 117,
     "decisions": 28
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._own_bridge": {
+    "decisions": 21,
     "nesting": 6
+  },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.send.operate": {
+    "decisions": 22
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.fork_context": {
     "lines": 105
@@ -1759,7 +1766,7 @@
     "decisions": 39
   },
   "src/cyrene/workbench/webui/server.py::create_app": {
-    "lines": 103
+    "lines": 107
   },
   "src/cyrene/workbench/workspaces/workspace_changes.py": {
     "module_lines": 1121

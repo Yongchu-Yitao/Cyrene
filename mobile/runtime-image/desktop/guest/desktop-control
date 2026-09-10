@@ -9,6 +9,7 @@ case "${1:-}" in
     if systemctl is-active --quiet cyrene-desktop; then exit 0; fi
     umask 077
     mkdir -p /run/cyrene /workspace
+    rm -f /run/cyrene/startup-progress.json
     printf 'CYRENE_AUTH_TOKEN=%s\nCYRENE_BASE_DIR=/workspace/.cyrene-desktop\nCYRENE_INSTALL_RESOURCES_DIR=/opt/cyrene\n' "$token" > /run/cyrene/backend.env
     cat > /run/systemd/system/cyrene-desktop.service <<'EOF'
 [Unit]
@@ -16,6 +17,8 @@ Description=Full Cyrene Python backend
 [Service]
 EnvironmentFile=/run/cyrene/backend.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=CYRENE_STARTUP_PROGRESS_PATH=/run/cyrene/startup-progress.json
+Environment=CYRENE_BROWSER_HOST=android
 WorkingDirectory=/workspace
 ExecStart=/usr/local/bin/python -m cyrene --port 4242
 KillMode=control-group
@@ -27,7 +30,7 @@ Description=Guest ingress to authenticated loopback backend
 BindsTo=cyrene-desktop.service
 After=cyrene-desktop.service
 [Service]
-ExecStart=/usr/bin/socat TCP4-LISTEN:4243,bind=0.0.0.0,reuseaddr,fork TCP4:127.0.0.1:4242
+ExecStart=/usr/local/bin/python /opt/cyrene-mobile/forward.py
 EOF
     systemctl daemon-reload
     systemctl start cyrene-desktop cyrene-desktop-forward

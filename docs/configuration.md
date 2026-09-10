@@ -202,3 +202,11 @@ Budget Settings can divide a configured monthly amount into adaptive monthly,
 weekly, and five-hour windows and can warn or block new Workbench runs. These
 are local gates over Cyrene's estimates, not provider-side quotas or billing
 guarantees.
+
+### Custom SimpleXNG sources
+
+Open **Settings → Web search → SimpleXNG → Search engines → Add source** to connect a JSON search API or an HTML results page using XPath. Supply a search URL with `{query}`, then map the result list, title, URL and optional snippet. JSON paths use `/` between nested keys (for example `data/results`); HTML field XPath expressions are relative to each result item.
+
+GET, POST JSON and POST form requests are supported. Escape literal braces in POST templates, for example `{{"q":"{query}"}}`. Query text is escaped for the selected body format. Optional authentication accepts a header such as `Authorization` with `Bearer …`, or `X-API-Key`. Header values are stored in encrypted configuration and are not returned to the settings UI; the generated local SimpleXNG configuration contains the headers needed at runtime.
+
+Adding, editing or deleting a source reloads local search automatically. Toggles apply to the next search. Custom sources on external SimpleXNG instances must be added on that server. The URL must return accessible JSON or HTML; browser JavaScript rendering is not supported.

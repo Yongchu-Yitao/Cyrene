@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -42,7 +43,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="New Android assets root; runtime/ is created inside it")
     parser.add_argument("--signing-key", type=Path, required=True)
     parser.add_argument("--disk-mib", type=int, default=8192)
-    parser.add_argument("--memory-mib", type=int, default=2048)
+    parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--build-arg", action="append", default=[], help="Additional Docker build argument, e.g. HTTPS_PROXY")
     parser.add_argument("--node-archive", type=Path, help="Optional offline copy of the pinned Node archive")
     args = parser.parse_args()
@@ -107,6 +108,13 @@ def main():
             "Package versions: installed-requirements.txt; guest /usr/share/doc/*/copyright.\n")
         args.output.mkdir(parents=True)
         shutil.copytree(output, args.output / "runtime")
+        # Same source snapshot as the guest, never a separately maintained UI.
+        # Only exact matching versioned URLs may bypass the guest HTTP server.
+        frontend = context / "source/src/cyrene/workbench/webui/static/app"
+        match = re.search(r'\?v=([A-Za-z0-9._-]+)', (frontend / "index.html").read_text())
+        if match:
+            shutil.copytree(frontend, args.output / "workbench/app")
+            (args.output / "workbench/version.txt").write_text(match.group(1) + "\n")
     print(f"Signed desktop assets: {args.output.resolve()}")
 
 

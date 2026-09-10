@@ -799,10 +799,10 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
     flex: none;
     width: 100%;
     min-width: 0;
-    min-height: 44px;
+    min-height: 38px;
     height: auto;
-    padding: 10px 12px;
-    gap: 12px;
+    padding: 0 10px;
+    gap: 9px;
     justify-content: flex-start;
     box-sizing: border-box;
   }

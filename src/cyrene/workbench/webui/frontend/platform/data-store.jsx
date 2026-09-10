@@ -269,11 +269,22 @@ function scheduleDashboardRefresh() {
   }, 3000);
 }
 
+let __realtimeRefreshRunning = false;
+let __realtimeRefreshPending = false;
 function scheduleRealtimeRefresh() {
+  if (__eventsClosed) return;
+  if (__realtimeRefreshRunning) { __realtimeRefreshPending = true; return; }
   if (__refreshTimer) return;
   __refreshTimer = window.setTimeout(() => {
     __refreshTimer = null;
-    void refreshSessions(true);
+    __realtimeRefreshRunning = true;
+    void refreshSessions(true).finally(() => {
+      __realtimeRefreshRunning = false;
+      if (__realtimeRefreshPending) {
+        __realtimeRefreshPending = false;
+        scheduleRealtimeRefresh();
+      }
+    });
   }, 80);
 }
 

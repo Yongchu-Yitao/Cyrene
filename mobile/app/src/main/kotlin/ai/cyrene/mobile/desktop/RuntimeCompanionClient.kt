@@ -12,12 +12,17 @@ import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
+class RuntimeCompanionClient(context: Context) : AutoCloseable {
+    private val context = context.applicationContext
+    private val progressListeners = ConcurrentHashMap<String, (StartupProgress) -> Unit>()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<GuestResponse>>()
     @Volatile private var service: IRuntimeService? = null
     private var bound = false
 
     private val callback = object : IRuntimeCallback.Stub() {
+        override fun onProgress(requestId: String, progressJson: String) {
+            runCatching { StartupProgress.parse(progressJson) }.onSuccess { progressListeners[requestId]?.invoke(it) }
+        }
         override fun onResult(responseJson: String) {
             runCatching { GuestResponse.parse(responseJson) }
                 .onSuccess { response -> pending.remove(response.requestId)?.complete(response) }
@@ -63,6 +68,7 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
         payload: JSONObject = JSONObject(),
         subagentId: String? = null,
         timeoutMs: Long = 30_000,
+        onProgress: (StartupProgress) -> Unit = {},
     ): GuestResponse {
         bind()
         val requestId = "gr_${UUID.randomUUID().toString().replace("-", "")}"
@@ -77,14 +83,17 @@ class RuntimeCompanionClient(private val context: Context) : AutoCloseable {
             .put("payload", payload)
         val deferred = CompletableDeferred<GuestResponse>()
         pending[requestId] = deferred
+        progressListeners[requestId] = onProgress
         try {
             service?.submit(request.toString(), callback) ?: error("Runtime companion unavailable")
             return withTimeout(timeoutMs) { deferred.await() }
         } catch (error: Throwable) {
-            service?.cancel(requestId)
+            // A timed-out read-only status request must never tear down an active VM.
+            if (operation != GuestOperation.DESKTOP_STATUS) service?.cancel(requestId)
             throw error
         } finally {
             pending.remove(requestId)
+            progressListeners.remove(requestId)
         }
     }
 

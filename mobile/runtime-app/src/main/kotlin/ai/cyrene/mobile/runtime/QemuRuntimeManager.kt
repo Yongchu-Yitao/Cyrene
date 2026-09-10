@@ -17,20 +17,21 @@ class QemuRuntimeManager(private val context: Context) {
     private val root = File(context.filesDir, "runtime").apply { mkdirs() }
     private val mounted = ConcurrentHashMap.newKeySet<String>()
     private val vmLock = Any()
+    private val desktopLock = Any()
     @Volatile private var image: RuntimeImageBundle? = null
     @Volatile private var vm: QemuVirtualMachine? = null
     @Volatile private var desktopEndpoint: DesktopBackendEndpoint? = null
 
-    fun handle(request: GuestRequest): GuestResponse {
+    fun handle(request: GuestRequest, report: (StartupProgress) -> Unit = {}): GuestResponse {
         if (System.currentTimeMillis() >= request.deadlineEpochMs) {
             return error(request, "deadline_expired", "Request deadline expired")
         }
         return try {
             when (request.operation) {
-                GuestOperation.DESKTOP_START -> desktopStart(request)
+                GuestOperation.DESKTOP_START -> desktopStart(request, report)
                 GuestOperation.DESKTOP_STATUS -> desktopStatus(request)
                 GuestOperation.DESKTOP_STOP -> desktopStop(request)
-                GuestOperation.HELLO, GuestOperation.HEALTH_CHECK -> health(request)
+                GuestOperation.HELLO, GuestOperation.HEALTH_CHECK -> health(request, report)
                 GuestOperation.SESSION_MOUNT -> mount(request)
                 GuestOperation.SESSION_UNMOUNT -> unmount(request)
                 GuestOperation.RESOURCE_USAGE -> resourceUsage(request)
@@ -75,8 +76,8 @@ class QemuRuntimeManager(private val context: Context) {
         mounted.clear()
     }
 
-    private fun health(request: GuestRequest): GuestResponse {
-        val verified = ensureImage()
+    private fun health(request: GuestRequest, report: (StartupProgress) -> Unit): GuestResponse {
+        val verified = ensureImage(report)
         val guest = vm?.lastHealth
         return success(request, JSONObject()
             .put("runtime_available", true)
@@ -94,31 +95,76 @@ class QemuRuntimeManager(private val context: Context) {
             .put("free_bytes", root.usableSpace))
     }
 
-    private fun desktopStart(request: GuestRequest): GuestResponse = synchronized(vmLock) {
-        require(ensureImage().desktopBackend) { "Install a Runtime APK built with signed desktop assets" }
-        ensureVm(request.deadlineEpochMs)
+    private fun desktopStart(request: GuestRequest, report: (StartupProgress) -> Unit): GuestResponse = synchronized(desktopLock) {
+        // Reattach to a live backend before touching the image, guest serial channel or systemd.
+        desktopEndpoint?.takeIf { it.healthy(healthBudget(request)) }?.let { endpoint ->
+            report(StartupProgress("ready"))
+            return@synchronized success(request, JSONObject().put("ready", true)
+                .put("url", endpoint.url).put("token", endpoint.token)
+                .put("auth_header", "X-Cyrene-Token"))
+        }
+        require(ensureImage(report).desktopBackend) { "Install a Runtime APK built with signed desktop assets" }
+        ensureVm(request.deadlineEpochMs, report)
+        report(StartupProgress("backend"))
         val endpoint = checkNotNull(desktopEndpoint)
         val result = checkNotNull(vm).execute(
             "/opt/cyrene-mobile/desktop-control start ${quote(endpoint.token)}", request.deadlineEpochMs
         )
         check(result.exitCode == 0) { "Desktop backend failed to start: ${result.stderr}" }
+        android.util.Log.i("CyreneStartup", "backend_start_command_complete")
+        var nextServiceCheck = System.currentTimeMillis() + 30_000
+        var nextProgressCheck = 0L
+        var lastProgress = ""
         while (System.currentTimeMillis() < request.deadlineEpochMs) {
             val remaining = (request.deadlineEpochMs - System.currentTimeMillis()).coerceIn(1, 5000).toInt()
             if (endpoint.healthy(remaining)) {
+                report(StartupProgress("ready"))
                 return@synchronized success(request, JSONObject().put("ready", true)
                     .put("url", endpoint.url).put("token", endpoint.token)
                     .put("auth_header", "X-Cyrene-Token"))
             }
-            // Each health connection creates a guest socat worker. Fast polling
-            // competes with Python startup on the single emulated CPU.
+            check(desktopEndpoint === endpoint) { "Workspace runtime was stopped" }
+            if (System.currentTimeMillis() >= nextProgressCheck) {
+                // The guest HTTP server cannot expose progress before plugin loading.
+                // Read only a small atomic snapshot, at most once every five seconds.
+                runCatching {
+                    val snapshot = checkNotNull(vm).execute(
+                        "cat /run/cyrene/startup-progress.json 2>/dev/null || true",
+                        minOf(request.deadlineEpochMs, System.currentTimeMillis() + 5_000),
+                    ).stdout.trim()
+                    if (snapshot.isNotEmpty() && snapshot != lastProgress) {
+                        val progress = StartupProgress.parse(snapshot)
+                        if (progress.stage in setOf("backend_plugins", "backend_services")) {
+                            report(progress)
+                            lastProgress = snapshot
+                        }
+                    }
+                }
+                nextProgressCheck = System.currentTimeMillis() + 5_000
+            }
+            if (System.currentTimeMillis() >= nextServiceCheck) {
+                val checkResult = checkNotNull(vm).execute(
+                    "systemctl show cyrene-desktop -p ActiveState -p SubState -p Result -p ExecMainStatus",
+                    minOf(request.deadlineEpochMs, System.currentTimeMillis() + 15_000),
+                )
+                android.util.Log.i("CyreneStartup", "backend_service: ${checkResult.stdout.trim()}")
+                check(!checkResult.stdout.lineSequence().any { it == "ActiveState=failed" || it == "ActiveState=inactive" }) {
+                    "Workspace service stopped before becoming ready: ${checkResult.stdout.trim()}"
+                }
+                nextServiceCheck = System.currentTimeMillis() + 30_000
+            }
+            // Bound polling so it does not compete with Python initialization.
             Thread.sleep(1000)
         }
         error(request, "desktop_start_timeout", "Backend health deadline expired; inspect guest journalctl -u cyrene-desktop")
     }
 
     private fun desktopStatus(request: GuestRequest): GuestResponse = success(request, JSONObject()
-        .put("available", ensureImage().desktopBackend)
-        .put("ready", desktopEndpoint?.healthy() ?: false))
+        .put("available", image?.desktopBackend ?: false)
+        .put("ready", desktopEndpoint?.healthy(healthBudget(request)) ?: false))
+
+    private fun healthBudget(request: GuestRequest): Int =
+        (request.deadlineEpochMs - System.currentTimeMillis()).coerceIn(1, 5000).toInt()
 
     private fun desktopStop(request: GuestRequest): GuestResponse = synchronized(vmLock) {
         if (ensureImage().desktopBackend && vm != null) {
@@ -326,14 +372,15 @@ class QemuRuntimeManager(private val context: Context) {
         require(request.sessionId in mounted) { "Runtime session is not mounted" }
     }
 
-    private fun ensureImage(): RuntimeImageBundle = image ?: synchronized(vmLock) {
-        image ?: RuntimeImageVerifier(context).verifyAndExtract().also { image = it }
+    private fun ensureImage(report: (StartupProgress) -> Unit = {}): RuntimeImageBundle = image ?: synchronized(vmLock) {
+        image ?: RuntimeImageVerifier(context).verifyAndExtract(report).also { image = it }
     }
 
-    private fun ensureVm(deadlineEpochMs: Long): VmHealth = synchronized(vmLock) {
+    private fun ensureVm(deadlineEpochMs: Long, report: (StartupProgress) -> Unit = {}): VmHealth = synchronized(vmLock) {
         val current = vm
         if (current != null) return@synchronized current.ping(deadlineEpochMs)
-        ensureRootDisk()
+        ensureRootDisk(report)
+        report(StartupProgress("boot"))
         val endpoint = if (ensureImage().desktopBackend) DesktopBackendEndpoint() else null
         val created = QemuVirtualMachine(context, ensureImage(), rootfsDisk(), endpoint?.port)
         try {
@@ -344,13 +391,14 @@ class QemuRuntimeManager(private val context: Context) {
         }
     }
 
-    private fun ensureRootDisk() {
+    private fun ensureRootDisk(report: (StartupProgress) -> Unit = {}) {
         val disk = rootfsDisk()
         if (disk.isFile) return
         val template = ensureImage().rootfsTemplate
         disk.parentFile?.mkdirs()
         val temp = File(disk.parentFile, ".rootfs.ext4.tmp")
-        template.inputStream().use { SparseDisk.copy(it, temp) }
+        report(StartupProgress("disk", 0, template.length()))
+        template.inputStream().use { input -> SparseDisk.copy(input, temp) { done -> report(StartupProgress("disk", done, template.length())) } }
         check(temp.renameTo(disk) || run {
             temp.inputStream().use { SparseDisk.copy(it, disk) }; temp.delete()
         }) {

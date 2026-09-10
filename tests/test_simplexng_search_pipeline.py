@@ -412,3 +412,50 @@ def test_self_contained_result_preserves_evidence_order():
     assert result.index("[1] First") < result.index("[2] Second")
     assert "Excerpt: First fetched body" in result
     assert "Excerpt: Second fetched body" in result
+
+
+@pytest.mark.parametrize("engines", [None, ["google", "bing"]])
+async def test_simplexng_passes_selected_engines(monkeypatch, engines):
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+
+    captured = {}
+
+    class Session(_FakeSearchSession):
+        def get(self, url, **kwargs):
+            captured.update(kwargs["params"])
+            return super().get(url, **kwargs)
+
+    monkeypatch.setattr(search, "_get_simplexng_url", lambda: "http://127.0.0.1:8888")
+    monkeypatch.setattr(search, "simplexng_engines", lambda: engines)
+    monkeypatch.setattr(search.requests, "Session", lambda: Session({"results": []}))
+    await search._search_simplexng("test")
+    if engines is None:
+        assert "engines" not in captured
+    else:
+        assert captured["engines"] == "google,bing"
+
+
+async def test_simplexng_all_engines_off_does_not_search_defaults(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+
+    monkeypatch.setattr(search, "_get_simplexng_url", lambda: "http://127.0.0.1:8888")
+    monkeypatch.setattr(search, "simplexng_engines", lambda: [])
+    with pytest.raises(search.SearchBackendUnavailable, match="No SimpleXNG") as exc:
+        await search._search_simplexng("test")
+    assert exc.value.affects_health is False
+
+
+def test_simplexng_catalog_uses_live_general_engines(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_content import search_backend as search
+
+    session = _FakeSearchSession({"engines": [
+        {"name": "google", "categories": ["general"], "enabled": True},
+        {"name": "bing", "categories": ["general"], "enabled": False},
+        {"name": "images", "categories": ["images"], "enabled": True},
+    ]})
+    monkeypatch.setattr(search, "_get_simplexng_url", lambda: "http://127.0.0.1:8888")
+    monkeypatch.setattr(search.requests, "Session", lambda: session)
+    assert search.get_simplexng_engines() == [
+        {"name": "bing", "enabled": False}, {"name": "google", "enabled": True},
+    ]
+    assert session.trust_env is False

@@ -17,9 +17,18 @@ def _safe_workbench_data_key(value: Any) -> str:
     return cleaned or 'project'
 
 def _workbench_default_project_name() -> str:
-    if WORKSPACE_DIR.name == 'workspace' and WORKSPACE_DIR.parent.name:
-        return WORKSPACE_DIR.parent.name
-    return WORKSPACE_DIR.name or 'Cyrene'
+    return 'Cyrene'
+
+def _workbench_normalize_default_project_name(project: dict[str, Any]) -> bool:
+    """Repair the Android bootstrap label without relocating its workspace."""
+    if (
+        project.get('name') == '.cyrene-desktop'
+        and project.get('workspacePath') == '/workspace/.cyrene-desktop/workspace'
+        and project.get('workspacePathSource', 'user') == 'user'
+    ):
+        project['name'] = 'Cyrene'
+        return True
+    return False
 
 def _workbench_project_data_key(project: dict[str, Any] | None) -> str:
     if not project:

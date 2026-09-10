@@ -1,6 +1,8 @@
 package ai.cyrene.mobile.runtime
 
 import android.content.Context
+import ai.cyrene.mobile.runtime.protocol.StartupProgress
+import java.security.DigestInputStream
 import org.json.JSONObject
 import java.io.File
 import java.security.KeyFactory
@@ -24,7 +26,8 @@ data class RuntimeImageBundle(
 )
 
 class RuntimeImageVerifier(private val context: Context) {
-    fun verifyAndExtract(): RuntimeImageBundle {
+    fun verifyAndExtract(report: (StartupProgress) -> Unit = {}): RuntimeImageBundle {
+        report(StartupProgress("verify"))
         val assets = context.assets
         val manifestBytes = assets.open("runtime/manifest.json").use { it.readBytes() }
         val signatureBytes = assets.open("runtime/manifest.sig").use { it.readBytes() }
@@ -42,12 +45,12 @@ class RuntimeImageVerifier(private val context: Context) {
         val manifest = JSONObject(manifestBytes.toString(Charsets.UTF_8))
         check(manifest.getString("schema") == "cyrene-runtime-image-v2") { "Unsupported runtime image schema" }
         val output = File(context.filesDir, "qemu-image/${manifest.getString("version")}").apply { mkdirs() }
-        val kernel = extractVerified(output, manifest.getJSONObject("kernel"))
-        val initramfs = extractVerified(output, manifest.getJSONObject("initramfs"))
-        val rootfsTemplate = extractGzipVerified(output, manifest.getJSONObject("rootfs"))
-        val hostResolver = extractVerified(output, manifest.getJSONObject("host_resolver"))
+        val kernel = extractVerified(output, manifest.getJSONObject("kernel"), report)
+        val initramfs = extractVerified(output, manifest.getJSONObject("initramfs"), report)
+        val rootfsTemplate = extractGzipVerified(output, manifest.getJSONObject("rootfs"), report)
+        val hostResolver = extractVerified(output, manifest.getJSONObject("host_resolver"), report)
         val firmware = manifest.getJSONArray("firmware")
-        for (index in 0 until firmware.length()) extractVerified(output, firmware.getJSONObject(index))
+        for (index in 0 until firmware.length()) extractVerified(output, firmware.getJSONObject(index), report)
         // Limbo redirects QEMU's absolute host-file reads into this bundle.
         // Install the already signature- and digest-verified resolver input at
         // the exact path used by slirp; do not trust an arbitrary local file.
@@ -65,22 +68,40 @@ class RuntimeImageVerifier(private val context: Context) {
             engine = manifest.getString("engine"),
             guestArch = manifest.getString("guest_arch"),
             desktopBackend = manifest.optBoolean("desktop_backend", false),
-            memoryMiB = manifest.optInt("memory_mib", 256).also {
+            memoryMiB = manifest.optInt(
+                "memory_mib", if (manifest.optBoolean("desktop_backend", false)) 4096 else 256,
+            ).also {
                 require(it in 256..4096) { "Invalid guest memory budget" }
             },
             kernelAppend = manifest.optString("kernel_append", "console=ttyS0 rdinit=/init panic=-1 loglevel=4"),
         )
     }
 
-    private fun extractVerified(output: File, entry: JSONObject): File {
+    private fun extractVerified(output: File, entry: JSONObject, report: (StartupProgress) -> Unit): File {
         val name = entry.getString("file")
         require(name.matches(Regex("[A-Za-z0-9._-]+"))) { "Invalid runtime asset name" }
         val expected = entry.getString("sha256")
         val target = File(output, name)
-        if (!target.isFile || sha256(target) != expected) {
+        if (!target.isFile || sha256(target, report) != expected) {
             val temp = File(output, ".$name.tmp")
-            context.assets.open("runtime/$name").use { input -> temp.outputStream().use(input::copyTo) }
-            check(sha256(temp) == expected) { "Runtime asset digest mismatch: $name" }
+            val digest = MessageDigest.getInstance("SHA-256")
+            val total = runCatching { context.assets.openFd("runtime/$name").use { it.length } }.getOrDefault(0L)
+            report(StartupProgress("assets", 0, total))
+            context.assets.open("runtime/$name").use { raw ->
+                DigestInputStream(raw, digest).use { input ->
+                    temp.outputStream().use { outputStream ->
+                        val buffer = ByteArray(64 * 1024)
+                        var done = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            outputStream.write(buffer, 0, count); done += count
+                            report(StartupProgress("assets", done, total))
+                        }
+                    }
+                }
+            }
+            check(hex(digest.digest()) == expected) { "Runtime asset digest mismatch: $name" }
             check(temp.renameTo(target) || run {
                 temp.copyTo(target, overwrite = true)
                 check(sha256(target) == expected) { "Runtime copied asset digest mismatch: $name" }
@@ -94,18 +115,21 @@ class RuntimeImageVerifier(private val context: Context) {
         return target
     }
 
-    private fun extractGzipVerified(output: File, entry: JSONObject): File {
-        val compressed = extractVerified(output, entry)
+    private fun extractGzipVerified(output: File, entry: JSONObject, report: (StartupProgress) -> Unit): File {
+        val compressed = extractVerified(output, entry, report)
         val installedName = entry.getString("installed_file")
         require(installedName.matches(Regex("[A-Za-z0-9._-]+"))) { "Invalid runtime output name" }
         val expected = entry.getString("unpacked_sha256")
         val target = File(output, installedName)
-        if (!target.isFile || sha256(target) != expected) {
+        if (!target.isFile || sha256(target, report, "verify_disk") != expected) {
             val temp = File(output, ".$installedName.tmp")
+            val digest = MessageDigest.getInstance("SHA-256")
+            val size = entry.getLong("size")
+            report(StartupProgress("unpack", 0, size))
             GZIPInputStream(compressed.inputStream(), 64 * 1024).use { input ->
-                SparseDisk.copy(input, temp)
+                SparseDisk.copy(input, temp, digest) { done -> report(StartupProgress("unpack", done, size)) }
             }
-            check(sha256(temp) == expected) { "Runtime unpacked digest mismatch: $installedName" }
+            check(temp.length() == size && hex(digest.digest()) == expected) { "Runtime unpacked digest mismatch: $installedName" }
             check(temp.renameTo(target) || run {
                 temp.inputStream().use { SparseDisk.copy(it, target) }
                 check(sha256(target) == expected) { "Runtime copied disk digest mismatch" }
@@ -117,16 +141,23 @@ class RuntimeImageVerifier(private val context: Context) {
         return target
     }
 
-    private fun sha256(file: File): String {
+    private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+    private fun sha256(file: File, report: (StartupProgress) -> Unit = {}, stage: String = "verify"): String {
+        val size = file.length()
+        var done = 0L
+        report(StartupProgress(stage, 0, size))
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            val buffer = ByteArray(64 * 1024)
             while (true) {
                 val count = input.read(buffer)
                 if (count < 0) break
                 digest.update(buffer, 0, count)
+                done += count
+                report(StartupProgress(stage, done, size))
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return hex(digest.digest())
     }
 }

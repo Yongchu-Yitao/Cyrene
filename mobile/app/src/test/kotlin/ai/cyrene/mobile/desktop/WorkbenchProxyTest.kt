@@ -93,4 +93,34 @@ class WorkbenchProxyTest {
             } finally { pool.shutdownNow() }
         }
     }
+
+    @Test fun reusesOneUpstreamAndChecksCredentialsOnEachRequest() {
+        ServerSocket(0).use { backend ->
+            val pool = Executors.newSingleThreadExecutor()
+            try {
+                val served = pool.submit {
+                    backend.accept().use { socket ->
+                        socket.soTimeout = 3000
+                        repeat(2) {
+                            assertTrue(headers(socket).contains("Connection: keep-alive"))
+                            socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nx".toByteArray())
+                        }
+                        assertEquals(-1, socket.getInputStream().read())
+                    }
+                }
+                WorkbenchProxy("http://127.0.0.1:${backend.localPort}", token).use { proxy ->
+                    connect(proxy).use { client ->
+                        repeat(2) {
+                            client.getOutputStream().write(request(proxy).toByteArray())
+                            assertTrue(headers(client).startsWith("HTTP/1.1 200"))
+                            assertEquals('x'.code, client.getInputStream().read())
+                        }
+                        client.getOutputStream().write(request(proxy, cookie = false).toByteArray())
+                        assertTrue(headers(client).startsWith("HTTP/1.1 403"))
+                    }
+                    served.get(3, TimeUnit.SECONDS)
+                }
+            } finally { pool.shutdownNow() }
+        }
+    }
 }

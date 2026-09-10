@@ -36,6 +36,7 @@ _TELEMETRY_FLUSH_INTERVAL = 2.0
 _TELEMETRY_QUEUE_MAX = 2000
 _telemetry_pending: deque[dict] = deque()
 _telemetry_flush_task: asyncio.Task | None = None
+_telemetry_batch_task: asyncio.Task | None = None
 
 
 def init_debug_log() -> None:
@@ -250,6 +251,23 @@ def _accounting_usage(event: dict) -> dict[str, int]:
 
 
 async def _flush_telemetry_batch() -> None:
+    from cyrene.platform.persistence.transactions import transaction_outcome
+
+    global _telemetry_batch_task
+    task = _telemetry_batch_task
+    if task is None or task.done():
+        task = asyncio.create_task(_commit_telemetry_batch())
+        _telemetry_batch_task = task
+    try:
+        _, cancelled = await transaction_outcome(task)
+    finally:
+        if task.done() and _telemetry_batch_task is task:
+            _telemetry_batch_task = None
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+async def _commit_telemetry_batch() -> None:
     if not _telemetry_pending:
         return
     events = list(_telemetry_pending)

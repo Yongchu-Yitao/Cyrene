@@ -6,4 +6,15 @@
     <string name="workbench_download_saved">File saved</string>
     <string name="workbench_download_failed">Could not save the file. Please try again.</string>
     <string name="workbench_download_unsupported">This file cannot be saved yet.</string>
+    <string name="workbench_stage_connect">Connecting to your workspace…</string>
+    <string name="workbench_stage_assets">Preparing application resources</string>
+    <string name="workbench_stage_verify">Verifying workspace resources</string>
+    <string name="workbench_stage_unpack">Unpacking workspace resources</string>
+    <string name="workbench_stage_disk">Creating your workspace</string>
+    <string name="workbench_stage_boot">Starting the workspace environment…</string>
+    <string name="workbench_stage_backend">Starting workspace services…</string>
+    <string name="workbench_stage_plugins">Preparing workspace tools</string>
+    <string name="workbench_stage_services">Connecting workspace services…</string>
+    <string name="workbench_stage_page">Loading your workspace</string>
+    <string name="workbench_stage_percent">%1$s · %2$d%%</string>
 </resources>

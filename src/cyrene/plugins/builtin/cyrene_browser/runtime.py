@@ -598,13 +598,21 @@ def browser_runtime_available() -> bool:
 
 
 def electron_browser_available() -> bool:
-    """Return True when the Electron host exposed its browser RPC server."""
-    return bool(os.environ.get("CYRENE_ELECTRON_RPC_PORT") and os.environ.get("CYRENE_ELECTRON_RPC_TOKEN"))
+    """Select the shared native browser (Electron or Android), without profile fallback."""
+    from cyrene.platform.native_browser import native_browser_host
+
+    return native_browser_host.selected or bool(os.environ.get("CYRENE_ELECTRON_RPC_PORT") and os.environ.get("CYRENE_ELECTRON_RPC_TOKEN"))
 
 
 def _electron_browser_failure(exc: Exception | str, **extra: Any) -> dict[str, Any]:
     """Return an Electron browser error without switching to another runtime."""
     logger.debug("Electron browser operation failed: %s", exc)
+    from cyrene.platform.native_browser import native_browser_host
+
+    if native_browser_host.selected:
+        return {"ok": False, "error": _l("The Android browser is unavailable. Keep Cyrene open and try again.",
+                                         "Android 浏览器暂不可用，请保持 Cyrene 打开后重试。"),
+                "code": "BROWSER_RUNTIME_UNAVAILABLE", **extra}
     return {
         "ok": False,
         "error": _l(
@@ -626,8 +634,6 @@ async def _electron_browser_rpc(
 ) -> dict[str, Any]:
     port = str(os.environ.get("CYRENE_ELECTRON_RPC_PORT") or "").strip()
     token = str(os.environ.get("CYRENE_ELECTRON_RPC_TOKEN") or "").strip()
-    if not port or not token:
-        raise RuntimeError("Electron browser RPC is unavailable.")
     url = f"http://127.0.0.1:{port}/browser/rpc"
     current_session_id, current_round_id = _active_plugin_run_identity()
     rpc_session_id = current_session_id if session_id is None else str(session_id or "").strip()
@@ -638,6 +644,12 @@ async def _electron_browser_rpc(
         "roundId": rpc_round_id,
         "args": args or {},
     }
+    from cyrene.platform.native_browser import native_browser_host
+
+    if native_browser_host.selected:
+        return await native_browser_host.request(payload, timeout)
+    if not port or not token:
+        raise RuntimeError("Electron browser RPC is unavailable.")
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.post(
             url,

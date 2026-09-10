@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import closing
 import re
 import sqlite3
 import threading
@@ -248,12 +250,29 @@ async def record_usage_stats_batch(
         or token_events
     ):
         return
-    batch = _aggregate_usage_events(runtime_events, model_events, tool_events)
+    # The worker owns preparation, connection, transaction and close. No SQL
+    # statement waits for the event loop before the transaction can commit.
+    await asyncio.to_thread(
+        _record_usage_stats_batch, db_path, runtime_events, model_events,
+        tool_events, permission_events, token_events,
+    )
 
-    async with aiosqlite.connect(db_path) as db:
+
+def _record_usage_stats_batch(
+    db_path, runtime_events, model_events, tool_events, permission_events, token_events,
+) -> None:
+    batch = _aggregate_usage_events(runtime_events, model_events, tool_events)
+    now = datetime.now(timezone.utc).isoformat()
+    token_rows = [TokenUsageEvent.from_mapping(event, now).as_row() for event in token_events]
+    permission_rows = _permission_rows(permission_events)
+    with closing(sqlite3.connect(db_path)) as db, db:
+        if permission_events:
+            # Idempotent DDL avoids a process cache outliving rollback or a
+            # replaced database, and never holds a threading lock across await.
+            db.execute(_PERMISSION_DECISIONS_DDL)
         for day, stats in batch.daily.items():
-            await db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
-            await db.execute(
+            db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
+            db.execute(
                 """
                 UPDATE daily_stats
                 SET llm_requests = llm_requests + ?,
@@ -273,11 +292,11 @@ async def record_usage_stats_batch(
                 ),
             )
         for (day, model), counts in batch.models.items():
-            await db.execute(
+            db.execute(
                 "INSERT OR IGNORE INTO daily_model_stats (day, model) VALUES (?, ?)",
                 (day, model),
             )
-            await db.execute(
+            db.execute(
                 """
                 UPDATE daily_model_stats
                 SET requests = requests + ?, prompt_tokens = prompt_tokens + ?,
@@ -287,7 +306,7 @@ async def record_usage_stats_batch(
                 (counts[0], counts[1], counts[2], day, model),
             )
         for (day, tool), count in batch.tools.items():
-            await db.execute(
+            db.execute(
                 """
                 INSERT INTO daily_tool_stats (day, tool, count) VALUES (?, ?, ?)
                 ON CONFLICT(day, tool) DO UPDATE SET count = count + ?
@@ -295,27 +314,16 @@ async def record_usage_stats_batch(
                 (day, tool, count, count),
             )
         if token_events:
-            now = datetime.now(timezone.utc).isoformat()
-            await db.executemany(
+            db.executemany(
                 """INSERT INTO token_usage
                    (created_at, model, round_id, session_id, caller,
                     prompt_tokens, completion_tokens, total_tokens,
                     cache_hit_tokens, cache_miss_tokens, duration_ms, estimated_cost)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                [
-                    TokenUsageEvent.from_mapping(event, now).as_row()
-                    for event in token_events
-                ],
+                token_rows,
             )
         if permission_events:
-            # The schema init creates the table for the main DB; this guard
-            # covers temp/other DB paths once per process instead of re-parsing
-            # the DDL on every flush.
-            with _permission_ddl_lock:
-                if db_path not in _permission_ddl_ensured:
-                    await db.execute(_PERMISSION_DECISIONS_DDL)
-                    _permission_ddl_ensured.add(db_path)
-            await db.executemany(
+            db.executemany(
                 """
                 INSERT OR REPLACE INTO permission_decisions (
                     id, created_at, session_id, round_id, event_type, source,
@@ -323,9 +331,9 @@ async def record_usage_stats_batch(
                     rationale, fingerprint
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                _permission_rows(permission_events),
+                permission_rows,
             )
-        await db.commit()
+        db.commit()
 
 
 async def get_model_stats_range(db_path: str, day_from: str, day_to: str) -> list[dict]:

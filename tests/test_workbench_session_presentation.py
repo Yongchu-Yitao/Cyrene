@@ -201,6 +201,34 @@ def test_agent_context_batch_reads_only_indexed_trees_with_one_router(
     assert counts == {"routers": 1, "trees": ["chat_one"]}
 
 
+def test_summary_projection_matches_full_context_and_reuses_unchanged_tree(tmp_path, monkeypatch):
+    db_path = tmp_path / "cyrene.sqlite3"
+    _seed_chat(db_path)
+    _seed_context(db_path)
+    presentation = WorkbenchSessionPresentation(db_path)
+    repository = AgentContextRepository(presentation.context_directory)
+    chat = store.read_chat_summaries(db_path, _empty_store)[0]
+    full = presentation._summary(chat, repository.read("chat_one"))
+    assert presentation.list() == [full]
+    original = ContextStoreRouter.get_subtree
+    reads = []
+
+    def counted(self, *args):
+        reads.append(1)
+        return original(self, *args)
+
+    monkeypatch.setattr(ContextStoreRouter, "get_subtree", counted)
+    assert presentation.list() == [full]
+    assert reads == []
+    with ContextStoreRouter(presentation.context_directory) as router:
+        tree = router.get_tree("chat_one")
+        value = dict(router.get_node(tree.id, tree.root_id).value)
+        value["content"] = "Changed instructions"
+        router.update_node(tree.id, tree.root_id, value)
+    presentation.list()
+    assert reads
+
+
 def test_export_merges_context_tree_activity_and_clear_removes_context(tmp_path):
     db_path = tmp_path / "cyrene.sqlite3"
     _seed_chat(db_path)

@@ -181,3 +181,11 @@ Alias。依赖 Cost Estimate 前应检查 Source 和 Provider Invoice。
 Budget Settings 会把 Monthly Amount 分配到 Adaptive Monthly、Weekly 和
 Five-hour Window，并可 Warn 或 Block 新 Workbench Run。它是对本地估算值的
 Gate，不是 Provider 侧 Quota 或 Billing Guarantee。
+
+### 自定义 SimpleXNG 搜索源
+
+在「设置 → 联网搜索 → SimpleXNG → 搜索源」中点击「添加搜索源」，可接入返回 JSON 的搜索 API，或用 XPath 解析 HTML 搜索结果页。填写搜索 URL（用 `{query}` 代表搜索词），以及结果列表、标题、链接和可选摘要的字段路径。JSON 嵌套字段用 `/` 分隔，例如 `data/results`；HTML 的标题和链接 XPath 相对于每条结果填写。
+
+支持 GET、POST JSON 和 POST 表单。POST 请求体中的固定大括号需双写，例如 `{{"q":"{query}"}}`；查询词会按 JSON 或表单格式转义。可选鉴权请求头支持 `Authorization`（值填 `Bearer …`）或 `X-API-Key`。鉴权值保存在加密配置中，界面只显示是否已配置；本地生成的 SimpleXNG 配置包含运行所需的请求头。
+
+新增、修改或删除会自动重载本地搜索服务；独立开关在下次搜索生效。此入口管理 Cyrene 的本地服务，外部 SimpleXNG 实例需在对应服务端添加引擎。搜索地址需为可直接访问的接口或结果页，不支持仅依赖浏览器 JavaScript 渲染的结果。

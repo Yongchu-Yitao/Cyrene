@@ -1482,13 +1482,14 @@ class PluginRegistry:
                 self._retire_loaded_entry(entry, reason="directory_unreadable")
             failures.append(PluginLoadFailure(root, str(exc)))
             return tuple(failures)
-        for entry in entries:
-            if entry.name.startswith((".", "_")) or not (
-                entry.is_dir() or (entry.is_file() and entry.suffix == ".py")
-            ):
-                continue
-            if entry.is_dir() and not _contains_python_source(entry):
-                continue
+        from cyrene.core.startup_progress import report_startup_progress
+
+        entries = [entry for entry in entries
+                   if not entry.name.startswith((".", "_"))
+                   and (entry.is_dir() or (entry.is_file() and entry.suffix == ".py"))
+                   and (not entry.is_dir() or _contains_python_source(entry))]
+        for completed, entry in enumerate(entries):
+            report_startup_progress("backend_plugins", completed, len(entries))
             module_name = ""
             contribution_kind: Literal["pack", "plugin"]
             contribution_identity = ""
@@ -1595,6 +1596,7 @@ class PluginRegistry:
                     identity=contribution_identity,
                     replaced=previous is not None,
                 )
+        report_startup_progress("backend_plugins", len(entries), len(entries))
         log_operation(
             logger,
             "plugin.registry",

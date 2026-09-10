@@ -22,6 +22,8 @@
         android:usesCleartextTraffic="true">
         <activity
             android:name=".DesktopWorkbenchActivity"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

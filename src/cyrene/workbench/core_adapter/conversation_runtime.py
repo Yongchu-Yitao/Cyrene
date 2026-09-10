@@ -444,6 +444,7 @@ class ConversationRuntime:
         *,
         owner_loop: asyncio.AbstractEventLoop,
         raw_publisher: WorkbenchPublisher | None,
+        resume_on_restore: bool = True,
     ) -> WorkbenchSessionBridge:
         plugin_root = Path(
             config.plugin_directory or default_plugin_impl_directory()
@@ -552,6 +553,7 @@ class ConversationRuntime:
             application_scope=application_host,
             max_model_calls=config.max_model_calls,
             extra_direct_tool_names=config.extra_direct_tool_names,
+            resume_on_restore=resume_on_restore,
         )
 
     async def _with_bridge(
@@ -561,11 +563,18 @@ class ConversationRuntime:
         *,
         publish: WorkbenchPublisher | None,
         expected_run_id: str | None = None,
+        replace_interrupted_run: bool = False,
     ) -> Any:
         if self._stopping or (self._shutting_down and asyncio.current_task() not in self._outbox_tasks.values()):
             raise RuntimeError("Conversation runtime is shutting down")
         # The runtime, not a request/waiter, owns the bridge and its chat lock.
-        task = asyncio.create_task(self._own_bridge(config, operation, publish=publish, expected_run_id=expected_run_id))
+        operation_options = {}
+        if replace_interrupted_run:
+            operation_options["replace_interrupted_run"] = True
+        task = asyncio.create_task(self._own_bridge(
+            config, operation, publish=publish, expected_run_id=expected_run_id,
+            **operation_options,
+        ))
         self._operations.add(task)
         def settled(completed):
             self._operations.discard(completed)
@@ -583,6 +592,7 @@ class ConversationRuntime:
         *,
         publish: WorkbenchPublisher | None,
         expected_run_id: str | None = None,
+        replace_interrupted_run: bool = False,
     ) -> Any:
         chat_id = str(config.session_id or "").strip()
         if not chat_id:
@@ -593,14 +603,21 @@ class ConversationRuntime:
             if expected_run_id is not None:
                 checkpoint = await asyncio.to_thread(self.context_checkpoint, chat_id, config)
                 if (checkpoint and checkpoint.get("status") == "running"
-                    and checkpoint.get("run_id") != expected_run_id):
+                    and checkpoint.get("run_id") != expected_run_id
+                    and not replace_interrupted_run):
                     raise RuntimeError(
                         f"Conversation has unfinished run {checkpoint.get('run_id')!r}; "
                         "resume it or explicitly cancel it before starting a different run."
                     )
             open_started = time.perf_counter()
+            open_options = {}
+            if (replace_interrupted_run and checkpoint
+                and checkpoint.get("status") == "running"
+                and checkpoint.get("run_id") != expected_run_id):
+                open_options["resume_on_restore"] = False
             opening = asyncio.create_task(asyncio.to_thread(
                 self._open_bridge, config, owner_loop=owner_loop, raw_publisher=publish,
+                **open_options,
             ))
             try:
                 bridge = await asyncio.shield(opening)
@@ -673,6 +690,14 @@ class ConversationRuntime:
             raise ValueError("run_id cannot be empty")
         event_publisher = publish or _accounting_publisher(config.session_id)
 
+        retry_branch = bool(
+            config.retry
+            and not (
+                isinstance(metadata, Mapping)
+                and metadata.get("fork_replay") is True
+            )
+        )
+
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             snapshot = bridge.snapshot()
             status = str(snapshot.get("status") or "")
@@ -686,6 +711,12 @@ class ConversationRuntime:
                 status = "idle"
             if status == "idle" and restored_run_id == normalized_run_id:
                 return bridge.current_result(restored_run_id)
+            if status != "idle" and restored_run_id != normalized_run_id and retry_branch:
+                # The chat lock excludes the previous execution owner. Explicit
+                # retry replaces its durable checkpoint using normal cancellation,
+                # then forks the original user turn without deleting history.
+                await bridge.cancel("replaced_by_retry")
+                status = str(bridge.snapshot().get("status") or "")
             if status != "idle":
                 if restored_run_id == normalized_run_id:
                     return await bridge.resume_result(
@@ -696,13 +727,6 @@ class ConversationRuntime:
                     f"Conversation has unfinished run {restored_run_id!r}; "
                     "resume it or explicitly cancel it before starting a different run."
                 )
-            retry_branch = bool(
-                config.retry
-                and not (
-                    isinstance(metadata, Mapping)
-                    and metadata.get("fork_replay") is True
-                )
-            )
             retry_origin: Mapping[str, str] = {}
             if retry_branch:
                 retry_origin = bridge.prepare_retry()
@@ -733,8 +757,12 @@ class ConversationRuntime:
             )
 
         try:
+            bridge_options = {}
+            if retry_branch:
+                bridge_options["replace_interrupted_run"] = True
             return await self._with_bridge(config, operate, publish=event_publisher,
-                                           expected_run_id=normalized_run_id)
+                                           expected_run_id=normalized_run_id,
+                                           **bridge_options)
         finally:
             self.kick_commit_outbox(config.session_id)
 

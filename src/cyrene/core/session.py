@@ -307,6 +307,7 @@ class AgentSession:
         load_plugins: bool = True,
         permission_user_request: str | None = None,
         event_listener: AgentEventListener | None = None,
+        resume_on_restore: bool = True,
     ) -> None:
         self.data_directory = Path(data_directory).expanduser().resolve()
         self.plugin_directory = Path(plugin_directory).expanduser().resolve()
@@ -515,7 +516,10 @@ class AgentSession:
             tree_id=self.tree.id,
         )
         self.task_contexts.recover_compaction()
-        self._restore()
+        if resume_on_restore:
+            self._restore()
+        else:
+            self._restore(resume=False)
         log_operation(
             logger,
             "cyrene.core.session",
@@ -1928,7 +1932,7 @@ class AgentSession:
                             agent_id=self.agent_id,
                         )
 
-    def _restore(self) -> None:
+    def _restore(self, *, resume: bool = True) -> None:
         log_operation(
             logger,
             "cyrene.core.session",
@@ -1999,6 +2003,13 @@ class AgentSession:
                 leaf_id=leaf.id,
             )
             log_restore(leaf, len(nodes), outcome='awaiting_user', question_id=str(pending.get('id') or ''))
+            return
+        if not resume and decision.action not in {"idle", "tools_complete"}:
+            # Retry must cancel the restored run before any old model, tool,
+            # context, or SessionEnd transition is scheduled. Keep it non-idle
+            # so the normal cancellation protocol persists a terminal marker.
+            self._set_state("queued", _l("Restored paused run", "已恢复暂停的运行"), leaf_id=leaf.id)
+            log_restore(leaf, len(nodes), outcome="paused")
             return
         if decision.action == "rewrite":
             if value.get("role") == "context_reflection":

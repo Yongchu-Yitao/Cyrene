@@ -19,6 +19,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModelProvider
 import ai.cyrene.mobile.desktop.WorkbenchModel
@@ -39,10 +40,12 @@ class DesktopWorkbenchActivity : ComponentActivity() {
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
     private lateinit var progress: ProgressBar
+    private lateinit var startupDetail: TextView
     private lateinit var retry: Button
     private lateinit var loading: LinearLayout
     private var pageFailed = false
     private var web: WebView? = null
+    private var nativeBrowser: ai.cyrene.mobile.browser.AndroidBrowserHost? = null
     private var insetScrim: ai.cyrene.mobile.desktop.SystemInsetScrim? = null
     private var loadedOrigin: String? = null
     private var proxy: WorkbenchProxy? = null
@@ -103,8 +106,17 @@ class DesktopWorkbenchActivity : ComponentActivity() {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         loading.addView(status)
-        progress = ProgressBar(this)
-        loading.addView(progress, LinearLayout.LayoutParams(dp(24), dp(24)))
+        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = true; max = 100
+        }
+        loading.addView(progress, LinearLayout.LayoutParams(-1, dp(6)).apply {
+            leftMargin = dp(16); rightMargin = dp(16)
+        })
+        startupDetail = TextView(this).apply {
+            textSize = 13f; gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(12))
+        }
+        loading.addView(startupDetail)
         retry = Button(this).apply {
             setText(R.string.workbench_retry)
             visibility = View.GONE
@@ -122,12 +134,41 @@ class DesktopWorkbenchActivity : ComponentActivity() {
                     progress.visibility = if (state.phase in setOf("starting", "stopping")) View.VISIBLE else View.GONE
                     retry.visibility = if (state.phase in setOf("error", "stopped")) View.VISIBLE else View.GONE
                     status.setText(if (state.phase == "error") R.string.workbench_error else R.string.workbench_starting)
+                    startupDetail.visibility = if (state.phase == "starting") View.VISIBLE else View.GONE
+                    if (state.phase == "starting") showStartupProgress(state.startup)
                 }
                 if (state.proxy != null && loadedOrigin != state.proxy.origin) loadWorkbench(state.proxy)
                 if (state.proxy == null && web != null) destroyWeb()
             }
         }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                // Returning to the launcher keeps the workspace and unfinished input alive.
+                if (nativeBrowser?.handleBack() != true) moveTaskToBack(true)
+            }
+        })
         model.start()
+    }
+
+    private fun showStartupProgress(value: ai.cyrene.mobile.runtime.protocol.StartupProgress) {
+        val label = getString(when (value.stage) {
+            "assets" -> R.string.workbench_stage_assets
+            "verify", "verify_disk" -> R.string.workbench_stage_verify
+            "unpack" -> R.string.workbench_stage_unpack
+            "disk" -> R.string.workbench_stage_disk
+            "boot" -> R.string.workbench_stage_boot
+            "backend" -> R.string.workbench_stage_backend
+            "backend_plugins" -> R.string.workbench_stage_plugins
+            "backend_services" -> R.string.workbench_stage_services
+            "ready", "page" -> R.string.workbench_stage_page
+            else -> R.string.workbench_stage_connect
+        })
+        val percent = value.percent
+        progress.isIndeterminate = percent == null
+        if (percent != null) progress.setProgress(percent, true)
+        progress.contentDescription = label
+        startupDetail.visibility = View.VISIBLE
+        startupDetail.text = if (percent == null) label else getString(R.string.workbench_stage_percent, label, percent)
     }
 
     private fun showPageError() {
@@ -136,6 +177,7 @@ class DesktopWorkbenchActivity : ComponentActivity() {
         loading.visibility = View.VISIBLE
         status.setText(R.string.workbench_error)
         progress.visibility = View.GONE
+        startupDetail.visibility = View.GONE
         retry.visibility = View.VISIBLE
     }
 
@@ -147,10 +189,15 @@ class DesktopWorkbenchActivity : ComponentActivity() {
         progress.visibility = View.VISIBLE
         retry.visibility = View.GONE
         status.setText(R.string.workbench_starting)
+        showStartupProgress(ai.cyrene.mobile.runtime.protocol.StartupProgress("page"))
         proxy = current; loadedOrigin = current.origin
         val browser = WebView(this)
         if (android.os.Build.VERSION.SDK_INT >= 33) browser.setAutoHandwritingEnabled(false)
         web = browser
+        nativeBrowser = ai.cyrene.mobile.browser.AndroidBrowserHost(this, browser, current.origin) { callback ->
+            fileCallback?.onReceiveValue(null); fileCallback = callback
+            picker.launch(arrayOf("*/*"))
+        }
         insetScrim = ai.cyrene.mobile.desktop.SystemInsetScrim(window.decorView, browser)
         // Cosmetic-only bridge; navigation and subresources are restricted to our proxy origin.
         browser.addJavascriptInterface(object {
@@ -167,6 +214,9 @@ class DesktopWorkbenchActivity : ComponentActivity() {
             useWideViewPort = true; loadWithOverviewMode = true
         }
         browser.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String, icon: android.graphics.Bitmap?) {
+                nativeBrowser?.beginDocument()
+            }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                 if (request.isForMainFrame) {
                     showPageError()
@@ -176,9 +226,11 @@ class DesktopWorkbenchActivity : ComponentActivity() {
                 if (request.isForMainFrame) showPageError()
             }
             override fun onPageFinished(view: WebView, url: String) {
+                nativeBrowser?.authorizeMainFrame(url)
                 if (!pageFailed && web === view && current.owns(url)) {
                     loading.visibility = View.GONE
                     view.visibility = View.VISIBLE
+                    android.util.Log.i("CyreneStartup", "workbench_page_loaded")
                 }
                 if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) && intent.getBooleanExtra("verify_workbench", false) && current.owns(url)) {
                     verifyWebView(view)
@@ -201,6 +253,10 @@ class DesktopWorkbenchActivity : ComponentActivity() {
             }
         }
         browser.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView, newProgress: Int) {
+                if (web === view && !pageFailed) showStartupProgress(
+                    ai.cyrene.mobile.runtime.protocol.StartupProgress("page", newProgress.toLong(), 100))
+            }
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
                 fileCallback?.onReceiveValue(null); fileCallback = callback
                 picker.launch(params.acceptTypes.filter { it.isNotBlank() }.toTypedArray().ifEmpty { arrayOf("*/*") })
@@ -256,10 +312,24 @@ class DesktopWorkbenchActivity : ComponentActivity() {
     }
 
     private fun destroyWeb() {
+        nativeBrowser?.close(); nativeBrowser = null
         insetScrim?.close(); insetScrim = null
         proxy?.let { CookieManager.getInstance().setCookie(it.origin, "${it.cookieName}=; Path=/; Max-Age=0") }
         web?.let { root.removeView(it); it.stopLoading(); it.destroy() }
         web = null; loadedOrigin = null; proxy = null
+    }
+
+    override fun onResume() {
+        super.onResume()
+        web?.onResume()
+        nativeBrowser?.resume()
+        if (::model.isInitialized) model.resume()
+    }
+
+    override fun onPause() {
+        nativeBrowser?.pause()
+        web?.onPause()
+        super.onPause()
     }
 
     override fun onDestroy() {

@@ -337,3 +337,94 @@ def test_partial_context_write_failure_cannot_be_reopened_by_queued_delivery(tmp
         assert len(attempts) == 1
     finally:
         session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["model", "tools", "context"])
+@pytest.mark.parametrize("interrupt_retry", [False, True])
+async def test_retry_replaces_interrupted_checkpoint_without_resuming_old_work(tmp_path, monkeypatch, stage, interrupt_retry):
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.workbench.core_adapter.bridge import WorkbenchSessionBridge
+
+    seed = make_session(tmp_path)
+    tree_id, root_id = seed.tree.id, seed.tree.root_id
+    seed.close()
+    store = ContextStoreRouter(tmp_path / "data" / "context")
+    try:
+        user = store.mount(tree_id, root_id, {
+            "role": "user", "content": "hello", "run_id": "old", "trigger_model": True,
+        })
+        if stage == "tools":
+            store.mount(tree_id, user.id, {
+                "role": "assistant", "run_id": "old", "content": "",
+                "tool_calls": [{"id": "old-effect", "name": "Effect", "arguments": {}}],
+            })
+        elif stage == "context":
+            store.mount(tree_id, user.id, {
+                "role": "context", "run_id": "old", "trigger_model": False,
+                "source_node_id": user.id,
+            })
+    finally:
+        store.close()
+
+    calls, effects = [], []
+
+    async def model(arguments, context):
+        calls.append(context.data.get("run_id"))
+        return {"content": "retried answer", "tool_calls": []}
+
+    async def effect(arguments, context):
+        effects.append("executed")
+        return "effect"
+
+    runtime = ConversationRuntime()
+
+    def checkpoint(*args):
+        store = ContextStoreRouter(tmp_path / "data" / "context")
+        try:
+            return context_checkpoint_from_nodes(store.get_subtree(tree_id, root_id))
+        finally:
+            store.close()
+
+    def open_bridge(config, *, resume_on_restore=True, **kwargs):
+        session = make_session(tmp_path, model, tree_id=tree_id, resume_on_restore=resume_on_restore)
+        session.registry.register_pack(PluginPack("effects", "test", (
+            Plugin("Effect", "test", {"type": "object"}, effect),
+        )), source="test")
+        bridge = WorkbenchSessionBridge(session)
+        if interrupt_retry and checkpoint()["status"] == "running":
+            async def interrupted_submit(*args, **kwargs):
+                raise RuntimeError("crash before retry submit")
+            bridge.submit_result = interrupted_submit
+        return bridge
+
+    monkeypatch.setattr(runtime, "context_checkpoint", checkpoint)
+    monkeypatch.setattr(runtime, "_open_bridge", open_bridge)
+    monkeypatch.setattr(runtime, "kick_commit_outbox", lambda _: None)
+    config = ConversationConfig(session_id=tree_id, workspace_dir=str(tmp_path), db_path="", retry=True)
+    assert checkpoint()["status"] == "running"
+    try:
+        if interrupt_retry:
+            with pytest.raises(RuntimeError, match="crash before retry submit"):
+                await runtime.send(config, "hello", run_id="interrupted-retry", publish=lambda _: None)
+            assert checkpoint()["status"] == "cancelled"
+            assert not calls
+        for run_id in ("retry-1", "retry-2"):
+            result = await asyncio.wait_for(runtime.send(config, "hello", run_id=run_id, publish=lambda _: None), 5)
+            assert result.text == "retried answer"
+            assert checkpoint()["status"] == "completed"
+            assert checkpoint()["run_id"] == run_id
+        assert calls == ["retry-1", "retry-2"]
+        assert not effects
+        store = ContextStoreRouter(tmp_path / "data" / "context")
+        try:
+            values = [node.value for node in store.get_subtree(tree_id, root_id)]
+            assert any(value.get("run_id") == "old" and value.get("cancel_reason") == "replaced_by_retry"
+                       for value in values)
+            retries = [value for value in values if value.get("role") == "user" and value.get("run_id") == "retry-1"]
+            assert len(retries) == 1
+            assert retries[0]["metadata"]["retry_of_run_id"] == "old"
+        finally:
+            store.close()
+    finally:
+        await runtime.shutdown(grace_seconds=0)

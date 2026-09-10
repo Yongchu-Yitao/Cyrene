@@ -64,7 +64,19 @@ class CyreneRuntimeService : Service() {
             val future = executor.submit {
                 val response = try {
                     val request = GuestRequest.parse(requestJson)
-                    runtime.handle(request).also {
+                    var lastStage = ""
+                    var lastUpdate = 0L
+                    val started = android.os.SystemClock.elapsedRealtime()
+                    runtime.handle(request) { progress ->
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val changed = progress.stage != lastStage
+                        if (changed) android.util.Log.i("CyreneStartup", "${progress.stage} at ${now - started}ms (${request.operation.wireName})")
+                        if (changed || now - lastUpdate >= 200 || progress.percent == 100) {
+                            runCatching { callback.onProgress(request.requestId, progress.toJson()) }
+                            lastStage = progress.stage; lastUpdate = now
+                        }
+                    }.also {
+                        android.util.Log.i("CyreneStartup", "${request.operation.wireName} ${it.status} after ${android.os.SystemClock.elapsedRealtime() - started}ms")
                         if (request.operation == GuestOperation.DESKTOP_STOP && it.status == "success") {
                             stopForeground(STOP_FOREGROUND_REMOVE)
                             stopSelf()

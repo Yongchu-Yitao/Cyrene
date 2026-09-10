@@ -3,6 +3,10 @@ import { wbSetBrowserOverlayObscured } from "../../shared/browser/overlays.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
 import { DoctorRepair } from './repair.jsx'
 
+function DoctorIcon({ name, className = "" }) {
+  return <span aria-hidden="true" className={"wb-doctor-icon " + className} style={{ "--doctor-icon": `url("settings-icons/${name}.svg")` }} />;
+}
+
 async function request(path, method = "GET", body) {
   const response = await fetch("/api/doctor/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const value = await response.json();
@@ -57,7 +61,7 @@ export function DoctorPanel({ scope = {}, onClose }) {
     request('reports/' + id).then(value => { if (!stopped) setPlan(value); }).catch(() => { if (!stopped) setError(t('doctor.requestFailed')); });
     return () => { stopped = true; };
   }, [report?.failure?.fixed_plan_id]);
-  const button = (label, action, disabled = busy) => <button type="button" className="wb-btn ghost" disabled={disabled} onClick={action}>{label}</button>;
+  const button = (label, action, disabled = busy, icon = "tools") => <button type="button" className="wb-btn ghost" disabled={disabled} onClick={action}><DoctorIcon name={icon} />{label}</button>;
   function exportReport() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = "cyrene-doctor.json"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -73,15 +77,15 @@ export function DoctorPanel({ scope = {}, onClose }) {
         {item.actions.map((action, index) => <span key={index}>{action.available === false ? <small>{action.reason}</small> : button(t("doctor.reviewRepair"), () => perform(async () => setPlan(await request("reports/" + report.id + "/repair-plan", "POST", { finding_id: item.id, action_index: index }))))}</span>)}
       </article>;
   return <section className="settings-panel wb-doctor-panel" aria-label={t("doctor.title")}>
-    <header className="wb-doctor-head"><div className="wb-section-title"><h3>{t("doctor.title")}</h3><p>{t("doctor.intro")}</p></div>{onClose && <button type="button" className="workbench-icon-btn" aria-label={t("doctor.close")} onClick={onClose}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 6 12 12M18 6 6 18" /></svg></button>}</header><div className="wb-doctor-body">
+    <header className="wb-doctor-head"><span className="wb-doctor-brand"><DoctorIcon name="stethoscope" /></span><div className="wb-section-title"><h3>{t("doctor.title")}</h3><p>{t("doctor.intro")}</p></div>{onClose && <button type="button" className="workbench-icon-btn" aria-label={t("doctor.close")} onClick={onClose}><DoctorIcon name="x" /></button>}</header><div className="wb-doctor-body">
     <div className="wb-doctor-actions">
-      {button(t("doctor.recheck"), () => scan(true), busy || refreshing || report?.failure?.status === "running" || (report && report.analysis.status === "running"))}
+      {button(t("doctor.recheck"), () => scan(true), busy || refreshing || report?.failure?.status === "running" || (report && report.analysis.status === "running"), "reload")}
 
-      {report && (report.analysis.status === "running" || report.failure?.status === "running") && button(t("doctor.stop"), () => perform(async () => setReport(await request("reports/" + report.id + (report.failure?.status === "running" ? "/failure-workflow" : "/analysis"), "DELETE"))), busy || report.failure?.phase === "applying")}
-      {report && button(t("doctor.probe"), () => perform(async () => setReport(await request("reports/" + report.id + "/probe", "POST"))))}
-      {report && button(t("doctor.export"), exportReport)}
+      {report && (report.analysis.status === "running" || report.failure?.status === "running") && button(t("doctor.stop"), () => perform(async () => setReport(await request("reports/" + report.id + (report.failure?.status === "running" ? "/failure-workflow" : "/analysis"), "DELETE"))), busy || report.failure?.phase === "applying", "player-pause")}
+      {report && button(t("doctor.probe"), () => perform(async () => setReport(await request("reports/" + report.id + "/probe", "POST"))), busy, "plug-connected")}
+      {report && button(t("doctor.export"), exportReport, busy, "download")}
     </div>
-    <p className="wb-doctor-usage">{t("doctor.usageHint")}</p>
+    <p className="wb-doctor-usage"><DoctorIcon name="info-circle" />{t("doctor.usageHint")}</p>
     {!report && <div className="wb-doctor-initial">
       <h3>{t("doctor.checks")}</h3>
       <p className="wb-doctor-usage">{t("doctor.firstCheck")}</p>
@@ -93,13 +97,13 @@ export function DoctorPanel({ scope = {}, onClose }) {
     {report && <>
       {report.persistence_unavailable && <p role="alert">{t("doctor.storageFailure")}</p>}
       <div className="wb-doctor-analysis" aria-live="polite">
-        <div className="wb-doctor-analysis-head"><h3>{t(report.failure ? "doctor.failureTitle" : "doctor.analysis")}</h3>{report && button(t(report.failure ? "doctor.recheck" : "doctor.analyze"), () => report.failure ? scan(true) : perform(async () => setReport(await request("reports/" + report.id + "/analysis", "POST", { description }))), busy || report.analysis.status === "running" || report.failure?.status === "running")}</div>
-      {report.model_probe && <p role="status">{t("doctor.modelConnection")}{statusLabel(report.model_probe.status)}</p>}
+        <div className="wb-doctor-analysis-head"><h3><DoctorIcon name="tools" />{t(report.failure ? "doctor.failureTitle" : "doctor.analysis")}</h3>{!report.failure && button(t("doctor.analyze"), () => report.failure ? scan(true) : perform(async () => setReport(await request("reports/" + report.id + "/analysis", "POST", { description }))), busy || report.analysis.status === "running" || report.failure?.status === "running")}</div>
+      {report.model_probe && <p className={"wb-doctor-connection is-" + report.model_probe.status} role="status"><DoctorIcon name="plug-connected" />{t("doctor.modelConnection")}{statusLabel(report.model_probe.status)}</p>}
       {report.failure && <div className="wb-doctor-failure-progress">
         <p>{t('doctor.failureStatus.' + report.failure.status)}{report.failure.status === 'running' && ' · ' + t('doctor.failurePhase.' + report.failure.phase)}</p>
         {report.failure.reason && <p>{['recovery_action_ready', 'restart_required', 'host_transition_failed', 'pending_question_requires_answer', 'model_probe_passed', 'model_probe_failed', 'ambiguous_failure_target', 'failure_target_unavailable', 'candidate_unavailable', 'runtime_not_verified'].includes(report.failure.reason) ? t('doctor.failureReason.' + report.failure.reason) : t("doctor.furtherHelp")}</p>}
       </div>}
-        <details open={!report.failure}><summary id={descriptionId + "-label"}>{t("doctor.descriptionLabel")}</summary>
+        <details open={!report.failure}><summary className="wb-doctor-disclosure" id={descriptionId + "-label"}><DoctorIcon name="chevron-down" /><DoctorIcon name="messages" />{t("doctor.descriptionLabel")}</summary>
         <textarea id={descriptionId} className="wb-textarea wb-doctor-description" aria-labelledby={descriptionId + "-label"} rows={3} maxLength={4000} value={description} onChange={event => setDescription(event.target.value)} disabled={busy || report.analysis.status === "running"} placeholder={t("doctor.descriptionPlaceholder")} aria-describedby={descriptionId + "-hint"} />
         <small className="wb-doctor-description-hint" id={descriptionId + "-hint"}>{t("doctor.descriptionHint")} <span>{description.length}/4000</span></small>
         </details>
@@ -110,7 +114,7 @@ export function DoctorPanel({ scope = {}, onClose }) {
         {!report.analysis.user_summary && !report.failure && report.analysis.status === 'completed' && <p>{t('doctor.legacyResult')}</p>}
       </div>
       <details className="wb-doctor-technical wb-doctor-finding">
-        <summary>{t("doctor.technicalDetails")}</summary>
+        <summary className="wb-doctor-disclosure"><DoctorIcon name="chevron-down" /><DoctorIcon name="code" />{t("doctor.technicalDetails")}</summary>
         <p>{t("doctor.technicalHint")}</p>
         {error && <pre>{error}</pre>}
         <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify({ report_id: report.id, scope: report.scope, failure: report.failure, model_probe: report.model_probe }, null, 2)}</pre>

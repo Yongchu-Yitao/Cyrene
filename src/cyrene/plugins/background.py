@@ -263,14 +263,22 @@ class BackgroundPluginHost:
             registry = self.registry
             failures = registry.refresh() if refresh else ()
         failed_sources = {str(item.path.resolve()) for item in failures}
+        # Resolving every tool's source walks the filesystem on the event loop.
+        # Sources only matter when filtering a failed load; tools from one pack
+        # also share a source. Keep this cache local so symlink changes are still
+        # observed by the next reconciliation.
+        resolved_sources: dict[str, str] = {}
         desired: dict[str, _BackgroundJobBinding] = {}
         for registered in registry.list_plugins():
-            try:
-                source = str(Path(registered.source).resolve())
-            except (OSError, ValueError):
-                source = registered.source
-            if source in failed_sources:
-                continue
+            if failed_sources:
+                if registered.source not in resolved_sources:
+                    try:
+                        source = str(Path(registered.source).resolve())
+                    except (OSError, ValueError):
+                        source = registered.source
+                    resolved_sources[registered.source] = source
+                if resolved_sources[registered.source] in failed_sources:
+                    continue
             if not registry.plugin_enabled(registered.plugin.name):
                 continue
             if (

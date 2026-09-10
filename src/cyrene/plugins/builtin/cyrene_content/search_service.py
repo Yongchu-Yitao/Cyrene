@@ -263,6 +263,8 @@ def _enable_china_search_engines(settings: dict[str, object]) -> None:
 
 def _write_simplexng_settings(port: int, host: str) -> Path:
     """Write the SimpleXNG settings file managed by Cyrene."""
+    from .custom_search_sources import engine_definitions
+
     proxy_url = _get_effective_search_proxy()
     sidecar = _woa_simplexng_sidecar()
     if sidecar is not None:
@@ -275,7 +277,7 @@ def _write_simplexng_settings(port: int, host: str) -> Path:
                 "host": host,
                 "secret_key": secrets.token_hex(16),
                 "proxy_url": proxy_url,
-                "engine_overrides": list(_CHINA_SEARCH_ENGINE_OVERRIDES),
+                "engine_overrides": [*list(_CHINA_SEARCH_ENGINE_OVERRIDES), *engine_definitions()],
             }),
             capture_output=True,
             text=True,
@@ -304,6 +306,7 @@ def _write_simplexng_settings(port: int, host: str) -> Path:
     settings["server"]["secret_key"] = secrets.token_hex(16)
 
     _enable_china_search_engines(settings)
+    settings.setdefault("engines", []).extend(engine_definitions())
 
     formats = settings.setdefault("search", {}).setdefault("formats", [])
     if "json" not in formats:
@@ -325,7 +328,11 @@ def _write_simplexng_settings(port: int, host: str) -> Path:
         f"# Proxy: {'configured' if proxy_url else 'not configured'}\n\n"
         f"{yaml.dump(settings, default_flow_style=False, sort_keys=False)}"
     )
-    _SIMPLEXNG_SETTINGS_PATH.write_text(content, encoding="utf-8")
+    # The generated file may contain authentication headers.
+    fd = os.open(_SIMPLEXNG_SETTINGS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        os.chmod(_SIMPLEXNG_SETTINGS_PATH, 0o600)
+        stream.write(content)
     return _SIMPLEXNG_SETTINGS_PATH
 
 

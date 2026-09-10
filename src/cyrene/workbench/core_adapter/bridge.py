@@ -750,6 +750,7 @@ class WorkbenchSessionBridge:
         application_scope: ApplicationPluginScope | None = None,
         max_model_calls: int | None = None,
         extra_direct_tool_names: Sequence[str] = (),
+        resume_on_restore: bool = True,
     ) -> WorkbenchSessionBridge:
         resolved_services = dict(plugin_services or {})
         if "model_protocol_trace" not in resolved_services:
@@ -780,6 +781,7 @@ class WorkbenchSessionBridge:
                 max_model_calls=max_model_calls,
                 extra_direct_tool_names=extra_direct_tool_names,
                 event_listener=event_stream.receive,
+                resume_on_restore=resume_on_restore,
             ),
             event_stream=event_stream,
         )

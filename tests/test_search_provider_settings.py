@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 
-def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
+@pytest.mark.parametrize("engines", [None, [], ["google", "bing"]])
+def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch, engines):
     from cyrene.core.plugin import PluginRegistry
     from cyrene.plugins.builtin.cyrene_content import plugin_pack
     from cyrene.plugins.builtin.cyrene_content import search_settings
@@ -64,7 +65,7 @@ def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
                 {"id": "tavily", "enabled": True, "api_key": "tvly-secret"},
                 {"id": "brave", "enabled": True, "api_key": "brave-secret"},
                 {"id": "deepseek", "enabled": False},
-                {"id": "simplexng", "enabled": True},
+                {"id": "simplexng", "enabled": True, "engines": engines},
             ],
         },
         canonical_name="WebSearch",
@@ -77,6 +78,9 @@ def test_search_settings_persist_order_switches_and_encrypted_keys(monkeypatch):
         "deepseek",
         "simplexng",
     ]
+    assert state["search"]["simplexng_engines"] == engines
+    assert payload["providers"][-1]["engines"] == engines
+    assert search_settings.simplexng_engines() == engines
     assert state["enabled_plugins"]["WebSearch"] is False
     assert env == {
         "TAVILY_API_KEY": "tvly-secret",
@@ -137,3 +141,13 @@ async def test_search_settings_publish_realtime_change_after_save(monkeypatch):
 
     assert result["revision"] == 9
     assert events == [("search", 9, ["search", "enabled_plugins"])]
+
+
+@pytest.mark.parametrize("value", ["google", [12], [""], ["google,bing"], ["bad\nname"], ["x"] * 301])
+def test_search_engine_settings_reject_invalid_values(value):
+    from cyrene.plugins.builtin.cyrene_content.search_settings import (
+        SearchSettingsError, _normalize_engines,
+    )
+
+    with pytest.raises(SearchSettingsError):
+        _normalize_engines(value)
