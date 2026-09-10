@@ -1249,7 +1249,7 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
   font-size: calc(14px * var(--wb-ui-font-scale, 1));
   font-weight: 680;
   line-height: 1.35;
-  white-space: nowrap;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -1585,7 +1585,7 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
 
   .wb-about-version-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px 0;
+    gap: 1px;
   }
 
   .wb-about-version-grid > div:nth-child(odd) {
