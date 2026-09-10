@@ -131,7 +131,7 @@ jobs:
   # ==========================================================================
   build-windows:
     needs: [release]
-    if: ${{ inputs.platforms != 'windows-arm64' }}
+    if: ${{ inputs.platforms == '' || inputs.platforms == 'all' || inputs.platforms == 'windows' || inputs.platforms == 'windows-x64' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -368,7 +368,7 @@ jobs:
   # Windows on ARM Build
   # ==========================================================================
   build-windows-arm-sidecars:
-    if: ${{ inputs.platforms != 'windows-x64' }}
+    if: ${{ inputs.platforms == '' || inputs.platforms == 'all' || inputs.platforms == 'windows' || inputs.platforms == 'windows-arm64' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -419,7 +419,7 @@ jobs:
 
   build-windows-arm:
     needs: [release, build-windows-arm-sidecars]
-    if: ${{ inputs.platforms != 'windows-x64' }}
+    if: ${{ inputs.platforms == '' || inputs.platforms == 'all' || inputs.platforms == 'windows' || inputs.platforms == 'windows-arm64' }}
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
