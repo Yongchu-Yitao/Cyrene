@@ -3,8 +3,8 @@ import org.junit.Test;
 
 public class CyreneVersionTest {
     @Test public void currentVersionUpgradesEveryLegacyApk() {
-        assertEquals(9002017, CyreneVersion.androidCode("0.9.0-beta17"));
-        assertTrue(CyreneVersion.androidCode("0.9.0-beta17") > 11);
+        assertEquals(9002018, CyreneVersion.androidCode("0.9.0-beta18"));
+        assertTrue(CyreneVersion.androidCode("0.9.0-beta18") > CyreneVersion.androidCode("0.9.0-beta17"));
     }
 
     @Test public void releasesAndPrereleasesKeepTheirOrder() {

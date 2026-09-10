@@ -1,4 +1,4 @@
-# Cyrene Mobile
+# Cyrene for Android
 
 移动端现已合入 [Cyrene 主仓库](https://github.com/Yongchu-Yitao/Cyrene/tree/main/mobile)。
 后续请在主仓库 `mobile/` 开发；Workbench 和 Python 后端直接使用同一提交的 `src/cyrene/`。
@@ -17,7 +17,7 @@ Android 上的桌面 Workbench：复用现有前端，在本机 ARM64 QEMU / Deb
 包含压缩镜像、模板盘及可写盘；建议至少预留 12 GB 可用空间。
 模型配置需在 Workbench 内自行设置；安装包不包含开发者的会话、API 密钥或设备数据。
 
-移动端顶栏整合项目切换、标签中心和其他按钮。左右卡片通过边缘滑动进入。
+移动端顶栏整合项目切换、标签中心和其他按钮。左右卡片可从页面中间或边缘水平滑动进入，仅在页面存在对应卡片时启用。
 
 Android 的 `versionName` 在 Gradle 配置时读取主仓库 `pyproject.toml` 的
 `[project].version`，无需单独维护。`versionCode` 也由该版本自动派生，

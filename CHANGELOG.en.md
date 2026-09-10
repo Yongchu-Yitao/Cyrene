@@ -2,6 +2,63 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta18] - 2026-09-10
+
+beta18 brings Cyrene's desktop Workbench to Android and improves the responsive experience across phones, narrow windows, and desktop displays. Mobile uses the familiar projects, conversations, schedule, board, knowledge, memory, and settings pages, with swipe gestures for side cards. This release also aligns Doctor with the rest of Settings, improves scheduled-result delivery, and makes model connection checks and system Hook status clearer.
+
+### Cyrene for Android
+
+- Added an experimental ARM64 Android build, named Cyrene and sharing the desktop version number. A single APK starts the app without a separate runtime application or a Cyrene backend running on a computer.
+- Android reuses the existing Workbench and local workspace experience. Projects, model configuration, conversations, Agents, and tool entry points follow the desktop application; the separate legacy mobile chat UI, model settings, and updater have been removed.
+- Startup now presents a Cyrene welcome and preparation screen, with a retry action on failure. Experimental start/stop backend controls are no longer exposed as the application's main screen.
+- Workbench supports the system keyboard, with improved viewport and input positioning when the soft keyboard opens or closes. Opening and saving files and following external links use Android system entry points.
+- Packages contain no developer conversations or model credentials; users configure their own model service. First startup takes several minutes, with at least 12 GB of free storage recommended. Data from the old two-app version and different experimental images is not automatically migrated or deleted.
+- Android remains experimental. Desktop-browser features and some external tools still have compatibility limitations; availability and performance of every desktop tool have not yet been verified on phones.
+
+### Responsive toolbar, project menus, and Tab Center
+
+- The mobile toolbar now has three main entry points: project selection, the current conversation, and More. Desktop keeps its full tab strip. The conversation button is centered across the entire toolbar instead of shifting with the project-name width; long project and conversation titles are ellipsized.
+- Project names open the project list, and the current conversation opens Tab Center. On phones, Tab Center includes both visible and overflow conversations, retaining separate exceptional and regular groups for running, waiting, failed, and completed tasks.
+- More groups Search, Help, Notifications, and Personal info with aligned icons, avatars, and labels, removing the unnecessary theme-control space. Selecting an action closes More while keeping the selected Help or Notifications content usable.
+- Project editing, memory editing, and deletion use a true floating menu. Opening it no longer expands the project list or clips actions at the list's edges, and its position adapts to available screen space.
+- Removed the harsh blue rectangular tap highlight from mobile controls. Toolbar controls, composer buttons, and floating menus share softer press feedback while retaining visible keyboard focus.
+
+### Side cards and swipe gestures
+
+- Phones initially show the central page. Horizontal swipes reveal the side cards, without dedicated Left cards, Right cards, or Swipe to close bars taking up page space.
+- Swipes can start in the middle of a page as well as at its edges. Settings can reveal left navigation. A right card opens only when the page actually has right-side content, preventing empty shadows on pages such as the board or an empty knowledge library.
+- Opening a side card dims the toolbar, Android status area, and bottom system area together with the central content. Closing it restores them, avoiding a backdrop that covers only the middle of the screen.
+- Open cards align with the main conversation card's edges. Opening and closing follow the same path in reverse, preserving position when direction changes quickly. Bottom navigation moves together with the left card instead of jumping or drifting.
+- Removed duplicate spacing between left-side tools, memory-source information, and the module dock. The right conversation inspector fits its content instead of leaving an otherwise empty full-height surface.
+- Inputs, editors, terminals, code blocks, and horizontally scrollable content retain their own interactions, reducing conflicts with sidebar gestures. Trackpad, mouse-drag, and wheel handling is also improved, avoiding repeated errors when gestures try to prevent default scrolling.
+- Open cards continue to support Escape and keyboard focus navigation, restoring the previous focus when closed.
+
+### Schedule, Memory, Knowledge, and Personal info
+
+- On narrow screens, the schedule toolbar separates date navigation from Day/Week/Month and New controls. Today and previous/next-date buttons no longer get squeezed out or hidden.
+- Memory keeps its full search, type/source filters, sorting, category statistics, source information, and skill-learning entry points. Doctor no longer occupies a permanent button in the normal Memory toolbar.
+- Memory search and filters fit phone widths without horizontal overflow or cramped labels. Detail views retain their right card, and error states still provide access to Doctor.
+- Spend, requests, tokens, streaks, and activity-insight cards on Personal info adapt to screen width instead of requiring horizontal scrolling to reach clipped cards. Long labels and values are easier to read.
+- Settings pages have improved mobile widths and scrolling, reducing content overflow while retaining swipe access to left-side module navigation.
+
+### Consistent Settings and Doctor experience
+
+- Language, theme, text size, map provider, and export-format segmented controls fit their choices instead of leaving a long empty track. They can wrap when a narrow screen cannot fit all options.
+- Standalone actions such as Import into current project, Test connection, and Save stay compact instead of stretching across the entire row.
+- Search-provider settings no longer leave large blank areas between a provider's name, description, and actions. Ordering buttons, enable switches, and required credentials remain close to their provider.
+- Version information uses a tidy two-column grid on phones. Current version, latest version, release branch, and publication time have thin separators instead of a thick gray band, and long version numbers can wrap.
+- Doctor now follows the same title, form, card, and button conventions as other settings pages on both desktop and mobile, including the embedded settings view and the standalone diagnostic dialog.
+- Removed Doctor's oversized icon/title treatment, duplicate internal padding, and special button colors. Actions fit their content and wrap, leaving a more compact layout for findings and descriptions.
+- Problem description (optional) appears only once, and its text area shares standard input and focus styling. Description disclosure, character counting, connection checks, analysis, stopping, report export, repairs, and technical details remain available.
+
+### Background tasks, model checks, and system Hooks
+
+- Scheduled tasks created from an existing conversation now return their results to that conversation instead of opening another conversation for every completion. A result conversation is still created when the original is unavailable, preventing lost results.
+- Scheduled results coordinate with ongoing work before being appended, preserving conversation state. Redelivery of the same result does not add duplicate messages, and notifications still lead to the relevant conversation.
+- Model connection and capability checks allow more room for models that reason before answering, reducing false failures caused by checks cutting off a usable model too early.
+- System Hooks distinguish loading, not yet initialized, genuinely empty, and failed-to-read states. Read failures show an explanation and Reload action instead of appearing as no Hooks.
+- Failed Hook-list requests no longer show a misleading normal count. Inspecting persisted system Hook status does not start an extra Agent session merely to display the list.
+
 ## [0.9.0-beta17] - 2026-09-09
 
 beta17 focuses on context management for long tasks and parallel workstreams. Separate goals or substantial subtasks now have isolated conversation histories that can be paused and resumed independently, and work can continue in a fresh segment near the context limit without losing source material or mixing in another task. This release also improves recovery from temporary model failures, mid-generation guidance, failed runs, and subagent shutdown, while fixing practical issues across model settings, notifications, the conversation rail, and split agents.
