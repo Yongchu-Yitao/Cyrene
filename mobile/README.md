@@ -47,6 +47,10 @@ Android 的 `versionName` 在 Gradle 配置时读取主仓库 `pyproject.toml` �
 平时的分支和 PR 仍运行 Android CI，但不会创建或修改 Release。
 手动运行发布工作流时可选择 `android` 仅验证 Android 构建；只有版本标签运行会上传安装包。
 
+如果上传中断，可手动运行 Android 工作流并同时填写 `release_tag` 与 `source_run`，
+直接补传已通过构建的 APK。补传会核对来源任务成功状态、标签提交、版本和校验和；
+不会重新构建，也不会把其他提交的 APK 上传到该版本。
+
 ## 验证与边界
 
 运行时测试使用 `:runtime-app:testDebugUnitTest`；安装验证必须在未安装旧 Runtime 包的设备上进行。

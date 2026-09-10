@@ -21,6 +21,15 @@ on:
       - 'LICENSE'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to recover (requires source_run)
+        type: string
+        default: ''
+      source_run:
+        description: Successful Android workflow run containing that exact tag's APK
+        type: string
+        default: ''
   workflow_call:
     inputs:
       publish_release:
@@ -38,6 +47,7 @@ concurrency:
 jobs:
   image:
     name: Build signed ARM64 desktop image
+    if: ${{ !inputs.source_run && !inputs.release_tag }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:
@@ -133,23 +143,49 @@ jobs:
   publish:
     name: Publish Android APK
     needs: apk
-    if: ${{ inputs.publish_release && startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ always() && ((inputs.publish_release && startsWith(github.ref, 'refs/tags/v') && needs.apk.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.source_run != '')) }}
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+      - name: Verify artifact source run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run || github.run_id }}
+          RECOVERING: ${{ inputs.source_run != '' }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if [ "$RECOVERING" = true ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/android-source-run.json"
+            python3 - "$RUNNER_TEMP/android-source-run.json" "$sha" <<'PYVERIFY'
+          import json, sys
+          run = json.load(open(sys.argv[1]))
+          assert run["head_sha"] == sys.argv[2], "Artifact run must match the release tag commit"
+          assert run["conclusion"] == "success", "Only a successful run can be published"
+          PYVERIFY
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
         with:
-          name: Cyrene-Android-debug-${{ github.sha }}
+          name: Cyrene-Android-debug-${{ steps.source.outputs.sha }}
           path: mobile/dist
+          run-id: ${{ inputs.source_run || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Verify release version, source and checksum
         working-directory: mobile/dist
         shell: bash
         run: |
           set -euo pipefail
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("../../pyproject.toml", "rb"))["project"]["version"])')"
-          test "$GITHUB_REF_NAME" = "v$version"
+          test "$RELEASE_TAG" = "v$version"
           test "$(cat source-commit.txt)" = "$(git rev-parse HEAD)"
           sha256sum --check Cyrene-Android-debug.apk.sha256
           name="Cyrene-${version}-android-arm64-debug.apk"
@@ -159,4 +195,4 @@ jobs:
         working-directory: mobile/dist
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" Cyrene-*-android-arm64-debug.apk Cyrene-*-android-arm64-debug.apk.sha256 --clobber
+        run: gh release upload "$RELEASE_TAG" Cyrene-*-android-arm64-debug.apk Cyrene-*-android-arm64-debug.apk.sha256 --clobber
