@@ -987,8 +987,12 @@
     justify-content: stretch;
   }
 
+  .wb-integration-actions {
+    flex-wrap: wrap;
+  }
+
   .wb-integration-actions > .wb-btn {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     justify-content: center;
   }
 
@@ -1118,6 +1122,14 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
+}
+
+/* Standalone actions should not stretch with full-width input columns. */
+.wb-controls > .wb-btn {
+  width: fit-content;
+  max-width: 100%;
+  white-space: normal;
+  justify-content: center;
 }
 
 .wb-field-stack {
