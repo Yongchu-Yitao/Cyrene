@@ -21,12 +21,18 @@ on:
       - 'LICENSE'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      publish_release:
+        description: Publish the verified APK to the calling tag release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-${{ github.event.pull_request.number || github.ref }}
+  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -123,3 +129,34 @@ jobs:
             mobile/app/build/test-results/
             mobile/runtime-app/build/test-results/
           if-no-files-found: ignore
+
+  publish:
+    name: Publish Android APK
+    needs: apk
+    if: ${{ inputs.publish_release && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: Cyrene-Android-debug-${{ github.sha }}
+          path: mobile/dist
+      - name: Verify release version, source and checksum
+        working-directory: mobile/dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("../../pyproject.toml", "rb"))["project"]["version"])')"
+          test "$GITHUB_REF_NAME" = "v$version"
+          test "$(cat source-commit.txt)" = "$(git rev-parse HEAD)"
+          sha256sum --check Cyrene-Android-debug.apk.sha256
+          name="Cyrene-${version}-android-arm64-debug.apk"
+          mv Cyrene-Android-debug.apk "$name"
+          sha256sum "$name" > "$name.sha256"
+      - name: Upload APK and checksum to the shared release
+        working-directory: mobile/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" Cyrene-*-android-arm64-debug.apk Cyrene-*-android-arm64-debug.apk.sha256 --clobber

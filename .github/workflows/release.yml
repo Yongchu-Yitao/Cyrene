@@ -15,6 +15,7 @@ on:
           - windows
           - windows-x64
           - windows-arm64
+          - android
 permissions:
   actions: read
   checks: read
@@ -24,6 +25,14 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
+  # Android reuses the same tested image/APK pipeline as branch CI.
+  build-android:
+    needs: [release]
+    if: ${{ inputs.platforms == '' || inputs.platforms == 'all' || inputs.platforms == 'android' }}
+    uses: ./.github/workflows/android.yml
+    with:
+      publish_release: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
   # ==========================================================================
   # macOS Build
   # ==========================================================================
@@ -845,6 +854,7 @@ jobs:
       - build-windows-arm-sidecars
       - build-windows-arm
       - build-linux
+      - build-android
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -857,6 +867,7 @@ jobs:
           WINDOWS_SIDECARS_RESULT: ${{ needs.build-windows-arm-sidecars.result }}
           WINDOWS_ARM64_RESULT: ${{ needs.build-windows-arm.result }}
           LINUX_RESULT: ${{ needs.build-linux.result }}
+          ANDROID_RESULT: ${{ needs.build-android.result }}
         run: |
           failures=()
           for entry in \
@@ -865,7 +876,8 @@ jobs:
             "Windows x64:$WINDOWS_X64_RESULT" \
             "Windows ARM64 sidecars:$WINDOWS_SIDECARS_RESULT" \
             "Windows ARM64:$WINDOWS_ARM64_RESULT" \
-            "Linux:$LINUX_RESULT"
+            "Linux:$LINUX_RESULT" \
+            "Android:$ANDROID_RESULT"
           do
             label="${entry%%:*}"
             result="${entry#*:}"

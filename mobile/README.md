@@ -38,6 +38,15 @@ Android 的 `versionName` 在 Gradle 配置时读取主仓库 `pyproject.toml` �
 `runtime-image/desktop/refresh-webui.py` 可在经过签名和摘要验证的干净模板中刷新静态前端，
 逐文件验证写入结果，并用提供的镜像签名密钥生成新版本。它不读取手机数据盘。
 
+## 统一发布
+
+从后续版本开始，主仓库 `release.yml` 的 `build-android` 任务会调用同一套 Android
+镜像构建、测试和打包流程，与 macOS、Windows、Linux 一起出现在发布任务图中。
+推送版本标签后，验证通过的实验 APK 和 SHA-256 校验文件会自动上传到同一 GitHub Release，
+最终发布汇总包含 Android；Android 构建或上传失败时，整次发布不会报告为全部成功。
+平时的分支和 PR 仍运行 Android CI，但不会创建或修改 Release。
+手动运行发布工作流时可选择 `android` 仅验证 Android 构建；只有版本标签运行会上传安装包。
+
 ## 验证与边界
 
 运行时测试使用 `:runtime-app:testDebugUnitTest`；安装验证必须在未安装旧 Runtime 包的设备上进行。
