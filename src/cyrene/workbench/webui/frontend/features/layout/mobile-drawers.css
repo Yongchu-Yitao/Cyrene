@@ -125,9 +125,9 @@
     .workbench-shell[data-mobile-drawer] .workbench-topbar :is(.workbench-brand-btn, .workbench-mobile-current, .workbench-mobile-more) { transition: none; }
   }
   .workbench-topbar-extras { display: block; flex: 0 0 44px; }
-  .workbench-topbar-extra-controls { display: none; }
+  .workbench-topbar-extra-controls { display: block; position: absolute; top: 58px; left: 8px; right: 8px; visibility: hidden; pointer-events: none; }
   .workbench-topbar-extras.is-open .workbench-topbar-extra-controls {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 12px; position: absolute;
+    display: flex; visibility: visible; pointer-events: auto; flex-wrap: wrap; align-items: center; gap: 12px; position: absolute;
     top: 58px; right: 8px; left: 8px; padding: 12px; border: 1px solid var(--wb-line);
     border-radius: 16px; background: var(--wb-surface); box-shadow: 0 12px 32px #0003; z-index: 210;
   }
@@ -379,4 +379,11 @@
   .wbp-hm-cell { min-width: 0; border-radius: 2px; }
   .wbp-lists { margin-top: 24px; gap: 24px; }
   .wbp-toolbar-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; }
+}
+
+@media (max-width: 767px) {
+  /* Child dialogs remain usable after the action menu closes. */
+  .workbench-topbar-extra-controls :is(.workbench-help-popover, .workbench-notif-popover) {
+    visibility: visible; pointer-events: auto; top: 58px; max-height: calc(100dvh - 74px);
+  }
 }

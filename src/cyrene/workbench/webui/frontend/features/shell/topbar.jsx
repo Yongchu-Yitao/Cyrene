@@ -1378,7 +1378,11 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
         onClick={function () { setProjectMenuOpen(false); closeOverflowMenu(); setMoreOpen(!moreOpen); }}>
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
       </button>
-      <div id="workbench-topbar-extra-controls" className="workbench-topbar-extra-controls">
+      <div id="workbench-topbar-extra-controls" className="workbench-topbar-extra-controls"
+        onClick={function (event) {
+          if (!moreOpen || event.target.closest('.workbench-help-popover, .workbench-notif-popover')) return;
+          if (event.target.closest('button, a[href]')) setMoreOpen(false);
+        }}>
       <div
         data-tour="topbar_resources"
         className={"workbench-resource-shelf" + (resourceDropActive ? " drop-active" : "")}
