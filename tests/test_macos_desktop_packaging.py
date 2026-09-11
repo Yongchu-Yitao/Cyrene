@@ -75,3 +75,17 @@ def test_release_publishes_each_verified_platform_independently():
     assert "Report all Windows ARM64 validation failures" in windows_arm_job
     assert "pre-release-summary:" in workflow
     assert "Report every platform result" in workflow
+
+
+def test_tag_release_requires_android_build_and_every_platform_to_succeed():
+    release_workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    android_workflow = (ROOT / ".github" / "workflows" / "android.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "publish_release: ${{ startsWith(github.ref, 'refs/tags/v') }}" in release_workflow
+    assert "if: ${{ inputs.publish_release ||" in android_workflow
+    assert 'if [[ "$GITHUB_REF" == refs/tags/v* ]]' in release_workflow
+    assert 'test "$result" = success || failures+=' in release_workflow

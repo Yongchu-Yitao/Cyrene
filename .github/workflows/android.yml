@@ -85,7 +85,7 @@ jobs:
     name: Build signed ARM64 desktop image
     # Pushes and pull requests use fast-checks. Real runtime assets are built
     # only for the shared release workflow or an explicit manual build.
-    if: ${{ github.event_name == 'workflow_call' || (github.event_name == 'workflow_dispatch' && !inputs.source_run && !inputs.release_tag) }}
+    if: ${{ inputs.publish_release || (github.event_name == 'workflow_dispatch' && !inputs.source_run && !inputs.release_tag) }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:

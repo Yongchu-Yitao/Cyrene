@@ -882,8 +882,12 @@ jobs:
             label="${entry%%:*}"
             result="${entry#*:}"
             printf '%-26s %s\n' "$label" "$result"
-            test "$result" = failure || test "$result" = cancelled || continue
-            failures+=("$label: $result")
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              test "$result" = success || failures+=("$label: $result")
+            else
+              test "$result" = failure || test "$result" = cancelled || continue
+              failures+=("$label: $result")
+            fi
           done
           if ((${#failures[@]})); then
             printf 'Pre-release failures across all platforms (%s):\n' "${#failures[@]}"
