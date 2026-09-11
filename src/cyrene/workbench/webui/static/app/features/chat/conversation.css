@@ -3669,12 +3669,26 @@ html[data-theme="dark"] .wbc-command-chip {
   padding: 0;
 }
 
-.wbc-composer-box {
+.wbc-composer {
   --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
   --wbc-composer-glass-drop-shadow: var(--wbc-control-shadow);
   --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 10%, transparent);
   --wbc-composer-glass-inner-edge: color-mix(in srgb, var(--wb-line) 14%, transparent);
+  --wbc-composer-glass-shadow:
+    var(--wbc-composer-glass-drop-shadow),
+    inset 0 1px 0 var(--wbc-composer-glass-top-highlight),
+    inset 0 0 0 1px var(--wbc-composer-glass-inner-edge);
+}
+
+/* Keep the overlay outside the input backdrop root so both sample the transcript. */
+.wbc-composer-overlay {
+  position: relative;
+  height: 0;
+  z-index: 21;
+}
+
+.wbc-composer-box {
   --wbc-composer-glass-shadow:
     var(--wbc-composer-glass-drop-shadow),
     inset 0 1px 0 var(--wbc-composer-glass-top-highlight),
@@ -3694,6 +3708,7 @@ html[data-theme="dark"] .wbc-command-chip {
 /* Match the dark composer's glass construction in light mode. The material
    stays light, but uses the same translucency, blur and three-layer elevation
    instead of falling back to the nearly flat shared control shadow. */
+html[data-theme="light"] .wbc-composer,
 html[data-theme="light"] .wbc-composer-box {
   --wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);
   --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(15, 23, 42, .12);
@@ -3706,6 +3721,13 @@ html[data-theme="light"] .wbc-composer-box {
    canvas, so dark mode needs stronger edge contrast to carry the same visual
    weight. Only material colours change here: both themes retain the base
    three-layer shadow and the exact same compositor filter. */
+html[data-theme="dark"] .wbc-composer {
+  --wbc-composer-glass-background: var(--wb-composer-surface);
+  --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(0, 0, 0, .42);
+  --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 14%, transparent);
+  --wbc-composer-glass-inner-edge: color-mix(in srgb, #fff 4%, transparent);
+}
+
 html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
   --wbc-composer-glass-background: var(--wb-conversation-surface);
   --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(0, 0, 0, .42);

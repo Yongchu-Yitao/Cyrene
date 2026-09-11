@@ -1,0 +1,41 @@
+{
+  "scope": "Already initialized backend; startup timing excluded (wrong header in first pilot; system HTTP proxy in second).",
+  "health": {
+    "status": 200,
+    "body": "{\"service\":\"cyrene\",\"status\":\"ok\",\"instance_id\":\"\"}"
+  },
+  "qmp": {
+    "QMP": {
+      "version": {
+        "qemu": {
+          "micro": 0,
+          "minor": 1,
+          "major": 5
+        },
+        "package": ""
+      },
+      "capabilities": [
+        "oob"
+      ]
+    }
+  },
+  "tool": {
+    "code": 0,
+    "stdout": "snapshot_v1\ne92af661-66f3-4dd5-ac88-9fc49ba94f0d\nMainPID=324\n",
+    "stderr": ""
+  },
+  "savevm": {
+    "return": ""
+  },
+  "save_s": 2.9622911250044126,
+  "snapshots": {
+    "return": "List of snapshots present on all disks:\r\nID        TAG                     VM SIZE                DATE       VM CLOCK\r\n--        ready                   753 MiB 2026-09-11 14:37:26   00:07:16.096\r\n"
+  },
+  "status": {
+    "return": {
+      "status": "running",
+      "singlestep": false,
+      "running": true
+    }
+  }
+}

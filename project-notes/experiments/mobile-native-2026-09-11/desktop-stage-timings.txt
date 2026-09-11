@@ -1,0 +1,24 @@
+run=0 2026-09-11 12:49:27,160 - cyrene.plugins.application - INFO - Plugin initialization stage=seed elapsed_ms=115.2
+run=0 2026-09-11 12:49:27,163 - cyrene.plugins.application - INFO - Plugin initialization stage=configuration elapsed_ms=2.8
+run=0 2026-09-11 12:49:27,702 - cyrene.plugins.application - INFO - Plugin initialization stage=load elapsed_ms=538.8
+run=0 2026-09-11 12:49:27,702 - cyrene.plugins.application - INFO - Plugin initialization stage=attach elapsed_ms=0.6
+run=0 2026-09-11 12:49:28,284 - cyrene.workbench.webui.server - INFO - Workbench initialization app_configured elapsed_ms=1366.4
+run=0 2026-09-11 12:49:29,101 - cyrene.plugins.application - INFO - Plugin startup host complete running_packs=23 startup_failures=0 elapsed_ms=718.6
+run=1 2026-09-11 12:49:30,099 - cyrene.plugins.application - INFO - Plugin initialization stage=seed elapsed_ms=37.8
+run=1 2026-09-11 12:49:30,101 - cyrene.plugins.application - INFO - Plugin initialization stage=configuration elapsed_ms=2.8
+run=1 2026-09-11 12:49:30,406 - cyrene.plugins.application - INFO - Plugin initialization stage=load elapsed_ms=305.0
+run=1 2026-09-11 12:49:30,407 - cyrene.plugins.application - INFO - Plugin initialization stage=attach elapsed_ms=0.7
+run=1 2026-09-11 12:49:30,734 - cyrene.workbench.webui.server - INFO - Workbench initialization app_configured elapsed_ms=750.0
+run=1 2026-09-11 12:49:31,525 - cyrene.plugins.application - INFO - Plugin startup host complete running_packs=23 startup_failures=0 elapsed_ms=714.2
+run=2 2026-09-11 12:49:32,453 - cyrene.plugins.application - INFO - Plugin initialization stage=seed elapsed_ms=35.0
+run=2 2026-09-11 12:49:32,456 - cyrene.plugins.application - INFO - Plugin initialization stage=configuration elapsed_ms=3.0
+run=2 2026-09-11 12:49:32,766 - cyrene.plugins.application - INFO - Plugin initialization stage=load elapsed_ms=310.2
+run=2 2026-09-11 12:49:32,767 - cyrene.plugins.application - INFO - Plugin initialization stage=attach elapsed_ms=0.6
+run=2 2026-09-11 12:49:33,092 - cyrene.workbench.webui.server - INFO - Workbench initialization app_configured elapsed_ms=748.9
+run=2 2026-09-11 12:49:33,881 - cyrene.plugins.application - INFO - Plugin startup host complete running_packs=23 startup_failures=0 elapsed_ms=715.3
+run=3 2026-09-11 12:49:34,839 - cyrene.plugins.application - INFO - Plugin initialization stage=seed elapsed_ms=35.0
+run=3 2026-09-11 12:49:34,842 - cyrene.plugins.application - INFO - Plugin initialization stage=configuration elapsed_ms=2.9
+run=3 2026-09-11 12:49:35,158 - cyrene.plugins.application - INFO - Plugin initialization stage=load elapsed_ms=316.0
+run=3 2026-09-11 12:49:35,159 - cyrene.plugins.application - INFO - Plugin initialization stage=attach elapsed_ms=0.7
+run=3 2026-09-11 12:49:35,497 - cyrene.workbench.webui.server - INFO - Workbench initialization app_configured elapsed_ms=772.4
+run=3 2026-09-11 12:49:36,257 - cyrene.plugins.application - INFO - Plugin startup host complete running_packs=23 startup_failures=0 elapsed_ms=683.1

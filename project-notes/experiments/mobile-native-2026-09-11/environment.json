@@ -1,0 +1,12 @@
+{
+  "host": "macOS-26.6.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu": "",
+  "host_memory_bytes": "",
+  "desktop_commit": "254a91b700d7ed9797f43db08f56c106f42c9629",
+  "old_tag_commit": "f5b6c5b2368ad745ed4d6a4af5a0fc4cea2e9295",
+  "android": "API 35 ARM64 emulator, 8129460 kB MemTotal, 32GiB fresh userdata",
+  "physical_device": "not connected during these experiments",
+  "old_runtime_instrumentation": "Only debug RuntimeProbeActivity timing; prepare_old_probe.py applied to git archive v0.2.5",
+  "interference": "Desktop first-install pilot overlapped beginning of historical Gradle build. Preview first-install run overlapped two failed native dependency builds. Subsequent cold samples had no concurrent benchmark/build workload. OS caches not flushed."
+}

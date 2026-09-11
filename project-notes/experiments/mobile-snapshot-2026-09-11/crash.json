@@ -1,0 +1,24 @@
+{
+  "before_write": {
+    "code": 0,
+    "stdout": "snapshot_v4\n",
+    "stderr": ""
+  },
+  "committed_after_snapshot": {
+    "code": 0,
+    "stdout": "[('snapshot_v2',), ('snapshot_v3',), ('snapshot_v4',), ('snapshot_v5_after_checkpoint',)]\n",
+    "stderr": ""
+  },
+  "cold_recovery_s": 18.9082345830102,
+  "cold_recovered": {
+    "code": 0,
+    "stdout": "snapshot_v5_after_checkpoint[('snapshot_v2',), ('snapshot_v3',), ('snapshot_v4',), ('snapshot_v5_after_checkpoint',)]\n('ok',)\n",
+    "stderr": ""
+  },
+  "stale_restored": {
+    "code": 0,
+    "stdout": "snapshot_v4\n[('snapshot_v2',), ('snapshot_v3',), ('snapshot_v4',)]\n('ok',)\n",
+    "stderr": ""
+  },
+  "conclusion": "Uncheckpointed committed data survives cold recovery but is rolled back by loadvm latest. Production must invalidate consumed/stale checkpoints."
+}

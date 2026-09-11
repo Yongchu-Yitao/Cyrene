@@ -1,0 +1,126 @@
+{
+  "kind": "native",
+  "serial": "emulator-5582",
+  "runs": [
+    {
+      "index": 0,
+      "epoch": 1789102991.531171,
+      "launch": "Starting: Intent { cmp=ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity\nTotalTime: 199\nWaitTime: 200\nComplete",
+      "result": {
+        "python_start_ms": 231.398458,
+        "probe": {
+          "imports_ms": {
+            "sqlite3": 3.9992920000031518,
+            "ssl": 19.899208000026647,
+            "httpx": 63.37812499998563,
+            "aiosqlite": 42.5534999999968
+          },
+          "unavailable": {
+            "pydantic": "No module named 'pydantic'",
+            "jsonschema": "No module named 'jsonschema'",
+            "fastapi": "No module named 'fastapi'"
+          },
+          "python": "3.13.9 (main, Nov 20 2025, 17:37:13) [Clang 18.0.4 (https://android.googlesource.com/toolchain/llvm-project d8003a456",
+          "event_count": 100,
+          "sqlite_100_commits_ms": 80.32687499996882,
+          "scope": "native interpreter + dependency probe; NOT full Cyrene",
+          "asgi": "not tested: dependency unavailable"
+        },
+        "total_ms": 448.959333,
+        "success": true
+      },
+      "wall_seconds_including_shutdown_and_poll": 0.7810358749993611,
+      "operation_timings": []
+    },
+    {
+      "index": 1,
+      "epoch": 1789102992.423907,
+      "launch": "Starting: Intent { cmp=ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity\nTotalTime: 191\nWaitTime: 193\nComplete",
+      "result": {
+        "python_start_ms": 259.938958,
+        "probe": {
+          "imports_ms": {
+            "sqlite3": 5.630332999999155,
+            "ssl": 10.459416999992754,
+            "httpx": 59.74754200002508,
+            "aiosqlite": 38.995459000034316
+          },
+          "unavailable": {
+            "pydantic": "No module named 'pydantic'",
+            "jsonschema": "No module named 'jsonschema'",
+            "fastapi": "No module named 'fastapi'"
+          },
+          "python": "3.13.9 (main, Nov 20 2025, 17:37:13) [Clang 18.0.4 (https://android.googlesource.com/toolchain/llvm-project d8003a456",
+          "event_count": 200,
+          "sqlite_100_commits_ms": 74.20054200002824,
+          "scope": "native interpreter + dependency probe; NOT full Cyrene",
+          "asgi": "not tested: dependency unavailable"
+        },
+        "total_ms": 455.671792,
+        "success": true
+      },
+      "wall_seconds_including_shutdown_and_poll": 0.7804493750154506,
+      "operation_timings": []
+    },
+    {
+      "index": 2,
+      "epoch": 1789102993.312186,
+      "launch": "Starting: Intent { cmp=ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity\nTotalTime: 203\nWaitTime: 205\nComplete",
+      "result": {
+        "python_start_ms": 279.543792,
+        "probe": {
+          "imports_ms": {
+            "sqlite3": 3.002417000004698,
+            "ssl": 15.985375000013846,
+            "httpx": 65.09541700000909,
+            "aiosqlite": 36.00445799997942
+          },
+          "unavailable": {
+            "pydantic": "No module named 'pydantic'",
+            "jsonschema": "No module named 'jsonschema'",
+            "fastapi": "No module named 'fastapi'"
+          },
+          "python": "3.13.9 (main, Nov 20 2025, 17:37:13) [Clang 18.0.4 (https://android.googlesource.com/toolchain/llvm-project d8003a456",
+          "event_count": 300,
+          "sqlite_100_commits_ms": 79.03475000000526,
+          "scope": "native interpreter + dependency probe; NOT full Cyrene",
+          "asgi": "not tested: dependency unavailable"
+        },
+        "total_ms": 487.0945,
+        "success": true
+      },
+      "wall_seconds_including_shutdown_and_poll": 0.7900524159776978,
+      "operation_timings": []
+    },
+    {
+      "index": 3,
+      "epoch": 1789102994.2077498,
+      "launch": "Starting: Intent { cmp=ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.research.nativeprobe/ai.cyrene.research.ProbeActivity\nTotalTime: 176\nWaitTime: 177\nComplete",
+      "result": {
+        "python_start_ms": 229.040042,
+        "probe": {
+          "imports_ms": {
+            "sqlite3": 2.4434169999949518,
+            "ssl": 13.269707999995717,
+            "httpx": 51.15566700004592,
+            "aiosqlite": 37.40862500001185
+          },
+          "unavailable": {
+            "pydantic": "No module named 'pydantic'",
+            "jsonschema": "No module named 'jsonschema'",
+            "fastapi": "No module named 'fastapi'"
+          },
+          "python": "3.13.9 (main, Nov 20 2025, 17:37:13) [Clang 18.0.4 (https://android.googlesource.com/toolchain/llvm-project d8003a456",
+          "event_count": 400,
+          "sqlite_100_commits_ms": 72.22566699999788,
+          "scope": "native interpreter + dependency probe; NOT full Cyrene",
+          "asgi": "not tested: dependency unavailable"
+        },
+        "total_ms": 411.338792,
+        "success": true
+      },
+      "wall_seconds_including_shutdown_and_poll": 0.7618292499973904,
+      "operation_timings": []
+    }
+  ]
+}

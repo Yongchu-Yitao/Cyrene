@@ -9,9 +9,9 @@ import java.security.SecureRandom
 import java.util.Base64
 
 /** Credentials are returned only through the signature-protected Binder API. */
-class DesktopBackendEndpoint {
+class DesktopBackendEndpoint(savedToken: String? = null) {
     val port: Int = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
-    val token: String = ByteArray(32).also { SecureRandom().nextBytes(it) }
+    val token: String = savedToken ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
         .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
     val url: String get() = "http://127.0.0.1:$port"
 

@@ -33,9 +33,12 @@ class QemuVirtualMachine(
     private val bundle: RuntimeImageBundle,
     private val rootfsDisk: File,
     private val desktopPort: Int? = null,
+    private val restore: Boolean = false,
 ) : AutoCloseable {
     private val executor = VMExecutor()
     private val vmThread = nativeVmThread
+    private val qmpPath = File(context.filesDir, "qemu-qmp.sock")
+    private var suspended = false
     private val socketPath = File(context.filesDir, "qemu-serial.sock")
     private var future: Future<*>? = null
     private var socket: LocalSocket? = null
@@ -61,6 +64,7 @@ class QemuVirtualMachine(
         check(ownershipLock != null) { "Another Runtime process owns the Linux VM" }
         rootfsDisk.parentFile?.mkdirs()
         if (socketPath.exists()) socketPath.delete()
+        qmpPath.delete()
         require(bundle.guestArch in setOf("x86_64", "aarch64")) { "Unsupported guest architecture" }
         val armGuest = bundle.guestArch == "aarch64"
         val libraryPath = File(context.applicationInfo.nativeLibraryDir, "libqemu-system-${bundle.guestArch}.so")
@@ -71,7 +75,7 @@ class QemuVirtualMachine(
             writeText(upstreamDns.joinToString(separator = "\n", postfix = "\n") { "nameserver $it" })
         }
         Log.i(SERIAL_TAG, "QEMU slirp upstream DNS: ${upstreamDns.joinToString()}")
-        val parameters = arrayOf(
+        val parameters = mutableListOf(
             libraryPath.name,
             "-machine", if (armGuest) "virt" else "pc",
             "-cpu", if (armGuest) "cortex-a72" else if (bundle.desktopBackend) "max" else "qemu64",
@@ -84,9 +88,10 @@ class QemuVirtualMachine(
             "-nodefaults",
             "-display", "none",
             "-monitor", "none",
+            "-qmp", "unix:${qmpPath.absolutePath},server=on,wait=off",
             "-chardev", "socket,id=cyrene,path=${socketPath.absolutePath},server=on,wait=off",
             "-serial", "chardev:cyrene",
-            "-drive", "if=none,id=rootfs,file=${rootfsDisk.absolutePath},format=raw,cache=writeback",
+            "-drive", "if=none,id=rootfs,file=${rootfsDisk.absolutePath},format=${if (rootfsDisk.extension == "qcow2") "qcow2" else "raw"},cache=writeback",
             "-device", "virtio-blk-pci,drive=rootfs",
             // The guest uses QEMU's DNS proxy at 10.0.2.3. Limbo redirects
             // slirp's host /etc/resolv.conf read into bundle.directory, where
@@ -105,6 +110,7 @@ class QemuVirtualMachine(
             "-overcommit", "mem-lock=off",
             "-L", bundle.directory.absolutePath,
         )
+        if (restore) parameters.addAll(listOf("-loadvm", "cyrene-resume"))
         future = vmThread.submit {
             nativeResult = runCatching {
                 executor.start(
@@ -113,13 +119,18 @@ class QemuVirtualMachine(
                     libraryPath.name,
                     libraryLocation,
                     0,
-                    parameters,
+                    parameters.toTypedArray(),
                 )
             }.fold({ it }, { "QEMU failed: ${it.message}" })
         }
         connect(deadlineEpochMs)
         started = true
-        val health = waitForReady(deadlineEpochMs)
+        if (restore) QmpConnection(qmpPath, deadlineEpochMs).use { it.command("cont") }
+        val health = if (restore) ping(deadlineEpochMs) else waitForReady(deadlineEpochMs)
+        if (restore) {
+            val clock = execute("date -u -s @${System.currentTimeMillis() / 1000}", deadlineEpochMs)
+            check(clock.exitCode == 0) { "Unable to update guest clock" }
+        }
         // Linux's canonical TTY discipline truncates lines around 4 KiB. The
         // serial protocol carries base64 commands on one line, so switch the
         // guest console to raw line delivery before accepting real work.
@@ -171,8 +182,25 @@ class QemuVirtualMachine(
         return VmCommandResult(decode(parts[3]), decode(parts[4]), parts[2].toInt())
     }
 
+    /** Leave QEMU paused until the owner exits; never resume after publishing a checkpoint. */
+    @Synchronized
+    fun suspendToDisk(deadlineEpochMs: Long) {
+        ensureRunning()
+        QmpConnection(qmpPath, deadlineEpochMs).use { qmp ->
+            qmp.command("stop")
+            try {
+                qmp.monitor("savevm cyrene-resume")
+                suspended = true
+            } catch (failure: Throwable) {
+                runCatching { qmp.command("cont") }
+                throw failure
+            }
+        }
+    }
+
     @Synchronized
     override fun close() {
+        if (suspended) return // The service exits this process with the guest still paused.
         if (started) {
             runCatching {
                 val id = token()
@@ -184,6 +212,7 @@ class QemuVirtualMachine(
             val stopped = runCatching { future?.get(shutdownSeconds, TimeUnit.SECONDS); true }.getOrDefault(false)
             if (!stopped) runCatching { executor.stop(0) }
         }
+        if (!started && future?.isDone == false) runCatching { executor.stop(0) }
         runCatching { reader?.close() }
         runCatching { writer?.close() }
         runCatching { socket?.close() }

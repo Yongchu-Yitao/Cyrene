@@ -29,7 +29,8 @@ export function installAndroidBrowserHost(win) {
   win.__cyreneAndroidBrowserState = (state, manager) => {
     listeners.forEach(fn => fn(state)); managers.forEach(fn => fn(manager));
   };
-  const browser = { platform: "android", getState: sessionId => call("state", { sessionId }),
+  const browser = { platform: "android", supportsPictureInPicture: false,
+    getState: sessionId => call("state", { sessionId }),
     getManagerState: () => call("managerState"),
     onState: fn => { listeners.add(fn); return () => listeners.delete(fn); },
     onManagerState: fn => { managers.add(fn); return () => managers.delete(fn); } };

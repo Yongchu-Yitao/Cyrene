@@ -906,12 +906,13 @@ def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
     shell_css = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
+    composer_material = styles.rsplit("\n.wbc-composer {", 1)[1].split("}", 1)[0]
     composer_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     assert "border: 1px solid" in search_css
     assert "box-shadow: none;" in search_css
     assert "border-color:" in search_focus_css
-    assert "--wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in composer_css
-    assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in composer_css
+    assert "--wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);" in composer_material
+    assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);" in composer_material
     assert "--wbc-composer-glass-filter: blur(18px) saturate(120%) contrast(102%);" in shell_css
     assert "border: var(--wbc-composer-glass-border);" in composer_css
     assert "background: var(--wbc-composer-glass-background);" in composer_css
@@ -3928,6 +3929,7 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
 def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     source = workbench_chat_source()
     live_events = frontend_module_source("features/chat/live-event-controller.jsx")
+    presentation = frontend_module_source("shared/browser/presentation.jsx")
     styles = workbench_style_source()
 
     assert "browserActiveByChat" in source
@@ -3940,9 +3942,12 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     )[0]
     assert "setBrowserWindowModeByChat" in browser_event_block
     assert 'setSideTab("browser")' not in browser_event_block
-    assert 'browserWindowModeByChat[activeChatId] || "pip"' in source
+    assert "wbcBrowserPresentationMode(browserWindowModeByChat[activeChatId]" in source
+    assert "browser.supportsPictureInPicture === false" in presentation
     surface = source.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
-    assert 'var effectiveMode = mode === "minimized" ? "pip" : (mode || "pip");' in surface
+    assert "var effectiveMode = wbcBrowserPresentationMode(mode, browserPictureInPictureAvailable);" in surface
+    assert 'if (!pictureInPictureAvailable) return "maximized";' in presentation
+    assert 'return mode === "minimized" ? "pip" : (mode || "pip");' in presentation
     assert "onMinimize" not in surface
     assert 'beginInteraction(event, "drag", "")' in surface
     assert '["n", "s"].map(function (direction)' in surface
@@ -4006,8 +4011,9 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert 'Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0' in source
     assert 'hasNoBrowserTabs && effectiveMode === "pip"' in source
     assert 'action_id: "set_frame"' not in surface
-    assert 'action_id: "maximize"' in surface
+    assert 'action_id: "maximize"' in presentation
     assert 'modeTransition.run(onRestore, "pip")' in surface
+    assert "<WbcBrowserRestoreButton available={browserPictureInPictureAvailable}" in surface
     assert "{WBC_ICONS.x}" in source
     assert 'close-fullscreen-rounded.svg' in styles
     assert "height: 58px;" in styles
@@ -6661,6 +6667,10 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "--wb-floating-rail-radius: 18px;" in integrated_grid_css
     assert "--wb-floating-rail-bg:" in integrated_grid_css
     assert "--wb-floating-rail-bg: var(--wb-composer-surface-color);" in integrated_grid_css
+    dark_integrated_grid_css = styles.split(
+        'html[data-theme="dark"] .workbench-grid.integrated-sidebars {', 1
+    )[1].split("}", 1)[0]
+    assert "--wb-composer-surface-color: #17181c;" in dark_integrated_grid_css
     assert "--wb-floating-rail-shadow:" in integrated_grid_css
     assert "0 5px 14px rgba(15, 23, 42, .02)" in integrated_grid_css
     agent_notification_css = styles.split(".wbc-agent-notification {", 1)[1].split("}", 1)[0]

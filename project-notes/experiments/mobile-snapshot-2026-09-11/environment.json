@@ -1,0 +1,18 @@
+{
+  "host": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "qemu_libraries_sha256": {
+    "libglib-2.0.so": "96caaccc314bbc504a6e138dda9b9a831a4d982b8268392e8908a589a3addb71",
+    "libcompat-SDL2-addons.so": "50fc17a3136f3e7ced8e7bddd576e10f77a9c4f603b80d5098f16b900bc0cb29",
+    "libcompat-musl.so": "5d0402181108ad7f0ceae2571b43bf1c617d33c3c6c02bd64b2725483609c07c",
+    "libcompat-SDL2-ext.so": "0f52d5fce5e0c3be5f42849c32ff6d3f700e9e71d9191680ce468c98a8c5cf74",
+    "libSDL2.so": "bc60dcbb52b73a6854454657b656d0f9b68be40f68d2cc4971f0954115d3e6f0",
+    "liblimbo.so": "d97a8309c81091c52f5f8cce685ca75ffb50b2aa3bf7bca1e6651a973ba194ca",
+    "libpixman-1.so": "e78e125ae1e4c40ece73e3b33a688cb2a9afb61270b99affaba174551869bd18",
+    "libcompat-limbo.so": "011aef7c3ce279e6a88dcaed1864d7bdfb02731e9004442a7f7b3471d4602b67",
+    "libqemu-system-x86_64.so": "05b168014ef22cdd0da9d05ec37f1a947f0bb3f681a9e7d6ae02dbdf831cfe95",
+    "libqemu-system-aarch64.so": "b9ff0c913e9cf99f603e6e578b05d00e4aa418727564b1caae0750c3ec397598"
+  },
+  "guest": "beta18 signed image; independent blank data; qcow2 converted from raw",
+  "scope": "QEMU native engine harness, no WebView or Android production lifecycle; no provider network calls",
+  "source_commit": "254a91b700d7ed9797f43db08f56c106f42c9629"
+}

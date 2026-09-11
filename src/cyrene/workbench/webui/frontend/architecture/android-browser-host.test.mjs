@@ -15,6 +15,7 @@ function setup() {
 test('native UI and Agent RPC target the same conversation; state events unsubscribe', async()=>{
  const {win,requests,sockets,handlers}=setup();
  assert.equal(win.cyrene.browser.platform,'android');
+ assert.equal(win.cyrene.browser.supportsPictureInPicture,false);
  const ui=win.cyrene.browser.navigate({sessionId:'A',url:'https://example.com'});
  await Promise.resolve();
  assert.equal(requests[0].sessionId,'A');assert.equal(requests[0].capability,'k'.repeat(72));

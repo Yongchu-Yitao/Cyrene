@@ -1,0 +1,38 @@
+plugins { id 'com.android.application'; id 'com.chaquo.python' }
+android {
+    namespace 'ai.cyrene.research'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'ai.cyrene.research.nativeprobe'
+        minSdk 28
+        targetSdk 35
+        versionCode 1
+        versionName 'research-1'
+        ndk { abiFilters 'arm64-v8a' }
+    }
+}
+chaquopy {
+    defaultConfig {
+        version providers.gradleProperty('probePythonVersion').getOrElse('3.13')
+        buildPython System.getenv('CYRENE_RESEARCH_PYTHON')
+        pip {
+            install 'httpx>=0.28.1'
+            install 'aiosqlite>=0.22.1'
+            if (providers.gradleProperty('probeSchemaDependencies').getOrElse('false') == 'true') {
+                install 'jsonschema>=4.26.0'
+            }
+            if (providers.gradleProperty('probeCoreDependencies').getOrElse('true') == 'true') {
+                install 'fastapi>=0.115.0'
+                install 'pydantic>=2.10'
+                install 'jsonschema>=4.26.0'
+            }
+        }
+    }
+    sourceSets {
+        main {
+            if (System.getenv('CYRENE_RESEARCH_SOURCE') != null) {
+                srcDir System.getenv('CYRENE_RESEARCH_SOURCE')
+            }
+        }
+    }
+}

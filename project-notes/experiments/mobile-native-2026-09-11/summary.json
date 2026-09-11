@@ -1,0 +1,8 @@
+{
+  "old_vm_cold_median_ms": 3704.055043,
+  "desktop_backend_cold_median_s": 1.8171579579939134,
+  "guest_core_total_median_ms": 5148.008511999997,
+  "desktop_core_total_median_ms": 141.8779999949038,
+  "native_interpreter_median_ms": 245.668708,
+  "scope": "Component results, not equivalent end-to-end workloads; see report limitations."
+}

@@ -1,0 +1,55 @@
+{
+  "script": "core_session_probe.py",
+  "scope": "guest script via real Binder; first call includes VM mount",
+  "runs": [
+    {
+      "index": 0,
+      "launch": "Starting: Intent { cmp=ai.cyrene.mobile.preview/ai.cyrene.mobile.RuntimeIntegrationProbeActivity (has extras) }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.mobile.preview/ai.cyrene.mobile.RuntimeIntegrationProbeActivity\nTotalTime: 254\nWaitTime: 255\nComplete\n",
+      "wall_seconds": 48.006542791990796,
+      "status": "success",
+      "exit_code": 0,
+      "stderr": "",
+      "result": {
+        "samples": [
+          {
+            "platform": "Linux-6.1.0-53-arm64-aarch64-with-glibc2.36",
+            "core_import_ms": 3363.171871999999,
+            "registry_and_session_ms": 819.476624,
+            "three_model_turns_two_tools_ms": 1739.6496640000016,
+            "restore_and_close_ms": 258.92083199999763,
+            "total_ms": 6188.504128000001,
+            "model_calls": 3,
+            "file_verified": true,
+            "restored_final_verified": true,
+            "scope": "shared microkernel + real file tools; deterministic model; no full application plugins"
+          },
+          {
+            "platform": "Linux-6.1.0-53-arm64-aarch64-with-glibc2.36",
+            "core_import_ms": 2251.1792640000012,
+            "registry_and_session_ms": 771.2589120000005,
+            "three_model_turns_two_tools_ms": 1622.781088,
+            "restore_and_close_ms": 270.7763360000008,
+            "total_ms": 4922.342592,
+            "model_calls": 3,
+            "file_verified": true,
+            "restored_final_verified": true,
+            "scope": "shared microkernel + real file tools; deterministic model; no full application plugins"
+          },
+          {
+            "platform": "Linux-6.1.0-53-arm64-aarch64-with-glibc2.36",
+            "core_import_ms": 2339.0822080000007,
+            "registry_and_session_ms": 887.859456000001,
+            "three_model_turns_two_tools_ms": 1661.214463999997,
+            "restore_and_close_ms": 253.20075200000502,
+            "total_ms": 5148.008511999997,
+            "model_calls": 3,
+            "file_verified": true,
+            "restored_final_verified": true,
+            "scope": "shared microkernel + real file tools; deterministic model; no full application plugins"
+          }
+        ],
+        "scope": "separate Python processes in one VM"
+      }
+    }
+  ]
+}

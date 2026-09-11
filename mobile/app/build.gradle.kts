@@ -19,7 +19,9 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "ai.cyrene.mobile"
+        val snapshotPreview = providers.gradleProperty("cyreneSnapshotPreview").orNull == "true"
+        applicationId = if (snapshotPreview) "ai.cyrene.mobile.snapshot" else "ai.cyrene.mobile"
+        manifestPlaceholders["cyreneAppLabel"] = if (snapshotPreview) "Cyrene Snapshot" else "@string/app_name"
         minSdk = 28
         targetSdk = 35
         versionCode = CyreneVersion.androidCode(cyreneVersion)

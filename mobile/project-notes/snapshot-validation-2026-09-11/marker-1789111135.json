@@ -1,0 +1,10 @@
+{
+  "status": "success",
+  "execution": {
+    "stdout": "e7bf8dd2-5470-428c-8ebb-792f7bee46be\n",
+    "stderr": "",
+    "exit_code": 0,
+    "command": "printf before_sleep > /workspace/mobile-resume-check.txt; cat /proc/sys/kernel/random/boot_id",
+    "executed_in": "qemu_guest"
+  }
+}

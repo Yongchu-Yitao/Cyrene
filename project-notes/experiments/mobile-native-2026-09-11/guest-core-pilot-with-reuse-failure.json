@@ -1,0 +1,35 @@
+{
+  "script": "core_session_probe.py",
+  "scope": "guest script via real Binder; first call includes VM mount",
+  "runs": [
+    {
+      "index": 0,
+      "launch": "Starting: Intent { cmp=ai.cyrene.mobile.preview/ai.cyrene.mobile.RuntimeIntegrationProbeActivity (has extras) }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.mobile.preview/ai.cyrene.mobile.RuntimeIntegrationProbeActivity\nTotalTime: 342\nWaitTime: 343\nComplete\n",
+      "wall_seconds": 37.17998941699625,
+      "status": "success",
+      "exit_code": 0,
+      "stderr": "",
+      "result": {
+        "platform": "Linux-6.1.0-53-arm64-aarch64-with-glibc2.36",
+        "core_import_ms": 2994.3092,
+        "registry_and_session_ms": 1070.7670880000003,
+        "three_model_turns_two_tools_ms": 1719.474864000002,
+        "restore_and_close_ms": 289.62983999999994,
+        "total_ms": 6081.064783999998,
+        "model_calls": 3,
+        "file_verified": true,
+        "restored_final_verified": true,
+        "scope": "shared microkernel + real file tools; deterministic model; no full application plugins"
+      }
+    },
+    {
+      "index": 1,
+      "launch": "Starting: Intent { cmp=ai.cyrene.mobile.preview/ai.cyrene.mobile.RuntimeIntegrationProbeActivity (has extras) }\nStatus: ok\nLaunchState: WARM\nActivity: ai.cyrene.mobile.preview/ai.cyrene.mobile.RuntimeIntegrationProbeActivity\nTotalTime: 133\nWaitTime: 134\nComplete\n",
+      "wall_seconds": 11.405915290990379,
+      "status": null,
+      "exit_code": null,
+      "stderr": "",
+      "error": "java.lang.IllegalStateException: Unable to boot signed Linux VM: null\n\tat ai.cyrene.mobile.RuntimeIntegrationProbeActivity$onCreate$1$result$1$1$1.invokeSuspend(RuntimeIntegrationProbeActivity.kt:28)\n\tat kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)\n\tat kotlinx.coroutines.internal.ScopeCoroutine.afterResume(Scopes.kt:35)\n\tat kotlinx.coroutines.AbstractCoroutine.resumeWith(AbstractCoroutine.kt:101)\n\tat kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:46)\n\tat kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)\n\tat kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)\n\tat kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:95)\n\tat kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:69)\n\tat kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)\n\tat kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:47)\n\tat kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)\n\tat ai.cyrene.mobile.RuntimeIntegrationProbeActivity.onCreate$lambda$5(RuntimeIntegrationProbeActivity.kt:19)\n\tat ai.cyrene.mobile.RuntimeIntegrationProbeActivity.$r8$lambda$HggVfQ4uRsMWM3Y081wDU_hL4Jo(Unknown Source:0)\n\tat ai.cyrene.mobile.RuntimeIntegrationProbeActivity$$ExternalSyntheticLambda0.run(D8$$SyntheticClass:0)\n\tat java.lang.Thread.run(Thread.java:1012)\n"
+    }
+  ]
+}

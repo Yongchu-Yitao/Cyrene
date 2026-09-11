@@ -1,0 +1,10 @@
+--------- beginning of main
+09-11 15:22:53.641  6875  6903 I CyreneStartup: desktop_status success after 17ms
+09-11 15:22:54.079  6875  6903 I CyreneStartup: desktop_status success after 0ms
+09-11 15:22:54.617  6875  6903 I CyreneStartup: verify at 16ms (desktop_start)
+09-11 15:22:54.662  6875  6903 I CyreneStartup: restore at 61ms (desktop_start)
+09-11 15:23:09.971  6875  6903 I CyreneStartup: backend at 15370ms (desktop_start)
+09-11 15:23:11.204  6875  6903 I CyreneStartup: backend_start_command_complete
+09-11 15:23:11.842  6875  6903 I CyreneStartup: ready at 17241ms (desktop_start)
+09-11 15:23:11.842  6875  6903 I CyreneStartup: desktop_start success after 17241ms
+09-11 15:23:33.998  4057  4057 I CyreneStartup: workbench_page_loaded

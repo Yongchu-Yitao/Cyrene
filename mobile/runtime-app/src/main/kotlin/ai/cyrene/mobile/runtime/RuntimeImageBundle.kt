@@ -26,6 +26,23 @@ data class RuntimeImageBundle(
 )
 
 class RuntimeImageVerifier(private val context: Context) {
+    private val receipts = context.getSharedPreferences("verified-runtime-assets", Context.MODE_PRIVATE)
+    private val install = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+    // Assets are app-private and immutable after verification. Invalidate on APK
+    // update or any file metadata change; never cache writable workspace disks.
+    private fun receipt(file: File, digest: String) = "$install:$digest:${file.length()}:${file.lastModified()}"
+    private fun verified(file: File, expected: String, report: (StartupProgress) -> Unit, stage: String = "verify"): Boolean {
+        if (!file.isFile) return false
+        if (!file.canWrite() && receipts.getString(file.absolutePath, null) == receipt(file, expected)) return true
+        if (sha256(file, report, stage) != expected) return false
+        remember(file, expected)
+        return true
+    }
+    private fun remember(file: File, expected: String) {
+        check(file.setReadOnly()) { "Unable to protect verified runtime asset" }
+        check(receipts.edit().putString(file.absolutePath, receipt(file, expected)).commit()) { "Unable to save asset verification receipt" }
+    }
+
     fun verifyAndExtract(report: (StartupProgress) -> Unit = {}): RuntimeImageBundle {
         report(StartupProgress("verify"))
         val assets = context.assets
@@ -82,7 +99,7 @@ class RuntimeImageVerifier(private val context: Context) {
         require(name.matches(Regex("[A-Za-z0-9._-]+"))) { "Invalid runtime asset name" }
         val expected = entry.getString("sha256")
         val target = File(output, name)
-        if (!target.isFile || sha256(target, report) != expected) {
+        if (!verified(target, expected, report)) {
             val temp = File(output, ".$name.tmp")
             val digest = MessageDigest.getInstance("SHA-256")
             val total = runCatching { context.assets.openFd("runtime/$name").use { it.length } }.getOrDefault(0L)
@@ -112,6 +129,7 @@ class RuntimeImageVerifier(private val context: Context) {
         }
         // Either the existing file or the atomically renamed temporary file
         // has already been hashed. Avoid hashing multi-GB assets twice.
+        remember(target, expected)
         return target
     }
 
@@ -121,7 +139,7 @@ class RuntimeImageVerifier(private val context: Context) {
         require(installedName.matches(Regex("[A-Za-z0-9._-]+"))) { "Invalid runtime output name" }
         val expected = entry.getString("unpacked_sha256")
         val target = File(output, installedName)
-        if (!target.isFile || sha256(target, report, "verify_disk") != expected) {
+        if (!verified(target, expected, report, "verify_disk")) {
             val temp = File(output, ".$installedName.tmp")
             val digest = MessageDigest.getInstance("SHA-256")
             val size = entry.getLong("size")
@@ -138,6 +156,7 @@ class RuntimeImageVerifier(private val context: Context) {
                 "Unable to install runtime output: $installedName"
             }
         }
+        remember(target, expected)
         return target
     }
 

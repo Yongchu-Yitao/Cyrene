@@ -1,0 +1,124 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.11.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build
+Warning: SDK processing. This version only understands SDK XML versions up to 3 but an SDK XML file of version 4 was encountered. This can happen if you use versions of Android Studio and the command-line tools that were released at different times.
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:extractDebugPythonBuildPackages
+
+> Task :app:installDebugPythonRequirements
+Chaquopy: Installing for arm64-v8a
+Looking in indexes: https://pypi.org/simple, https://chaquo.com/pypi-13.1
+Collecting fastapi>=0.115.0
+  Using cached fastapi-0.141.1-py3-none-any.whl.metadata (27 kB)
+Collecting pydantic>=2.10
+  Using cached pydantic-2.13.5-py3-none-any.whl.metadata (110 kB)
+Collecting httpx>=0.28.1
+  Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+Collecting jsonschema>=4.26.0
+  Using cached jsonschema-4.26.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting aiosqlite>=0.22.1
+  Using cached aiosqlite-0.22.1-py3-none-any.whl.metadata (4.3 kB)
+Collecting starlette>=0.46.0 (from fastapi>=0.115.0)
+  Using cached starlette-1.6.0-py3-none-any.whl.metadata (6.4 kB)
+Collecting typing-extensions>=4.8.0 (from fastapi>=0.115.0)
+  Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting typing-inspection>=0.4.2 (from fastapi>=0.115.0)
+  Using cached typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
+Collecting annotated-doc>=0.0.2 (from fastapi>=0.115.0)
+  Using cached annotated_doc-0.0.5-py3-none-any.whl.metadata (6.5 kB)
+Collecting annotated-types>=0.6.0 (from pydantic>=2.10)
+  Using cached annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+INFO: pip is looking at multiple versions of pydantic to determine which version is compatible with other requirements. This could take a while.
+Collecting pydantic>=2.10
+  Using cached pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)
+  Using cached pydantic-2.13.3-py3-none-any.whl.metadata (108 kB)
+  Using cached pydantic-2.13.2-py3-none-any.whl.metadata (108 kB)
+  Using cached pydantic-2.13.1-py3-none-any.whl.metadata (108 kB)
+  Using cached pydantic-2.13.0-py3-none-any.whl.metadata (107 kB)
+  Using cached pydantic-2.12.5-py3-none-any.whl.metadata (90 kB)
+  Using cached pydantic-2.12.4-py3-none-any.whl.metadata (89 kB)
+INFO: pip is still looking at multiple versions of pydantic to determine which version is compatible with other requirements. This could take a while.
+  Using cached pydantic-2.12.3-py3-none-any.whl.metadata (87 kB)
+  Using cached pydantic-2.12.2-py3-none-any.whl.metadata (85 kB)
+  Using cached pydantic-2.12.0-py3-none-any.whl.metadata (83 kB)
+  Using cached pydantic-2.11.10-py3-none-any.whl.metadata (68 kB)
+  Using cached pydantic-2.11.9-py3-none-any.whl.metadata (68 kB)
+INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
+  Using cached pydantic-2.11.8-py3-none-any.whl.metadata (68 kB)
+  Using cached pydantic-2.11.7-py3-none-any.whl.metadata (67 kB)
+  Using cached pydantic-2.11.6-py3-none-any.whl.metadata (67 kB)
+  Using cached pydantic-2.11.5-py3-none-any.whl.metadata (67 kB)
+  Using cached pydantic-2.11.4-py3-none-any.whl.metadata (66 kB)
+  Using cached pydantic-2.11.3-py3-none-any.whl.metadata (65 kB)
+  Using cached pydantic-2.11.2-py3-none-any.whl.metadata (64 kB)
+  Using cached pydantic-2.11.1-py3-none-any.whl.metadata (63 kB)
+  Using cached pydantic-2.11.0-py3-none-any.whl.metadata (63 kB)
+  Using cached pydantic-2.10.6-py3-none-any.whl.metadata (30 kB)
+  Using cached pydantic-2.10.5-py3-none-any.whl.metadata (30 kB)
+  Using cached pydantic-2.10.4-py3-none-any.whl.metadata (29 kB)
+  Using cached pydantic-2.10.3-py3-none-any.whl.metadata (172 kB)
+  Using cached pydantic-2.10.2-py3-none-any.whl.metadata (170 kB)
+  Using cached pydantic-2.10.1-py3-none-any.whl.metadata (169 kB)
+  Using cached pydantic-2.10.0-py3-none-any.whl.metadata (167 kB)
+Collecting fastapi>=0.115.0
+  Using cached fastapi-0.141.0-py3-none-any.whl.metadata (27 kB)
+ERROR: Cannot install pydantic==2.10.0, pydantic==2.10.1, pydantic==2.10.2, pydantic==2.10.3, pydantic==2.10.4, pydantic==2.10.5, pydantic==2.10.6, pydantic==2.11.0, pydantic==2.11.1, pydantic==2.11.10, pydantic==2.11.2, pydantic==2.11.3, pydantic==2.11.4, pydantic==2.11.5, pydantic==2.11.6, pydantic==2.11.7, pydantic==2.11.8, pydantic==2.11.9, pydantic==2.12.0, pydantic==2.12.2, pydantic==2.12.3, pydantic==2.12.4, pydantic==2.12.5, pydantic==2.13.0, pydantic==2.13.1, pydantic==2.13.2, pydantic==2.13.3, pydantic==2.13.4 and pydantic==2.13.5 because these package versions have conflicting dependencies.
+
+The conflict is caused by:
+    pydantic 2.13.5 depends on pydantic-core==2.46.5
+ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/en/latest/topics/dependency-resolution/#dealing-with-dependency-conflicts
+    pydantic 2.13.4 depends on pydantic-core==2.46.4
+    pydantic 2.13.3 depends on pydantic-core==2.46.3
+    pydantic 2.13.2 depends on pydantic-core==2.46.2
+    pydantic 2.13.1 depends on pydantic-core==2.46.1
+    pydantic 2.13.0 depends on pydantic-core==2.46.0
+    pydantic 2.12.5 depends on pydantic-core==2.41.5
+    pydantic 2.12.4 depends on pydantic-core==2.41.5
+    pydantic 2.12.3 depends on pydantic-core==2.41.4
+    pydantic 2.12.2 depends on pydantic-core==2.41.4
+    pydantic 2.12.0 depends on pydantic-core==2.41.1
+    pydantic 2.11.10 depends on pydantic-core==2.33.2
+    pydantic 2.11.9 depends on pydantic-core==2.33.2
+    pydantic 2.11.8 depends on pydantic-core==2.33.2
+    pydantic 2.11.7 depends on pydantic-core==2.33.2
+    pydantic 2.11.6 depends on pydantic-core==2.33.2
+    pydantic 2.11.5 depends on pydantic-core==2.33.2
+    pydantic 2.11.4 depends on pydantic-core==2.33.2
+    pydantic 2.11.3 depends on pydantic-core==2.33.1
+    pydantic 2.11.2 depends on pydantic-core==2.33.1
+    pydantic 2.11.1 depends on pydantic-core==2.33.0
+    pydantic 2.11.0 depends on pydantic-core==2.33.0
+    pydantic 2.10.6 depends on pydantic-core==2.27.2
+    pydantic 2.10.5 depends on pydantic-core==2.27.2
+    pydantic 2.10.4 depends on pydantic-core==2.27.2
+    pydantic 2.10.3 depends on pydantic-core==2.27.1
+    pydantic 2.10.2 depends on pydantic-core==2.27.1
+    pydantic 2.10.1 depends on pydantic-core==2.27.1
+    pydantic 2.10.0 depends on pydantic-core==2.27.0
+
+Additionally, some packages in these conflicts have no matching distributions available for your environment:
+    pydantic-core
+
+To fix this you could try to:
+1. loosen the range of package versions you've specified
+2. remove package versions to allow pip to attempt to solve the dependency conflict
+
+ERROR: pip returned exit status 1. For advice, see https://chaquo.com/chaquopy/doc/current/faq.html#faq-pip.
+
+> Task :app:installDebugPythonRequirements FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:installDebugPythonRequirements'.
+> Process 'command '/Users/syw/Documents/playground/Cyrene/project-notes/experiments/mobile-native-2026-09-11/native-probe/app/build/python/env/debug/bin/python'' finished with non-zero exit value 1
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 15s
+2 actionable tasks: 2 executed

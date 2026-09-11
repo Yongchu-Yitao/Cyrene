@@ -1,0 +1,31 @@
+{
+  "scope": "static AST imports under cyrene/core, includes conditional imports; not a transitive dependency proof",
+  "files": 62,
+  "external": {
+    "jsonschema": [
+      "src/cyrene/core/plugin/validation.py"
+    ]
+  },
+  "outside_core_imports": [
+    {
+      "file": "src/cyrene/core/session.py",
+      "line": 643,
+      "module": "cyrene.platform.settings_store"
+    },
+    {
+      "file": "src/cyrene/core/plugin/registry.py",
+      "line": 20,
+      "module": "cyrene.path_policy"
+    },
+    {
+      "file": "src/cyrene/core/plugin/core_impl/permission_boundaries.py",
+      "line": 110,
+      "module": "cyrene.platform.paths"
+    },
+    {
+      "file": "src/cyrene/core/plugin/core_impl/bash.py",
+      "line": 11,
+      "module": "cyrene.platform.subprocess_environment"
+    }
+  ]
+}

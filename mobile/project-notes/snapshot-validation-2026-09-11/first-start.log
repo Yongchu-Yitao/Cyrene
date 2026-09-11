@@ -1,0 +1,54 @@
+--------- beginning of main
+09-11 15:08:22.908  4112  4138 I CyreneStartup: verify at 37ms (desktop_start)
+09-11 15:08:22.916  4112  4138 I CyreneStartup: assets at 45ms (desktop_start)
+09-11 15:08:36.009  4112  4138 I CyreneStartup: unpack at 13137ms (desktop_start)
+09-11 15:09:17.025  4112  4138 I CyreneStartup: assets at 54154ms (desktop_start)
+09-11 15:09:17.062  4112  4138 I CyreneStartup: disk at 54191ms (desktop_start)
+09-11 15:09:49.574  4112  4138 I CyreneStartup: boot at 86703ms (desktop_start)
+09-11 15:11:20.319  4112  4138 I CyreneStartup: backend at 177448ms (desktop_start)
+09-11 15:11:33.006  4112  4138 I CyreneStartup: backend_start_command_complete
+09-11 15:12:05.568  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:12:05.568  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:12:05.568  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:12:05.568  4112  4138 I CyreneStartup: SubState=running
+09-11 15:12:37.198  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:12:37.198  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:12:37.198  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:12:37.198  4112  4138 I CyreneStartup: SubState=running
+09-11 15:13:09.118  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:13:09.118  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:13:09.118  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:13:09.118  4112  4138 I CyreneStartup: SubState=running
+09-11 15:13:40.236  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:13:40.236  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:13:40.236  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:13:40.236  4112  4138 I CyreneStartup: SubState=running
+09-11 15:14:12.031  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:14:12.031  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:14:12.031  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:14:12.031  4112  4138 I CyreneStartup: SubState=running
+09-11 15:14:43.060  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:14:43.060  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:14:43.060  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:14:43.060  4112  4138 I CyreneStartup: SubState=running
+09-11 15:15:13.491  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:15:13.491  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:15:13.491  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:15:13.491  4112  4138 I CyreneStartup: SubState=running
+09-11 15:15:45.544  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:15:45.544  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:15:45.544  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:15:45.544  4112  4138 I CyreneStartup: SubState=running
+09-11 15:15:52.473  4112  5373 I CyreneStartup: session_mount success after 132ms
+09-11 15:15:52.924  4112  5373 I CyreneStartup: exec_start success after 436ms
+09-11 15:16:18.008  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:16:18.008  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:16:18.008  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:16:18.008  4112  4138 I CyreneStartup: SubState=running
+09-11 15:16:51.516  4112  4138 I CyreneStartup: backend_service: Result=success
+09-11 15:16:51.516  4112  4138 I CyreneStartup: ExecMainStatus=0
+09-11 15:16:51.516  4112  4138 I CyreneStartup: ActiveState=active
+09-11 15:16:51.516  4112  4138 I CyreneStartup: SubState=running
+09-11 15:17:06.198  4112  4138 I CyreneStartup: ready at 523327ms (desktop_start)
+09-11 15:17:06.205  4112  4138 I CyreneStartup: desktop_start success after 523334ms
+09-11 15:17:25.434  4057  4057 I CyreneStartup: workbench_page_loaded

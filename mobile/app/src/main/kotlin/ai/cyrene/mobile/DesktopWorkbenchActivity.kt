@@ -156,6 +156,7 @@ class DesktopWorkbenchActivity : ComponentActivity() {
             "verify", "verify_disk" -> R.string.workbench_stage_verify
             "unpack" -> R.string.workbench_stage_unpack
             "disk" -> R.string.workbench_stage_disk
+            "restore" -> R.string.workbench_stage_restore
             "boot" -> R.string.workbench_stage_boot
             "backend" -> R.string.workbench_stage_backend
             "backend_plugins" -> R.string.workbench_stage_plugins

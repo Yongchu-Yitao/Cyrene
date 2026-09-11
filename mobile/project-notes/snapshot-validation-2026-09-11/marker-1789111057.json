@@ -1,0 +1,10 @@
+{
+  "status": "success",
+  "execution": {
+    "stdout": "Sep 11 07:17:34 debuerreotype python[333]: 2026-09-11 07:17:34,991 - watchfiles.main - INFO - 1 change detected\nSep 11 07:17:35 debuerreotype python[333]: 2026-09-11 07:17:35,057 - watchfiles.main - INFO - 1 change detected\nSep 11 07:17:35 debuerreotype python[333]: 2026-09-11 07:17:35,099 - watchfiles.main - INFO - 1 change detected\nSep 11 07:17:35 debuerreotype python[333]: 2026-09-11 07:17:35,176 - watchfiles.main - INFO - 1 change detected\nSep 11 07:17:35 debuerreotype python[333]: 2026-09-11 07:17:35,236 - watchfiles.main - INFO - 1 change detected\nSep 11 07:17:35 debuerreotype python[333]: 2026-09-11 07:17:35,516 - watchfiles.main - INFO - 1 change detected\nSep 11 07:17:35 debuerreotype python[333]: 2026-09-11 07:17:35,909 - watchfiles.main - INFO - 1 change detected\nSep 11 07:17:36 debuerreotype python[333]: 2026-09-11 07:17:36,064 - watchfiles.main - INFO - 1 change detected\n",
+    "stderr": "",
+    "exit_code": 0,
+    "command": "journalctl -u cyrene-desktop -n 8 --no-pager; true",
+    "executed_in": "qemu_guest"
+  }
+}

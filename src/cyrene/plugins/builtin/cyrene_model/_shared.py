@@ -22,6 +22,7 @@ import httpx
 from cyrene.core.observability import log_operation
 from cyrene.core.plugin import Plugin, PluginContext
 from cyrene.model.status import publish_context_model_status
+from cyrene.plugins.builtin.cyrene_model.deepseek_requests import adapt_provider_payload, restore_provider_reasoning
 from cyrene.plugins.tool_call_parsers import GENERIC_TOOL_CALL_PARSER
 
 
@@ -596,7 +597,7 @@ def _openai_payload(
     reasoning_effort = str(arguments.get("reasoning_effort") or "").strip()
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort
-    return payload
+    return adapt_provider_payload(payload, provider.id)
 
 
 def _log_completed_stream(
@@ -881,11 +882,7 @@ async def complete_model(
             messages=messages,
             tools=tools,
             model=model,
-            max_tokens=(
-                int(arguments["max_tokens"])
-                if arguments.get("max_tokens") is not None
-                else None
-            ),
+            max_tokens=int(arguments["max_tokens"]) if arguments.get("max_tokens") is not None else None,
             stream=True,
             response_format=(
                 dict(arguments["response_format"])
@@ -898,6 +895,7 @@ async def complete_model(
         payload = prepared.payload
         headers = prepared.headers
     else:
+        arguments = restore_provider_reasoning(arguments, provider.id, messages, context, model)
         payload = _openai_payload(arguments, provider, model)
         headers = {"Content-Type": "application/json"}
         if api_key:

@@ -5,10 +5,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="ai.cyrene.mobile.permission.BIND_RUNTIME" />
+    <uses-permission android:name="${applicationId}.permission.BIND_RUNTIME" />
 
     <permission
-        android:name="ai.cyrene.mobile.permission.BIND_RUNTIME"
+        android:name="${applicationId}.permission.BIND_RUNTIME"
         android:protectionLevel="signature" />
     <application>
         <activity
@@ -16,12 +16,12 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:noHistory="true"
-            android:permission="ai.cyrene.mobile.permission.BIND_RUNTIME"
+            android:permission="${applicationId}.permission.BIND_RUNTIME"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service
             android:name="ai.cyrene.mobile.runtime.CyreneRuntimeService"
             android:exported="false"
-            android:permission="ai.cyrene.mobile.permission.BIND_RUNTIME"
+            android:permission="${applicationId}.permission.BIND_RUNTIME"
             android:foregroundServiceType="specialUse"
             android:process=":qemu">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

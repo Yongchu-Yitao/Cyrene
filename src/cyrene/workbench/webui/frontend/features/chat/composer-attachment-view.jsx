@@ -1,6 +1,8 @@
 import { WBC_ICONS, wbcT, wbcAttachmentTypeLabel } from "../../workbench-chat.jsx"
 import { WbcFileVisual } from "./file-resources.jsx"
 
+export function WbcComposerTopOverlay({ children }) { return children ? <div className="wbc-composer-overlay">{children}</div> : null; }
+
 export function WbcComposerAttachmentView({ attachments, failedImagePreviews, setFailedImagePreviews, setAttachments, awaitingAnswer }) {
   return attachments.length > 0 && (
           <div className="wbc-attach-row">

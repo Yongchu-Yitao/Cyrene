@@ -1,0 +1,40 @@
+{
+  "samples": [
+    {
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "core_import_ms": 116.45083298208192,
+      "registry_and_session_ms": 11.047709005651996,
+      "three_model_turns_two_tools_ms": 38.45008299686015,
+      "restore_and_close_ms": 18.023832992184907,
+      "total_ms": 184.5155409828294,
+      "model_calls": 3,
+      "file_verified": true,
+      "restored_final_verified": true,
+      "scope": "shared microkernel + real file tools; deterministic model; no full application plugins"
+    },
+    {
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "core_import_ms": 67.94804098899476,
+      "registry_and_session_ms": 11.494167003547773,
+      "three_model_turns_two_tools_ms": 38.36362500442192,
+      "restore_and_close_ms": 14.31412500096485,
+      "total_ms": 132.8312499972526,
+      "model_calls": 3,
+      "file_verified": true,
+      "restored_final_verified": true,
+      "scope": "shared microkernel + real file tools; deterministic model; no full application plugins"
+    },
+    {
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "core_import_ms": 68.867499998305,
+      "registry_and_session_ms": 12.312832986935973,
+      "three_model_turns_two_tools_ms": 43.03879200597294,
+      "restore_and_close_ms": 16.807250009151176,
+      "total_ms": 141.8779999949038,
+      "model_calls": 3,
+      "file_verified": true,
+      "restored_final_verified": true,
+      "scope": "shared microkernel + real file tools; deterministic model; no full application plugins"
+    }
+  ]
+}

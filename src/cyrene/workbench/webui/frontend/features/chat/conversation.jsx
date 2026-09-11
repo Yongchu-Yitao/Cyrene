@@ -8,8 +8,11 @@ import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinu
 import { WbcComposer } from "./composer.jsx"
 import { WbcConversationNavigator } from "./conversation-navigator.jsx"
 import { useMainTranscriptResize } from "./transcript-resize-hooks.jsx"
+import { WbcBrowserRestoreButton, wbcBrowserPictureInPictureAvailable, wbcBrowserPresentationMode, wbcBrowserRestoreIfAvailable, wbcBrowserTitlebarActions, wbcBrowserTitlebarHandlers } from "../../shared/browser/presentation.jsx"
 
 import { permissionOptionLabel } from "./behavior.mjs"
+
+export { wbcBrowserPictureInPictureAvailable, wbcBrowserPresentationMode };
 
 function useWbcFullscreenReplyEffects(options) {
   useWbcEffect(function () {
@@ -464,14 +467,14 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var maximizedPickerToggleAtRef = useWbcRef(0);
   var [frame, setFrame] = useWbcState(null);
   var [minimizedFrame, setMinimizedFrame] = useWbcState(null);
-  // Minimized browser mode is temporarily retired. Normalize any stale
-  // in-memory value back to the fixed PiP surface.
-  var effectiveMode = mode === "minimized" ? "pip" : (mode || "pip");
+  var browserBridge = window.cyrene && window.cyrene.browser;
+  var browserPictureInPictureAvailable = wbcBrowserPictureInPictureAvailable(browserBridge);
+  // Retire stale minimized modes; Android has no PiP surface and stays full-screen.
+  var effectiveMode = wbcBrowserPresentationMode(mode, browserPictureInPictureAvailable);
   // Enter avoidance synchronously with the collapsed render. On reopening,
   // keep avoidance active through the panel's 500ms grid transition; the
   // effect below releases it only after the composer has finished shrinking.
   if (composerDocked) composerDockedRef.current = true;
-  var browserBridge = window.cyrene && window.cyrene.browser;
   var FloatingBrowserIcon = workbenchServices.browser().Icon;
   var hasNativeChatOverlay = !!(browserBridge && typeof browserBridge.setChatOverlay === "function");
   var hasNativeTabPicker = !!(browserBridge && typeof browserBridge.setTabPicker === "function");
@@ -1100,11 +1103,11 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     function onKeyDown(event) {
       if (event.key !== "Escape") return;
       if (maximizedPickerOpen) browserTabs.setPicker(false);
-      else if (onRestore) onRestore();
+      else wbcBrowserRestoreIfAvailable(browserPictureInPictureAvailable, onRestore);
     }
     window.addEventListener("keydown", onKeyDown);
     return function () { window.removeEventListener("keydown", onKeyDown); };
-  }, [effectiveMode, onRestore, maximizedPickerOpen]);
+  }, [effectiveMode, onRestore, maximizedPickerOpen, browserPictureInPictureAvailable]);
 
   useWbcEffect(function () {
     return function () {
@@ -1128,17 +1131,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     if (!window.CyreneUI.has("uiSurface")) return undefined;
     var uiSurface = workbenchServices.uiSurface();
     var isPresent = visible && !hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "maximized");
-    var actions = effectiveMode === "pip" ? [{
-      action_id: "maximize",
-      kind: "invoke",
-      gesture_aliases: ["double_press", "maximize_button"],
-      risk: "R1",
-    }] : [{
-      action_id: "restore",
-      kind: "invoke",
-      gesture_aliases: ["double_press", "restore_button", "escape_key"],
-      risk: "R1",
-    }];
+    var actions = wbcBrowserTitlebarActions(effectiveMode, browserPictureInPictureAvailable);
     return uiSurface.register({
       node_id: "browser_window_titlebar",
       parent_id: "root",
@@ -1150,12 +1143,9 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
         } : null;
       },
       actions: actions,
-      handlers: {
-        maximize: maximizeBrowserWindow,
-        restore: restoreBrowserWindow,
-      },
+      handlers: wbcBrowserTitlebarHandlers(browserPictureInPictureAvailable, maximizeBrowserWindow, restoreBrowserWindow),
     });
-  }, [visible, hasNoBrowserTabs, effectiveMode, browserSessionId, onMaximize, onRestore]);
+  }, [visible, hasNoBrowserTabs, effectiveMode, browserSessionId, onMaximize, onRestore, browserPictureInPictureAvailable]);
 
   if (!visible) return null;
   if (hasNoBrowserTabs && effectiveMode === "pip") return null;
@@ -1195,7 +1185,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
               <React.Fragment>
                 <button type="button" className="wbc-browser-split-action" onClick={function (event) { browserTabs.refresh(displayActiveBrowserTab, event); }} title={wbcT("browser.context.reload", "Reload")} aria-label={wbcT("browser.context.reload", "Reload")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name="reload" size={15} /> : WBC_ICONS.retry}</button>
                 <button type="button" className={"wbc-browser-split-action" + (displayActiveBrowserTab.muted ? " active" : "")} onClick={function (event) { browserTabs.toggleMute(displayActiveBrowserTab, event); }} title={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")} aria-label={displayActiveBrowserTab.muted ? wbcT("browser.context.unmute", "Unmute") : wbcT("browser.context.mute", "Mute")}>{FloatingBrowserIcon ? <FloatingBrowserIcon name={displayActiveBrowserTab.muted ? "muted" : "volume"} size={15} /> : null}</button>
-                <button type="button" onClick={restoreBrowserWindow} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}>{WBC_ICONS.x}</button>
+                <WbcBrowserRestoreButton available={browserPictureInPictureAvailable} onRestore={restoreBrowserWindow} icon={WBC_ICONS.x} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} />
               </React.Fragment>
             )}
           </div>

@@ -57,6 +57,10 @@
 }
 
 html[data-theme="dark"] .workbench-grid.integrated-sidebars {
+  /* Match every module directory card to the opaque conversation rail. Using
+     one resolved colour here prevents schedule, library, and memory canvases
+     from tinting an otherwise identical translucent rail. */
+  --wb-composer-surface-color: #17181c;
   --wb-floating-rail-border: 1px solid color-mix(in srgb, #fff 9%, transparent);
   --wb-floating-rail-shadow:
     0 14px 34px rgba(0, 0, 0, .28),

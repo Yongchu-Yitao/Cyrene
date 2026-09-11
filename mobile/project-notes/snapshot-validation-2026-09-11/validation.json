@@ -1,0 +1,18 @@
+{
+  "unit_tests": 26,
+  "unit_failures": 0,
+  "resume_backend_ms": 17241,
+  "resume_page_loaded": "2026-09-11 15:23:33.998",
+  "resume_start": "2026-09-11 15:22:54.601",
+  "pre_sleep_boot_id": "e7bf8dd2-5470-428c-8ebb-792f7bee46be",
+  "restored_boot_id": "e7bf8dd2-5470-428c-8ebb-792f7bee46be",
+  "post_crash_boot_id": "af79a001-dddb-4671-84b2-2ea32d9a679a",
+  "post_crash_file": "after_resume_committed",
+  "consumed_marker_absent_before_force_stop": true,
+  "app_package": "ai.cyrene.mobile",
+  "avd": "CyreneSnapshotTest",
+  "avd_home": "/tmp/cyrene-snapshot-product-avd",
+  "scope": "Full Android APK on initially fresh AVD; existing beta18 signed Debian image; controlled file checks. No account credentials read by the validation scripts.",
+  "cold_after_force_stop_backend_ms": 196934,
+  "final_app_phase": "ready"
+}

@@ -1,0 +1,122 @@
+[
+  {
+    "index": 0,
+    "qmp_s": 4.333155916974647,
+    "status": {
+      "return": {
+        "status": "running",
+        "singlestep": false,
+        "running": true
+      }
+    },
+    "tool": {
+      "code": 0,
+      "stdout": "snapshot_v1\ne92af661-66f3-4dd5-ac88-9fc49ba94f0d\nMainPID=324\n",
+      "stderr": ""
+    },
+    "first_tool_s": 0.6073086249816697,
+    "tool_ready_from_launch_s": 4.944943416980095,
+    "health": {
+      "status": 200,
+      "body": "{\"service\":\"cyrene\",\"status\":\"ok\",\"instance_id\":\"\"}"
+    },
+    "backend_ready_from_launch_s": 5.079140041983919,
+    "write": {
+      "code": 0,
+      "stdout": "snapshot_v2\n",
+      "stderr": ""
+    },
+    "sqlite": {
+      "code": 0,
+      "stdout": "[('snapshot_v2',)]\n('ok',)\n",
+      "stderr": ""
+    },
+    "save": {
+      "return": ""
+    },
+    "save_s": 12.902924959023949,
+    "snapshots": {
+      "return": "List of snapshots present on all disks:\r\nID        TAG                     VM SIZE                DATE       VM CLOCK\r\n--        ready                   753 MiB 2026-09-11 14:37:26   00:07:16.096\r\n--        latest                  753 MiB 2026-09-11 14:38:11   00:07:17.824\r\n"
+    }
+  },
+  {
+    "index": 1,
+    "qmp_s": 4.232422541012056,
+    "status": {
+      "return": {
+        "status": "running",
+        "singlestep": false,
+        "running": true
+      }
+    },
+    "tool": {
+      "code": 0,
+      "stdout": "snapshot_v2\n\ne92af661-66f3-4dd5-ac88-9fc49ba94f0d\nMainPID=324\n",
+      "stderr": ""
+    },
+    "first_tool_s": 0.6179584589845035,
+    "tool_ready_from_launch_s": 4.856787541008089,
+    "health": {
+      "status": 200,
+      "body": "{\"service\":\"cyrene\",\"status\":\"ok\",\"instance_id\":\"\"}"
+    },
+    "backend_ready_from_launch_s": 5.03577779099578,
+    "write": {
+      "code": 0,
+      "stdout": "snapshot_v3\n",
+      "stderr": ""
+    },
+    "sqlite": {
+      "code": 0,
+      "stdout": "[('snapshot_v2',), ('snapshot_v3',)]\n('ok',)\n",
+      "stderr": ""
+    },
+    "save": {
+      "return": ""
+    },
+    "save_s": 2.0760848330101,
+    "snapshots": {
+      "return": "List of snapshots present on all disks:\r\nID        TAG                     VM SIZE                DATE       VM CLOCK\r\n--        ready                   753 MiB 2026-09-11 14:37:26   00:07:16.096\r\n--        latest                  753 MiB 2026-09-11 14:38:30   00:07:19.597\r\n"
+    }
+  },
+  {
+    "index": 2,
+    "qmp_s": 3.996223124995595,
+    "status": {
+      "return": {
+        "status": "running",
+        "singlestep": false,
+        "running": true
+      }
+    },
+    "tool": {
+      "code": 0,
+      "stdout": "snapshot_v3\n\ne92af661-66f3-4dd5-ac88-9fc49ba94f0d\nMainPID=324\n",
+      "stderr": ""
+    },
+    "first_tool_s": 0.5857746249821503,
+    "tool_ready_from_launch_s": 4.584946083981777,
+    "health": {
+      "status": 200,
+      "body": "{\"service\":\"cyrene\",\"status\":\"ok\",\"instance_id\":\"\"}"
+    },
+    "backend_ready_from_launch_s": 4.729368791973684,
+    "write": {
+      "code": 0,
+      "stdout": "snapshot_v4\n",
+      "stderr": ""
+    },
+    "sqlite": {
+      "code": 0,
+      "stdout": "[('snapshot_v2',), ('snapshot_v3',), ('snapshot_v4',)]\n('ok',)\n",
+      "stderr": ""
+    },
+    "save": {
+      "return": ""
+    },
+    "save_s": 1.9249204169900622,
+    "snapshots": {
+      "return": "List of snapshots present on all disks:\r\nID        TAG                     VM SIZE                DATE       VM CLOCK\r\n--        ready                   753 MiB 2026-09-11 14:37:26   00:07:16.096\r\n--        latest                  753 MiB 2026-09-11 14:38:37   00:07:21.342\r\n"
+    }
+  }
+]

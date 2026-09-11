@@ -417,13 +417,14 @@
 
 /* Share desktop materials and control styling; only reflow narrow content. */
 @media (max-width: 767px) {
-  .workbench-shell[data-mobile-drawer] .wbc-msg-foot {
+  /* Footer metrics must stay intact even when no mobile drawer is active. */
+  .workbench-shell .wbc-msg-foot {
     flex-wrap: wrap; gap: 4px 10px; min-width: 0;
   }
-  .workbench-shell[data-mobile-drawer] .wbc-msg-foot > :is(time, small) {
+  .workbench-shell .wbc-msg-foot > :is(time, small) {
     flex: 0 0 auto; white-space: nowrap; line-height: 1.5;
   }
-  .workbench-shell[data-mobile-drawer] .wbc-msg-foot > .wbc-msg-action {
+  .workbench-shell .wbc-msg-foot > .wbc-msg-action {
     flex: 0 0 32px; width: 32px; height: 32px;
   }
   .workbench-shell[data-mobile-drawer] .wb-board-toolbar {

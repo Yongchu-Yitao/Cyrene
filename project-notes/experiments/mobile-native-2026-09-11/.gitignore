@@ -1,0 +1,5 @@
+native-probe/.gradle/
+native-probe/build/
+native-probe/app/build/
+native-probe/local.properties
+__pycache__/

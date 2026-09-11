@@ -1,0 +1,30 @@
+--------- beginning of main
+09-11 15:26:04.356  7267  7287 I CyreneStartup: verify at 8ms (desktop_start)
+09-11 15:26:04.468  7267  7287 I CyreneStartup: boot at 120ms (desktop_start)
+09-11 15:26:28.496  7267  7287 I CyreneStartup: backend at 24148ms (desktop_start)
+09-11 15:26:32.284  7267  7287 I CyreneStartup: backend_start_command_complete
+09-11 15:27:03.009  7267  7287 I CyreneStartup: backend_service: Result=success
+09-11 15:27:03.009  7267  7287 I CyreneStartup: ExecMainStatus=0
+09-11 15:27:03.009  7267  7287 I CyreneStartup: ActiveState=active
+09-11 15:27:03.009  7267  7287 I CyreneStartup: SubState=running
+09-11 15:27:33.603  7267  7287 I CyreneStartup: backend_service: Result=success
+09-11 15:27:33.603  7267  7287 I CyreneStartup: ExecMainStatus=0
+09-11 15:27:33.603  7267  7287 I CyreneStartup: ActiveState=active
+09-11 15:27:33.603  7267  7287 I CyreneStartup: SubState=running
+09-11 15:28:04.439  7267  7287 I CyreneStartup: backend_service: Result=success
+09-11 15:28:04.439  7267  7287 I CyreneStartup: ExecMainStatus=0
+09-11 15:28:04.439  7267  7287 I CyreneStartup: ActiveState=active
+09-11 15:28:04.439  7267  7287 I CyreneStartup: SubState=running
+09-11 15:28:07.664  7267  7627 I CyreneStartup: session_mount success after 68ms
+09-11 15:28:08.067  7267  7627 I CyreneStartup: exec_start success after 347ms
+09-11 15:28:35.320  7267  7287 I CyreneStartup: backend_service: Result=success
+09-11 15:28:35.320  7267  7287 I CyreneStartup: ExecMainStatus=0
+09-11 15:28:35.320  7267  7287 I CyreneStartup: ActiveState=active
+09-11 15:28:35.320  7267  7287 I CyreneStartup: SubState=running
+09-11 15:29:06.336  7267  7287 I CyreneStartup: backend_service: Result=success
+09-11 15:29:06.336  7267  7287 I CyreneStartup: ExecMainStatus=0
+09-11 15:29:06.336  7267  7287 I CyreneStartup: ActiveState=active
+09-11 15:29:06.336  7267  7287 I CyreneStartup: SubState=running
+09-11 15:29:21.282  7267  7287 I CyreneStartup: ready at 196933ms (desktop_start)
+09-11 15:29:21.282  7267  7287 I CyreneStartup: desktop_start success after 196934ms
+09-11 15:29:42.951  7241  7241 I CyreneStartup: workbench_page_loaded

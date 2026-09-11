@@ -1,0 +1,14 @@
+--------- beginning of main
+09-11 14:24:41.095  4833  4857 I SnapshotProbe: START restore=false time=273639
+09-11 14:30:09.926  5584  5607 I SnapshotProbe: START restore=false time=602470
+09-11 14:38:05.283  6246  6267 I SnapshotProbe: START restore=true time=1077827
+09-11 14:38:24.314  6358  6376 I SnapshotProbe: START restore=true time=1096858
+09-11 14:38:32.503  6474  6497 I SnapshotProbe: START restore=true time=1105047
+09-11 14:38:59.332  6614  6632 I SnapshotProbe: START restore=true time=1131876
+09-11 14:39:04.548  6709  6729 I SnapshotProbe: START restore=false time=1137091
+09-11 14:39:23.911  6800  6824 I SnapshotProbe: START restore=true time=1156455
+09-11 14:40:40.879  7006  7025 I SnapshotProbe: START restore=true time=1233423
+09-11 14:43:26.044  7229  7254 I SnapshotProbe: START restore=true time=1398588
+09-11 14:44:16.250  7372  7389 I SnapshotProbe: START restore=true time=1448794
+09-11 14:45:44.535  7504  7528 I SnapshotProbe: START restore=true time=1537080
+09-11 14:46:13.905  7606  7641 I SnapshotProbe: START restore=true time=1566449

@@ -46,6 +46,19 @@ def test_persistent_dock_has_equal_visible_side_and_bottom_insets():
     assert "bottom: 19px;" in dock_override
 
 
+def test_board_rail_preserves_work_topbar_clearance():
+    css = workbench_style_source()
+
+    board_rail = css.split(
+        ".workbench-grid.integrated-sidebars.is-conversation-board .wbc-rail {", 1
+    )[1].split("}", 1)[0]
+    assert (
+        "inset: var(--wbc-card-top-inset) auto var(--wbc-card-gutter) "
+        "var(--wbc-card-gutter);" in board_rail
+    )
+    assert "inset: 0 " not in board_rail
+
+
 def test_board_rail_open_actions_activate_work_before_opening_content():
     shell = workbench_shell_source()
     chat = workbench_chat_source()

@@ -26,6 +26,18 @@ class CyreneRuntimeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_HIBERNATE_DESKTOP) {
+            executor.submit {
+                try { runtime.hibernate() }
+                catch (failure: Throwable) { android.util.Log.e("CyreneStartup", "hibernate_failed; next start uses current disk", failure) }
+                finally {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    // Only this :qemu process exits. A paused VM must not run shutdown code.
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                }
+            }
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_STOP_DESKTOP) {
             executor.submit {
                 runtime.shutdown()
@@ -41,11 +53,15 @@ class CyreneRuntimeService : Service() {
             val stop = PendingIntent.getService(this, 0,
                 Intent(this, CyreneRuntimeService::class.java).setAction(ACTION_STOP_DESKTOP),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val hibernate = PendingIntent.getService(this, 1,
+                Intent(this, CyreneRuntimeService::class.java).setAction(ACTION_HIBERNATE_DESKTOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             val notification = Notification.Builder(this, "desktop-runtime")
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentTitle("Cyrene Desktop Runtime")
                 .setContentText("Local Linux runtime is active")
                 .setOngoing(true)
+                .addAction(Notification.Action.Builder(null, getString(R.string.runtime_hibernate), hibernate).build())
                 .addAction(Notification.Action.Builder(null, "Stop", stop).build())
                 .build()
             if (Build.VERSION.SDK_INT >= 34) {
@@ -113,6 +129,7 @@ class CyreneRuntimeService : Service() {
     companion object {
         const val ACTION_BIND = "ai.cyrene.mobile.runtime.BIND"
         const val ACTION_KEEP_DESKTOP = "ai.cyrene.mobile.runtime.KEEP_DESKTOP"
+        const val ACTION_HIBERNATE_DESKTOP = "ai.cyrene.mobile.runtime.HIBERNATE_DESKTOP"
         const val ACTION_STOP_DESKTOP = "ai.cyrene.mobile.runtime.STOP_DESKTOP"
     }
 }

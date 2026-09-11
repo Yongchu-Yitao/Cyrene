@@ -1,0 +1,31 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.12.11 (main, Aug 18 2025, 19:02:39) [Clang 20.1.4 ]",
+  "measurement": "fresh process to authenticated HTTP health; no UI or model inference",
+  "runs": [
+    {
+      "index": 0,
+      "data": "empty",
+      "health_seconds": 2.577268749999348,
+      "elapsed_seconds": 2.5772717500076396
+    },
+    {
+      "index": 1,
+      "data": "reused",
+      "health_seconds": 1.8433870419976301,
+      "elapsed_seconds": 1.8433915420027915
+    },
+    {
+      "index": 2,
+      "data": "reused",
+      "health_seconds": 1.7842232499970123,
+      "elapsed_seconds": 1.7842267919913866
+    },
+    {
+      "index": 3,
+      "data": "reused",
+      "health_seconds": 1.8171579579939134,
+      "elapsed_seconds": 1.8171613750018878
+    }
+  ]
+}

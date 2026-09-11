@@ -12,7 +12,7 @@ import { WorkbenchChatRuntimes, wbcRuntimePresenceSnapshot, wbcSameRuntimePresen
 
 import { WorkbenchFileDropOverlay, useWorkbenchFileDrop } from "../../shared/file-drop.jsx"
 import { WbcRail, WbcRenameDialog } from "./rail.jsx"
-import { WbcMain } from "./conversation.jsx"
+import { WbcMain, wbcBrowserPictureInPictureAvailable, wbcBrowserPresentationMode } from "./conversation.jsx"
 import { wbcBrowserStateForChat } from "./composer.jsx"
 import { WbcChatPageContextMenu, wbcClearPendingPageContextMenu, wbcClosePageContextMenu, wbcOpenPageContextMenu, wbcSetOpenPageContextMenu } from "./page-context-menu.jsx"
 import { useWbcTerminalCatalog, wbcCreateTerminal, wbcDeleteTerminal, wbcOpenTerminal, wbcReplaceWithTerminal, wbcShowAgentTerminal, wbcSubscribeTerminalRefresh } from "./terminal-controller.jsx"
@@ -1866,7 +1866,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   var activeBrowserState = wbcBrowserStateForChat(activeChatId);
   var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
   var hasActiveBrowser = browserAvailable && !!((activeBrowserState && activeBrowserState.active) || browserMarkedActive);
-  var browserWindowMode = browserWindowModeByChat[activeChatId] || "pip";
+  var browserWindowMode = wbcBrowserPresentationMode(browserWindowModeByChat[activeChatId], wbcBrowserPictureInPictureAvailable(window.cyrene && window.cyrene.browser));
   var splitResource = resourceSplitByChat[activeChatId] || null;
   var browserTabOpen = !!(
     hasActiveBrowser

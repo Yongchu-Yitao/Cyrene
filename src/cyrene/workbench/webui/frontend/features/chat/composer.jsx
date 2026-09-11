@@ -3,7 +3,7 @@ import { handleComposerKey } from "./composer-keyboard.jsx"
 import { useWbcComposerSettings, resolveComposerSettings, wbcNormalizeContextActivations } from "./composer-settings.jsx"
 import { useWbcComposerDraft } from "./composer-draft.jsx"
 import { useWbcComposerContextResource, useWbcComposerCommandCatalog } from "./composer-resources.jsx"
-import { WbcComposerAttachmentView } from "./composer-attachment-view.jsx"
+import { WbcComposerAttachmentView, WbcComposerTopOverlay } from "./composer-attachment-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
 import { WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
@@ -885,12 +885,12 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           </span>
         </div>
       )}
+      <WbcComposerTopOverlay>{topOverlay}</WbcComposerTopOverlay>
       <div
         ref={composerBoxRef}
         className={"wbc-composer-box" + (agentFlow ? (" agent-flow agent-flow-" + agentFlow) : "")}
         data-agent-flow={agentFlow || undefined}
       >
-        {topOverlay}
         <WbcComposerAttachmentView attachments={attachments} failedImagePreviews={failedImagePreviews} setFailedImagePreviews={setFailedImagePreviews} setAttachments={setAttachments} awaitingAnswer={awaitingAnswer} />
         <textarea
           ref={taRef}

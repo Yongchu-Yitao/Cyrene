@@ -1,0 +1,10 @@
+{
+  "status": "success",
+  "execution": {
+    "stdout": "after_resume_committed\naf79a001-dddb-4671-84b2-2ea32d9a679a\n",
+    "stderr": "",
+    "exit_code": 0,
+    "command": "cat /workspace/mobile-resume-check.txt; printf \"\\n\"; cat /proc/sys/kernel/random/boot_id",
+    "executed_in": "qemu_guest"
+  }
+}

@@ -35,9 +35,10 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars.is-conversation-boar
   position: absolute;
   /* An absolutely positioned board rail cannot resolve the shared
      percentage height through the display:contents page wrapper. Anchor both
-     vertical edges explicitly so it keeps the same full-height card geometry
-     as the Work rail instead of shrinking to its conversation rows. */
-  inset: 0 auto var(--wb-floating-card-bottom-gap, 12px) 12px;
+     vertical edges explicitly, while preserving the shared topbar clearance,
+     so it keeps the same card geometry as the Work rail without hiding its
+     search controls beneath the fixed application topbar. */
+  inset: var(--wbc-card-top-inset) auto var(--wbc-card-gutter) var(--wbc-card-gutter);
   height: auto;
   max-height: none;
   margin: 0;
@@ -528,6 +529,7 @@ html[data-performance-mode="on"] *:focus-visible {
 
 /* With backdrop blur disabled, the translucent composer lets conversation
    text show through. Use the theme's solid card surface in performance mode. */
+html[data-performance-mode="on"] .wbc-scroll-to-bottom,
 html[data-performance-mode="on"] .wbc-composer-box {
   background: var(--wb-card-bg) !important;
 }

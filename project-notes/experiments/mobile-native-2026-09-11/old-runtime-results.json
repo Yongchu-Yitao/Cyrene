@@ -1,0 +1,450 @@
+{
+  "kind": "old",
+  "serial": "emulator-5582",
+  "runs": [
+    {
+      "index": 0,
+      "epoch": 1789102910.643517,
+      "launch": "Starting: Intent { cmp=ai.cyrene.mobile.runtime/.RuntimeProbeActivity (has extras) }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.mobile.runtime/.RuntimeProbeActivity\nTotalTime: 265\nWaitTime: 275\nComplete",
+      "result": {
+        "mount": {
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "workspace": "shared",
+          "network": "ready",
+          "workspace_state": "ready",
+          "already_mounted": false
+        },
+        "cross_session": {
+          "writer_session": "ls_runtime_probe",
+          "reader_session": "ls_runtime_probe_second",
+          "content": "shared-by-ls_runtime_probe",
+          "same_vm_workspace": true
+        },
+        "artifact_export": {
+          "path": "cross-session-proof.txt",
+          "size": 26,
+          "offset": 0,
+          "bytes": 26,
+          "content_base64": "c2hhcmVkLWJ5LWxzX3J1bnRpbWVfcHJvYmU=",
+          "complete": true
+        },
+        "execution": {
+          "stdout": "x86_64\nRESEARCH_TOOL_OK",
+          "stderr": "",
+          "exit_code": 0,
+          "command": "uname -m; printf RESEARCH_TOOL_OK",
+          "executed_in": "qemu_guest"
+        },
+        "long_command": {
+          "bytes": 12030,
+          "result": {
+            "stdout": "LONG_COMMAND_OK\n",
+            "stderr": "",
+            "exit_code": 0,
+            "command": "printf 'LONG_COMMAND_OK\\n'; # xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "executed_in": "qemu_guest"
+          }
+        },
+        "health": {
+          "runtime_available": true,
+          "vm_running": true,
+          "image_signature_verified": true,
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "guest_arch": "x86_64",
+          "guest_network": "ready",
+          "guest_workspace": "ready",
+          "isolation": "qemu_system_tcg_shared_persistent_root",
+          "session_running": true,
+          "active_sessions": 2,
+          "free_bytes": 29353472000
+        }
+      },
+      "wall_seconds_including_shutdown_and_poll": 7.2138208340038545,
+      "operation_timings": [
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 5539.513086,
+          "since_start_ms": 5544.933795,
+          "status": "success"
+        },
+        {
+          "operation": "FS_WRITE",
+          "elapsed_ms": 167.843667,
+          "since_start_ms": 5713.853045,
+          "status": "success"
+        },
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 8.104083,
+          "since_start_ms": 5722.165045,
+          "status": "success"
+        },
+        {
+          "operation": "FS_READ",
+          "elapsed_ms": 127.297791,
+          "since_start_ms": 5849.552378,
+          "status": "success"
+        },
+        {
+          "operation": "ARTIFACT_EXPORT",
+          "elapsed_ms": 235.240542,
+          "since_start_ms": 6084.894545,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 97.754084,
+          "since_start_ms": 6183.014753,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 342.858667,
+          "since_start_ms": 6526.42442,
+          "status": "success"
+        },
+        {
+          "operation": "HEALTH_CHECK",
+          "elapsed_ms": 0.23875,
+          "since_start_ms": 6526.849253,
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "epoch": 1789102917.9595578,
+      "launch": "Starting: Intent { cmp=ai.cyrene.mobile.runtime/.RuntimeProbeActivity (has extras) }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.mobile.runtime/.RuntimeProbeActivity\nTotalTime: 157\nWaitTime: 160\nComplete",
+      "result": {
+        "mount": {
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "workspace": "shared",
+          "network": "ready",
+          "workspace_state": "ready",
+          "already_mounted": false
+        },
+        "cross_session": {
+          "writer_session": "ls_runtime_probe",
+          "reader_session": "ls_runtime_probe_second",
+          "content": "shared-by-ls_runtime_probe",
+          "same_vm_workspace": true
+        },
+        "artifact_export": {
+          "path": "cross-session-proof.txt",
+          "size": 26,
+          "offset": 0,
+          "bytes": 26,
+          "content_base64": "c2hhcmVkLWJ5LWxzX3J1bnRpbWVfcHJvYmU=",
+          "complete": true
+        },
+        "execution": {
+          "stdout": "x86_64\nRESEARCH_TOOL_OK",
+          "stderr": "",
+          "exit_code": 0,
+          "command": "uname -m; printf RESEARCH_TOOL_OK",
+          "executed_in": "qemu_guest"
+        },
+        "long_command": {
+          "bytes": 12030,
+          "result": {
+            "stdout": "LONG_COMMAND_OK\n",
+            "stderr": "",
+            "exit_code": 0,
+            "command": "printf 'LONG_COMMAND_OK\\n'; # xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "executed_in": "qemu_guest"
+          }
+        },
+        "health": {
+          "runtime_available": true,
+          "vm_running": true,
+          "image_signature_verified": true,
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "guest_arch": "x86_64",
+          "guest_network": "ready",
+          "guest_workspace": "ready",
+          "isolation": "qemu_system_tcg_shared_persistent_root",
+          "session_running": true,
+          "active_sessions": 2,
+          "free_bytes": 29333073920
+        }
+      },
+      "wall_seconds_including_shutdown_and_poll": 5.516099000000395,
+      "operation_timings": [
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 3864.743543,
+          "since_start_ms": 3868.927585,
+          "status": "success"
+        },
+        {
+          "operation": "FS_WRITE",
+          "elapsed_ms": 249.935375,
+          "since_start_ms": 4119.585752,
+          "status": "success"
+        },
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 8.99075,
+          "since_start_ms": 4129.073168,
+          "status": "success"
+        },
+        {
+          "operation": "FS_READ",
+          "elapsed_ms": 136.85375,
+          "since_start_ms": 4266.030127,
+          "status": "success"
+        },
+        {
+          "operation": "ARTIFACT_EXPORT",
+          "elapsed_ms": 293.839792,
+          "since_start_ms": 4559.954877,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 112.763709,
+          "since_start_ms": 4672.85996,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 363.071292,
+          "since_start_ms": 5036.521419,
+          "status": "success"
+        },
+        {
+          "operation": "HEALTH_CHECK",
+          "elapsed_ms": 0.08025,
+          "since_start_ms": 5036.683669,
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "epoch": 1789102923.570514,
+      "launch": "Starting: Intent { cmp=ai.cyrene.mobile.runtime/.RuntimeProbeActivity (has extras) }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.mobile.runtime/.RuntimeProbeActivity\nTotalTime: 140\nWaitTime: 145\nComplete",
+      "result": {
+        "mount": {
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "workspace": "shared",
+          "network": "ready",
+          "workspace_state": "ready",
+          "already_mounted": false
+        },
+        "cross_session": {
+          "writer_session": "ls_runtime_probe",
+          "reader_session": "ls_runtime_probe_second",
+          "content": "shared-by-ls_runtime_probe",
+          "same_vm_workspace": true
+        },
+        "artifact_export": {
+          "path": "cross-session-proof.txt",
+          "size": 26,
+          "offset": 0,
+          "bytes": 26,
+          "content_base64": "c2hhcmVkLWJ5LWxzX3J1bnRpbWVfcHJvYmU=",
+          "complete": true
+        },
+        "execution": {
+          "stdout": "x86_64\nRESEARCH_TOOL_OK",
+          "stderr": "",
+          "exit_code": 0,
+          "command": "uname -m; printf RESEARCH_TOOL_OK",
+          "executed_in": "qemu_guest"
+        },
+        "long_command": {
+          "bytes": 12030,
+          "result": {
+            "stdout": "LONG_COMMAND_OK\n",
+            "stderr": "",
+            "exit_code": 0,
+            "command": "printf 'LONG_COMMAND_OK\\n'; # xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "executed_in": "qemu_guest"
+          }
+        },
+        "health": {
+          "runtime_available": true,
+          "vm_running": true,
+          "image_signature_verified": true,
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "guest_arch": "x86_64",
+          "guest_network": "ready",
+          "guest_workspace": "ready",
+          "isolation": "qemu_system_tcg_shared_persistent_root",
+          "session_running": true,
+          "active_sessions": 2,
+          "free_bytes": 29333073920
+        }
+      },
+      "wall_seconds_including_shutdown_and_poll": 4.938470458990196,
+      "operation_timings": [
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 3533.726585,
+          "since_start_ms": 3536.783293,
+          "status": "success"
+        },
+        {
+          "operation": "FS_WRITE",
+          "elapsed_ms": 141.677583,
+          "since_start_ms": 3679.361793,
+          "status": "success"
+        },
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 8.810083,
+          "since_start_ms": 3688.710793,
+          "status": "success"
+        },
+        {
+          "operation": "FS_READ",
+          "elapsed_ms": 142.494667,
+          "since_start_ms": 3831.31996,
+          "status": "success"
+        },
+        {
+          "operation": "ARTIFACT_EXPORT",
+          "elapsed_ms": 242.271958,
+          "since_start_ms": 4073.671168,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 106.8035,
+          "since_start_ms": 4180.723668,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 366.957584,
+          "since_start_ms": 4548.103169,
+          "status": "success"
+        },
+        {
+          "operation": "HEALTH_CHECK",
+          "elapsed_ms": 0.068709,
+          "since_start_ms": 4548.349419,
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "epoch": 1789102928.612107,
+      "launch": "Starting: Intent { cmp=ai.cyrene.mobile.runtime/.RuntimeProbeActivity (has extras) }\nStatus: ok\nLaunchState: COLD\nActivity: ai.cyrene.mobile.runtime/.RuntimeProbeActivity\nTotalTime: 160\nWaitTime: 163\nComplete",
+      "result": {
+        "mount": {
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "workspace": "shared",
+          "network": "ready",
+          "workspace_state": "ready",
+          "already_mounted": false
+        },
+        "cross_session": {
+          "writer_session": "ls_runtime_probe",
+          "reader_session": "ls_runtime_probe_second",
+          "content": "shared-by-ls_runtime_probe",
+          "same_vm_workspace": true
+        },
+        "artifact_export": {
+          "path": "cross-session-proof.txt",
+          "size": 26,
+          "offset": 0,
+          "bytes": 26,
+          "content_base64": "c2hhcmVkLWJ5LWxzX3J1bnRpbWVfcHJvYmU=",
+          "complete": true
+        },
+        "execution": {
+          "stdout": "x86_64\nRESEARCH_TOOL_OK",
+          "stderr": "",
+          "exit_code": 0,
+          "command": "uname -m; printf RESEARCH_TOOL_OK",
+          "executed_in": "qemu_guest"
+        },
+        "long_command": {
+          "bytes": 12030,
+          "result": {
+            "stdout": "LONG_COMMAND_OK\n",
+            "stderr": "",
+            "exit_code": 0,
+            "command": "printf 'LONG_COMMAND_OK\\n'; # xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "executed_in": "qemu_guest"
+          }
+        },
+        "health": {
+          "runtime_available": true,
+          "vm_running": true,
+          "image_signature_verified": true,
+          "image_version": "alpine-3.24-qemu-x86_64-v2",
+          "engine": "qemu-5.1.0-tcg",
+          "guest_arch": "x86_64",
+          "guest_network": "ready",
+          "guest_workspace": "ready",
+          "isolation": "qemu_system_tcg_shared_persistent_root",
+          "session_running": true,
+          "active_sessions": 2,
+          "free_bytes": 29333069824
+        }
+      },
+      "wall_seconds_including_shutdown_and_poll": 4.968066125002224,
+      "operation_timings": [
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 3704.055043,
+          "since_start_ms": 3709.544377,
+          "status": "success"
+        },
+        {
+          "operation": "FS_WRITE",
+          "elapsed_ms": 145.243292,
+          "since_start_ms": 3856.144169,
+          "status": "success"
+        },
+        {
+          "operation": "SESSION_MOUNT",
+          "elapsed_ms": 9.013042,
+          "since_start_ms": 3865.244044,
+          "status": "success"
+        },
+        {
+          "operation": "FS_READ",
+          "elapsed_ms": 154.261041,
+          "since_start_ms": 4019.585211,
+          "status": "success"
+        },
+        {
+          "operation": "ARTIFACT_EXPORT",
+          "elapsed_ms": 231.232708,
+          "since_start_ms": 4250.911544,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 105.323667,
+          "since_start_ms": 4356.385503,
+          "status": "success"
+        },
+        {
+          "operation": "EXEC_START",
+          "elapsed_ms": 349.330667,
+          "since_start_ms": 4706.188544,
+          "status": "success"
+        },
+        {
+          "operation": "HEALTH_CHECK",
+          "elapsed_ms": 0.066208,
+          "since_start_ms": 4706.346544,
+          "status": "success"
+        }
+      ]
+    }
+  ]
+}

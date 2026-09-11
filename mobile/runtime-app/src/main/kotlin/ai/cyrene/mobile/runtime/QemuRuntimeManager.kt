@@ -18,11 +18,13 @@ class QemuRuntimeManager(private val context: Context) {
     private val mounted = ConcurrentHashMap.newKeySet<String>()
     private val vmLock = Any()
     private val desktopLock = Any()
+    @Volatile private var hibernating = false
     @Volatile private var image: RuntimeImageBundle? = null
     @Volatile private var vm: QemuVirtualMachine? = null
     @Volatile private var desktopEndpoint: DesktopBackendEndpoint? = null
 
     fun handle(request: GuestRequest, report: (StartupProgress) -> Unit = {}): GuestResponse {
+        if (hibernating) return error(request, "runtime_hibernating", "Workspace is hibernating")
         if (System.currentTimeMillis() >= request.deadlineEpochMs) {
             return error(request, "deadline_expired", "Request deadline expired")
         }
@@ -376,24 +378,71 @@ class QemuRuntimeManager(private val context: Context) {
         image ?: RuntimeImageVerifier(context).verifyAndExtract(report).also { image = it }
     }
 
+    private fun checkpointStore(): CheckpointStore {
+        val directory = File(root, "vm-state").apply { mkdirs() }
+        return CheckpointStore(File(directory, "resume.properties")) {
+            val fd = android.system.Os.open(directory.absolutePath, android.system.OsConstants.O_RDONLY, 0)
+            try { android.system.Os.fsync(fd) } finally { android.system.Os.close(fd) }
+        }
+    }
+
+    private fun checkpointFingerprint(): String {
+        val update = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+        return "v1:$update:${ensureImage().version}:${ensureImage().memoryMiB}:${writableDisk().absolutePath}"
+    }
+
+    /** Called only for an explicit user hibernation request, never an OS lifecycle callback. */
+    fun hibernate() = synchronized(desktopLock) {
+        synchronized(vmLock) {
+            val current = checkNotNull(vm) { "No workspace is running" }
+            val endpoint = checkNotNull(desktopEndpoint)
+            check(endpoint.healthy()) { "Workspace is not ready to hibernate" }
+            hibernating = true
+            val store = checkpointStore()
+            store.invalidate()
+            current.suspendToDisk(System.currentTimeMillis() + 120_000)
+            // The guest remains paused. Publish only after disk durability is established.
+            java.io.RandomAccessFile(writableDisk(), "rw").use { it.fd.sync() }
+            store.publish(CheckpointStore.Saved(checkpointFingerprint(), endpoint.token))
+            android.util.Log.i("CyreneStartup", "hibernate_complete")
+        }
+    }
+
     private fun ensureVm(deadlineEpochMs: Long, report: (StartupProgress) -> Unit = {}): VmHealth = synchronized(vmLock) {
         val current = vm
         if (current != null) return@synchronized current.ping(deadlineEpochMs)
         ensureRootDisk(report)
-        report(StartupProgress("boot"))
-        val endpoint = if (ensureImage().desktopBackend) DesktopBackendEndpoint() else null
-        val created = QemuVirtualMachine(context, ensureImage(), rootfsDisk(), endpoint?.port)
-        try {
-            created.start(deadlineEpochMs).also { vm = created; desktopEndpoint = endpoint }
-        } catch (error: Throwable) {
-            created.close()
-            throw IllegalStateException("Unable to boot signed Linux VM: ${error.message}", error)
+        val saved = checkpointStore().consume(checkpointFingerprint())
+        fun boot(resume: Boolean): VmHealth {
+            report(StartupProgress(if (resume) "restore" else "boot"))
+            val endpoint = if (ensureImage().desktopBackend) DesktopBackendEndpoint(if (resume) saved?.token else null) else null
+            val created = QemuVirtualMachine(context, ensureImage(), writableDisk(), endpoint?.port, resume)
+            try {
+                val health = created.start(if (resume) minOf(deadlineEpochMs, System.currentTimeMillis() + 60_000) else deadlineEpochMs)
+                vm = created; desktopEndpoint = endpoint
+                return health
+            } catch (error: Throwable) {
+                created.close()
+                throw IllegalStateException("Unable to boot signed Linux VM: ${error.message}", error)
+            }
         }
+        if (saved != null) {
+            try { return@synchronized boot(true) }
+            catch (failure: Exception) {
+                android.util.Log.w("CyreneStartup", "resume_failed; using current disk", failure)
+            }
+        }
+        boot(false)
     }
+
+    private fun writableDisk() = File(root, "vm-state/${ensureImage().version}-rootfs.qcow2")
 
     private fun ensureRootDisk(report: (StartupProgress) -> Unit = {}) {
         val disk = rootfsDisk()
-        if (disk.isFile) return
+        if (disk.isFile) {
+            QcowOverlay.create(disk, writableDisk())
+            return
+        }
         val template = ensureImage().rootfsTemplate
         disk.parentFile?.mkdirs()
         val temp = File(disk.parentFile, ".rootfs.ext4.tmp")
@@ -404,6 +453,7 @@ class QemuRuntimeManager(private val context: Context) {
         }) {
             "Unable to create persistent Linux root disk"
         }
+        QcowOverlay.create(disk, writableDisk())
     }
 
     private fun rootfsDisk() = File(root, "vm-state/${ensureImage().version}-rootfs.ext4")
