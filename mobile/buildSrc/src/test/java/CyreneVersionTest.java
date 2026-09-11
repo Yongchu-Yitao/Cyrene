@@ -3,13 +3,13 @@ import org.junit.Test;
 
 public class CyreneVersionTest {
     @Test public void currentVersionUpgradesEveryLegacyApk() {
-        assertEquals(9002019, CyreneVersion.androidCode("0.9.0-beta19"));
-        assertTrue(CyreneVersion.androidCode("0.9.0-beta19") > CyreneVersion.androidCode("0.9.0-beta18"));
+        assertEquals(9002020, CyreneVersion.androidCode("0.9.0-beta20"));
+        assertTrue(CyreneVersion.androidCode("0.9.0-beta20") > CyreneVersion.androidCode("0.9.0-beta19"));
     }
 
     @Test public void releasesAndPrereleasesKeepTheirOrder() {
         String[] versions = {"0.9.0-dev1", "0.9.0-dev999", "0.9.0-alpha0",
-            "0.9.0-alpha999", "0.9.0-beta0", "0.9.0-beta18", "0.9.0-beta19",
+            "0.9.0-alpha999", "0.9.0-beta0", "0.9.0-beta18", "0.9.0-beta19", "0.9.0-beta20",
             "0.9.0-beta999", "0.9.0-rc0", "0.9.0-rc999", "0.9.0",
             "0.9.1-dev0", "0.9.99", "0.10.0-dev0", "0.99.99", "1.0.0-dev0"};
         for (int i = 1; i < versions.length; i++) {

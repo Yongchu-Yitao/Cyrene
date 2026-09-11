@@ -2,6 +2,36 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0-beta20] - 2026-09-11
+
+beta20 adds user-controlled full hibernation and recovery for the Android local workspace, while tightening the mobile presentation of the browser and Workbench. Reopening the app can continue the previous local environment, files, and terminal state; a forced exit, upgrade, or invalid recovery state safely starts again from current data. DeepSeek thinking-model and tool-call compatibility is improved, alongside visual fixes for the composer, dark side rails, Board, and mobile message actions.
+
+### Android workspace hibernation and recovery
+
+- The Android persistent notification now includes Hibernate. After the current task finishes, users can save the entire local workspace and stop its background environment; the next launch restores the saved working state instead of performing a complete cold start.
+- Hibernation preserves project files, running local services, and programs that are still active inside terminals. Restored terminals can accept new commands, and data written before the save remains available.
+- A recovery state is used only once and is tied to the current installation and workspace resources. After an app upgrade or when recovery data is missing or incompatible, Cyrene falls back to an ordinary startup instead of forcing an outdated state to load.
+- If the app is force-stopped after a normal hibernation, Cyrene starts from the current on-disk data rather than returning to the earlier hibernation point and overwriting later saves. Consumed or invalid recovery states are never reused.
+- The local environment remains stopped after hibernation and cannot quietly resume work after saving. Reopening reconnects the interface, corrects the time, and confirms that the environment is ready.
+- Results for large, unchanged application resources are reused to reduce repeated checks during normal recovery, while integrity and safety checks still run on every entry.
+- Moving the app to the background does not hibernate it automatically, so existing background behavior is unchanged. Hibernation happens only when the user explicitly selects it; active network requests should still be allowed to finish first.
+- Visible Chinese and English status messages cover hibernating, saving, restoring, falling back to a normal start, and failures, so users can tell which recovery path is active.
+
+### Android browser and mobile interface
+
+- Android's native browser now always uses the full-screen presentation instead of exposing the desktop picture-in-picture window or Restore size button. Back, tab switching, refresh, mute, and page interaction remain available, avoiding a floating browser state that cannot be sized appropriately on phones.
+- Guidance and action overlays above the conversation composer now sample the page separately from the input surface. Translucent layers no longer stack or pull underlying text into the composer, with more consistent glass treatment in light and dark themes.
+- Conversation, Schedule, Library, and Memory side rails share the same opaque surface in dark mode, removing color shifts caused by the page underneath when switching modules.
+- Board's left card now reserves the correct clearance below the fixed toolbar, keeping Search and tool controls fully visible while preserving the standard floating-card margins.
+- With performance mode enabled, Scroll to bottom uses a clear solid background instead of allowing conversation text to show through after blur is disabled.
+- Message timestamps, status, and actions wrap reliably on phones. Action buttons retain a consistent 32-pixel touch area instead of crowding one another with long status text or on narrow screens.
+
+### DeepSeek conversations and tool use
+
+- Improved multi-turn compatibility for DeepSeek thinking models. Cyrene preserves the information DeepSeek needs to continue the current conversation, reducing rejected follow-up requests.
+- DeepSeek conversations now retain the continuity needed when tools are available. A tool call can continue the same conversation even after an ordinary assistant answer instead of requiring a new chat.
+- When the user or Agent explicitly requires a tool call, Cyrene automatically selects a response mode compatible with that requirement, avoiding failures from combining forced tool use with thinking mode. Tool permissions, the selected tool, and the meaning of existing features are unchanged.
+
 ## [0.9.0-beta19] - 2026-09-11
 
 beta19 moves Cyrene for Android beyond simply opening the desktop Workbench and toward a workspace that can be used continuously. Startup now reports its current stage and measurable progress, an in-app native browser shares pages with the Agent, and recovery, reconnection, and long-running stability have been improved throughout. Web Search adds per-engine selection and custom sources, while the mobile toolbar, side cards, Schedule, Board, project tools, composer, and Doctor receive another focused interface pass. Desktop and Android continue to use the same projects, conversations, features, and settings; the reliability work in this release does not change the meaning or entry points of existing features.
