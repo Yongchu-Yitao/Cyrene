@@ -942,6 +942,14 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
 
   function chatRailVisualState(chat) {
     var running = wbcConversationTrackIsRunning(chat, runningChatIds);
+    // Match the conversation track: resumed work outranks the previous
+    // exchange's pending question or terminal summary until it refreshes.
+    if (running) return {
+      running: true,
+      tone: " status-running",
+      icon: WBC_ICONS.running,
+      label: "",
+    };
     var rawStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();
     var failed = !!chat.failed || !!chat.error || ["error", "failed", "failure", "timeout"].indexOf(rawStatus) >= 0;
     var attention = !!chat.awaitingUser || !!chat.pendingQuestion || [
