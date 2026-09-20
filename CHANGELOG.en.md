@@ -2,9 +2,48 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
-## [Unreleased]
+## [0.9.0] - 2026-09-20
 
-- Remove execution subagents' forced no-progress finalization based on tool arguments and result fingerprints, including its settings and metrics. Normal tool discovery, repeated reads, and waiting no longer trigger this heuristic. Tool, time, cost, context limits and completion criteria remain enforced. Old checkpoints no longer carry this execution fence; finished tasks are not automatically restarted.
+0.9.0 is the first stable release after beta20. It focuses on safe collaboration between conversation Agents, more dependable recovery for interrupted conversations and long-running work, and a faster, smoother experience in long chats, streaming replies, and desktop windows. The stable release covers macOS, Windows x64, Windows ARM64, Linux, and Android.
+
+### Collaboration between conversation Agents
+
+- Agents can now discover other running local Cyrene conversations and send a message to a selected conversation, making it easier to hand off results, context, and follow-up work between independent tasks.
+- An idle conversation can resume when a message arrives, while a busy conversation receives it at a safe point. Messages retain their sending order and remain queued across application restarts, reducing lost collaboration updates.
+- Cross-conversation messages clearly identify their origin. They never count as user authorization or bypass permissions, pending user input, or safety confirmations. The sender can continue once delivery is safely accepted instead of waiting for a reply.
+- Collaboration is limited to recognized main, local, and side conversations in the same Cyrene installation. It does not expose external Agents or arbitrary child processes as contacts.
+
+### Conversation recovery and task reliability
+
+- Conversations now make a limited number of automatic recovery attempts after an unexpected internal runtime failure, without requiring the user to resend the request. Completed tool actions are not run again, and user cancellation or explicitly non-retryable errors still stop immediately.
+- Recovery preserves earlier answers, tool history, and conversation order. An incomplete failed reply is replaced only when new replacement content actually arrives, avoiding a suddenly blank conversation.
+- Completed, cancelled, and failed runs stay in their final state, so late events cannot make them appear active again. Mid-run user guidance and Agent-to-Agent messages also retain their correct origin.
+
+### Long-running subagent work
+
+- Removed forced no-progress finalization based on repeated tool arguments or results. Normal discovery, repeated reads, polling, and waiting no longer stop a subagent prematurely.
+- Tool, time, cost, context limits and completion criteria remain enforced. Existing checkpoints resume normally, and already finished tasks are not restarted.
+
+### Long-conversation performance and streaming
+
+- Large, frequently updated conversations merge history more efficiently instead of reprocessing the entire timeline whenever new content arrives. Switching, scrolling, and live updates are smoother in long chats.
+- Context, cache, and history reads from separate conversations are less likely to block one another. Terminal history and diagnostic views also load faster while preserving existing content, actions, and presentation.
+- Streaming text fades and live activity-card animations are smoother and more continuous. Rapid updates to long replies are less likely to flicker or cut animations short.
+
+### Desktop windows and conversation rail
+
+- Windows and Linux now use a consistent native-style title bar with minimize, maximize, restore, and close controls whose state follows the actual window.
+- Detached panes on Linux regain native dragging and window-state synchronization. Returning a pane to the main window and existing pane actions continue to work as before.
+- Conversation status in the side rail now prioritizes newly resumed work instead of allowing an older question or failure state to cover it.
+
+### Model settings and upgrades
+
+- During upgrade, existing model-provider connections are recognized by their complete service endpoint, avoiding an extra duplicate default connection.
+- Saved credentials, custom connection identifiers, model profiles, and routing remain intact. Unused duplicate defaults are cleaned up for a clearer provider list.
+
+### Stable release coverage
+
+- Every supported desktop platform and Android shares the 0.9.0 version and these release notes, with platform-specific installation, launch, and basic-use validation.
 
 ## [0.9.0-beta20] - 2026-09-11
 
