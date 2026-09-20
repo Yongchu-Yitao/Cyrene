@@ -2361,6 +2361,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "workbenchChat.dropToOpenSide": "在右侧分屏中打开这个对话",
     "workbenchChat.dropPluginViewToOpenSide": "在右侧分屏中打开这个插件",
     "workbenchChat.detachedReturn": "松手合并回主窗口",
+    "workbenchChat.detachedReturnToSource": "返回主窗口",
     "workbenchChat.openInMain": "在主对话中打开",
     "workbenchChat.splitMoveOtherSide": "把分屏移动到另一侧",
     "workbenchChat.surfacePin": "固定自动分屏",

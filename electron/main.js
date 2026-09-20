@@ -6149,7 +6149,7 @@ if (!gotSingleInstanceLock) {
     ipcMain.handle('detached-pane:get-context', (event) => {
       const record = detachedPaneContextForSender(event.sender);
       return record
-        ? { ok: true, id: record.id, descriptor: record.descriptor }
+        ? { ok: true, id: record.id, descriptor: record.descriptor, maximized: record.window.isMaximized() }
         : { ok: false, error: 'detached_pane_not_found' };
     });
     ipcMain.handle('detached-pane:ready', (event) => {
@@ -6210,6 +6210,9 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.handle('detached-pane:return-end', (event, point) => (
       finishDetachedPaneReturnDrag(event.sender, point || screen.getCursorScreenPoint())
+    ));
+    ipcMain.handle('detached-pane:return-to-source', (event) => (
+      detachedPanes.returnDetachedPaneToSource(event.sender)
     ));
     ipcMain.handle('detached-pane:close-by-chat', (_event, info) => (
       closeDetachedPanesForChat(info && info.chatId)

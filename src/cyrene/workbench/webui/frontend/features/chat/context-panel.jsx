@@ -1250,6 +1250,7 @@ function WbcArtifactsTab({ chat, files: providedFiles, emptyKey, emptyFallback, 
 
 function WbcDetachedPaneApp() {
   var bridge = window.cyrene && window.cyrene.detachedPane;
+  var nativeWindowDrag = window.cyrene && window.cyrene.platform === "linux";
   var [context, setContext] = useWbcState(null);
   var [loadError, setLoadError] = useWbcState("");
   var [subagents, setSubagents] = useWbcState(null);
@@ -1264,9 +1265,8 @@ function WbcDetachedPaneApp() {
 
   function toggleWindowMaximize() {
     if (!bridge || typeof bridge.toggleMaximize !== "function") return;
-    Promise.resolve(bridge.toggleMaximize()).then(function (result) {
-      if (result && typeof result.maximized === "boolean") setWindowMaximized(result.maximized);
-    }).catch(function () {});
+    // The compositor may apply this asynchronously; native events own state.
+    Promise.resolve(bridge.toggleMaximize()).catch(function () {});
   }
 
   function updateDescriptor(updates) {
@@ -1280,6 +1280,8 @@ function WbcDetachedPaneApp() {
   }
 
   function beginReturnDrag(event) {
+    // Native Linux dragging must not capture or cancel the compositor gesture.
+    if (nativeWindowDrag) return;
     if (event.button !== 0 || event.target.closest("button")) return;
     var target = event.currentTarget;
     var rect = document.body.getBoundingClientRect();
@@ -1319,11 +1321,22 @@ function WbcDetachedPaneApp() {
       setLoadError(wbcT("workbenchChat.detachedUnavailable", "This pane cannot be opened in a separate window."));
       return undefined;
     }
+    var receivedWindowState = false;
+    var unsubscribeWindowState = typeof bridge.onWindowState === "function"
+      ? bridge.onWindowState(function (state) {
+        if (disposed || !state || typeof state.maximized !== "boolean") return;
+        receivedWindowState = true;
+        setWindowMaximized(state.maximized);
+      }) : null;
     bridge.getContext().then(function (result) {
       if (disposed) return;
       if (!result || result.ok === false || !result.descriptor) {
         setLoadError(wbcT("workbenchChat.detachedUnavailable", "This pane cannot be opened in a separate window."));
         return;
+      }
+      // Do not overwrite a newer native event with the initial IPC snapshot.
+      if (!receivedWindowState && typeof result.maximized === "boolean") {
+        setWindowMaximized(result.maximized);
       }
       var descriptor = result.descriptor;
       if ((descriptor.kind === "file" || descriptor.kind === "viewer") && descriptor.draft) {
@@ -1348,7 +1361,10 @@ function WbcDetachedPaneApp() {
     }).catch(function (error) {
       if (!disposed) setLoadError(wbcErrorText(error));
     });
-    return function () { disposed = true; };
+    return function () {
+      disposed = true;
+      if (typeof unsubscribeWindowState === "function") unsubscribeWindowState();
+    };
   }, []);
 
   useWbcEffect(function () {
@@ -1533,6 +1549,12 @@ function WbcDetachedPaneApp() {
           onPointerDown={function (event) { event.stopPropagation(); }}
           onDoubleClick={function (event) { event.stopPropagation(); }}
         >
+          {nativeWindowDrag && bridge && typeof bridge.returnToSource === "function" && <button
+            type="button"
+            onClick={function () { bridge.returnToSource().catch(function () {}); }}
+            aria-label={wbcT("workbenchChat.detachedReturnToSource", "Return to main window")}
+            title={wbcT("workbenchChat.detachedReturnToSource", "Return to main window")}
+          >{WBC_ICONS.sidebar}</button>}
           <button
             type="button"
             className="minimize"

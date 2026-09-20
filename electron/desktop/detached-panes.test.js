@@ -41,3 +41,124 @@ test('browser surface return only removes the window owned by that record',()=>{
   panes.restoreBrowserSurface({...record,window:newer});
   assert.equal(panes.detachedBrowserSurfaceWindows.size,0);
 });
+
+function returnFixture() {
+  const fixtureState = fixture();
+  const {panes, source, events} = fixtureState;
+  const childSender = {id: 8, send: (...args) => events.push(args)};
+  let destroyed = false;
+  const window = {
+    webContents: childSender,
+    isDestroyed: () => destroyed,
+    destroy: () => { destroyed = true; },
+    getBounds: () => ({x: 1100, y: 100, width: 500, height: 400}),
+    setBounds: () => {},
+    setAlwaysOnTop: () => {},
+    moveTop: () => {},
+  };
+  source.show = () => events.push(['show']);
+  source.focus = () => events.push(['focus']);
+  const record = {
+    id: 'pane', window, sourceWindow: source,
+    descriptor: {kind: 'chat', payload: 'chat', draft: {text: 'unsent'}},
+    sourceInfo: {cardId: 'chat:chat', sourceSide: 'right', sourceIndex: 1},
+  };
+  panes.detachedPaneWindows.set(record.id, record);
+  return {...fixtureState, childSender, record, window};
+}
+
+test('explicit return preserves pane context without screen coordinates or a drag session', () => {
+  const {panes, childSender, record, window, events} = returnFixture();
+  panes.screen.getCursorScreenPoint = () => { throw new Error('No global coordinates on Wayland'); };
+  assert.deepEqual(panes.returnDetachedPaneToSource(childSender), {ok: true, merged: true});
+  assert.deepEqual(events[0], ['detached-pane:returned', {
+    id: record.id, descriptor: record.descriptor, ...record.sourceInfo,
+  }]);
+  assert.equal(window.isDestroyed(), true);
+  assert.equal(record.returning, true);
+  assert.deepEqual(events.slice(1), [['show'], ['focus']]);
+});
+
+test('explicit return rejects unrelated senders and keeps the pane when the source is unavailable', () => {
+  const {panes, sender, childSender, source, window} = returnFixture();
+  assert.deepEqual(panes.returnDetachedPaneToSource(sender), {ok: false, merged: false});
+  source.webContents.send = () => { throw new Error('closed'); };
+  assert.deepEqual(panes.returnDetachedPaneToSource(childSender), {ok: false, merged: false});
+  source.isDestroyed = () => true;
+  assert.deepEqual(panes.returnDetachedPaneToSource(childSender), {ok: false, merged: false});
+  assert.equal(window.isDestroyed(), false);
+});
+
+test('pointer-based return still merges into the source window', () => {
+  const {panes, childSender, window} = returnFixture();
+  panes.beginDetachedPaneReturnDrag(childSender);
+  assert.deepEqual(panes.finishDetachedPaneReturnDrag(childSender, {x: 300, y: 200}), {ok: true, merged: true});
+  assert.equal(window.isDestroyed(), true);
+});
+
+test('native maximize and restore publish actual detached window state', () => {
+  const {panes} = fixture();
+  const win = new EventEmitter();
+  const updates = [];
+  let maximized = false;
+  let destroyed = false;
+  let rendererDestroyed = false;
+  win.isDestroyed = () => destroyed;
+  win.isMaximized = () => maximized;
+  win.webContents = {
+    isDestroyed: () => rendererDestroyed,
+    send: (...args) => updates.push(args),
+  };
+  panes.observeDetachedPaneWindowState(win);
+  maximized = true;
+  win.emit('maximize');
+  maximized = false;
+  win.emit('unmaximize');
+  assert.deepEqual(updates, [
+    ['detached-pane:window-state', {maximized: true}],
+    ['detached-pane:window-state', {maximized: false}],
+  ]);
+  rendererDestroyed = true;
+  win.emit('maximize');
+  rendererDestroyed = false;
+  destroyed = true;
+  win.emit('unmaximize');
+  assert.equal(updates.length, 2);
+});
+
+test('detached renderer initializes state, favors native events, and unsubscribes', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname,
+    '../../src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx'), 'utf8');
+  // Execute the production initialization effect with controlled IPC timing.
+  const effect = source.slice(source.indexOf('function WbcDetachedPaneApp()'))
+    .split('useWbcEffect(function () {')[1].split('}, []);')[0];
+  for (const nativeEventFirst of [false, true]) {
+    let resolveContext;
+    let listener;
+    let unsubscribed = false;
+    const states = [];
+    const bridge = {
+      onWindowState(callback) {
+        listener = callback;
+        return () => { unsubscribed = true; };
+      },
+      getContext: () => new Promise(resolve => { resolveContext = resolve; }),
+    };
+    const cleanup = new Function('bridge', 'setWindowMaximized', 'setContext',
+      'setLoadError', 'wbcErrorText', effect)(bridge, state => states.push(state),
+      () => {}, error => { throw new Error(error); }, String);
+    if (nativeEventFirst) listener({maximized: false});
+    resolveContext({ok: true, maximized: true, descriptor: {kind: 'chat'}});
+    await Promise.resolve();
+    assert.deepEqual(states, [!nativeEventFirst]);
+    listener({maximized: true});
+    listener({maximized: false});
+    assert.deepEqual(states.slice(-2), [true, false]);
+    cleanup();
+    assert.equal(unsubscribed, true);
+    listener({maximized: true});
+    assert.equal(states.at(-1), false);
+  }
+});

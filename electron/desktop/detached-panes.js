@@ -402,6 +402,15 @@ class DetachedPanes {
     }
   }
 
+  observeDetachedPaneWindowState(win) {
+    const notify = () => {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+      win.webContents.send('detached-pane:window-state', { maximized: win.isMaximized() });
+    };
+    win.on('maximize', notify);
+    win.on('unmaximize', notify);
+  }
+
   async createDetachedPaneWindow(rawDescriptor, info = {}) {
     const descriptor = this.normalizeDetachedPaneDescriptor(rawDescriptor);
     const port = await this.waitForPort();
@@ -449,6 +458,7 @@ class DetachedPanes {
       returning: false,
     };
     this.detachedPaneWindows.set(id, record);
+    this.observeDetachedPaneWindowState(win);
     if (dragSession) {
       dragSession.detachedWindow = win;
       dragSession.detachedRecord = record;
@@ -584,14 +594,21 @@ class DetachedPanes {
       try { record.window.setAlwaysOnTop(false); } catch (_) {}
       return { ok: true, merged: false };
     }
-    record.returning = true;
+    return this.returnDetachedPaneToSource(sender);
+  }
+
+  returnDetachedPaneToSource(sender) {
+    const record = this.detachedPaneContextForSender(sender);
+    const source = record && record.sourceWindow;
+    if (!record || !source || source.isDestroyed()) return { ok: false, merged: false };
     try {
       source.webContents.send('detached-pane:returned', {
         id: record.id,
         descriptor: record.descriptor,
         ...record.sourceInfo,
       });
-    } catch (_) {}
+    } catch (_) { return { ok: false, merged: false }; }
+    record.returning = true;
     record.window.destroy();
     source.show();
     source.focus();

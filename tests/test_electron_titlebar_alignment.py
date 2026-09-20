@@ -2,6 +2,24 @@ import re
 from pathlib import Path
 
 
+def test_linux_detached_titlebar_uses_native_drag_and_excludes_controls():
+    root = Path(__file__).resolve().parent.parent
+    frontend = root / "src/cyrene/workbench/webui/frontend"
+    css = (frontend / "workbench.css").read_text(encoding="utf-8")
+    source = (frontend / "features/chat/context-panel.jsx").read_text(encoding="utf-8")
+    assert re.search(
+        r'html\[data-platform="linux"\] \.wbc-detached-pane-titlebar\s*\{[^}]*'
+        r'-webkit-app-region:\s*drag;', css,
+    )
+    assert re.search(
+        r'\.wbc-detached-pane-window-actions\s*\{[^}]*-webkit-app-region:\s*no-drag;', css,
+    )
+    handler = source.split("function beginReturnDrag(event) {", 1)[1].split("function moveReturnDrag", 1)[0]
+    assert handler.index("if (nativeWindowDrag) return;") < handler.index("setPointerCapture")
+    assert 'window.cyrene.platform === "linux"' in source
+    assert "bridge.returnToSource()" in source
+
+
 def test_macos_traffic_lights_are_centered_in_workbench_topbar():
     root = Path(__file__).resolve().parent.parent
     main_source = (root / "electron" / "main.js").read_text(encoding="utf-8")

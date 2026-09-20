@@ -2353,6 +2353,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "workbenchChat.dropToOpenSide": "Release to open this conversation in the side panel",
     "workbenchChat.dropPluginViewToOpenSide": "Release to open this plugin in the side panel",
     "workbenchChat.detachedReturn": "Release to merge back into the main window",
+    "workbenchChat.detachedReturnToSource": "Return to main window",
     "workbenchChat.openInMain": "Open in the main conversation",
     "workbenchChat.splitMoveOtherSide": "Move split to the other side",
     "workbenchChat.surfacePin": "Pin automatic surface",

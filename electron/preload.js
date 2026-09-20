@@ -147,6 +147,13 @@ contextBridge.exposeInMainWorld('cyrene', {
     returnBegin: (info) => ipcRenderer.invoke('detached-pane:return-begin', info || {}),
     returnMove: (point) => ipcRenderer.send('detached-pane:return-move', point || {}),
     returnEnd: (point) => ipcRenderer.invoke('detached-pane:return-end', point || {}),
+    returnToSource: () => ipcRenderer.invoke('detached-pane:return-to-source'),
+    onWindowState: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, info) => callback(info);
+      ipcRenderer.on('detached-pane:window-state', listener);
+      return () => ipcRenderer.removeListener('detached-pane:window-state', listener);
+    },
     closeByChat: (chatId) => ipcRenderer.invoke('detached-pane:close-by-chat', {
       chatId: String(chatId || ''),
     }),
