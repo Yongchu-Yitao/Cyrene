@@ -2,48 +2,127 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
-## [0.9.0] - 2026-09-20
+## [0.9.0] - 2026-09-21
 
-0.9.0 is the first stable release after beta20. It focuses on safe collaboration between conversation Agents, more dependable recovery for interrupted conversations and long-running work, and a faster, smoother experience in long chats, streaming replies, and desktop windows. The stable release covers macOS, Windows x64, Windows ARM64, Linux, and Android.
+### Agent execution, plans, and long-running work
 
-### Collaboration between conversation Agents
+- Agents can continue through reasoning, tool use, verification, and follow-up work in one request, while discovering available tools on demand and recovering from correctable tool-selection errors.
+- Persistent Plan and Goal workflows add reviewable steps, dependencies, scope, constraints, acceptance criteria, pause/resume controls, and evidence-based completion review.
+- DeepReflect can reassess the actual goal, verified facts, failed assumptions, and next direction without losing the original request or completed work.
+- Mid-run guidance and permission answers are preserved and applied safely. Tool failures carry actionable retry information, repeated failures are bounded, and unexpected internal failures receive limited recovery without repeating completed actions.
 
-- Agents can now discover other running local Cyrene conversations and send a message to a selected conversation, making it easier to hand off results, context, and follow-up work between independent tasks.
-- An idle conversation can resume when a message arrives, while a busy conversation receives it at a safe point. Messages retain their sending order and remain queued across application restarts, reducing lost collaboration updates.
-- Cross-conversation messages clearly identify their origin. They never count as user authorization or bypass permissions, pending user input, or safety confirmations. The sender can continue once delivery is safely accepted instead of waiting for a reply.
-- Collaboration is limited to recognized main, local, and side conversations in the same Cyrene installation. It does not expose external Agents or arbitrary child processes as contacts.
+### Subagents, task contexts, and conversation collaboration
 
-### Conversation recovery and task reliability
+- Independent, discussion, and synthesis subagents have separate histories, limits, checkpoints, evidence, and explicit complete, partial, or blocked outcomes.
+- Large projects can use isolated task contexts that pause, resume, unload, and reload without mixing another task's messages or tool results. Near the context limit, work continues in a new segment with saved progress and evidence.
+- Agents can discover other local Cyrene conversations and hand off context or follow-up work. Ordered delivery survives restarts, resumes idle recipients, and never counts as user authorization.
+- Normal repeated reads, discovery, polling, and waiting no longer trigger premature “no progress” shutdown, while time, cost, tool, context, and completion limits remain enforced.
 
-- Conversations now make a limited number of automatic recovery attempts after an unexpected internal runtime failure, without requiring the user to resend the request. Completed tool actions are not run again, and user cancellation or explicitly non-retryable errors still stop immediately.
-- Recovery preserves earlier answers, tool history, and conversation order. An incomplete failed reply is replaced only when new replacement content actually arrives, avoiding a suddenly blank conversation.
-- Completed, cancelled, and failed runs stay in their final state, so late events cannot make them appear active again. Mid-run user guidance and Agent-to-Agent messages also retain their correct origin.
+### Plugins, extensions, and Hooks
 
-### Long-running subagent work
+- A unified plugin framework now covers model providers, tools, app services, context, Hooks, and interface integrations. Plugin Center supports discovery, search, categories, status, enable/disable controls, details, restart requirements, and removal.
+- Plugins can be installed from a local folder or ZIP with path and content checks. Failed plugins remain inspectable and repairable without affecting neighboring plugins, and updates preserve disabled choices.
+- Plugin creation supports drafting, editing, validation, review, installation, and capability checks; changed drafts must be reviewed again before use.
+- Natural-language Hooks can run around conversations, model requests, tools, context changes, usage, commits, and stopping, with testing, editing, enable/disable controls, audit, and run history.
+- MCP services, CLI tools, user plugins, and remotely granted capabilities use the same discovery and permission flow.
 
-- Removed forced no-progress finalization based on repeated tool arguments or results. Normal discovery, repeated reads, polling, and waiting no longer stop a subagent prematurely.
-- Tool, time, cost, context limits and completion criteria remain enforced. Existing checkpoints resume normally, and already finished tasks are not restarted.
+### Models, routing, and reply compatibility
 
-### Long-conversation performance and streaming
+- Model settings now unify providers, connections, models, and routing for main, helper, vision, and embedding models. Built-in paths include OpenAI-compatible services, Anthropic, Gemini, DeepSeek, MiniMax, Kimi, GLM, OpenRouter, Alibaba Cloud, AMD, Ollama, local ONNX, and custom endpoints.
+- Codex OAuth adds in-app sign-in, model choice, usage checks, and its managed CLI runtime. Authentication, quota, and model errors remain visible without silently switching providers.
+- Cyrene-managed local models and Qwen3 Embedding appear in the connection list; Codex and local connections can be removed and added again.
+- Streaming text, reasoning, tool calls, usage, and model identity remain linked. Empty or truncated replies, incomplete tool arguments, and broken text encoding enter visible recovery rather than being saved as normal answers.
+- DeepSeek thinking conversations, Anthropic output limits, tool-required replies, cache separation, and capability checks now match each service more reliably. Upgrades preserve credentials, custom IDs, profiles, and routing while removing unused duplicate defaults.
 
-- Large, frequently updated conversations merge history more efficiently instead of reprocessing the entire timeline whenever new content arrives. Switching, scrolling, and live updates are smoother in long chats.
-- Context, cache, and history reads from separate conversations are less likely to block one another. Terminal history and diagnostic views also load faster while preserving existing content, actions, and presentation.
-- Streaming text fades and live activity-card animations are smoother and more continuous. Rapid updates to long replies are less likely to flicker or cut animations short.
+### Conversations, Quick Chat, streaming, and split workspaces
 
-### Desktop windows and conversation rail
+- Conversation uses one ordered timeline for user messages, replies, reasoning, tools, progress, questions, permissions, waiting, failures, and completion. Live Markdown, code, activity cards, and final replies transition more smoothly.
+- Reconnects resume from the last position without duplicating events. Failed, cancelled, completed, retried, or shutdown-interrupted runs keep the correct final state and preserve completed work.
+- Split Agent workspaces support side-by-side or stacked conversations, resizing, swapping, detached windows, and merging back while keeping each conversation's state and scroll position.
+- The composer can select workspace files, attachments, MCP, Skills, visible panes, and pinned resources, and supports slash commands, paste, edit, regenerate, copy, and attachment actions.
+- Main Conversation, split panes, Side Agents, Quick Chat, browser entry points, and desktop entry points now show the same run history, message order, and completion state.
+- Conversation cards can be pinned and groups keep their saved order. Board cards have more consistent density, state display, and actions. Per-conversation memory learning can be disabled and its sources inspected.
 
-- Windows and Linux now use a consistent native-style title bar with minimize, maximize, restore, and close controls whose state follows the actual window.
-- Detached panes on Linux regain native dragging and window-state synchronization. Returning a pane to the main window and existing pane actions continue to work as before.
-- Conversation status in the side rail now prioritizes newly resumed work instead of allowing an older question or failure state to cover it.
+### Coding, projects, files, and terminals
 
-### Model settings and upgrades
+- Coding combines full-file reading and writing, precise edits, search, symbols, analysis, Git, builds, tests, and previews without the former fixed full-file write limit.
+- JavaScript/TypeScript, Python, Go, Rust, Java, TeX, Make, GitHub, and general projects receive relevant actions in one project workspace.
+- Persistent terminals and background commands survive page changes and restarts with complete screen state, high-volume output, history, multilingual text, emoji, colors, and control sequences.
+- Managed SSH terminals support remote directories and recoverable tmux sessions, including reconnect behavior and clear remote directory, title, state, and exit information.
+- Terminal recognizes Codex, Claude Code, Gemini CLI, Kimi, OpenCode, Aider, Qwen, Copilot, Goose, Amp, and MiniMax CLI Agents and separately shows active, waiting, completed, failed, interrupted, and unread-output states.
+- Agents can identify the visible current, left, or right terminal, including SSH sessions not bound to the current conversation. Timeouts and cancellation stop the whole process tree instead of leaving background children running.
 
-- During upgrade, existing model-provider connections are recognized by their complete service endpoint, avoiding an extra duplicate default connection.
-- Saved credentials, custom connection identifiers, model profiles, and routing remain intact. Unused duplicate defaults are cleaned up for a clearer provider list.
+### Browser, web search, and content
 
-### Stable release coverage
+- The browser workspace adds tabs, navigation, refresh, wait, screenshots, upload, download, find, login takeover, shared user/Agent pages, picture-in-picture, maximize, and detachable-window workflows.
+- Agents can inspect visible content and controls, click, type, scroll, wait for changes, and follow nested interactive content using traceable page references.
+- Web Search supports multiple engines, source links, previews, full-page reading, local or external SimpleXNG, and the user's selected proxy route.
+- SimpleXNG engines can be enabled individually, reset to defaults, or extended with custom JSON and HTML sources using GET, JSON POST, form POST, relative links, content types, and secret request headers.
+- Large attachments, web pages, tool results, and paginated content can be read on demand with evidence locations retained. Local interactive HTML previews can open safely inside Workbench.
 
-- Every supported desktop platform and Android shares the 0.9.0 version and these release notes, with platform-specific installation, launch, and basic-use validation.
+### Memory, knowledge, Skills, schedules, and proactive work
+
+- Memory now combines SOUL, short-term, project, structured, and archived-conversation sources with search, editing, disable/restore controls, provenance, revision, conflict handling, retry, and source withdrawal.
+- Knowledge supports document import, parsing, OCR, hybrid retrieval, publication metadata, collections, tags, notes, annotations, import/export, and local Zotero import.
+- Skills can be installed or learned from successful workflows, then merged, parameterized, approved, versioned, rolled back, activated, retired, and reviewed through run statistics.
+- Persistent entities track tasks, issues, decisions, projects, events, and habits with state, due dates, priority, relationships, and sources.
+- Optional proactive work acts only on registered active items with completion checks, cooldown, deduplication, blocking explanations, and optional silent completion.
+- Scheduled work supports one-time, interval, and cron timing, time zones, history, pause/resume, cancellation, and deduplicated delivery back to the originating conversation.
+
+### Channels, notifications, and quick entry points
+
+- Telegram and WeChat channels use the same plugin-based Agents, tools, context, and result delivery as Workbench, with their enablement and runtime state managed by the owning plugin.
+- Notification Center refreshes when opened, closes reliably, links back to relevant conversations, and preserves traceable update failures and background-task states.
+- Quick Chat shares Workbench's Agent runtime, history, and message rules so a quick request can continue in the full workspace.
+
+### Desktop control, remote devices, and cross-device work
+
+- App Use can inspect and operate accessible macOS and Windows interfaces through click, input, selection, scrolling, and drag, while Linux reports only the semantic actions it can actually verify.
+- Device pairing adds shared projects, file transfer, remote tasks, remote Conversation and Goal control, and authorized remote plugins.
+- Remote Desktop adds screen viewing and control, multiple displays, audio, and file capabilities with explicit enablement and visible status.
+
+### PowerPoint, images, video, music, and voice
+
+- PowerPoint supports live authoring and direct PPTX editing: create, open, inspect, edit, add slides, text, shapes, lines, images, editable tables and charts, arrange layers, render-check, undo, and save.
+- Image generation and editing supports references, localized edits, variants, dimensions, and transparent backgrounds.
+- Video and music jobs run in the background with progress, retry, wake-up, and result delivery, while media settings choose separate providers, models, and defaults.
+- Voice unifies speech recognition, synthesis, microphone input, playback state, and direct voice requests in the current Conversation.
+
+### Cyrene Doctor and safe recovery
+
+- Cyrene Doctor checks configuration, model connections, plugins, conversation runs, project memory, and learning from Settings, Help, error, and failure entry points, without requiring a model for basic evidence.
+- Reports can be saved, refreshed, and exported without collecting credentials or conversation/request/response bodies. An isolated Doctor Agent can analyze the redacted report without inheriting ordinary memory, Skills, MCP, files, or terminals.
+- Doctor can investigate a selected local plugin in a copy, show a proposed repair and its validation, and apply only after confirmation and a fresh file check. Failed apply, reload, or validation attempts preserve rollback and partial status.
+- A failed desktop Python backend opens an offline recovery page instead of closing the app; offline Doctor is also available from the command line.
+
+### Updates, backups, settings, and data safety
+
+- Updates add release notes, progress, resume, package verification, restart installation, and a separate proxy choice. Failures distinguish network, proxy, server, disk, permission, and file-lock causes.
+- Windows waits for the app and terminal service to exit before replacement and preserves a downloaded installer for retry; the next launch retains the failed stage, reason, and log location.
+- Application data can be backed up and safely restored after version, content, and free-space checks. Import, export, and cleanup are consolidated in Settings.
+- Settings now consistently covers language, theme, text size, models, media, browser, search, proxy, notifications, voice, maps, plugins, tools, shortcuts, data, updates, and Doctor. Saved secrets are never shown again in the interface, reports, or Agent context.
+
+### Android local workspace
+
+- A single ARM64 APK now runs the Cyrene workspace locally on Android with the same projects, model settings, Conversations, Agents, tools, memory, knowledge, Schedule, and Settings as desktop; no separate runtime app or computer backend is required.
+- Startup shows real preparation stages and measurable progress, reuses healthy prepared resources, coordinates reconnects, and provides retry on failure.
+- User-triggered hibernation saves project files, services, terminal programs, and unfinished state before stopping the environment, then safely resumes once on the matching version without overwriting newer files.
+- The native full-screen browser lets users and Agents share tabs, login state, cookies, touch, system keyboard, file picker, navigation, reading, clicking, typing, scrolling, waits, and viewport captures.
+- Phone toolbars, tab center, swipe-in side cards, Schedule, Board, Memory, Knowledge, project tools, Terminal, Settings, Doctor, Personal info, version pages, soft keyboard, and dark surfaces now use responsive layouts.
+- Android remains experimental: first startup needs substantial time and storage, old two-app builds are not migrated automatically, and not every desktop external tool is verified on phones.
+
+### Desktop interface, accessibility, performance, and reliability
+
+- Windows and Linux use a consistent native-style title bar; Linux detached panes regain native dragging, maximize/restore state, and merge-back behavior.
+- Floating cards, headings, tabs, icons, buttons, forms, empty/error states, themes, Chinese/English typography, keyboard focus, Escape behavior, touch targets, narrow layouts, selection, and reduced motion are more consistent across Workbench.
+- Long Conversation history and live events merge in order without changing message order or deduplication. Streaming, expanded cards, pane resizing, terminal history, diagnostics, plugins, projects, and unchanged resources avoid unnecessary refresh work.
+- Separate conversations no longer block one another on context or cache reads. Concurrent saves across conversations, Schedule, analytics, projects, memory, knowledge, events, and background results are more reliable.
+
+### Stable platform and release coverage
+
+- 0.9.0 ships together for macOS, Windows x64, Windows ARM64, Linux, and Android with one version and these release notes.
+- Release assets include macOS DMG; Windows x64 installers and portable packages; Windows ARM64 plus compatibility components; Linux AppImage, Debian, and RPM packages; and an Android ARM64 APK with SHA-256 checksum.
+- A release is complete only after version, tag, main-branch, CI, build, install, startup, basic-use, and upload checks pass for every platform; any failed platform prevents an all-success result.
 
 ## [0.9.0-beta20] - 2026-09-11
 

@@ -40,9 +40,9 @@ class BuildTests(unittest.TestCase):
     def test_cpu_profile_keeps_tools_and_platform_markers(self):
         project = {"project": {"dependencies": ["httpx>=0.28", "onnxruntime-gpu>=1.26; sys_platform != 'darwin'",
                      "onnxruntime>=1.27", "mlx-lm>=0.31; sys_platform == 'darwin'", "pywinpty; sys_platform == 'win32'"],
-                     "optional-dependencies": {"browser": ["playwright>=1.40"]}}}
+                     "optional-dependencies": {"browser": ["playwright==1.60.0"]}}}
         result = list(dependencies.requirements(project))
-        self.assertIn("playwright>=1.40", result)
+        self.assertIn("playwright==1.60.0", result)
         self.assertIn("pywinpty; sys_platform == 'win32'", result)
         self.assertEqual([item for item in result if item.startswith("onnx")], ["onnxruntime>=1.27,<1.28"])
         self.assertFalse(any(item.startswith("mlx") for item in result))
