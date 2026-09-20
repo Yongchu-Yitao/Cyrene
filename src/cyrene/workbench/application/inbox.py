@@ -1650,7 +1650,7 @@ class WorkbenchGuidanceChannel:
         self._wake(False)
 
 
-def _inbox_payload(raw: Any) -> dict[str, Any]:
+def inbox_payload(raw: Any) -> dict[str, Any]:
     try:
         value = json.loads(str(raw) or "{}")
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -1748,7 +1748,7 @@ def read_workbench_inbox_snapshot(
             ).fetchall()
             events: list[dict[str, Any]] = []
             for row in rows:
-                payload = _inbox_payload(row[7])
+                payload = inbox_payload(row[7])
                 event_type = str(row[4] or "event")
                 item: dict[str, Any] = {
                     "eventId": str(row[0]),
@@ -1849,7 +1849,7 @@ def read_workbench_guidance_records(db_path: str) -> list[dict[str, Any]]:
             ).fetchall()
         records: list[dict[str, Any]] = []
         for session_id, event_id, run_id, payload_json, created_at in rows:
-            payload = _inbox_payload(payload_json)
+            payload = inbox_payload(payload_json)
             message_id = str(payload.get("public_message_id") or "").strip()
             text = str(payload.get("text") or "").strip()
             if not message_id or not text:

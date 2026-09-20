@@ -31,11 +31,11 @@ async def send_session_message(arguments, context):
 
 
 def application_setup(context):
-    from cyrene.workbench.application.app_services import _chat_application_port
+    from cyrene.workbench.application.app_services import chat_application_port
     from .service import SessionMessagingService
 
     service = SessionMessagingService(
-        context.data_directory / "plugin_data" / "cyrene_sessions", _chat_application_port,
+        context.data_directory / "plugin_data" / "cyrene_sessions", chat_application_port,
     )
     context.provide("session_messaging", service)
     context.on_startup(service.start)

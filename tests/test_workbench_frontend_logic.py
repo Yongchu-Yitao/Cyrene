@@ -8648,6 +8648,9 @@ def test_desktop_uses_cross_platform_native_directory_picker():
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
     create = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
+    composer = (
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "features" / "chat" / "composer.jsx"
+    ).read_text(encoding="utf-8")
     chat = workbench_chat_source()
 
     assert "const isLinux = process.platform === 'linux';" in main
@@ -8664,7 +8667,7 @@ def test_desktop_uses_cross_platform_native_directory_picker():
     assert 'window.cyrene && typeof window.cyrene.pickDirectory === "function"' in create
     assert "await window.cyrene.pickDirectory()" in create
     assert 'fetch("/api/context/pick-directory", { method: "POST" })' in create
-    assert 'window.cyrene.platform === "linux"' not in chat
+    assert 'window.cyrene.platform === "linux"' not in composer
     assert "window.cyrene.pickDirectory().then(function (data)" in chat
     assert 'toastError(err, wbcT("workbenchChat.pickDirFailed"' in chat
 
@@ -8945,10 +8948,14 @@ def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
 
 
 def test_workbench_chat_directory_picker_supports_desktop_and_browser_modes():
+    root = Path(__file__).resolve().parent.parent
     chat = workbench_chat_source()
     i18n = workbench_i18n_source()
+    composer = (
+        root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "features" / "chat" / "composer.jsx"
+    ).read_text(encoding="utf-8")
 
-    assert 'window.cyrene.platform === "linux"' not in chat
+    assert 'window.cyrene.platform === "linux"' not in composer
     assert 'typeof window.cyrene.pickDirectory === "function"' in chat
     assert 'fetch("/api/context/pick-directory", { method: "POST" })' in chat
     assert "[wsDir, projectWorkspacePath].concat(wsHistory).forEach" in chat

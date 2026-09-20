@@ -55,7 +55,7 @@
     "decisions": 28
   },
   "electron/desktop/detached-panes.js::DetachedPanes.createDetachedPaneWindow": {
-    "lines": 101,
+    "lines": 102,
     "decisions": 30
   },
   "electron/desktop/detached-panes.js::DetachedPanes.detachedPaneBounds": {
@@ -76,6 +76,9 @@
   "electron/desktop/detached-panes.js::DetachedPanes.updateDetachedPaneReturnDrag": {
     "decisions": 33
   },
+  "electron/desktop/main-window-controls.js::installMainWindowControls.<anonymous>": {
+    "decisions": 26
+  },
   "electron/desktop/host-control.js::HostControl.handle": {
     "lines": 104,
     "decisions": 69
@@ -88,13 +91,13 @@
     "nesting": 10
   },
   "electron/main.js": {
-    "module_lines": 6519
+    "module_lines": 6525
   },
-  "electron/main.js::<anonymous>.<anonymous>#34": {
+  "electron/main.js::<anonymous>.<anonymous>#35": {
     "decisions": 23
   },
   "electron/main.js::<anonymous>#2": {
-    "lines": 355
+    "lines": 359
   },
   "electron/main.js::BrowserTabManager": {
     "methods": 113,
@@ -179,7 +182,7 @@
     "decisions": 24
   },
   "electron/main.js::createMainWindowOnce": {
-    "lines": 104,
+    "lines": 105,
     "decisions": 42
   },
   "electron/main.js::getTrayIconImage": {
@@ -389,7 +392,7 @@
     "decisions": 23
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx": {
-    "module_lines": 1566
+    "module_lines": 1588
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx::useWbcLiveChatMetrics": {
     "lines": 130
@@ -416,11 +419,14 @@
     "decisions": 47
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx::WbcDetachedPaneApp": {
-    "lines": 314,
-    "decisions": 32
+    "lines": 336,
+    "decisions": 36
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx::WbcDetachedPaneApp.<anonymous>.<anonymous>": {
     "decisions": 21
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx::WbcDetachedPaneApp.<anonymous>.<anonymous>#2": {
+    "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-panel.jsx::WbcDetachedPaneApp.renderContent": {
     "lines": 126,
@@ -603,6 +609,9 @@
   "src/cyrene/workbench/webui/frontend/features/chat/floating-pane-handoff.jsx::beginFloatingPanelSplit": {
     "decisions": 28
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/message-memo.mjs::snapshotRecord": {
+    "decisions": 21
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx": {
     "module_lines": 1852
   },
@@ -655,8 +664,8 @@
     "decisions": 42
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcUserMessage": {
-    "lines": 109,
-    "decisions": 26
+    "lines": 112,
+    "decisions": 31
   },
   "src/cyrene/workbench/webui/frontend/features/chat/model-api.jsx::consumeEventStream": {
     "lines": 103
@@ -857,7 +866,7 @@
     "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx::wbcApplyTimeline": {
-    "decisions": 24
+    "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx::wbcDurableTracePayload": {
     "decisions": 21
@@ -873,6 +882,12 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx::wbcRuntimeTimelineMessages": {
     "decisions": 49
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx::wbcTryMergeOrderedMessages": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx::wbcTryMergeOrderedMessages.times": {
+    "decisions": 30
   },
   "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx": {
     "module_lines": 2607
@@ -1207,7 +1222,7 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx": {
-    "module_lines": 1683
+    "module_lines": 1685
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchNotificationCenter": {
     "decisions": 33
@@ -1216,7 +1231,7 @@
     "decisions": 42
   },
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar": {
-    "lines": 1434,
+    "lines": 1435,
     "decisions": 262,
     "hooks": 25
   },
@@ -1409,10 +1424,10 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4315
+    "module_lines": 4319
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4315
+    "module_lines": 4319
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
     "module_lines": 1234

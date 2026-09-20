@@ -1307,7 +1307,7 @@ function WbcGoalMilestoneMessage({ msg, chatId }) {
   );
 }
 
-function WbcAssistantMessage(props) {
+function WbcAssistantMessageBoundary(props) {
   var snapshot = props.liveRuntime ? null : snapshotStaticMessage(props.msg);
   // Date/zone can change even when a historical message does not. Keep the
   // same time-label refresh opportunities as an ordinary parent render.
@@ -1318,9 +1318,9 @@ function WbcAssistantMessage(props) {
     languageVersion={typeof i18n.getVersion === "function" ? i18n.getVersion() : i18n.getLang()}
     browserIcon={workbenchServices.browser().Icon} />;
 }
-var WbcMemoAssistantMessage = React.memo(WbcAssistantMessageBody, equalAssistantProps);
+var WbcMemoAssistantMessage = React.memo(WbcAssistantMessage, equalAssistantProps);
 
-function WbcAssistantMessageBody({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
+function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
   msg = msg || {};
   if (!liveRuntime && msg.timelineVersion === 1 && !msg.activityCard && msg.status === "running") {
     liveRuntime = { text: msg.content, artifacts: msg.attachments || [], streamDone: false };
@@ -1700,7 +1700,7 @@ function wbcUseBufferedLiveText(text, flush) {
 }
 
 function WbcLiveMessage({ runtime, onOpenFile }) {
-  return <WbcAssistantMessage msg={{ role: "assistant" }} liveRuntime={runtime} onOpenFile={onOpenFile} />;
+  return <WbcAssistantMessageBoundary msg={{ role: "assistant" }} liveRuntime={runtime} onOpenFile={onOpenFile} />;
 }
 
 function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion, onAnswer }) {
@@ -1713,7 +1713,7 @@ function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion,
     if (message.modelStatusCard) return <WbcThreadItem key={message.id}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
     return <WbcThreadItem key={message.id}>{message.role === "user"
       ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
-      : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} chatId={chatId} />}</WbcThreadItem>;
+      : <WbcAssistantMessageBoundary msg={message} onOpenFile={onOpenFile} chatId={chatId} />}</WbcThreadItem>;
   })}</React.Fragment>;
 }
 
@@ -1832,4 +1832,4 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-export { WbcTranscript, WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }
+export { WbcTranscript, WBC_DRAFT_SAVE_DELAY_MS, WBC_NATIVE_FIELD_SIZING, WbcActivityGroup, WbcAgentNotification, WbcAssistantMessageBoundary as WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcRuntimeTranscript, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey }

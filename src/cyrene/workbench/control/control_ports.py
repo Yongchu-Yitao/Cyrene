@@ -174,7 +174,7 @@ class WorkbenchChatApplicationPort:
         def read() -> bool:
             import sqlite3
             from contextlib import closing
-            from cyrene.workbench.application.inbox import _inbox_payload
+            from cyrene.workbench.application.inbox import inbox_payload
 
             with closing(sqlite3.connect(self.service.repository._database())) as db:
                 try:
@@ -187,7 +187,7 @@ class WorkbenchChatApplicationPort:
                     if "no such table" not in str(exc).lower():
                         raise
                     rows = []
-            if any(_inbox_payload(row[0]).get("agent_originated") is True for row in rows):
+            if any(inbox_payload(row[0]).get("agent_originated") is True for row in rows):
                 return True
             return self.run_manager.conversation_runtime.has_admitted_agent_message(chat_id, request_id)
         return await asyncio.to_thread(read)

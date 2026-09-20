@@ -36,9 +36,9 @@ class MessageStore:
             db.close()
 
     def accept(self, sender: str, recipient: str, content: str, title: str,
-               effect: str, recipient_created_at: str, *, file_event: dict | None = None) -> dict:
+               effect: str, recipient_created_at: str) -> dict:
         fingerprint = hashlib.sha256(json.dumps(
-            [sender, recipient, content, file_event] if file_event else [sender, recipient, content], ensure_ascii=False,
+            [sender, recipient, content], ensure_ascii=False,
         ).encode()).hexdigest()
         key = f"{sender}:{effect}" if effect else uuid4().hex
         with self.connect() as db:
@@ -63,8 +63,7 @@ class MessageStore:
                 raise ValueError("Session message rate limit reached; try again later.")
             message_id = "session_msg_" + uuid4().hex
             payload = json.dumps({"content": content, "title": title,
-                                  "recipient_created_at": recipient_created_at,
-                                  **({"file_event": file_event} if file_event else {})}, ensure_ascii=False)
+                                  "recipient_created_at": recipient_created_at}, ensure_ascii=False)
             db.execute("""INSERT INTO messages
                 (id,effect,fingerprint,sender,recipient,payload,created)
                 VALUES (?,?,?,?,?,?,?)""",

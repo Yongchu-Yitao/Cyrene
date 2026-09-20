@@ -63,7 +63,7 @@ def _chat_repository() -> ChatRepository:
     return ChatRepository(db_path)
 
 
-def _chat_application_port() -> Any:
+def chat_application_port() -> Any:
     """Return the Workbench Chat port published by route composition.
 
     Cyrene application Plugins must share the exact same run manager and
@@ -309,7 +309,7 @@ async def delete_project(project_id: str) -> dict[str, Any]:
 
     # Stop every execution owner before making either project or chat deletion
     # durable. A failed termination leaves the records intact and recoverable.
-    chat_port = _chat_application_port()
+    chat_port = chat_application_port()
     project_chat_id_set = set(removed_chat_ids)
     root_chat_ids = [
         str(item.get("id") or "")
@@ -424,7 +424,7 @@ async def compact_chat(chat_id: str) -> dict[str, Any]:
         ),
         completed_turn_count=max(0, int(chat.get("completedTurnCount") or 0)),
     )
-    if _chat_application_port().run_manager.get(chat_id) is not None:
+    if chat_application_port().run_manager.get(chat_id) is not None:
         raise ValueError(localized(
             "The conversation is currently running.",
             "对话当前正在运行。",
@@ -445,7 +445,7 @@ async def delete_chat(chat_id: str) -> dict[str, Any]:
         str(item.get("id") or "") for item in payload.get("chats", [])
         if str(item.get("kind") or "") == "side-agent" and str(item.get("parentChatId") or "") == chat_id
     ]}
-    await _chat_application_port().delete(chat_id)
+    await chat_application_port().delete(chat_id)
     return {"deletedChatIds": sorted(removed)}
 
 
@@ -637,7 +637,7 @@ async def dispatch_session_message(
             "An agent cannot dispatch a second run into its own active session.",
             "智能体不能向自身的活动会话再次分派运行。",
         ))
-    outcome = await _chat_application_port().dispatch_agent_message(
+    outcome = await chat_application_port().dispatch_agent_message(
         target_id,
         text,
         origin_session_id=origin_id,

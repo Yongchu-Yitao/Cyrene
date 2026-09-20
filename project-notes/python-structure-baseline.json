@@ -116,7 +116,7 @@
     "nesting": 7
   },
   "src/cyrene/core/context/tasks.py::project_tasks": {
-    "decisions": 52
+    "decisions": 54
   },
   "src/cyrene/core/hook/registry.py": {
     "module_lines": 1688
@@ -182,10 +182,10 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 4880
+    "module_lines": 4919
   },
   "src/cyrene/core/session.py::AgentSession": {
-    "methods": 122,
+    "methods": 123,
     "fields": 47
   },
   "src/cyrene/core/session.py::AgentSession.__init__": {
@@ -236,7 +236,7 @@
     "decisions": 39
   },
   "src/cyrene/core/session.py::AgentSession._restore_run_context": {
-    "decisions": 31
+    "decisions": 33
   },
   "src/cyrene/core/session.py::AgentSession._select_restore_leaf": {
     "decisions": 23
@@ -248,8 +248,8 @@
     "lines": 110
   },
   "src/cyrene/core/session.py::AgentSession.submit": {
-    "lines": 118,
-    "decisions": 21
+    "lines": 120,
+    "decisions": 23
   },
   "src/cyrene/core/session.py::_tool_call_correction_payload": {
     "decisions": 30
@@ -274,7 +274,7 @@
     "decisions": 26
   },
   "src/cyrene/model/error_details.py::classify_model_error": {
-    "decisions": 38
+    "decisions": 39
   },
   "src/cyrene/model/protocol_adapters.py": {
     "module_lines": 1460
@@ -963,6 +963,9 @@
     "lines": 111,
     "decisions": 23
   },
+  "src/cyrene/plugins/builtin/cyrene_guidance/service.py::GuidanceService.node_value": {
+    "decisions": 22
+  },
   "src/cyrene/plugins/builtin/cyrene_memory/application.py::MemoryApplication": {
     "methods": 47
   },
@@ -1002,7 +1005,7 @@
     "methods": 32
   },
   "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService._committed_learning_context": {
-    "decisions": 21
+    "decisions": 29
   },
   "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService._process_committed_turn": {
     "lines": 101,
@@ -1452,7 +1455,7 @@
     "decisions": 40
   },
   "src/cyrene/workbench/application/inbox.py": {
-    "module_lines": 1881
+    "module_lines": 1895
   },
   "src/cyrene/workbench/application/inbox.py::WorkbenchAgentInbox": {
     "methods": 45,
@@ -1514,6 +1517,9 @@
   "src/cyrene/workbench/chat/chat_external_turn_service.py::_ExternalEventProjector.publish": {
     "nesting": 10
   },
+  "src/cyrene/workbench/chat/chat_guidance_service.py::ChatGuidanceApplicationService.submit": {
+    "lines": 107
+  },
   "src/cyrene/workbench/chat/chat_groups.py": {
     "module_lines": 1226
   },
@@ -1539,17 +1545,17 @@
     "decisions": 21
   },
   "src/cyrene/workbench/chat/chat_runs.py": {
-    "module_lines": 1722
+    "module_lines": 1750
   },
   "src/cyrene/workbench/chat/chat_runs.py::ChatRun": {
-    "fields": 30
+    "fields": 31
   },
   "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager._drive": {
-    "lines": 162,
+    "lines": 174,
     "decisions": 33
   },
   "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager._reconcile_inbox_guidance_messages": {
-    "decisions": 24
+    "decisions": 28
   },
   "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager.startup": {
     "decisions": 26
@@ -1614,11 +1620,12 @@
     "decisions": 37
   },
   "src/cyrene/workbench/chat/run_timeline.py::RunTimeline.apply": {
-    "decisions": 52,
+    "lines": 125,
+    "decisions": 81,
     "nesting": 15
   },
   "src/cyrene/workbench/core_adapter/bridge.py": {
-    "module_lines": 1111
+    "module_lines": 1116
   },
   "src/cyrene/workbench/core_adapter/bridge.py::_turn_metrics": {
     "lines": 102,
@@ -1641,7 +1648,7 @@
     "nesting": 6
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.send.operate": {
-    "decisions": 22
+    "decisions": 24
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.fork_context": {
     "lines": 105
@@ -1696,7 +1703,7 @@
     "lines": 107
   },
   "src/cyrene/workbench/http/workbench/chat_routes/fork_routes.py::_build_fork_chat": {
-    "decisions": 28
+    "decisions": 29
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_action_routes.py::_prepare_action_send": {
     "decisions": 22
@@ -1705,7 +1712,7 @@
     "fields": 31
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
-    "module_lines": 1575
+    "module_lines": 1611
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
     "methods": 36,
@@ -1715,8 +1722,11 @@
     "lines": 116
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_chat": {
-    "lines": 101,
-    "decisions": 32
+    "lines": 106,
+    "decisions": 34
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._run_builtin": {
+    "lines": 112
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._select_model": {
     "decisions": 23
@@ -1724,11 +1734,14 @@
   "src/cyrene/workbench/http/workbench/chat_routes/run_stream_routes.py::register_run_stream_routes": {
     "lines": 128
   },
+  "src/cyrene/workbench/http/workbench/chat_routes/send_input.py::append_user_message": {
+    "decisions": 23
+  },
   "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository._chat_message_summary": {
     "decisions": 27
   },
   "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository.mutate_chat": {
-    "decisions": 26
+    "decisions": 27
   },
   "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository.write_chat_bundle": {
     "decisions": 52,
