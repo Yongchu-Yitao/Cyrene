@@ -18,6 +18,14 @@ ipcRenderer.on('ui-surface:request', async (_event, payload) => {
 
 contextBridge.exposeInMainWorld('cyrene', {
   platform: process.platform,
+  windowControls: {
+    invoke: (info) => ipcRenderer.invoke('main-window:controls', info),
+    onState: (callback) => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('main-window:state', listener);
+      return () => ipcRenderer.removeListener('main-window:state', listener);
+    },
+  },
   version: process.env.npm_package_version || '0.0.0',
   onMenuAction: function (callback) {
     if (typeof callback !== 'function') return function () {};

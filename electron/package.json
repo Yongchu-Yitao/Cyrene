@@ -185,6 +185,7 @@
       "backend/backend-port-waiters.js",
       "backend/backend-process.js",
       "desktop/main-window-lifecycle.js",
+      "desktop/main-window-controls.js",
       "shared/development-data-migration.js",
       "desktop/host-control.js",
       "browser/browser-input.js",

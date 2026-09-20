@@ -3889,6 +3889,8 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
 
   "browser.context.closeTab": "关闭标签页",
   "common.minimize": "最小化",
+  "common.maximizeWindow": "最大化",
+  "common.restoreWindow": "还原窗口",
   "rail.chat": "对话",
   "rail.knowledge": "知识库",
   "rail.memory": "记忆",

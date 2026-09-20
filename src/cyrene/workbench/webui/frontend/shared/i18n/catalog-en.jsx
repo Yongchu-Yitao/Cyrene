@@ -3881,6 +3881,8 @@ export const WORKBENCH_TRANSLATIONS_EN = {
 
     "browser.context.closeTab": "Close tab",
     "common.minimize": "Minimize",
+    "common.maximizeWindow": "Maximize",
+    "common.restoreWindow": "Restore window",
     "rail.chat": "Chats",
     "rail.knowledge": "Knowledge",
     "rail.memory": "Memory",

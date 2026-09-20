@@ -60,6 +60,7 @@ const { runTerminalLifecycleSoak } = require('./scripts/terminal-lifecycle-soak'
 const { BackendProcess } = require('./backend/backend-process');
 const { dispatchBrowserCommand } = require('./browser/browser-rpc');
 const { createSingleFlight, loadWindowUrl } = require('./desktop/main-window-lifecycle');
+const { mainWindowChromeOptions, installMainWindowControls, observeMainWindowControls } = require('./desktop/main-window-controls');
 const { RotatingFileLog } = require('./shared/rotating-log');
 const { migrateLegacyDevelopmentData } = require('./shared/development-data-migration');
 const { RemoteDesktopManager } = require('./remote-desktop/remote-desktop');
@@ -5854,10 +5855,10 @@ async function resolveMainWindowBackendPort() {
 function buildMainWindowOptions() {
   // Workbench draws its own top bar and reserves room for the traffic lights.
   // The inset title bar and traffic-light positioning remain macOS-specific.
-  // Windows and Linux keep their native frame so close/minimize/maximize
-  // controls remain available.
+  // Windows/Linux share the workbench row with right-aligned window controls.
   const useInsetTitleBar = isMac;
   const windowOptions = {
+    ...mainWindowChromeOptions(process.platform),
     width: 1200,
     height: 800,
     minWidth: 800,
@@ -5899,6 +5900,7 @@ async function createMainWindowOnce(isCurrent) {
 
   const win = new BrowserWindow(buildMainWindowOptions());
   mainWindow = win;
+  observeMainWindowControls(win, process.platform);
   installWindowDiagnostics(win, 'main');
 
   win.once('ready-to-show', () => {
@@ -6107,6 +6109,7 @@ if (!gotSingleInstanceLock) {
       Menu.setApplicationMenu(null);
     }
     ipcMain.handle('desktop-settings:get', () => getDesktopSettings());
+    installMainWindowControls({ ipcMain, getMainWindow: () => mainWindow, platform: process.platform });
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
     ipcMain.handle('agent-cursor:set-running', (event, info) => (
       updateAgentCursorRunningSource(event.sender, info && info.running === true)

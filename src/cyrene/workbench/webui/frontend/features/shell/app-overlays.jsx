@@ -1,4 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { WorkbenchWindowControls } from "./window-controls.jsx"
 import { wbSetBrowserOverlayObscured } from "../../shared/browser/overlays.jsx"
 import { WorkbenchEditProjectModal, WorkbenchProjectMemoryModal } from "./support.jsx"
 
@@ -94,6 +95,7 @@ function WorkbenchOnboardingShell({ onboarding, theme, actualTheme, onToggleThem
   return (
     <div className="workbench-shell wb-ob-shell" data-screen-label="Cyrene · onboarding">
       <div className="wb-ob-topbar">
+        <WorkbenchWindowControls t={t} />
         <div className="workbench-brand">
           <div className="workbench-traffic-space"></div>
           <span className="brand-mark" aria-hidden="true"></span>

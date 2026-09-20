@@ -1,4 +1,5 @@
 import { readTopbarPortalTheme, topbarCandidates } from "./topbar-presentation.jsx"
+import { WorkbenchWindowControls } from "./window-controls.jsx"
 import { useMobileTopbar } from "./mobile-topbar.jsx"
 import { ProjectActionPopover } from "./project-action-popover.jsx"
 import { useTopbarMenus } from "./topbar-menus.jsx"
@@ -1087,6 +1088,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
 
   return (
     <div ref={topbarRef} className="workbench-topbar">
+      <WorkbenchWindowControls t={t} />
       <div className="workbench-brand" ref={projectMenuRef}>
         <div className="workbench-traffic-space"></div>
         <button

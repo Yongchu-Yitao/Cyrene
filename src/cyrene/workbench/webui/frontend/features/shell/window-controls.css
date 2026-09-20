@@ -1,0 +1,47 @@
+/* Desktop-only: never change the macOS traffic-light gutter or web layout. */
+html[data-platform="win32"] .workbench-shell :is(.workbench-topbar, .wb-ob-topbar) {
+  padding-right: calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 144px)) + 8px);
+}
+html[data-platform="linux"] .workbench-shell :is(.workbench-topbar, .wb-ob-topbar) {
+  padding-right: 120px;
+}
+/* The old trailing inset was for the outer window edge. Window controls now
+   occupy that edge; keeping the inset would double the gap after the avatar. */
+@media (min-width: 768px) {
+  html:is([data-platform="win32"], [data-platform="linux"]) .workbench-top-actions {
+    padding-right: 0;
+  }
+}
+html:is([data-platform="win32"], [data-platform="linux"]) .wb-ob-topbar {
+  height: 58px;
+  box-sizing: border-box;
+  background: var(--wb-main-bg);
+  -webkit-app-region: drag;
+}
+html:is([data-platform="win32"], [data-platform="linux"]) .wb-ob-topbar button {
+  -webkit-app-region: no-drag;
+}
+.workbench-window-controls {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 120px;
+  display: flex;
+  align-items: stretch;
+  -webkit-app-region: no-drag;
+}
+.workbench-window-controls button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  flex: 0 0 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-text);
+  cursor: default;
+}
+.workbench-window-controls button:hover { background: var(--wb-control-hover-bg); }
+.workbench-window-controls button:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -3px; }
+.workbench-window-controls .workbench-window-close:hover { background: #c42b1c; color: white; }
+.workbench-window-controls svg { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.2; }
