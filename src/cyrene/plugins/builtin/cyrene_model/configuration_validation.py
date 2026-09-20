@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from cyrene.model.adapter_registry import require_adapter
 
-CONFIG_VERSION = 12
+CONFIG_VERSION = 13
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 

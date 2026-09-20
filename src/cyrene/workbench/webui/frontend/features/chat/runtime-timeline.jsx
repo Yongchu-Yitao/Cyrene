@@ -350,7 +350,12 @@ function wbcProjectRuntimeTranscript(messages, additions) {
     if (!liveActivityKeys.size) return true;
     return !wbcActivityDedupeKeys(message).some(function (key) { return liveActivityKeys.has(key); });
   });
-  return wbcMergeChronologicalMessages(durable, runtimeMessages);
+  // Run status is a trailing UI row, not a chronological transcript record.
+  // A later checkpoint/segment must never place it between activity cards.
+  var statusRows = runtimeMessages.filter(function (message) { return message.runtimeContinuation; });
+  return wbcMergeChronologicalMessages(durable, runtimeMessages.filter(function (message) {
+    return !message.runtimeContinuation;
+  })).concat(statusRows);
 }
 
 // One projection for all surfaces. Server identities survive hydration and save.
@@ -405,8 +410,11 @@ function wbcProjectTranscript(messages, runtime) {
     if (liveIds.has(message.id)) return false;
     return !wbcActivityDedupeKeys(message).some(function (key) { return liveActivityKeys.has(key); });
   }), records);
-  var busy = patch.messages.some(function (message) {
-    return message.status === "running" && (message.activityCard || String(message.content || "").length > 0);
+  // Use the reconciled records that are actually rendered, including a newer
+  // checkpoint. A visible live activity or streaming reply already signals
+  // progress; the continuation is only a fallback for an otherwise quiet run.
+  var busy = records.some(function (message) {
+    return message.status === "running" && (message.activityCard || String(message.content || "").trim().length > 0);
   });
   if (patch.status === "running" && !busy && !runtime.pendingQuestion && !runtime.reconnecting) {
     merged.push({ id: patch.runId + ":continuation", role: "assistant", runtimeContinuation: true });
@@ -468,25 +476,15 @@ function wbcRuntimeTimelineMessages(runtime, options) {
       notification: notice,
     });
   });
-  var hasRunningEntry = runtimeActivities.some(function (activity) {
-    return (Array.isArray(activity && activity.progress) ? activity.progress : []).some(function (entry) {
-      return String(entry && entry.status || "").trim().toLowerCase() === "running";
-    });
-  });
-  var latestActivity = runtimeActivities.length ? runtimeActivities[runtimeActivities.length - 1] : null;
-  var latestEntries = Array.isArray(latestActivity && latestActivity.progress) ? latestActivity.progress : [];
-  var hasLiveReply = !!String(runtime.text || "") || !!(runtime.artifacts && runtime.artifacts.length);
-  // A completed activity describes work that has already finished, so leave
-  // its card settled. If the runtime itself remains active, append a separate
-  // continuation row to cover the quiet gap before the next event or reply.
-  var needsContinuation = !runtime.finalizing
-    && !hasLiveReply
-    && !hasRunningEntry
-    && (
-      (runtimeActivities.length === 0 && !showReasoningPlaceholder)
-      || !!(latestActivity && latestEntries.length > 0)
-    );
-  if (needsContinuation) {
+  // Match the legacy renderer's liveness, rather than just tool completion:
+  // its latest activity can still show a spinner after a tool has finished.
+  var busy = items.some(function (message) {
+    return message.runtimeActivity && (message.runtimeActivityActive
+      || (message.runtimeActivity.progress || []).some(function (entry) {
+        return String(entry && entry.status || "").trim().toLowerCase() === "running";
+      }));
+  }) || !!runtime.text || !!(runtime.artifacts && runtime.artifacts.length);
+  if (!runtime.finalizing && !busy && !runtime.pendingQuestion && !runtime.reconnecting) {
     var continuationAt = items.reduce(function (latest, item) {
       var timestamp = Date.parse(String(item && item.createdAt || ""));
       return Number.isFinite(timestamp) ? Math.max(latest, timestamp) : latest;

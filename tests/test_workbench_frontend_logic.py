@@ -3383,7 +3383,7 @@ def test_workbench_finalizing_runtime_closes_live_tool_activity():
     }
 
 
-def test_workbench_active_runtime_adds_continuation_after_completed_activity():
+def test_workbench_run_indicator_does_not_duplicate_visible_activity_or_reply():
     result = _run_workbench_timeline_js(
         """
 (() => {
@@ -3421,7 +3421,7 @@ def test_workbench_active_runtime_adds_continuation_after_completed_activity():
     )
 
     assert result == {
-        "completed": True,
+        "completed": False,
         "running": False,
         "emptyActivity": False,
         "replying": False,
@@ -10482,12 +10482,12 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     assert "workbenchServices.markdown().splitStableBlocks(renderedText, streamingPartsRef.current)" in assistant_message
     assert "previousLiveVisibleTextLengthRef" in assistant_message
     assert 'String(bodyRef.current.textContent || "").length' in assistant_message
-    assert "wbcClearStreamingFades(activeBodyRef.current)" in assistant_message
-    assert "wbcFadeInStreamingTail(activeBodyRef.current, addedVisibleCharacterCount)" in assistant_message
+    assert "wbcClearStreamingFades(bodyRef.current)" in assistant_message
+    assert "wbcFadeInStreamingTail(bodyRef.current, addedVisibleCharacterCount, liveFadeStateRef.current)" in assistant_message
     assert 'fade.className = "wbc-stream-fade"' in chat
     assert ".wbc-stream-fade" in styles
-    assert "animation: wbc-stream-tail-in 180ms" in styles
-    assert "opacity: 0.72" in styles
+    assert "animation: wbc-stream-tail-in 520ms" in styles
+    assert "opacity: 0;" in styles
     assert ".wbc-msg-body.streaming::after" not in styles
     assert "@keyframes wbc-blink" not in styles
     assert "!live || !!liveRuntime.streamDone" in assistant_message

@@ -1421,7 +1421,7 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
     || reasoningStatus === "degraded";
   var runtimeTimeline = useWbcMemo(function () {
     return wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
-  }, [runtimeSegments, runtimeActivities, runtimeNotifications, runtimeStartedAt, runtimeFinalizing, runtimeHasReplyText, runtime && runtime.chatId, showReasoningPlaceholder]);
+  }, [runtimeSegments, runtimeActivities, runtimeNotifications, runtimeStartedAt, runtimeFinalizing, runtimeHasReplyText, runtime && runtime.chatId, runtime && runtime.pendingQuestion, runtime && runtime.reconnecting, showReasoningPlaceholder]);
   var retryClearingKey = Array.isArray(retryClearingMessageIds) ? retryClearingMessageIds.map(String).join("\u0000") : "";
   var retryClearingIds = useWbcMemo(function () {
     return new Set(retryClearingKey ? retryClearingKey.split("\u0000") : []);
@@ -1511,7 +1511,7 @@ function wbcRenderHistoryMessage(msg, context) {
   );
   if (msg.runtimeHeartbeat) return null;
   if (msg.runtimeContinuation) {
-    return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcContinuationIndicator /></WbcThreadItem>;
+    return <WbcContinuationIndicator key={renderKey} className={retryClearing ? "retry-clearing" : ""} />;
   }
   if (msg.modelStatusCard) {
     return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcModelStatusMessage msg={msg} /></WbcThreadItem>;
@@ -1734,7 +1734,12 @@ function wbcRenderConversationTimeline(renderedHistory, runtime, onOpenFile, cha
   if (!runtime || (!runtime.text && !(runtime.artifacts && runtime.artifacts.length))) {
     return renderedHistory;
   }
-  return renderedHistory.concat([
+  // Legacy replies are rendered outside the transcript projection. Insert
+  // them before its stable run-status row, keeping that same keyed element.
+  var last = renderedHistory[renderedHistory.length - 1];
+  var hasStatusRow = last && last.key === "runtime_continuation_" + String(runtime.chatId || "chat");
+  var history = hasStatusRow ? renderedHistory.slice(0, -1) : renderedHistory;
+  return history.concat([
     <WbcThreadItem key={String(runtime.replyRenderKey)}>
       <WbcAssistantMessage
         msg={{ role: "assistant" }}
@@ -1743,7 +1748,7 @@ function wbcRenderConversationTimeline(renderedHistory, runtime, onOpenFile, cha
         chatId={String(chatId || "")}
       />
     </WbcThreadItem>,
-  ]);
+  ], hasStatusRow ? [last] : []);
 }
 
 // Keep token-level state below the conversation shell. This fragment adds no

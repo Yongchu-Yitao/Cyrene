@@ -1185,16 +1185,27 @@ function WbcTraceCard({ trace, live, running, label, reasoning, disclosureId }) 
   );
 }
 
-function WbcContinuationIndicator() {
+function WbcContinuationIndicator({ className }) {
   useWorkbenchI18n();
+  var [visible, setVisible] = useWbcState(false);
+  useWbcEffect(function () {
+    // A short tool/reasoning handoff should never paint a transient row. The
+    // parent unmounts immediately when real activity resumes, cancelling this
+    // timer; there is deliberately no minimum hold that could show both.
+    var timer = window.setTimeout(function () { setVisible(true); }, 400);
+    return function () { window.clearTimeout(timer); };
+  }, []);
+  if (!visible) return null;
   return (
-    <WbcTraceCard
-      trace={[]}
-      live={true}
-      running={true}
-      label={wbcT("workbenchChat.continueProcessing", "Processing")}
-      reasoning=""
-    />
+    <WbcThreadItem className={className}>
+      <WbcTraceCard
+        trace={[]}
+        live={true}
+        running={true}
+        label={wbcT("workbenchChat.continueProcessing", "Processing")}
+        reasoning=""
+      />
+    </WbcThreadItem>
   );
 }
 
@@ -1331,18 +1342,19 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   var bodyRef = useWbcRef(null);
   var activeBodyRef = useWbcRef(null);
   var previousLiveVisibleTextLengthRef = useWbcRef(0);
+  var liveFadeStateRef = useWbcRef({ ranges: [] });
   useWbcLayoutEffect(function () {
     if (!live || !bodyRef.current) {
       previousLiveVisibleTextLengthRef.current = 0;
+      liveFadeStateRef.current.ranges = [];
       return;
     }
-    if (activeBodyRef.current) wbcClearStreamingFades(activeBodyRef.current);
+    wbcClearStreamingFades(bodyRef.current);
     var visibleTextLength = String(bodyRef.current.textContent || "").length;
     var previousLength = Number(previousLiveVisibleTextLengthRef.current || 0);
     previousLiveVisibleTextLengthRef.current = visibleTextLength;
     var addedVisibleCharacterCount = visibleTextLength - previousLength;
-    if (addedVisibleCharacterCount <= 0 || !activeBodyRef.current) return;
-    wbcFadeInStreamingTail(activeBodyRef.current, addedVisibleCharacterCount);
+    wbcFadeInStreamingTail(bodyRef.current, addedVisibleCharacterCount, liveFadeStateRef.current);
   }, [activeBodyHtml, live, renderedText.length]);
   useWbcEffect(function () {
     return WbcVoice.subscribe(setVoiceSnapshot);
@@ -1623,7 +1635,8 @@ function WbcActivityGroup({ group }) {
 // text at a bounded cadence, so fast providers cannot force React/layout work
 // for every token and slow providers remain responsive.
 var WBC_LIVE_FRAME_INTERVAL_MS = 48;
-var WBC_LIVE_FADE_MAX_CHARACTERS = 96;
+var WBC_LIVE_FADE_MAX_CHARACTERS = 2048;
+var WBC_LIVE_FADE_DURATION_MS = 520;
 
 function wbcClearStreamingFades(body) {
   if (!body || typeof document === "undefined") return;
@@ -1636,39 +1649,60 @@ function wbcClearStreamingFades(body) {
   });
 }
 
-function wbcFadeInStreamingTail(body, addedCharacterCount) {
+// Preserve each arriving batch's clock across Markdown DOM replacements.
+// Negative animation delays resume the same fade instead of restarting it.
+function wbcStreamingFadeRanges(ranges, length, addedCharacterCount, now) {
+  var earliest = Math.max(0, length - WBC_LIVE_FADE_MAX_CHARACTERS);
+  var pending = addedCharacterCount < 0 ? [] : (ranges || []).filter(function (range) {
+    return now - range.at < WBC_LIVE_FADE_DURATION_MS && range.end > earliest && range.end <= length;
+  });
+  if (addedCharacterCount > 0) pending.push({
+    start: Math.max(earliest, length - addedCharacterCount), end: length, at: now,
+  });
+  return pending;
+}
+
+function wbcFadeInStreamingTail(body, addedCharacterCount, state) {
   if (!body || typeof document === "undefined") return;
-  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  var budget = Math.min(
-    WBC_LIVE_FADE_MAX_CHARACTERS,
-    Math.max(1, Number(addedCharacterCount) || 0)
-  );
+  var current = state || { ranges: [] };
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    current.ranges = [];
+    return;
+  }
+  var now = performance.now();
+  var length = String(body.textContent || "").length;
+  current.ranges = wbcStreamingFadeRanges(current.ranges, length, addedCharacterCount, now);
+  if (!current.ranges.length) return;
+  var earliest = Math.max(0, length - WBC_LIVE_FADE_MAX_CHARACTERS, current.ranges[0].start);
   var walker = document.createTreeWalker(body, 4);
   var textNodes = [];
-  var collectedCharacters = 0;
+  var cursor = length;
   var node = walker.lastChild();
-  while (node && collectedCharacters < WBC_LIVE_FADE_MAX_CHARACTERS) {
-    var nodeText = String(node.nodeValue || "");
-    if (nodeText.trim()) {
-      textNodes.push(node);
-      collectedCharacters += nodeText.length;
-    }
+  // Include whitespace in offsets so inline markup and code retain their exact
+  // text. Collect before wrapping to avoid revisiting the inserted spans.
+  while (node && cursor > earliest) {
+    var value = String(node.nodeValue || "");
+    textNodes.push({ node: node, start: cursor - value.length, end: cursor });
+    cursor -= value.length;
     node = walker.previousNode();
   }
-  for (var index = 0; index < textNodes.length && budget > 0; index += 1) {
-    var textNode = textNodes[index];
-    var value = String(textNode.nodeValue || "");
-    var take = Math.min(value.length, budget);
-    var start = value.length - take;
-    var suffix = value.slice(start);
-    if (!suffix) continue;
-    var fade = document.createElement("span");
-    fade.className = "wbc-stream-fade";
-    fade.textContent = suffix;
-    textNode.nodeValue = value.slice(0, start);
-    textNode.parentNode.insertBefore(fade, textNode.nextSibling);
-    budget -= take;
-  }
+  textNodes.forEach(function (item) {
+    for (var index = current.ranges.length - 1; index >= 0; index -= 1) {
+      var range = current.ranges[index];
+      var start = Math.max(item.start, range.start, earliest);
+      var end = Math.min(item.end, range.end);
+      if (end <= start) continue;
+      var textNode = item.node;
+      var fragment = textNode.splitText(start - item.start);
+      fragment.splitText(end - start);
+      var fade = document.createElement("span");
+      fade.className = "wbc-stream-fade";
+      fade.style.animationDuration = WBC_LIVE_FADE_DURATION_MS + "ms";
+      fade.style.animationDelay = -Math.max(0, now - range.at) + "ms";
+      fragment.parentNode.insertBefore(fade, fragment);
+      fade.appendChild(fragment);
+    }
+  });
 }
 
 function wbcUseBufferedLiveText(text, flush) {
@@ -1725,7 +1759,7 @@ function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion,
   var timeline = wbcGroupConsecutiveActivityMessages(wbcProjectTranscript(messages || [], runtime), runtime);
   return <React.Fragment>{timeline.map(function (message) {
     if (message.questionPrompt && pendingQuestion && message.questionId === pendingQuestion.id) return <WbcThreadItem key={message.id}><WbcQuestionPrompt pending={pendingQuestion} onAnswer={onAnswer} busy={false} /></WbcThreadItem>;
-    if (message.runtimeContinuation) return <WbcThreadItem key={message.id}><WbcContinuationIndicator /></WbcThreadItem>;
+    if (message.runtimeContinuation) return <WbcContinuationIndicator key={message.id} />;
     if (message.activityGroup) return <WbcThreadItem key={message.id}><WbcActivityGroup group={message} /></WbcThreadItem>;
     if (message.notificationCard) return <WbcThreadItem key={message.id}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
     if (message.modelStatusCard) return <WbcThreadItem key={message.id}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
@@ -1751,9 +1785,7 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
         if (item.runtimeNotification) {
           return <WbcThreadItem key={item.id}><WbcAgentNotification notice={item.notification} /></WbcThreadItem>;
         }
-        if (item.runtimeContinuation) {
-          return <WbcThreadItem key={item.id}><WbcContinuationIndicator /></WbcThreadItem>;
-        }
+        if (item.runtimeContinuation) return null;
         if (item.activityGroup) {
           return <WbcThreadItem key={item.id}><WbcActivityGroup group={item} /></WbcThreadItem>;
         }
@@ -1767,6 +1799,9 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
       {(runtime.text || (runtime.artifacts && runtime.artifacts.length))
         ? <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>
         : null}
+      {timeline.filter(function (item) { return item.runtimeContinuation; }).map(function (item) {
+        return <WbcContinuationIndicator key={item.id} />;
+      })}
     </React.Fragment>
   );
 }

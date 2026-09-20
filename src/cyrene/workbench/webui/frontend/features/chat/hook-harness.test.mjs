@@ -39,7 +39,7 @@ export function harness(file, extras = {}) {
     ...extras,
   };
   dependencies.useWbcLayoutEffect ||= dependencies.useWbcEffect;
-  const context = {module:{exports:{}}, require: () => dependencies, window:eventTarget,
+  const context = {module:{exports:{}}, require: () => dependencies, window:eventTarget, React:extras.React,
     document:{...eventTarget, visibilityState:'visible'}, AbortController, localStorage:extras.localStorage};
   vm.runInNewContext(transformSync(readFileSync(new URL(file, import.meta.url),'utf8'),{loader:'jsx',format:'cjs'}).code,context);
   function flush() {

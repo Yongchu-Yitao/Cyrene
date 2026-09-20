@@ -311,7 +311,11 @@ process.stdout.write(JSON.stringify(states));
 """
     states = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
     activity_id = timeline.messages()[0]["id"]
-    assert states == [[activity_id], [activity_id, "guide"], [activity_id, "guide", "guided-wait:continuation"]]
+    assert states == [
+        [activity_id],
+        [activity_id, "guide"],
+        [activity_id, "guide", "guided-wait:continuation"],
+    ]
 
 
 @pytest.mark.parametrize("running_tool", [False, True])

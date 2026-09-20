@@ -606,6 +606,90 @@ def test_v12_upgrade_repairs_sparse_onboarding_provider_graph(
     )
 
 
+def test_v13_upgrade_adopts_legacy_deepseek_and_removes_v12_duplicate(
+    isolated_model_store,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import (
+        CONFIG_VERSION,
+        get_model_configuration,
+    )
+
+    isolated_model_store.set_setting("model_configuration", {
+        "version": 12,
+        "connections": [
+            {
+                "id": "connection-2",
+                "name": "My DeepSeek",
+                "adapter": "openai",
+                "enabled": True,
+                "use_proxy": True,
+                "base_url": "https://api.deepseek.com/v1/",
+                "api_key": "legacy-secret",
+                "options": {"custom": "preserved"},
+            },
+            {
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "adapter": "openai",
+                "enabled": True,
+                "use_proxy": False,
+                "base_url": "https://api.deepseek.com/v1",
+                "api_key": "",
+                "options": {"provider_preset": "deepseek"},
+            },
+        ],
+        "profiles": [
+            {
+                "id": "legacy-profile",
+                "connection_id": "connection-2",
+                "model": "deepseek-v4-flash",
+                "name": "DeepSeek V4 Flash",
+                "capabilities": ["chat"],
+            },
+            {
+                "id": "new-profile",
+                "connection_id": "deepseek",
+                "model": "deepseek-chat",
+                "name": "DeepSeek Chat",
+                "capabilities": ["chat"],
+            },
+        ],
+        "routes": {
+            "primary": ["legacy-profile"],
+            "secondary": ["new-profile"],
+            "vision": [],
+            "embedding": [],
+        },
+    })
+
+    migrated = get_model_configuration()
+
+    matching = [
+        connection
+        for connection in migrated["connections"]
+        if connection["base_url"] == "https://api.deepseek.com/v1"
+    ]
+    assert migrated["version"] == CONFIG_VERSION
+    assert [connection["id"] for connection in matching] == ["connection-2"]
+    assert matching[0]["name"] == "My DeepSeek"
+    assert matching[0]["api_key"] == "legacy-secret"
+    assert matching[0]["use_proxy"] is True
+    assert matching[0]["options"] == {
+        "custom": "preserved",
+        "provider_preset": "deepseek",
+    }
+    assert {
+        profile["id"]: profile["connection_id"]
+        for profile in migrated["profiles"]
+    } == {
+        "legacy-profile": "connection-2",
+        "new-profile": "connection-2",
+        "local_onnx:qwen3-embedding-0.6b": "local_onnx",
+    }
+    assert migrated["routes"]["primary"] == ["legacy-profile"]
+    assert migrated["routes"]["secondary"] == ["new-profile"]
+
+
 def test_default_provider_connections_include_managed_local_provider(
     isolated_model_store,
 ):

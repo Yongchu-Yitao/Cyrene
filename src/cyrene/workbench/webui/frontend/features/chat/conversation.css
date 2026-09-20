@@ -2298,12 +2298,12 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-stream-fade {
-  animation: wbc-stream-tail-in 180ms cubic-bezier(.2, .8, .2, 1) both;
+  animation: wbc-stream-tail-in 520ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 @keyframes wbc-stream-tail-in {
   from {
-    opacity: 0.72;
+    opacity: 0;
   }
   to {
     opacity: 1;
@@ -3146,6 +3146,25 @@ button.wbc-attach-file:focus-visible {
   gap: 7px;
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
   color: var(--wb-muted);
+}
+
+/* Fade newly mounted live cards, including the processing indicator,
+   and tool entries without moving the transcript. */
+.wbc-trace.live,
+.wbc-trace.live .wbc-trace-list > li:not(.wbc-thinking-detail) {
+  animation: wbc-tool-appear 520ms cubic-bezier(.22, .61, .36, 1) both;
+}
+
+@keyframes wbc-tool-appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-trace.live,
+  .wbc-trace.live .wbc-trace-list > li:not(.wbc-thinking-detail) {
+    animation: none;
+  }
 }
 
 .wbc-trace-mark {

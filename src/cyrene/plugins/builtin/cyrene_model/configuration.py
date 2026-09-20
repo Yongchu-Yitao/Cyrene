@@ -99,8 +99,110 @@ def _configuration_version(raw: dict[str, Any]) -> int:
     return 0
 
 
+def _connection_endpoint_identity(connection: Any) -> tuple[str, str]:
+    """Return the stable protocol/endpoint identity used by legacy connections."""
+
+    if not isinstance(connection, dict):
+        return "", ""
+    return (
+        str(connection.get("adapter") or "").strip().lower(),
+        str(connection.get("base_url") or "").strip().rstrip("/").lower(),
+    )
+
+
+def _is_pristine_seed_connection(
+    connection: Any,
+    seeded: dict[str, Any],
+) -> bool:
+    """Recognize only the untouched default that the v12 migration appended."""
+
+    if not isinstance(connection, dict):
+        return False
+    expected_options = seeded.get("options")
+    options = connection.get("options")
+    return (
+        str(connection.get("id") or "") == str(seeded.get("id") or "")
+        and str(connection.get("name") or "") == str(seeded.get("name") or "")
+        and _connection_endpoint_identity(connection)
+        == _connection_endpoint_identity(seeded)
+        and connection.get("enabled", True) == seeded.get("enabled", True)
+        and connection.get("use_proxy", False) == seeded.get("use_proxy", False)
+        and str(connection.get("api_key") or "") == ""
+        and options == expected_options
+    )
+
+
+def _adopt_legacy_provider_connections(
+    raw_connections: list[Any],
+    raw_profiles: list[Any],
+    seeded_connections: dict[str, dict[str, Any]],
+) -> None:
+    """Attach Provider metadata to unambiguous pre-Plugin connections.
+
+    Before model services became Plugins, connections had generated ids and no
+    ``provider_preset``.  Version 12 consequently preserved the old connection
+    and appended a second default for the same service.  Exact adapter/endpoint
+    matching lets the existing connection adopt the Plugin without guessing
+    from its user-editable display name.
+    """
+
+    for provider_id, seeded in seeded_connections.items():
+        endpoint = _connection_endpoint_identity(seeded)
+        if not all(endpoint):
+            continue
+        legacy_matches = [
+            connection
+            for connection in raw_connections
+            if isinstance(connection, dict)
+            and not str(
+                (
+                    connection.get("options")
+                    if isinstance(connection.get("options"), dict)
+                    else {}
+                ).get("provider_preset")
+                or ""
+            ).strip()
+            and _connection_endpoint_identity(connection) == endpoint
+        ]
+        if len(legacy_matches) != 1:
+            continue
+
+        legacy = legacy_matches[0]
+        legacy_id = str(legacy.get("id") or "").strip()
+        if not legacy_id:
+            continue
+        options = legacy.get("options")
+        legacy["options"] = {
+            **(deepcopy(options) if isinstance(options, dict) else {}),
+            "provider_preset": provider_id,
+        }
+
+        duplicate_ids = {
+            str(connection.get("id") or "").strip()
+            for connection in raw_connections
+            if connection is not legacy
+            and _is_pristine_seed_connection(connection, seeded)
+        }
+        duplicate_ids.discard("")
+        if not duplicate_ids:
+            continue
+        raw_connections[:] = [
+            connection
+            for connection in raw_connections
+            if not isinstance(connection, dict)
+            or str(connection.get("id") or "").strip() not in duplicate_ids
+            or connection is legacy
+        ]
+        for profile in raw_profiles:
+            if (
+                isinstance(profile, dict)
+                and str(profile.get("connection_id") or "") in duplicate_ids
+            ):
+                profile["connection_id"] = legacy_id
+
+
 def _migrate_plugin_seed_connections(raw: dict[str, Any]) -> dict[str, Any]:
-    """Restore built-in providers omitted by pre-v12 configuration graphs.
+    """Restore or adopt built-in providers in pre-v13 configuration graphs.
 
     Version 10 made the persisted connection graph authoritative, but did not
     reconcile an existing empty or partial graph with the newly plugin-owned
@@ -109,10 +211,14 @@ def _migrate_plugin_seed_connections(raw: dict[str, Any]) -> dict[str, Any]:
     consequently exposed exactly those two services even though every built-in
     provider Plugin was loaded.
 
-    Repair the graph once during the v12 upgrade.  Existing connections remain
+    Version 13 additionally adopts an exact legacy endpoint instead of adding
+    another Provider connection, and retires the untouched duplicate that v12
+    may already have appended.
+
+    Repair the graph once during the upgrade.  Existing connections remain
     authoritative for their represented provider, so onboarding credentials,
     custom ids, profiles, and routes are preserved.  Once the migrated graph is
-    saved at v12, later user deletions remain intentional and are not revived.
+    saved at v13, later user deletions remain intentional and are not revived.
     """
 
     migrated = deepcopy(raw)
@@ -132,6 +238,11 @@ def _migrate_plugin_seed_connections(raw: dict[str, Any]) -> dict[str, Any]:
         for connection in seeded["connections"]
         if isinstance(connection, dict)
     }
+    _adopt_legacy_provider_connections(
+        raw_connections,
+        raw_profiles,
+        seeded_connections,
+    )
     represented: set[str] = set()
     used_connection_ids: set[str] = set()
     for connection in raw_connections:
