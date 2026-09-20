@@ -1,0 +1,7 @@
+{
+  "timeline_events": 6000,
+  "terminal_cases": 600,
+  "terminal_chunks_and_restore_checks": 6923,
+  "task_projection_cases": 300,
+  "equal": true
+}

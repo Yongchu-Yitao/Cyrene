@@ -301,6 +301,11 @@ class _SendOperation:
                 language=self.options.lang,
             )
         self.base_chat = copy.deepcopy(self.chat)
+        if self.origin.agent_originated and self.chat.get("pendingQuestion"):
+            return localized_error_response(
+                "The target is waiting for the user.", "目标正在等待用户回答。",
+                409, "chat_awaiting_user", language=self.options.lang,
+            )
         from cyrene.agents.builtin import normalize_agent_binding
 
         binding = normalize_agent_binding(self.chat.get("agent") if isinstance(self.chat.get("agent"), dict) else None)
@@ -570,6 +575,12 @@ class _SendOperation:
                 "nothing_to_retry", language=self.options.lang,
             )
         user_entry = messages[last_user_index]
+        if user_entry.get("agentOriginated"):
+            return None, localized_error_response(
+                "Send a new user instruction instead of retrying an Agent message.",
+                "请发送新的用户指令，不要把 Agent 消息重试为用户输入。",
+                409, "agent_message_retry_forbidden", language=self.options.lang,
+            )
         truncate_after_id = str(user_entry.get("id") or "")
         replaced_ids = {str(item.get("id") or "") for item in messages[last_user_index + 1 :]
                                  if isinstance(item, dict) and str(item.get("id") or "")}
@@ -749,9 +760,9 @@ class _SendOperation:
             project_id=self.project_id,
             project_memory_snapshot=memory_snapshot,
             session_title=str(self.chat.get("title") or ""),
-            memory_write_enabled=not self.is_side_agent,
-            memory_trigger_enabled=not self.is_side_agent,
-            memory_archive_enabled=True,
+            memory_write_enabled=not self.is_side_agent and not self.origin.agent_originated,
+            memory_trigger_enabled=not self.is_side_agent and not self.origin.agent_originated,
+            memory_archive_enabled=not self.origin.agent_originated,
             memory_short_term_enabled=self.service.chat_short_term_memory_active(
                 self.chat
             ),
@@ -823,6 +834,8 @@ class _SendOperation:
             run_id=run.run_id,
             metadata={
                 "client_request_id": self.origin.client_request_id,
+                "agent_originated": self.origin.agent_originated,
+                "origin_session_id": self.origin.origin_session_id,
                 "public_user_message": self.turn.input.public_message,
                 "public_attachments": [dict(item) for item in self.turn.input.public_attachments],
                 "command": self.turn.input.command,
@@ -989,7 +1002,9 @@ class _SendOperation:
                 else str(getattr(result, "text", "") or "")
             ),
             completed_turn_count=int(chat.get("completedTurnCount") or 0),
-            metadata={"command": self.turn.input.command},
+            metadata={"command": self.turn.input.command,
+                      "agent_originated": self.origin.agent_originated,
+                      "origin_session_id": self.origin.origin_session_id},
         ).as_event()
 
     def _builtin_result_payload(
@@ -1227,11 +1242,16 @@ class _SendOperation:
             run.run_id,
         )
         await run.mark_timing("snapshot_complete")
-        try:
-            result = await self._run_turn(run)
+        result = None
+        workspace_finalized = False
+
+        async def execute() -> None:
+            nonlocal result, workspace_finalized
+            if result is None:
+                result = await self._run_turn(run)
             run.status = "finishing"
             awaiting = str(getattr(result, "status", "")) == "awaiting_user"
-            if awaiting:
+            if awaiting and not workspace_finalized:
                 await self.service.finalize_workspace_changes(
                     chat_id=self.chat_id,
                     run_id=str(getattr(result, "run_id", "") or run.run_id),
@@ -1240,7 +1260,7 @@ class _SendOperation:
                     status="awaiting_user",
                     run=run,
                 )
-            else:
+            elif not workspace_finalized:
                 self.controller._schedule_workspace_finalize(
                     chat_id=self.chat_id,
                     run_id=str(getattr(result, "run_id", "") or run.run_id),
@@ -1248,6 +1268,7 @@ class _SendOperation:
                     before=before,
                     status="completed",
                 )
+            workspace_finalized = True
             if not awaiting:
                 await run.publish({"type": "run_finalizing", "chatId": self.chat_id})
             terminal_timeline = run.terminal_timeline_messages(
@@ -1270,6 +1291,21 @@ class _SendOperation:
                 result,
                 payload,
                 awaiting=awaiting,
+            )
+
+        from cyrene.core.retry import retry_runtime_operation
+
+        async def retrying(attempt: int) -> None:
+            run.status = "running"
+            await run.publish({"type": "runtime_retry", "attempt": attempt,
+                               "limit": 3, "code": "agent_run_failed"})
+
+        try:
+            await retry_runtime_operation(
+                execute,
+                should_retry=lambda: str((run.outcome or {}).get("kind") or "")
+                    not in {"reply", "awaiting"},
+                on_retry=retrying,
             )
         except asyncio.CancelledError:
             await self.service.finalize_workspace_changes(

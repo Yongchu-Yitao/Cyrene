@@ -1,0 +1,68 @@
+{
+  "node": "v24.13.1",
+  "samples": 100,
+  "warmups": 20,
+  "scope": "synthetic pure functions, no browser/DOM",
+  "results": [
+    {
+      "records_per_array": 10,
+      "apply_one_delta": {
+        "p50_ms": 0.0022039999999989845,
+        "p95_ms": 0.004398999999999376
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 0.008676999999998714,
+        "p95_ms": 0.01367599999999669
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 0.05443499999999801,
+        "p95_ms": 0.09031399999999934
+      }
+    },
+    {
+      "records_per_array": 100,
+      "apply_one_delta": {
+        "p50_ms": 0.00727399999999534,
+        "p95_ms": 0.012453999999998189
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 0.05176999999999765,
+        "p95_ms": 0.07517499999999444
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 4.5204180000000065,
+        "p95_ms": 4.614489999999989
+      }
+    },
+    {
+      "records_per_array": 1000,
+      "apply_one_delta": {
+        "p50_ms": 0.05891299999996136,
+        "p95_ms": 0.09421099999997296
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 0.4897030000000768,
+        "p95_ms": 0.5399889999999914
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 448.73432700000194,
+        "p95_ms": 462.49725500000204
+      }
+    },
+    {
+      "records_per_array": 5000,
+      "apply_one_delta": {
+        "p50_ms": 0.371062999998685,
+        "p95_ms": 0.39797600000019884
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 2.6037579999974696,
+        "p95_ms": 3.100783000001684
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 11212.918216000078,
+        "p95_ms": 11454.059623999987
+      }
+    }
+  ]
+}

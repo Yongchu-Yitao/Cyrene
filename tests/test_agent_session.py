@@ -194,8 +194,8 @@ def test_invalid_model_response_retries_same_node_through_context_hook(tmp_path)
         for projected in workbench_events(observed):
             timeline.apply(projected)
     replies = [record for record in timeline.messages() if record.get("content")]
-    assert [record["content"] for record in replies] == ["partial", "recovered"]
-    assert replies[0]["id"] != replies[1]["id"]
+    assert [record["content"] for record in replies] == ["recovered"]
+    assert len(timeline.removed_message_ids) == 1
     session.close()
 
 
@@ -203,6 +203,7 @@ def test_invalid_model_response_retries_same_node_through_context_hook(tmp_path)
     ("invalid JSON response", "model_response_invalid"),
     ("model output truncated", "model_output_truncated"),
     ("incomplete-stream", "model_response_incomplete"),
+    ("server-error-stream", "model_service_unavailable"),
 ])
 def test_invalid_model_response_retry_is_bounded(tmp_path, error_text, code):
     model_calls = 0
@@ -212,6 +213,8 @@ def test_invalid_model_response_retry_is_bounded(tmp_path, error_text, code):
         model_calls += 1
         from cyrene.model.protocol_adapters import ModelStreamError
         error = ModelStreamError("upstream_incomplete", "EOF", {}) if error_text == "incomplete-stream" else error_text
+        if error_text == "server-error-stream":
+            error = ModelStreamError("provider_failed", "internal error", {"provider_error_code": "server_error"})
         raise ModelCallError(classify_model_error(error))
 
     registry = PluginRegistry()

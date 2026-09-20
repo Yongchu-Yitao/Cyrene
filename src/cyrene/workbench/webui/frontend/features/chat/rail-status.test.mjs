@@ -1,20 +1,13 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import vm from 'node:vm'
+import { wbcChatRailVisualState } from './rail-status.mjs'
 
-const rail = readFileSync(new URL('./rail.jsx', import.meta.url), 'utf8');
-const model = readFileSync(new URL('./rail-model.jsx', import.meta.url), 'utf8');
 const context = {
   runningChatIds: {},
   WBC_ICONS: { running: 'running', alert: 'alert', errorCircle: 'error', check: 'check', file: 'file' },
   wbcT: (_key, fallback) => fallback,
 };
-vm.createContext(context);
-vm.runInContext(
-  model.slice(model.indexOf('function wbcConversationTrackRawStatus('), model.indexOf('function wbcConversationTrackIsCompleted('))
-  + rail.slice(rail.indexOf('  function chatRailVisualState('), rail.indexOf('  function prepareRailDragImage(')), context);
-const state = chat => context.chatRailVisualState(chat);
+const state = chat => wbcChatRailVisualState(chat, Boolean(context.runningChatIds[chat.id]) || ['running', 'resumed', 'planning', 'initializing', 'finishing'].includes(chat.runStatus), context.WBC_ICONS, context.wbcT);
 
 test('new work replaces the waiting icon and color even before the summary refreshes', () => {
   const chat = { id: 'chat', runStatus: 'awaiting_user', awaitingUser: true, pendingQuestion: { id: 'approval' } };

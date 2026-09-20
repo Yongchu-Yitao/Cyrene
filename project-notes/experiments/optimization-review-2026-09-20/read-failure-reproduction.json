@@ -1,0 +1,32 @@
+{
+  "baseline": {
+    "during_transient_failure": {
+      "events": []
+    },
+    "after_recovery": {
+      "events": [
+        {
+          "id": "existing",
+          "timestamp": "2026",
+          "caller": "",
+          "phase": "",
+          "model": "",
+          "duration_ms": null,
+          "total_tokens_est": 0,
+          "block_count": 0,
+          "message_count": 0,
+          "token_by_type": {},
+          "source_log": "debug_archived.jsonl"
+        }
+      ]
+    }
+  },
+  "candidate": {
+    "during_transient_failure": {
+      "events": []
+    },
+    "after_recovery": {
+      "events": []
+    }
+  }
+}

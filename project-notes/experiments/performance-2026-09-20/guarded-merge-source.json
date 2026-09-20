@@ -1,0 +1,5 @@
+{
+  "source_sha256": "ba91480549223a4cfc5368893eee5127db8e55a78764951ad466bf12a9c992bb",
+  "candidate_sha256": "4244d3b91180570d9c2737154dabb0439e92756ff4b545472cdbc4914be04495",
+  "note": "Unapplied candidate generated from dirty working tree; includes existing removedMessageIds behavior."
+}

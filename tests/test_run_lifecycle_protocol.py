@@ -310,7 +310,7 @@ def test_unserializable_result_retains_execution_outcome_without_poisoning_batch
     json.dumps(result.value)
 
 
-def test_partial_context_write_failure_cannot_be_reopened_by_queued_delivery(tmp_path, monkeypatch):
+def test_partial_context_write_failure_recovers_without_duplicate_model_call(tmp_path, monkeypatch):
     requests = []
     async def model(arguments, context):
         requests.append(arguments)
@@ -332,9 +332,10 @@ def test_partial_context_write_failure_cannot_be_reopened_by_queued_delivery(tmp
     try:
         session.submit("work", run_id="run")
         drain(session)
-        assert not requests
-        assert session.final_output("run")["error"] is True
-        assert len(attempts) == 1
+        assert len(requests) == 1
+        assert "required policy" in str(requests[0])
+        assert not session.final_output("run").get("error")
+        assert len(attempts) >= 2
     finally:
         session.close()
 
@@ -405,16 +406,16 @@ async def test_retry_replaces_interrupted_checkpoint_without_resuming_old_work(t
     assert checkpoint()["status"] == "running"
     try:
         if interrupt_retry:
-            with pytest.raises(RuntimeError, match="crash before retry submit"):
-                await runtime.send(config, "hello", run_id="interrupted-retry", publish=lambda _: None)
-            assert checkpoint()["status"] == "cancelled"
-            assert not calls
+            result = await runtime.send(config, "hello", run_id="interrupted-retry", publish=lambda _: None)
+            assert result.text == "retried answer"
+            assert checkpoint()["status"] == "completed"
+            assert calls == ["interrupted-retry"]
         for run_id in ("retry-1", "retry-2"):
             result = await asyncio.wait_for(runtime.send(config, "hello", run_id=run_id, publish=lambda _: None), 5)
             assert result.text == "retried answer"
             assert checkpoint()["status"] == "completed"
             assert checkpoint()["run_id"] == run_id
-        assert calls == ["retry-1", "retry-2"]
+        assert calls == (["interrupted-retry"] if interrupt_retry else []) + ["retry-1", "retry-2"]
         assert not effects
         store = ContextStoreRouter(tmp_path / "data" / "context")
         try:
@@ -423,7 +424,7 @@ async def test_retry_replaces_interrupted_checkpoint_without_resuming_old_work(t
                        for value in values)
             retries = [value for value in values if value.get("role") == "user" and value.get("run_id") == "retry-1"]
             assert len(retries) == 1
-            assert retries[0]["metadata"]["retry_of_run_id"] == "old"
+            assert retries[0]["metadata"]["retry_of_run_id"] == ("interrupted-retry" if interrupt_retry else "old")
         finally:
             store.close()
     finally:

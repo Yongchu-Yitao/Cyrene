@@ -523,12 +523,24 @@ class WorkbenchSessionPresentation:
         )
 
     def clear(self, chat_id: str) -> tuple[dict[str, Any], int]:
+        from .admission import session_admission
+        with session_admission(self.db_path, chat_id):
+            self._ensure_no_live_run(chat_id)
+            return self._clear(chat_id)
+
+    def _ensure_no_live_run(self, chat_id: str) -> None:
+        from cyrene.platform.run_coordinator import run_coordinator_for
+        if run_coordinator_for(self.db_path).get("conversation", str(chat_id)) is not None:
+            raise WorkbenchSessionError("Cancel the running conversation first.", 409, "conversation_running")
+
+    def _clear(self, chat_id: str) -> tuple[dict[str, Any], int]:
         chat, state = self.get(chat_id)
         self._ensure_mutable(chat, state)
         deleted_archives = self._delete_memory_archive(chat)
         self._delete_context_tree(str(chat_id))
 
         def clear_record(record: dict[str, Any]) -> None:
+            record["messageGeneration"] = int(record.get("messageGeneration") or 0) + 1
             record["messages"] = []
             record["status"] = "idle"
             record["completedTurnCount"] = 0
@@ -565,6 +577,12 @@ class WorkbenchSessionPresentation:
         )
 
     def delete(self, chat_id: str) -> int:
+        from .admission import session_admission
+        with session_admission(self.db_path, chat_id):
+            self._ensure_no_live_run(chat_id)
+            return self._delete(chat_id)
+
+    def _delete(self, chat_id: str) -> int:
         chat, state = self.get(chat_id)
         self._ensure_mutable(chat, state)
         deleted_archives = self._delete_memory_archive(chat)

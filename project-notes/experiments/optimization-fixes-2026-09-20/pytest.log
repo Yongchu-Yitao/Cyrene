@@ -1,0 +1,154 @@
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+............F...F....................................................... [  8%]
+........................................................................ [ 11%]
+........................................................................ [ 13%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+.........s..........s................................................... [ 26%]
+........................................................................ [ 29%]
+........................................................................ [ 31%]
+........................................................................ [ 33%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+........................................................................ [ 49%]
+................................................................F....... [ 51%]
+........................................................................ [ 53%]
+........................................................................ [ 55%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 62%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+.............................s.......................................... [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 73%]
+........................................................................ [ 75%]
+.........................................................ss............. [ 78%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+..............................................................F......... [ 91%]
+F....................................................................... [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 98%]
+..........................................................               [100%]
+=================================== FAILURES ===================================
+_____________ test_private_cross_package_imports_can_only_decrease _____________
+
+    def test_private_cross_package_imports_can_only_decrease() -> None:
+        baseline = json.loads(COMPLEXITY_BASELINE.read_text(encoding="utf-8"))
+        allowed = set(baseline["private_cross_package_imports"])
+    
+>       assert _private_cross_package_imports() <= allowed
+E       AssertionError: assert {'src/cyrene/...ication_port'} <= {'src/cyrene/...nai_response'}
+E         
+E         Extra items in the left set:
+E         'src/cyrene/plugins/builtin/cyrene_sessions/__init__.py::cyrene.workbench.application.app_services::_chat_application_port'
+E         'src/cyrene/plugins/builtin/cyrene_sandbox/process.py::cyrene.core.plugin.core_impl.bash::_kill_process_tree'
+
+tests/test_architecture_boundaries.py:298: AssertionError
+__________ test_private_domain_and_sibling_plugin_imports_cannot_grow __________
+
+    def test_private_domain_and_sibling_plugin_imports_cannot_grow() -> None:
+        import runpy
+        collect = runpy.run_path(str(REPOSITORY_ROOT / "build/dependency_boundaries.py"))["collect"]
+    
+        baseline = json.loads((REPOSITORY_ROOT / "project-notes/domain-import-baseline.json").read_text())
+>       assert not (collect() - set(baseline))
+E       AssertionError: assert not ({'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} - {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...})
+E        +  where {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} = <function collect at 0x7afad1dedd00>()
+E        +  and   {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} = set(['src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...])
+
+tests/test_architecture_boundaries.py:449: AssertionError
+_______ test_builtin_catalog_explicitly_covers_every_plugin_description ________
+
+    def test_builtin_catalog_explicitly_covers_every_plugin_description() -> None:
+        catalog = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+        registry = PluginRegistry()
+        assert registry.load_directory(_CATALOG_PATH.parent) == ()
+        ensure_model_router(registry)
+    
+        # Keep historical/compatibility translations in the catalog even after a
+        # Plugin is removed; the currently registered identities must nevertheless
+        # all have explicit entries.
+>       assert {pack.id for pack in registry.list_packs()} <= set(catalog["packs"])
+E       AssertionError: assert {'core', 'cyr...ne_code', ...} <= {'core', 'cyr...ne_code', ...}
+E         
+E         Extra items in the left set:
+E         'cyrene_sandbox'
+
+tests/test_plugin_i18n.py:259: AssertionError
+___________ test_desktop_uses_cross_platform_native_directory_picker ___________
+
+    def test_desktop_uses_cross_platform_native_directory_picker():
+        root = Path(__file__).resolve().parent.parent
+        main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+        preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+        create = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
+        chat = workbench_chat_source()
+    
+        assert "const isLinux = process.platform === 'linux';" in main
+        assert "const useInsetTitleBar = isMac;" in main
+        assert "ipcMain.handle('dialog:pick-directory'" in main
+        assert "properties: ['openDirectory', 'createDirectory']" in main
+        picker_handler = main.split("ipcMain.handle('dialog:pick-directory'", 1)[1].split(
+            "ipcMain.handle('dialog:pick-extension-path'", 1
+        )[0]
+        assert "isLinux" not in picker_handler
+        assert "directoryPickerUnsupported" not in main
+        assert "process.platform !== 'linux'" not in preload
+        assert "ipcRenderer.invoke('dialog:pick-directory')" in preload
+        assert 'window.cyrene && typeof window.cyrene.pickDirectory === "function"' in create
+        assert "await window.cyrene.pickDirectory()" in create
+        assert 'fetch("/api/context/pick-directory", { method: "POST" })' in create
+>       assert 'window.cyrene.platform === "linux"' not in chat
+E       assert 'window.cyre... === "linux"' not in '// Stable c...tService }\n'
+E         
+E         'window.cyrene.platform === "linux"' is contained here:
+E           cyrene && window.cyrene.platform === "linux";
+E             var [context, setContext] = useWbcState(null);
+E             var [loadError, setLoadError] = useWbcState("");
+E             var [subagents, setSubagents] = useWbcState(null);
+E             var [subagentsLoading, setSubagentsLoading] = useWbcState(false);...
+E         
+E         ...Full output truncated (631 lines hidden), use '-vv' to show
+
+tests/test_workbench_frontend_logic.py:8667: AssertionError
+___ test_workbench_chat_directory_picker_supports_desktop_and_browser_modes ____
+
+    def test_workbench_chat_directory_picker_supports_desktop_and_browser_modes():
+        chat = workbench_chat_source()
+        i18n = workbench_i18n_source()
+    
+>       assert 'window.cyrene.platform === "linux"' not in chat
+E       assert 'window.cyre... === "linux"' not in '// Stable c...tService }\n'
+E         
+E         'window.cyrene.platform === "linux"' is contained here:
+E           cyrene && window.cyrene.platform === "linux";
+E             var [context, setContext] = useWbcState(null);
+E             var [loadError, setLoadError] = useWbcState("");
+E             var [subagents, setSubagents] = useWbcState(null);
+E             var [subagentsLoading, setSubagentsLoading] = useWbcState(false);...
+E         
+E         ...Full output truncated (631 lines hidden), use '-vv' to show
+
+tests/test_workbench_frontend_logic.py:8951: AssertionError
+- generated xml file: /home/shaoyw1810/桌面/playground/Cyrene/project-notes/experiments/optimization-fixes-2026-09-20/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/test_architecture_boundaries.py::test_private_cross_package_imports_can_only_decrease
+FAILED tests/test_architecture_boundaries.py::test_private_domain_and_sibling_plugin_imports_cannot_grow
+FAILED tests/test_plugin_i18n.py::test_builtin_catalog_explicitly_covers_every_plugin_description
+FAILED tests/test_workbench_frontend_logic.py::test_desktop_uses_cross_platform_native_directory_picker
+FAILED tests/test_workbench_frontend_logic.py::test_workbench_chat_directory_picker_supports_desktop_and_browser_modes
+5 failed, 3216 passed, 5 skipped in 112.02s (0:01:52)

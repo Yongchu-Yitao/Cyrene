@@ -1,5 +1,6 @@
 """Thin runtime event and context-debug HTTP adapters."""
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Request
@@ -54,7 +55,7 @@ def register_event_routes(
             limit = int(request.query_params.get("limit") or "120")
         except ValueError:
             limit = 120
-        return repository.context_events(max(1, min(limit, 500)))
+        return await asyncio.to_thread(repository.context_events, max(1, min(limit, 500)))
 
     @router.get("/api/context-debug/events/{event_id}")
     async def api_context_debug_event_detail(event_id: str):

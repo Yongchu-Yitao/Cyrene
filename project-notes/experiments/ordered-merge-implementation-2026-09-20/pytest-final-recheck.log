@@ -1,0 +1,32 @@
+........F...F..................                                          [100%]
+=================================== FAILURES ===================================
+_____________ test_private_cross_package_imports_can_only_decrease _____________
+
+    def test_private_cross_package_imports_can_only_decrease() -> None:
+        baseline = json.loads(COMPLEXITY_BASELINE.read_text(encoding="utf-8"))
+        allowed = set(baseline["private_cross_package_imports"])
+    
+>       assert _private_cross_package_imports() <= allowed
+E       AssertionError: assert {'src/cyrene/...ication_port'} <= {'src/cyrene/...nai_response'}
+E         
+E         Extra items in the left set:
+E         'src/cyrene/plugins/builtin/cyrene_sessions/__init__.py::cyrene.workbench.application.app_services::_chat_application_port'
+
+tests/test_architecture_boundaries.py:298: AssertionError
+__________ test_private_domain_and_sibling_plugin_imports_cannot_grow __________
+
+    def test_private_domain_and_sibling_plugin_imports_cannot_grow() -> None:
+        import runpy
+        collect = runpy.run_path(str(REPOSITORY_ROOT / "build/dependency_boundaries.py"))["collect"]
+    
+        baseline = json.loads((REPOSITORY_ROOT / "project-notes/domain-import-baseline.json").read_text())
+>       assert not (collect() - set(baseline))
+E       AssertionError: assert not ({'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} - {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...})
+E        +  where {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} = <function collect at 0x79ddbef66d40>()
+E        +  and   {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} = set(['src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...])
+
+tests/test_architecture_boundaries.py:449: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_architecture_boundaries.py::test_private_cross_package_imports_can_only_decrease
+FAILED tests/test_architecture_boundaries.py::test_private_domain_and_sibling_plugin_imports_cannot_grow
+2 failed, 29 passed in 7.93s

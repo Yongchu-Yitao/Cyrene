@@ -159,7 +159,7 @@ def test_subagent_pack_follows_toolbox_list_describe_invoke(tmp_path, monkeypatc
         manager = StubSubagentManager()
         context = PluginContext(
             workspace=tmp_path,
-            data={"agent_id": "main"},
+            data={"agent_id": "main", "language": "en"},
             services={"subagents": manager},
         )
 

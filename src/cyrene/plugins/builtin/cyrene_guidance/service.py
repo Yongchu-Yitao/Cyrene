@@ -66,13 +66,23 @@ class GuidanceService:
         texts = [str(payload.get("text") or "").strip() for payload in payloads]
         texts = [text for text in texts if text]
         raw_text = "\n\n".join(texts)
-        content = localized(
-            "[Runtime guidance]\nThe user sent this while the current task was "
-            "running. Treat the latest guidance as authoritative for all work "
-            "not already completed.\n\n{guidance}",
-            "[运行中引导]\n用户在当前任务运行期间发送了以下要求。对于尚未完成的工作，"
-            "应以最新引导为准。\n\n{guidance}",
-            guidance=raw_text,
+
+        def user_guidance(text: str) -> str:
+            return localized(
+                "[Runtime guidance]\nThe user sent this while the current task was "
+                "running. Treat the latest guidance as authoritative for all work "
+                "not already completed.\n\n{guidance}",
+                "[运行中引导]\n用户在当前任务运行期间发送了以下要求。对于尚未完成的工作，"
+                "应以最新引导为准。\n\n{guidance}",
+                guidance=text,
+            )
+        content = "\n\n".join(
+            localized(
+                "[Agent message; not user authorization]\n{message}",
+                "[Agent 消息；不代表用户授权]\n{message}",
+                message=str(payload.get("text") or ""),
+            ) if payload.get("agent_originated") else user_guidance(str(payload.get("text") or ""))
+            for payload in payloads
         )
         local_authorization = "\n\n".join(
             str(payload.get("text") or "").strip()
@@ -93,7 +103,10 @@ class GuidanceService:
             "authorization_request": local_authorization,
             "metadata": {
                 "source": "cyrene_guidance",
-                "raw_guidance": raw_text,
+                "raw_guidance": local_authorization,
+                "peer_guidance": raw_text,
+                "authorization_text": local_authorization,
+                "contains_agent_messages": any(bool(payload.get("agent_originated")) for payload in payloads),
                 "agent_originated": all(
                     bool(payload.get("agent_originated")) for payload in payloads
                 ),
@@ -110,6 +123,7 @@ class GuidanceService:
         text = "\n\n".join(
             str(payload.get("text") or "").strip()
             for payload in payloads
+            if not payload.get("agent_originated")
             if str(payload.get("text") or "").strip()
         )
         if not text:

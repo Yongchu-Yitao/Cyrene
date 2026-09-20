@@ -1,0 +1,176 @@
+{
+  "scenario": "database_init",
+  "samples": [
+    {
+      "feature": "persistence",
+      "scenario": "runtime_database_init",
+      "wall_ms": 52.806,
+      "operations": 12,
+      "operations_per_second": 227.2,
+      "latency_p50_ms": 24.185,
+      "latency_p95_ms": 45.046,
+      "quality": {
+        "preserved": true,
+        "table_count": 14,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "cold_ms": 1.929,
+        "warm_ms": 1.357,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 36,
+        "hit_units": 18,
+        "miss_units": 18,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 0,
+            "miss_units": 18,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 18,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 18,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 36,
+            "cumulative_hit_units": 18,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "persistence",
+      "scenario": "runtime_database_init",
+      "wall_ms": 7.908,
+      "operations": 12,
+      "operations_per_second": 1517.4,
+      "latency_p50_ms": 3.377,
+      "latency_p95_ms": 4.13,
+      "quality": {
+        "preserved": true,
+        "table_count": 14,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "cold_ms": 2.057,
+        "warm_ms": 1.216,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 36,
+        "hit_units": 18,
+        "miss_units": 18,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 0,
+            "miss_units": 18,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 18,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 18,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 36,
+            "cumulative_hit_units": 18,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "persistence",
+      "scenario": "runtime_database_init",
+      "wall_ms": 8.055,
+      "operations": 12,
+      "operations_per_second": 1489.7,
+      "latency_p50_ms": 3.422,
+      "latency_p95_ms": 4.024,
+      "quality": {
+        "preserved": true,
+        "table_count": 14,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "cold_ms": 2.058,
+        "warm_ms": 1.351,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 36,
+        "hit_units": 18,
+        "miss_units": 18,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 0,
+            "miss_units": 18,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 18,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 18,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 36,
+            "cumulative_hit_units": 18,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    }
+  ],
+  "quality": {
+    "preserved": true
+  }
+}

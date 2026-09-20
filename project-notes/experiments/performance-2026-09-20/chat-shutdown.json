@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Task-17769",
+    "coroutine": "<coroutine object BaseEventLoop.shutdown_default_executor at 0x7b592d165440>",
+    "cancelling": 0,
+    "stack": [
+      "/home/shaoyw1810/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py:605:shutdown_default_executor"
+    ]
+  }
+]

@@ -1,0 +1,414 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-09-20T13:02:44.014417+00:00",
+  "environment": {
+    "python": "3.12.12",
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "repeats": 3,
+    "network_access": false,
+    "real_credentials": false,
+    "real_llm_calls": false
+  },
+  "groups": [
+    "chat"
+  ],
+  "cases": [
+    {
+      "id": "chat/single_heavy_run",
+      "group": "chat",
+      "scenario": "single_heavy_run",
+      "primary_metric": "run_latency_p95_ms",
+      "primary_ms": 62.932,
+      "quality_preserved": true,
+      "parallel_workers": 2,
+      "rounds_per_worker": 3,
+      "ideal_cache_hit_rate": 0.361423,
+      "ideal_cache_progression": [
+        0.0,
+        0.07772,
+        0.361423
+      ]
+    },
+    {
+      "id": "chat/dense_concurrency",
+      "group": "chat",
+      "scenario": "dense_concurrency",
+      "primary_metric": "run_latency_p95_ms",
+      "primary_ms": 316.96,
+      "quality_preserved": true,
+      "parallel_workers": 24,
+      "rounds_per_worker": 3,
+      "ideal_cache_hit_rate": 0.361423,
+      "ideal_cache_progression": [
+        0.0,
+        0.07772,
+        0.361423
+      ]
+    },
+    {
+      "id": "chat/multi_tool_storm",
+      "group": "chat",
+      "scenario": "multi_tool_storm",
+      "primary_metric": "run_latency_p95_ms",
+      "primary_ms": 487.42,
+      "quality_preserved": true,
+      "parallel_workers": 12,
+      "rounds_per_worker": 3,
+      "ideal_cache_hit_rate": 0.361423,
+      "ideal_cache_progression": [
+        0.0,
+        0.07772,
+        0.361423
+      ]
+    }
+  ],
+  "quality": {
+    "preserved": true,
+    "failed_cases": []
+  },
+  "ideal_cache": {
+    "kind": "ideal",
+    "basis": "combined_ideal_reuse",
+    "llm_independent": true,
+    "requests": 114,
+    "input_units": 40584,
+    "hit_units": 14668,
+    "miss_units": 25916,
+    "hit_rate": 0.361423
+  },
+  "comparison": null,
+  "reports": {
+    "chat": {
+      "schema_version": 2,
+      "generated_at": "2026-09-20T13:02:44.012846+00:00",
+      "environment": {
+        "python": "3.12.12",
+        "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+        "repeats": 3,
+        "network_access": false,
+        "real_credentials": false,
+        "real_llm_calls": false
+      },
+      "profiles": [
+        {
+          "name": "single_heavy_run",
+          "concurrency": 2,
+          "tools_per_run": 32,
+          "turns_per_session": 3,
+          "progress_events_per_tool": 2,
+          "reply_chunks": 24,
+          "tool_result_chars": 512
+        },
+        {
+          "name": "dense_concurrency",
+          "concurrency": 24,
+          "tools_per_run": 12,
+          "turns_per_session": 3,
+          "progress_events_per_tool": 2,
+          "reply_chunks": 24,
+          "tool_result_chars": 512
+        },
+        {
+          "name": "multi_tool_storm",
+          "concurrency": 12,
+          "tools_per_run": 40,
+          "turns_per_session": 3,
+          "progress_events_per_tool": 2,
+          "reply_chunks": 24,
+          "tool_result_chars": 512
+        }
+      ],
+      "results": [
+        {
+          "profile": "single_heavy_run",
+          "parallel_sessions": 2,
+          "turns_per_session": 3,
+          "conversation_turns": 6,
+          "wall_ms": 144.679,
+          "run_latency_p50_ms": 47.832,
+          "run_latency_p95_ms": 62.932,
+          "first_event_p95_ms": 0.153,
+          "event_loop_lag_p95_ms": 1.629,
+          "event_loop_lag_max_ms": 1.913,
+          "events_per_second": 6511.0,
+          "tools_per_second": 1327.1,
+          "rss_delta_bytes": 12357632,
+          "telemetry_events": 774,
+          "sqlite_connections": {
+            "inbox": 6,
+            "event_store": 31
+          },
+          "inbox_telemetry_batches": {
+            "count": 18,
+            "median_size": 64.0,
+            "max_size": 64
+          },
+          "durable_event_batches": {
+            "count": 19,
+            "median_size": 17,
+            "max_size": 137
+          },
+          "failure_counts": {},
+          "ideal_cache": {
+            "kind": "ideal",
+            "basis": "deterministic_context_prefix",
+            "llm_independent": true,
+            "requests": 6,
+            "input_units": 2136,
+            "hit_units": 772,
+            "miss_units": 1364,
+            "hit_rate": 0.361423,
+            "series_dimension": "turn",
+            "series": [
+              {
+                "index": 0,
+                "requests": 2,
+                "input_units": 60,
+                "hit_units": 0,
+                "miss_units": 60,
+                "hit_rate": 0.0,
+                "cumulative_input_units": 60,
+                "cumulative_hit_units": 0,
+                "cumulative_hit_rate": 0.0
+              },
+              {
+                "index": 1,
+                "requests": 2,
+                "input_units": 712,
+                "hit_units": 60,
+                "miss_units": 652,
+                "hit_rate": 0.08427,
+                "cumulative_input_units": 772,
+                "cumulative_hit_units": 60,
+                "cumulative_hit_rate": 0.07772
+              },
+              {
+                "index": 2,
+                "requests": 2,
+                "input_units": 1364,
+                "hit_units": 712,
+                "miss_units": 652,
+                "hit_rate": 0.521994,
+                "cumulative_input_units": 2136,
+                "cumulative_hit_units": 772,
+                "cumulative_hit_rate": 0.361423
+              }
+            ]
+          },
+          "quality": {
+            "preserved": true,
+            "expected_events": 942,
+            "stream_events": 942,
+            "durable_events": 942,
+            "expected_tool_results": 192,
+            "durable_tool_results": 192,
+            "expected_telemetry_events": 774,
+            "durable_telemetry_events": 774,
+            "failed_runs": 0
+          },
+          "samples_ms": [
+            140.424,
+            150.377,
+            144.679
+          ]
+        },
+        {
+          "profile": "dense_concurrency",
+          "parallel_sessions": 24,
+          "turns_per_session": 3,
+          "conversation_turns": 72,
+          "wall_ms": 787.118,
+          "run_latency_p50_ms": 255.03,
+          "run_latency_p95_ms": 316.96,
+          "first_event_p95_ms": 0.182,
+          "event_loop_lag_p95_ms": 1.152,
+          "event_loop_lag_max_ms": 16.534,
+          "events_per_second": 7043.4,
+          "tools_per_second": 1097.7,
+          "rss_delta_bytes": 22544384,
+          "telemetry_events": 3528,
+          "sqlite_connections": {
+            "inbox": 72,
+            "event_store": 386
+          },
+          "inbox_telemetry_batches": {
+            "count": 128,
+            "median_size": 48.0,
+            "max_size": 49
+          },
+          "durable_event_batches": {
+            "count": 242,
+            "median_size": 17.0,
+            "max_size": 59
+          },
+          "failure_counts": {},
+          "ideal_cache": {
+            "kind": "ideal",
+            "basis": "deterministic_context_prefix",
+            "llm_independent": true,
+            "requests": 72,
+            "input_units": 25632,
+            "hit_units": 9264,
+            "miss_units": 16368,
+            "hit_rate": 0.361423,
+            "series_dimension": "turn",
+            "series": [
+              {
+                "index": 0,
+                "requests": 24,
+                "input_units": 720,
+                "hit_units": 0,
+                "miss_units": 720,
+                "hit_rate": 0.0,
+                "cumulative_input_units": 720,
+                "cumulative_hit_units": 0,
+                "cumulative_hit_rate": 0.0
+              },
+              {
+                "index": 1,
+                "requests": 24,
+                "input_units": 8544,
+                "hit_units": 720,
+                "miss_units": 7824,
+                "hit_rate": 0.08427,
+                "cumulative_input_units": 9264,
+                "cumulative_hit_units": 720,
+                "cumulative_hit_rate": 0.07772
+              },
+              {
+                "index": 2,
+                "requests": 24,
+                "input_units": 16368,
+                "hit_units": 8544,
+                "miss_units": 7824,
+                "hit_rate": 0.521994,
+                "cumulative_input_units": 25632,
+                "cumulative_hit_units": 9264,
+                "cumulative_hit_rate": 0.361423
+              }
+            ]
+          },
+          "quality": {
+            "preserved": true,
+            "expected_events": 5544,
+            "stream_events": 5544,
+            "durable_events": 5544,
+            "expected_tool_results": 864,
+            "durable_tool_results": 864,
+            "expected_telemetry_events": 3528,
+            "durable_telemetry_events": 3528,
+            "failed_runs": 0
+          },
+          "samples_ms": [
+            811.583,
+            787.118,
+            781.862
+          ]
+        },
+        {
+          "profile": "multi_tool_storm",
+          "parallel_sessions": 12,
+          "turns_per_session": 3,
+          "conversation_turns": 36,
+          "wall_ms": 1188.715,
+          "run_latency_p50_ms": 406.212,
+          "run_latency_p95_ms": 487.42,
+          "first_event_p95_ms": 0.566,
+          "event_loop_lag_p95_ms": 2.027,
+          "event_loop_lag_max_ms": 22.901,
+          "events_per_second": 5723.8,
+          "tools_per_second": 1211.4,
+          "rss_delta_bytes": 11325440,
+          "telemetry_events": 5796,
+          "sqlite_connections": {
+            "inbox": 36,
+            "event_store": 197
+          },
+          "inbox_telemetry_batches": {
+            "count": 108,
+            "median_size": 64.0,
+            "max_size": 96
+          },
+          "durable_event_batches": {
+            "count": 125,
+            "median_size": 17,
+            "max_size": 170
+          },
+          "failure_counts": {},
+          "ideal_cache": {
+            "kind": "ideal",
+            "basis": "deterministic_context_prefix",
+            "llm_independent": true,
+            "requests": 36,
+            "input_units": 12816,
+            "hit_units": 4632,
+            "miss_units": 8184,
+            "hit_rate": 0.361423,
+            "series_dimension": "turn",
+            "series": [
+              {
+                "index": 0,
+                "requests": 12,
+                "input_units": 360,
+                "hit_units": 0,
+                "miss_units": 360,
+                "hit_rate": 0.0,
+                "cumulative_input_units": 360,
+                "cumulative_hit_units": 0,
+                "cumulative_hit_rate": 0.0
+              },
+              {
+                "index": 1,
+                "requests": 12,
+                "input_units": 4272,
+                "hit_units": 360,
+                "miss_units": 3912,
+                "hit_rate": 0.08427,
+                "cumulative_input_units": 4632,
+                "cumulative_hit_units": 360,
+                "cumulative_hit_rate": 0.07772
+              },
+              {
+                "index": 2,
+                "requests": 12,
+                "input_units": 8184,
+                "hit_units": 4272,
+                "miss_units": 3912,
+                "hit_rate": 0.521994,
+                "cumulative_input_units": 12816,
+                "cumulative_hit_units": 4632,
+                "cumulative_hit_rate": 0.361423
+              }
+            ]
+          },
+          "quality": {
+            "preserved": true,
+            "expected_events": 6804,
+            "stream_events": 6804,
+            "durable_events": 6804,
+            "expected_tool_results": 1440,
+            "durable_tool_results": 1440,
+            "expected_telemetry_events": 5796,
+            "durable_telemetry_events": 5796,
+            "failed_runs": 0
+          },
+          "samples_ms": [
+            1217.503,
+            1171.116,
+            1188.715
+          ]
+        }
+      ],
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "combined_ideal_reuse",
+        "llm_independent": true,
+        "requests": 114,
+        "input_units": 40584,
+        "hit_units": 14668,
+        "miss_units": 25916,
+        "hit_rate": 0.361423
+      }
+    }
+  }
+}

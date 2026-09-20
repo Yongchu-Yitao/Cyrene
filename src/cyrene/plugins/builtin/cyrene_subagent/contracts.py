@@ -74,7 +74,6 @@ def _number_setting(name: str, default: float, minimum: float, maximum: float) -
 class ExecutionLimits:
     max_tool_calls: int
     max_wall_seconds: int
-    no_progress_turns: int
     checkpoint_calls: int
     max_cost_usd: float
     max_context_tokens: int
@@ -87,9 +86,6 @@ class ExecutionLimits:
             ),
             max_wall_seconds=_integer_setting(
                 "subagent_execution_max_wall_seconds", 1800, 30, 86400
-            ),
-            no_progress_turns=_integer_setting(
-                "subagent_execution_no_progress_turns", 3, 1, 20
             ),
             checkpoint_calls=_integer_setting(
                 "subagent_execution_checkpoint_calls", 20, 1, 500
@@ -106,7 +102,6 @@ class ExecutionLimits:
         return {
             "max_tool_calls": self.max_tool_calls,
             "max_wall_seconds": self.max_wall_seconds,
-            "no_progress_turns": self.no_progress_turns,
             "checkpoint_calls": self.checkpoint_calls,
             "max_cost_usd": self.max_cost_usd,
             "max_context_tokens": self.max_context_tokens,
@@ -172,7 +167,6 @@ class SubagentMetrics:
     model_turns: int = 0
     tool_calls: int = 0
     lease_tool_calls: int = 0
-    no_progress_turns: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -186,7 +180,7 @@ class SubagentMetrics:
         raw = value if isinstance(value, Mapping) else {}
         integer_fields = {
             "model_turns", "tool_calls", "lease_tool_calls",
-            "no_progress_turns", "prompt_tokens", "completion_tokens",
+            "prompt_tokens", "completion_tokens",
             "total_tokens", "context_compactions", "discussion_rounds",
             "messages",
         }
@@ -209,7 +203,6 @@ class SubagentMetrics:
             "model_turns": self.model_turns,
             "tool_calls": self.tool_calls,
             "lease_tool_calls": self.lease_tool_calls,
-            "no_progress_turns": self.no_progress_turns,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
@@ -286,8 +279,6 @@ class SubagentRecord:
     finalization_reason: str = ""
     metrics: SubagentMetrics = field(default_factory=SubagentMetrics)
     finish: FinishRequest = field(default_factory=FinishRequest)
-    seen_tool_signatures: list[str] = field(default_factory=list)
-    seen_result_fingerprints: list[str] = field(default_factory=list)
 
     @classmethod
     def from_value(cls, agent_id: str, value: Mapping[str, Any]) -> "SubagentRecord":
@@ -301,6 +292,12 @@ class SubagentRecord:
             )
         except (TypeError, ValueError, OverflowError):
             normalized_max = None
+        finalization_reason = str(value.get("finalization_reason") or "")
+        # Old checkpoints may still carry the removed heuristic's execution
+        # fence. Drop only that fence; preserve terminal status and history so
+        # loading an upgrade never restarts previously finished work.
+        if finalization_reason == "execution_no_progress":
+            finalization_reason = ""
         return cls(
             agent_id=str(agent_id),
             tree_id=str(value.get("tree_id") or ""),
@@ -331,11 +328,9 @@ class SubagentRecord:
             updated_at=str(value.get("updated_at") or utc_now()),
             started_at=str(value.get("started_at") or utc_now()),
             lease_started_at=str(value.get("lease_started_at") or utc_now()),
-            finalization_reason=str(value.get("finalization_reason") or ""),
+            finalization_reason=finalization_reason,
             metrics=SubagentMetrics.from_value(value.get("metrics")),
             finish=FinishRequest.from_value(value.get("finish")),
-            seen_tool_signatures=[str(item) for item in value.get("seen_tool_signatures", ())],
-            seen_result_fingerprints=[str(item) for item in value.get("seen_result_fingerprints", ())],
         )
 
     def touch(self) -> None:
@@ -373,8 +368,6 @@ class SubagentRecord:
             "finalization_reason": self.finalization_reason,
             "metrics": self.metrics.as_dict(),
             "finish": self.finish.as_dict(),
-            "seen_tool_signatures": list(self.seen_tool_signatures[-256:]),
-            "seen_result_fingerprints": list(self.seen_result_fingerprints[-256:]),
         }
 
     def public_dict(self) -> dict[str, Any]:

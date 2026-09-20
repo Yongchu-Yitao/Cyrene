@@ -105,6 +105,17 @@ async def retry_send_input(source: SendInput, user_entry, chat, is_external_agen
 
 
 def append_user_message(chat, messages, source: SendInput, origin, now, short_id):
+    # A process can die after saving the public turn but before Agent admission.
+    # Replaying that input must retain its identity rather than append a second turn.
+    if origin.agent_originated and origin.client_request_id:
+        existing = next((item for item in messages
+                         if item.get("clientRequestId") == origin.client_request_id), None)
+        if existing is not None:
+            if (not existing.get("agentOriginated")
+                    or existing.get("originSessionId", "") != origin.origin_session_id
+                    or existing.get("content") != source.public_message):
+                raise ValueError("Agent message request ID conflicts with an existing turn")
+            return PreparedUserTurn(source, existing, now)
     should_generate_title = False
     user_entry = {
         "id": short_id("msg"),

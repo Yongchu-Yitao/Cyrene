@@ -124,6 +124,11 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
         """
     )
     _ensure_context_token_columns(connection)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_context_missing_tokens "
+        "ON context_nodes(node_id) "
+        "WHERE self_token_count IS NULL OR path_token_count IS NULL"
+    )
     _ensure_tree_metadata_columns(connection)
     _ensure_closed_hook_failure_policy(connection)
 

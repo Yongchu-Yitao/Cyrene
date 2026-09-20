@@ -1,0 +1,42 @@
+{
+  "baseline": [
+    {
+      "history": 1000,
+      "active": 1,
+      "mountLayoutMs": 160.89999997615814,
+      "updateLayoutMs": 9.100000023841858
+    },
+    {
+      "history": 2000,
+      "active": 1,
+      "mountLayoutMs": 296.8000000715256,
+      "updateLayoutMs": 17.59999990463257
+    },
+    {
+      "history": 1000,
+      "active": 1000,
+      "mountLayoutMs": 318.60000002384186,
+      "updateLayoutMs": 39.39999997615814
+    }
+  ],
+  "candidate": [
+    {
+      "history": 1000,
+      "active": 1,
+      "mountLayoutMs": 182.5,
+      "updateLayoutMs": 6.600000023841858
+    },
+    {
+      "history": 2000,
+      "active": 1,
+      "mountLayoutMs": 312.1999999284744,
+      "updateLayoutMs": 11.300000071525574
+    },
+    {
+      "history": 1000,
+      "active": 1000,
+      "mountLayoutMs": 325.89999997615814,
+      "updateLayoutMs": 10
+    }
+  ]
+}

@@ -1,0 +1,182 @@
+{
+  "scenario": "scheduled_tasks",
+  "samples": [
+    {
+      "feature": "scheduler",
+      "scenario": "scheduled_task_crud_concurrency",
+      "wall_ms": 3359.64,
+      "operations": 732,
+      "operations_per_second": 217.9,
+      "latency_p50_ms": 1595.409,
+      "latency_p95_ms": 1625.357,
+      "quality": {
+        "preserved": true,
+        "expected_created": 48,
+        "actual_created": 48,
+        "remaining": 24,
+        "failed_operations": 0,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "concurrency": 48,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "scheduler",
+      "scenario": "scheduled_task_crud_concurrency",
+      "wall_ms": 3274.382,
+      "operations": 732,
+      "operations_per_second": 223.6,
+      "latency_p50_ms": 1578.811,
+      "latency_p95_ms": 1637.99,
+      "quality": {
+        "preserved": true,
+        "expected_created": 48,
+        "actual_created": 48,
+        "remaining": 24,
+        "failed_operations": 0,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "concurrency": 48,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "scheduler",
+      "scenario": "scheduled_task_crud_concurrency",
+      "wall_ms": 3363.94,
+      "operations": 732,
+      "operations_per_second": 217.6,
+      "latency_p50_ms": 1607.011,
+      "latency_p95_ms": 1747.277,
+      "quality": {
+        "preserved": true,
+        "expected_created": 48,
+        "actual_created": 48,
+        "remaining": 24,
+        "failed_operations": 0,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "concurrency": 48,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    }
+  ],
+  "quality": {
+    "preserved": true
+  }
+}

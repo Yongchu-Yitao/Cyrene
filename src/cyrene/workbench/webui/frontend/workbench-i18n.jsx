@@ -350,6 +350,7 @@ window.CyreneUI.i18n = window.CyreneUI.register("i18n", {
   permissionQuestionText: workbenchPermissionQuestionText,
   setLang: setWorkbenchLang,
   getLang: function () { return workbenchI18nLang || "en"; },
+  getVersion: function () { return workbenchI18nVersion; },
   getLocale: workbenchLocale,
   formatDate: workbenchFormatDate,
   formatNumber: workbenchFormatNumber,

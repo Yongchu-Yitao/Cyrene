@@ -1,0 +1,182 @@
+{
+  "scenario": "knowledge_search",
+  "samples": [
+    {
+      "feature": "knowledge",
+      "scenario": "fts_search_concurrency",
+      "wall_ms": 2293.842,
+      "operations": 192,
+      "operations_per_second": 83.7,
+      "latency_p50_ms": 685.272,
+      "latency_p95_ms": 900.475,
+      "quality": {
+        "preserved": true,
+        "expected_results_per_search": 8,
+        "minimum_results": 8,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "documents": 24,
+        "chunks": 1536,
+        "concurrency": 32,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "knowledge",
+      "scenario": "fts_search_concurrency",
+      "wall_ms": 2098.221,
+      "operations": 192,
+      "operations_per_second": 91.5,
+      "latency_p50_ms": 638.882,
+      "latency_p95_ms": 855.65,
+      "quality": {
+        "preserved": true,
+        "expected_results_per_search": 8,
+        "minimum_results": 8,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "documents": 24,
+        "chunks": 1536,
+        "concurrency": 32,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "knowledge",
+      "scenario": "fts_search_concurrency",
+      "wall_ms": 2100.304,
+      "operations": 192,
+      "operations_per_second": 91.4,
+      "latency_p50_ms": 642.087,
+      "latency_p95_ms": 858.298,
+      "quality": {
+        "preserved": true,
+        "expected_results_per_search": 8,
+        "minimum_results": 8,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "documents": 24,
+        "chunks": 1536,
+        "concurrency": 32,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    }
+  ],
+  "quality": {
+    "preserved": true
+  }
+}

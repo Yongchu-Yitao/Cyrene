@@ -1,0 +1,10 @@
+{
+  "baseline": {
+    "status": 200,
+    "body": "{\"events\":[{\"id\":\"latest\",\"timestamp\":\"2026\",\"caller\":\"\",\"phase\":\"\",\"model\":\"normal\",\"duration_ms\":null,\"total_tokens_est\":0,\"block_count\":0,\"message_count\":0,\"token_by_type\":{},\"source_log\":\"debug_review.jsonl\"}]}"
+  },
+  "candidate": {
+    "status": 500,
+    "body": "Internal Server Error"
+  }
+}

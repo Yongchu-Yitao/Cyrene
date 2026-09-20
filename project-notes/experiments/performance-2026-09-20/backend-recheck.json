@@ -1,0 +1,457 @@
+[
+  {
+    "case": "ordinary_once",
+    "equivalent": true,
+    "steps": [
+      {
+        "patch_equal": true,
+        "state_equal": true,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "case": "identical_completion_twice",
+    "equivalent": false,
+    "steps": [
+      {
+        "patch_equal": true,
+        "state_equal": true,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        }
+      },
+      {
+        "patch_equal": false,
+        "state_equal": false,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 2,
+          "status": "running",
+          "messages": []
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 2,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 2
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "case": "duplicate_event_id",
+    "equivalent": false,
+    "steps": [
+      {
+        "patch_equal": true,
+        "state_equal": false,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        }
+      },
+      {
+        "patch_equal": false,
+        "state_equal": false,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": []
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 2,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 2
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "case": "response_precedes_text",
+    "equivalent": false,
+    "steps": [
+      {
+        "patch_equal": false,
+        "state_equal": false,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "authoritative response",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "case": "null_text_preserves_content",
+    "equivalent": false,
+    "steps": [
+      {
+        "patch_equal": false,
+        "state_equal": false,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": null,
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "case": "numeric_text_coerced",
+    "equivalent": false,
+    "steps": [
+      {
+        "patch_equal": false,
+        "state_equal": false,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "7",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": 7,
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "case": "unknown_source_creates_record",
+    "equivalent": false,
+    "steps": [
+      {
+        "patch_equal": false,
+        "state_equal": false,
+        "prototype_error": "KeyError: 'message:unknown'"
+      }
+    ]
+  },
+  {
+    "case": "nested_payload_override",
+    "equivalent": false,
+    "steps": [
+      {
+        "patch_equal": false,
+        "state_equal": false,
+        "old_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "nested",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        },
+        "prototype_patch": {
+          "version": 2,
+          "runId": "probe",
+          "revision": 1,
+          "status": "running",
+          "messages": [
+            {
+              "id": "probe:message:1",
+              "role": "assistant",
+              "content": "final",
+              "runId": "probe",
+              "roundId": "probe",
+              "timelineOrder": 1,
+              "timelineVersion": 1,
+              "createdAt": "2026-09-20T00:00:00+00:00",
+              "startedAt": "2026-09-20T00:00:00+00:00",
+              "status": "completed",
+              "endedAt": "2026-09-20T00:00:01+00:00",
+              "timelineRevision": 1
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

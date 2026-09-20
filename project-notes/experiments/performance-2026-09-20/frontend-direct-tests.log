@@ -1,0 +1,16 @@
+✔ runtime activity keeps its server timeline identity (0.816928ms)
+✔ legacy projection replaces a checkpointed activity instead of rendering both (0.236193ms)
+✔ legacy projection deduplicates old prefixed ids by tool call identity (0.080144ms)
+✔ unified timeline suppresses a legacy checkpoint with a different activity id (0.18772ms)
+✔ run fallback only fills quiet gaps without changing reasoning, tools or prose (1.162532ms)
+✔ waiting and reconnection keep the existing suppression and resume the same run indicator (0.125481ms)
+✔ legacy status stays after checkpointed segments without altering activity state (0.323842ms)
+✔ running tools in earlier or folded activities suppress fallback, even after a newer activity completes (0.163824ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6.041209

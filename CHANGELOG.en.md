@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [Unreleased]
+
+- Remove execution subagents' forced no-progress finalization based on tool arguments and result fingerprints, including its settings and metrics. Normal tool discovery, repeated reads, and waiting no longer trigger this heuristic. Tool, time, cost, context limits and completion criteria remain enforced. Old checkpoints no longer carry this execution fence; finished tasks are not automatically restarted.
+
 ## [0.9.0-beta20] - 2026-09-11
 
 beta20 adds user-controlled full hibernation and recovery for the Android local workspace, while tightening the mobile presentation of the browser and Workbench. Reopening the app can continue the previous local environment, files, and terminal state; a forced exit, upgrade, or invalid recovery state safely starts again from current data. DeepSeek thinking-model and tool-call compatibility is improved, alongside visual fixes for the composer, dark side rails, Board, and mobile message actions.

@@ -1,0 +1,38 @@
+[
+  {
+    "status": "completed",
+    "events": 16,
+    "rows": [
+      119,
+      119
+    ],
+    "equal": true
+  },
+  {
+    "status": "completed",
+    "events": 16,
+    "rows": [
+      238,
+      238
+    ],
+    "equal": true
+  },
+  {
+    "status": "failed",
+    "events": 16,
+    "rows": [
+      119,
+      119
+    ],
+    "equal": true
+  },
+  {
+    "status": "cancelled",
+    "events": 16,
+    "rows": [
+      119,
+      119
+    ],
+    "equal": true
+  }
+]

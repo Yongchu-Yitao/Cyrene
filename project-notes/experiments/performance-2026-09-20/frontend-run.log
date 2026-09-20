@@ -1,0 +1,89 @@
+{
+  "node": "v24.13.1",
+  "samples": 10,
+  "warmups": 3,
+  "semanticChecks": 200,
+  "scope": "synthetic pure functions, no browser/DOM; prototype only",
+  "results": [
+    {
+      "records_per_array": 10,
+      "apply_one_delta": {
+        "p50_ms": 0.003917500000000018,
+        "p95_ms": 0.013897000000000048
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 0.010114500000003801,
+        "p95_ms": 0.014507000000001824
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 0.059504000000000445,
+        "p95_ms": 0.06332199999999943
+      },
+      "prototype_linear_merge_projection": {
+        "p50_ms": 0.014717999999998455,
+        "p95_ms": 0.014869000000004462
+      },
+      "fixture_projection_equal": true
+    },
+    {
+      "records_per_array": 100,
+      "apply_one_delta": {
+        "p50_ms": 0.012944499999999692,
+        "p95_ms": 0.02819400000000627
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 0.05391350000000017,
+        "p95_ms": 0.17791199999999918
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 4.6627684999999985,
+        "p95_ms": 4.807400999999999
+      },
+      "prototype_linear_merge_projection": {
+        "p50_ms": 0.12170799999999815,
+        "p95_ms": 0.16634000000000526
+      },
+      "fixture_projection_equal": true
+    },
+    {
+      "records_per_array": 1000,
+      "apply_one_delta": {
+        "p50_ms": 0.06257499999998117,
+        "p95_ms": 0.09666500000002998
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 0.5168725000000336,
+        "p95_ms": 0.5447759999999562
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 448.5578619999999,
+        "p95_ms": 451.954753
+      },
+      "prototype_linear_merge_projection": {
+        "p50_ms": 1.19681300000002,
+        "p95_ms": 2.081867000000784
+      },
+      "fixture_projection_equal": true
+    },
+    {
+      "records_per_array": 2000,
+      "apply_one_delta": {
+        "p50_ms": 0.15019800000027317,
+        "p95_ms": 0.21396000000095228
+      },
+      "project_one_live_record_over_history": {
+        "p50_ms": 1.0440050000006522,
+        "p95_ms": 1.3551920000008977
+      },
+      "project_equal_sized_history_and_run": {
+        "p50_ms": 1800.3059615000002,
+        "p95_ms": 1826.5152430000016
+      },
+      "prototype_linear_merge_projection": {
+        "p50_ms": 2.281554999999571,
+        "p95_ms": 2.4881470000000263
+      },
+      "fixture_projection_equal": true
+    }
+  ]
+}

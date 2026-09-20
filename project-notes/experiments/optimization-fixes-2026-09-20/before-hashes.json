@@ -1,0 +1,5 @@
+{
+  "src/cyrene/observability/debug_event_repository.py": "e01590b1eba0805b2eb4d42f27e138639d91f0e3bd27c74cec4ee04f92c34717",
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/history.py": "e1f9ed29b59613ba982be31c330fef4935549d0b206d9d018a6b2b3770f04eaf",
+  "src/cyrene/workbench/webui/frontend/features/chat/message-memo.mjs": "51a6a1cfa080b7867334095e5d2919feada72d9236167220e66a283bdf0afa12"
+}

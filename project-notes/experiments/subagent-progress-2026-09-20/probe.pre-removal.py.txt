@@ -1,0 +1,257 @@
+"""Isolated behavior/performance probes of the existing progress detector.
+
+Run from repository root with .venv/bin/python PATH. No model/network calls.
+Production algorithms are imported unchanged; settings use declared defaults.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import shutil
+import statistics
+import tempfile
+import threading
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from cyrene.core.context import ContextStoreRouter
+from cyrene.core.hook import POST_TOOL_USE, PRE_TOOL_USE
+from cyrene.core.plugin import Plugin, PluginContext, PluginPack, PluginRegistry, PluginRuntime
+from cyrene.core import AgentSession
+from cyrene.platform import inbox
+from cyrene.plugins.builtin.cyrene_subagent.contracts import SubagentRecord
+from cyrene.plugins.builtin.cyrene_subagent.manager import SubagentManager
+
+logging.disable(logging.CRITICAL)
+
+
+def record(i=0):
+    return SubagentRecord(str(i), f"child-{i}", "probe", "main", "run")
+
+
+def bare():
+    m = object.__new__(SubagentManager)
+    m._lock = threading.RLock()
+    m._records = {"0": record()}
+    m._discussions = {}
+    m._tool_batch_progress = {}
+    m._persist = lambda: None
+    return m
+
+
+def feed(m, name, args, value, success=True):
+    m.record_tool_result("0", name, args, {"value": value, "success": success})
+
+
+def case(name, batches):
+    m = bare()
+    trajectory = []
+    for batch in batches:
+        for tool, args, value, success in batch:
+            feed(m, tool, args, value, success)
+        m.complete_tool_batch("0")
+        r = m._records["0"]
+        trajectory.append({"count": r.metrics.no_progress_turns, "reason": r.finalization_reason})
+    return {"case": name, "batches": trajectory,
+            "next_read": dict(m.review_tool("0", "Read", {})),
+            "quit": dict(m.review_tool("0", "quit", {}))}
+
+
+def scenarios():
+    one = lambda n, a, v, s=True: [(n, a, v, s)]
+    cases = [
+        case("same_read", [one("Read", {"path": "a"}, "same") for _ in range(4)]),
+        case("same_failure_dynamic_timestamp", [one("Bash", {"command": "test"}, f"failed at {i}", False) for i in range(8)]),
+        case("same_failure_new_arguments", [one("Bash", {"command": f"test #{i}"}, "failed", False) for i in range(8)]),
+        case("legitimate_poll_running", [one("Status", {"job": "a"}, {"state": "running"}) for _ in range(4)]),
+        case("distinct_files_same_content", [one("Read", {"path": f"{i}.txt"}, "TODO") for i in range(4)]),
+        case("semantic_whitespace_change", [one("Read", {"path": "a.py"}, s) for s in (
+            "if x:\n    a()\n    b()", "if x:\n    a()\nb()", "if x: a(); b()")]),
+        case("different_searches_no_matches", [one("WebSearch", {"q": str(i)}, "no matches") for i in range(4)]),
+        case("ab_cycle", [one("Read", {"path": "a"}, s) for s in ["A", "B", "A", "B", "A"]]),
+        case("one_novel_item_resets_whole_batch", [[("Read", {"path": "a"}, "same", True),
+            ("Read", {"path": "clock"}, str(i), True)] for i in range(6)]),
+    ]
+    m = bare()
+    feed(m, "Read", {}, "new observation")
+    saved = m._records["0"].as_dict()
+    restored = bare()
+    restored._records["0"] = SubagentRecord.from_value("0", saved)
+    restored.complete_tool_batch("0")
+    cases.append({"case": "restore_between_post_hook_and_batch_end",
+                  "count": restored._records["0"].metrics.no_progress_turns})
+    return cases
+
+
+async def runtime_probe():
+    with tempfile.TemporaryDirectory(prefix="cyrene-progress-hooks-") as temp:
+        store = ContextStoreRouter(Path(temp)/"store")
+        tree = store.create_tree({"role": "system", "content": "probe"})
+        hooks = store.hooks_for(tree.id)
+        m = bare()
+        observed = []
+        def before(event):
+            t = event.payload["tool"]
+            return m.review_tool("0", t["name"], t["arguments"])
+        def after(event):
+            t = event.payload["tool"]
+            observed.append(t["name"])
+            m.record_tool_result("0", t["name"], t["arguments"], event.payload["result"])
+        hooks.register(PRE_TOOL_USE, before, plugin_id="probe.before", failure_policy="block")
+        hooks.register(POST_TOOL_USE, after, plugin_id="probe.after")
+        registry = PluginRegistry()
+        registry.register_pack(PluginPack("probe", "probe", tuple(
+            Plugin(n, n, {"type":"object","properties":{}}, lambda a,c: "real data")
+            for n in ["SearchOne", "SearchTwo", "SearchThree"])), source="probe")
+        assert registry.registered("toolbox").plugin.name == "toolbox"
+        runtime = PluginRuntime(registry)
+        context = PluginContext(workspace=Path(temp), tree_id=tree.id, node_id=tree.root_id,
+                                hooks=hooks, data={"agent_id":"0"})
+        rows = []
+        for i,args in enumerate([
+            {"operation":"list"},
+            {"operation":"describe", "name":"SearchOne"},
+            {"operation":"describe", "name":"SearchTwo"},
+            {"operation":"invoke", "name":"SearchOne", "arguments":{}},
+        ]):
+            result = await runtime.call("toolbox", args, context, call_id=str(i))
+            m.complete_tool_batch("0")
+            rows.append({"args":args, "success":result.success, "value":result.value,
+                         "count":m._records["0"].metrics.no_progress_turns,
+                         "reason":m._records["0"].finalization_reason,
+                         "observed_hooks":list(observed)})
+        store.close()
+        return rows
+
+
+def performance():
+    rows = []
+    for size in [1024, 1024*1024]:
+        for n in [1,8]:
+            for full in [False,True]:
+                with tempfile.TemporaryDirectory(prefix="cyrene-progress-perf-") as temp:
+                    store = ContextStoreRouter(Path(temp)/"store")
+                    tree = store.create_tree({"role":"system", "content":"probe"})
+                    owner = SimpleNamespace(store=store, tree=tree, plugin_context_data={})
+                    m = SubagentManager(owner)
+                    m._records = {str(i):record(i) for i in range(n)}
+                    for r in m._records.values():
+                        r.seen_tool_signatures = [f"{j:064x}" for j in range(100)]
+                        r.seen_result_fingerprints = [f"{j:064x}" for j in range(100)]
+                    if not full:
+                        m._persist = lambda: None
+                    samples=[]
+                    for i in range(45):
+                        payload = ("word " * (size//5)) + str(i)
+                        start=time.perf_counter_ns()
+                        feed(m, "Read", {"path":"a"}, payload)
+                        m.complete_tool_batch("0")
+                        samples.append((time.perf_counter_ns()-start)/1e6)
+                    measured=samples[5:]
+                    rows.append({"payload_bytes_approx":size,"agents":n,"persistence":full,
+                        "median_ms_per_result_and_batch":round(statistics.median(measured),3),
+                        "p95_ms":round(sorted(measured)[int(len(measured)*.95)-1],3),
+                        "root_json_bytes":len(json.dumps(store.get_node(tree.id,tree.root_id).value))})
+                    store.close()
+    return rows
+
+
+def persistence_ab():
+    """Same whole-manager persistence, with versus without fingerprint state."""
+    rows=[]
+    for n in [1,8]:
+        for fingerprints in [False,True]:
+            with tempfile.TemporaryDirectory(prefix="cyrene-progress-ab-") as temp:
+                store=ContextStoreRouter(Path(temp)/"store")
+                tree=store.create_tree({"role":"system","content":"probe"})
+                m=SubagentManager(SimpleNamespace(store=store,tree=tree,plugin_context_data={}))
+                m._records={str(i):record(i) for i in range(n)}
+                if fingerprints:
+                    for r in m._records.values():
+                        r.seen_tool_signatures=[f"{j:064x}" for j in range(200)]
+                        r.seen_result_fingerprints=[f"{j:064x}" for j in range(200)]
+                samples=[]
+                for _ in range(65):
+                    start=time.perf_counter_ns()
+                    m._persist()
+                    samples.append((time.perf_counter_ns()-start)/1e6)
+                rows.append({"agents":n,"fingerprints":fingerprints,
+                    "median_ms_per_persist":round(statistics.median(samples[5:]),3),
+                    "root_json_bytes":len(json.dumps(store.get_node(tree.id,tree.root_id).value))})
+                store.close()
+    return rows
+
+
+async def full_session_probe():
+    """Use the real AgentSession events and editable subagent pack, scripted model."""
+    with tempfile.TemporaryDirectory(prefix="cyrene-progress-session-") as temp:
+        root=Path(temp)
+        plugins=root/"plugins"
+        plugins.mkdir()
+        source=Path(__file__).resolve().parents[3]/"src/cyrene/plugins/builtin/cyrene_subagent"
+        shutil.copytree(source,plugins/"cyrene_subagent")
+        child_calls=[]
+        executions=[]
+        holder={}
+        async def model(args,context):
+            if context.data.get("model_call_kind")=="permission":
+                return {"content":"", "tool_calls":[{"id":"allow","name":"decide",
+                    "arguments":{"approve":True,"rationale":"probe"}}]}
+            if context.data.get("agent_id","main")=="main":
+                return {"content":"parent ready","tool_calls":[]}
+            i=len(child_calls)
+            manager=holder["session"].plugin_services["subagents"]
+            state=manager._records["worker"]
+            child_calls.append({"step":i,"count":state.metrics.no_progress_turns,
+                                "reason":state.finalization_reason})
+            operations=[
+                {"operation":"list"},
+                {"operation":"describe","name":"SearchOne"},
+                {"operation":"describe","name":"SearchTwo"},
+                {"operation":"invoke","name":"SearchOne","arguments":{}},
+            ]
+            if i<len(operations):
+                return {"content":"", "tool_calls":[{"id":f"call-{i}","name":"toolbox","arguments":operations[i]}]}
+            if i==4:
+                return {"content":"Could not run the search after discovery.","tool_calls":[
+                    {"id":"quit","name":"quit","arguments":{"completion_status":"blocked"}}]}
+            return {"content":"Blocked before real search.","tool_calls":[]}
+        def search(args,context):
+            executions.append("search executed")
+            return "new evidence"
+        registry=PluginRegistry()
+        registry.register_pack(PluginPack("model","model",(Plugin("MiniMax","model",{"type":"object"},model,kind="model"),)),source="probe")
+        registry.register_pack(PluginPack("search","search",tuple(Plugin(n,n,{"type":"object","properties":{}},search)
+            for n in ["SearchOne","SearchTwo"])),source="probe")
+        with patch.object(inbox,"INBOX_DIR",root/"inbox"):
+            session=AgentSession(root/"data",root/"workspace",plugins,registry=registry,
+                                 plugin_context_data={"session_id":"probe-session"})
+            holder["session"]=session
+            try:
+                session.submit("seed",run_id="seed")
+                await asyncio.wait_for(session.drain(),20)
+                manager=session.plugin_services["subagents"]
+                await manager.spawn("main","worker","Discover tools then search")
+                await asyncio.wait_for(session.drain(),20)
+                state=manager._records["worker"]
+                return {"model_observations":child_calls,"search_executions":executions,
+                        "status":state.status,"outcome":state.outcome,"reason":state.finalization_reason}
+            finally:
+                session.close()
+
+
+def main():
+    with patch("cyrene.plugins.builtin.cyrene_subagent.contracts.settings_store.get", side_effect=lambda k,d=None:d):
+        result={"behavior":scenarios(),"real_runtime_discovery":asyncio.run(runtime_probe()),
+                "full_session_discovery":asyncio.run(full_session_probe()),
+                "performance":performance(),"persistence_ab":persistence_ab()}
+    output=Path(__file__).with_name("results.json")
+    output.write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n")
+    print(json.dumps(result,ensure_ascii=False,indent=2))
+
+
+if __name__=="__main__":
+    main()

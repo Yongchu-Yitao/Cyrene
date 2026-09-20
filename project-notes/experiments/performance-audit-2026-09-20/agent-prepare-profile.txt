@@ -1,0 +1,96 @@
+         2893679 function calls (2565838 primitive calls) in 0.582 seconds
+
+   Ordered by: cumulative time
+   List reduced from 359 to 45 due to restriction <45>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       80    0.003    0.000    0.305    0.004 session.py:4271(_messages)
+  833/410    0.003    0.000    0.257    0.001 base_events.py:1922(_run_once)
+   160/80    0.012    0.000    0.246    0.003 projection.py:86(project_model_messages)
+      143    0.000    0.000    0.245    0.002 base_events.py:631(run_forever)
+    80/79    0.001    0.000    0.236    0.003 session.py:2636(_prepare_model_input)
+ 1012/960    0.001    0.000    0.232    0.000 {method 'run' of '_contextvars.Context' objects}
+291843/7521    0.107    0.000    0.221    0.000 copy.py:118(deepcopy)
+       80    0.009    0.000    0.216    0.003 tasks.py:223(project_tasks)
+30683/7921    0.036    0.000    0.212    0.000 copy.py:217(_deepcopy_dict)
+ 1022/850    0.003    0.000    0.210    0.000 events.py:86(_run)
+  129/120    0.000    0.000    0.196    0.002 base_events.py:655(run_until_complete)
+      119    0.000    0.000    0.136    0.001 registry.py:988(_drain_persisted)
+     2007    0.002    0.000    0.119    0.000 observability.py:277(log_operation)
+     2007    0.001    0.000    0.115    0.000 observability.py:221(_bounded_operation_payload)
+     2007    0.002    0.000    0.114    0.000 observability.py:211(_encode_payload)
+20357/2007    0.024    0.000    0.102    0.000 observability.py:136(safe_log_value)
+10397/9597    0.004    0.000    0.070    0.000 copy.py:191(_deepcopy_list)
+    11933    0.007    0.000    0.065    0.000 __init__.py:183(dumps)
+       80    0.001    0.000    0.063    0.001 session.py:2558(_direct_model_tool_definitions)
+  158/154    0.000    0.000    0.060    0.000 queue.py:154(get)
+    82/81    0.000    0.000    0.059    0.001 router.py:771(get_path)
+      121    0.000    0.000    0.058    0.000 router.py:66(claim_next)
+    11933    0.006    0.000    0.057    0.000 encoder.py:183(encode)
+    82/81    0.001    0.000    0.056    0.001 store.py:933(get_path)
+  165/163    0.000    0.000    0.049    0.000 router.py:751(get_node)
+    11933    0.048    0.000    0.048    0.000 encoder.py:205(iterencode)
+     6647    0.007    0.000    0.043    0.000 store.py:329(_node_from_row)
+     6640    0.003    0.000    0.038    0.000 compaction.py:14(message_token_estimate)
+    16457    0.012    0.000    0.038    0.000 observability.py:96(_sensitive_key)
+       80    0.000    0.000    0.037    0.000 compaction.py:25(messages_token_estimate)
+       80    0.001    0.000    0.037    0.000 {built-in method builtins.sum}
+  165/163    0.001    0.000    0.037    0.000 store.py:820(get_node)
+     6640    0.001    0.000    0.037    0.000 compaction.py:26(<genexpr>)
+   697179    0.036    0.000    0.036    0.000 {method 'get' of 'dict' objects}
+      640    0.000    0.000    0.034    0.000 session.py:2569(circuit_is_open)
+      640    0.000    0.000    0.033    0.000 runtime.py:262(circuit_failure)
+      640    0.001    0.000    0.032    0.000 registry.py:1027(resolve)
+     6649    0.002    0.000    0.032    0.000 serialization.py:37(decode_value)
+       81    0.000    0.000    0.031    0.000 tasks.py:332(read)
+     6653    0.003    0.000    0.030    0.000 __init__.py:299(loads)
+       80    0.000    0.000    0.027    0.000 registry.py:1334(direct_tool_definitions)
+     6653    0.005    0.000    0.027    0.000 decoder.py:333(decode)
+  601/598    0.000    0.000    0.026    0.000 contextlib.py:132(__enter__)
+  725/627    0.001    0.000    0.025    0.000 {method 'poll' of 'select.epoll' objects}
+1578/1566    0.001    0.000    0.024    0.000 {built-in method builtins.next}
+
+
+         2893679 function calls (2565838 primitive calls) in 0.582 seconds
+
+   Ordered by: internal time
+   List reduced from 359 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+291843/7521    0.107    0.000    0.221    0.000 copy.py:118(deepcopy)
+    11933    0.048    0.000    0.048    0.000 encoder.py:205(iterencode)
+30683/7921    0.036    0.000    0.212    0.000 copy.py:217(_deepcopy_dict)
+   697179    0.036    0.000    0.036    0.000 {method 'get' of 'dict' objects}
+20357/2007    0.024    0.000    0.102    0.000 observability.py:136(safe_log_value)
+     6653    0.019    0.000    0.019    0.000 decoder.py:344(raw_decode)
+   381444    0.016    0.000    0.016    0.000 {built-in method builtins.id}
+    41080    0.014    0.000    0.019    0.000 copy.py:231(_keep_alive)
+    16457    0.012    0.000    0.038    0.000 observability.py:96(_sensitive_key)
+   160/80    0.012    0.000    0.246    0.003 projection.py:86(project_model_messages)
+147289/147287    0.012    0.000    0.017    0.000 {built-in method builtins.isinstance}
+    16377    0.011    0.000    0.020    0.000 {built-in method builtins.any}
+    29524    0.010    0.000    0.010    0.000 {method 'sub' of 're.Pattern' objects}
+   194284    0.010    0.000    0.010    0.000 observability.py:102(<genexpr>)
+       80    0.009    0.000    0.216    0.003 tasks.py:223(project_tasks)
+     6480    0.009    0.000    0.016    0.000 dataclasses.py:1540(replace)
+   250763    0.009    0.000    0.009    0.000 copy.py:172(_deepcopy_atomic)
+  962/949    0.008    0.000    0.007    0.000 {method 'execute' of 'sqlite3.Connection' objects}
+    11933    0.007    0.000    0.065    0.000 __init__.py:183(dumps)
+     6647    0.007    0.000    0.043    0.000 store.py:329(_node_from_row)
+    11933    0.006    0.000    0.057    0.000 encoder.py:183(encode)
+    16246    0.006    0.000    0.009    0.000 observability.py:105(_normalized_key)
+   103/81    0.005    0.000    0.005    0.000 {method 'fetchall' of 'sqlite3.Cursor' objects}
+     6653    0.005    0.000    0.027    0.000 decoder.py:333(decode)
+10397/9597    0.004    0.000    0.070    0.000 copy.py:191(_deepcopy_list)
+    14762    0.004    0.000    0.014    0.000 observability.py:123(_scrub_local_identity)
+    58261    0.004    0.000    0.004    0.000 {method 'append' of 'list' objects}
+    14762    0.004    0.000    0.018    0.000 observability.py:128(_trim)
+     6640    0.003    0.000    0.038    0.000 compaction.py:14(message_token_estimate)
+    53792    0.003    0.000    0.003    0.000 {built-in method builtins.getattr}
+     7430    0.003    0.000    0.003    0.000 <string>:2(__init__)
+    16246    0.003    0.000    0.012    0.000 observability.py:109(_private_value_key)
+    38235    0.003    0.000    0.003    0.000 {built-in method builtins.len}
+  833/410    0.003    0.000    0.257    0.001 base_events.py:1922(_run_once)
+     9756    0.003    0.000    0.004    0.000 dataclasses.py:1301(is_dataclass)
+
+

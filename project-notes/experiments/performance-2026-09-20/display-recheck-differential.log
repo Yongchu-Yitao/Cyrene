@@ -1,0 +1,105 @@
+{
+  "checks": 20336,
+  "projections": 4000,
+  "refs": 311752,
+  "directed": [
+    "sparse history",
+    "sparse additions",
+    "null entries",
+    "numeric id",
+    "null prototype",
+    "request confirmation",
+    "same-time stability",
+    "record getter",
+    "array index getter",
+    "custom array method"
+  ],
+  "counters": {
+    "fast": 10431,
+    "fallback": 13908
+  },
+  "replayChecks": 240,
+  "timings": [
+    {
+      "n": 20,
+      "m": 1,
+      "shape": "ordered",
+      "baseline_projection_ms": 0.004518999999845619,
+      "guarded_projection_ms": 0.005280000000084328,
+      "fast_path": false
+    },
+    {
+      "n": 20,
+      "m": 8,
+      "shape": "ordered",
+      "baseline_projection_ms": 0.022181999999929758,
+      "guarded_projection_ms": 0.026150000000143336,
+      "fast_path": false
+    },
+    {
+      "n": 100,
+      "m": 8,
+      "shape": "ordered",
+      "baseline_projection_ms": 0.09430199999997058,
+      "guarded_projection_ms": 0.09405100000003586,
+      "fast_path": false
+    },
+    {
+      "n": 1000,
+      "m": 1,
+      "shape": "ordered",
+      "baseline_projection_ms": 0.16104999999993197,
+      "guarded_projection_ms": 0.200657000000092,
+      "fast_path": false
+    },
+    {
+      "n": 1000,
+      "m": 4,
+      "shape": "ordered",
+      "baseline_projection_ms": 0.45169000000009873,
+      "guarded_projection_ms": 0.4976480000000265,
+      "fast_path": false
+    },
+    {
+      "n": 1000,
+      "m": 8,
+      "shape": "ordered",
+      "baseline_projection_ms": 0.8322030000001632,
+      "guarded_projection_ms": 0.2906390000000556,
+      "fast_path": true
+    },
+    {
+      "n": 1000,
+      "m": 32,
+      "shape": "ordered",
+      "baseline_projection_ms": 3.203457999999955,
+      "guarded_projection_ms": 0.28455800000006093,
+      "fast_path": true
+    },
+    {
+      "n": 1000,
+      "m": 1000,
+      "shape": "ordered",
+      "baseline_projection_ms": 144.19905100000028,
+      "guarded_projection_ms": 0.6642289999999775,
+      "fast_path": true
+    },
+    {
+      "n": 1000,
+      "m": 8,
+      "shape": "invalid-last-history",
+      "baseline_projection_ms": 0.8435540000000401,
+      "guarded_projection_ms": 1.0401730000003226,
+      "fast_path": false
+    },
+    {
+      "n": 1000,
+      "m": 32,
+      "shape": "question",
+      "baseline_projection_ms": 3.2286959999996725,
+      "guarded_projection_ms": 3.3027099999999336,
+      "fast_path": false
+    }
+  ],
+  "note": "Same-realm Node execution, 2 warmups/7 timing samples, medians. Prototype changes only one in-memory projection call site; no product edits; no browser/GC/peak-RSS validation."
+}

@@ -1,0 +1,60 @@
+{
+  "baseline": [
+    {
+      "history": 1000,
+      "active": 1,
+      "update_layout_ms": 8.100000023841858,
+      "mount_layout_ms": 157.79999995231628,
+      "renders_each_update": [
+        1001
+      ]
+    },
+    {
+      "history": 2000,
+      "active": 1,
+      "update_layout_ms": 15.799999952316284,
+      "mount_layout_ms": 311.8000000715256,
+      "renders_each_update": [
+        2001
+      ]
+    },
+    {
+      "history": 1000,
+      "active": 1000,
+      "update_layout_ms": 39.699999928474426,
+      "mount_layout_ms": 330,
+      "renders_each_update": [
+        2000
+      ]
+    }
+  ],
+  "candidate": [
+    {
+      "history": 1000,
+      "active": 1,
+      "update_layout_ms": 10.799999952316284,
+      "mount_layout_ms": 183.29999995231628,
+      "renders_each_update": [
+        1001
+      ]
+    },
+    {
+      "history": 2000,
+      "active": 1,
+      "update_layout_ms": 21.399999976158142,
+      "mount_layout_ms": 320.60000002384186,
+      "renders_each_update": [
+        2001
+      ]
+    },
+    {
+      "history": 1000,
+      "active": 1000,
+      "update_layout_ms": 13.600000023841858,
+      "mount_layout_ms": 331.5,
+      "renders_each_update": [
+        1001
+      ]
+    }
+  ]
+}

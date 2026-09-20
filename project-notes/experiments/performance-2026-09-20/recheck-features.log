@@ -1,0 +1,12 @@
+Timeout (0:00:45)!
+Thread 0x0000747ba7fff6c0 (most recent call first):
+  File "/home/shaoyw1810/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/threading.py", line 355 in wait
+  File "/home/shaoyw1810/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/queue.py", line 171 in get
+  File "/home/shaoyw1810/\u684c\u9762/playground/Cyrene/src/cyrene/plugins/builtin/cyrene_code/terminal/manager.py", line 1032 in _run_queries
+  File "/home/shaoyw1810/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/threading.py", line 1012 in run
+  File "/home/shaoyw1810/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/home/shaoyw1810/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Thread 0x0000747b857fa6c0 (most recent call first):
+  File "/home/shaoyw1810/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/collections/__init__.py", line 449 in _make
+  File 

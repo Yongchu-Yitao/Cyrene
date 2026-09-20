@@ -1,0 +1,4 @@
+event_bus repeat 1
+event_bus repeat 2
+event_bus repeat 3
+quality {'preserved': True}

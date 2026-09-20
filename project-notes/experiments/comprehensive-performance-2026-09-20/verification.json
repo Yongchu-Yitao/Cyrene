@@ -1,0 +1,21 @@
+{
+  "python_pass": 3155,
+  "python_skip": 5,
+  "frontend_pass": 172,
+  "electron_pass": 133,
+  "performance_groups": 9,
+  "all_checks_passed": true,
+  "agent_sessions": 57,
+  "agent_turns": 276,
+  "agent_deltas": 42300,
+  "changed_production_sources": [
+    "src/cyrene/workbench/webui/frontend/settings-overlay.jsx",
+    "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx",
+    "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx",
+    "src/cyrene/plugins/builtin/cyrene_remote/commands.py",
+    "src/cyrene/plugins/builtin/cyrene_subagent/contracts.py",
+    "src/cyrene/plugins/builtin/cyrene_subagent/__init__.py",
+    "src/cyrene/plugins/builtin/cyrene_subagent/manager.py",
+    "src/cyrene/plugins/builtin/cyrene_subagent/runtime_policy.py"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "mergeChecks": 12000,
+  "projectionChecks": 6000,
+  "referenceChecks": 154188,
+  "dense_fixture_mismatches": 0,
+  "sparse_array_counterexample": {
+    "baseline": {
+      "ok": true,
+      "value": [
+        null,
+        {
+          "id": "new",
+          "createdAt": "2023-11-14T22:13:21.000Z"
+        }
+      ]
+    },
+    "candidate": {
+      "ok": false,
+      "error": "TypeError: Cannot read properties of undefined (reading 'at')"
+    }
+  },
+  "conclusion": "Dense ordinary-data fixtures match; existing prototype is not equivalent for all accepted inputs. No production change authorized by this result."
+}

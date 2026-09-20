@@ -132,6 +132,65 @@ def _is_pristine_seed_connection(
     )
 
 
+def _legacy_connections_for_endpoint(
+    raw_connections: list[Any],
+    endpoint: tuple[str, str],
+) -> list[dict[str, Any]]:
+    """Return legacy connections that unambiguously target one endpoint."""
+
+    matches: list[dict[str, Any]] = []
+    for connection in raw_connections:
+        if not isinstance(connection, dict):
+            continue
+        options = connection.get("options")
+        provider_preset = (
+            options.get("provider_preset") if isinstance(options, dict) else ""
+        )
+        if (
+            not str(provider_preset or "").strip()
+            and _connection_endpoint_identity(connection) == endpoint
+        ):
+            matches.append(connection)
+    return matches
+
+
+def _pristine_seed_duplicate_ids(
+    raw_connections: list[Any],
+    legacy: dict[str, Any],
+    seeded: dict[str, Any],
+) -> set[str]:
+    duplicate_ids = {
+        str(connection.get("id") or "").strip()
+        for connection in raw_connections
+        if connection is not legacy
+        and _is_pristine_seed_connection(connection, seeded)
+    }
+    duplicate_ids.discard("")
+    return duplicate_ids
+
+
+def _retire_seed_duplicates(
+    raw_connections: list[Any],
+    raw_profiles: list[Any],
+    legacy: dict[str, Any],
+    legacy_id: str,
+    duplicate_ids: set[str],
+) -> None:
+    raw_connections[:] = [
+        connection
+        for connection in raw_connections
+        if not isinstance(connection, dict)
+        or str(connection.get("id") or "").strip() not in duplicate_ids
+        or connection is legacy
+    ]
+    for profile in raw_profiles:
+        if (
+            isinstance(profile, dict)
+            and str(profile.get("connection_id") or "") in duplicate_ids
+        ):
+            profile["connection_id"] = legacy_id
+
+
 def _adopt_legacy_provider_connections(
     raw_connections: list[Any],
     raw_profiles: list[Any],
@@ -150,20 +209,9 @@ def _adopt_legacy_provider_connections(
         endpoint = _connection_endpoint_identity(seeded)
         if not all(endpoint):
             continue
-        legacy_matches = [
-            connection
-            for connection in raw_connections
-            if isinstance(connection, dict)
-            and not str(
-                (
-                    connection.get("options")
-                    if isinstance(connection.get("options"), dict)
-                    else {}
-                ).get("provider_preset")
-                or ""
-            ).strip()
-            and _connection_endpoint_identity(connection) == endpoint
-        ]
+        legacy_matches = _legacy_connections_for_endpoint(
+            raw_connections, endpoint
+        )
         if len(legacy_matches) != 1:
             continue
 
@@ -177,28 +225,14 @@ def _adopt_legacy_provider_connections(
             "provider_preset": provider_id,
         }
 
-        duplicate_ids = {
-            str(connection.get("id") or "").strip()
-            for connection in raw_connections
-            if connection is not legacy
-            and _is_pristine_seed_connection(connection, seeded)
-        }
-        duplicate_ids.discard("")
+        duplicate_ids = _pristine_seed_duplicate_ids(
+            raw_connections, legacy, seeded
+        )
         if not duplicate_ids:
             continue
-        raw_connections[:] = [
-            connection
-            for connection in raw_connections
-            if not isinstance(connection, dict)
-            or str(connection.get("id") or "").strip() not in duplicate_ids
-            or connection is legacy
-        ]
-        for profile in raw_profiles:
-            if (
-                isinstance(profile, dict)
-                and str(profile.get("connection_id") or "") in duplicate_ids
-            ):
-                profile["connection_id"] = legacy_id
+        _retire_seed_duplicates(
+            raw_connections, raw_profiles, legacy, legacy_id, duplicate_ids
+        )
 
 
 def _migrate_plugin_seed_connections(raw: dict[str, Any]) -> dict[str, Any]:

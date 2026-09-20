@@ -63,7 +63,6 @@ class SubagentManager:
         self._discussions: dict[str, DiscussionState] = self._load_discussions()
         self._sessions: dict[str, AgentSession] = {}
         self._unsubscribers: dict[str, Any] = {}
-        self._tool_batch_progress: dict[str, bool] = {}
         try:
             self._event_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
@@ -453,13 +452,6 @@ class SubagentManager:
                     pass
                 self._update_resource_finalization(record)
                 publish = True
-            elif event.type == "tools.completed":
-                progress = self._tool_batch_progress.pop(record.agent_id, False)
-                record.metrics.no_progress_turns = (
-                    0 if progress else record.metrics.no_progress_turns + 1
-                )
-                self._update_resource_finalization(record)
-                publish = True
             elif event.type == "run.failed":
                 record.status = "failed"
                 record.outcome = "error"
@@ -526,8 +518,6 @@ class SubagentManager:
             and record.metrics.estimated_cost_usd >= limits.max_cost_usd
         ):
             record.finalization_reason = "execution_cost_budget_exhausted"
-        elif record.metrics.no_progress_turns >= limits.no_progress_turns:
-            record.finalization_reason = "execution_no_progress"
 
     def mode_context(self, agent_id: str) -> str:
         with self._lock:
@@ -605,7 +595,6 @@ class SubagentManager:
                 "Resource fuses: "
                 f"{execution_limits.max_tool_calls} tool calls, "
                 f"{execution_limits.max_wall_seconds} seconds, "
-                f"{execution_limits.no_progress_turns} no-progress turns, "
                 f"${execution_limits.max_cost_usd:.2f}, and "
                 + (
                     f"{execution_limits.max_context_tokens} context tokens. "
@@ -663,62 +652,20 @@ class SubagentManager:
                 }
             return {"decision": "allow", "arguments": dict(arguments)}
 
-    def record_tool_result(
+    def record_tool_execution(
         self,
         agent_id: str,
         tool_name: str,
-        arguments: Mapping[str, Any],
-        result: Mapping[str, Any],
     ) -> None:
+        """Account for tool execution without inspecting arguments or output."""
         if tool_name == "quit":
             return
-        encoded_args = json.dumps(
-            dict(arguments), ensure_ascii=False, sort_keys=True, default=str
-        )
-        signature = hashlib.sha256(
-            f"{tool_name}:{encoded_args}".encode("utf-8")
-        ).hexdigest()
-        result_text = str(result.get("value") or result.get("error") or "")
-        fingerprint = hashlib.sha256(
-            " ".join(result_text.split()).encode("utf-8")
-        ).hexdigest()
-        observation_markers = (
-            "read", "search", "fetch", "list", "get", "query", "recall",
-            "snapshot", "status", "check", "inspect", "analyze",
-        )
         with self._lock:
             record = self._records.get(str(agent_id))
             if record is None:
                 return
             record.metrics.tool_calls += 1
             record.metrics.lease_tool_calls += 1
-            is_observation = any(
-                marker in tool_name.casefold() for marker in observation_markers
-            )
-            progress = (
-                fingerprint not in record.seen_result_fingerprints
-                if is_observation else
-                signature not in record.seen_tool_signatures
-                or fingerprint not in record.seen_result_fingerprints
-            )
-            record.seen_tool_signatures.append(signature)
-            record.seen_result_fingerprints.append(fingerprint)
-            self._tool_batch_progress[record.agent_id] = (
-                self._tool_batch_progress.get(record.agent_id, False) or progress
-            )
-            self._update_resource_finalization(record)
-            record.touch()
-        self._persist()
-
-    def complete_tool_batch(self, agent_id: str) -> None:
-        with self._lock:
-            record = self._records.get(str(agent_id))
-            if record is None:
-                return
-            progress = self._tool_batch_progress.pop(record.agent_id, False)
-            record.metrics.no_progress_turns = (
-                0 if progress else record.metrics.no_progress_turns + 1
-            )
             self._update_resource_finalization(record)
             record.touch()
         self._persist()
@@ -1326,7 +1273,6 @@ class SubagentManager:
                     record.finish = FinishRequest()
                     record.finalization_reason = ""
                     record.metrics.lease_tool_calls = 0
-                    record.metrics.no_progress_turns = 0
                     record.lease_started_at = utc_now()
                 record.touch()
             self._persist()

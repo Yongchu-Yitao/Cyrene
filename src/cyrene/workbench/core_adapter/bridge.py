@@ -37,6 +37,8 @@ class AgentSessionRunError(RuntimeError):
 class AgentSessionCancelledError(RuntimeError):
     """The Agent reached a durable cancelled terminal node."""
 
+    _cyrene_runtime_retry_exhausted = True
+
 
 @dataclass(frozen=True, slots=True)
 class WorkbenchPendingQuestion:
@@ -398,6 +400,8 @@ def _stream_events(
     }
     if content_key is not None:
         payload[content_key] = str(data.get(content_key) or "")
+    if data.get("reset") is True:
+        payload["reset"] = True
     return (payload,)
 
 
@@ -829,6 +833,7 @@ class WorkbenchSessionBridge:
         if output.get("error") is True:
             raise AgentSessionRunError(
                 str(output.get("content") or "Agent run failed"),
+                _cyrene_runtime_retry_exhausted=True,
                 code=str(output.get("failure_kind") or output.get("code") or "agent_run_failed"),
                 detail_key=str(output.get("detail_key") or ""),
                 detail_params=dict(output.get("detail_params") or {}),

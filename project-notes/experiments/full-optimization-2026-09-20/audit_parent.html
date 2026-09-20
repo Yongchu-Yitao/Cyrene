@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>Cyrene ordered merge equivalence</title>
+<style>body{margin:0;font:14px system-ui}header{padding:8px}iframe{width:48vw;height:760px;border:1px solid #bbb}pre{max-height:180px;overflow:auto;white-space:pre-wrap}</style>
+<header><button id="run">Run full conversation comparison</button><button id="perf">Measure projection A/B</button><strong id="status">Loading</strong><pre id="result"></pre></header>
+<iframe title="Baseline conversation" id="baseline" src="/baseline.html"></iframe><iframe title="Optimized conversation" id="candidate" src="/candidate.html"></iframe>
+<script>
+const ids=['baseline','candidate'],pause=ms=>new Promise(r=>setTimeout(r,ms));
+let results=[];const runId=Date.now();
+async function post(data){await fetch('/audit-result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId,...data})});}
+function comparable(value){const {fastHits,...rest}=value;return rest;}
+document.getElementById('run').onclick=async()=>{
+ document.getElementById('status').textContent='Running';results=[];
+ try{
+  const a=document.getElementById('baseline').contentWindow,b=document.getElementById('candidate').contentWindow;
+  if(!a.auditReady||!b.auditReady)throw Error('Fixture not ready');
+  for(const command of ['reset','focus','delta','scroll','delta','select','delta','expand','copy','dark','light','zh','en','split','unsplit','switch','switch-back','reconnect','resume','remove','retry-animation','finish','edit','edit-text','cancel-edit','reset','cancel','reset','failure','voice-ready','voice-off','translations','scalar-mutation']){
+   const [left,right]=await Promise.all([a.audit.step(command),b.audit.step(command)]);
+   const fields=Object.keys(comparable(left));const differences=fields.filter(k=>JSON.stringify(left[k])!==JSON.stringify(right[k]));
+   const result={kind:'comparison',command,differences,equal:!differences.length,fastHits:right.fastHits,left,right};results.push(result);await post(result);
+   document.getElementById('result').textContent=JSON.stringify({command,equal:result.equal,differences,fastHits:right.fastHits,rows:[left.rows,right.rows]},null,2);
+   document.getElementById('status').textContent='Running '+command;
+  }
+  document.getElementById('status').textContent=results.every(x=>x.equal)?'PASS':'DIFFERENCES';
+ }catch(e){document.getElementById('status').textContent='ERROR '+e.message;console.error(e);await post({kind:'error',message:e.stack});}
+};
+document.getElementById('perf').onclick=async()=>{
+ document.getElementById('status').textContent='Measuring';
+ for(let round=0;round<3;round++)for(const variant of round%2?['candidate','baseline']:ids){
+   const samples=await document.getElementById(variant).contentWindow.audit.performance();await post({kind:'performance',round,variant,samples});
+ }
+ document.getElementById('status').textContent='PERFORMANCE DONE';
+};
+window.addEventListener('message',e=>{if(e.data?.kind==='audit-error'){document.getElementById('status').textContent='ERROR '+e.data.message;post(e.data);}});
+const ready=setInterval(()=>{if(ids.every(id=>document.getElementById(id).contentWindow.auditReady)){clearInterval(ready);document.getElementById('status').textContent='Ready';}},100);
+</script>

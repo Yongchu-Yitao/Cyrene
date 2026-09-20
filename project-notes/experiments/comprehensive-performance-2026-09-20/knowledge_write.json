@@ -1,0 +1,182 @@
+{
+  "scenario": "knowledge_write",
+  "samples": [
+    {
+      "feature": "knowledge",
+      "scenario": "chunk_replace_concurrency",
+      "wall_ms": 1160.412,
+      "operations": 72,
+      "operations_per_second": 62.0,
+      "latency_p50_ms": 492.875,
+      "latency_p95_ms": 609.992,
+      "quality": {
+        "preserved": true,
+        "expected_chunks": 1548,
+        "durable_chunks": 1548,
+        "failed_writes": 0,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "concurrency": 12,
+        "failure_messages": [],
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "knowledge",
+      "scenario": "chunk_replace_concurrency",
+      "wall_ms": 1052.269,
+      "operations": 72,
+      "operations_per_second": 68.4,
+      "latency_p50_ms": 498.299,
+      "latency_p95_ms": 635.416,
+      "quality": {
+        "preserved": true,
+        "expected_chunks": 1548,
+        "durable_chunks": 1548,
+        "failed_writes": 0,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "concurrency": 12,
+        "failure_messages": [],
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "knowledge",
+      "scenario": "chunk_replace_concurrency",
+      "wall_ms": 987.057,
+      "operations": 72,
+      "operations_per_second": 72.9,
+      "latency_p50_ms": 473.039,
+      "latency_p95_ms": 566.387,
+      "quality": {
+        "preserved": true,
+        "expected_chunks": 1548,
+        "durable_chunks": 1548,
+        "failed_writes": 0,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "concurrency": 12,
+        "failure_messages": [],
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 42,
+        "hit_units": 21,
+        "miss_units": 21,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 0,
+            "miss_units": 21,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 21,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 21,
+            "hit_units": 21,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 42,
+            "cumulative_hit_units": 21,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    }
+  ],
+  "quality": {
+    "preserved": true
+  }
+}

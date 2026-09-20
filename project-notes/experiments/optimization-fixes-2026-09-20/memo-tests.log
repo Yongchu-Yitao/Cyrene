@@ -1,0 +1,13 @@
+✔ static snapshots detect in-place scalar edits and never observe getters (0.489412ms)
+✔ live, nested, special and inherited messages always render normally (0.095684ms)
+✔ memoization preserves callback, calendar, timezone and every scalar field dependency (0.096425ms)
+✔ production usage and model metadata are isolated snapshots and can be memoized (0.582452ms)
+✔ metadata getters, arrays and richer records retain the ordinary render path (0.112878ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30.178677

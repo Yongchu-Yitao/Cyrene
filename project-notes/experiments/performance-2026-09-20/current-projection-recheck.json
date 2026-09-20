@@ -1,0 +1,5 @@
+{
+  "checks": 2000,
+  "fastPathHits": 1105,
+  "scope": "current working-tree implementation pinned to current-runtime-timeline.jsx versus original snapshot; same realm; immutable inputs; 2000 long-transcript projections"
+}

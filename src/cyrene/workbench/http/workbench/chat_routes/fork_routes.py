@@ -43,7 +43,8 @@ def _build_fork_chat(service, chat: dict[str, Any], message_id: str, new_content
         return localized_error_response(
             "Message not found.", "未找到消息。", 404, "message_not_found"
         )
-    if str(messages[edit_index].get("role") or "") != "user":
+    if (str(messages[edit_index].get("role") or "") != "user"
+            or messages[edit_index].get("agentOriginated")):
         return localized_error_response(
             "Only user messages can be edited when forking a chat.",
             "分叉对话时只能编辑用户消息。",

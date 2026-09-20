@@ -129,7 +129,7 @@ Settings 页面可以不重启更新：
 - Channel 与 Map Credential；
 - Provider Plugin Connection、Model Profile 与 Role Route；
 - Plugin Pack 与独立 Plugin；
-- Main Agent Tool Round 与 Execution Subagent Safety Fuse；
+- 执行型 Subagent 的检查点、工具次数、运行时间、费用和上下文限制；重复的工具结果不会自动停止子 Agent；
 - SimpleXNG；
 - MCP Server；
 - `SOUL.md`；

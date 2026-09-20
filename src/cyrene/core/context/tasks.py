@@ -240,7 +240,10 @@ def project_tasks(path, state, *, observation_services=()):
     selected = []
     included_calls = {}
     for index, node in enumerate(path):
-        value = deepcopy(node.value)
+        # The task-state snapshot is removed before projection. Do not traverse
+        # its (potentially large) archived documents just to throw it away.
+        # Copy the remaining graph together to preserve aliases and isolation.
+        value = deepcopy({k: v for k, v in node.value.items() if k != STATE_KEY})
         value.pop(STATE_KEY, None)
         role = value.get("role")
         if role == "context" and str(value.get("context_kind", "")).startswith("task_capacity."):

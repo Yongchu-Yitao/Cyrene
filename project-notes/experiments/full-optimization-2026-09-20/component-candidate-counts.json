@@ -1,0 +1,493 @@
+{
+  "results": [
+    {
+      "history": 100,
+      "active": 1,
+      "samples": [
+        {
+          "projectionMs": 0.2999999523162842,
+          "commitMs": 23.700000047683716,
+          "layoutMs": 32,
+          "updateSamples": [
+            {
+              "commitMs": 1.5,
+              "layoutMs": 1.899999976158142,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.2000000476837158,
+              "layoutMs": 1.5,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1,
+              "layoutMs": 1.3000000715255737,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.100000023841858,
+              "layoutMs": 1.4000000953674316,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.3000000715255737,
+              "layoutMs": 1.5,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 1313,
+          "items": 101,
+          "longTasks": [],
+          "checks": true
+        },
+        {
+          "projectionMs": 0,
+          "commitMs": 12,
+          "layoutMs": 19.09999990463257,
+          "updateSamples": [
+            {
+              "commitMs": 1.2000000476837158,
+              "layoutMs": 1.399999976158142,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.2999999523162842,
+              "layoutMs": 1.600000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1,
+              "layoutMs": 1.2000000476837158,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.3000000715255737,
+              "layoutMs": 1.600000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1,
+              "layoutMs": 1.2999999523162842,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 1313,
+          "items": 101,
+          "longTasks": [],
+          "checks": true
+        },
+        {
+          "projectionMs": 0.10000002384185791,
+          "commitMs": 9.100000023841858,
+          "layoutMs": 15.700000047683716,
+          "updateSamples": [
+            {
+              "commitMs": 0.9000000953674316,
+              "layoutMs": 1.2000000476837158,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 0.6999999284744263,
+              "layoutMs": 0.8999999761581421,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 0.6999999284744263,
+              "layoutMs": 0.8999999761581421,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 0.7999999523162842,
+              "layoutMs": 1,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 0.6999999284744263,
+              "layoutMs": 1,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 1313,
+          "items": 101,
+          "longTasks": [],
+          "checks": true
+        }
+      ],
+      "projectionMs": 0.10000002384185791,
+      "mountCommitMs": 12,
+      "mountLayoutMs": 19.09999990463257,
+      "updateCommitMs": 1,
+      "updateLayoutMs": 1.3000000715255737
+    },
+    {
+      "history": 100,
+      "active": 100,
+      "samples": [
+        {
+          "projectionMs": 0.3999999761581421,
+          "commitMs": 21.800000071525574,
+          "layoutMs": 36.40000009536743,
+          "updateSamples": [
+            {
+              "commitMs": 2,
+              "layoutMs": 2.299999952316284,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.2000000476837158,
+              "layoutMs": 1.5,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.3000000715255737,
+              "layoutMs": 1.5,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.100000023841858,
+              "layoutMs": 1.2999999523162842,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.2000000476837158,
+              "layoutMs": 1.5,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 2600,
+          "items": 200,
+          "longTasks": [],
+          "checks": true
+        },
+        {
+          "projectionMs": 0.10000002384185791,
+          "commitMs": 19.700000047683716,
+          "layoutMs": 32.800000071525574,
+          "updateSamples": [
+            {
+              "commitMs": 1.3000000715255737,
+              "layoutMs": 1.600000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.899999976158142,
+              "layoutMs": 2.1999999284744263,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.7999999523162842,
+              "layoutMs": 2.100000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.0999999046325684,
+              "layoutMs": 1.5,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1,
+              "layoutMs": 1.3000000715255737,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 2600,
+          "items": 200,
+          "longTasks": [],
+          "checks": true
+        },
+        {
+          "projectionMs": 0.10000002384185791,
+          "commitMs": 22.399999976158142,
+          "layoutMs": 35.5,
+          "updateSamples": [
+            {
+              "commitMs": 1.100000023841858,
+              "layoutMs": 1.4000000953674316,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.100000023841858,
+              "layoutMs": 1.4000000953674316,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1,
+              "layoutMs": 1.399999976158142,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.5,
+              "layoutMs": 1.7000000476837158,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 1.2999999523162842,
+              "layoutMs": 1.5999999046325684,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 2600,
+          "items": 200,
+          "longTasks": [],
+          "checks": true
+        }
+      ],
+      "projectionMs": 0.10000002384185791,
+      "mountCommitMs": 21.800000071525574,
+      "mountLayoutMs": 35.5,
+      "updateCommitMs": 1.2000000476837158,
+      "updateLayoutMs": 1.5
+    },
+    {
+      "history": 1000,
+      "active": 1,
+      "samples": [
+        {
+          "projectionMs": 0.3999999761581421,
+          "commitMs": 80.79999995231628,
+          "layoutMs": 157.79999995231628,
+          "updateSamples": [
+            {
+              "commitMs": 2.8000000715255737,
+              "layoutMs": 3.600000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 4.399999976158142,
+              "layoutMs": 5.099999904632568,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.600000023841858,
+              "layoutMs": 4.200000047683716,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.5999999046325684,
+              "layoutMs": 4.199999928474426,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.700000047683716,
+              "layoutMs": 4.299999952316284,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 13013,
+          "items": 1001,
+          "longTasks": [
+            {
+              "start": 1618.6000000238419,
+              "duration": 162
+            }
+          ],
+          "checks": true
+        },
+        {
+          "projectionMs": 0.3999999761581421,
+          "commitMs": 76.89999997615814,
+          "layoutMs": 148.60000002384186,
+          "updateSamples": [
+            {
+              "commitMs": 2.799999952316284,
+              "layoutMs": 3.6999999284744263,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3,
+              "layoutMs": 3.600000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.100000023841858,
+              "layoutMs": 3.799999952316284,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.3000000715255737,
+              "layoutMs": 4.200000047683716,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.6999999284744263,
+              "layoutMs": 4.399999976158142,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 13013,
+          "items": 1001,
+          "longTasks": [],
+          "checks": true
+        },
+        {
+          "projectionMs": 0.2999999523162842,
+          "commitMs": 71.89999997615814,
+          "layoutMs": 140.89999997615814,
+          "updateSamples": [
+            {
+              "commitMs": 3.5,
+              "layoutMs": 4.299999952316284,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.299999952316284,
+              "layoutMs": 3.899999976158142,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.100000023841858,
+              "layoutMs": 3.6999999284744263,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.600000023841858,
+              "layoutMs": 4.100000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 3.200000047683716,
+              "layoutMs": 3.700000047683716,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 13013,
+          "items": 1001,
+          "longTasks": [],
+          "checks": true
+        }
+      ],
+      "projectionMs": 0.3999999761581421,
+      "mountCommitMs": 76.89999997615814,
+      "mountLayoutMs": 148.60000002384186,
+      "updateCommitMs": 3.3000000715255737,
+      "updateLayoutMs": 4.100000023841858
+    },
+    {
+      "history": 1000,
+      "active": 1000,
+      "samples": [
+        {
+          "projectionMs": 1.2999999523162842,
+          "commitMs": 183.39999997615814,
+          "layoutMs": 317,
+          "updateSamples": [
+            {
+              "commitMs": 6.100000023841858,
+              "layoutMs": 7.200000047683716,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.300000071525574,
+              "layoutMs": 7.300000071525574,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.600000023841858,
+              "layoutMs": 7.600000023841858,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.800000071525574,
+              "layoutMs": 7.800000071525574,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.600000023841858,
+              "layoutMs": 7.600000023841858,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 26000,
+          "items": 2000,
+          "longTasks": [],
+          "checks": true
+        },
+        {
+          "projectionMs": 1.100000023841858,
+          "commitMs": 185,
+          "layoutMs": 335.1999999284744,
+          "updateSamples": [
+            {
+              "commitMs": 6.300000071525574,
+              "layoutMs": 8.200000047683716,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6,
+              "layoutMs": 7.400000095367432,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.200000047683716,
+              "layoutMs": 7.5,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.299999952316284,
+              "layoutMs": 7.799999952316284,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.799999952316284,
+              "layoutMs": 8,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 26000,
+          "items": 2000,
+          "longTasks": [],
+          "checks": true
+        },
+        {
+          "projectionMs": 1,
+          "commitMs": 185.79999995231628,
+          "layoutMs": 328.6999999284744,
+          "updateSamples": [
+            {
+              "commitMs": 6.400000095367432,
+              "layoutMs": 7.400000095367432,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6,
+              "layoutMs": 7,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.399999976158142,
+              "layoutMs": 7.399999976158142,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6.799999952316284,
+              "layoutMs": 7.699999928474426,
+              "assistantRenderCalls": 1
+            },
+            {
+              "commitMs": 6,
+              "layoutMs": 6.899999976158142,
+              "assistantRenderCalls": 1
+            }
+          ],
+          "domNodes": 26000,
+          "items": 2000,
+          "longTasks": [],
+          "checks": true
+        }
+      ],
+      "projectionMs": 1.100000023841858,
+      "mountCommitMs": 185,
+      "mountLayoutMs": 328.6999999284744,
+      "updateCommitMs": 6.300000071525574,
+      "updateLayoutMs": 7.5
+    }
+  ],
+  "streaming": {
+    "chunks": 100,
+    "intervalMs": 10,
+    "elapsedMs": 1101.1999999284744,
+    "maxTickGap": 15.899999976158142,
+    "checks": true
+  },
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+}

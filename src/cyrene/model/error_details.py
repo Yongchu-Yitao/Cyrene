@@ -290,7 +290,10 @@ def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
             "invalid_request_error": ("model_request_invalid", False),
             "model_not_found": ("model_unavailable", False),
         }.get(provider_code, ("model_call_failed", True))
-        return _details(code, retryable, 0)
+        return _details(
+            code, retryable, 0,
+            retry_scope="immediate" if provider_code == "server_error" else None,
+        )
     if stream_kind == "output_limit" or (
         stream_kind == "invalid_tool_arguments"
         and isinstance(diagnostics, Mapping)

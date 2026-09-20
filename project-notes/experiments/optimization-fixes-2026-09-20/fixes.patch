@@ -1,0 +1,191 @@
+--- before-review-fixes/src/cyrene/observability/debug_event_repository.py
++++ src/cyrene/observability/debug_event_repository.py
+@@ -92,16 +92,29 @@
+             if before is not None and cached is not None and cached[0] == before:
+                 self._summary_cache.move_to_end(path)
+                 return cached[1]
+-        summaries = tuple(summary for event in self._read_jsonl(path)
++        complete = False
++
++        def read_complete():
++            nonlocal complete
++            complete = True
++
++        summaries = tuple(summary for event in self._read_jsonl(path, on_complete=read_complete)
+                           if (summary := _context_summary(event, path.name)) is not None)
+-        # A changing file is read normally but never installed as a valid cache.
++        # Failed/partial reads keep the normal response semantics, but must be
++        # retried next time even when the file's metadata has not changed.
+         after = stamp()
+-        size = len(json.dumps(summaries, ensure_ascii=False).encode("utf-8"))
++        size = None
++        if complete and before is not None and before == after:
++            try:
++                # ASCII escaping also accounts safely for JSON surrogate escapes.
++                size = len(json.dumps(summaries, ensure_ascii=True))
++            except (ValueError, TypeError, RecursionError, OverflowError):
++                pass  # Cache admission must never make a readable result fail.
+         with self._summary_lock:
+             old = self._summary_cache.pop(path, None)
+             if old is not None:
+                 self._summary_bytes -= old[2]
+-            if before is not None and before == after and size <= 16 * 1024 * 1024:
++            if size is not None and size <= 16 * 1024 * 1024:
+                 self._summary_cache[path] = (after, summaries, size)
+                 self._summary_bytes += size
+             while self._summary_cache and (len(self._summary_cache) > 20 or self._summary_bytes > 16 * 1024 * 1024):
+@@ -120,7 +133,9 @@
+             return []
+ 
+     @staticmethod
+-    def _read_jsonl(log_file: Path) -> Iterator[dict[str, Any]]:
++    def _read_jsonl(
++        log_file: Path, *, on_complete: Callable[[], None] | None = None,
++    ) -> Iterator[dict[str, Any]]:
+         try:
+             with log_file.open("r", encoding="utf-8") as handle:
+                 for line in handle:
+@@ -135,6 +150,8 @@
+                         yield raw
+         except (OSError, UnicodeDecodeError):
+             return
++        if on_complete is not None:
++            on_complete()
+ 
+ 
+ def _context_summary(
+--- before-review-fixes/src/cyrene/plugins/builtin/cyrene_code/terminal/history.py
++++ src/cyrene/plugins/builtin/cyrene_code/terminal/history.py
+@@ -13,7 +13,8 @@
+ _OSC_RE = re.compile(rb"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
+ _CSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+ _ESC_RE = re.compile(rb"\x1b[ -/]*[@-~]")
+-_PLAIN_ASCII_RUN = re.compile(rb"[ -~]+")
++_PLAIN_ASCII_RUN = re.compile(rb"[ -~]{16,}")
++_UTF8_BYTES = tuple(bytes((value,)) for value in range(256))
+ 
+ 
+ class IncrementalPlainTextParser:
+@@ -57,27 +58,29 @@
+             raise ValueError("non-contiguous incremental terminal text")
+         lines: list[dict[str, Any]] = []
+         offset = 0
+-        while offset < len(payload):
+-            # Preserve the byte-wise state machine at every control/UTF-8
+-            # boundary. Printable ASCII has one byte per character and no
+-            # state transitions, so append the whole span at once.
++        # Find substantial printable runs in C. Short/control/non-ASCII spans
++        # keep the original byte loop without per-byte fast-path probes.
++        for plain in _PLAIN_ASCII_RUN.finditer(payload):
++            begin, end = plain.span()
++            self._feed_bytes(payload[offset:begin], absolute_start + offset, lines)
+             if (self._mode == "normal" and not self._pending_cr
+                     and not self._decoder.getstate()[0]):
+-                plain = _PLAIN_ASCII_RUN.match(payload, offset)
+-                if plain is not None:
+-                    self._line.extend(plain[0].decode("ascii"))
+-                    offset = plain.end()
+-                    continue
+-            value = payload[offset]
++                self._line.extend(plain[0].decode("ascii"))
++            else:
++                self._feed_bytes(plain[0], absolute_start + begin, lines)
++            offset = end
++        self._feed_bytes(payload[offset:], absolute_start + offset, lines)
++        self._next_seq = absolute_start + len(payload)
++        return lines
++
++    def _feed_bytes(self, payload: bytes, absolute_start: int, lines: list[dict[str, Any]]) -> None:
++        for offset, value in enumerate(payload):
+             end_seq = absolute_start + offset + 1
+-            offset += 1
+             if self._consume_control_byte(value):
+                 continue
+-            decoded = self._decoder.decode(bytes((value,)), final=False)
++            decoded = self._decoder.decode(_UTF8_BYTES[value], final=False)
+             for character in decoded:
+                 self._consume_character(character, end_seq, lines)
+-        self._next_seq = absolute_start + len(payload)
+-        return lines
+ 
+     def current_line(self) -> dict[str, Any]:
+         return {
+--- before-review-fixes/src/cyrene/workbench/webui/frontend/features/chat/message-memo.mjs
++++ src/cyrene/workbench/webui/frontend/features/chat/message-memo.mjs
+@@ -1,32 +1,58 @@
+-// Snapshot only simple, completed JSON messages. Complex/live records retain
+-// ordinary rendering; no deep equality or mutable nested-data cache is used.
++// Snapshot ordinary completed messages, including the flat metadata records
++// emitted by runtime_model_message_fields. Complex/live records still render.
++const metadataFields = new Set(['usage', 'latestRequestUsage', 'modelIdentity']);
++function scalar(value) {
++  return value === null || value === undefined || typeof value === 'string'
++    || typeof value === 'number' || typeof value === 'boolean';
++}
++function snapshotRecord(record, allowMetadata) {
++  if (!record || typeof record !== 'object') return null;
++  const prototype = Object.getPrototypeOf(record);
++  if (prototype !== Object.prototype && prototype !== null) return null;
++  // Build without inherited setters, then restore the ordinary source prototype.
++  const snapshot = Object.create(null);
++  for (const key of Reflect.ownKeys(record)) {
++    if (typeof key !== 'string') return null;
++    const field = Object.getOwnPropertyDescriptor(record, key);
++    if (!field || !field.enumerable || !Object.prototype.hasOwnProperty.call(field, 'value')) return null;
++    let value = field.value;
++    if (!scalar(value)) {
++      if (!allowMetadata || !metadataFields.has(key)) return null;
++      value = snapshotRecord(value, false);
++      if (!value) return null;
++    }
++    snapshot[key] = value;
++  }
++  Object.setPrototypeOf(snapshot, prototype);
++  return snapshot;
++}
+ function snapshotStaticMessage(message) {
+-  if (!message || typeof message !== 'object') return null;
+-  const prototype = Object.getPrototypeOf(message);
+-  if (prototype !== Object.prototype && prototype !== null) return null;
+-  const snapshot = {};
+-  for (const key of Reflect.ownKeys(message)) {
+-    if (typeof key !== 'string') return null;
+-    const field = Object.getOwnPropertyDescriptor(message, key);
+-    if (!field || !field.enumerable || !Object.prototype.hasOwnProperty.call(field, 'value')) return null;
+-    const value = field.value;
+-    if (value !== null && !['undefined', 'string', 'number', 'boolean'].includes(typeof value)) return null;
+-    Object.defineProperty(snapshot, key, { value, enumerable: true, writable: true, configurable: true });
+-  }
+-  if (snapshot.role !== 'assistant' || snapshot.status === 'running' || snapshot.kind
++  const snapshot = snapshotRecord(message, true);
++  if (!snapshot || snapshot.role !== 'assistant' || snapshot.status === 'running' || snapshot.kind
+       || snapshot.activityCard || snapshot.runtimeActivity || snapshot.notificationCard
+       || snapshot.modelStatusCard) return null;
+   return snapshot;
+ }
+ function shallowEqual(left, right) {
+   const keys = Object.keys(left);
+-  return keys.length === Object.keys(right).length && keys.every(key =>
+-    Object.prototype.hasOwnProperty.call(right, key) && Object.is(left[key], right[key]));
++  return Object.getPrototypeOf(left) === Object.getPrototypeOf(right)
++    && keys.length === Object.keys(right).length && keys.every(key =>
++      Object.prototype.hasOwnProperty.call(right, key) && Object.is(left[key], right[key]));
++}
++function equalMessages(left, right) {
++  const keys = Object.keys(left);
++  return Object.getPrototypeOf(left) === Object.getPrototypeOf(right)
++    && keys.length === Object.keys(right).length && keys.every(key => {
++      if (!Object.prototype.hasOwnProperty.call(right, key)) return false;
++      const a = left[key], b = right[key];
++      return metadataFields.has(key) && a && b && typeof a === 'object' && typeof b === 'object'
++        ? shallowEqual(a, b) : Object.is(a, b);
++    });
+ }
+ function equalAssistantProps(previous, next) {
+   if (!previous.staticMessage || !next.staticMessage || previous.liveRuntime || next.liveRuntime) return false;
+   const { msg: oldMessage, ...oldProps } = previous;
+   const { msg: newMessage, ...newProps } = next;
+-  return shallowEqual(oldProps, newProps) && shallowEqual(oldMessage, newMessage);
++  return shallowEqual(oldProps, newProps) && equalMessages(oldMessage, newMessage);
+ }
+ export { snapshotStaticMessage, equalAssistantProps };

@@ -169,7 +169,63 @@ class WorkbenchChatApplicationPort:
     async def send(self, chat_id: str, body: dict[str, Any]) -> dict[str, Any]:
         return _domain_result(await self._send(chat_id, body, detached=True))
 
+    async def agent_message_admitted(self, chat_id: str, request_id: str) -> bool:
+        """Read durable receiver evidence, never infer it from the transcript."""
+        def read() -> bool:
+            import sqlite3
+            from contextlib import closing
+            from cyrene.workbench.application.inbox import _inbox_payload
+
+            with closing(sqlite3.connect(self.service.repository._database())) as db:
+                try:
+                    rows = db.execute(
+                        "SELECT payload_json FROM workbench_agent_inbox "
+                        "WHERE session_id=? AND dedupe_key=? AND event_type='guidance'",
+                        (chat_id, f"guidance:{request_id}"),
+                    ).fetchall()
+                except sqlite3.OperationalError as exc:
+                    if "no such table" not in str(exc).lower():
+                        raise
+                    rows = []
+            if any(_inbox_payload(row[0]).get("agent_originated") is True for row in rows):
+                return True
+            return self.run_manager.conversation_runtime.has_admitted_agent_message(chat_id, request_id)
+        return await asyncio.to_thread(read)
+
     async def dispatch_agent_message(
+        self, chat_id: str, message: str, *, origin_session_id: str = "",
+        client_request_id: str = "", expected_version: str | None = None,
+    ) -> dict[str, Any]:
+        from cyrene.workbench.sessions.admission import session_admission
+        import json
+
+        async def admit():
+            with session_admission(self.service.repository._database(), chat_id):
+                chat = await asyncio.to_thread(self.service.repository.get, chat_id)
+                version = json.dumps([chat.get("createdAt", ""), chat.get("messageGeneration", 0)]) if chat else None
+                if chat is None or (expected_version is not None and version != expected_version):
+                    raise ControlServiceError("Target session was cleared or deleted.", status_code=410)
+                if client_request_id and await self.agent_message_admitted(chat_id, client_request_id):
+                    return {"status": "admitted", "session_id": chat_id, "duplicate": True}
+                if chat.get("pendingQuestion"):
+                    raise ControlServiceError("Target is awaiting user input.", status_code=409)
+                return await self._dispatch_agent_message(
+                    chat_id, message, origin_session_id=origin_session_id,
+                    client_request_id=client_request_id,
+                )
+
+        # Cancellation must not release exclusion while an off-thread write is
+        # still capable of persisting an input into a newly cleared conversation.
+        task = asyncio.create_task(admit())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await task
+            finally:
+                raise
+
+    async def _dispatch_agent_message(
         self,
         chat_id: str,
         message: str,
@@ -211,7 +267,13 @@ class WorkbenchChatApplicationPort:
                 "run_id": str(result.payload.get("runId") or ""),
             }
 
-        if self.run_manager.get(chat_id) is not None:
+        active = self.run_manager.get(chat_id)
+        if active is not None:
+            # A retry may observe the run created by its own earlier attempt
+            # before that run has mounted input. Do not also enqueue guidance.
+            if active.events and active.events[0].get("clientRequestId") == request_id:
+                await self._wait_agent_message_admission(chat_id, request_id)
+                return {"status": "admitted", "session_id": chat_id, "run_id": active.run_id}
             return await guide_active()
         try:
             payload = await self.send(
@@ -229,12 +291,22 @@ class WorkbenchChatApplicationPort:
             if exc.status_code == 409 or exc.code == "chat_run_in_progress":
                 return await guide_active()
             raise
+        await self._wait_agent_message_admission(chat_id, request_id)
         return {
             **payload,
             "status": "started",
             "session_id": str(chat_id),
             "run_id": str(payload.get("run_id") or payload.get("runId") or ""),
         }
+
+    async def _wait_agent_message_admission(self, chat_id: str, request_id: str) -> None:
+        # HTTP 202 only means an in-memory runner exists. Wait for its input
+        # commit, independently of whether the eventual model call succeeds.
+        async with asyncio.timeout(20):
+            while not await self.agent_message_admitted(chat_id, request_id):
+                if self.run_manager.get(chat_id) is None:
+                    raise ControlServiceError("Agent run ended before input admission.", status_code=503)
+                await asyncio.sleep(0.05)
 
     async def guide(self, chat_id: str, command: Any) -> dict[str, Any]:
         values = _body(command)

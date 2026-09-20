@@ -1,0 +1,4 @@
+[
+  "src/cyrene/plugins/builtin/cyrene_sessions/__init__.py::cyrene.workbench.application.app_services::_chat_application_port",
+  "src/cyrene/workbench/control/control_ports.py::cyrene.workbench.application.inbox::_inbox_payload"
+]

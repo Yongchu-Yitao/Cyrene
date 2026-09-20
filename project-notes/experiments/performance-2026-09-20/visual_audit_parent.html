@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>Cyrene display equivalence audit</title>
+<style>body{font:14px system-ui;margin:12px;background:#eee;color:#17191d}header{position:static;background:#eee;padding:8px;z-index:10}button,select{margin:4px;padding:7px}#panes{display:flex;gap:16px}section{flex:1;min-width:0}iframe{width:100%;height:650px;border:1px solid #ccc;background:white}#panes.narrow section{flex:none;width:360px}#result{max-height:120px;overflow:auto;white-space:pre-wrap;padding:8px;background:white}h2{font-size:14px}</style>
+<header><strong>Cyrene 原实现 / 候选实现：真实消息组件隔离验证</strong><br>
+<label>场景 <select id="scenario"><option value="normal">普通长时间线</option><option value="same-time">相同时间</option><option value="invalid-date">无效时间回退</option><option value="question">问答回退</option><option value="reconnect">重连</option></select></label>
+<button data-command="delta">追加流式文字</button><button data-command="cleanup">删除重试残留</button><button data-command="finish">完成回复</button><button data-command="cancel">取消回复</button><button id="theme">切换深浅色</button><button id="language">切换中英文</button><button id="width">切换窄屏</button><button id="compare">重新比较</button>
+<div id="result">正在载入真实组件…</div></header>
+<div id="panes"><section><h2>原实现</h2><iframe title="原实现" id="baseline" src="/baseline.html"></iframe></section><section><h2>候选实现</h2><iframe title="候选实现" id="candidate" src="/candidate.html"></iframe></section></div>
+<script>
+const results={},history=[];let dark=false,zh=false;
+function send(command,value){for(const id of ['baseline','candidate'])document.getElementById(id).contentWindow.postMessage({kind:'audit-control',command,value},location.origin);}
+function compare(){if(!results.baseline||!results.candidate)return;const a=results.baseline,b=results.candidate;
+const result={scenario:document.getElementById('scenario').value,steps:[a.step,b.step],htmlEqual:a.html===b.html,textEqual:a.text===b.text,geometryEqual:JSON.stringify(a.geometry)===JSON.stringify(b.geometry),actionsEqual:JSON.stringify(a.actions)===JSON.stringify(b.actions),rows:[a.rows,b.rows],preserved:[a.preserved,b.preserved],fastHits:b.fastHits};
+document.getElementById('result').textContent=JSON.stringify(result,null,2);history.push(result);fetch('/audit-result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result)});}
+window.addEventListener('message',e=>{if(e.origin!==location.origin)return;if(e.data.kind==='audit-error'){document.getElementById('result').textContent=JSON.stringify(e.data);return;}if(e.data.kind==='audit-result'){results[e.data.variant]=e.data;if(results.baseline?.step===results.candidate?.step)compare();}});
+document.querySelectorAll('[data-command]').forEach(b=>b.onclick=()=>send(b.dataset.command));
+document.getElementById('scenario').onchange=e=>send('scenario',e.target.value);
+document.getElementById('theme').onclick=()=>{dark=!dark;send('theme',dark?'dark':'light');};
+document.getElementById('language').onclick=()=>{zh=!zh;send('language',zh?'zh':'en');};
+document.getElementById('width').onclick=()=>{document.getElementById('panes').classList.toggle('narrow');send('measure');};
+document.getElementById('compare').onclick=()=>send('measure');
+</script>

@@ -38,15 +38,10 @@ def setup_child_runtime(context: PluginSetupContext, manager: object) -> None:
     async def observe_tool(event: HookEvent) -> None:
         payload = event.payload if isinstance(event.payload, Mapping) else {}
         tool = payload.get("tool") if isinstance(payload, Mapping) else {}
-        result = payload.get("result") if isinstance(payload, Mapping) else {}
         tool = tool if isinstance(tool, Mapping) else {}
-        result = result if isinstance(result, Mapping) else {}
-        arguments = tool.get("arguments")
-        manager.record_tool_result(
+        manager.record_tool_execution(
             agent_id,
             str(tool.get("name") or ""),
-            arguments if isinstance(arguments, Mapping) else {},
-            result,
         )
 
     async def observe_context(event: HookEvent) -> None:

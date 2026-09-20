@@ -62,7 +62,19 @@ class ChatGuidanceApplicationService:
                 404,
             )
         now = self.dependencies.utc_now_iso()
-        message_id = self.dependencies.short_id("msg")
+        previous = next((item for item in chat.get("messages", [])
+                         if agent_originated and client_request_id
+                         and item.get("clientRequestId") == client_request_id), None)
+        if previous is not None and (
+            not previous.get("agentOriginated")
+            or previous.get("originSessionId", "") != origin_session_id
+            or previous.get("content") != message
+        ):
+            return self._error("Agent message request ID conflicts with an existing turn.",
+                               "agent_message_conflict", 422)
+        message_id = str(previous["id"]) if previous else self.dependencies.short_id("msg")
+        if previous:
+            now = str(previous.get("createdAt") or now)
         try:
             event = await run.inbox.put_guidance(
                 message,
@@ -99,8 +111,13 @@ class ChatGuidanceApplicationService:
         )
 
         def persist(current: dict[str, Any]) -> None:
-            current.setdefault("messages", []).append(entry)
-            current["updatedAt"] = now
+            messages = current.setdefault("messages", [])
+            existing = next((item for item in messages if item.get("id") == message_id), None)
+            if existing is None:
+                messages.append(entry)
+            else:
+                existing.update(entry)
+            current["updatedAt"] = max(str(current.get("updatedAt") or ""), now)
 
         await asyncio.to_thread(self.dependencies.mutate_chat, chat_id, persist)
         await run.publish(

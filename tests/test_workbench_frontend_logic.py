@@ -522,6 +522,7 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
         "// Conversation main (column 3)", 1
     )[0]
     drop_controller = frontend_module_source("features/chat/rail-drop-controller.jsx")
+    rail_status = frontend_module_source("features/chat/rail-status.mjs")
     assert "WBC_CHAT_ORDER_PREFIX" in source
     assert "WBC_CHAT_GROUPS_PREFIX" in source
     assert "wbcLoadChatGroups(projectId, defaultOrder)" in rail
@@ -549,18 +550,18 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "function revealRailMenu(actions)" in rail
     assert "revealExpandedGroup" not in rail
     assert "function chatRailVisualState(chat)" in rail
-    assert 'var rawStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();' in rail
-    assert '!!chat.awaitingUser || !!chat.pendingQuestion' in rail
-    assert 'tone: failed ? " status-failed"' in rail
-    assert 'attention ? WBC_ICONS.alert' in rail
-    assert 'failed ? WBC_ICONS.errorCircle' in rail
-    assert 'completed ? WBC_ICONS.check' in rail
-    assert 'running ? WBC_ICONS.running : WBC_ICONS.file' in rail
+    assert 'var rawStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();' in rail_status
+    assert 'chat.awaitingUser || chat.pendingQuestion' in rail_status
+    assert 'tone: kind ? " status-" + kind : ""' in rail_status
+    assert 'return icons.alert' in rail_status
+    assert 'return icons.errorCircle' in rail_status
+    assert 'return kind === "completed" ? icons.check : icons.file' in rail_status
+    assert 'return icons.running' in rail_status
     assert 'running: <span className="wb-spinner wbc-chat-running-spinner"' in source
     assert ".wbc-chat-running-spinner {" in styles
     assert "animation-duration: 0.7s;" in styles
     assert "var chatStatusLabel = visualState.label" in rail
-    assert 'wbcT("status.failed", "Failed")' in rail
+    assert 'translate("status.failed", "Failed")' in rail_status
     assert '!chatStatusLabel && (' in rail
     assert '{chatStatusLabel && (' in rail
     assert 'className="wbc-chat-card-status"' in rail
@@ -10477,6 +10478,7 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     contract = (root / "src" / "cyrene" / "plugins" / "builtin" / "cyrene_renderer" / "load_contract.py").read_text(encoding="utf-8")
 
     assistant_message = chat.split("function WbcAssistantMessage", 1)[1].split("var WBC_HEARTBEAT_STALL_MS", 1)[0]
+    streaming_fade = frontend_module_source("features/chat/streaming-fade.mjs")
     assert "WBC_LIVE_FRAME_INTERVAL_MS = 48" in chat
     assert "wbcUseBufferedLiveText" in assistant_message
     assert "workbenchServices.markdown().splitStableBlocks(renderedText, streamingPartsRef.current)" in assistant_message
@@ -10484,7 +10486,7 @@ def test_workbench_live_reply_disables_interactive_markdown_until_done():
     assert 'String(bodyRef.current.textContent || "").length' in assistant_message
     assert "wbcClearStreamingFades(bodyRef.current)" in assistant_message
     assert "wbcFadeInStreamingTail(bodyRef.current, addedVisibleCharacterCount, liveFadeStateRef.current)" in assistant_message
-    assert 'fade.className = "wbc-stream-fade"' in chat
+    assert 'fade.className = "wbc-stream-fade"' in streaming_fade
     assert ".wbc-stream-fade" in styles
     assert "animation: wbc-stream-tail-in 520ms" in styles
     assert "opacity: 0;" in styles

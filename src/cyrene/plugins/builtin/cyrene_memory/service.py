@@ -471,6 +471,17 @@ class MemoryService:
         metadata = metadata if isinstance(metadata, Mapping) else {}
         turn_id = str(details.get("turn_id") or metadata.get("turn_id") or "")
         path = self._path(assistant_node_id)
+        # Peer statements must not become user facts, including mixed guidance
+        # turns whose original input was genuinely human-authored.
+        if any(
+            isinstance(node.value, Mapping)
+            and isinstance(node.value.get("metadata"), Mapping)
+            and (node.value["metadata"].get("agent_originated")
+                 or node.value["metadata"].get("contains_agent_messages"))
+            and str(node.value.get("run_id") or "") == str(details.get("run_id") or "")
+            for node in path
+        ):
+            return None
         anchor = path[-1] if path and path[-1].id == assistant_node_id else None
         anchor_value = (
             dict(anchor.value)

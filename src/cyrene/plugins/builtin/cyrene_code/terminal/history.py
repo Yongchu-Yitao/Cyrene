@@ -13,6 +13,8 @@ from .shell_integration import OscMetadataParser
 _OSC_RE = re.compile(rb"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 _CSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
 _ESC_RE = re.compile(rb"\x1b[ -/]*[@-~]")
+_PLAIN_ASCII_RUN = re.compile(rb"[ -~]{16,}")
+_UTF8_BYTES = tuple(bytes((value,)) for value in range(256))
 
 
 class IncrementalPlainTextParser:
@@ -55,15 +57,30 @@ class IncrementalPlainTextParser:
         elif self._next_seq != absolute_start:
             raise ValueError("non-contiguous incremental terminal text")
         lines: list[dict[str, Any]] = []
+        offset = 0
+        # Find substantial printable runs in C. Short/control/non-ASCII spans
+        # keep the original byte loop without per-byte fast-path probes.
+        for plain in _PLAIN_ASCII_RUN.finditer(payload):
+            begin, end = plain.span()
+            self._feed_bytes(payload[offset:begin], absolute_start + offset, lines)
+            if (self._mode == "normal" and not self._pending_cr
+                    and not self._decoder.getstate()[0]):
+                self._line.extend(plain[0].decode("ascii"))
+            else:
+                self._feed_bytes(plain[0], absolute_start + begin, lines)
+            offset = end
+        self._feed_bytes(payload[offset:], absolute_start + offset, lines)
+        self._next_seq = absolute_start + len(payload)
+        return lines
+
+    def _feed_bytes(self, payload: bytes, absolute_start: int, lines: list[dict[str, Any]]) -> None:
         for offset, value in enumerate(payload):
             end_seq = absolute_start + offset + 1
             if self._consume_control_byte(value):
                 continue
-            decoded = self._decoder.decode(bytes((value,)), final=False)
+            decoded = self._decoder.decode(_UTF8_BYTES[value], final=False)
             for character in decoded:
                 self._consume_character(character, end_seq, lines)
-        self._next_seq = absolute_start + len(payload)
-        return lines
 
     def current_line(self) -> dict[str, Any]:
         return {

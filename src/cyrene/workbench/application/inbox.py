@@ -864,7 +864,8 @@ class WorkbenchAgentInbox:
             self._live_dedupe_events[dedupe_key] = event
         if event_type == "guidance":
             self._guidance_pending_count += 1
-            self._guidance_signal.set()
+            if not event["payload"].get("agent_originated"):
+                self._guidance_signal.set()
         await self._queue.put(self._queue_item(event))
         return event
 
@@ -1495,6 +1496,7 @@ class WorkbenchGuidanceChannel:
         self._requeued: list[dict[str, Any]] = []
         self._revision = 0
         self._notified = False
+        self._interrupt_pending = False
         self._closed = False
         inbox.set_guidance_listener(self.notify)
 
@@ -1526,12 +1528,16 @@ class WorkbenchGuidanceChannel:
             loop.call_soon_threadsafe(self._resolve_waiter, future, value)
 
     def notify(self, _event: dict[str, Any] | None = None) -> None:
+        payload = (_event or {}).get("payload") or {}
+        interrupt = not payload.get("agent_originated")
         with self._lock:
             if self._closed:
                 return
             self._revision += 1
             self._notified = True
-        self._wake(True)
+            self._interrupt_pending = self._interrupt_pending or interrupt
+        if interrupt:
+            self._wake(True)
 
     @property
     def has_pending(self) -> bool:
@@ -1541,7 +1547,7 @@ class WorkbenchGuidanceChannel:
     async def wait(self) -> bool:
         loop = asyncio.get_running_loop()
         with self._lock:
-            if self._notified or self._requeued:
+            if self._interrupt_pending:
                 return True
             if self._closed:
                 return False
@@ -1599,6 +1605,7 @@ class WorkbenchGuidanceChannel:
         with self._lock:
             if self._revision == revision and not self._requeued:
                 self._notified = False
+                self._interrupt_pending = False
         return self._dedupe(events)
 
     async def collect_or_seal(self) -> list[dict[str, Any]]:
@@ -1611,9 +1618,11 @@ class WorkbenchGuidanceChannel:
             if events:
                 if self._revision == revision and not self._requeued:
                     self._notified = False
+                    self._interrupt_pending = False
             else:
                 self._closed = True
                 self._notified = False
+                self._interrupt_pending = False
         if not events:
             self._wake(False)
         return self._dedupe(events)
@@ -1625,7 +1634,10 @@ class WorkbenchGuidanceChannel:
             self._requeued = self._dedupe([*events, *self._requeued])
             self._revision += 1
             self._notified = True
-        self._wake(True)
+            interrupt = any(not (event.get("payload") or {}).get("agent_originated") for event in events)
+            self._interrupt_pending = self._interrupt_pending or interrupt
+        if interrupt:
+            self._wake(True)
 
     async def acknowledge(self, events: list[dict[str, Any]]) -> None:
         if events:
@@ -1849,6 +1861,8 @@ def read_workbench_guidance_records(db_path: str) -> list[dict[str, Any]]:
                 "messageId": message_id,
                 "clientRequestId": str(payload.get("client_request_id") or ""),
                 "content": text,
+                "agentOriginated": payload.get("agent_originated") is True,
+                "originSessionId": str(payload.get("origin_session_id") or ""),
                 "createdAt": str(payload.get("public_created_at") or created_at or ""),
             })
         return records

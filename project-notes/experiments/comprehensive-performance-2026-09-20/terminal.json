@@ -1,0 +1,191 @@
+{
+  "scenario": "terminal",
+  "samples": [
+    {
+      "feature": "terminal",
+      "scenario": "output_stream_persist_screen_replay",
+      "wall_ms": 11181.094,
+      "operations": 3072,
+      "operations_per_second": 274.7,
+      "latency_p50_ms": 3642.664,
+      "latency_p95_ms": 4955.158,
+      "quality": {
+        "preserved": true,
+        "expected_bytes": 2097152,
+        "durable_bytes": 2097152,
+        "replay_bytes": 2097152,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "first_live_ms": 0.032,
+        "append_ms": 3.607,
+        "flush_ms": 660.093,
+        "screen_parse_ms": 1158.373,
+        "replay_ms": 4.14,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 30,
+        "hit_units": 15,
+        "miss_units": 15,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 15,
+            "hit_units": 0,
+            "miss_units": 15,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 15,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 15,
+            "hit_units": 15,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 30,
+            "cumulative_hit_units": 15,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "terminal",
+      "scenario": "output_stream_persist_screen_replay",
+      "wall_ms": 10987.728,
+      "operations": 3072,
+      "operations_per_second": 279.6,
+      "latency_p50_ms": 3455.2,
+      "latency_p95_ms": 4835.259,
+      "quality": {
+        "preserved": true,
+        "expected_bytes": 2097152,
+        "durable_bytes": 2097152,
+        "replay_bytes": 2097152,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "first_live_ms": 0.034,
+        "append_ms": 3.676,
+        "flush_ms": 652.65,
+        "screen_parse_ms": 1143.613,
+        "replay_ms": 4.319,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 30,
+        "hit_units": 15,
+        "miss_units": 15,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 15,
+            "hit_units": 0,
+            "miss_units": 15,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 15,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 15,
+            "hit_units": 15,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 30,
+            "cumulative_hit_units": 15,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "terminal",
+      "scenario": "output_stream_persist_screen_replay",
+      "wall_ms": 11105.978,
+      "operations": 3072,
+      "operations_per_second": 276.6,
+      "latency_p50_ms": 3568.443,
+      "latency_p95_ms": 4935.888,
+      "quality": {
+        "preserved": true,
+        "expected_bytes": 2097152,
+        "durable_bytes": 2097152,
+        "replay_bytes": 2097152,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "first_live_ms": 0.03,
+        "append_ms": 3.386,
+        "flush_ms": 659.347,
+        "screen_parse_ms": 1195.209,
+        "replay_ms": 4.61,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 30,
+        "hit_units": 15,
+        "miss_units": 15,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 15,
+            "hit_units": 0,
+            "miss_units": 15,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 15,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 15,
+            "hit_units": 15,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 30,
+            "cumulative_hit_units": 15,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    }
+  ],
+  "quality": {
+    "preserved": true
+  }
+}

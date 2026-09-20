@@ -60,7 +60,6 @@ def application_setup(context: PluginApplicationContext) -> None:
         ),
         plugin_setting_spec("subagent_execution_max_tool_calls", "integer", 200, tab="agents", minimum=1, maximum=5000),
         plugin_setting_spec("subagent_execution_max_wall_seconds", "integer", 1800, tab="agents", minimum=30, maximum=86400),
-        plugin_setting_spec("subagent_execution_no_progress_turns", "integer", 3, tab="agents", minimum=1, maximum=20),
         plugin_setting_spec("subagent_execution_checkpoint_calls", "integer", 20, tab="agents", minimum=1, maximum=500),
         plugin_setting_spec("subagent_execution_max_cost_usd", "number", 5.0, tab="agents", minimum=0, maximum=1000),
         plugin_setting_spec("subagent_execution_max_context_tokens", "integer", 0, tab="agents", minimum=0, maximum=4_000_000),

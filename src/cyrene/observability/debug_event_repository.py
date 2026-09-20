@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import threading
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -26,6 +29,9 @@ class DebugEventRepository:
         self._recent_events = recent_events
         self._full_event = full_event
         self._subscribe_events = subscribe_events
+        self._summary_cache = OrderedDict()
+        self._summary_bytes = 0
+        self._summary_lock = threading.RLock()
 
     def subscribe(self, session_id: str = "") -> AsyncIterator[dict[str, Any]]:
         return self._subscribe_events(session_id=session_id)
@@ -62,16 +68,59 @@ class DebugEventRepository:
             if summary is not None:
                 events_by_id[summary["id"]] = summary
         for log_file in self._debug_log_files():
-            for event in self._read_jsonl(log_file):
-                summary = _context_summary(event, log_file.name)
-                if summary is not None:
-                    events_by_id[summary["id"]] = summary
+            for summary in self._file_context_summaries(log_file):
+                events_by_id[summary["id"]] = summary
         events = sorted(
             events_by_id.values(),
             key=lambda item: str(item.get("timestamp") or ""),
             reverse=True,
         )[:limit]
-        return {"events": events}
+        # Cached file summaries remain private, including nested token maps.
+        return {"events": [copy.deepcopy(item) if item["source_log"] else item for item in events]}
+
+    def _file_context_summaries(self, path: Path):
+        def stamp():
+            try:
+                stat = path.stat()
+                return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            except OSError:
+                return None
+
+        before = stamp()
+        with self._summary_lock:
+            cached = self._summary_cache.get(path)
+            if before is not None and cached is not None and cached[0] == before:
+                self._summary_cache.move_to_end(path)
+                return cached[1]
+        complete = False
+
+        def read_complete():
+            nonlocal complete
+            complete = True
+
+        summaries = tuple(summary for event in self._read_jsonl(path, on_complete=read_complete)
+                          if (summary := _context_summary(event, path.name)) is not None)
+        # Failed/partial reads keep the normal response semantics, but must be
+        # retried next time even when the file's metadata has not changed.
+        after = stamp()
+        size = None
+        if complete and before is not None and before == after:
+            try:
+                # ASCII escaping also accounts safely for JSON surrogate escapes.
+                size = len(json.dumps(summaries, ensure_ascii=True))
+            except (ValueError, TypeError, RecursionError, OverflowError):
+                pass  # Cache admission must never make a readable result fail.
+        with self._summary_lock:
+            old = self._summary_cache.pop(path, None)
+            if old is not None:
+                self._summary_bytes -= old[2]
+            if size is not None and size <= 16 * 1024 * 1024:
+                self._summary_cache[path] = (after, summaries, size)
+                self._summary_bytes += size
+            while self._summary_cache and (len(self._summary_cache) > 20 or self._summary_bytes > 16 * 1024 * 1024):
+                _, old = self._summary_cache.popitem(last=False)
+                self._summary_bytes -= old[2]
+        return summaries
 
     def _debug_log_files(self) -> list[Path]:
         if not self.data_dir.exists():
@@ -84,7 +133,9 @@ class DebugEventRepository:
             return []
 
     @staticmethod
-    def _read_jsonl(log_file: Path) -> Iterator[dict[str, Any]]:
+    def _read_jsonl(
+        log_file: Path, *, on_complete: Callable[[], None] | None = None,
+    ) -> Iterator[dict[str, Any]]:
         try:
             with log_file.open("r", encoding="utf-8") as handle:
                 for line in handle:
@@ -99,6 +150,8 @@ class DebugEventRepository:
                         yield raw
         except (OSError, UnicodeDecodeError):
             return
+        if on_complete is not None:
+            on_complete()
 
 
 def _context_summary(

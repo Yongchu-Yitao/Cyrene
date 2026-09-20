@@ -1,0 +1,532 @@
+--- baseline/src/cyrene/core/observability.py
++++ src/cyrene/core/observability.py
+@@ -285,6 +285,14 @@
+ ) -> None:
+     """Emit one searchable JSON operation record."""
+ 
++    try:
++        effective_level = _default_log_level(fields) if level is None else level
++        enabled = logger.isEnabledFor(effective_level)
++    except Exception:
++        # Preserve the non-throwing logging boundary for malformed levels.
++        return
++    if not enabled:
++        return
+     payload = {
+         "component": str(component),
+         "action": str(action),
+@@ -305,7 +313,7 @@
+         )
+     try:
+         logger.log(
+-            _default_log_level(fields) if level is None else level,
++            effective_level,
+             "%s %s",
+             LOG_PREFIX,
+             encoded,
+--- baseline/src/cyrene/core/context/schema.py
++++ src/cyrene/core/context/schema.py
+@@ -124,6 +124,11 @@
+         """
+     )
+     _ensure_context_token_columns(connection)
++    connection.execute(
++        "CREATE INDEX IF NOT EXISTS idx_context_missing_tokens "
++        "ON context_nodes(node_id) "
++        "WHERE self_token_count IS NULL OR path_token_count IS NULL"
++    )
+     _ensure_tree_metadata_columns(connection)
+     _ensure_closed_hook_failure_policy(connection)
+ 
+--- baseline/src/cyrene/core/context/tasks.py
++++ src/cyrene/core/context/tasks.py
+@@ -240,7 +240,10 @@
+     selected = []
+     included_calls = {}
+     for index, node in enumerate(path):
+-        value = deepcopy(node.value)
++        # The task-state snapshot is removed before projection. Do not traverse
++        # its (potentially large) archived documents just to throw it away.
++        # Copy the remaining graph together to preserve aliases and isolation.
++        value = deepcopy({k: v for k, v in node.value.items() if k != STATE_KEY})
+         value.pop(STATE_KEY, None)
+         role = value.get("role")
+         if role == "context" and str(value.get("context_kind", "")).startswith("task_capacity."):
+--- baseline/src/cyrene/workbench/chat/run_timeline.py
++++ src/cyrene/workbench/chat/run_timeline.py
+@@ -231,8 +231,25 @@
+             return self._append_text(identity, kind, payload)
+         if kind in {"tool.started", "tool.updated", "tool.completed", "tool_call_started", "tool_call_progress", "tool_call_finished", "permission.reviewed"}:
+             return self._changed_patch(self._apply_tool(kind, payload, at, source, event_id))
+-        # Structural events may close memberships or settle several records.
+-        before = copy.deepcopy(self.records)
++        # Known in-place transitions cannot create/close other memberships.
++        # Keep the original full comparison for structural creation/replacement.
++        local_ids = None
++        if kind in {"reply_done", "message.completed"}:
++            target = self.sources.get(f"message:{source}") if source else self.reply_id
++            if target in self.records:
++                local_ids = [target]
++        elif kind in {"reasoning_done", "reasoning.completed"}:
++            target = self.reasonings.get(source) if source else self.reasoning_id
++            if target in self.records:
++                local_ids = [target]
++        elif kind in {"permission.requested", "elicitation.requested", "awaiting_user",
++                      "run.awaiting_input", "permission.resolved", "elicitation.resolved"}:
++            local_ids = []
++        elif kind == "message.cancelled" and source:
++            targets = {self.reasonings.get(source), self.sources.get(f"message:{source}")}
++            local_ids = [key for key in self.records if key in targets]
++        before = copy.deepcopy(self.records if local_ids is None else
++                               {key: self.records[key] for key in local_ids})
+         if kind in {"reply_start", "message.started"}:
+             self._reply(at, source, new=True)
+         elif kind in {"reply_delta", "message.delta", "reply_done", "message.completed"}:
+@@ -291,7 +308,10 @@
+                     for entry in record.get("trace", []):
+                         if entry.get("status") == "running":
+                             entry.update(status=self.status, endedAt=at)
+-        changed = [r for key, r in self.records.items() if before.get(key) != r]
++        compared = self.records.items() if local_ids is None else (
++            (key, self.records[key]) for key in local_ids
++        )
++        changed = [r for key, r in compared if before.get(key) != r]
+         return self._changed_patch(changed)
+ 
+     def _changed_patch(self, changed: list[dict[str, Any]]) -> dict[str, Any]:
+--- baseline/src/cyrene/workbench/chat/chat_runs.py
++++ src/cyrene/workbench/chat/chat_runs.py
+@@ -30,6 +30,7 @@
+ 
+ import asyncio
+ from bisect import bisect_right
++from contextlib import closing
+ import json
+ import logging
+ import sqlite3
+@@ -216,7 +217,7 @@
+         return conn
+ 
+     def _initialize(self) -> None:
+-        with self._lock, self._connect() as conn:
++        with self._lock, closing(self._connect()) as conn, conn:
+             conn.executescript(
+                 """
+                 CREATE TABLE IF NOT EXISTS workbench_chat_runs (
+@@ -284,7 +285,7 @@
+                 )
+ 
+     def create(self, run: "ChatRun") -> None:
+-        with self._lock, self._connect() as conn:
++        with self._lock, closing(self._connect()) as conn, conn:
+             conn.execute(
+                 """
+                 INSERT OR REPLACE INTO workbench_chat_runs(
+@@ -313,7 +314,7 @@
+         """Persist a cursor-preserving event batch in one transaction."""
+         if not events:
+             return
+-        with self._lock, self._connect() as conn:
++        with self._lock, closing(self._connect()) as conn, conn:
+             base = conn.execute("SELECT replay_base_seq FROM workbench_chat_runs WHERE run_id = ?", (str(run_id),)).fetchone()
+             # Cancelled thread flushes may have committed before being retried.
+             # Never resurrect operations already folded into the baseline.
+@@ -380,7 +381,7 @@
+ 
+     def finalize(self, run: "ChatRun") -> None:
+         outcome = run.outcome if isinstance(run.outcome, dict) else {}
+-        with self._lock, self._connect() as conn:
++        with self._lock, closing(self._connect()) as conn, conn:
+             conn.execute(
+                 """
+                 UPDATE workbench_chat_runs
+@@ -400,7 +401,7 @@
+ 
+     def delete_chat(self, chat_id: str) -> None:
+         """Remove durable replay state after its owning chat is deleted."""
+-        with self._lock, self._connect() as conn:
++        with self._lock, closing(self._connect()) as conn, conn:
+             run_ids = [
+                 str(row["run_id"])
+                 for row in conn.execute(
+@@ -420,7 +421,7 @@
+ 
+     def recover_interrupted(self) -> int:
+         now = datetime.now(timezone.utc).isoformat()
+-        with self._lock, self._connect() as conn:
++        with self._lock, closing(self._connect()) as conn, conn:
+             rows = conn.execute(
+                 """
+                 SELECT run_id, last_seq FROM workbench_chat_runs
+@@ -468,7 +469,7 @@
+         *,
+         order_by: str = "created_at DESC",
+     ) -> "ChatRun | None":
+-        with self._lock, self._connect() as conn:
++        with self._lock, closing(self._connect()) as conn, conn:
+             row = conn.execute(
+                 f"""
+                 SELECT run_id, chat_id, status, created_at, completed_at,
+--- baseline/src/cyrene/workbench/chat/context_read_cache.py
++++ src/cyrene/workbench/chat/context_read_cache.py
+@@ -1,8 +1,7 @@
+-"""Bounded, commit-aware cache for read-only ContextTree projections.
++"""Bounded, commit-aware cache with per-key loading and leased connections.
+ 
+-Each entry keeps an idle SQLite connection solely for PRAGMA data_version.
+-Unlike mtime or a TTL, this detects commits from other connections, including
+-WAL writes. No read transaction is retained between requests.
++SQLite data_version observes WAL commits; each caller receives an isolated value.
++The LRU lock protects metadata only, never a loader or pickle conversion.
+ """
+ from __future__ import annotations
+ 
+@@ -11,43 +10,89 @@
+ import sqlite3
+ import threading
+ from collections import OrderedDict
++from dataclasses import dataclass, field
+ from pathlib import Path
++
++
++@dataclass
++class _Entry:
++    identity: tuple
++    connection: sqlite3.Connection
++    version: int | None = None
++    payload: bytes = b''
++    dependencies: dict = field(default_factory=dict)
++    leases: int = 0
++    retired: bool = False
+ 
+ 
+ class ContextReadCache:
+     def __init__(self, max_entries=256, max_bytes=16 * 1024 * 1024):
+         self._entries = OrderedDict()
+         self._lock = threading.RLock()
++        self._condition = threading.Condition(self._lock)
++        self._gates = {}
++        self._active = 0
++        self._closing = 0
++        self._local = threading.local()
+         self._max_entries = max_entries
+         self._max_bytes = max_bytes
+         self._bytes = 0
+ 
+     def _discard(self, key):
+         entry = self._entries.pop(key)
+-        entry[1].close()
+-        self._bytes -= len(entry[3])
++        self._bytes -= len(entry.payload)
++        entry.retired = True
++        if not entry.leases:
++            entry.connection.close()
+ 
+     def read(self, path: Path, load, owner, *, variant="full"):
+-        # Also coalesce simultaneous identical reads. The lock only covers
+-        # context projection, never a running Agent or a database writer.
++        # A loader may read another tree. Do not acquire a second key gate:
++        # two such loaders could otherwise wait on each other in reverse order.
++        if getattr(self._local, 'depth', 0):
++            return load(owner)
++        key = (str(path.resolve()), variant)
++        with self._condition:
++            while self._closing and not getattr(self._local, 'depth', 0):
++                self._condition.wait()
++            gate = self._gates.setdefault(key, [threading.RLock(), 0])
++            gate[1] += 1
++            self._active += 1
++        self._local.depth = getattr(self._local, 'depth', 0) + 1
++        try:
++            # Same-key readers still coalesce; unrelated trees never wait on load.
++            with gate[0]:
++                return self._read_key(path, key, load, owner)
++        finally:
++            self._local.depth -= 1
++            with self._condition:
++                gate[1] -= 1
++                if not gate[1]:
++                    del self._gates[key]
++                self._active -= 1
++                self._condition.notify_all()
++
++    def _read_key(self, path, key, load, owner):
++        stat = path.stat()
++        identity = (stat.st_dev, stat.st_ino)
+         with self._lock:
+-            stat = path.stat()
+-            identity = (stat.st_dev, stat.st_ino)
+-            key = (str(path.resolve()), variant)
+             entry = self._entries.get(key)
+-            if entry is not None and entry[0] != identity:
++            if entry is not None and entry.identity != identity:
+                 self._discard(key)
+                 entry = None
+             if entry is None:
+                 conn = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True,
+                                        isolation_level=None, check_same_thread=False)
+-                entry = [identity, conn, None, b'', {}]
++                entry = _Entry(identity, conn)
+                 self._entries[key] = entry
+             self._entries.move_to_end(key)
+-            conn = entry[1]
++            entry.leases += 1
++            while len(self._entries) > self._max_entries and self._entries:
++                self._discard(next(iter(self._entries)))
++        try:
++            conn = entry.connection
+             before = conn.execute('PRAGMA data_version').fetchone()[0]
+-            if entry[2] == before and entry[3] and all(owner(k) == v for k, v in entry[4].items()):
+-                return pickle.loads(entry[3])
++            if entry.version == before and entry.payload and all(owner(k) == v for k, v in entry.dependencies.items()):
++                return pickle.loads(entry.payload)
+             dependencies = {}
+ 
+             def record(name):
+@@ -55,26 +100,43 @@
+                 dependencies[name] = value
+                 return value
+ 
+-            try:
+-                result = load(record)
+-                after = conn.execute('PRAGMA data_version').fetchone()[0]
+-                # A concurrent write makes this result uncacheable; the normal
+-                # read still returns, and the next request projects fresh data.
+-                payload = pickle.dumps(result, protocol=5) if before == after else b''
+-                self._bytes -= len(entry[3])
+-                entry[2:] = [after, payload, dependencies]
+-                self._bytes += len(payload)
+-                while self._entries and (len(self._entries) > self._max_entries or self._bytes > self._max_bytes):
+-                    self._discard(next(iter(self._entries)))
+-                return result
+-            except BaseException:
+-                self._discard(key)
+-                raise
++            result = load(record)
++            after = conn.execute('PRAGMA data_version').fetchone()[0]
++            payload = pickle.dumps(result, protocol=5) if before == after else b''
++            with self._lock:
++                # An LRU eviction can detach an in-flight entry. Its lease keeps
++                # the connection alive but does not resurrect its cache slot.
++                if not entry.retired:
++                    self._bytes -= len(entry.payload)
++                    entry.version, entry.payload, entry.dependencies = after, payload, dependencies
++                    self._bytes += len(payload)
++                    while self._entries and (len(self._entries) > self._max_entries or self._bytes > self._max_bytes):
++                        self._discard(next(iter(self._entries)))
++            return result
++        except BaseException:
++            with self._lock:
++                if self._entries.get(key) is entry:
++                    self._discard(key)
++            raise
++        finally:
++            with self._lock:
++                entry.leases -= 1
++                if entry.retired and not entry.leases:
++                    entry.connection.close()
+ 
+     def close(self):
+-        with self._lock:
+-            while self._entries:
+-                self._discard(next(iter(self._entries)))
++        with self._condition:
++            self._closing += 1
++            try:
++                # Reentrant close retires entries; leases release their handles
++                # when the current reads finish, without waiting on this caller.
++                while self._active and not getattr(self._local, 'depth', 0):
++                    self._condition.wait()
++                while self._entries:
++                    self._discard(next(iter(self._entries)))
++            finally:
++                self._closing -= 1
++                self._condition.notify_all()
+ 
+ 
+ CONTEXT_READ_CACHE = ContextReadCache()
+--- baseline/src/cyrene/observability/debug_event_repository.py
++++ src/cyrene/observability/debug_event_repository.py
+@@ -2,7 +2,10 @@
+ 
+ from __future__ import annotations
+ 
++import copy
+ import json
++import threading
++from collections import OrderedDict
+ from collections.abc import AsyncIterator, Callable, Iterator
+ from pathlib import Path
+ from typing import Any
+@@ -26,6 +29,9 @@
+         self._recent_events = recent_events
+         self._full_event = full_event
+         self._subscribe_events = subscribe_events
++        self._summary_cache = OrderedDict()
++        self._summary_bytes = 0
++        self._summary_lock = threading.RLock()
+ 
+     def subscribe(self, session_id: str = "") -> AsyncIterator[dict[str, Any]]:
+         return self._subscribe_events(session_id=session_id)
+@@ -62,16 +68,46 @@
+             if summary is not None:
+                 events_by_id[summary["id"]] = summary
+         for log_file in self._debug_log_files():
+-            for event in self._read_jsonl(log_file):
+-                summary = _context_summary(event, log_file.name)
+-                if summary is not None:
+-                    events_by_id[summary["id"]] = summary
++            for summary in self._file_context_summaries(log_file):
++                events_by_id[summary["id"]] = summary
+         events = sorted(
+             events_by_id.values(),
+             key=lambda item: str(item.get("timestamp") or ""),
+             reverse=True,
+         )[:limit]
+-        return {"events": events}
++        # Cached file summaries remain private, including nested token maps.
++        return {"events": [copy.deepcopy(item) if item["source_log"] else item for item in events]}
++
++    def _file_context_summaries(self, path: Path):
++        def stamp():
++            try:
++                stat = path.stat()
++                return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
++            except OSError:
++                return None
++
++        before = stamp()
++        with self._summary_lock:
++            cached = self._summary_cache.get(path)
++            if before is not None and cached is not None and cached[0] == before:
++                self._summary_cache.move_to_end(path)
++                return cached[1]
++        summaries = tuple(summary for event in self._read_jsonl(path)
++                          if (summary := _context_summary(event, path.name)) is not None)
++        # A changing file is read normally but never installed as a valid cache.
++        after = stamp()
++        size = len(json.dumps(summaries, ensure_ascii=False).encode("utf-8"))
++        with self._summary_lock:
++            old = self._summary_cache.pop(path, None)
++            if old is not None:
++                self._summary_bytes -= old[2]
++            if before is not None and before == after and size <= 16 * 1024 * 1024:
++                self._summary_cache[path] = (after, summaries, size)
++                self._summary_bytes += size
++            while self._summary_cache and (len(self._summary_cache) > 20 or self._summary_bytes > 16 * 1024 * 1024):
++                _, old = self._summary_cache.popitem(last=False)
++                self._summary_bytes -= old[2]
++        return summaries
+ 
+     def _debug_log_files(self) -> list[Path]:
+         if not self.data_dir.exists():
+--- baseline/src/cyrene/workbench/http/system/events.py
++++ src/cyrene/workbench/http/system/events.py
+@@ -1,5 +1,6 @@
+ """Thin runtime event and context-debug HTTP adapters."""
+ 
++import asyncio
+ import json
+ 
+ from fastapi import APIRouter, Request
+@@ -54,7 +55,7 @@
+             limit = int(request.query_params.get("limit") or "120")
+         except ValueError:
+             limit = 120
+-        return repository.context_events(max(1, min(limit, 500)))
++        return await asyncio.to_thread(repository.context_events, max(1, min(limit, 500)))
+ 
+     @router.get("/api/context-debug/events/{event_id}")
+     async def api_context_debug_event_detail(event_id: str):
+--- baseline/src/cyrene/plugins/builtin/cyrene_code/terminal/history.py
++++ src/cyrene/plugins/builtin/cyrene_code/terminal/history.py
+@@ -13,6 +13,7 @@
+ _OSC_RE = re.compile(rb"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
+ _CSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+ _ESC_RE = re.compile(rb"\x1b[ -/]*[@-~]")
++_PLAIN_ASCII_RUN = re.compile(rb"[ -~]+")
+ 
+ 
+ class IncrementalPlainTextParser:
+@@ -55,8 +56,21 @@
+         elif self._next_seq != absolute_start:
+             raise ValueError("non-contiguous incremental terminal text")
+         lines: list[dict[str, Any]] = []
+-        for offset, value in enumerate(payload):
++        offset = 0
++        while offset < len(payload):
++            # Preserve the byte-wise state machine at every control/UTF-8
++            # boundary. Printable ASCII has one byte per character and no
++            # state transitions, so append the whole span at once.
++            if (self._mode == "normal" and not self._pending_cr
++                    and not self._decoder.getstate()[0]):
++                plain = _PLAIN_ASCII_RUN.match(payload, offset)
++                if plain is not None:
++                    self._line.extend(plain[0].decode("ascii"))
++                    offset = plain.end()
++                    continue
++            value = payload[offset]
+             end_seq = absolute_start + offset + 1
++            offset += 1
+             if self._consume_control_byte(value):
+                 continue
+             decoded = self._decoder.decode(bytes((value,)), final=False)
+--- baseline/src/cyrene/workbench/webui/frontend/features/chat/messages.jsx
++++ src/cyrene/workbench/webui/frontend/features/chat/messages.jsx
+@@ -1,3 +1,4 @@
++import { snapshotStaticMessage, equalAssistantProps } from "./message-memo.mjs"
+ import { createDisclosureSubscriptions, subscribeDisclosureUpdates } from "./disclosure-subscriptions.mjs"
+ import { wbcProjectTranscript } from "./runtime-timeline.jsx"
+ import { workbenchServices } from "../../shared/runtime/services.jsx"
+@@ -1306,7 +1307,20 @@
+   );
+ }
+ 
+-function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
++function WbcAssistantMessage(props) {
++  var snapshot = props.liveRuntime ? null : snapshotStaticMessage(props.msg);
++  // Date/zone can change even when a historical message does not. Keep the
++  // same time-label refresh opportunities as an ordinary parent render.
++  var now = new Date();
++  var i18n = workbenchServices.i18n();
++  return <WbcMemoAssistantMessage {...props} msg={snapshot || props.msg}
++    staticMessage={!!snapshot} calendarDay={now.toDateString()} zoneOffset={now.getTimezoneOffset()}
++    languageVersion={typeof i18n.getVersion === "function" ? i18n.getVersion() : i18n.getLang()}
++    browserIcon={workbenchServices.browser().Icon} />;
++}
++var WbcMemoAssistantMessage = React.memo(WbcAssistantMessageBody, equalAssistantProps);
++
++function WbcAssistantMessageBody({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
+   msg = msg || {};
+   if (!liveRuntime && msg.timelineVersion === 1 && !msg.activityCard && msg.status === "running") {
+     liveRuntime = { text: msg.content, artifacts: msg.attachments || [], streamDone: false };
+--- baseline/src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx
++++ src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx
+@@ -313,7 +313,7 @@
+     return update ? { ...message, ...update } : message;
+   });
+   return { ...chat, status: "idle", liveAgentArtifacts: [],
+-    messages: wbcMergeChronologicalMessages(current, Array.from(updates.values())) };
++    messages: wbcMergeProjectedMessages(current, Array.from(updates.values())) };
+ }
+ 
+ function wbcActivityDedupeKeys(message) {
+@@ -353,7 +353,7 @@
+   // Run status is a trailing UI row, not a chronological transcript record.
+   // A later checkpoint/segment must never place it between activity cards.
+   var statusRows = runtimeMessages.filter(function (message) { return message.runtimeContinuation; });
+-  return wbcMergeChronologicalMessages(durable, runtimeMessages.filter(function (message) {
++  return wbcMergeProjectedMessages(durable, runtimeMessages.filter(function (message) {
+     return !message.runtimeContinuation;
+   })).concat(statusRows);
+ }
+--- baseline/src/cyrene/workbench/webui/frontend/workbench-i18n.jsx
++++ src/cyrene/workbench/webui/frontend/workbench-i18n.jsx
+@@ -350,6 +350,7 @@
+   permissionQuestionText: workbenchPermissionQuestionText,
+   setLang: setWorkbenchLang,
+   getLang: function () { return workbenchI18nLang || "en"; },
++  getVersion: function () { return workbenchI18nVersion; },
+   getLocale: workbenchLocale,
+   formatDate: workbenchFormatDate,
+   formatNumber: workbenchFormatNumber,

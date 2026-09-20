@@ -285,6 +285,14 @@ def log_operation(
 ) -> None:
     """Emit one searchable JSON operation record."""
 
+    try:
+        effective_level = _default_log_level(fields) if level is None else level
+        enabled = logger.isEnabledFor(effective_level)
+    except Exception:
+        # Preserve the non-throwing logging boundary for malformed levels.
+        return
+    if not enabled:
+        return
     payload = {
         "component": str(component),
         "action": str(action),
@@ -305,7 +313,7 @@ def log_operation(
         )
     try:
         logger.log(
-            _default_log_level(fields) if level is None else level,
+            effective_level,
             "%s %s",
             LOG_PREFIX,
             encoded,

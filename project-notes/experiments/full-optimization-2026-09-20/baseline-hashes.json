@@ -1,0 +1,14 @@
+{
+  "src/cyrene/core/observability.py": "de53748f358c9b0c206d5a9e484f096f598ef5c82d6ffae6d1b63faa3b3efb74",
+  "src/cyrene/core/context/schema.py": "afa44725af3d2b983b94b861c43814a0a308e420d99ccb958c9a2b7f9fbecad3",
+  "src/cyrene/core/context/tasks.py": "f28c60db97607c7fd0e01dc3b658608f8e101b0582daf8f5e4d75e5222190242",
+  "src/cyrene/workbench/chat/run_timeline.py": "bebd1ad680b533b1ed5cf8d4ffff3dbb9bc0b57a51c14264b58ace6bc82adc36",
+  "src/cyrene/workbench/chat/chat_runs.py": "bbfcee2b74b9848ced8f60919a769fac3bfe790e358e07355efc2e95e6b45965",
+  "src/cyrene/workbench/chat/context_read_cache.py": "de4ffa92392ddc9c904112afc5606a1355cf2445ea172111d9576ce6f16efce6",
+  "src/cyrene/observability/debug_event_repository.py": "fe62f802d0aec2a40aa79439bec50333eaab07e1d0faeb43f3a678e8c928b69a",
+  "src/cyrene/workbench/http/system/events.py": "c996eef04f35192f9c14aff4f6d6aceaff360423b28ac12f1bac3a086a07cafb",
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/history.py": "9cae0b69325a508131ff2aaeaa731976f2e1d91bca5eb59f422f2004636e5dc7",
+  "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx": "24aa4014587e0a998b901d7c37b5f3e03d4291b183d89c7eaf746c57a3c82e07",
+  "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx": "a68b567921467561e5cd994d0ba2678840ba79759b5577a3fde697c9c7d844b7",
+  "src/cyrene/workbench/webui/frontend/workbench-i18n.jsx": "94c682889f619f5feffbe39ea3e9447bb83d9d4783fdc357262dd951783c5609"
+}

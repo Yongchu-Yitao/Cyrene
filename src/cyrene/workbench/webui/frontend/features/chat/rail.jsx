@@ -13,6 +13,7 @@ import { WbcRenameDialog } from "./rename-dialog.jsx"
 import { WBC_CHAT_GROUPS_PREFIX, WbcConversationStatusPreview, WbcHoverMarquee, wbcBuildChatRailItems, wbcConversationTrackIsCompleted, wbcConversationTrackIsRunning, wbcConversationTrackPositions, wbcConversationTrackState, wbcConversationTrackRuntimeText, wbcCreateChatGroup, wbcFindChatGroup, wbcLoadChatGroups, wbcLoadChatOrder, wbcMoveChatOrder, wbcMoveChatOrderBlock, wbcNormalizeChatGroups, wbcNormalizeChatOrder, wbcOrderChatsByPinned, wbcProjectFileResource, wbcProjectFileVisual, wbcRemoveChatFromGroups, wbcViewportChatIds } from "./rail-model.jsx"
 import { useWbcRailOrdering, wbcDefaultRailOrder } from "./rail-ordering.jsx"
 import { useWbcRailDropController } from "./rail-drop-controller.jsx"
+import { wbcChatRailVisualState } from "./rail-status.mjs"
 
 // Workbench chat rail and project navigation.
 var WBC_PROJECT_TOOL_VIEW_STORAGE_PREFIX = "wbc-project-tool-view:";
@@ -941,30 +942,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
   }
 
   function chatRailVisualState(chat) {
-    var running = wbcConversationTrackIsRunning(chat, runningChatIds);
-    // Match the conversation track: resumed work outranks the previous
-    // exchange's pending question or terminal summary until it refreshes.
-    if (running) return {
-      running: true,
-      tone: " status-running",
-      icon: WBC_ICONS.running,
-      label: "",
-    };
-    var rawStatus = String(chat.runStatus || chat.status || "").trim().toLowerCase();
-    var failed = !!chat.failed || !!chat.error || ["error", "failed", "failure", "timeout"].indexOf(rawStatus) >= 0;
-    var attention = !!chat.awaitingUser || !!chat.pendingQuestion || [
-      "awaiting_user", "waiting_for_user", "waiting_for_approval", "needs_input",
-      "waiting_input", "requires_confirmation", "blocked", "review",
-    ].indexOf(rawStatus) >= 0;
-    var completed = ["completed", "complete", "done", "success", "succeeded"].indexOf(rawStatus) >= 0;
-    return {
-      running: running,
-      tone: failed ? " status-failed" : attention ? " status-attention" : completed ? " status-completed" : running ? " status-running" : "",
-      icon: failed ? WBC_ICONS.errorCircle : attention ? WBC_ICONS.alert : completed ? WBC_ICONS.check : running ? WBC_ICONS.running : WBC_ICONS.file,
-      label: failed
-        ? wbcT("status.failed", "Failed")
-        : attention ? wbcT("workbenchChat.awaitingUser", "Needs input") : "",
-    };
+    return wbcChatRailVisualState(chat, wbcConversationTrackIsRunning(chat, runningChatIds), WBC_ICONS, wbcT);
   }
 
   function prepareRailDragImage(root, transfer, clientX, clientY) {

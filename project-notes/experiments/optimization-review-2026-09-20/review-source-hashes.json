@@ -1,0 +1,82 @@
+{
+  "src/cyrene/core/observability.py": {
+    "previous": "3dec564c5b0035e98ffe10d5d7e7db2a8c31e496aef4ebbc38b807d9c3f41c1b",
+    "current": "3dec564c5b0035e98ffe10d5d7e7db2a8c31e496aef4ebbc38b807d9c3f41c1b",
+    "same": true
+  },
+  "src/cyrene/core/context/schema.py": {
+    "previous": "ac12f7ffc35732e9b7aacea7502ea4cfeb80989b4bb26b07c3fb9c5b324007eb",
+    "current": "ac12f7ffc35732e9b7aacea7502ea4cfeb80989b4bb26b07c3fb9c5b324007eb",
+    "same": true
+  },
+  "src/cyrene/core/context/tasks.py": {
+    "previous": "bc232a60101a87bcb51ee96e807af418f7e9073158458f7744cc7dff217e0b35",
+    "current": "bc232a60101a87bcb51ee96e807af418f7e9073158458f7744cc7dff217e0b35",
+    "same": true
+  },
+  "src/cyrene/workbench/chat/run_timeline.py": {
+    "previous": "d97479a01a4d155ec8784d377972d1826417901dffb92485e157184f58a0e115",
+    "current": "d97479a01a4d155ec8784d377972d1826417901dffb92485e157184f58a0e115",
+    "same": true
+  },
+  "src/cyrene/workbench/chat/chat_runs.py": {
+    "previous": "eac908b010cba346f7d2571fdb9fe475bca6cba442b48b5f90cc68fb1ac48cb3",
+    "current": "eac908b010cba346f7d2571fdb9fe475bca6cba442b48b5f90cc68fb1ac48cb3",
+    "same": true
+  },
+  "src/cyrene/workbench/chat/context_read_cache.py": {
+    "previous": "844fe432b2179db481a02f7c4a7dc1c4ccb7ad8e2c5a8683bc38de64ebe1e1b3",
+    "current": "844fe432b2179db481a02f7c4a7dc1c4ccb7ad8e2c5a8683bc38de64ebe1e1b3",
+    "same": true
+  },
+  "src/cyrene/observability/debug_event_repository.py": {
+    "previous": "e01590b1eba0805b2eb4d42f27e138639d91f0e3bd27c74cec4ee04f92c34717",
+    "current": "e01590b1eba0805b2eb4d42f27e138639d91f0e3bd27c74cec4ee04f92c34717",
+    "same": true
+  },
+  "src/cyrene/workbench/http/system/events.py": {
+    "previous": "89bca0f7e72078bd358f203c3cd8ca5ca860f39cec46c226675c25811c93a8a0",
+    "current": "89bca0f7e72078bd358f203c3cd8ca5ca860f39cec46c226675c25811c93a8a0",
+    "same": true
+  },
+  "src/cyrene/plugins/builtin/cyrene_code/terminal/history.py": {
+    "previous": "e1f9ed29b59613ba982be31c330fef4935549d0b206d9d018a6b2b3770f04eaf",
+    "current": "e1f9ed29b59613ba982be31c330fef4935549d0b206d9d018a6b2b3770f04eaf",
+    "same": true
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx": {
+    "previous": "470287537fa7b0477c6f2d36bbd4cb443410c89f67efb72fbeb981a9e6e995dc",
+    "current": "470287537fa7b0477c6f2d36bbd4cb443410c89f67efb72fbeb981a9e6e995dc",
+    "same": true
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx": {
+    "previous": "383b42a38e10fe2c4072edbb19bfa1212da0f6c14f7973a1c9534b9ec5e83acd",
+    "current": "383b42a38e10fe2c4072edbb19bfa1212da0f6c14f7973a1c9534b9ec5e83acd",
+    "same": true
+  },
+  "src/cyrene/workbench/webui/frontend/workbench-i18n.jsx": {
+    "previous": "ed9bfce890e00db0db20225775fe6a2640ee078890653f12b144386f1b818211",
+    "current": "ed9bfce890e00db0db20225775fe6a2640ee078890653f12b144386f1b818211",
+    "same": true
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/message-memo.mjs": {
+    "previous": "51a6a1cfa080b7867334095e5d2919feada72d9236167220e66a283bdf0afa12",
+    "current": "51a6a1cfa080b7867334095e5d2919feada72d9236167220e66a283bdf0afa12",
+    "same": true
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/message-memo.test.mjs": {
+    "previous": "7f11bd60114d7d7d797bc895ad9bdda2fc8df3b596f01b3bfdddc749cdb972ed",
+    "current": "7f11bd60114d7d7d797bc895ad9bdda2fc8df3b596f01b3bfdddc749cdb972ed",
+    "same": true
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/saved-merge.test.mjs": {
+    "previous": "8d27f80f87887b87a47fd53fc626df1890443f398a3624b93089c4c128e98105",
+    "current": "8d27f80f87887b87a47fd53fc626df1890443f398a3624b93089c4c128e98105",
+    "same": true
+  },
+  "tests/test_performance_preservation.py": {
+    "previous": "a5c9dbd1c688d4d0a984796194e74e839f3f5f2637e727bce51f97d3d7e321f9",
+    "current": "a5c9dbd1c688d4d0a984796194e74e839f3f5f2637e727bce51f97d3d7e321f9",
+    "same": true
+  }
+}

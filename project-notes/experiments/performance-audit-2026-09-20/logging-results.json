@@ -1,0 +1,26 @@
+{
+  "calls_per_sample": 10000,
+  "disabled_debug_samples_ms": {
+    "current": [
+      83.78622704185545,
+      80.23925696033984,
+      80.20100404974073,
+      79.8969529569149,
+      80.16166894230992
+    ],
+    "guarded": [
+      2.702365047298372,
+      2.7241670759394765,
+      2.7287949342280626,
+      2.7326029958203435,
+      2.7259299531579018
+    ]
+  },
+  "medians_ms": {
+    "current": 80.20100404974073,
+    "guarded": 2.7259299531579018
+  },
+  "enabled_output_equal": true,
+  "enabled_records_per_variant": 15,
+  "scope": "standard logging.Logger and ordinary structured fields only; experimental wrapper, not production"
+}

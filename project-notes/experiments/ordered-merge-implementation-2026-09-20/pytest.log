@@ -1,0 +1,388 @@
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+............F...F....................................................... [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 13%]
+........................................................................ [ 15%]
+........................................................................ [ 18%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+.........s..........s................................................... [ 27%]
+........................................................................ [ 29%]
+........................................................................ [ 31%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+........................................................................ [ 43%]
+......................F................................................. [ 45%]
+........................................................................ [ 47%]
+........................................................................ [ 49%]
+....................................FF.................................. [ 52%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+................................................s....................... [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 74%]
+........................................................................ [ 77%]
+....ss.................................................................. [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+........................................................................ [ 90%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 97%]
+........................................................................ [ 99%]
+.....                                                                    [100%]
+=================================== FAILURES ===================================
+_____________ test_private_cross_package_imports_can_only_decrease _____________
+
+    def test_private_cross_package_imports_can_only_decrease() -> None:
+        baseline = json.loads(COMPLEXITY_BASELINE.read_text(encoding="utf-8"))
+        allowed = set(baseline["private_cross_package_imports"])
+    
+>       assert _private_cross_package_imports() <= allowed
+E       AssertionError: assert {'src/cyrene/...ication_port'} <= {'src/cyrene/...nai_response'}
+E         
+E         Extra items in the left set:
+E         'src/cyrene/plugins/builtin/cyrene_sessions/__init__.py::cyrene.workbench.application.app_services::_chat_application_port'
+
+tests/test_architecture_boundaries.py:298: AssertionError
+__________ test_private_domain_and_sibling_plugin_imports_cannot_grow __________
+
+    def test_private_domain_and_sibling_plugin_imports_cannot_grow() -> None:
+        import runpy
+        collect = runpy.run_path(str(REPOSITORY_ROOT / "build/dependency_boundaries.py"))["collect"]
+    
+        baseline = json.loads((REPOSITORY_ROOT / "project-notes/domain-import-baseline.json").read_text())
+>       assert not (collect() - set(baseline))
+E       AssertionError: assert not ({'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} - {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...})
+E        +  where {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} = <function collect at 0x7dfc83d20540>()
+E        +  and   {'src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...} = set(['src/cyrene/plugins/builtin/cyrene_cli/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_cent..._code/terminal/manager.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::agent_process_environment', ...])
+
+tests/test_architecture_boundaries.py:449: AssertionError
+_____________ test_seeded_canonical_plugins_complete_toolbox_chain _____________
+
+tmp_path = PosixPath('/tmp/pytest-of-shaoyw1810/pytest-26/test_seeded_canonical_plugins_0')
+
+    def test_seeded_canonical_plugins_complete_toolbox_chain(tmp_path):
+        async def scenario():
+            plugin_directory = tmp_path / "plugin_impl"
+    
+            seeded = seed_builtin_plugin_directory(plugin_directory)
+    
+            assert seeded.directory == plugin_directory.resolve()
+            assert seeded.manifest == plugin_directory / ".upstream-hashes.json"
+            assert seeded.manifest.is_file()
+            assert not (plugin_directory / "__init__.py").exists()
+            assert not tuple(plugin_directory.glob(".*.cyrene-seed-*"))
+    
+            for source_path in plugin_directory.rglob("*.py"):
+                source_text = source_path.read_text(encoding="utf-8")
+                assert "invoke_builtin_tool" not in source_text
+                assert "from cyrene.tool_impl" not in source_text
+                assert "import cyrene.tool_impl" not in source_text
+    
+            registry = PluginRegistry()
+            assert registry.load_directory(plugin_directory) == ()
+    
+            user_packs = {
+                pack.id: pack
+                for pack in registry.list_packs()
+                if registry.pack_source(pack.id) != "core"
+            }
+            assert TOOL_PACK_IDS <= set(user_packs)
+            assert CONTEXT_PACK_IDS <= set(user_packs)
+            assert registry.pack_locked("cyrene_context") is True
+            assert registry.pack_locked("cyrene_composer_context") is True
+            assert registry.pack_locked("cyrene_system_prompt") is True
+            assert registry.pack_locked("cyrene_user_language") is True
+            business_names = {
+                plugin.name
+                for pack_id in TOOL_PACK_IDS
+                for plugin in user_packs[pack_id].plugins
+            }
+            assert all(
+                plugin.kind == "tool"
+                for pack_id in TOOL_PACK_IDS
+                for plugin in user_packs[pack_id].plugins
+            )
+            assert all(
+                plugin.kind == ("model" if pack_id == "cyrene_model" else "tool")
+                for pack_id, pack in user_packs.items()
+                if pack_id not in CONTEXT_PACK_IDS
+                for plugin in pack.plugins
+            )
+            assert not business_names & CORE_PLUGIN_NAMES
+            assert not business_names & USER_STANDALONE_PLUGIN_NAMES
+    
+            standalone_names = {
+                item.plugin.name
+                for item in registry.list_plugins()
+                if item.pack_id is None
+                and item.plugin.kind == "tool"
+                and item.source != "core"
+            }
+            assert standalone_names == USER_STANDALONE_PLUGIN_NAMES
+            plugin_entity_names = {
+                "entity.track",
+                "entity.update",
+                "entity.list",
+                "entity.query",
+                "entity.delete",
+            }
+            registered_tool_names = (
+                business_names | standalone_names | CORE_PLUGIN_NAMES
+            )
+            assert plugin_entity_names <= registered_tool_names
+    
+            for name in business_names | standalone_names:
+                registered = registry.registered(name)
+                assert Path(registered.source).is_relative_to(plugin_directory)
+    
+            workspace = tmp_path / "workspace"
+            workspace.mkdir()
+            (workspace / "seeded.txt").write_text("seeded", encoding="utf-8")
+            context = PluginContext(
+                workspace=workspace,
+                data={
+                    "bot": None,
+                    "chat_id": 0,
+                    "db_path": "",
+                    "notify_state": None,
+                    "run_context": {
+                        "workspace_dir": workspace,
+                        "workspace_enabled": True,
+                        "permission_mode": "full_access",
+                    },
+                },
+            )
+            runtime = PluginRuntime(registry)
+    
+            listing = await runtime.call("toolbox", {"operation": "list"}, context)
+            assert listing.success is True
+            assert set(listing.value["packs"]) == MODEL_VISIBLE_PACK_IDS | {
+                "cyrene_plugin_development"
+            }
+            assert set(listing.value["standalone_tools"]) == USER_STANDALONE_PLUGIN_NAMES - {"ask_user"}
+    
+            globbed = await runtime.call(
+                "toolbox",
+                {
+                    "operation": "invoke",
+                    "name": "Glob",
+                    "arguments": {"pattern": "*.txt"},
+                },
+                context,
+            )
+            assert globbed.success is True
+            assert globbed.value["result"] == "seeded.txt"
+    
+>       _run(scenario())
+
+tests/test_native_plugins.py:185: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_native_plugins.py:65: in _run
+    return asyncio.run(coroutine)
+           ^^^^^^^^^^^^^^^^^^^^^^
+../../../.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+../../../.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def scenario():
+        plugin_directory = tmp_path / "plugin_impl"
+    
+        seeded = seed_builtin_plugin_directory(plugin_directory)
+    
+        assert seeded.directory == plugin_directory.resolve()
+        assert seeded.manifest == plugin_directory / ".upstream-hashes.json"
+        assert seeded.manifest.is_file()
+        assert not (plugin_directory / "__init__.py").exists()
+        assert not tuple(plugin_directory.glob(".*.cyrene-seed-*"))
+    
+        for source_path in plugin_directory.rglob("*.py"):
+            source_text = source_path.read_text(encoding="utf-8")
+            assert "invoke_builtin_tool" not in source_text
+            assert "from cyrene.tool_impl" not in source_text
+            assert "import cyrene.tool_impl" not in source_text
+    
+        registry = PluginRegistry()
+        assert registry.load_directory(plugin_directory) == ()
+    
+        user_packs = {
+            pack.id: pack
+            for pack in registry.list_packs()
+            if registry.pack_source(pack.id) != "core"
+        }
+        assert TOOL_PACK_IDS <= set(user_packs)
+        assert CONTEXT_PACK_IDS <= set(user_packs)
+        assert registry.pack_locked("cyrene_context") is True
+        assert registry.pack_locked("cyrene_composer_context") is True
+        assert registry.pack_locked("cyrene_system_prompt") is True
+        assert registry.pack_locked("cyrene_user_language") is True
+        business_names = {
+            plugin.name
+            for pack_id in TOOL_PACK_IDS
+            for plugin in user_packs[pack_id].plugins
+        }
+        assert all(
+            plugin.kind == "tool"
+            for pack_id in TOOL_PACK_IDS
+            for plugin in user_packs[pack_id].plugins
+        )
+        assert all(
+            plugin.kind == ("model" if pack_id == "cyrene_model" else "tool")
+            for pack_id, pack in user_packs.items()
+            if pack_id not in CONTEXT_PACK_IDS
+            for plugin in pack.plugins
+        )
+        assert not business_names & CORE_PLUGIN_NAMES
+        assert not business_names & USER_STANDALONE_PLUGIN_NAMES
+    
+        standalone_names = {
+            item.plugin.name
+            for item in registry.list_plugins()
+            if item.pack_id is None
+            and item.plugin.kind == "tool"
+            and item.source != "core"
+        }
+        assert standalone_names == USER_STANDALONE_PLUGIN_NAMES
+        plugin_entity_names = {
+            "entity.track",
+            "entity.update",
+            "entity.list",
+            "entity.query",
+            "entity.delete",
+        }
+        registered_tool_names = (
+            business_names | standalone_names | CORE_PLUGIN_NAMES
+        )
+        assert plugin_entity_names <= registered_tool_names
+    
+        for name in business_names | standalone_names:
+            registered = registry.registered(name)
+            assert Path(registered.source).is_relative_to(plugin_directory)
+    
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "seeded.txt").write_text("seeded", encoding="utf-8")
+        context = PluginContext(
+            workspace=workspace,
+            data={
+                "bot": None,
+                "chat_id": 0,
+                "db_path": "",
+                "notify_state": None,
+                "run_context": {
+                    "workspace_dir": workspace,
+                    "workspace_enabled": True,
+                    "permission_mode": "full_access",
+                },
+            },
+        )
+        runtime = PluginRuntime(registry)
+    
+        listing = await runtime.call("toolbox", {"operation": "list"}, context)
+        assert listing.success is True
+>       assert set(listing.value["packs"]) == MODEL_VISIBLE_PACK_IDS | {
+            "cyrene_plugin_development"
+        }
+E       AssertionError: assert {'cyrene_appl...control', ...} == frozenset({'c...ontrol', ...})
+E         
+E         Extra items in the left set:
+E         'cyrene_sessions'
+E         Use -v to get more diff
+
+tests/test_native_plugins.py:168: AssertionError
+_______ test_workbench_tool_name_catalog_covers_every_registered_builtin _______
+
+    def test_workbench_tool_name_catalog_covers_every_registered_builtin() -> None:
+        root = Path(__file__).parents[1]
+        i18n_root = (
+            root / "src" / "cyrene" / "workbench" / "webui" / "frontend"
+            / "shared" / "i18n"
+        )
+        key_sets = []
+        for filename in ("catalog-en.jsx", "catalog-zh.jsx"):
+            source = (i18n_root / filename).read_text(encoding="utf-8")
+            key_sets.append(set(re.findall(r'"toolName\.([^"\\]+)"\s*:', source)))
+        assert key_sets[0] == key_sets[1]
+    
+        alias_source = (i18n_root / "tool-name-aliases.jsx").read_text(encoding="utf-8")
+        aliases = dict(re.findall(r'^\s*"([^"]+)":\s*"([^"]+)"', alias_source, re.M))
+        assert set(aliases.values()) <= key_sets[0]
+    
+        registry = PluginRegistry()
+        assert registry.load_directory(_CATALOG_PATH.parent) == ()
+        ensure_model_router(registry)
+        missing = {
+            registered.plugin.canonical_name
+            for registered in registry.list_plugins()
+            if registered.plugin.canonical_name not in key_sets[0]
+            and aliases.get(registered.plugin.canonical_name) not in key_sets[0]
+        }
+>       assert missing == set()
+E       AssertionError: assert {'list_sessio...sion_message'} == set()
+E         
+E         Extra items in the left set:
+E         'send_session_message'
+E         'list_sessions'
+E         Use -v to get more diff
+
+tests/test_plugin_i18n.py:312: AssertionError
+_________ test_seeded_plugin_english_descriptions_match_english_source _________
+
+tmp_path = PosixPath('/tmp/pytest-of-shaoyw1810/pytest-26/test_seeded_plugin_english_des0')
+
+    def test_seeded_plugin_english_descriptions_match_english_source(tmp_path) -> None:
+        root = tmp_path / "plugin_impl"
+        seed_builtin_plugin_directory(root)
+        registry = PluginRegistry()
+    
+        assert registry.load_directory(root) == ()
+        catalog = json.loads((root / "i18n.json").read_text(encoding="utf-8"))
+        compared = []
+        for registered in registry.list_plugins():
+            plugin = registered.plugin
+            identity = plugin.canonical_name
+            if identity not in catalog["plugins"]:
+                continue
+            source_description = str(
+                plugin.metadata.get("source_description") or plugin.description
+            )
+            if _HAN_CHARACTER.search(source_description):
+                continue
+>           assert catalog["plugins"][identity]["en"]["description"] == (
+                source_description
+            ), identity
+E           AssertionError: list_sessions
+E           assert 'List other r...onversations.' == 'List other c...no arguments.'
+E             
+E             - List other currently running built-in Cyrene chat sessions. Returns session_id and title; no arguments.
+E             + List other running conversations.
+
+tests/test_plugin_i18n.py:333: AssertionError
+- generated xml file: /home/shaoyw1810/桌面/playground/Cyrene/project-notes/experiments/ordered-merge-implementation-2026-09-20/pytest.xml -
+=========================== short test summary info ============================
+FAILED tests/test_architecture_boundaries.py::test_private_cross_package_imports_can_only_decrease
+FAILED tests/test_architecture_boundaries.py::test_private_domain_and_sibling_plugin_imports_cannot_grow
+FAILED tests/test_native_plugins.py::test_seeded_canonical_plugins_complete_toolbox_chain
+FAILED tests/test_plugin_i18n.py::test_workbench_tool_name_catalog_covers_every_registered_builtin
+FAILED tests/test_plugin_i18n.py::test_seeded_plugin_english_descriptions_match_english_source
+5 failed, 3163 passed, 5 skipped in 115.31s (0:01:55)

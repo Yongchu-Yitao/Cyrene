@@ -1421,7 +1421,7 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
     || reasoningStatus === "degraded";
   var runtimeTimeline = useWbcMemo(function () {
     return wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
-  }, [runtimeSegments, runtimeActivities, runtimeNotifications, runtimeStartedAt, runtimeFinalizing, runtimeHasReplyText, runtime && runtime.chatId, runtime && runtime.pendingQuestion, runtime && runtime.reconnecting, showReasoningPlaceholder]);
+  }, [runtimeSegments, runtimeActivities, runtimeNotifications, runtimeStartedAt, runtimeFinalizing, runtimeHasReplyText, runtime?.chatId, runtime?.pendingQuestion, runtime?.reconnecting, showReasoningPlaceholder]);
   var retryClearingKey = Array.isArray(retryClearingMessageIds) ? retryClearingMessageIds.map(String).join("\u0000") : "";
   var retryClearingIds = useWbcMemo(function () {
     return new Set(retryClearingKey ? retryClearingKey.split("\u0000") : []);

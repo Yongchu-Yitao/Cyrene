@@ -1,0 +1,179 @@
+{
+  "scenario": "file_hashing",
+  "samples": [
+    {
+      "feature": "files",
+      "scenario": "content_hash_cold_and_cached",
+      "wall_ms": 61.1,
+      "operations": 1206,
+      "operations_per_second": 19738.2,
+      "latency_p50_ms": 4.938,
+      "latency_p95_ms": 5.39,
+      "quality": {
+        "preserved": true,
+        "digest_matches": true,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "file_bytes": 8388608,
+        "cold_ms": 3.735,
+        "cached_reads_ms": 1.23,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 36,
+        "hit_units": 18,
+        "miss_units": 18,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 0,
+            "miss_units": 18,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 18,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 18,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 36,
+            "cumulative_hit_units": 18,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "files",
+      "scenario": "content_hash_cold_and_cached",
+      "wall_ms": 55.911,
+      "operations": 1206,
+      "operations_per_second": 21569.9,
+      "latency_p50_ms": 4.677,
+      "latency_p95_ms": 4.902,
+      "quality": {
+        "preserved": true,
+        "digest_matches": true,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "file_bytes": 8388608,
+        "cold_ms": 3.632,
+        "cached_reads_ms": 1.043,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 36,
+        "hit_units": 18,
+        "miss_units": 18,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 0,
+            "miss_units": 18,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 18,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 18,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 36,
+            "cumulative_hit_units": 18,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "feature": "files",
+      "scenario": "content_hash_cold_and_cached",
+      "wall_ms": 54.543,
+      "operations": 1206,
+      "operations_per_second": 22111.1,
+      "latency_p50_ms": 4.617,
+      "latency_p95_ms": 4.663,
+      "quality": {
+        "preserved": true,
+        "digest_matches": true,
+        "completed_rounds": 6,
+        "failed_rounds": 0
+      },
+      "details": {
+        "file_bytes": 8388608,
+        "cold_ms": 3.544,
+        "cached_reads_ms": 0.995,
+        "parallel_workers": 3,
+        "rounds_per_worker": 2
+      },
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 6,
+        "input_units": 36,
+        "hit_units": 18,
+        "miss_units": 18,
+        "hit_rate": 0.5,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 0,
+            "miss_units": 18,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 18,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 3,
+            "input_units": 18,
+            "hit_units": 18,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 36,
+            "cumulative_hit_units": 18,
+            "cumulative_hit_rate": 0.5
+          }
+        ]
+      }
+    }
+  ],
+  "quality": {
+    "preserved": true
+  }
+}

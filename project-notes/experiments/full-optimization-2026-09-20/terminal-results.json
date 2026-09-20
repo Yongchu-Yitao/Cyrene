@@ -1,0 +1,114 @@
+{
+  "unprofiled": [
+    {
+      "feature": "terminal",
+      "scenario": "output_stream_persist_screen_replay",
+      "wall_ms": 1378.625,
+      "operations": 512,
+      "operations_per_second": 371.4,
+      "latency_p50_ms": 0.047,
+      "latency_p95_ms": 0.047,
+      "quality": {
+        "preserved": true,
+        "expected_bytes": 2097152,
+        "durable_bytes": 2097152,
+        "replay_bytes": 2097152
+      },
+      "details": {
+        "first_live_ms": 0.047,
+        "append_ms": 4.2,
+        "flush_ms": 209.293,
+        "screen_parse_ms": 1159.734,
+        "replay_ms": 5.398
+      }
+    },
+    {
+      "feature": "terminal",
+      "scenario": "output_stream_persist_screen_replay",
+      "wall_ms": 1373.049,
+      "operations": 512,
+      "operations_per_second": 372.9,
+      "latency_p50_ms": 0.041,
+      "latency_p95_ms": 0.041,
+      "quality": {
+        "preserved": true,
+        "expected_bytes": 2097152,
+        "durable_bytes": 2097152,
+        "replay_bytes": 2097152
+      },
+      "details": {
+        "first_live_ms": 0.041,
+        "append_ms": 3.915,
+        "flush_ms": 210.894,
+        "screen_parse_ms": 1153.349,
+        "replay_ms": 4.891
+      }
+    },
+    {
+      "feature": "terminal",
+      "scenario": "output_stream_persist_screen_replay",
+      "wall_ms": 1394.598,
+      "operations": 512,
+      "operations_per_second": 367.1,
+      "latency_p50_ms": 0.031,
+      "latency_p95_ms": 0.031,
+      "quality": {
+        "preserved": true,
+        "expected_bytes": 2097152,
+        "durable_bytes": 2097152,
+        "replay_bytes": 2097152
+      },
+      "details": {
+        "first_live_ms": 0.031,
+        "append_ms": 3.645,
+        "flush_ms": 218.852,
+        "screen_parse_ms": 1167.881,
+        "replay_ms": 4.22
+      }
+    }
+  ],
+  "worker_metrics": [
+    {
+      "batches": 2,
+      "bytesWritten": 2097152,
+      "bytesRead": 2097152,
+      "segmentsDeleted": 0,
+      "evictions": 0,
+      "screenBytesParsed": 2097152,
+      "screenBatches": 64,
+      "screenUpdates": 512,
+      "queries": 2,
+      "terminalWorkPeakBytes": 2097152,
+      "workerQueueWaitMaxUs": 1349920,
+      "queryQueueWaitMaxUs": 24
+    },
+    {
+      "batches": 2,
+      "bytesWritten": 2097152,
+      "bytesRead": 2097152,
+      "segmentsDeleted": 0,
+      "evictions": 0,
+      "screenBytesParsed": 2097152,
+      "screenBatches": 64,
+      "screenUpdates": 512,
+      "queries": 2,
+      "terminalWorkPeakBytes": 2097152,
+      "workerQueueWaitMaxUs": 1345403,
+      "queryQueueWaitMaxUs": 44
+    },
+    {
+      "batches": 2,
+      "bytesWritten": 2097152,
+      "bytesRead": 2097152,
+      "segmentsDeleted": 0,
+      "evictions": 0,
+      "screenBytesParsed": 2097152,
+      "screenBatches": 64,
+      "screenUpdates": 512,
+      "queries": 2,
+      "terminalWorkPeakBytes": 2097152,
+      "workerQueueWaitMaxUs": 1367596,
+      "queryQueueWaitMaxUs": 19
+    }
+  ]
+}

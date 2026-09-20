@@ -1,0 +1,4 @@
+scheduled_tasks repeat 1
+scheduled_tasks repeat 2
+scheduled_tasks repeat 3
+quality {'preserved': True}

@@ -1,0 +1,53 @@
+         24936735 function calls (24936498 primitive calls) in 6.404 seconds
+
+   Ordered by: internal time
+   List reduced from 362 to 45 due to restriction <45>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    47680    2.682    0.000    4.155    0.000 screens.py:466(draw)
+        1    0.746    0.746    1.809    1.809 history.py:49(feed)
+  2049536    0.431    0.000    1.193    0.000 __init__.py:457(_replace)
+  2185859    0.423    0.000    0.423    0.000 {built-in method __new__ of type object at 0x140e4b0}
+  2097152    0.381    0.000    0.622    0.000 history.py:116(_consume_character)
+  2049536    0.280    0.000    0.762    0.000 __init__.py:447(_make)
+  2097216    0.252    0.000    0.366    0.000 <frozen codecs>:319(decode)
+  2049587    0.156    0.000    0.156    0.000 {built-in method builtins.min}
+  2097703    0.117    0.000    0.117    0.000 {method 'append' of 'list' objects}
+  2097216    0.114    0.000    0.114    0.000 {built-in method _codecs.utf_8_decode}
+    68111    0.108    0.000    0.141    0.000 screens.py:551(index)
+95253/95249    0.101    0.000    0.101    0.000 {method 'execute' of 'sqlite3.Connection' objects}
+  2049536    0.094    0.000    0.094    0.000 {built-in method builtins.ord}
+  2097152    0.076    0.000    0.076    0.000 history.py:77(_consume_control_byte)
+  2055037    0.070    0.000    0.070    0.000 {built-in method builtins.len}
+   196950    0.049    0.000    0.061    0.000 screens.py:233(render)
+       64    0.032    0.001    4.334    0.068 streams.py:181(feed)
+        1    0.027    0.027    0.165    0.165 manager.py:667(_upsert_search_lines)
+    68112    0.022    0.000    0.062    0.000 screens.py:220(<lambda>)
+    68112    0.020    0.000    0.034    0.000 screens.py:210(default_char)
+    49662    0.019    0.000    0.079    0.000 {method 'join' of 'str' objects}
+    95306    0.018    0.000    0.018    0.000 {method 'match' of 're.Pattern' objects}
+    47625    0.017    0.000    0.062    0.000 manager.py:528(_history_timestamp)
+    47616    0.016    0.000    0.032    0.000 history.py:137(_finish_line)
+    68084    0.014    0.000    0.014    0.000 {method 'update' of 'set' objects}
+    47626    0.014    0.000    0.014    0.000 {method 'fetchone' of 'sqlite3.Cursor' objects}
+    47680    0.012    0.000    0.012    0.000 {method 'translate' of 'str' objects}
+    68111    0.011    0.000    0.152    0.000 screens.py:579(linefeed)
+    47618    0.010    0.000    0.119    0.000 streams.py:224(_parser_fsm)
+    68140    0.008    0.000    0.013    0.000 <string>:1(<lambda>)
+    47616    0.007    0.000    0.127    0.000 {method 'send' of 'generator' objects}
+   195003    0.007    0.000    0.009    0.000 {built-in method builtins.sum}
+    47616    0.007    0.000    0.133    0.000 streams.py:210(_send_to_parser)
+    68112    0.006    0.000    0.006    0.000 screens.py:130(__init__)
+    68083    0.006    0.000    0.006    0.000 {method 'pop' of 'dict' objects}
+    68689    0.005    0.000    0.005    0.000 {method 'add' of 'set' objects}
+   138384    0.005    0.000    0.005    0.000 screens.py:133(__missing__)
+    47680    0.005    0.000    0.005    0.000 {method 'span' of 're.Match' objects}
+        2    0.005    0.002    0.005    0.002 {method 'commit' of 'sqlite3.Connection' objects}
+    49410    0.004    0.000    0.004    0.000 {built-in method builtins.max}
+    47616    0.004    0.000    0.004    0.000 {method 'clear' of 'list' objects}
+    47617    0.004    0.000    0.004    0.000 {method 'casefold' of 'str' objects}
+      520    0.003    0.000    0.003    0.000 {built-in method binascii.b2a_base64}
+        8    0.002    0.000    0.002    0.000 {built-in method binascii.a2b_base64}
+        2    0.002    0.001    1.981    0.991 manager.py:921(_persist_batch)
+
+

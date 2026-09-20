@@ -25,6 +25,8 @@ class RunTimeline:
         self.seen: set[str] = set()
         self.counter = 0
         self.revision = 0
+        self.pending_replacements: set[str] = set()
+        self.removed_message_ids: set[str] = set()
 
     def _new(self, kind: str, at: str, source: str = "") -> dict[str, Any]:
         self.counter += 1
@@ -196,6 +198,27 @@ class RunTimeline:
         payload = {**event, **(event.get("payload") if isinstance(event.get("payload"), dict) else {})}
         at = str(event.get("timestamp") or event.get("createdAt") or datetime.now(timezone.utc).isoformat())
         source = str(payload.get("messageId") or payload.get("sourceId") or "")
+        reply_identity = self.sources.get(f"message:{source}") if source else self.reply_id
+        if (kind in {"reply_start", "message.started", "reply_delta", "message.delta", "reply_done", "message.completed"}
+            and reply_identity in self.removed_message_ids):
+            return self.patch([])
+        if kind in {"reply_start", "message.started"} and payload.get("reset") is True:
+            if reply_identity in self.records:
+                self.pending_replacements.add(reply_identity)
+            # Keep the failed text visible until replacement text actually arrives.
+            return self.patch([])
+        replacement = (
+            bool(self.pending_replacements)
+            and kind in {"reply_delta", "message.delta", "reply_done", "message.completed"}
+            and bool(payload.get("delta") or payload.get("text") or payload.get("response") or payload.get("content"))
+        )
+        if replacement:
+            for identity in self.pending_replacements:
+                self.records.pop(identity, None)
+                self.removed_message_ids.add(identity)
+                if self.reply_id == identity:
+                    self.reply_id = ""
+            self.pending_replacements.clear()
         delta_kind = kind in {"reply_delta", "message.delta", "reasoning_delta", "reasoning.delta"}
         # Deltas touch one record; do not copy the accumulated conversation on every token.
         if kind in {"reply_delta", "message.delta"}:
@@ -208,8 +231,25 @@ class RunTimeline:
             return self._append_text(identity, kind, payload)
         if kind in {"tool.started", "tool.updated", "tool.completed", "tool_call_started", "tool_call_progress", "tool_call_finished", "permission.reviewed"}:
             return self._changed_patch(self._apply_tool(kind, payload, at, source, event_id))
-        # Structural events may close memberships or settle several records.
-        before = copy.deepcopy(self.records)
+        # Known in-place transitions cannot create/close other memberships.
+        # Keep the original full comparison for structural creation/replacement.
+        local_ids = None
+        if kind in {"reply_done", "message.completed"}:
+            target = self.sources.get(f"message:{source}") if source else self.reply_id
+            if target in self.records:
+                local_ids = [target]
+        elif kind in {"reasoning_done", "reasoning.completed"}:
+            target = self.reasonings.get(source) if source else self.reasoning_id
+            if target in self.records:
+                local_ids = [target]
+        elif kind in {"permission.requested", "elicitation.requested", "awaiting_user",
+                      "run.awaiting_input", "permission.resolved", "elicitation.resolved"}:
+            local_ids = []
+        elif kind == "message.cancelled" and source:
+            targets = {self.reasonings.get(source), self.sources.get(f"message:{source}")}
+            local_ids = [key for key in self.records if key in targets]
+        before = copy.deepcopy(self.records if local_ids is None else
+                               {key: self.records[key] for key in local_ids})
         if kind in {"reply_start", "message.started"}:
             self._reply(at, source, new=True)
         elif kind in {"reply_delta", "message.delta", "reply_done", "message.completed"}:
@@ -268,7 +308,10 @@ class RunTimeline:
                     for entry in record.get("trace", []):
                         if entry.get("status") == "running":
                             entry.update(status=self.status, endedAt=at)
-        changed = [r for key, r in self.records.items() if before.get(key) != r]
+        compared = self.records.items() if local_ids is None else (
+            (key, self.records[key]) for key in local_ids
+        )
+        changed = [r for key, r in compared if before.get(key) != r]
         return self._changed_patch(changed)
 
     def _changed_patch(self, changed: list[dict[str, Any]]) -> dict[str, Any]:
@@ -305,6 +348,9 @@ class RunTimeline:
         if patch.get("snapshot"):
             self.records.clear()
             self.counter = 0
+        self.removed_message_ids.update(patch.get("removedMessageIds", []))
+        for identity in self.removed_message_ids:
+            self.records.pop(identity, None)
         for message in patch.get("messages", []):
             self.records[message["id"]] = copy.deepcopy(message)
             self.counter = max(self.counter, int(message.get("timelineOrder") or 0))
@@ -322,7 +368,8 @@ class RunTimeline:
 
     def patch(self, records: list[dict[str, Any]]) -> dict[str, Any]:
         return {"version": 2, "runId": self.run_id, "revision": self.revision,
-                "status": self.status, "messages": copy.deepcopy(records)}
+                "status": self.status, "messages": copy.deepcopy(records),
+                "removedMessageIds": sorted(self.removed_message_ids)}
 
     def snapshot(self) -> dict[str, Any]:
         return {**self.patch(list(self.records.values())), "snapshot": True}

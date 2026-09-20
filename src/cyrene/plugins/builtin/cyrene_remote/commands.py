@@ -271,10 +271,6 @@ _REMOTE_SETTING_FIELDS = (
         "Maximum run time (seconds)", "最长运行时间（秒）", default=1800, minimum=30, maximum=86400,
     ),
     _remote_setting_field(
-        "subagent_execution_no_progress_turns", "execution", "integer",
-        "No-progress turns", "无进展轮数", default=3, minimum=1, maximum=20,
-    ),
-    _remote_setting_field(
         "subagent_execution_checkpoint_calls", "execution", "integer",
         "Checkpoint frequency", "检查点频率", default=20, minimum=1, maximum=500,
     ),

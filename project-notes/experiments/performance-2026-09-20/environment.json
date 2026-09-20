@@ -1,0 +1,14 @@
+{
+  "head": "8806c588ae662970392a0af0e9e18ce66aa26df5",
+  "python": "3.12.12",
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+  "source_sha256": {
+    "src/cyrene/workbench/chat/run_timeline.py": "bfabc076daefc82703555d7db06c9ddd404c75f53456de84c21e5d803c235129",
+    "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx": "80014c3b2ce8a6bbac26ec045d8b380ae0a4c2b6c0e045819c595c0fc64e8e06",
+    "src/cyrene/workbench/chat/chat_runs.py": "87fcf0837ce6539ec7c38f9f15bf80a9b3bc39ab6b12a577ac91d1061154c9f6",
+    "src/cyrene/workbench/chat/context_read_cache.py": "de4ffa92392ddc9c904112afc5606a1355cf2445ea172111d9576ce6f16efce6",
+    "src/cyrene/observability/debug_event_repository.py": "fe62f802d0aec2a40aa79439bec50333eaab07e1d0faeb43f3a678e8c928b69a",
+    "src/cyrene/observability/chat_pipeline_benchmark.py": "ecee6a8c32dd84aa0daf64cff7f9fec469431249e96935e936d66c1ce5d76d43"
+  },
+  "note": "Source hashes at end of research; dirty workspace with concurrent unrelated edits. No production edits by this research."
+}

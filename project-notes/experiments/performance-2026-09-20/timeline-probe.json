@@ -1,0 +1,31 @@
+{
+  "python": "3.12.12",
+  "rounds": 50,
+  "scope": "existing reply completion only; prototype is not production-ready",
+  "results": [
+    {
+      "records": 10,
+      "baseline_done_ms": 0.027306959964334965,
+      "prototype_done_ms": 0.003191526047885418,
+      "fixture_patch_and_state_equal": true
+    },
+    {
+      "records": 100,
+      "baseline_done_ms": 0.22723700385540724,
+      "prototype_done_ms": 0.003175984602421522,
+      "fixture_patch_and_state_equal": true
+    },
+    {
+      "records": 1000,
+      "baseline_done_ms": 2.237685490399599,
+      "prototype_done_ms": 0.003161025233566761,
+      "fixture_patch_and_state_equal": true
+    },
+    {
+      "records": 5000,
+      "baseline_done_ms": 11.229362979065627,
+      "prototype_done_ms": 0.00313599593937397,
+      "fixture_patch_and_state_equal": true
+    }
+  ]
+}

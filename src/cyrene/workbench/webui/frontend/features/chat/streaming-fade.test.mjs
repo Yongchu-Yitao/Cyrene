@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import vm from 'node:vm';
-
-const source = readFileSync(new URL('./messages.jsx', import.meta.url), 'utf8');
-const helpers = source.slice(source.indexOf('var WBC_LIVE_FADE_MAX_CHARACTERS'), source.indexOf('function wbcUseBufferedLiveText'));
+import { wbcClearStreamingFades, wbcFadeInStreamingTail } from './streaming-fade.mjs';
 // Minimal text DOM for checking exact wrapping, offsets, and cleanup across
 // simulated innerHTML replacements without needing a browser or native deps.
 class Node {
@@ -45,8 +41,16 @@ function setup() {
       },
     },
   };
-  vm.runInNewContext(helpers, context);
-  return { ...context, clock(value) { now = value; }, reduce() { reduced = true; } };
+  globalThis.performance = context.performance;
+  globalThis.window = context.window;
+  globalThis.document = context.document;
+  return {
+    ...context,
+    wbcClearStreamingFades,
+    wbcFadeInStreamingTail,
+    clock(value) { now = value; },
+    reduce() { reduced = true; },
+  };
 }
 function body(...parts) { const root = new Node(); parts.forEach(p => root.appendChild(typeof p === 'string' ? new Node(p) : p)); return root; }
 

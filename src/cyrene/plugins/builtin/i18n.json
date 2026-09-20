@@ -412,6 +412,16 @@
         "name": "语音",
         "description": "提供语音识别、语音合成与声音设置。"
       }
+    },
+    "cyrene_sessions": {
+      "en": {
+        "name": "Session communication",
+        "description": "Discover running sessions and exchange Agent messages."
+      },
+      "zh": {
+        "name": "对话通信",
+        "description": "发现运行中的对话，让各对话的 Agent 互相发送消息。"
+      }
     }
   },
   "plugins": {
@@ -3213,6 +3223,26 @@
       "zh": {
         "name": "替换任务上下文",
         "description": "修正或更新任意上下文而不切换任务。提供完整替换内容，且不保留修订历史；更新 shared 时替换过时或错误约定，同时保留其他有效信息、来源与范围。不要重写未变化内容或加入没有依据的要求。执行记录独立管理，此工具必须单独调用并等待成功。"
+      }
+    },
+    "list_sessions": {
+      "en": {
+        "name": "List running sessions",
+        "description": "List other currently running built-in Cyrene chat sessions. Returns session_id and title; no arguments."
+      },
+      "zh": {
+        "name": "列出运行中的对话",
+        "description": "列出其他正在运行的对话及其会话 ID。"
+      }
+    },
+    "send_session_message": {
+      "en": {
+        "name": "Send session message",
+        "description": "Send text to another built-in Cyrene chat session. The source session ID and title are attached automatically. Idle targets are awakened; busy targets receive queued input. Returns after durable acceptance, not after a reply. Reply using this same tool and the source session ID. Do not send acknowledgement-only replies."
+      },
+      "zh": {
+        "name": "发送对话消息",
+        "description": "向其他对话的 Agent 发送消息，空闲时自动唤醒；回复也使用本工具。"
       }
     }
   }

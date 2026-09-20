@@ -1,0 +1,22 @@
+{
+  "baseline": [
+    {
+      "type": "input",
+      "data": null,
+      "key": null,
+      "inputType": "",
+      "trusted": false,
+      "value": "编辑验证：西，中文和 🦊\n第二行"
+    }
+  ],
+  "candidate": [
+    {
+      "type": "input",
+      "data": null,
+      "key": null,
+      "inputType": "",
+      "trusted": false,
+      "value": "编辑验证：西，中文和 🦊\n第二行"
+    }
+  ]
+}

@@ -1563,6 +1563,8 @@ async def test_responses_failed_preserves_cause_even_when_cleanup_fails(code, ex
     assert error.diagnostics["termination_reason"] == "provider_response_failed"
     details = ModelCallError(classify_model_error(error), diagnostics=error.diagnostics).as_error_details()
     assert details["code"] == expected
+    if code == "server_error":
+        assert details["retry_scope"] == "immediate"
     assert "private-" not in json.dumps(details)
     assert details["stream_diagnostics"]["provider_error_code"] == (
         "unknown" if code == "private-unknown-code" else code

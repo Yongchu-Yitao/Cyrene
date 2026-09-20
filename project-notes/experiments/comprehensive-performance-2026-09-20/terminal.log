@@ -1,0 +1,4 @@
+terminal repeat 1
+terminal repeat 2
+terminal repeat 3
+quality {'preserved': True}

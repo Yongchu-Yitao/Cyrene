@@ -1,0 +1,34 @@
+{
+  "root": "/home/shaoyw1810/\u684c\u9762/playground/Cyrene",
+  "head": "ef60b498ec8e2fd9b941d70ed408498a314f2d58",
+  "tmp": "/tmp/cyrene-merge-commit-wytbgoj6",
+  "tree": "/tmp/cyrene-merge-commit-wytbgoj6/tree",
+  "index": "/tmp/cyrene-merge-commit-wytbgoj6/index",
+  "source": "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx",
+  "test": "src/cyrene/workbench/webui/frontend/features/chat/ordered-merge.test.mjs",
+  "generated": [
+    "src/cyrene/workbench/webui/static/app/index.html",
+    "src/cyrene/workbench/webui/static/app/compiled/app.js",
+    "src/cyrene/workbench/webui/static/app/electron/browser-tab-picker.html",
+    "src/cyrene/workbench/webui/static/app/electron/browser-chat-overlay.html"
+  ],
+  "paths": [
+    "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx",
+    "src/cyrene/workbench/webui/frontend/features/chat/ordered-merge.test.mjs",
+    "project-notes/ordered-merge-optimization-2026-09-20.zh-CN.md",
+    "src/cyrene/workbench/webui/static/app/index.html",
+    "src/cyrene/workbench/webui/static/app/compiled/app.js",
+    "src/cyrene/workbench/webui/static/app/electron/browser-tab-picker.html",
+    "src/cyrene/workbench/webui/static/app/electron/browser-chat-overlay.html"
+  ],
+  "original_index": {
+    "src/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx": "100644 c958b7d227d968731f5026507b55381433eb409d 0\tsrc/cyrene/workbench/webui/frontend/features/chat/runtime-timeline.jsx\n",
+    "src/cyrene/workbench/webui/frontend/features/chat/ordered-merge.test.mjs": "",
+    "project-notes/ordered-merge-optimization-2026-09-20.zh-CN.md": "",
+    "src/cyrene/workbench/webui/static/app/index.html": "100644 fc9bd196fbf1fce94eeb747575e32b2d02c6d976 0\tsrc/cyrene/workbench/webui/static/app/index.html\n",
+    "src/cyrene/workbench/webui/static/app/compiled/app.js": "100644 f0ec0654427019ce4edd7ff92f5e2c12acccbcfe 0\tsrc/cyrene/workbench/webui/static/app/compiled/app.js\n",
+    "src/cyrene/workbench/webui/static/app/electron/browser-tab-picker.html": "100644 65c48f78cc1630d22dd0c040d0e49297d83bfb31 0\tsrc/cyrene/workbench/webui/static/app/electron/browser-tab-picker.html\n",
+    "src/cyrene/workbench/webui/static/app/electron/browser-chat-overlay.html": "100644 d5e4600594db133c94d28bc9f98a678ec661b272 0\tsrc/cyrene/workbench/webui/static/app/electron/browser-chat-overlay.html\n"
+  },
+  "commit": "7a4e00425312b242196244d926d6c88d5d12841c"
+}

@@ -253,6 +253,23 @@ class ConversationRuntime:
             router.close()
         return context_checkpoint_from_nodes(nodes)
 
+    def has_admitted_agent_message(self, chat_id: str, request_id: str) -> bool:
+        """Only committed ContextTree input proves idle-run admission."""
+        with ContextStoreRouter(self._state_root() / "context") as router:
+            try:
+                tree = router.get_tree(str(chat_id))
+                nodes = router.get_subtree(tree.id, tree.root_id)
+            except TreeNotFoundError:
+                return False
+        for node in nodes:
+            value = node.value if isinstance(node.value, Mapping) else {}
+            metadata = value.get("metadata") or {}
+            if (value.get("role") == "user" and isinstance(metadata, Mapping)
+                    and metadata.get("agent_originated") is True
+                    and metadata.get("client_request_id") == request_id):
+                return True
+        return False
+
     def fork_context(
         self,
         source_chat_id: str,
@@ -703,6 +720,8 @@ class ConversationRuntime:
             status = str(snapshot.get("status") or "")
             restored_run_id = str(snapshot.get("run_id") or "")
             if status == "awaiting_user":
+                if metadata and metadata.get("agent_originated"):
+                    raise RuntimeError("Agent messages cannot answer or replace a pending user question.")
                 if restored_run_id == normalized_run_id:
                     return bridge.pending_result(restored_run_id)
                 if not str(text or "").strip():
@@ -760,9 +779,14 @@ class ConversationRuntime:
             bridge_options = {}
             if retry_branch:
                 bridge_options["replace_interrupted_run"] = True
-            return await self._with_bridge(config, operate, publish=event_publisher,
-                                           expected_run_id=normalized_run_id,
-                                           **bridge_options)
+            from cyrene.core.retry import retry_runtime_operation
+
+            return await retry_runtime_operation(
+                lambda: self._with_bridge(config, operate, publish=event_publisher,
+                                         expected_run_id=normalized_run_id,
+                                         **bridge_options),
+                should_retry=lambda: not self._stopping,
+            )
         finally:
             self.kick_commit_outbox(config.session_id)
 

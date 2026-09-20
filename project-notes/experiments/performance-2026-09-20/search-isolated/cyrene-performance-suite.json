@@ -1,0 +1,123 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-09-20T12:29:23.861713+00:00",
+  "environment": {
+    "python": "3.12.12",
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "repeats": 3,
+    "network_access": false,
+    "real_credentials": false,
+    "real_llm_calls": false
+  },
+  "groups": [
+    "search"
+  ],
+  "cases": [
+    {
+      "id": "search/simplexng_search_and_fetch",
+      "group": "search",
+      "scenario": "simplexng_search_and_fetch",
+      "primary_metric": "median_ms",
+      "primary_ms": 213.888,
+      "quality_preserved": true,
+      "parallel_workers": 6,
+      "rounds_per_worker": 3,
+      "ideal_cache_hit_rate": 0.666667,
+      "ideal_cache_progression": [
+        0.0,
+        0.5,
+        0.666667
+      ]
+    }
+  ],
+  "quality": {
+    "preserved": true,
+    "failed_cases": []
+  },
+  "ideal_cache": {
+    "kind": "ideal",
+    "basis": "combined_ideal_reuse",
+    "llm_independent": true,
+    "requests": 108,
+    "input_units": 900,
+    "hit_units": 600,
+    "miss_units": 300,
+    "hit_rate": 0.666667
+  },
+  "comparison": null,
+  "reports": {
+    "search": {
+      "schema_version": 2,
+      "generated_at": "2026-09-20T12:29:23.861681+00:00",
+      "fixture": {
+        "network_access": false,
+        "real_model_calls": false,
+        "result_count": 5,
+        "fetched_count": 5,
+        "delays_ms": {
+          "search": 10,
+          "fetch": 60
+        }
+      },
+      "workload": {
+        "parallel_sessions": 6,
+        "rounds_per_session": 3
+      },
+      "repeats": 3,
+      "median_ms": 213.888,
+      "ideal_cache": {
+        "kind": "ideal",
+        "basis": "deterministic_context_prefix",
+        "llm_independent": true,
+        "requests": 108,
+        "input_units": 900,
+        "hit_units": 600,
+        "miss_units": 300,
+        "hit_rate": 0.666667,
+        "series_dimension": "round",
+        "series": [
+          {
+            "index": 0,
+            "requests": 36,
+            "input_units": 300,
+            "hit_units": 0,
+            "miss_units": 300,
+            "hit_rate": 0.0,
+            "cumulative_input_units": 300,
+            "cumulative_hit_units": 0,
+            "cumulative_hit_rate": 0.0
+          },
+          {
+            "index": 1,
+            "requests": 36,
+            "input_units": 300,
+            "hit_units": 300,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 600,
+            "cumulative_hit_units": 300,
+            "cumulative_hit_rate": 0.5
+          },
+          {
+            "index": 2,
+            "requests": 36,
+            "input_units": 300,
+            "hit_units": 300,
+            "miss_units": 0,
+            "hit_rate": 1.0,
+            "cumulative_input_units": 900,
+            "cumulative_hit_units": 600,
+            "cumulative_hit_rate": 0.666667
+          }
+        ]
+      },
+      "quality": {
+        "preserved": true,
+        "output_byte_identical": true,
+        "expected_outputs": 18,
+        "actual_outputs": 18,
+        "output_sha256": "9298e01ee2e6c8fd7ed4e4c29bbf753dfa3c79c5bbdd0e05f4504bc154800d0d"
+      }
+    }
+  }
+}

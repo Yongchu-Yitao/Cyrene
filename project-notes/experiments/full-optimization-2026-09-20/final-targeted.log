@@ -1,0 +1,66 @@
+........................................................................ [ 17%]
+........................................................................ [ 34%]
+........................................................................ [ 52%]
+.....................F.........F........................................ [ 69%]
+........................................................................ [ 86%]
+......................................................                   [100%]
+=================================== FAILURES ===================================
+___________ test_desktop_uses_cross_platform_native_directory_picker ___________
+
+    def test_desktop_uses_cross_platform_native_directory_picker():
+        root = Path(__file__).resolve().parent.parent
+        main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+        preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+        create = (root / "src" / "cyrene" / "workbench" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
+        chat = workbench_chat_source()
+    
+        assert "const isLinux = process.platform === 'linux';" in main
+        assert "const useInsetTitleBar = isMac;" in main
+        assert "ipcMain.handle('dialog:pick-directory'" in main
+        assert "properties: ['openDirectory', 'createDirectory']" in main
+        picker_handler = main.split("ipcMain.handle('dialog:pick-directory'", 1)[1].split(
+            "ipcMain.handle('dialog:pick-extension-path'", 1
+        )[0]
+        assert "isLinux" not in picker_handler
+        assert "directoryPickerUnsupported" not in main
+        assert "process.platform !== 'linux'" not in preload
+        assert "ipcRenderer.invoke('dialog:pick-directory')" in preload
+        assert 'window.cyrene && typeof window.cyrene.pickDirectory === "function"' in create
+        assert "await window.cyrene.pickDirectory()" in create
+        assert 'fetch("/api/context/pick-directory", { method: "POST" })' in create
+>       assert 'window.cyrene.platform === "linux"' not in chat
+E       assert 'window.cyre... === "linux"' not in '// Stable c...tService }\n'
+E         
+E         'window.cyrene.platform === "linux"' is contained here:
+E           cyrene && window.cyrene.platform === "linux";
+E             var [context, setContext] = useWbcState(null);
+E             var [loadError, setLoadError] = useWbcState("");
+E             var [subagents, setSubagents] = useWbcState(null);
+E             var [subagentsLoading, setSubagentsLoading] = useWbcState(false);...
+E         
+E         ...Full output truncated (618 lines hidden), use '-vv' to show
+
+tests/test_workbench_frontend_logic.py:8667: AssertionError
+___ test_workbench_chat_directory_picker_supports_desktop_and_browser_modes ____
+
+    def test_workbench_chat_directory_picker_supports_desktop_and_browser_modes():
+        chat = workbench_chat_source()
+        i18n = workbench_i18n_source()
+    
+>       assert 'window.cyrene.platform === "linux"' not in chat
+E       assert 'window.cyre... === "linux"' not in '// Stable c...tService }\n'
+E         
+E         'window.cyrene.platform === "linux"' is contained here:
+E           cyrene && window.cyrene.platform === "linux";
+E             var [context, setContext] = useWbcState(null);
+E             var [loadError, setLoadError] = useWbcState("");
+E             var [subagents, setSubagents] = useWbcState(null);
+E             var [subagentsLoading, setSubagentsLoading] = useWbcState(false);...
+E         
+E         ...Full output truncated (618 lines hidden), use '-vv' to show
+
+tests/test_workbench_frontend_logic.py:8951: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_workbench_frontend_logic.py::test_desktop_uses_cross_platform_native_directory_picker
+FAILED tests/test_workbench_frontend_logic.py::test_workbench_chat_directory_picker_supports_desktop_and_browser_modes
+2 failed, 412 passed in 4.54s

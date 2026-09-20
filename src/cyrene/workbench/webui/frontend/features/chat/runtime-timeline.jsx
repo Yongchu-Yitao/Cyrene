@@ -313,7 +313,7 @@ function wbcMergeSavedAssistantMessages(chat, assistantMessages) {
     return update ? { ...message, ...update } : message;
   });
   return { ...chat, status: "idle", liveAgentArtifacts: [],
-    messages: wbcMergeChronologicalMessages(current, Array.from(updates.values())) };
+    messages: wbcMergeProjectedMessages(current, Array.from(updates.values())) };
 }
 
 function wbcActivityDedupeKeys(message) {
@@ -353,7 +353,7 @@ function wbcProjectRuntimeTranscript(messages, additions) {
   // Run status is a trailing UI row, not a chronological transcript record.
   // A later checkpoint/segment must never place it between activity cards.
   var statusRows = runtimeMessages.filter(function (message) { return message.runtimeContinuation; });
-  return wbcMergeChronologicalMessages(durable, runtimeMessages.filter(function (message) {
+  return wbcMergeProjectedMessages(durable, runtimeMessages.filter(function (message) {
     return !message.runtimeContinuation;
   })).concat(statusRows);
 }
@@ -366,6 +366,7 @@ function wbcApplyTimeline(runtime, patch) {
   var prior = !patch.snapshot && current.timeline && current.timeline.runId === patch.runId ? current.timeline.messages : [];
   var byId = new Map((prior || []).map(function (message) { return [message.id, message]; }));
   (patch.messages || []).forEach(function (message) { byId.set(message.id, message); });
+  (patch.removedMessageIds || []).forEach(function (id) { byId.delete(id); });
   (patch.updates || []).forEach(function (update) {
     var previous = byId.get(update.id);
     if (!previous || Number(previous.timelineRevision || 0) !== update.baseRevision) {
@@ -475,6 +476,7 @@ function wbcProjectTranscript(messages, runtime) {
   if (!runtime || !runtime.timeline) return durable;
   var patch = runtime.timeline;
   var liveIds = new Set(patch.messages.map(function (message) { return message.id; }));
+  (patch.removedMessageIds || []).forEach(function (id) { liveIds.add(id); });
   var liveActivityKeys = new Set();
   patch.messages.forEach(function (message) {
     wbcActivityDedupeKeys(message).forEach(function (key) { liveActivityKeys.add(key); });

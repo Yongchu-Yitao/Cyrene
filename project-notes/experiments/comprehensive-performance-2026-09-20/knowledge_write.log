@@ -1,0 +1,4 @@
+knowledge_write repeat 1
+knowledge_write repeat 2
+knowledge_write repeat 3
+quality {'preserved': True}

@@ -1375,8 +1375,11 @@ class AgentSession:
             if reply is None:
                 metadata = value.get("metadata")
                 metadata = metadata if isinstance(metadata, Mapping) else {}
+                if metadata.get("contains_agent_messages"):
+                    content = str(metadata.get("authorization_text") or "")
                 if role == "user" and not metadata.get("agent_originated"):
-                    reply = {"role": "user", "content": content}
+                    if content.strip():
+                        reply = {"role": "user", "content": content}
             elif role == "assistant":
                 return [{"role": "assistant", "content": content}, reply]
             elif role == "user":
@@ -1405,8 +1408,9 @@ class AgentSession:
                 authorizations.append(authorization)
             metadata = value.get("metadata")
             metadata = metadata if isinstance(metadata, Mapping) else {}
-            if str(metadata.get("source") or "") != "agent_inbox" and not fallback:
-                fallback = str(value.get("content") or "")
+            if (str(metadata.get("source") or "") != "agent_inbox"
+                    and not metadata.get("agent_originated") and not fallback):
+                fallback = str(metadata.get("authorization_text") or "") if metadata.get("contains_agent_messages") else str(value.get("content") or "")
         return "\n\n".join(authorizations) or fallback
 
     def _append_clarification_authorization(
@@ -1741,7 +1745,38 @@ class AgentSession:
 
     def _enqueue_transition(self, kind: str, node: ContextNode) -> None:
         self._transitions.enqueue(kind, node)
-    def _transition_coroutine(self, kind: str, node: ContextNode):
+    async def _transition_coroutine(self, kind: str, node: ContextNode):
+        from .retry import RUNTIME_RETRY_LIMIT, retry_runtime_operation
+
+        run_id = self._node_run_id(node)
+
+        async def retrying(attempt: int) -> None:
+            key = self._transition_key(node)
+            with self._state_lock:
+                streamed = key in self._streamed_transition_keys
+                self._streamed_transition_keys.discard(key)
+                state = self._set_state_locked(
+                    self._status,
+                    _l("Retrying after an internal error ({attempt}/{limit})",
+                       "内部错误，正在重试（{attempt}/{limit}）",
+                       attempt=attempt, limit=RUNTIME_RETRY_LIMIT),
+                )
+            if streamed:
+                self._emit_event("assistant.stream.started", run_id=run_id,
+                                 node_id=node.id, data={"reset": True,
+                                 "sourceId": self._stream_source_ids.get(key, ""),
+                                 "recovery": "agent_transition_failed", "attempt": attempt})
+            self._emit_event("agent.runtime.retry", run_id=run_id, node_id=node.id,
+                             data={"attempt": attempt, "limit": RUNTIME_RETRY_LIMIT, "stage": kind})
+            self._emit_state_snapshot(state)
+
+        await retry_runtime_operation(
+            lambda: self._transition_attempt(kind, node),
+            should_retry=lambda: not self._transitions.closed and not self._is_cancelled(run_id),
+            on_retry=retrying,
+        )
+
+    def _transition_attempt(self, kind: str, node: ContextNode):
         if kind == "context":
             return self._mount_turn_context(node)
         if kind == "advance":
@@ -1759,7 +1794,7 @@ class AgentSession:
                 await self._finish_terminal(failure, status="failed")
         except BaseException:
             # Even broken persistence/lifecycle hooks must not strand drain().
-            # Do not retry a transition whose side effects may already exist.
+            # Recovery is exhausted; do not retry terminal failure publication.
             settled = None
             with self._state_lock:
                 if self._current_run_id == run_id and self._status not in {"idle", "awaiting_user"}:
@@ -1896,7 +1931,8 @@ class AgentSession:
                 )
                 request_text = str(request_metadata.get("raw_guidance") or "")
             else:
-                request_text = str(request_value.get("content") or "")
+                request_metadata = request_value.get("metadata") or {}
+                request_text = "" if request_metadata.get("agent_originated") else str(request_value.get("content") or "")
             if request_text and request_text not in request_parts:
                 request_parts.append(request_text)
         self._current_user_request = "\n\n".join(request_parts)
@@ -2124,7 +2160,9 @@ class AgentSession:
         public_request = str(
             normalized_metadata.get("public_user_message") or content
         ).strip()
-        if self._permission_user_request is not None:
+        if normalized_metadata.get("agent_originated"):
+            authorization_request = self._permission_request_for_run(normalized_run_id)
+        elif self._permission_user_request is not None:
             authorization_request = self._permission_user_request
         elif permission_user_request is not None:
             authorization_request = str(permission_user_request)
@@ -2157,7 +2195,7 @@ class AgentSession:
             parent_id = self._leaf_id
             self._status = "queued"
             self._detail = _l("User context mounted", "用户上下文已挂载")
-            self._current_user_request = content
+            self._current_user_request = "" if normalized_metadata.get("agent_originated") else content
             self._current_run_id = normalized_run_id
             self._run_permission_user_request = authorization_request
             self._model_calls = 0
@@ -3114,7 +3152,7 @@ class AgentSession:
         run_id: str,
         transition_key: str,
     ) -> bool:
-        """Recover protocol-invalid model results through bounded ContextChange Hooks.
+        """Recover transient/invalid model results through bounded ContextChange Hooks.
 
         Updating the original trigger gives the retry a new transition key and
         lets the durable ``agent-session-transition`` Hook schedule it.  The
@@ -3129,7 +3167,7 @@ class AgentSession:
         )
         retry_scope = str(details.get("retry_scope") or "")
         if (
-            str(details.get("code") or "") not in {"model_response_invalid", "model_output_truncated", "model_response_incomplete"}
+            str(details.get("code") or "") not in {"model_response_invalid", "model_output_truncated", "model_response_incomplete", "model_service_unavailable"}
             or details.get("retryable") is False
             or retry_scope not in {"immediate", "different_arguments"}
         ):
@@ -3168,8 +3206,8 @@ class AgentSession:
             retrying_state = self._set_state_locked(
                 "queued",
                 _l(
-                    "Retrying invalid model response ({attempt}/{limit})",
-                    "正在重试无效模型响应（{attempt}/{limit}）",
+                    "Retrying model response ({attempt}/{limit})",
+                    "正在重试模型响应（{attempt}/{limit}）",
                     attempt=attempt,
                     limit=_MODEL_RESPONSE_INVALID_RETRY_LIMIT,
                 ),
@@ -3186,6 +3224,7 @@ class AgentSession:
                 node_id=trigger.id,
                 data={
                     "reset": True,
+                    "sourceId": self._stream_source_ids.get(transition_key, ""),
                     "recovery": str(details.get("code") or "model_response_invalid"),
                     "attempt": attempt,
                 },

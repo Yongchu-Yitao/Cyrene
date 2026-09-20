@@ -40,7 +40,7 @@ def fresh_auto_state(monkeypatch):
     monkeypatch.setattr("cyrene.platform.settings_store.set_", lambda *a, **k: None)
     monkeypatch.setattr(
         "cyrene.platform.settings_store.get",
-        lambda _key, default=None: default,
+        lambda key, default=None: "en" if key == "app_language" else default,
     )
     updater._download_progress.update({
         "downloaded": 0, "total": 0, "done": False,

@@ -141,7 +141,7 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 - **Credentials** — Update channel and map credentials
 - **Models** — Manage Provider Plugin connections, profiles, and role routes
 - **Plugin packs and standalone Plugins** — Enable or disable Agent capabilities
-- **Agents** — Main-agent execution is completion-driven with no tool-round limit; configure execution subagent lease checkpoints, no-progress detection, wide tool/time/cost/context safety fuses, and separate discussion round/message/information-gain limits
+- **Agents** — Main-agent execution is completion-driven with no tool-round limit; configure execution subagent lease checkpoints, tool/time/cost/context safety limits, and separate discussion round/message/information-gain limits. Repeated tool results do not stop execution subagents.
 - **Search** — official DeepSeek Responses Web Search when configured, with built-in SimpleXNG fallback
 - **MCP Servers** — Add, remove, and restart MCP server connections
 - **SOUL.md** — Edit the personality document directly

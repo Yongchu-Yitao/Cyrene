@@ -363,6 +363,7 @@ class ChatRepository:
                     conn.rollback()
                     return None
                 before_messages = [_plain(item) for item in current.get('messages') or [] if isinstance(item, dict)]
+                before_generation = current.get("messageGeneration", 0)
                 changed = mutation(current)
                 if changed is False:
                     conn.rollback()
@@ -370,6 +371,10 @@ class ChatRepository:
                 if self._chat_id(current) != target:
                     raise ValueError('Workbench chat mutation cannot change id')
                 self._write_chat_row(conn, current, int(row[0]), write_messages=before_messages != current.get('messages'), previous_messages=before_messages)
+                if current.get("messageGeneration", 0) != before_generation:
+                    # Clearing a transcript also retires its recoverable inbox;
+                    # otherwise startup reconstructs deleted peer/user guidance.
+                    conn.execute("DELETE FROM workbench_agent_inbox WHERE session_id=?", (target,))
                 stored = self.ports.load_row(conn, 'chats') or {}
                 ids = [
                     str(item[0])

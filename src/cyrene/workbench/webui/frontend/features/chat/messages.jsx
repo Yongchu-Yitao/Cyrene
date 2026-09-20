@@ -1,3 +1,4 @@
+import { snapshotStaticMessage, equalAssistantProps } from "./message-memo.mjs"
 import { createDisclosureSubscriptions, subscribeDisclosureUpdates } from "./disclosure-subscriptions.mjs"
 import { wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
@@ -5,6 +6,7 @@ import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useW
 import { WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm } from "./conversation.jsx"
 import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag, wbcStartFilePointerDrag, wbcUsesFilePointerDrag } from "./file-resources.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
+import { wbcClearStreamingFades, wbcFadeInStreamingTail } from "./streaming-fade.mjs"
 
 // Workbench chat feature module with explicit ESM dependencies.
 var wbcDisclosureListeners = createDisclosureSubscriptions();
@@ -515,6 +517,8 @@ function WbcGenericAttachment({ file, onOpenFile }) {
 }
 
 function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessage }) {
+  // Agent inputs keep their provenance; retry/edit must not turn them into human input.
+  if (msg.agentOriginated) { canEdit = false; onRetryMessage = null; }
   var attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
   var hasInlineImage = attachments.some(function (file) {
     return file && file.url && (file.kind === "image" || String(file.content_type || "").indexOf("image") === 0);
@@ -596,6 +600,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
       <div className="wbc-msg-row">
         <time>{wbcFormatTime(msg.createdAt)}</time>
         <div className={bubbleClassName}>
+          {msg.agentOriginated ? <small>{wbcT("workbenchChat.agentSessionSource", "Agent message from session")} {msg.originSessionId || ""}</small> : null}
           {msg.content ? <p>{msg.content}</p> : null}
           {attachments.length > 0 && (
             <div className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}>
@@ -1302,7 +1307,20 @@ function WbcGoalMilestoneMessage({ msg, chatId }) {
   );
 }
 
-function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
+function WbcAssistantMessage(props) {
+  var snapshot = props.liveRuntime ? null : snapshotStaticMessage(props.msg);
+  // Date/zone can change even when a historical message does not. Keep the
+  // same time-label refresh opportunities as an ordinary parent render.
+  var now = new Date();
+  var i18n = workbenchServices.i18n();
+  return <WbcMemoAssistantMessage {...props} msg={snapshot || props.msg}
+    staticMessage={!!snapshot} calendarDay={now.toDateString()} zoneOffset={now.getTimezoneOffset()}
+    languageVersion={typeof i18n.getVersion === "function" ? i18n.getVersion() : i18n.getLang()}
+    browserIcon={workbenchServices.browser().Icon} />;
+}
+var WbcMemoAssistantMessage = React.memo(WbcAssistantMessageBody, equalAssistantProps);
+
+function WbcAssistantMessageBody({ msg, liveRuntime, onOpenFile, onRetryMessage, chatId }) {
   msg = msg || {};
   if (!liveRuntime && msg.timelineVersion === 1 && !msg.activityCard && msg.status === "running") {
     liveRuntime = { text: msg.content, artifacts: msg.attachments || [], streamDone: false };
@@ -1315,8 +1333,7 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   );
   var [copied, setCopied] = useWbcState(false);
   var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" });
-  var referenceAttachments = Array.isArray(msg.referenceAttachments)
-    ? msg.referenceAttachments
+  var referenceAttachments = Array.isArray(msg.referenceAttachments) ? msg.referenceAttachments
     : (Array.isArray(msg.reference_attachments) ? msg.reference_attachments : []);
   // A live reply has an immutable Markdown prefix and one active block. Only
   // the active block is reparsed while tokens arrive; completed paragraphs and
@@ -1635,75 +1652,6 @@ function WbcActivityGroup({ group }) {
 // text at a bounded cadence, so fast providers cannot force React/layout work
 // for every token and slow providers remain responsive.
 var WBC_LIVE_FRAME_INTERVAL_MS = 48;
-var WBC_LIVE_FADE_MAX_CHARACTERS = 2048;
-var WBC_LIVE_FADE_DURATION_MS = 520;
-
-function wbcClearStreamingFades(body) {
-  if (!body || typeof document === "undefined") return;
-  Array.from(body.querySelectorAll(".wbc-stream-fade")).forEach(function (existingFade) {
-    var parent = existingFade.parentNode;
-    if (!parent) return;
-    while (existingFade.firstChild) parent.insertBefore(existingFade.firstChild, existingFade);
-    parent.removeChild(existingFade);
-    parent.normalize();
-  });
-}
-
-// Preserve each arriving batch's clock across Markdown DOM replacements.
-// Negative animation delays resume the same fade instead of restarting it.
-function wbcStreamingFadeRanges(ranges, length, addedCharacterCount, now) {
-  var earliest = Math.max(0, length - WBC_LIVE_FADE_MAX_CHARACTERS);
-  var pending = addedCharacterCount < 0 ? [] : (ranges || []).filter(function (range) {
-    return now - range.at < WBC_LIVE_FADE_DURATION_MS && range.end > earliest && range.end <= length;
-  });
-  if (addedCharacterCount > 0) pending.push({
-    start: Math.max(earliest, length - addedCharacterCount), end: length, at: now,
-  });
-  return pending;
-}
-
-function wbcFadeInStreamingTail(body, addedCharacterCount, state) {
-  if (!body || typeof document === "undefined") return;
-  var current = state || { ranges: [] };
-  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    current.ranges = [];
-    return;
-  }
-  var now = performance.now();
-  var length = String(body.textContent || "").length;
-  current.ranges = wbcStreamingFadeRanges(current.ranges, length, addedCharacterCount, now);
-  if (!current.ranges.length) return;
-  var earliest = Math.max(0, length - WBC_LIVE_FADE_MAX_CHARACTERS, current.ranges[0].start);
-  var walker = document.createTreeWalker(body, 4);
-  var textNodes = [];
-  var cursor = length;
-  var node = walker.lastChild();
-  // Include whitespace in offsets so inline markup and code retain their exact
-  // text. Collect before wrapping to avoid revisiting the inserted spans.
-  while (node && cursor > earliest) {
-    var value = String(node.nodeValue || "");
-    textNodes.push({ node: node, start: cursor - value.length, end: cursor });
-    cursor -= value.length;
-    node = walker.previousNode();
-  }
-  textNodes.forEach(function (item) {
-    for (var index = current.ranges.length - 1; index >= 0; index -= 1) {
-      var range = current.ranges[index];
-      var start = Math.max(item.start, range.start, earliest);
-      var end = Math.min(item.end, range.end);
-      if (end <= start) continue;
-      var textNode = item.node;
-      var fragment = textNode.splitText(start - item.start);
-      fragment.splitText(end - start);
-      var fade = document.createElement("span");
-      fade.className = "wbc-stream-fade";
-      fade.style.animationDuration = WBC_LIVE_FADE_DURATION_MS + "ms";
-      fade.style.animationDelay = -Math.max(0, now - range.at) + "ms";
-      fragment.parentNode.insertBefore(fade, fragment);
-      fade.appendChild(fragment);
-    }
-  });
-}
 
 function wbcUseBufferedLiveText(text, flush) {
   var source = String(text || "");

@@ -1,0 +1,539 @@
+{
+  "behavior": [
+    {
+      "case": "same_read",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 1,
+          "reason": ""
+        },
+        {
+          "count": 2,
+          "reason": ""
+        },
+        {
+          "count": 3,
+          "reason": "execution_no_progress"
+        }
+      ],
+      "next_read": {
+        "decision": "block",
+        "reason": "subagent finalization required: execution_no_progress; return the best available result and call quit"
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "same_failure_dynamic_timestamp",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        }
+      ],
+      "next_read": {
+        "decision": "allow",
+        "arguments": {}
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "same_failure_new_arguments",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        }
+      ],
+      "next_read": {
+        "decision": "allow",
+        "arguments": {}
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "legitimate_poll_running",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 1,
+          "reason": ""
+        },
+        {
+          "count": 2,
+          "reason": ""
+        },
+        {
+          "count": 3,
+          "reason": "execution_no_progress"
+        }
+      ],
+      "next_read": {
+        "decision": "block",
+        "reason": "subagent finalization required: execution_no_progress; return the best available result and call quit"
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "distinct_files_same_content",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 1,
+          "reason": ""
+        },
+        {
+          "count": 2,
+          "reason": ""
+        },
+        {
+          "count": 3,
+          "reason": "execution_no_progress"
+        }
+      ],
+      "next_read": {
+        "decision": "block",
+        "reason": "subagent finalization required: execution_no_progress; return the best available result and call quit"
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "semantic_whitespace_change",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 1,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        }
+      ],
+      "next_read": {
+        "decision": "allow",
+        "arguments": {}
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "different_searches_no_matches",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 1,
+          "reason": ""
+        },
+        {
+          "count": 2,
+          "reason": ""
+        },
+        {
+          "count": 3,
+          "reason": "execution_no_progress"
+        }
+      ],
+      "next_read": {
+        "decision": "block",
+        "reason": "subagent finalization required: execution_no_progress; return the best available result and call quit"
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "ab_cycle",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 1,
+          "reason": ""
+        },
+        {
+          "count": 2,
+          "reason": ""
+        },
+        {
+          "count": 3,
+          "reason": "execution_no_progress"
+        }
+      ],
+      "next_read": {
+        "decision": "block",
+        "reason": "subagent finalization required: execution_no_progress; return the best available result and call quit"
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "one_novel_item_resets_whole_batch",
+      "batches": [
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        },
+        {
+          "count": 0,
+          "reason": ""
+        }
+      ],
+      "next_read": {
+        "decision": "allow",
+        "arguments": {}
+      },
+      "quit": {
+        "decision": "allow",
+        "arguments": {}
+      }
+    },
+    {
+      "case": "restore_between_post_hook_and_batch_end",
+      "count": 1
+    }
+  ],
+  "real_runtime_discovery": [
+    {
+      "args": {
+        "operation": "list"
+      },
+      "success": true,
+      "value": {
+        "operation": "list",
+        "packs": [
+          "probe"
+        ],
+        "pack_descriptions": [
+          {
+            "name": "probe",
+            "description": "probe"
+          }
+        ],
+        "standalone_tools": []
+      },
+      "count": 1,
+      "reason": "",
+      "observed_hooks": []
+    },
+    {
+      "args": {
+        "operation": "describe",
+        "name": "SearchOne"
+      },
+      "success": true,
+      "value": {
+        "operation": "describe",
+        "plugins": [
+          {
+            "name": "SearchOne",
+            "description": "SearchOne",
+            "input_schema": {
+              "type": "object",
+              "properties": {}
+            },
+            "pack": "probe"
+          }
+        ]
+      },
+      "count": 2,
+      "reason": "",
+      "observed_hooks": []
+    },
+    {
+      "args": {
+        "operation": "describe",
+        "name": "SearchTwo"
+      },
+      "success": true,
+      "value": {
+        "operation": "describe",
+        "plugins": [
+          {
+            "name": "SearchTwo",
+            "description": "SearchTwo",
+            "input_schema": {
+              "type": "object",
+              "properties": {}
+            },
+            "pack": "probe"
+          }
+        ]
+      },
+      "count": 3,
+      "reason": "execution_no_progress",
+      "observed_hooks": []
+    },
+    {
+      "args": {
+        "operation": "invoke",
+        "name": "SearchOne",
+        "arguments": {}
+      },
+      "success": true,
+      "value": {
+        "operation": "invoke",
+        "name": "SearchOne",
+        "pack": "probe",
+        "result": null,
+        "error": {
+          "error_code": "plugin_review_rejected",
+          "message": "subagent finalization required: execution_no_progress; return the best available result and call quit",
+          "retryable": false,
+          "retry_scope": "never",
+          "retry_after_ms": null,
+          "circuit_scope": "none",
+          "details": {},
+          "plugin": "SearchOne",
+          "code": "plugin_review_rejected"
+        }
+      },
+      "count": 4,
+      "reason": "execution_no_progress",
+      "observed_hooks": []
+    }
+  ],
+  "full_session_discovery": {
+    "model_observations": [
+      {
+        "step": 0,
+        "count": 0,
+        "reason": ""
+      },
+      {
+        "step": 1,
+        "count": 1,
+        "reason": ""
+      },
+      {
+        "step": 2,
+        "count": 2,
+        "reason": ""
+      },
+      {
+        "step": 3,
+        "count": 3,
+        "reason": "execution_no_progress"
+      },
+      {
+        "step": 4,
+        "count": 4,
+        "reason": "execution_no_progress"
+      },
+      {
+        "step": 5,
+        "count": 5,
+        "reason": "execution_no_progress"
+      }
+    ],
+    "search_executions": [],
+    "status": "incomplete",
+    "outcome": "blocked",
+    "reason": "execution_no_progress"
+  },
+  "performance": [
+    {
+      "payload_bytes_approx": 1024,
+      "agents": 1,
+      "persistence": false,
+      "median_ms_per_result_and_batch": 0.037,
+      "p95_ms": 0.044,
+      "root_json_bytes": 38
+    },
+    {
+      "payload_bytes_approx": 1024,
+      "agents": 1,
+      "persistence": true,
+      "median_ms_per_result_and_batch": 2.906,
+      "p95_ms": 3.054,
+      "root_json_bytes": 21741
+    },
+    {
+      "payload_bytes_approx": 1024,
+      "agents": 8,
+      "persistence": false,
+      "median_ms_per_result_and_batch": 0.038,
+      "p95_ms": 0.044,
+      "root_json_bytes": 38
+    },
+    {
+      "payload_bytes_approx": 1024,
+      "agents": 8,
+      "persistence": true,
+      "median_ms_per_result_and_batch": 28.483,
+      "p95_ms": 28.948,
+      "root_json_bytes": 129352
+    },
+    {
+      "payload_bytes_approx": 1048576,
+      "agents": 1,
+      "persistence": false,
+      "median_ms_per_result_and_batch": 4.965,
+      "p95_ms": 5.281,
+      "root_json_bytes": 38
+    },
+    {
+      "payload_bytes_approx": 1048576,
+      "agents": 1,
+      "persistence": true,
+      "median_ms_per_result_and_batch": 8.123,
+      "p95_ms": 8.48,
+      "root_json_bytes": 21741
+    },
+    {
+      "payload_bytes_approx": 1048576,
+      "agents": 8,
+      "persistence": false,
+      "median_ms_per_result_and_batch": 5.012,
+      "p95_ms": 5.102,
+      "root_json_bytes": 38
+    },
+    {
+      "payload_bytes_approx": 1048576,
+      "agents": 8,
+      "persistence": true,
+      "median_ms_per_result_and_batch": 33.87,
+      "p95_ms": 35.056,
+      "root_json_bytes": 129352
+    }
+  ],
+  "persistence_ab": [
+    {
+      "agents": 1,
+      "fingerprints": false,
+      "median_ms_per_persist": 0.66,
+      "root_json_bytes": 2021
+    },
+    {
+      "agents": 1,
+      "fingerprints": true,
+      "median_ms_per_persist": 1.415,
+      "root_json_bytes": 29217
+    },
+    {
+      "agents": 8,
+      "fingerprints": false,
+      "median_ms_per_persist": 3.09,
+      "root_json_bytes": 14460
+    },
+    {
+      "agents": 8,
+      "fingerprints": true,
+      "median_ms_per_persist": 14.97,
+      "root_json_bytes": 232028
+    }
+  ]
+}

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 from bisect import bisect_right
+from contextlib import closing
 import json
 import logging
 import sqlite3
@@ -216,7 +217,7 @@ class ChatRunEventStore:
         return conn
 
     def _initialize(self) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn, conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS workbench_chat_runs (
@@ -284,7 +285,7 @@ class ChatRunEventStore:
                 )
 
     def create(self, run: "ChatRun") -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO workbench_chat_runs(
@@ -313,7 +314,7 @@ class ChatRunEventStore:
         """Persist a cursor-preserving event batch in one transaction."""
         if not events:
             return
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn, conn:
             base = conn.execute("SELECT replay_base_seq FROM workbench_chat_runs WHERE run_id = ?", (str(run_id),)).fetchone()
             # Cancelled thread flushes may have committed before being retried.
             # Never resurrect operations already folded into the baseline.
@@ -380,7 +381,7 @@ class ChatRunEventStore:
 
     def finalize(self, run: "ChatRun") -> None:
         outcome = run.outcome if isinstance(run.outcome, dict) else {}
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 UPDATE workbench_chat_runs
@@ -400,7 +401,7 @@ class ChatRunEventStore:
 
     def delete_chat(self, chat_id: str) -> None:
         """Remove durable replay state after its owning chat is deleted."""
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn, conn:
             run_ids = [
                 str(row["run_id"])
                 for row in conn.execute(
@@ -420,7 +421,7 @@ class ChatRunEventStore:
 
     def recover_interrupted(self) -> int:
         now = datetime.now(timezone.utc).isoformat()
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 """
                 SELECT run_id, last_seq FROM workbench_chat_runs
@@ -468,7 +469,7 @@ class ChatRunEventStore:
         *,
         order_by: str = "created_at DESC",
     ) -> "ChatRun | None":
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn, conn:
             row = conn.execute(
                 f"""
                 SELECT run_id, chat_id, status, created_at, completed_at,
@@ -785,6 +786,17 @@ class ChatRun:
             )
         if self._persist_live_message is not None:
             patch = event.get("timeline") or {}
+            persisted_removals = getattr(self, "_persisted_timeline_removals", set())
+            self._persisted_timeline_removals = persisted_removals
+            for identity in patch.get("removedMessageIds", []):
+                if identity in persisted_removals:
+                    continue
+                try:
+                    await asyncio.to_thread(self._persist_live_message, self.chat_id,
+                                            {"id": identity, "timelineRemoved": True})
+                    persisted_removals.add(identity)
+                except Exception:
+                    logger.exception("Failed to remove replaced reply for %s", self.chat_id)
             changed_messages = [*patch.get("messages", []),
                                 *(self.timeline.records[update["id"]] for update in patch.get("updates", []))]
             for message in changed_messages:
@@ -1141,7 +1153,19 @@ class ChatRunManager:
                 if run.inbox.has_guidance_nowait():
                     run.guidance_channel.notify()
             run.ready.set()
-            await runner(run)
+            from cyrene.core.retry import retry_runtime_operation
+
+            async def retrying(attempt: int) -> None:
+                run.status = "running"
+                await run.publish({"type": "runtime_retry", "attempt": attempt,
+                                   "limit": 3, "code": "chat_run_driver_failed"})
+
+            await retry_runtime_operation(
+                lambda: runner(run),
+                should_retry=lambda: run.status != "cancelled" and
+                    str((run.outcome or {}).get("kind") or "") not in {"reply", "awaiting", "error"},
+                on_retry=retrying,
+            )
         except asyncio.CancelledError:
             run.status = "cancelled"
             if not run.termination_reason:
@@ -1391,6 +1415,10 @@ class ChatRunManager:
             entry.pop("opensActivity", None)
 
         def persist(chat: dict[str, Any]) -> None:
+            if entry.get("timelineRemoved") is True:
+                chat["messages"] = [message for message in chat.get("messages", [])
+                                    if message.get("id") != entry["id"]]
+                return
             merge_chat_messages_chronologically(chat, [entry])
             model_status = (
                 entry.get("modelStatus")
@@ -1477,17 +1505,16 @@ class ChatRunManager:
             messages = chat.setdefault("messages", [])
             event_id = str(record.get("eventId") or "")
             message_id = str(record.get("messageId") or "")
-            if any(
-                isinstance(item, dict)
-                and (
-                    str(item.get("id") or "") == message_id
-                    or (
-                        event_id
-                        and str(item.get("guidanceEventId") or "") == event_id
-                    )
-                )
-                for item in messages
-            ):
+            existing = next((item for item in messages if isinstance(item, dict)
+                             and (str(item.get("id") or "") == message_id
+                                  or (event_id and item.get("guidanceEventId") == event_id))), None)
+            provenance = ({"agentOriginated": True,
+                           "originSessionId": str(record.get("originSessionId") or "")}
+                          if record.get("agentOriginated") else {})
+            if existing is not None:
+                if any(existing.get(key) != value for key, value in provenance.items()):
+                    existing.update(provenance)
+                    repaired += 1
                 continue
             entry = {
                 "id": message_id,
@@ -1496,6 +1523,7 @@ class ChatRunManager:
                 "createdAt": str(record.get("createdAt") or utc_now_iso()),
                 "guidance": True,
                 "guidanceEventId": event_id,
+                **provenance,
                 "runId": str(record.get("runId") or ""),
             }
             client_request_id = str(record.get("clientRequestId") or "")
