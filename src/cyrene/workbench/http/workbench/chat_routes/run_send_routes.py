@@ -1117,6 +1117,7 @@ class _SendOperation:
                 raise RuntimeError("chat disappeared while persisting Agent outcome")
             base_chat = copy.deepcopy(chat)
             self._commit_retry_cut(chat)
+            chat.pop("contextGraphReplay", None)
             timeline = self._builtin_timeline(
                 terminal_timeline,
                 model=model,

@@ -172,6 +172,7 @@ _WORKBENCH_I18N_SOURCE_FILES = (
     "shared/i18n/hook-labels.jsx",
     "shared/i18n/extension-translations.jsx",
     "shared/i18n/doctor-translations.jsx",
+    "shared/i18n/graph-translations.jsx",
     "shared/i18n/catalog-en.jsx",
     "shared/i18n/catalog-zh.jsx",
     "shared/i18n/tool-name-aliases.jsx",

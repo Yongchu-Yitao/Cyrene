@@ -659,7 +659,7 @@ class ContextTreeStore:
                 )
         return max(0, cursor.rowcount)
 
-    def update_node(self, node_id: str, value: Any) -> ContextNode:
+    def update_node(self, node_id: str, value: Any, *, expected_updated_at: str = "") -> ContextNode:
         node_id = str(node_id)
         log_operation(
             logger,
@@ -678,6 +678,8 @@ class ContextTreeStore:
             self._ensure_available()
             with transaction(self._connection):
                 existing = self._require_node_row(node_id)
+                if expected_updated_at and str(existing["updated_at"]) != expected_updated_at:
+                    raise ValueError("context node changed before this update")
                 token_delta = self_tokens - int(existing["self_token_count"] or 0)
                 self._connection.execute(
                     "UPDATE context_nodes SET value_json = ?, self_token_count = ?, "

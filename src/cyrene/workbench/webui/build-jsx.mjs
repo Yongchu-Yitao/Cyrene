@@ -195,6 +195,10 @@ async function buildWorkbenchBundles(files) {
     outdir: OUT_DIR,
     bundle: true,
     format: 'esm',
+    plugins: [{ name: 'workbench-react-singleton', setup(build) {
+      build.onResolve({ filter: /^react$/ }, () => ({ path: resolve(WORKBENCH_DIR, 'shared/runtime/react-singleton.mjs') }));
+      build.onResolve({ filter: /^react-dom$/ }, () => ({ path: resolve(WORKBENCH_DIR, 'shared/runtime/react-dom-singleton.mjs') }));
+    } }],
     splitting: true,
     minify: true,
     chunkNames: 'chunks/[name]-[hash]',
@@ -225,6 +229,10 @@ async function buildWorkbenchBundles(files) {
     + `→ compiled/app.js, compiled/pdf.js (${files.length} source modules, `
     + `${(appEntryBytes / 1024 / 1024).toFixed(2)} MiB app entry, ${splitChunks} shared chunks)`,
   )
+}
+
+function copyGraphWorker() {
+  writeFileSync(resolve(OUT_DIR, "elk-worker.min.js"), readFileSync(resolve(__dirname, "node_modules/elkjs/lib/elk-worker.min.js"), "utf8").replace(/[ \t]+$/gm, ""))
 }
 
 async function build() {
@@ -414,7 +422,7 @@ async function build() {
   }
 }
 
-build().catch(e => {
+build().then(copyGraphWorker).catch(e => {
   console.error('Build failed:', e)
   process.exit(1)
 })

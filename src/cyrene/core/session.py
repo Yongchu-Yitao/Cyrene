@@ -459,6 +459,7 @@ class AgentSession:
         self._initial_root_value = deepcopy(root_node.value)
         if isinstance(self._initial_root_value, dict):
             self._initial_root_value.pop(TASK_STATE_KEY, None)
+        self._leaf_id = self.tree.root_id
         self.task_contexts = TaskContexts(self)
         self.task_contexts.initialize()
         self._plugin_service_values["task_contexts"] = self.task_contexts
@@ -891,6 +892,21 @@ class AgentSession:
         mounts = await self.build_session_mounts(details)
         return "\n\n".join(str(mount["content"]) for mount in mounts)
 
+    def _graph_mount_overrides(self, mounts, lifecycle):
+        root = self.store.get_node(self.tree.id, self.tree.root_id)
+        overrides = root.value.get("context_graph_overrides", {})
+        result = [dict(m) for m in mounts]
+        by_kind = {m.get("kind"): m for m in result}
+        for kind, override in overrides.items():
+            if override.get("lifecycle", "session") != lifecycle:
+                continue
+            mount = by_kind.get(kind)
+            if mount is None:
+                mount = {"kind": kind, "lifecycle": lifecycle}
+                result.append(mount)
+            mount.update(content=str(override.get("content", "")), source="context_graph_override")
+        return tuple(result)
+
     async def build_session_mounts(
         self,
         details: Mapping[str, Any] | None = None,
@@ -904,7 +920,7 @@ class AgentSession:
             fingerprint = await self._session_start_fingerprint(details)
             cached = self._cached_session_start_mounts(fingerprint)
             if cached is not None:
-                return tuple(cached)
+                return self._graph_mount_overrides(cached, "session")
             contributions = await self.hooks.session_start_mounts(dict(details or {}))
             mounts = self._contribution_mounts(
                 contributions,
@@ -927,7 +943,7 @@ class AgentSession:
                     state,
                 )
                 self.store.update_node(self.tree.id, root.id, root_value)
-            return tuple(mounts)
+            return self._graph_mount_overrides(mounts, "session")
         finally:
             self._session_start_build_lock.release()
 
@@ -940,14 +956,14 @@ class AgentSession:
         self.reconcile_plugins()
         self._ensure_required_session_packs()
         contributions = await self.hooks.turn_start_mounts(dict(details or {}))
-        return tuple(self._contribution_mounts(
+        return self._graph_mount_overrides(self._contribution_mounts(
             contributions,
             system_kind="turn_system_prompt",
             ordinary_kind="turn_context",
             system_source="TurnStart",
             ordinary_source="TurnStart",
             lifecycle="turn",
-        ))
+        ), "turn")
 
     async def build_model_context(
         self,
@@ -1829,73 +1845,9 @@ class AgentSession:
     def _wait_for_transitions(self) -> None:
         self._transitions.wait()
     def _select_restore_leaf(self, nodes: Sequence[ContextNode]) -> ContextNode:
-        dialogue = [
-            node
-            for node in nodes
-            if isinstance(node.value, Mapping)
-            and node.value.get("role")
-            in {
-                "system",
-                "user",
-                "context",
-                "context_compaction",
-                "context_reflection",
-                "assistant",
-                "tool_results",
-            }
-        ]
-        leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
-        leaf = terminal_run_ancestor(leaf, nodes)
-        committed_leaf_id, _committed_run_id = self.store.committed_state(
-            self.tree.id
-        )
-        committed_leaf = next(
-            (node for node in dialogue if node.id == committed_leaf_id),
-            None,
-        )
-        latest_value = leaf.value if isinstance(leaf.value, Mapping) else {}
-        latest_path = self.store.get_path(self.tree.id, leaf.id)
-        latest_run_id = self._node_run_id(leaf)
-        latest_run_user = next(
-            (
-                node
-                for node in reversed(latest_path)
-                if isinstance(node.value, Mapping)
-                and node.value.get("role") == "user"
-                and node.value.get("runtime_guidance") is not True
-                and self._node_run_id(node) == latest_run_id
-            ),
-            None,
-        )
-        latest_user_metadata = (
-            latest_run_user.value.get("metadata")
-            if latest_run_user is not None
-            and isinstance(latest_run_user.value, Mapping)
-            and isinstance(latest_run_user.value.get("metadata"), Mapping)
-            else {}
-        )
-        latest_is_retry = latest_user_metadata.get("retry") is True
-        latest_is_terminal = bool(
-            latest_value.get("cancelled") is True
-            or latest_value.get("error") is True
-            or self._pending_from_node(leaf) is not None
-            or (
-                latest_value.get("role") == "assistant"
-                and (latest_value.get("session_end_complete") is True
-                     or latest_value.get("answer_complete") is True)
-            )
-        )
-        if (
-            committed_leaf is not None
-            and committed_leaf.id != leaf.id
-            and latest_is_retry
-            and latest_is_terminal
-        ):
-            # A retry branch only becomes authoritative after Workbench saves
-            # its public projection. A failed save/cancel therefore restores
-            # the previously committed answer; the sibling remains for audit.
-            return committed_leaf
-        return leaf
+        from cyrene.core.context.paths import select_context_leaf
+        committed, _ = self.store.committed_state(self.tree.id)
+        return select_context_leaf(nodes, committed)
 
     def _restore_run_context(self, leaf: ContextNode) -> None:
         path = self.store.get_path(self.tree.id, leaf.id)

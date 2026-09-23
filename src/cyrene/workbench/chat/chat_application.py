@@ -835,6 +835,7 @@ def public_chat_light(
         "forkedFromChatId",
         "forkedAtMessageId",
         "forkMessage",
+        "contextGraphReplay",
     ):
         if chat.get(key):
             payload[key] = chat.get(key)

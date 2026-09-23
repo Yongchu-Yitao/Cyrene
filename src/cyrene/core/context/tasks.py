@@ -497,6 +497,12 @@ def fork_task_state(path):
     by_id = {n.id: n for n in path}
     for node in path[1:]:
         value = node.value
+        manual = value.get("context_graph_task_edit")
+        if isinstance(manual, dict):
+            target = manual.get("contextId")
+            doc = state[SHARED_ID] if target == SHARED_ID else state["documents"].get(target)
+            if doc is not None:
+                doc["body"] = str(manual.get("content", ""))
         owner = value.get("task_context_id")
         if owner and owner != SHARED_ID:
             state["documents"].setdefault(owner, {"body": "", "summary": "", "messages": [], "covered": []})

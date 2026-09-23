@@ -1,7 +1,7 @@
+import { WORKBENCH_GRAPH_EN } from "./graph-translations.jsx"
 import { WORKBENCH_DOCTOR_EN } from "./doctor-translations.jsx"
-// Core English Workbench catalog. Extension-center strings live in extension-translations.jsx.
 export const WORKBENCH_TRANSLATIONS_EN = {
-    ...WORKBENCH_DOCTOR_EN,
+  ...WORKBENCH_GRAPH_EN, ...WORKBENCH_DOCTOR_EN,
     "settings.doctor": "Cyrene Doctor",
     "nav.settings": "Settings",
     "settings.about": "About Cyrene",

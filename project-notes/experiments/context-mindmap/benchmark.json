@@ -1,0 +1,26 @@
+{
+  "node": "v24.13.1",
+  "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+  "platform": "linux",
+  "measurements": [
+    {
+      "nodes": 100,
+      "projectionMs": 0.4,
+      "layoutMs": 68,
+      "heapMiB": 19
+    },
+    {
+      "nodes": 500,
+      "projectionMs": 0.63,
+      "layoutMs": 98,
+      "heapMiB": 32
+    },
+    {
+      "nodes": 1000,
+      "projectionMs": 1,
+      "layoutMs": 153,
+      "heapMiB": 50
+    }
+  ],
+  "scope": "Synthetic graph projection and ELK layout only; not browser frame rate."
+}

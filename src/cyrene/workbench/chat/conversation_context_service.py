@@ -857,6 +857,7 @@ class AgentContextRepository:
                     target_tree,
                     target_node,
                     updated_value,
+                    expected_updated_at=expected,
                 )
         except (NodeNotFoundError, TreeNotFoundError) as exc:
             raise ConversationContextUpdateError(
@@ -931,7 +932,9 @@ class AgentContextRepository:
         ]
         if not dialogue:
             return {}
-        leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+        from cyrene.core.context.paths import select_context_leaf
+        committed, _ = router.committed_state(tree.id)
+        leaf = select_context_leaf(nodes, committed)
         by_id = {node.id: node for node in nodes}
         path = []
         current = leaf
@@ -1011,7 +1014,7 @@ class AgentContextRepository:
                     len(message.get("trace") or []) for message in activity_messages
                     if isinstance(message, Mapping)
                 )}],
-                "checkpoint": context_checkpoint_from_nodes(nodes),
+                "checkpoint": context_checkpoint_from_nodes(nodes, committed),
                 "updatedAt": max((node.updated_at for node in nodes), default=leaf.updated_at).isoformat(),
             }
         compaction_nodes = [
@@ -1096,7 +1099,7 @@ class AgentContextRepository:
         }
         from cyrene.workbench.core_adapter.conversation_runtime import context_checkpoint_from_nodes
 
-        checkpoint = context_checkpoint_from_nodes(nodes)
+        checkpoint = context_checkpoint_from_nodes(nodes, committed)
         if isinstance(checkpoint, Mapping):
             state["checkpoint"] = dict(checkpoint)
         active_plan = plugin_snapshot.get("activePlan")

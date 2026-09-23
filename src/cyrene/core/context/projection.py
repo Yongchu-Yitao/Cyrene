@@ -94,6 +94,35 @@ def project_model_messages(
     durable consumers share the same projection without storing binary content.
     """
 
+    # Branch-scoped overrides are applied after providers materialize their
+    # snapshots and before either task or ordinary message projection.
+    from dataclasses import replace
+    overrides = path[0].value.get("context_graph_overrides", {}) if path and isinstance(path[0].value, Mapping) else {}
+    if overrides:
+        adjusted = []
+        current_run = next((str(n.value.get("run_id") or "") for n in reversed(path) if n.value.get("role") == "user"), "")
+        templates, current_kinds = {}, set()
+        for node in path:
+            value = node.value if isinstance(node.value, Mapping) else {}
+            kind = str(value.get("context_kind") or "context")
+            override = overrides.get(kind) if value.get("role") == "context" else None
+            if isinstance(override, Mapping):
+                value = dict(value, content=str(override.get("content", "")), context_source="context_graph_override")
+                node = replace(node, value=value)
+                templates[kind] = node
+                if str(value.get("run_id") or "") == current_run:
+                    current_kinds.add(kind)
+            adjusted.append(node)
+        # Overrides remain effective even when a provider no longer emits its
+        # mount. These projection-only nodes never execute hooks or mutate the
+        # durable history. Task projection may call us again; current_kinds
+        # makes the transformation idempotent.
+        for kind, template in templates.items():
+            if kind not in current_kinds:
+                value = dict(template.value, run_id=current_run)
+                adjusted.append(replace(template, id=template.id + "-graph-override-" + current_run, value=value))
+        path = adjusted
+
     from .tasks import state_from, project_tasks
     task_state = state_from(path)
     if task_state is not None:
@@ -118,6 +147,8 @@ def project_model_messages(
     for node in path:
         value = node.value if isinstance(node.value, Mapping) else {}
         role = str(value.get("role") or "")
+        if value.get("context_graph_checkpoint"):
+            continue
         if role in {"context_compaction", "context_reflection"}:
             compacted = value.get("messages")
             if isinstance(compacted, list) and all(

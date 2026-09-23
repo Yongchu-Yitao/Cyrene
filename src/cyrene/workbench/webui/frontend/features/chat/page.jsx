@@ -1,3 +1,4 @@
+import { graphActivationListener } from "./context-graph-activation.jsx";
 import { beginFloatingPanelSplit as beginFloatingPaneHandoff, restoreFloatingPanelSplit as restoreFloatingPaneHandoff, abandonFloatingPaneHandoff } from "./floating-pane-handoff.jsx"
 import { useWbcSplitSelection } from "./split-selection-state.jsx"
 import { useWbcChatProjections, useWbcDraftAgentBinding, useWbcSplitSide } from "./page-state.jsx"
@@ -1102,17 +1103,13 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
   }, []);
 
+
   // Re-pull the chat list when another surface (the quick-chat window) sent a
   // message into this project, so the new conversation / reply shows up without
   // a manual refresh. Re-registered per project so refreshChats stays current.
   useWbcEffect(function () {
-    function onRefresh(event) {
-      var detail = (event && event.detail) || {};
-      if (detail.projectId && String(detail.projectId) !== String(projectId)) return;
-      refreshChats(detail.selectId || "");
-    }
-    window.addEventListener("cyrene:wbc-refresh-chats", onRefresh);
-    return function () { window.removeEventListener("cyrene:wbc-refresh-chats", onRefresh); };
+    const release = graphActivationListener({ setChats, skipNextHydrationChatIdRef, setActiveChat, selectChat, runtimeEngine, model, setError, refreshChats, projectId });
+    return function () { release(); };
   }, [projectId]);
 
   // Live tool progress reuses the platform SSE feed and remains subscribed for

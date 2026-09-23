@@ -793,6 +793,13 @@ class WorkbenchSessionBridge:
     def snapshot(self) -> dict[str, Any]:
         return self.session.snapshot()
 
+    def has_graph_draft(self) -> bool:
+        """A saved graph draft is durable input, but has never been executed."""
+        snapshot = self.session.snapshot()
+        path = self.session.store.get_path(self.session.tree.id, snapshot["leaf_id"])
+        user = next((n for n in reversed(path) if n.value.get("role") == "user"), None)
+        return bool(user and user.value.get("metadata", {}).get("graph_draft"))
+
     def prepare_retry(self) -> dict[str, str]:
         """Select the durable parent used by the next retried submission."""
 

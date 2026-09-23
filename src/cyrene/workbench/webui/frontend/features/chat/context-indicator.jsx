@@ -234,26 +234,7 @@ function wbcFetchContextJson(url, signal) {
 }
 
 function wbcUpdateContextNode(chatId, block, content) {
-  return fetch(
-    "/api/workbench/chats/" + encodeURIComponent(chatId)
-      + "/context-nodes/" + encodeURIComponent(block.nodeId),
-    {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content: content,
-        expectedUpdatedAt: String(block.updatedAt || ""),
-      }),
-    }
-  ).then(function (response) {
-    return response.json().catch(function () { return {}; }).then(function (payload) {
-      if (!response.ok || !payload || payload.error) {
-        throw new Error(String(payload && payload.error || "HTTP " + response.status));
-      }
-      return payload;
-    });
-  });
+  return import('./context-graph-revision.mjs').then(module => module.updateContextRevision(chatId, block, content));
 }
 
 function WbcContextDoubleRing({ metrics }) {
@@ -401,7 +382,7 @@ function WbcContextBlockDetails({ block, chatId, onReload }) {
               <span>{wbcT("workbenchChat.contextContentFull", "Full node content")}</span>
               <textarea ref={editorRef} value={draft} onChange={function (event) { setDraft(event.target.value); setSaved(false); }} spellCheck="false" />
             </label>
-            <small>{wbcT("workbenchChat.contextContentEditHint", "Changes are persisted to this ContextTree node and apply to subsequent context projections.")}</small>
+            <small>{wbcT("workbenchChat.graph.revisionHint", "Saving creates an independent branch and preserves the original history.")}</small>
             {block.contentFormat === "json" ? <small>{wbcT("workbenchChat.contextContentJsonHint", "This node uses structured JSON and must remain valid JSON.")}</small> : null}
             {error ? <p role="alert">{error}</p> : null}
             <div>
@@ -583,9 +564,27 @@ function WbcContextInspectorContent({ data, chatId, onReload }) {
   );
 }
 
+function WbcLazyContextGraph(props) {
+  var [Component, setComponent] = useWbcState(null);
+  var [failure, setFailure] = useWbcState("");
+  useWbcEffect(function () {
+    var cancelled = false;
+    import("./context-graph.jsx").then(function (module) { if (!cancelled) setComponent(function () { return module.WbcContextGraph; }); }).catch(function (error) { if (!cancelled) setFailure(String(error)); });
+    return function () { cancelled = true; };
+  }, []);
+  if (failure) return <p role="alert">{failure}</p>;
+  return Component ? <Component {...props} /> : <p role="status">{wbcT("workbenchChat.graph.loading", "Loading graph…")}</p>;
+}
+
 function WbcContextInspectorDialog({ chat, summary, metrics, details, loading, error, onRetry, onClose, triggerRef, titleId }) {
   var closeRef = useWbcRef(null);
   var dialogRef = useWbcRef(null);
+  var [graphMode, setGraphMode] = useWbcState(true);
+  var [fullscreen, setFullscreen] = useWbcState(false);
+  var [dirty, setDirty] = useWbcState(false);
+  var [confirmClose, setConfirmClose] = useWbcState(false);
+  function closeInspector() { if (dirty) setConfirmClose(true); else onClose(); }
+
 
   useWbcEffect(function () {
     var previous = document.activeElement;
@@ -599,7 +598,7 @@ function WbcContextInspectorDialog({ chat, summary, metrics, details, loading, e
   function onKeyDown(event) {
     if (event.key === "Escape") {
       event.preventDefault();
-      onClose();
+      closeInspector();
       return;
     }
     if (event.key !== "Tab" || !dialogRef.current) return;
@@ -616,11 +615,11 @@ function WbcContextInspectorDialog({ chat, summary, metrics, details, loading, e
     }
   }
 
-  var model = String(summary && summary.model || chat && (chat.lastModel || chat.model) || "");
+  var model = inspectorModel(summary, chat);
   return window.ReactDOM.createPortal(
-    <div className="wbc-context-inspector-scrim" onMouseDown={function (event) { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="wbc-context-inspector-scrim" onMouseDown={function (event) { if (event.target === event.currentTarget) closeInspector(); }}>
       <section
-        className="wbc-context-inspector"
+        className={"wbc-context-inspector" + (graphMode ? " is-graph" : "") + (fullscreen ? " is-fullscreen" : "")}
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
@@ -632,29 +631,16 @@ function WbcContextInspectorDialog({ chat, summary, metrics, details, loading, e
             <strong id={titleId}>{wbcT("workbenchChat.contextTree", "Conversation context tree")}</strong>
             <small>{model || wbcT("workbenchChat.contextTreeCurrentModel", "Current model")}</small>
           </span>
-          <button ref={closeRef} type="button" onClick={onClose} aria-label={wbcT("common.close", "Close")}>{WBC_ICONS.x}</button>
+          <span className="wbc-graph-mode">
+            <button type="button" aria-pressed={graphMode} onClick={function () { if (!dirty) setGraphMode(true); }}>{wbcT("workbenchChat.graph.map", "Mind map")}</button>
+            <button type="button" aria-pressed={!graphMode} disabled={dirty} onClick={function () { setGraphMode(false); }}>{wbcT("workbenchChat.graph.input", "Model input")}</button>
+            <button type="button" onClick={function () { setFullscreen(!fullscreen); }}>{wbcT("workbenchChat.graph.full", "Full screen")}</button>
+          </span>
+          <button ref={closeRef} type="button" onClick={closeInspector} aria-label={wbcT("common.close", "Close")}>{WBC_ICONS.x}</button>
         </header>
-        <div className="wbc-context-inspector-summary">
-          <div>
-            <span>{wbcT("workbenchChat.contextUsage", "Context usage")}</span>
-            <b>{wbcContextPercent(metrics.contextRatio, metrics.hasContextLimit)}</b>
-            <small>{metrics.hasContextLimit ? wbcExactNumber(metrics.contextUsed) + " / " + wbcExactNumber(metrics.contextLimit) + " " + wbcT("workbenchChat.contextAuditTokensUnit", "tokens") : "—"}</small>
-          </div>
-          <div>
-            <span>{wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}</span>
-            <b>{wbcContextPercent(metrics.cacheRatio, metrics.hasCacheUsage)}</b>
-            <small>{metrics.hasCacheUsage
-              ? wbcExactNumber(metrics.cacheHitTokens) + " / " + wbcExactNumber(metrics.cacheHitTokens + metrics.cacheMissTokens) + " " + wbcT("workbenchChat.contextAuditTokensUnit", "tokens")
-              : "—"}</small>
-          </div>
-          <div>
-            <span>{wbcT("workbenchChat.messageCount", "Messages")}</span>
-            <b>{Number(details && details.messageCount != null ? details.messageCount : summary && summary.messageCount || 0)}</b>
-            <small>{wbcT("workbenchChat.contextTreeActivePath", "active path")}</small>
-          </div>
-        </div>
+        <WbcInspectorMetrics metrics={metrics} details={details} summary={summary} />
         <div className="wbc-context-inspector-body">
-          {loading ? (
+          {graphMode ? <WbcLazyContextGraph chatId={String(chat && chat.id || "")} onClose={onClose} onDirtyChange={setDirty} /> : loading ? (
             <div className="wbc-context-inspector-state" role="status"><span className="wbc-spinner" aria-hidden="true" />{wbcT("workbenchChat.contextTreeLoading", "Loading context tree…")}</div>
           ) : error ? (
             <div className="wbc-context-inspector-state is-error" role="alert">
@@ -663,6 +649,11 @@ function WbcContextInspectorDialog({ chat, summary, metrics, details, loading, e
             </div>
           ) : <WbcContextInspectorContent data={details} chatId={String(chat && chat.id || "")} onReload={onRetry} />}
         </div>
+        {confirmClose && <div className="wbc-graph-dirty" role="alertdialog" aria-label={wbcT("workbenchChat.graph.dirty", "Unsaved edits")}>
+          <p>{wbcT("workbenchChat.graph.dirty", "Unsaved edits")}</p>
+          <button onClick={onClose}>{wbcT("workbenchChat.graph.discard", "Discard edits")}</button>
+          <button onClick={function () { setConfirmClose(false); }}>{wbcT("workbenchChat.graph.keep", "Keep editing")}</button>
+        </div>}
       </section>
     </div>,
     document.querySelector(".workbench-shell") || document.body
@@ -773,6 +764,12 @@ function WbcComposerContextIndicator({ chat, runtime, running }) {
   var contextRevision = Number(chat && chat.contextRevision || 0);
   var [open, setOpen] = useWbcState(false);
   var triggerRef = useWbcRef(null);
+  useWbcEffect(function () {
+    function openGraph(event) { if (!event.detail || event.detail.chatId === chatId) setOpen(true); }
+    window.addEventListener("cyrene:context-graph-open", openGraph);
+    return function () { window.removeEventListener("cyrene:context-graph-open", openGraph); };
+  }, [chatId]);
+
   var summaryState = useWbcContextSummary(chatId, updatedAt, contextRevision, running);
   var summary = summaryState[0];
   var detailsState = useWbcContextDetails(chatId, open, running, summaryState[1]);
@@ -824,4 +821,28 @@ function WbcComposerContextIndicator({ chat, runtime, running }) {
   );
 }
 
-export { WbcComposerContextIndicator }
+export { WbcComposerContextIndicator, WbcContextInspectorDialog }
+
+function WbcInspectorMetrics({ metrics, details, summary }) {
+  return <div className="wbc-context-inspector-summary">
+          <div>
+            <span>{wbcT("workbenchChat.contextUsage", "Context usage")}</span>
+            <b>{wbcContextPercent(metrics.contextRatio, metrics.hasContextLimit)}</b>
+            <small>{metrics.hasContextLimit ? wbcExactNumber(metrics.contextUsed) + " / " + wbcExactNumber(metrics.contextLimit) + " " + wbcT("workbenchChat.contextAuditTokensUnit", "tokens") : "—"}</small>
+          </div>
+          <div>
+            <span>{wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}</span>
+            <b>{wbcContextPercent(metrics.cacheRatio, metrics.hasCacheUsage)}</b>
+            <small>{metrics.hasCacheUsage
+              ? wbcExactNumber(metrics.cacheHitTokens) + " / " + wbcExactNumber(metrics.cacheHitTokens + metrics.cacheMissTokens) + " " + wbcT("workbenchChat.contextAuditTokensUnit", "tokens")
+              : "—"}</small>
+          </div>
+          <div>
+            <span>{wbcT("workbenchChat.messageCount", "Messages")}</span>
+            <b>{Number(details && details.messageCount != null ? details.messageCount : summary && summary.messageCount || 0)}</b>
+            <small>{wbcT("workbenchChat.contextTreeActivePath", "active path")}</small>
+          </div>
+        </div>;
+}
+
+function inspectorModel(summary, chat) { return String(summary?.model || chat?.lastModel || chat?.model || ""); }

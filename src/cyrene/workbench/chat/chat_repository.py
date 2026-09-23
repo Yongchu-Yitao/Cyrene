@@ -19,6 +19,7 @@ from cyrene.workbench.persistence.store import (
     read_chat_summaries,
     read_document,
     write_chat,
+    write_chat_bundle,
     write_chat_metadata,
     write_document,
 )
@@ -114,6 +115,18 @@ class ChatRepository:
         self, metadata: dict[str, Any], *, base_metadata: dict[str, Any],
     ) -> dict[str, Any] | None:
         return write_chat_metadata(self._database(), metadata, base_metadata=base_metadata)
+
+    def insert(self, chat: dict[str, Any]) -> dict[str, Any]:
+        """Merge a new conversation without replacing concurrent siblings."""
+        with self._lock:
+            existing = self.get(str(chat.get("id") or ""))
+            if existing is not None:
+                return dict(existing)
+            merged = write_chat_bundle(
+                self._database(), {"chats": [chat]}, _empty_store,
+                base_value={"chats": []},
+            )
+        return next(item for item in merged["chats"] if item["id"] == chat["id"])
 
     def write_one(
         self,

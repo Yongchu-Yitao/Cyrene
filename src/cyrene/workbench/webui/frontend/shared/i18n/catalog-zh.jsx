@@ -1,7 +1,7 @@
+import { WORKBENCH_GRAPH_ZH } from "./graph-translations.jsx"
 import { WORKBENCH_DOCTOR_ZH } from "./doctor-translations.jsx"
-// Core Chinese Workbench catalog. Extension-center strings live in extension-translations.jsx.
 export const WORKBENCH_TRANSLATIONS_ZH = {
-    ...WORKBENCH_DOCTOR_ZH,
+  ...WORKBENCH_GRAPH_ZH, ...WORKBENCH_DOCTOR_ZH,
     "settings.doctor": "Cyrene 诊断助手",
     "nav.settings": "设置",
     "settings.about": "关于 Cyrene",

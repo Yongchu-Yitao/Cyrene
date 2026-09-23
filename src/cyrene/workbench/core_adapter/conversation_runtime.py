@@ -87,7 +87,7 @@ def _conversation_data_directory(
     return Path(USER_DATA_DIR).expanduser().resolve() / "agent-state"
 
 
-def context_checkpoint_from_nodes(nodes: Sequence[Any]) -> dict[str, Any] | None:
+def context_checkpoint_from_nodes(nodes: Sequence[Any], committed_leaf_id: str = "") -> dict[str, Any] | None:
     """Project a durable run checkpoint from an already-loaded tree snapshot."""
 
     dialogue = [
@@ -107,10 +107,8 @@ def context_checkpoint_from_nodes(nodes: Sequence[Any]) -> dict[str, Any] | None
     ]
     if not dialogue:
         return None
-    leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
-    from cyrene.core.restore_decision import terminal_run_ancestor
-
-    leaf = terminal_run_ancestor(leaf, nodes)
+    from cyrene.core.context.paths import select_context_leaf
+    leaf = select_context_leaf(nodes, committed_leaf_id)
     by_id = {node.id: node for node in nodes}
     current = leaf
     run_id = ""
@@ -247,11 +245,12 @@ class ConversationRuntime:
         try:
             tree = router.get_tree(str(chat_id))
             nodes = router.get_subtree(tree.id, tree.root_id)
+            committed = router.committed_state(tree.id)[0]
         except TreeNotFoundError:
             return None
         finally:
             router.close()
-        return context_checkpoint_from_nodes(nodes)
+        return context_checkpoint_from_nodes(nodes, committed)
 
     def has_admitted_agent_message(self, chat_id: str, request_id: str) -> bool:
         """Only committed ContextTree input proves idle-run admission."""
@@ -275,7 +274,10 @@ class ConversationRuntime:
         source_chat_id: str,
         target_chat_id: str,
         *,
-        user_ordinal: int,
+        user_ordinal: int = 0,
+        source_leaf_id: str = "",
+        boundary_node_id: str = "",
+        include_boundary: bool = False,
     ) -> dict[str, Any]:
         """Copy the active source prefix before one user turn into a new tree."""
 
@@ -286,11 +288,12 @@ class ConversationRuntime:
             raise ValueError("source and target chat ids are required")
         if source_id == target_id:
             raise ValueError("source and target chat ids must differ")
-        if ordinal < 1:
+        if ordinal < 1 and not boundary_node_id:
             raise ValueError("user_ordinal must be at least one")
 
         router = ContextStoreRouter(self._state_root() / "context")
         target_created = False
+        staged_artifacts = None
         try:
             source = router.get_tree(source_id)
             nodes = router.get_subtree(source.id, source.root_id)
@@ -311,7 +314,8 @@ class ConversationRuntime:
             ]
             if not dialogue:
                 raise RuntimeError("source conversation has no durable dialogue")
-            leaf = max(dialogue, key=lambda item: (item.created_at, item.id))
+            from cyrene.core.context.paths import select_context_leaf
+            leaf = router.get_node(source.id, source_leaf_id) if source_leaf_id else select_context_leaf(nodes, router.committed_state(source.id)[0])
             path = router.get_path(source.id, leaf.id)
             seen_users = 0
             cutoff = -1
@@ -323,11 +327,19 @@ class ConversationRuntime:
                 if seen_users == ordinal:
                     cutoff = index
                     break
-            if cutoff < 0:
-                raise LookupError("source user turn was not found")
+            if boundary_node_id:
+                cutoff = next((i + int(include_boundary) for i, n in enumerate(path) if n.id == boundary_node_id), -1)
+            if cutoff < 1:
+                raise LookupError("source boundary was not found or excludes the root")
 
             from cyrene.core.context.tasks import STATE_KEY, fork_task_state
             root_value = without_plugin_session_state(path[0].value)
+            root_value.pop("permission_session_grants", None)
+            prefix_ids = {node.id for node in path[:cutoff]}
+            overrides = root_value.get("context_graph_overrides")
+            if isinstance(overrides, dict):
+                root_value["context_graph_overrides"] = {key: value for key, value in overrides.items()
+                    if isinstance(value, dict) and (not value.get("nodeId") or value["nodeId"] in prefix_ids)}
             task_state = fork_task_state(path[:cutoff])
             if task_state is not None:
                 root_value[STATE_KEY] = task_state
@@ -350,7 +362,11 @@ class ConversationRuntime:
             )
             target_created = True
             if source_artifacts.exists():
-                shutil.copytree(source_artifacts, target_artifacts)
+                staged_artifacts = target_artifacts.with_name(target_artifacts.name + ".copying")
+                if staged_artifacts.exists():
+                    shutil.rmtree(staged_artifacts)
+                shutil.copytree(source_artifacts, staged_artifacts)
+                staged_artifacts.rename(target_artifacts)
             parent_id = target.root_id
             copied = 0
             for node in path[1:cutoff]:
@@ -374,6 +390,8 @@ class ConversationRuntime:
                 router.delete_tree(target_id)
             raise
         finally:
+            if staged_artifacts is not None and staged_artifacts.exists():
+                shutil.rmtree(staged_artifacts)
             router.close()
 
     def delete_context(self, chat_id: str) -> bool:
@@ -389,6 +407,10 @@ class ConversationRuntime:
             if not normalized or normalized in visited:
                 return
             visited.add(normalized)
+            artifacts = router.artifact_directory(normalized)
+            staged = artifacts.with_name(artifacts.name + ".copying")
+            if staged.exists():
+                shutil.rmtree(staged)
             try:
                 tree = router.get_tree(normalized)
                 root = router.get_node(tree.id, tree.root_id)
@@ -747,7 +769,8 @@ class ConversationRuntime:
                     "resume it or explicitly cancel it before starting a different run."
                 )
             retry_origin: Mapping[str, str] = {}
-            if retry_branch:
+            graph_replay = bool(metadata and metadata.get("fork_replay") and bridge.has_graph_draft())
+            if retry_branch or graph_replay:
                 retry_origin = bridge.prepare_retry()
             turn_metadata = dict(metadata or {})
             if retry_origin:

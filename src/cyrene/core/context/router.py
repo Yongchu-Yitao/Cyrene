@@ -652,10 +652,10 @@ class ContextStoreRouter:
         )
         return node
 
-    def update_node(self, tree_id: str, node_id: str, value: Any) -> ContextNode:
+    def update_node(self, tree_id: str, node_id: str, value: Any, *, expected_updated_at: str = "") -> ContextNode:
         hooks = self.hooks_for(tree_id)
         with self._lease(tree_id) as store:
-            node = store.update_node(node_id, value)
+            node = store.update_node(node_id, value, expected_updated_at=expected_updated_at)
         self._publish_change(
             ContextChange(
                 node.tree_id,

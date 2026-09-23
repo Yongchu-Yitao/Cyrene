@@ -15,7 +15,6 @@ import { WbcArtifactsTab, WbcContextTab, WbcOverviewTab, useWbcLiveChatMetrics, 
 import { ConversationPlanTimeline } from "../plan/conversation-plan-timeline.jsx"
 import { WbcGoalTab } from "../goal/goal-ui.jsx"
 import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserList, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcMapList, WbcMapPaneContent, WbcMapSplitHost, WbcResourceSplitHost, WbcViewerList, useWbcMapData, wbcArtifactFileKey, wbcCanEditProjectTextFile, wbcChatArtifactFiles, wbcChatDeliveredArtifacts, wbcDiscardProjectFileDraft, wbcEditableChatFileResource, wbcMapItemKey, wbcMapItemLabel, wbcProjectFileDraftKey, wbcProjectFileEditUrl, wbcViewerFileFromItems } from "./resource-splits.jsx"
-
 // Workbench chat feature module with explicit ESM dependencies.
 function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
   var rows = useWbcMemo(function () {
@@ -29,6 +28,7 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
   }, 0);
   return (
     <div className="wbc-branch" style={{ "--wbc-branch-rail": (maxDepth * 14 + 30) + "px" }}>
+      <button type="button" className="wbc-graph-open" onClick={function () { window.dispatchEvent(new CustomEvent("cyrene:context-graph-open", { detail: { chatId: activeChatId } })); }}>{wbcT("workbenchChat.graph.map", "Mind map")}</button>
       <ul className="wbc-branch-tree">
         {rows.map(function (row, index) {
           var isActive = row.chatId === activeChatId;

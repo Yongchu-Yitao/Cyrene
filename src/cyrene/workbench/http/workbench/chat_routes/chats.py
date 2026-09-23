@@ -37,4 +37,6 @@ def register_chat_routes(
     register_groups_routes(router, context)
     handlers.update(register_delete_routes(router, context) or {})
     register_fork_routes(router, context)
+    from .context_graph_routes import register_context_graph_routes
+    register_context_graph_routes(router, context)
     return handlers
