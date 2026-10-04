@@ -146,17 +146,24 @@ class ContextGraphService:
             for n in visible:
                 v = n.value
                 content = node_content(v)
+                calls = v.get('tool_calls') if isinstance(v.get('tool_calls'), list) else []
+                results = v.get('results') if v.get('role') == 'tool_results' and isinstance(v.get('results'), list) else []
+                tool_phase = 'call' if calls else 'result' if v.get('role') == 'tool_results' else ''
+                tool_items = calls if calls else results
+                tool_names = list(dict.fromkeys(str(item.get('name') or '').strip() for item in tool_items if isinstance(item, dict) and item.get('name')))
+                tool_preview = ' · '.join(tool_names[:3]) + (f' · +{len(tool_names) - 3}' if len(tool_names) > 3 else '')
                 pending = bool(v.get('pending_question'))
                 graph_nodes.append({'id': f'{cid}:{n.id}', 'nodeId': n.id, 'chatId': cid,
                     'parentId': f'{cid}:{n.parent_id}' if n.parent_id in visible_ids else '',
                     'internalCheckpoint': bool(v.get('context_graph_checkpoint')), 'contentHash': hashlib.sha256(json.dumps([content, v.get('context_lifecycle'), v.get('context_source'), v.get('context_graph_overrides')], sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
-                    'role': v.get('role'), 'kind': v.get('context_kind', ''), 'preview': content[:220],
+                    'role': v.get('role'), 'kind': v.get('context_kind', ''), 'preview': (tool_preview or content)[:220],
                     'chars': len(content), 'updatedAt': n.updated_at.isoformat(), 'createdAt': n.created_at.isoformat(),
                     'active': cid == chat_id and n.id in active_ids, 'currentPath': n.id in active_ids,
                     'tip': n.id not in parents, 'historical': n.id not in active_ids,
                     'canContinue': bool(safe_boundary(n)), 'canFork': v.get('role') == 'user' and not v.get('runtime_guidance') and not v.get('metadata', {}).get('agent_originated'),
                     'canEdit': v.get('role') in {'user', 'assistant', 'system', 'context', 'tool_results', 'context_compaction', 'context_reflection'} and not pending and not v.get('tool_calls'),
-                    'toolGroup': bool(v.get('tool_calls') or v.get('role') == 'tool_results'), 'pending': pending, 'revision': revision, 'runId': v.get('run_id', ''),
+                    'toolGroup': bool(tool_phase), 'toolPhase': tool_phase, 'toolCount': len(tool_items), 'toolNames': tool_names,
+                    'pending': pending, 'revision': revision, 'runId': v.get('run_id', ''),
                     'draft': bool(v.get('metadata', {}).get('graph_draft')), 'retry': bool(v.get('metadata', {}).get('retry')), 'manual': bool(v.get('manual_revision'))})
                 if n.parent_id in visible_ids:
                     kind = 'mount' if v.get('role') == 'context' else 'retry' if v.get('metadata', {}).get('retry') else 'sequence'

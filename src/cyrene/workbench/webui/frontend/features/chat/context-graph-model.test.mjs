@@ -19,9 +19,10 @@ test('SVG export escapes message content and diff preserves changed lines',()=>{
  const svg=graphSvg([{id:'a',position:{x:0,y:0},data:{preview:'<script>&"'}}],[]); assert.ok(svg.includes('&lt;script&gt;')); assert.ok(!svg.includes('<script>')); assert.equal(graphDiff('a\nb','a\nc')[1].changed,true);
 });
 test('tool steps fold into connected history and can be expanded', () => {
- const g={branches:[], nodes:[node('a','u'),{...node('a','tool','u'),toolGroup:true},node('a','answer','tool')],edges:[edge('a','u','tool'),edge('a','tool','answer')]};
- const folded=visibleGraph(g); assert.equal(folded.nodes.length,2); assert.equal(folded.edges[0].source,'a:u'); assert.equal(folded.edges[0].target,'a:answer'); assert.equal(folded.edges[0].kind,'tools');
- assert.equal(visibleGraph(g,{showTools:true}).nodes.length,3);
+ const g={branches:[], nodes:[node('a','u'),{...node('a','call','u'),toolGroup:true,toolPhase:'call'}, {...node('a','result','call'),toolGroup:true,toolPhase:'result'},node('a','answer','result')],edges:[edge('a','u','call'),edge('a','call','result'),edge('a','result','answer')]};
+ const expanded=visibleGraph(g); assert.equal(expanded.nodes.length,4,'tool call and result cards are visible by default');
+ assert.ok(expanded.nodes.some(n=>n.toolPhase==='call')); assert.ok(expanded.nodes.some(n=>n.toolPhase==='result'));
+ const folded=visibleGraph(g,{showTools:false}); assert.equal(folded.nodes.length,2); assert.equal(folded.edges[0].source,'a:u'); assert.equal(folded.edges[0].target,'a:answer'); assert.equal(folded.edges[0].kind,'tools');
 });
 test('archiving one copy does not hide its visible shared prefix',()=>{
  const g={...graph,branches:[{chatId:'a',value:{archived:true}},{chatId:'b',value:{}}]};

@@ -94,6 +94,6 @@ export function graphSvg(nodes, edges) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${minX} ${minY} ${width} ${height}"><rect x="${minX}" y="${minY}" width="${width}" height="${height}" fill="#1c1d23"/>${paths}${cards}</svg>`;
 }
 
-function hiddenTools(graph, view, query) { return new Set(!view.showTools && !query ? graph.nodes.filter(n => n.toolGroup).map(n => n.id) : []); }
+function hiddenTools(graph, view, query) { return new Set(view.showTools === false && !query ? graph.nodes.filter(n => n.toolGroup).map(n => n.id) : []); }
 
 function groupExpansion(view, query) { return { all: !!view.showContexts || !!query, ids: view.expandedGroups || [] }; }

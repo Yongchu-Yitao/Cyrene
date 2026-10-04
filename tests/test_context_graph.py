@@ -49,6 +49,28 @@ def test_graph_read_includes_retry_and_committed_path(graph_env):
     assert any(edge['kind'] == 'retry' for edge in graph['edges'])
 
 
+def test_tool_steps_have_named_call_and_result_cards(graph_env):
+    e = graph_env
+    with ContextStoreRouter(e.directory) as router:
+        call = router.mount('source', e.user.id, {
+            'role': 'assistant', 'content': '', 'run_id': 'r1',
+            'tool_calls': [{'id': 'call-1', 'name': 'weather.lookup', 'arguments': {'city': 'Munich'}}],
+        })
+        result = router.mount('source', call.id, {
+            'role': 'tool_results', 'run_id': 'r1',
+            'results': [{'call_id': 'call-1', 'name': 'weather.lookup', 'success': True, 'value': {'temp': 21}}],
+        })
+        answer = router.mount('source', result.id, {'role': 'assistant', 'content': '21°C', 'run_id': 'r1', 'answer_complete': True, 'session_end_complete': True})
+        router.commit_state('source', answer.id, 'r1')
+    graph = e.graph.graph('source')
+    by_id = {node['nodeId']: node for node in graph['nodes']}
+    assert by_id[call.id]['toolPhase'] == 'call'
+    assert by_id[result.id]['toolPhase'] == 'result'
+    assert by_id[call.id]['preview'] == 'weather.lookup'
+    assert by_id[result.id]['preview'] == 'weather.lookup'
+    assert [edge for edge in graph['edges'] if edge['source'] == by_id[call.id]['id'] and edge['target'] == by_id[result.id]['id']]
+
+
 def test_edit_forks_without_mutating_source_and_is_idempotent(graph_env):
     e = graph_env
     body = operation(e, e.user, 'edit', content='new question')

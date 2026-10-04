@@ -5,6 +5,7 @@ import { wbcT, useWbcState as useState, useWbcEffect as useEffect, useWbcRef as 
 import { visibleGraph, graphMarkdown, graphDiff, graphSvg } from './context-graph-model.mjs';
 import { WBC_ICONS } from './icons.jsx';
 import { GraphContextMenu } from './context-graph-menu.jsx';
+import { WbcContextInspectorContent } from './context-indicator.jsx';
 const graphText = key => wbcT('workbenchChat.graph.' + key, key);
 
 async function request(url, method = 'GET', data, signal) {
@@ -18,10 +19,20 @@ function download(blob, name) {
   const url = URL.createObjectURL(blob), a = document.createElement('a');
   a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
-function graphNodeClass(data) { return 'wbc-graph-node' + (data.active ? ' is-active' : '') + (data.match ? ' is-match' : '') + (data.historical ? ' is-history' : '') + (data.groupItems ? ' is-context-group' : ''); }
+function graphToolPhase(data) { return data.toolPhase || (data.toolGroup ? data.role === 'tool_results' ? 'result' : 'call' : ''); }
+function graphNodeClass(data) { return 'wbc-graph-node' + (data.active ? ' is-active' : '') + (data.match ? ' is-match' : '') + (data.historical ? ' is-history' : '') + (data.groupItems ? ' is-context-group' : '') + (graphToolPhase(data) ? ' is-tool-' + graphToolPhase(data) : ''); }
+function graphNodePreview(data) {
+  const phase = graphToolPhase(data);
+  if (!phase) return data.preview || graphText('start');
+  if (data.toolNames?.length) return data.preview;
+  const names = [...String(data.preview || '').matchAll(/"name"\s*:\s*"([^"]+)"/g)].map(match => match[1]);
+  return [...new Set(names)].slice(0, 3).join(' · ') || graphText(phase === 'call' ? 'toolCall' : 'toolResult');
+}
 function graphNodeBadge(data) { if (data.draft) return graphText('draft'); if (data.retry) return '↻'; if (data.manual) return graphText('manual'); return data.tip ? '●' : ''; }
 function graphNodeTitle(data) {
   if (data.groupItems) return graphText(data.groupKind) + ' · ' + data.groupItems.length;
+  const phase = graphToolPhase(data);
+  if (phase) return graphText(phase === 'call' ? 'toolCall' : 'toolResult') + (data.toolCount > 1 ? ' · ' + data.toolCount : '');
   if (data.role === 'task') return graphText('taskDocument');
   if (data.role === 'context') return wbcT('workbenchChat.contextKind.' + data.kind, graphContextLabel(data.kind));
   return wbcT('workbenchChat.contextRole.' + data.role, data.role);
@@ -30,7 +41,7 @@ function ContextNode({ data }) {
   return <div className={graphNodeClass(data)}>
     <Handle type="target" position={Position.Left} isConnectable={false} />
     <div className="wbc-graph-node-head"><b>{graphNodeTitle(data)}</b><span>{graphNodeBadge(data)}</span></div>
-    <p>{data.groupItems ? data.groupItems.map(graphNodeTitle).join(' · ') : data.preview || graphText('start')}</p><small>{data.groupItems ? graphText('inspectGroup') : data.pending ? graphText('pending') : data.kind || ''}</small>
+    <p>{data.groupItems ? data.groupItems.map(graphNodeTitle).join(' · ') : graphNodePreview(data)}</p><small>{data.groupItems ? graphText('inspectGroup') : data.pending ? graphText('pending') : data.kind || ''}</small>
     {data.canCollapse && <button type="button" className="nodrag" aria-label={graphText('collapse')} onClick={e => { e.stopPropagation(); data.toggle(data.id, !!data.groupItems); }}>{data.collapsed ? '+' : '−'}</button>}
     <Handle type="source" position={Position.Right} isConnectable={false} />
   </div>;
@@ -38,7 +49,7 @@ function ContextNode({ data }) {
 const nodeTypes = { context: ContextNode };
 
 function useGraphDataState() {
-  const [graph, setGraph] = useState(null), [view, setView] = useState({ positions: {}, collapsed: [] });
+  const [graph, setGraph] = useState(null), [view, setView] = useState({ positions: {}, collapsed: [], showTools: true });
   const [nodes, setNodes, onNodesChange] = useNodesState([]), [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selected, setSelected] = useState(''), [detail, setDetail] = useState(null), [draft, setDraft] = useState('');
   const [inspectionChat, setInspectionChat] = useState('');
@@ -88,7 +99,11 @@ function useGraphRead(state) {
       setGraph(previous => JSON.stringify(previous) === JSON.stringify(result) ? previous : result); setError('');
       if (loadedView.current !== result.familyId) {
         loadedView.current = result.familyId; viewRevision.current = result.view.revision;
-        setView({ positions: {}, collapsed: [], ...(result.view.value.layoutVersion === 2 ? result.view.value : {}) }); setSelected(result.view.value.selected || ''); setInspectionChat(result.view.value.inspectionChat || ''); dirtyView.current = false;
+        const savedView = result.view.value.layoutVersion === 2 ? result.view.value : {};
+        const revealTools = savedView.showTools === undefined;
+        setView({ positions: {}, collapsed: [], ...savedView, showTools: savedView.showTools !== false,
+          ...(revealTools ? { positions: {}, viewport: null } : {}) });
+        setSelected(result.view.value.selected || ''); setInspectionChat(result.view.value.inspectionChat || ''); dirtyView.current = false;
       }
       return result;
     } catch (e) { if (rev === graphRequest.current) setError(e.message); }
@@ -116,6 +131,22 @@ function useGraphRead(state) {
 
 
   return { load };
+}
+
+function useGraphAudit(state) {
+  const [audit, setAudit] = useState(null), [auditError, setAuditError] = useState(''), [auditLoading, setAuditLoading] = useState(false);
+  const [auditRevision, setAuditRevision] = useState(0);
+  const selectedChatId = state.node?.chatId;
+  useEffect(() => {
+    if (!selectedChatId) { setAudit(null); setAuditError(''); setAuditLoading(false); return; }
+    const abort = new AbortController();
+    setAudit(null); setAuditError(''); setAuditLoading(true);
+    request('/api/workbench/chats/' + encodeURIComponent(selectedChatId) + '/context', 'GET', undefined, abort.signal)
+      .then(data => { setAudit(data); setAuditLoading(false); })
+      .catch(error => { if (error.name !== 'AbortError') { setAuditError(error.message); setAuditLoading(false); } });
+    return () => abort.abort();
+  }, [selectedChatId, auditRevision]);
+  return { audit, auditError, auditLoading, reloadAudit: () => setAuditRevision(value => value + 1) };
 }
 
 function useGraphLayout(state) {
@@ -150,12 +181,19 @@ function useGraphLayout(state) {
       }
       if (rev !== layoutRevision.current) return;
       const parents = new Set(visible.edges.map(e => e.source));
-      setNodes(visible.nodes.map(n => ({ id: n.id, type: 'context', position: positions[n.id], selected: n.id === selected || groupContains(n, selected),
-        data: { ...n, toggle, canCollapse: !!n.groupItems || n.collapsed || parents.has(n.id) }, ariaLabel: `${graphNodeTitle(n)}: ${n.preview}`, style: { '--branch-color': graph.branches.find(b => b.chatId === n.chatId)?.value?.color || 'var(--wb-accent)' } })));
+      const visibleById = new Map(visible.nodes.map(n => [n.id, n]));
+      const toolResultBySource = new Map(visible.edges.map(e => [e.source, visibleById.get(e.target)]).filter(([, target]) => target?.role === 'tool_results'));
+      setNodes(visible.nodes.map(n => {
+        const result = toolResultBySource.get(n.id);
+        const display = n.toolGroup && n.role === 'assistant' && !n.preview && result
+          ? { ...n, preview: graphNodePreview(result), toolNames: [graphNodePreview(result)] } : n;
+        return { id: n.id, type: 'context', position: positions[n.id], selected: n.id === selected || groupContains(n, selected),
+          data: { ...display, toggle, canCollapse: !!n.groupItems || n.collapsed || parents.has(n.id) }, ariaLabel: `${graphNodeTitle(display)}: ${graphNodePreview(display)}`, style: { '--branch-color': graph.branches.find(b => b.chatId === n.chatId)?.value?.color || 'var(--wb-accent)' } };
+      }));
       setEdges(visible.edges.map(e => ({ ...e, type: 'smoothstep', label: ['fork', 'retry', 'mount', 'tools'].includes(e.kind) ? wbcT('workbenchChat.graphEdge.' + e.kind, e.kind) : undefined,
         animated: false, style: { stroke: e.kind === 'fork' ? 'var(--wb-accent)' : 'var(--wb-muted)', strokeDasharray: e.kind === 'mount' ? '5 4' : undefined } })));
       if (!flow.current?.__graphInitialized) {
-        requestAnimationFrame(() => { if (flow.current) { flow.current.__graphInitialized = true; if (view.viewport) flow.current.setViewport(view.viewport); else flow.current.fitView({ nodes: readableGraphNodes(visible.nodes), padding: 0.2, minZoom: 0.8, maxZoom: 1 }); } });
+        requestAnimationFrame(() => { if (flow.current) { flow.current.__graphInitialized = true; if (view.viewport) flow.current.setViewport(view.viewport); else flow.current.fitView({ nodes: readableGraphNodes(visible.nodes).slice(0, 4), padding: 0.15, minZoom: 0.65, maxZoom: 1 }); } });
       }
     }
     render();
@@ -292,7 +330,7 @@ function graphExportActions(state) {
 
 function GraphBranchSettings({ state }) {
   const { graph, busy, notes, setNotes, confirmDelete, setConfirmDelete, branch, metadata, deleteBranch } = state;
-  return <details className="wbc-graph-branch-settings"><summary>{graphText('branchSettings')}</summary>
+  return <details className="wbc-graph-branch-settings wbc-graph-disclosure"><GraphDisclosureSummary>{graphText('branchSettings')}</GraphDisclosureSummary>
               <label>{graphText('rename')}<input key={branch.id + ':' + branch.revision} defaultValue={branch.value?.title || branch.title} onBlur={e => { if (e.target.value.trim() && e.target.value !== (branch.value?.title || branch.title)) metadata({ title: e.target.value }); }} /></label>
               <GraphBranchColor state={state} />
               <label>{graphText('notes')}<textarea value={notes} onChange={e => setNotes(e.target.value)} /></label><button disabled={busy} onClick={() => metadata({ notes })}>{graphText('saveNotes')}</button>
@@ -303,23 +341,24 @@ function GraphBranchSettings({ state }) {
             </details>;
 }
 
-function GraphNodeActions({ state, menu = false }) {
+function GraphNodeActions({ state, menu = false, secondary = false }) {
   const role = menu ? 'menuitem' : undefined;
   const { graph, view, selected, setSelected, detail, draft, setDraft, setEditing, busy, copySource, setCopySource, pinned, setPinned, setNotice, setNewContext, chatId, node, branch, changeView, prepareCopy, activate, create } = state;
-  return <div className="wbc-graph-actions">
-              {detail.previousContent != null && <button role={role} disabled={busy} onClick={() => create('edit', false, detail.previousContent)}><GraphActionLabel action="revert" icon={menu} /></button>}
-              <button role={role} onClick={() => { changeView({ ...view, hidden: [...(view.hidden || []), selected] }); setSelected(''); }}><GraphActionLabel action="hide" icon={menu} /></button>
-              {node.canEdit && <button role={role} disabled={busy} onClick={() => { setEditing(true); setDraft(detail.content); }}><GraphActionLabel action="edit" icon={menu} /></button>}
-              {node.canFork && <button role={role} disabled={busy} onClick={() => { setCopySource({ ...node, content: detail.content, revision: detail.revision }); setNotice(graphText('copied')); }}><GraphActionLabel action="copyQuestion" icon={menu} /></button>}
-              {copySource && node.canContinue && <button role={role} disabled={busy} onClick={() => prepareCopy(copySource, node)}><GraphActionLabel action="pasteQuestion" icon={menu} /></button>}
-              {node.draft && branch?.replay && <button role={role} disabled={busy} onClick={() => activate(node.chatId, true)}><GraphActionLabel action="generate" icon={menu} /></button>}
-              {node.canFork && <button role={role} disabled={busy} onClick={() => create('fork', true, detail.content)}><GraphActionLabel action="fork" icon={menu} /></button>}
-              {node.canContinue && <button role={role} disabled={busy} onClick={() => create('continue', false, detail.content)}><GraphActionLabel action="continue" icon={menu} /></button>}
-              {node.chatId && <button role={role} disabled={busy} onClick={() => activate(node.chatId)}><GraphActionLabel action="switch" icon={menu} /></button>}
-              {node.role === 'context' && <button role={role} disabled={busy} onClick={() => create('remove', false, '')}><GraphActionLabel action="remove" icon={menu} /></button>}
-              {node.canContinue && <button role={role} disabled={busy} onClick={() => { setDraft(''); setNewContext(true); setEditing(true); }}><GraphActionLabel action="addContext" icon={menu} /></button>}
-              <button role={role} onClick={() => setPinned({ id: node.id, content: detail.content, projection: detail.projection, config: branch?.config })}><GraphActionLabel action="compare" icon={menu} /></button>
-              {pinned && node.canContinue && <button role={role} disabled={busy} onClick={() => create('reference', false, pinned.content)}><GraphActionLabel action="reference" icon={menu} /></button>}
+  const actionLabel = action => <GraphActionLabel action={action} icon={menu || secondary} hint={secondary} />;
+  return <div className={'wbc-graph-actions' + (secondary ? ' is-secondary' : '')}>
+              {detail.previousContent != null && <button role={role} disabled={busy} onClick={() => create('edit', false, detail.previousContent)}>{actionLabel('revert')}</button>}
+              <button role={role} onClick={() => { changeView({ ...view, hidden: [...(view.hidden || []), selected] }); setSelected(''); }}>{actionLabel('hide')}</button>
+              {!secondary && node.canEdit && <button role={role} disabled={busy} onClick={() => { setEditing(true); setDraft(detail.content); }}>{actionLabel('edit')}</button>}
+              {node.canFork && <button role={role} disabled={busy} onClick={() => { setCopySource({ ...node, content: detail.content, revision: detail.revision }); setNotice(graphText('copied')); }}>{actionLabel('copyQuestion')}</button>}
+              {copySource && node.canContinue && <button role={role} disabled={busy} onClick={() => prepareCopy(copySource, node)}>{actionLabel('pasteQuestion')}</button>}
+              {node.draft && branch?.replay && <button role={role} disabled={busy} onClick={() => activate(node.chatId, true)}>{actionLabel('generate')}</button>}
+              {node.canFork && <button role={role} disabled={busy} onClick={() => create('fork', true, detail.content)}>{actionLabel('fork')}</button>}
+              {node.canContinue && <button role={role} disabled={busy} onClick={() => create('continue', false, detail.content)}>{actionLabel('continue')}</button>}
+              {!secondary && node.chatId && <button role={role} disabled={busy} onClick={() => activate(node.chatId)}>{actionLabel('switch')}</button>}
+              {node.role === 'context' && <button role={role} disabled={busy} onClick={() => create('remove', false, '')}>{actionLabel('remove')}</button>}
+              {node.canContinue && <button role={role} disabled={busy} onClick={() => { setDraft(''); setNewContext(true); setEditing(true); }}>{actionLabel('addContext')}</button>}
+              <button role={role} className={pinned?.id === node.id ? 'is-selected' : ''} aria-pressed={menu ? undefined : pinned?.id === node.id} onClick={() => setPinned(pinned?.id === node.id ? null : { id: node.id, content: detail.content, projection: detail.projection, config: branch?.config })}>{actionLabel(pinned?.id === node.id ? 'clearCompare' : 'compare')}</button>
+              {pinned && node.canContinue && <button role={role} disabled={busy} onClick={() => create('reference', false, pinned.content)}>{actionLabel('reference')}</button>}
             </div>;
 }
 
@@ -333,31 +372,39 @@ function GraphEditor({ state }) {
 }
 
 function GraphToolbar({ state }) {
-  const { nodes, query, setQuery, flow, view, changeView, saveView } = state;
+  const { nodes, query, setQuery, flow } = state;
   return <div className="wbc-graph-toolbar">
     <input type="search" placeholder={graphText('search')} aria-label={graphText('search')} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') flow.current?.fitView({ nodes: nodes.filter(n => n.data.match), padding: 0.2, minZoom: 0.8, maxZoom: 1 }); }} />
-    <button onClick={() => flow.current?.fitView({ nodes: readableGraphNodes(nodes), padding: 0.2, minZoom: 0.8, maxZoom: 1 })}>{graphText('fit')}</button>
-    <button onClick={() => flow.current?.zoomTo(1, { duration: 180 })}>100%</button>
-    <button onClick={() => { flow.current.__graphInitialized = false; changeView({ ...view, positions: {}, viewport: null }); }}>{graphText('arrange')}</button>
-    <button onClick={saveView}>{graphText('saveView')}</button>
     <GraphOptions state={state} />
+    <GraphBranchNavigation state={state} />
   </div>;
 }
 function GraphOptions({ state }) {
-  const { graph, view, busy, exportType, setExportType, flow, history, future, load, changeView, choose, exportGraph, undo } = state;
-  return <details className="wbc-graph-options"><summary>{graphText('more')}<span aria-hidden="true">⌄</span></summary><div className="wbc-graph-options-panel">
-    <div className="wbc-graph-option-actions"><button onClick={load}>{graphText('refresh')}</button><button onClick={() => flow.current?.fitView({ padding: 0.15 })}>{graphText('overview')}</button><button onClick={() => undo()} disabled={!history.current.length}>{graphText('undo')}</button><button onClick={() => undo(true)} disabled={!future.current.length}>{graphText('redo')}</button></div>
-    <label><input type="checkbox" checked={!!view.showContexts} onChange={e => changeView({ ...view, showContexts: e.target.checked })} />{graphText('showContexts')}</label>
-    <label><input type="checkbox" checked={!!view.showTools} onChange={e => changeView({ ...view, showTools: e.target.checked })} />{graphText('showTools')}</label>
-    <label><input type="checkbox" checked={!!view.showArchived} onChange={e => changeView({ ...view, showArchived: e.target.checked })} />{graphText('archived')}</label>
-    {!!view.hidden?.length && <button onClick={() => changeView({ ...view, hidden: [] })}>{graphText('showHidden')}</button>}
-    <select aria-label={graphText('navigate')} value="" onChange={e => { changeView({ ...view, collapsed: [], hidden: [], showTools: true, showContexts: true }); choose(e.target.value); }}><option value="">{graphText('navigate')}</option>{graph?.nodes.filter(n => !n.internalCheckpoint).map(n => <option key={n.id} value={n.id}>{graphNodeTitle(n)} · {n.preview?.slice(0, 40)}</option>)}</select>
-    <div className="wbc-graph-export"><select aria-label={graphText('export')} value={exportType} onChange={e => setExportType(e.target.value)}>{['json', 'markdown', 'svg', 'png'].map(k => <option key={k} value={k}>{graphText(k)}</option>)}</select><button onClick={exportGraph} disabled={busy || !graph}>{graphText('export')}</button></div>
+  const { graph, view, nodes, busy, exportType, setExportType, flow, history, future, load, changeView, choose, exportGraph, saveView, undo } = state;
+  return <details className="wbc-graph-options"><summary>{graphText('more')}<span className="wbc-graph-caret" aria-hidden="true">{WBC_ICONS.chevronDown}</span></summary><div className="wbc-graph-options-panel">
+    <div className="wbc-graph-options-section"><div className="wbc-graph-options-heading">{graphText('canvasMenu')}</div><div className="wbc-graph-option-actions">
+      <button onClick={() => flow.current?.fitView({ nodes: readableGraphNodes(nodes), padding: 0.2, minZoom: 0.3, maxZoom: 1 })}><GraphActionLabel action="fit" /></button>
+      <button onClick={() => flow.current?.zoomTo(1, { duration: 180 })}><span className="wbc-graph-option-scale-icon" aria-hidden="true">1:1</span><span>100%</span></button>
+      <button onClick={() => { if (flow.current) flow.current.__graphInitialized = false; changeView({ ...view, positions: {}, viewport: null }); }}><GraphActionLabel action="arrange" /></button>
+      <button onClick={saveView}><GraphActionLabel action="saveView" /></button>
+      <button onClick={load}><GraphActionLabel action="refresh" /></button>
+      <button onClick={() => flow.current?.fitView({ padding: 0.15 })}><GraphActionLabel action="overview" /></button>
+      <button onClick={() => undo()} disabled={!history.current.length}><GraphActionLabel action="undo" /></button>
+      <button onClick={() => undo(true)} disabled={!future.current.length}><GraphActionLabel action="redo" /></button>
+    </div></div>
+    <div className="wbc-graph-options-section"><div className="wbc-graph-options-heading">{graphText('displayOptions')}</div><div className="wbc-graph-option-toggles">
+      <label><input type="checkbox" checked={!!view.showContexts} onChange={e => changeView({ ...view, showContexts: e.target.checked })} />{graphText('showContexts')}</label>
+      <label><input type="checkbox" checked={view.showTools !== false} onChange={e => { if (flow.current) flow.current.__graphInitialized = false; changeView({ ...view, showTools: e.target.checked, positions: {}, viewport: null }); }} />{graphText('showTools')}</label>
+      <label><input type="checkbox" checked={!!view.showArchived} onChange={e => changeView({ ...view, showArchived: e.target.checked })} />{graphText('archived')}</label>
+      {!!view.hidden?.length && <button onClick={() => changeView({ ...view, hidden: [] })}><GraphActionLabel action="showHidden" /></button>}
+    </div></div>
+    <div className="wbc-graph-options-footer"><select aria-label={graphText('navigate')} value="" onChange={e => { changeView({ ...view, collapsed: [], hidden: [], showTools: true, showContexts: true }); choose(e.target.value); }}><option value="">{graphText('navigate')}</option>{graph?.nodes.filter(n => !n.internalCheckpoint).map(n => <option key={n.id} value={n.id}>{graphNodeTitle(n)} · {n.preview?.slice(0, 40)}</option>)}</select>
+    <div className="wbc-graph-export"><select aria-label={graphText('export')} value={exportType} onChange={e => setExportType(e.target.value)}>{['json', 'markdown', 'svg', 'png'].map(k => <option key={k} value={k}>{graphText(k)}</option>)}</select><button onClick={exportGraph} disabled={busy || !graph}>{graphText('export')}</button></div></div>
   </div></details>;
 }
 
 function GraphCanvas({ state }) {
-  const { graph, view, nodes, onNodesChange, edges, onEdgesChange, selected, detail, setEditing, flow, history, currentView, chatId, branch, changeView, choose, prepareCopy } = state;
+  const { graph, nodes, onNodesChange, edges, onEdgesChange, selected, detail, setEditing, flow, currentView, changeView, choose, prepareCopy } = state;
   return <div className="wbc-graph-canvas" ref={state.canvasRef} onContextMenu={event => openGraphContextMenu(state, event)}>
         {!graph ? <p role="status">{graphText('loading')}</p> : !graph.nodes.length ? <p>{graphText('empty')}</p> : <ReactFlow
           nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
@@ -367,32 +414,110 @@ function GraphCanvas({ state }) {
           onNodeDoubleClick={(_, n) => { choose(n.id); if (n.id === selected && n.data.canEdit && detail) setEditing(true); }}
           onNodeDragStop={(_, n) => {
             changeView({ ...currentView.current, positions: { ...currentView.current.positions, [n.id]: n.position } });
-            const target = nodes.find(other => other.id !== n.id && other.data.canContinue && Math.abs(other.position.x - n.position.x) < 120 && Math.abs(other.position.y - n.position.y) < 65);
-            if (target && n.data.canFork) prepareCopy(n.data, target.data);
+            const target = nodes.find(other => other.id !== n.id && n.data.canFork && other.data.canContinue && Math.abs(other.position.x - n.position.x) < 120 && Math.abs(other.position.y - n.position.y) < 65);
+            if (target) prepareCopy(n.data, target.data);
           }}
-          nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} minZoom={0.08} maxZoom={2}
-          onlyRenderVisibleElements colorMode="dark"><Background gap={22} size={1} /><Controls showInteractive={false} fitViewOptions={{ nodes: readableGraphNodes(nodes), padding: 0.2, minZoom: 0.8, maxZoom: 1 }} /><MiniMap style={{width: 136, height: 88}} pannable zoomable nodeColor={n => n.data.active ? 'var(--wb-accent)' : 'var(--wb-muted)'} /></ReactFlow>}
-        <div className="wbc-graph-branch-list" aria-label={graphText('branches')}><span className="wbc-graph-branch-caption">{graphText('branches')}</span>{graph?.branches.filter(b => view.showArchived || !b.value?.archived).map(b => <button key={b.id} className={b.active ? 'active' : ''} onClick={() => {
-          const tip = branchDisplayNode(nodes, b); if (tip) { choose(tip.data.groupItems ? b.chatId + ':' + (b.displayLeafId || b.leafId) : tip.id, b.chatId); flow.current?.fitView({ nodes: [{ id: tip.id }], maxZoom: 1, duration: 200 }); }
-        }}>{b.value?.favorite ? '★ ' : ''}{b.value?.title || b.title || b.id}</button>)}{nodes.filter(n => n.data.tip && n.data.historical).map(n => <button key={'history:' + n.id} onClick={() => choose(n.id)}>{graphText('historical')} · {n.data.preview?.slice(0, 24)}</button>)}</div>
+          nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} minZoom={0.08} maxZoom={2} proOptions={{ hideAttribution: true }}
+          onlyRenderVisibleElements colorMode="dark"><Background gap={22} size={1} /><Controls showInteractive={false} fitViewOptions={{ nodes: readableGraphNodes(nodes), padding: 0.2, minZoom: 0.3, maxZoom: 1 }} /><MiniMap style={{width: 136, height: 88}} pannable zoomable nodeColor={n => n.data.active ? 'var(--wb-accent)' : 'var(--wb-muted)'} /></ReactFlow>}
       </div>;
 }
 
+function GraphBranchNavigation({ state }) {
+  const { graph, view, nodes, selected, choose, flow } = state;
+  const branches = graph?.branches.filter(b => view.showArchived || !b.value?.archived) || [];
+  const titleCounts = new Map();
+  for (const b of branches) {
+    const title = b.value?.title || b.title || b.id;
+    titleCounts.set(title, (titleCounts.get(title) || 0) + 1);
+  }
+  const titleOrdinals = new Map();
+  const historicalTips = nodes.filter(n => n.data.tip && n.data.historical);
+  return <nav className="wbc-graph-branch-list" aria-label={graphText('branches')}>
+          <div className="wbc-graph-branch-items"><span className="wbc-graph-branch-caption">{graphText('branches')} <b>{branches.length}</b></span>
+          {branches.map(b => {
+            const title = b.value?.title || b.title || b.id;
+            const ordinal = (titleOrdinals.get(title) || 0) + 1;
+            titleOrdinals.set(title, ordinal);
+            const label = titleCounts.get(title) > 1 ? `${title} · ${ordinal}` : title;
+            return <button key={b.id} type="button" title={label} aria-current={b.active ? 'page' : undefined} className={b.active ? 'active' : ''} onClick={() => {
+              const tip = branchDisplayNode(nodes, b); if (tip) { choose(tip.data.groupItems ? b.chatId + ':' + (b.displayLeafId || b.leafId) : tip.id, b.chatId); flow.current?.fitView({ nodes: [{ id: tip.id }], maxZoom: 1, duration: 200 }); }
+            }}>{b.value?.favorite ? '★ ' : ''}{label}</button>;
+          })}</div>
+          {!!historicalTips.length && <details className="wbc-graph-history"><summary>{graphText('historical')} <b>{historicalTips.length}</b><span className="wbc-graph-caret" aria-hidden="true">{WBC_ICONS.chevronDown}</span></summary>
+            <div className="wbc-graph-history-menu">{historicalTips.map((n, i) => {
+              const time = n.data.updatedAt ? new Date(n.data.updatedAt).toLocaleString() : '';
+              const label = `${i + 1}. ${n.data.preview || graphNodeTitle(n)}`;
+              return <button key={n.id} type="button" title={label} aria-current={selected === n.id ? 'location' : undefined} onClick={e => { choose(n.id, n.data.chatId); e.currentTarget.closest('details').open = false; }}><span>{label}</span>{time && <small>{time}</small>}</button>;
+            })}</div>
+          </details>}
+        </nav>;
+}
+
 function GraphInspector({ state }) {
-  const { graph, selected, detail, draft, editing, tab, setTab, pinned, chatId, displayNode, node, branch, choose, metadata } = state;
+  const { detail, editing, node, branch, audit, auditError, auditLoading, reloadAudit, load, busy, setEditing, setDraft, activate } = state;
   if (!node || node.groupItems) return graphInspectorPlaceholder(state);
+  const selectedAuditItem = audit?.timeline?.find(item => String(item.nodeId || item.id || '') === String(node.nodeId || ''));
+  const toolPhase = graphToolPhase(node);
+  const branchTitle = branch?.value?.title || branch?.title || node.chatId;
   return <aside className="wbc-graph-inspector" aria-label={graphText('details')}>
-        {!node ? <p>{graphText('select')}</p> : <>
-          <button className="wbc-graph-inspector-close" onClick={() => state.choose('')} aria-label={graphText('close')}>×</button><GraphMemberSelector state={state} />
-          <GraphInspectorHeading node={node} />
-          <div className="wbc-graph-tabs">{['details', 'input'].map(k => <button key={k} aria-pressed={tab === k} onClick={() => setTab(k)}>{graphText(k)}</button>)}</div>
-          {!detail ? <p>{graphText('loading')}</p> : tab === 'input' ? <><p>{graphText('activeStats')}</p><pre>{JSON.stringify(detail.projection, null, 2)}</pre></> : <>
-            {editing ? <GraphEditor state={state} /> : <><pre>{detail.content || '—'}</pre><GraphSourceDetails node={node} detail={detail} /><GraphNodeActions state={state} /></>}
-            <GraphComparison state={state} />
-            {branch && <GraphBranchSettings state={state} />}
+        <div className="wbc-graph-inspector-head">
+          <div><GraphInspectorHeading node={node} /><span className="wbc-graph-inspector-branch" title={branchTitle}>{branchTitle}</span></div>
+          <button className="wbc-graph-inspector-close" onClick={() => state.choose('')} aria-label={graphText('close')}>{WBC_ICONS.x}</button>
+        </div>
+        <GraphMemberSelector state={state} />
+        {!detail ? <p className="wbc-graph-inspector-content" role="status">{graphText('loading')}</p> : <div className="wbc-graph-inspector-content">
+          {editing ? <GraphEditor state={state} /> : <>
+            {toolPhase && <GraphToolDetails node={node} value={detail.value} />}
+            {((detail.content && toolPhase !== 'result') || !toolPhase) && <section className="wbc-graph-detail-section"><h4>{graphText('nodeContent')}</h4><pre className="wbc-graph-node-content">{detail.content || '—'}</pre></section>}
+            <div className="wbc-graph-primary-actions">
+              {node.canEdit && <button disabled={busy} onClick={() => { setEditing(true); setDraft(detail.content); }}>{graphText('edit')}</button>}
+              {node.chatId && <button disabled={busy} onClick={() => activate(node.chatId)}>{graphText('switch')}</button>}
+            </div>
+            <GraphModelMessages projection={detail.projection} />
+            {selectedAuditItem && <div className="wbc-graph-selected-audit"><span>{graphText('nodeEstimate')}</span><strong>{selectedAuditItem.tokensEst} {wbcT('workbenchChat.contextAuditTokensUnit', 'tokens')}</strong><small>{selectedAuditItem.chars} {wbcT('workbenchChat.contextAuditCharsUnit', 'characters')}{selectedAuditItem.activeMount ? ' · ' + wbcT('workbenchChat.contextAuditActiveMount', 'Current mount') : ''}</small></div>}
+            <details className="wbc-graph-more-actions wbc-graph-disclosure"><GraphDisclosureSummary>{graphText('moreActions')}</GraphDisclosureSummary><GraphNodeActions state={state} secondary /></details>
+            <GraphSourceDetails node={node} detail={detail} />
+            <details className="wbc-graph-branch-audit wbc-graph-disclosure"><GraphDisclosureSummary>{graphText('branchAudit')}</GraphDisclosureSummary>
+              <p>{graphText('inputScope')}: <strong>{branchTitle}</strong></p>
+              {auditLoading ? <p role="status">{graphText('loading')}</p> : auditError ? <div className="wbc-graph-audit-message" role="alert">{auditError}<button type="button" onClick={reloadAudit}>{graphText('refresh')}</button></div> : audit ? <>{!audit.timeline?.length && <p className="wbc-graph-audit-message">{graphText('noAuditTimeline')}</p>}<WbcContextInspectorContent data={audit} chatId={node.chatId} selectedNodeId={node.nodeId} showTimeline={!!audit.timeline?.length} onReload={() => { reloadAudit(); load(); }} /></> : null}
+            </details>
           </>}
-        </>}
+          <GraphComparison state={state} />
+          {branch && <GraphBranchSettings state={state} />}
+        </div>}
       </aside>;
+}
+
+function GraphModelMessages({ projection }) {
+  const messages = Array.isArray(projection) ? projection : [];
+  return <section className="wbc-graph-detail-section wbc-graph-model-messages">
+    <h4>{graphText('selectedPath')} <span>{messages.length}</span></h4>
+    {messages.length ? <ol>{messages.map((message, index) => {
+      const role = wbcT('workbenchChat.contextRole.' + message.role, message.role || graphText('message'));
+      const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '', null, 2);
+      return <li key={index}><details open={index === messages.length - 1}><summary><b>{index + 1}. {role}</b><span className="wbc-graph-message-preview">{content.slice(0, 80) || graphText('emptyContent')}</span><span className="wbc-graph-disclosure-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span></summary><pre>{content || graphText('emptyContent')}</pre>{Object.keys(message).some(key => !['role', 'content'].includes(key)) && <pre className="wbc-graph-message-extra">{JSON.stringify(Object.fromEntries(Object.entries(message).filter(([key]) => !['role', 'content'].includes(key))), null, 2)}</pre>}</details></li>;
+    })}</ol> : <p>{graphText('noMessages')}</p>}
+  </section>;
+}
+
+function GraphToolDetails({ node, value }) {
+  const phase = graphToolPhase(node);
+  const items = phase === 'call' ? value?.tool_calls : value?.results;
+  const entries = Array.isArray(items) ? items.filter(item => item && typeof item === 'object') : [];
+  return <section className="wbc-graph-detail-section wbc-graph-tool-details">
+    <h4>{graphText(phase === 'call' ? 'toolCall' : 'toolResult')} <span>{entries.length}</span></h4>
+    {entries.map((item, index) => {
+      const name = String(item.name || graphText('tools'));
+      const label = wbcT('toolName.' + name, name);
+      const payload = phase === 'call' ? item.arguments : item.value;
+      const content = typeof payload === 'string' ? payload : JSON.stringify(payload ?? {}, null, 2);
+      return <details key={item.id || item.call_id || index} open={entries.length === 1}>
+        <summary><strong>{label}</strong>{phase === 'result' && <small className={item.success === false ? 'is-error' : ''}>{graphText(item.success === false ? 'toolFailed' : 'toolCompleted')}</small>}<span className="wbc-graph-disclosure-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span></summary>
+        <pre>{content}</pre>
+        {item.error && <p className="wbc-graph-tool-error">{String(item.error)}</p>}
+      </details>;
+    })}
+  </section>;
 }
 
 function GraphCopyDialog({ state }) {
@@ -405,6 +530,7 @@ export function WbcContextGraph(props) {
   const state = { ...props, ...data, ...editor, ...refs, contextMenu, setContextMenu };
   Object.assign(state, graphSelection(state));
   Object.assign(state, useGraphRead(state));
+  Object.assign(state, useGraphAudit(state));
   Object.assign(state, useGraphLayout(state));
   Object.assign(state, graphNavigation(state), graphBranchActions(state), graphExportActions(state));
   const { graph, selected, setSelected, editing, setEditing, error, copyTarget, inspectionChat, setInspectionChat, notice, setNotice, notes, setNotes, pendingSelection, setPendingSelection, branch, dirty } = state;
@@ -421,7 +547,9 @@ export function WbcContextGraph(props) {
   </div>;
 }
 
-function GraphSourceDetails({ node, detail }) { return <details><summary>{graphText('sourceDetails')}</summary><pre>{JSON.stringify({ role: detail.role, time: node.createdAt, characters: node.chars, source: detail.value.context_source, metadata: detail.value.metadata, attachments: detail.value.metadata?.public_attachments, revision: detail.revisionSource, treeId: node.chatId, nodeId: node.nodeId }, null, 2)}</pre></details>; }
+function GraphDisclosureSummary({ children }) { return <summary><span className="wbc-graph-disclosure-label">{children}</span><span className="wbc-graph-disclosure-chevron" aria-hidden="true">{WBC_ICONS.chevronRight}</span></summary>; }
+
+function GraphSourceDetails({ node, detail }) { return <details className="wbc-graph-disclosure"><GraphDisclosureSummary>{graphText('sourceDetails')}</GraphDisclosureSummary><pre>{JSON.stringify({ role: detail.role, time: node.createdAt, characters: node.chars, source: detail.value.context_source, metadata: detail.value.metadata, attachments: detail.value.metadata?.public_attachments, revision: detail.revisionSource, treeId: node.chatId, nodeId: node.nodeId }, null, 2)}</pre></details>; }
 
 function GraphMemberSelector({ state }) {
  const { displayNode, node, graph, choose, selected } = state;
@@ -430,7 +558,7 @@ function GraphMemberSelector({ state }) {
 
 function GraphComparison({ state }) {
  const { pinned, selected, draft, detail, branch } = state;
- return <>{pinned && pinned.id !== selected && <details className="wbc-graph-diff"><summary>{graphText('compareTitle')}</summary>{graphDiff(JSON.stringify({ content: pinned.content, input: pinned.projection, configuration: pinned.config }, null, 2), JSON.stringify({ content: draft, input: detail?.projection, configuration: branch?.config }, null, 2)).map((line, i) => <div key={i} className={line.changed ? 'changed' : ''}><pre>{line.left}</pre><pre>{line.right}</pre></div>)}</details>}</>;
+ return <>{pinned && pinned.id !== selected && <details className="wbc-graph-diff wbc-graph-disclosure"><GraphDisclosureSummary>{graphText('compareTitle')}</GraphDisclosureSummary>{graphDiff(JSON.stringify({ content: pinned.content, input: pinned.projection, configuration: pinned.config }, null, 2), JSON.stringify({ content: draft, input: detail?.projection, configuration: branch?.config }, null, 2)).map((line, i) => <div key={i} className={line.changed ? 'changed' : ''}><pre>{line.left}</pre><pre>{line.right}</pre></div>)}</details>}</>;
 }
 
 function discardGraphDraft(state) {
@@ -445,9 +573,14 @@ function discardGraphDraft(state) {
 function GraphGroupInspector({ state }) {
   const { node, choose } = state;
   return <aside className="wbc-graph-inspector" aria-label={graphText('details')}>
-    <button className="wbc-graph-inspector-close" onClick={() => choose('')} aria-label={graphText('close')}>×</button>
-    <h3>{graphNodeTitle(node)}</h3><p>{graphText('groupHint')}</p>
-    <div className="wbc-graph-group-list">{node.groupItems.map(item => <button key={item.id} onClick={() => inspectGroupedItem(state, item)}><strong>{graphNodeTitle(item)}</strong><span>{item.preview || graphText('emptyContent')}</span></button>)}</div>
+    <div className="wbc-graph-inspector-head">
+      <h3>{graphNodeTitle(node)}</h3>
+      <button className="wbc-graph-inspector-close" onClick={() => choose('')} aria-label={graphText('close')}>{WBC_ICONS.x}</button>
+    </div>
+    <div className="wbc-graph-inspector-content wbc-graph-group-content">
+      <p>{graphText('groupHint')}</p>
+      <div className="wbc-graph-group-list">{node.groupItems.map(item => <button key={item.id} onClick={() => inspectGroupedItem(state, item)}><strong>{graphNodeTitle(item)}</strong><span>{item.preview || graphText('emptyContent')}</span></button>)}</div>
+    </div>
   </aside>;
 }
 
@@ -460,7 +593,7 @@ function graphInspectorPlaceholder(state) { return state.node?.groupItems ? <Gra
 
 function graphContextLabel(kind) { const aliases = { soul: 'personality', user_language: 'language', workspace_context: 'workspace', workspace_policy: 'workspaceRules' }; return aliases[kind] ? graphText(aliases[kind]) : kind; }
 
-function GraphInspectorHeading({ node }) { return <><h3>{graphNodeTitle(node)}</h3><small>{graphText(node.active ? 'current' : 'historical')} · {graphText('preview')}</small></>; }
+function GraphInspectorHeading({ node }) { return <><h3>{graphNodeTitle(node)}</h3><small>{graphText(node.active ? 'current' : 'historical')}</small></>; }
 
 function branchDisplayNode(nodes, branch) {
   const id = branch.chatId + ':' + (branch.displayLeafId || branch.leafId);
@@ -497,7 +630,7 @@ function GraphRightClickMenu({ state }) {
 function GraphCanvasMenu({ state }) {
   const { flow, nodes, view, changeView, saveView, load, history, future, undo } = state;
   return <>
-    <button role="menuitem" onClick={() => flow.current?.fitView({ nodes: readableGraphNodes(nodes), padding: 0.2, minZoom: 0.8, maxZoom: 1 })}><GraphActionLabel action="fit" /></button>
+    <button role="menuitem" onClick={() => flow.current?.fitView({ nodes: readableGraphNodes(nodes), padding: 0.2, minZoom: 0.3, maxZoom: 1 })}><GraphActionLabel action="fit" /></button>
     <button role="menuitem" onClick={() => flow.current?.fitView({ padding: 0.15 })}><GraphActionLabel action="overview" /></button>
     <button role="menuitem" onClick={() => flow.current?.zoomTo(1)}>{WBC_ICONS.search}<span>100%</span></button>
     <button role="menuitem" onClick={() => changeView({ ...view, positions: {} })}><GraphActionLabel action="arrange" /></button>
@@ -513,11 +646,12 @@ const GRAPH_ACTION_ICONS = {
   details: 'infoCircle', edit: 'edit', copyQuestion: 'file', pasteQuestion: 'attach',
   fork: 'fork', generate: 'play', continue: 'chat', switch: 'openExternal',
   hide: 'windowMinimize', remove: 'trash', revert: 'chevronLeft', addContext: 'plus',
-  compare: 'pin', reference: 'attach', expandNode: 'chevronDown', collapseNode: 'chevronRight',
+  compare: 'pin', clearCompare: 'pin', reference: 'attach', expandNode: 'chevronDown', collapseNode: 'chevronRight',
   fit: 'windowMaximize', overview: 'map', arrange: 'layers', saveView: 'download',
   undo: 'chevronLeft', redo: 'chevronRight', showHidden: 'layers', refresh: 'phase', loading: 'running',
 };
-function GraphActionLabel({ action, icon = true }) {
+function GraphActionLabel({ action, icon = true, hint = false }) {
+  if (hint) return <>{icon && <span className="wbc-graph-action-icon" aria-hidden="true">{WBC_ICONS[GRAPH_ACTION_ICONS[action]]}</span>}<span className="wbc-graph-action-copy"><strong>{graphText(action)}</strong><small>{graphText(action + 'Hint')}</small></span></>;
   return <>{icon && WBC_ICONS[GRAPH_ACTION_ICONS[action]]}<span>{graphText(action)}</span></>;
 }
 
