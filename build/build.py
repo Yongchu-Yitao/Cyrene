@@ -561,7 +561,7 @@ def run_electron_builder(arch: str = "x64") -> None:
         return
 
     print("\n[electron-builder] Packaging...")
-    cmd = [eb]
+    cmd = [shutil.which("node") or "node", str(electron_dir / "scripts" / "build-release.js")]
     if IS_MAC:
         # Sign the completed app before creating the only distributable image.
         # Building a DMG here as well would mount and replace the same image
@@ -576,12 +576,11 @@ def run_electron_builder(arch: str = "x64") -> None:
     elif IS_LINUX:
         cmd.append("--linux")
 
-    # On Windows, electron-builder is a .cmd file that needs shell=True
-    # (otherwise CreateProcess fails with "not a valid Win32 application").
+    # Invoke the Node packaging adapter directly on every platform.
     result = None
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
-        result = subprocess.run(cmd, cwd=str(electron_dir), shell=IS_WIN)
+        result = subprocess.run(cmd, cwd=str(electron_dir))
         if result.returncode == 0:
             break
         if attempt < max_attempts:

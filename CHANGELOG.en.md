@@ -2,6 +2,37 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0.1] - 2026-10-21
+
+### Features and interface updates
+
+- Added an interactive, editable conversation context map. Open it from the context indicator beside the composer to explore questions, replies, tool steps, context, and branches. The model-input list and full-screen view remain available.
+- Related conversation forks, regenerated replies, and revisions appear together, with current and historical paths distinguished. Shared earlier content is grouped while retaining access to each source conversation.
+- Selecting a historical node only previews it and does not change where messages are sent. Explicit actions let you switch conversations, continue from a completed reply, or create a branch and regenerate the original question.
+- Pan, zoom, use the minimap, drag nodes, arrange automatically, fit the canvas, view the whole graph, or return to 100%. The initial view prioritizes readable questions and answers; selected nodes are located automatically and remain visible when the panel resizes.
+- Search node content and use the navigation list to locate a node. Collapse or expand descendants, temporarily hide nodes, and restore hidden content to make long conversations easier to explore.
+- Prompts, personality, language preferences, workspace rules, memory, and other input appear in expandable context groups, with task documents grouped separately. Individual items remain available for inspection, navigation, and editing.
+- Tool calls and results have separate cards showing tool names, counts, completion or failure, and their relationships. Show or collapse tool steps together while retaining full arguments and results in details.
+- Node details show complete content, model messages up to the selected node, effective input for its branch, sources, and revision information. Nodes outside the current model input are clearly identified; older history without itemized records can still show model messages from that path.
+- Edit user questions, assistant replies, system and context content, complete tool-result groups, compaction and reflection content, and task documents. Saving creates an independent revision branch, preserves the original conversation, and clearly marks manually edited replies.
+- Save an edited question as a draft awaiting generation, or create a branch and generate immediately. Saved drafts remain usable after reopening or restarting, without adding the same question twice when generation begins.
+- Editing content in the existing model-input list also saves to a new branch and opens the new conversation, preserving the history being inspected.
+- Copy a question from one branch after a completed reply in another using buttons or dragging. Preview the differences between both model inputs before confirming. The new draft uses the destination history and retains related attachments; later answers from the source are not presented as newly generated results.
+- Add context after a completed reply, reference a pinned node, or remove a context item in a new branch. Context edits can apply to the historical snapshot alone or to subsequent turns in that branch.
+- Pin a comparison baseline to compare another node's content, effective model input, and model configuration. Restore earlier content as a new branch while retaining the current revision.
+- Rename, color, favorite, archive, restore, or delete branches. Deleting a branch preserves descendant branches, and a source placeholder remains when the original conversation no longer exists.
+- Add and save branch notes for organizing the graph; notes are not sent to the model.
+- Undo, redo, and save layouts, including node positions, collapsed groups, hidden content, viewport, and selection, then restore the saved layout when reopening.
+- Export complete text content as JSON or Markdown, or export the visible graph as SVG or PNG for sharing and records. Attachment files themselves are not included.
+- Node context menus provide editing, question copying, pasting as a branch, regeneration, continuation, conversation switching, hiding, and comparison according to the selected node's capabilities. Context groups also support inspection, expansion, and collapse.
+- The canvas context menu offers fit, overview, 100%, automatic arrangement, save, undo, redo, restore hidden nodes, and refresh. Menus stay within window boundaries and support arrow keys, Home, End, Escape, and outside-click dismissal.
+- Unsaved content or notes prompt you to keep editing or discard before switching nodes or conversations or closing the map. Conflicting operations are restricted while busy to protect drafts.
+- The header retains the active conversation's model, context usage, cache hit rate, and message count. Unknown statistics display “—”, and historical node details are clearly separated from active-conversation statistics.
+- Refined the map layout with a compact header and toolbar, a consolidated More options panel for display, layout, navigation, and export, and a separate branch navigation row. The details panel occupies space only when a node is selected.
+- Details are organized around content, model input, source and revisions, and branch settings. Primary and additional actions are separated, with icons and explanations; tool cards, groups, and the active path are easier to distinguish.
+- Controls, context menus, overlays, selection, the minimap, and connections follow the workbench's light, dark, and accent themes. On narrow screens, details move below the canvas with independent scrolling; full-screen and button layouts also adapt to window size.
+- Fixed completed first-run setup reopening after a restart and asking for model setup again. A temporarily unavailable model or unreadable setup item no longer makes completed onboarding appear unfinished. Incomplete setup can still resume, and explicitly resetting app data still allows a fresh start.
+
 ## [0.9.0] - 2026-09-21
 
 ### Agent execution, plans, and long-running work

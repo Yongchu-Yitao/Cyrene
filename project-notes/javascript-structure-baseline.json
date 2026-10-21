@@ -76,9 +76,6 @@
   "electron/desktop/detached-panes.js::DetachedPanes.updateDetachedPaneReturnDrag": {
     "decisions": 33
   },
-  "electron/desktop/main-window-controls.js::installMainWindowControls.<anonymous>": {
-    "decisions": 26
-  },
   "electron/desktop/host-control.js::HostControl.handle": {
     "lines": 104,
     "decisions": 69
@@ -89,6 +86,9 @@
   "electron/desktop/host-control.js::HostControl.windowControl": {
     "decisions": 45,
     "nesting": 10
+  },
+  "electron/desktop/main-window-controls.js::installMainWindowControls.<anonymous>": {
+    "decisions": 26
   },
   "electron/main.js": {
     "module_lines": 6525
@@ -376,6 +376,12 @@
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#9": {
     "decisions": 37
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/context-graph.jsx::GraphInspector": {
+    "decisions": 38
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/context-graph.jsx::GraphNodeActions": {
+    "decisions": 33
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/context-indicator.jsx::WbcComposerContextIndicator": {
     "decisions": 22
   },
@@ -386,7 +392,7 @@
     "decisions": 27
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-indicator.jsx::WbcContextTechnicalDetails": {
-    "decisions": 29
+    "decisions": 37
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-indicator.mjs::wbcContextRingMetrics": {
     "decisions": 23
@@ -1247,6 +1253,16 @@
   "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.handleTopbarItemKeyDown": {
     "decisions": 29
   },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderBrowserDownload": {
+    "decisions": 37
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderPinnedResource": {
+    "decisions": 35
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderSessionTab": {
+    "lines": 126,
+    "decisions": 53
+  },
   "src/cyrene/workbench/webui/frontend/platform/api.jsx::<anonymous>": {
     "lines": 220
   },
@@ -1677,15 +1693,5 @@
     "lines": 460,
     "decisions": 38,
     "hooks": 41
-  },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderBrowserDownload": {
-    "decisions": 37
-  },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderSessionTab": {
-    "lines": 126,
-    "decisions": 53
-  },
-  "src/cyrene/workbench/webui/frontend/features/shell/topbar.jsx::WorkbenchTopbar.renderPinnedResource": {
-    "decisions": 35
   }
 }

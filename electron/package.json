@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.9.0",
+  "version": "0.9.0.1",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "desktopName": "cyrene.desktop",
@@ -16,10 +16,10 @@
     "predev": "node scripts/build-app-use-macos.js",
     "dev": "node dev-launcher.js",
     "build:app-use-macos": "node scripts/build-app-use-macos.js",
-    "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win",
-    "build:win:portable": "electron-builder --win portable",
-    "build:linux": "electron-builder --linux",
+    "build:mac": "node scripts/build-release.js --mac",
+    "build:win": "node scripts/build-release.js --win",
+    "build:win:portable": "node scripts/build-release.js --win portable",
+    "build:linux": "node scripts/build-release.js --linux",
     "test": "node --test */*.test.js"
   },
   "build": {

@@ -301,9 +301,10 @@ def get_onboarding_status() -> dict[str, Any]:
         existing_data=existing_data,
     )
     # The wizard is mid-flow only when a step was completed through the wizard
-    # and setup isn't finished — e.g. the model step is saved but personality
-    # selection is still pending.
-    wizard_in_progress = not all_configured and (
+    # and setup has never finished — e.g. the model step is saved but personality
+    # selection is still pending. The wizard source survives completion; an empty
+    # model route or unavailable Plugin later must not reopen completed setup.
+    wizard_in_progress = not state["completed_at"] and not all_configured and (
         state["llm"].get("source") == "wizard"
         or personality.get("source") == "wizard"
     )

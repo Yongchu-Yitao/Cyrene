@@ -82,17 +82,27 @@
 .wbc-context-inspector.is-graph .wbc-context-graph { background: var(--wb-surface, #1c1d23); min-height: 0; }
 .wbc-context-inspector.is-graph .wbc-context-graph :is(button:where(:not([role="menuitem"])), input, select, summary) { font-size: 12px; line-height: 1.4; }
 .wbc-context-inspector.is-graph .wbc-context-graph button:where(:not([role="menuitem"])) { min-height: 30px; padding: 5px 10px; white-space: nowrap; font-weight: 500; }
-.wbc-context-graph .wbc-graph-toolbar { display: grid; grid-template-columns: minmax(160px, 280px) minmax(0, 1fr) auto; align-items: center; flex-shrink: 0; padding: 7px 16px; gap: 10px; background: var(--wb-modal-bg, #202127); }
+.wbc-context-graph .wbc-graph-toolbar { display: grid; grid-template-columns: minmax(160px, 280px) auto minmax(0, 1fr); align-items: center; flex-shrink: 0; padding: 7px 16px; gap: 10px; background: var(--wb-modal-bg, #202127); }
 .wbc-context-graph .wbc-graph-toolbar input[type="search"] { box-sizing: border-box; width: 100%; max-width: none; min-width: 0; height: 32px; padding: 6px 10px; }
 .wbc-graph-options { position: relative; margin-left: 0; z-index: 25; font-size: 12px; }
 .wbc-graph-options > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 10px; border: 1px solid var(--wb-line); border-radius: 7px; white-space: nowrap; }
 .wbc-graph-options > summary::-webkit-details-marker { display: none; }
-.wbc-graph-options-panel { position: absolute; top: calc(100% + 8px); right: 0; width: 300px; max-width: calc(100vw - 48px); max-height: 55vh; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--wb-line); border-radius: 12px; background: var(--wb-flyout-bg); box-shadow: var(--wb-flyout-shadow); border-color: var(--wb-flyout-border); border-radius: var(--wb-flyout-radius); }
-.wbc-graph-options-panel label { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; }
-.wbc-graph-options-panel input[type="checkbox"] { width: 15px; height: 15px; margin: 0; }
-.wbc-graph-option-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.wbc-graph-options-panel { position: absolute; top: calc(100% + 7px); left: 0; box-sizing: border-box; width: 292px; max-width: calc(100vw - 32px); max-height: min(420px, 65vh); overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; padding: 8px; border: 1px solid var(--wb-flyout-border, var(--wb-line)); border-radius: var(--wb-flyout-radius, 10px); background: var(--wb-flyout-bg); box-shadow: var(--wb-flyout-shadow); }
+.wbc-graph-options-section { padding: 5px 0 8px; }
+.wbc-graph-options-section + .wbc-graph-options-section, .wbc-graph-options-footer { border-top: 1px solid var(--wb-line); }
+.wbc-graph-options-heading { padding: 2px 7px 6px; color: var(--wb-muted); font-size: 10px; font-weight: 600; }
+.wbc-graph-option-actions, .wbc-graph-option-toggles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; }
+.wbc-context-inspector.is-graph .wbc-graph-options-panel .wbc-graph-option-actions button,
+.wbc-context-inspector.is-graph .wbc-graph-options-panel .wbc-graph-option-toggles button { display: flex; align-items: center; justify-content: flex-start; gap: 7px; min-width: 0; min-height: 30px; padding: 5px 7px; border: 0; border-radius: 6px; background: transparent; text-align: left; }
+.wbc-graph-options-panel .wbc-graph-option-actions button:hover:not(:disabled), .wbc-graph-options-panel .wbc-graph-option-toggles button:hover { background: var(--wb-row-hover-bg, var(--wb-control-hover-bg)); }
+.wbc-graph-options-panel .wbc-graph-option-actions button svg, .wbc-graph-options-panel .wbc-graph-option-toggles button svg { flex: 0 0 14px; width: 14px; height: 14px; color: var(--wb-muted); }
+.wbc-graph-option-scale-icon { display: inline-flex; flex: 0 0 14px; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: var(--wb-muted); }
+.wbc-graph-options-panel label { display: flex; flex-direction: row; align-items: center; gap: 7px; min-width: 0; min-height: 30px; margin: 0; padding: 4px 7px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.wbc-graph-options-panel label:hover { background: var(--wb-row-hover-bg, var(--wb-control-hover-bg)); }
+.wbc-graph-options-panel input[type="checkbox"] { flex: 0 0 14px; width: 14px; height: 14px; margin: 0; }
+.wbc-graph-options-footer { display: grid; gap: 6px; padding: 9px 3px 2px; }
 .wbc-graph-export { display: flex; gap: 6px; }
-.wbc-graph-options-panel select { max-width: 100%; width: 100%; }
+.wbc-graph-options-panel select { min-width: 0; max-width: 100%; width: 100%; height: 30px; }
 .wbc-graph-inspector { position: relative; box-sizing: border-box; width: 320px; background: var(--wb-modal-bg, #202127); padding: 20px; }
 .wbc-graph-inspector-close { float: right; margin: -8px -8px 8px 8px; }
 .wbc-graph-group-list { display: flex; min-width: 0; flex-direction: column; gap: 10px; margin-top: 16px; }
@@ -112,7 +122,7 @@
  .wbc-context-inspector.is-graph .wbc-context-inspector-head { padding: 8px 12px; gap: 8px; }
  .wbc-context-graph .wbc-graph-toolbar { padding: 7px 10px; gap: 7px; }
  .wbc-graph-inspector { width: 100%; max-height: 42vh; flex: 0 0 auto; }
- .wbc-graph-options-panel { position: fixed; top: 150px; right: 16px; }
+ .wbc-graph-options-panel { left: auto; right: 0; }
 }
 .wbc-context-graph .wbc-graph-node.is-context-group { border-style: dashed; background: var(--wb-control-bg); box-shadow: none; }
 .wbc-context-inspector-scrim:has(.wbc-context-inspector.is-graph) { padding: 16px; }

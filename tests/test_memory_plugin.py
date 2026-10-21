@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -792,6 +793,23 @@ def test_memory_pack_attaches_real_application_contributions(tmp_path):
     assert "/api/search/conversations" in paths
 
 
+def _compiled_application_source(entry):
+    """Inspect the shipped entry and its actual imports, including shared chunks."""
+    pending, visited, sources = [entry.resolve()], set(), []
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        source = path.read_text(encoding="utf-8")
+        sources.append(source)
+        for relative in re.findall(r"(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)[\"'](\.[^\"']+\.js)[\"']", source):
+            dependency = (path.parent / relative).resolve()
+            assert dependency.is_relative_to(entry.parent.resolve())
+            pending.append(dependency)
+    return "\n".join(sources)
+
+
 def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch):
     from cyrene.plugins.builtin.cyrene_memory import archive
     from cyrene.plugins.builtin.cyrene_soul import plugin_pack as soul_pack
@@ -951,14 +969,11 @@ def test_memory_plugin_serves_frontend_contract_end_to_end(tmp_path, monkeypatch
         / "search"
         / "overlay.jsx"
     ).read_text(encoding="utf-8")
-    compiled_frontend = (
+    compiled_frontend = _compiled_application_source(
         Path(__file__).resolve().parents[1]
         / "src" / "cyrene" / "workbench" / "webui"
-        / "static"
-        / "app"
-        / "compiled"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+        / "static" / "app" / "compiled" / "app.js"
+    )
     assert "/api/workbench/memory" in frontend
     assert "/api/projects/" in project_frontend
     assert "/memory-prompt" in project_frontend

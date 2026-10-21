@@ -94,9 +94,12 @@
   "src/cyrene/core/context/compaction.py::_render_prefix": {
     "decisions": 23
   },
+  "src/cyrene/core/context/paths.py::select_context_leaf": {
+    "decisions": 27
+  },
   "src/cyrene/core/context/projection.py::project_model_messages": {
-    "lines": 165,
-    "decisions": 58,
+    "lines": 196,
+    "decisions": 74,
     "nesting": 8
   },
   "src/cyrene/core/context/router.py::ContextStoreRouter": {
@@ -106,13 +109,13 @@
     "lines": 113
   },
   "src/cyrene/core/context/store.py": {
-    "module_lines": 1086
+    "module_lines": 1088
   },
   "src/cyrene/core/context/store.py::ContextTreeStore": {
     "methods": 38
   },
   "src/cyrene/core/context/tasks.py::fork_task_state": {
-    "decisions": 25,
+    "decisions": 28,
     "nesting": 7
   },
   "src/cyrene/core/context/tasks.py::project_tasks": {
@@ -185,11 +188,11 @@
     "module_lines": 4919
   },
   "src/cyrene/core/session.py::AgentSession": {
-    "methods": 123,
+    "methods": 124,
     "fields": 47
   },
   "src/cyrene/core/session.py::AgentSession.__init__": {
-    "lines": 254,
+    "lines": 255,
     "decisions": 34
   },
   "src/cyrene/core/session.py::AgentSession._advance": {
@@ -634,6 +637,9 @@
   "src/cyrene/plugins/builtin/cyrene_composer_context/application.py::ComposerContextService._mcp_catalog": {
     "decisions": 24
   },
+  "src/cyrene/plugins/builtin/cyrene_content/custom_search_sources.py::normalize_sources": {
+    "decisions": 29
+  },
   "src/cyrene/plugins/builtin/cyrene_content/deepseek_web_search.py::_parse_response": {
     "decisions": 24
   },
@@ -642,9 +648,6 @@
   },
   "src/cyrene/plugins/builtin/cyrene_content/pdf_routes.py::register_pdf_routes": {
     "lines": 139
-  },
-  "src/cyrene/plugins/builtin/cyrene_content/custom_search_sources.py::normalize_sources": {
-    "decisions": 29
   },
   "src/cyrene/plugins/builtin/cyrene_content/search_backend.py": {
     "module_lines": 1133
@@ -805,6 +808,9 @@
   "src/cyrene/plugins/builtin/cyrene_goal/service.py::ConversationGoalService._normalize_review": {
     "decisions": 26
   },
+  "src/cyrene/plugins/builtin/cyrene_guidance/service.py::GuidanceService.node_value": {
+    "decisions": 22
+  },
   "src/cyrene/plugins/builtin/cyrene_knowledge/content.py::_bib_entries": {
     "nesting": 7
   },
@@ -962,9 +968,6 @@
   "src/cyrene/plugins/builtin/cyrene_media/worker.py::MediaWorker._register_artifact": {
     "lines": 111,
     "decisions": 23
-  },
-  "src/cyrene/plugins/builtin/cyrene_guidance/service.py::GuidanceService.node_value": {
-    "decisions": 22
   },
   "src/cyrene/plugins/builtin/cyrene_memory/application.py::MemoryApplication": {
     "methods": 47
@@ -1489,7 +1492,7 @@
     "decisions": 25
   },
   "src/cyrene/workbench/chat/chat_application.py": {
-    "module_lines": 1578
+    "module_lines": 1579
   },
   "src/cyrene/workbench/chat/chat_application.py::WorkspaceChangeService.sync_generated_files.update": {
     "decisions": 24
@@ -1504,7 +1507,7 @@
     "decisions": 45
   },
   "src/cyrene/workbench/chat/chat_application.py::public_chat_light": {
-    "lines": 113,
+    "lines": 114,
     "decisions": 53,
     "nesting": 6
   },
@@ -1516,9 +1519,6 @@
   },
   "src/cyrene/workbench/chat/chat_external_turn_service.py::_ExternalEventProjector.publish": {
     "nesting": 10
-  },
-  "src/cyrene/workbench/chat/chat_guidance_service.py::ChatGuidanceApplicationService.submit": {
-    "lines": 107
   },
   "src/cyrene/workbench/chat/chat_groups.py": {
     "module_lines": 1226
@@ -1540,6 +1540,9 @@
   },
   "src/cyrene/workbench/chat/chat_groups.py::read_group_session_snapshots": {
     "decisions": 25
+  },
+  "src/cyrene/workbench/chat/chat_guidance_service.py::ChatGuidanceApplicationService.submit": {
+    "lines": 107
   },
   "src/cyrene/workbench/chat/chat_reply_finalization_service.py::ChatReplyFinalizationApplicationService._prepend_external_projection": {
     "decisions": 21
@@ -1577,11 +1580,18 @@
   "src/cyrene/workbench/chat/chat_service.py::ChatService.update_chat_agent_context_report": {
     "decisions": 21
   },
+  "src/cyrene/workbench/chat/context_graph_service.py::ContextGraphService._materialize": {
+    "lines": 212,
+    "decisions": 139
+  },
+  "src/cyrene/workbench/chat/context_graph_service.py::ContextGraphService.graph": {
+    "decisions": 49
+  },
   "src/cyrene/workbench/chat/conversation_context_service.py": {
-    "module_lines": 2068
+    "module_lines": 2071
   },
   "src/cyrene/workbench/chat/conversation_context_service.py::AgentContextRepository._read_tree": {
-    "lines": 195,
+    "lines": 197,
     "decisions": 59
   },
   "src/cyrene/workbench/chat/conversation_context_service.py::ConversationContextQueryService._agent_blocks": {
@@ -1625,7 +1635,7 @@
     "nesting": 15
   },
   "src/cyrene/workbench/core_adapter/bridge.py": {
-    "module_lines": 1116
+    "module_lines": 1123
   },
   "src/cyrene/workbench/core_adapter/bridge.py::_turn_metrics": {
     "lines": 102,
@@ -1639,6 +1649,9 @@
     "lines": 199,
     "decisions": 36
   },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py": {
+    "module_lines": 1008
+  },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge": {
     "lines": 117,
     "decisions": 28
@@ -1647,11 +1660,12 @@
     "decisions": 21,
     "nesting": 6
   },
-  "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.send.operate": {
-    "decisions": 24
-  },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.fork_context": {
-    "lines": 105
+    "lines": 124,
+    "decisions": 34
+  },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.send.operate": {
+    "decisions": 27
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::context_checkpoint_from_nodes": {
     "decisions": 23
@@ -1712,7 +1726,7 @@
     "fields": 31
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
-    "module_lines": 1611
+    "module_lines": 1612
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
     "methods": 36,

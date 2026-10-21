@@ -32,6 +32,8 @@ def test_electron_builder_retries_transient_packaging_failure(tmp_path, monkeypa
     build_module.run_electron_builder()
 
     assert len(calls) == 2
-    assert calls[0][0] == [str(builder)]
+    assert calls[0][0] == ["node", str(electron_dir / "scripts" / "build-release.js")]
+    assert calls[1][0] == calls[0][0]
+    assert not calls[0][1].get("shell", False)
     assert calls[0][1]["cwd"] == str(electron_dir)
     assert delays == [10]

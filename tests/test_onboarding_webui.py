@@ -89,6 +89,76 @@ def test_get_onboarding_status_infers_existing_setup(monkeypatch, tmp_path):
     assert (tmp_path / "onboarding_state.json").exists()
 
 
+@pytest.mark.parametrize("missing_step", ["llm", "personality"])
+@pytest.mark.parametrize("wizard_source", ["llm", "personality"])
+def test_completed_onboarding_stays_complete_after_restart(
+    monkeypatch, tmp_path, missing_step, wizard_source,
+):
+    from cyrene.platform import onboarding
+
+    default_soul = "# Default soul\n"
+    _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
+    personality = onboarding._personality_status()
+    personality.update(
+        configured=missing_step != "personality",
+        source="wizard" if wizard_source == "personality" else "",
+    )
+    monkeypatch.setattr(onboarding, "_personality_status", lambda: personality)
+    monkeypatch.setattr(
+        onboarding, "_primary_model",
+        lambda: {} if missing_step == "llm" else {"model": "ready"},
+    )
+    completed_at = "2026-08-11T18:07:44+00:00"
+    onboarding.save_onboarding_state({
+        "completed_at": completed_at,
+        "llm": {"source": "wizard" if wizard_source == "llm" else ""},
+    })
+
+    # Startup reads the durable completion marker even without any prior chats.
+    status = onboarding.get_onboarding_status()
+
+    assert status["needsOnboarding"] is False
+    assert status["isAbsoluteFreshStart"] is False
+    assert status["completedAt"] == completed_at
+    # Configuration health is still reported independently of wizard completion.
+    assert status[missing_step]["configured"] is False
+
+
+def test_unfinished_onboarding_resumes_after_restart(monkeypatch, tmp_path):
+    from cyrene.platform import onboarding
+
+    default_soul = "# Default soul\n"
+    _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
+    monkeypatch.setattr(onboarding, "_primary_model", lambda: {"model": "ready"})
+    onboarding.save_onboarding_state({"llm": {"source": "wizard"}})
+
+    status = onboarding.get_onboarding_status()
+
+    assert status["needsOnboarding"] is True
+    assert status["activeStep"] == "personality"
+    assert status["completedAt"] == ""
+
+
+def test_reset_completed_onboarding_allows_fresh_start(monkeypatch, tmp_path):
+    from cyrene.platform import onboarding
+
+    default_soul = "# Default soul\n"
+    _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
+    monkeypatch.setattr(onboarding, "_primary_model", lambda: {})
+    onboarding.save_onboarding_state({
+        "completed_at": "2026-08-11T18:07:44+00:00",
+        "llm": {"source": "wizard"},
+    })
+    (tmp_path / ".setup_done").write_text("setup_complete", encoding="utf-8")
+
+    onboarding.reset_onboarding_state()
+    status = onboarding.get_onboarding_status()
+
+    assert status["needsOnboarding"] is True
+    assert status["isAbsoluteFreshStart"] is True
+    assert status["completedAt"] == ""
+
+
 def test_get_onboarding_status_skips_personality_when_soul_is_unavailable(
     monkeypatch,
     tmp_path,

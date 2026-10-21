@@ -287,7 +287,8 @@ def test_graph_http_contract_conflicts_and_validation(graph_env):
     router = APIRouter()
     register_context_graph_routes(router, SimpleNamespace(service=e.service, db_path=e.graph.store.db_path,
         conversation_context=SimpleNamespace(agent_states=SimpleNamespace(context_directory=e.directory))))
-    app = FastAPI(); app.include_router(router)
+    app = FastAPI()
+    app.include_router(router)
     with TestClient(app) as client:
         base = '/api/workbench/chats/source/context-graph'
         assert client.get(base).status_code == 200
