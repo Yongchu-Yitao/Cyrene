@@ -31,11 +31,11 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     && pip freeze > /opt/cyrene-mobile/installed-requirements.txt
 # Use Google's official Chrome for Testing origin when the Playwright CDN stalls.
 # Restore the installer after downloading; browser revisions remain Playwright-selected.
+# ARM64 retains the official mirror list, including the direct storage fallback.
+# Pinning only the ESRP host makes transient DNS failures fatal to the build.
 RUN if [ "$TARGETARCH" = amd64 ]; then python -c 'import pathlib, playwright; root=pathlib.Path(playwright.__file__).parent/"driver/package/lib"; files=[p for p in root.rglob("*.js") if "builds/cft/" in p.read_text()]; assert files; [(p.with_suffix(".js.original").write_text(p.read_text()), p.write_text(p.read_text().replace("builds/cft/", ""))) for p in files]' \
     && PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST=https://storage.googleapis.com/chrome-for-testing-public PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000 python -m playwright install --with-deps chromium \
     && python -c 'import pathlib, playwright; root=pathlib.Path(playwright.__file__).parent/"driver/package/lib"; [p.replace(p.with_suffix("")) for p in root.rglob("*.js.original")]'; else \
-    NO_PROXY=playwright.download.prss.microsoft.com no_proxy=playwright.download.prss.microsoft.com \
-    PLAYWRIGHT_DOWNLOAD_HOST=https://playwright.download.prss.microsoft.com/dbazure/download/playwright \
     PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000 python -m playwright install --with-deps chromium; fi
 COPY guest /opt/cyrene-mobile
 RUN if [ "$TARGETARCH" = arm64 ]; then sed -i s/ttyS0/ttyAMA0/g /opt/cyrene-mobile/cyrene-serial.service; fi \
