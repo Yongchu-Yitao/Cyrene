@@ -2,6 +2,25 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.0.2] - 2026-10-26
+
+### Features and interface updates
+
+- Refined the conversation context map header with a context-tree icon, a separate current-model label, and clearer spacing and hierarchy for the title, statistics, and close button. Long model names are easier to read.
+- Added progress bars for context usage and cache hit rate alongside percentages and actual token counts. Message and turn counts remain available, and unknown statistics still display “—”, making conversation capacity and caching easier to assess.
+- Header icons, model labels, progress bars, and separators follow the Workbench theme and font scaling. Statistics move to a second row in narrower windows, while message information gets its own row at phone widths to reduce crowding.
+- Removed the map's separate full-screen toggle in favor of a consistent panel that occupies most of the window. Panning, zooming, overview, node details, and branch actions remain available, with space reserved for macOS window controls.
+- Improved opening and viewing long conversations and maps with many branches. Unchanged maps reuse previously loaded history while preserving questions, replies, tool steps, branch relationships, and saved layouts.
+- Automatic map refresh pauses while the application is in the background and resumes when it returns. Earlier reads no longer replace the newly selected conversation when switching conversations or refreshing quickly.
+- Changes to branch names, notes, layouts, context content, or the active execution path refresh the corresponding map instead of leaving stale information visible. Historical relationships remain identifiable when a source conversation has been deleted.
+- Improved streamed replies, long tool arguments, and large tool outputs to reduce delays and resource use while preserving reply text, reasoning content, tool arguments, and execution order.
+- Preserved Chinese text, emoji, and text split across response chunks. Damaged encoding, interrupted responses, and incomplete tool arguments still report a failure instead of treating corrupted or unfinished content as a valid reply and continuing execution.
+- Fixed repeated confirmation prompts for similar file deletions after choosing to allow them throughout the current conversation. Approval covers only the explicitly approved operation category in that conversation and workspace, and remains available when reopening the conversation.
+- Remote file deletion and remote tool calls also respect conversation approvals while keeping the device, project, capability, and operation category separate. Changing the target or operation category requires a new confirmation. One-time approvals, denials, and operations requiring individual confirmation retain their behavior, and other conversations do not inherit approval.
+- Fixed retrying a restored paused run potentially restarting unfinished operations from the old run. Retry stops the old run first so its tool operations or completion processing cannot execute alongside the new attempt.
+- Improved code indexing and reindexing by reducing repeated work on unchanged files and dependency or build directories. Indexing one file or subdirectory preserves symbols, references, and imports already indexed elsewhere in the project.
+- Improved indexing when files change during reading, become temporarily unreadable, or directory scans fail, avoiding incomplete results and unintended removal of unrelated code from the index.
+
 ## [0.9.0.1] - 2026-10-21
 
 ### Features and interface updates
