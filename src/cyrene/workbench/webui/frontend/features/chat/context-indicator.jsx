@@ -583,7 +583,6 @@ function WbcLazyContextGraph(props) {
 function WbcContextInspectorDialog({ chat, summary, metrics, details, onClose, triggerRef, titleId }) {
   var closeRef = useWbcRef(null);
   var dialogRef = useWbcRef(null);
-  var [fullscreen, setFullscreen] = useWbcState(false);
   var [dirty, setDirty] = useWbcState(false);
   var [confirmClose, setConfirmClose] = useWbcState(false);
   function closeInspector() { if (dirty) setConfirmClose(true); else onClose(); }
@@ -622,7 +621,7 @@ function WbcContextInspectorDialog({ chat, summary, metrics, details, onClose, t
   return window.ReactDOM.createPortal(
     <div className="wbc-context-inspector-scrim" onMouseDown={function (event) { if (event.target === event.currentTarget) closeInspector(); }}>
       <section
-        className={"wbc-context-inspector is-graph" + (fullscreen ? " is-fullscreen" : "")}
+        className="wbc-context-inspector is-graph"
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
@@ -630,14 +629,14 @@ function WbcContextInspectorDialog({ chat, summary, metrics, details, onClose, t
         onKeyDown={onKeyDown}
       >
         <header className="wbc-context-inspector-head">
-          <span>
-            <strong id={titleId}>{wbcT("workbenchChat.contextTree", "Conversation context tree")}</strong>
-            <small>{model || wbcT("workbenchChat.contextTreeCurrentModel", "Current model")}</small>
-          </span>
+          <div className="wbc-context-inspector-identity">
+            <span className="wbc-context-inspector-icon" aria-hidden="true">{WBC_ICONS.contextTree}</span>
+            <div className="wbc-context-inspector-title">
+              <strong id={titleId}>{wbcT("workbenchChat.contextTree", "Conversation context tree")}</strong>
+              <small title={model || undefined}>{model || wbcT("workbenchChat.contextTreeCurrentModel", "Current model")}</small>
+            </div>
+          </div>
           <WbcInspectorMetrics metrics={metrics} details={details} summary={summary} />
-          <span className="wbc-graph-mode">
-            <button type="button" onClick={function () { setFullscreen(!fullscreen); }}>{wbcT("workbenchChat.graph.full", "Full screen")}</button>
-          </span>
           <button ref={closeRef} type="button" onClick={closeInspector} aria-label={wbcT("common.close", "Close")}>{WBC_ICONS.x}</button>
         </header>
         <div className="wbc-context-inspector-body">
@@ -818,11 +817,13 @@ function WbcComposerContextIndicator({ chat, runtime, running }) {
 export { WbcComposerContextIndicator, WbcContextInspectorDialog, WbcContextInspectorContent }
 
 function WbcInspectorMetrics({ metrics, details, summary }) {
+  var colors = wbcContextRingColors(metrics);
   return <div className="wbc-context-inspector-summary">
           <div>
             <span>{wbcT("workbenchChat.contextUsage", "Context usage")}</span>
             <b>{wbcContextPercent(metrics.contextRatio, metrics.hasContextLimit)}</b>
             <small>{metrics.hasContextLimit ? wbcExactNumber(metrics.contextUsed) + " / " + wbcExactNumber(metrics.contextLimit) + " " + wbcT("workbenchChat.contextAuditTokensUnit", "tokens") : "—"}</small>
+            <WbcInspectorMeter ratio={metrics.contextRatio} available={metrics.hasContextLimit} color={colors.context} />
           </div>
           <div>
             <span>{wbcT("workbenchChat.cacheHitRate", "Cache hit rate")}</span>
@@ -830,6 +831,7 @@ function WbcInspectorMetrics({ metrics, details, summary }) {
             <small>{metrics.hasCacheUsage
               ? wbcExactNumber(metrics.cacheHitTokens) + " / " + wbcExactNumber(metrics.cacheHitTokens + metrics.cacheMissTokens) + " " + wbcT("workbenchChat.contextAuditTokensUnit", "tokens")
               : "—"}</small>
+            <WbcInspectorMeter ratio={metrics.cacheRatio} available={metrics.hasCacheUsage} color={colors.cache} />
           </div>
           <div>
             <span>{wbcT("workbenchChat.messageCount", "Messages")}</span>
@@ -837,6 +839,13 @@ function WbcInspectorMetrics({ metrics, details, summary }) {
             <small>{wbcT("workbenchChat.contextTreeActivePath", "active path")}</small>
           </div>
         </div>;
+}
+
+function WbcInspectorMeter({ ratio, available, color }) {
+  var width = available ? Math.max(0, Math.min(1, Number(ratio) || 0)) * 100 : 0;
+  return <div className="wbc-context-inspector-meter" aria-hidden="true">
+    <i style={{ width: width + "%", background: color }} />
+  </div>;
 }
 
 function inspectorModel(summary, chat) { return String(summary?.model || chat?.lastModel || chat?.model || ""); }
