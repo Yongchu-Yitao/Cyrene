@@ -8,23 +8,21 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import threading
+from collections import OrderedDict
+from uuid import uuid4
 from copy import deepcopy
 from dataclasses import replace
 
 from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
+from cyrene.core.context.graph_reads import graph_version, graph_snapshot
 from cyrene.core.context.paths import DIALOGUE_ROLES, context_path, select_context_leaf
 from cyrene.core.context.projection import project_model_messages
 from cyrene.core.context.tasks import STATE_KEY, fork_task_state
 from cyrene.workbench.chat.context_graph_store import ContextGraphStore, GraphConflict
-
-
-def node_content(value):
-    role = value.get('role')
-    if role == 'tool_results':
-        return json.dumps(value.get('results', []), ensure_ascii=False, indent=2)
-    if role in {'context_compaction', 'context_reflection'}:
-        return json.dumps(value.get('messages', []), ensure_ascii=False, indent=2)
-    return str(value.get('content') or '')
+from cyrene.workbench.chat.context_graph_projection import (
+    node_content, safe_boundary, append_task_nodes, project_node, append_lineage_edges,
+)
 
 
 def rebase_artifact_refs(value, source, target):
@@ -41,17 +39,14 @@ def tree_revision(nodes):
     return hashlib.sha256('|'.join(sorted(f'{n.id}:{n.updated_at.isoformat()}' for n in nodes)).encode()).hexdigest()
 
 
-def safe_boundary(node):
-    v = node.value
-    return (v.get('role') == 'assistant' and not v.get('tool_calls') and not v.get('error')
-            and not v.get('cancelled') and (v.get('answer_complete') or v.get('session_end_complete')))
-
-
 class ContextGraphService:
     def __init__(self, service, context_directory, db_path):
         self.service = service
         self.directory = context_directory
         self.store = ContextGraphStore(db_path)
+        self._graph_lock = threading.RLock()
+        self._graph_cache = OrderedDict()
+        self._graph_cache_bytes = 0
         self.recover_incomplete_operations()
 
     def recover_incomplete_operations(self):
@@ -71,8 +66,9 @@ class ContextGraphService:
             except GraphConflict:
                 continue
 
-    def chat(self, chat_id):
-        chat = self.service.repository.get(chat_id)
+    def chat(self, chat_id, *, metadata_only=False):
+        read = self.service.repository.get_metadata if metadata_only else self.service.repository.get
+        chat = read(chat_id)
         if not chat:
             raise LookupError('Conversation not found')
         from cyrene.agents.builtin import normalize_agent_binding
@@ -81,7 +77,7 @@ class ContextGraphService:
         return chat
 
     def family(self, chat_id):
-        chat = self.chat(chat_id)
+        chat = self.chat(chat_id, metadata_only=True)
         chats = {c['id']: c for c in self.service.repository.read_summaries()['chats']
                  if c.get('projectId') == chat.get('projectId')}
         links = self.store.entries('lineage:')
@@ -106,81 +102,97 @@ class ContextGraphService:
         family_id = root(chat_id)
         return family_id, {cid: c for cid, c in chats.items() if root(cid) == family_id}, links
 
-    def snapshot(self, chat_id):
-        self.chat(chat_id)
-        with ContextStoreRouter(self.directory) as router:
-            tree = router.get_tree(chat_id)
-            nodes = list(router.get_subtree(tree.id, tree.root_id))
-            leaf = select_context_leaf(nodes, router.committed_state(chat_id)[0])
+    def snapshot(self, chat_id, *, router=None):
+        if router is None:
+            with ContextStoreRouter(self.directory) as opened:
+                return self.snapshot(chat_id, router=opened)
+        self.chat(chat_id, metadata_only=True)
+        nodes, committed_leaf, _version = graph_snapshot(router, chat_id)
+        leaf = select_context_leaf(nodes, committed_leaf)
         return nodes, leaf, tree_revision(nodes)
 
-    def graph(self, chat_id):
+    def _graph_inputs(self, chat_id, router):
         family_id, chats, links = self.family(chat_id)
+        records = self.store.read_many([*('branch:' + cid for cid in chats), 'view:' + family_id])
+        metadata = {cid: records['branch:' + cid] for cid in chats}
+        view = records['view:' + family_id]
+        links = {cid: links[cid] for cid in chats if cid in links}
+        versions = {}
+        for cid in chats:
+            try:
+                versions[cid] = graph_version(router, cid)
+            except TreeNotFoundError:
+                versions[cid] = None
+        # Include ordering, non-tree metadata and the active conversation.
+        # Tree versions are transactionally updated, never timestamp guesses.
+        return family_id, chats, links, metadata, view, versions, tuple(chats)
+
+    def graph_document(self, chat_id):
+        """Return immutable JSON plus a representation revision for HTTP reads."""
+        with self._graph_lock, ContextStoreRouter(self.directory) as router:
+            inputs = self._graph_inputs(chat_id, router)
+            cached = self._graph_cache.get(chat_id)
+            if cached is not None and cached[0] == inputs:
+                self._graph_cache.move_to_end(chat_id)
+                return cached[1], cached[2]
+            graph = self._build_graph(chat_id, router, inputs)
+            revision = uuid4().hex
+            graph['graphRevision'] = revision
+            encoded = json.dumps(graph, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            # Trees live in separate databases. Cache only if all dependencies
+            # remained stable throughout the read; never label a mixed read as
+            # a reusable snapshot. A changing graph is still served fresh.
+            stable = inputs == self._graph_inputs(chat_id, router)
+            old = self._graph_cache.pop(chat_id, None)
+            if old is not None:
+                self._graph_cache_bytes -= len(old[1]) + old[3]
+            # Keys retain only metadata, but notes can be large too. Account
+            # for them as well as the immutable response (Unicode worst case).
+            key_size = 4 * len(json.dumps(inputs, ensure_ascii=False))
+            weight = len(encoded) + key_size
+            if stable and weight <= 8 * 1024 * 1024:
+                while self._graph_cache and (len(self._graph_cache) >= 4 or self._graph_cache_bytes + weight > 8 * 1024 * 1024):
+                    _, evicted = self._graph_cache.popitem(last=False)
+                    self._graph_cache_bytes -= len(evicted[1]) + evicted[3]
+                self._graph_cache[chat_id] = (inputs, encoded, revision, key_size)
+                self._graph_cache_bytes += weight
+            return encoded, revision
+
+    def graph(self, chat_id):
+        # Public callers get independent dictionaries; cached data cannot be
+        # corrupted by graph consumers or branch-edit code.
+        encoded, _revision = self.graph_document(chat_id)
+        return json.loads(encoded)
+
+    def _build_graph(self, chat_id, router, inputs):
+        family_id, chats, links, metadata, view, _versions, _order = inputs
         graph_nodes, edges, branches = [], [], []
         origins = {}
         for cid, chat in chats.items():
-            meta = self.store.read('branch:' + cid)
+            meta = metadata.get(cid, {'revision': 0, 'value': {}})
             try:
-                nodes, leaf, revision = self.snapshot(cid)
+                nodes, leaf, revision = self.snapshot(cid, router=router)
             except (TreeNotFoundError, ValueError):
                 branches.append({'id': cid, 'chatId': cid, 'title': chat.get('title', ''), 'empty': True, **meta})
                 continue
-            active_ids = {n.id for n in context_path(nodes, leaf.id)}
+            active_path = context_path(nodes, leaf.id)
+            active_ids = {n.id for n in active_path}
             visible = [n for n in nodes if isinstance(n.value, dict) and n.value.get('role') in DIALOGUE_ROLES]
             visible_ids = {n.id for n in visible}
             parents = {n.parent_id for n in visible}
             origins[cid] = {str(n.value.get('metadata', {}).get('turn_id', '')): n.id for n in visible if n.value.get('role') == 'user'}
             branches.append({'id': cid, 'chatId': cid, 'title': chat.get('title', ''), 'leafId': leaf.id,
                              'replay': bool(chat.get('contextGraphReplay')), 'config': {key: chat.get(key) for key in ('model', 'reasoningEffort', 'agent', 'contextActivations')}, 'treeRevision': revision, 'displayLeafId': leaf.parent_id if leaf.value.get('context_graph_checkpoint') else leaf.id, 'active': cid == chat_id, **meta})
-            task_state = context_path(nodes, leaf.id)[0].value.get(STATE_KEY)
-            if isinstance(task_state, dict):
-                documents = {"shared": task_state.get("shared", {}), **task_state.get("documents", {})}
-                for task_id, doc in documents.items():
-                    display_id = f"{cid}:task:{task_id}"
-                    graph_nodes.append({'id': display_id, 'nodeId': 'task:' + task_id, 'chatId': cid,
-                        'role': 'task', 'kind': task_id, 'preview': str(doc.get('body', ''))[:220],
-                        'canEdit': bool(safe_boundary(leaf)), 'canContinue': False, 'canFork': False,
-                        'revision': revision, 'active': cid == chat_id and (task_id == 'shared' or task_state.get('active') == task_id)})
-                    edges.append({'id': 'task:' + display_id, 'source': f'{cid}:{leaf.id}', 'target': display_id, 'kind': 'mount'})
+            append_task_nodes(graph_nodes, edges, active_path[0].value.get(STATE_KEY), cid, leaf, revision, cid == chat_id)
             for n in visible:
                 v = n.value
-                content = node_content(v)
-                calls = v.get('tool_calls') if isinstance(v.get('tool_calls'), list) else []
-                results = v.get('results') if v.get('role') == 'tool_results' and isinstance(v.get('results'), list) else []
-                tool_phase = 'call' if calls else 'result' if v.get('role') == 'tool_results' else ''
-                tool_items = calls if calls else results
-                tool_names = list(dict.fromkeys(str(item.get('name') or '').strip() for item in tool_items if isinstance(item, dict) and item.get('name')))
-                tool_preview = ' · '.join(tool_names[:3]) + (f' · +{len(tool_names) - 3}' if len(tool_names) > 3 else '')
-                pending = bool(v.get('pending_question'))
-                graph_nodes.append({'id': f'{cid}:{n.id}', 'nodeId': n.id, 'chatId': cid,
-                    'parentId': f'{cid}:{n.parent_id}' if n.parent_id in visible_ids else '',
-                    'internalCheckpoint': bool(v.get('context_graph_checkpoint')), 'contentHash': hashlib.sha256(json.dumps([content, v.get('context_lifecycle'), v.get('context_source'), v.get('context_graph_overrides')], sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
-                    'role': v.get('role'), 'kind': v.get('context_kind', ''), 'preview': (tool_preview or content)[:220],
-                    'chars': len(content), 'updatedAt': n.updated_at.isoformat(), 'createdAt': n.created_at.isoformat(),
-                    'active': cid == chat_id and n.id in active_ids, 'currentPath': n.id in active_ids,
-                    'tip': n.id not in parents, 'historical': n.id not in active_ids,
-                    'canContinue': bool(safe_boundary(n)), 'canFork': v.get('role') == 'user' and not v.get('runtime_guidance') and not v.get('metadata', {}).get('agent_originated'),
-                    'canEdit': v.get('role') in {'user', 'assistant', 'system', 'context', 'tool_results', 'context_compaction', 'context_reflection'} and not pending and not v.get('tool_calls'),
-                    'toolGroup': bool(tool_phase), 'toolPhase': tool_phase, 'toolCount': len(tool_items), 'toolNames': tool_names,
-                    'pending': pending, 'revision': revision, 'runId': v.get('run_id', ''),
-                    'draft': bool(v.get('metadata', {}).get('graph_draft')), 'retry': bool(v.get('metadata', {}).get('retry')), 'manual': bool(v.get('manual_revision'))})
+                graph_nodes.append(project_node(n, cid, visible_ids, active_ids, parents, revision, cid == chat_id))
                 if n.parent_id in visible_ids:
                     kind = 'mount' if v.get('role') == 'context' else 'retry' if v.get('metadata', {}).get('retry') else 'sequence'
                     edges.append({'id': f'{cid}:{n.parent_id}>{n.id}', 'source': f'{cid}:{n.parent_id}', 'target': f'{cid}:{n.id}', 'kind': kind})
-        for cid, chat in chats.items():
-            link = links.get(cid, {}).get('value', {})
-            parent = link.get('parent')
-            source_node = link.get('sourceNodeId') or origins.get(parent, {}).get(link.get('forkMessageId'))
-            roots = [n for n in graph_nodes if n['chatId'] == cid and not n.get('parentId')]
-            source = f'{parent}:{source_node}'
-            if parent and roots:
-                if source not in {n['id'] for n in graph_nodes}:
-                    source = 'missing:' + str(parent)
-                    if source not in {n['id'] for n in graph_nodes}:
-                        graph_nodes.append({'id': source, 'role': 'origin', 'preview': '来源已删除或不可用', 'chatId': '', 'nodeId': '', 'canEdit': False})
-                edges.append({'id': 'fork:' + cid, 'source': source, 'target': roots[0]['id'], 'kind': 'fork'})
+        append_lineage_edges(graph_nodes, edges, chats, links, origins)
         return {'familyId': family_id, 'activeChatId': chat_id, 'nodes': graph_nodes, 'edges': edges,
-                'branches': branches, 'view': self.store.read('view:' + family_id)}
+                'branches': branches, 'view': view}
 
     def detail(self, chat_id, node_id):
         nodes, leaf, revision = self.snapshot(chat_id)

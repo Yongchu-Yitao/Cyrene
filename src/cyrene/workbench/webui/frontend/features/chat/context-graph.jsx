@@ -4,6 +4,7 @@ import './context-graph.css';
 import { wbcT, useWbcState as useState, useWbcEffect as useEffect, useWbcRef as useRef } from './core.jsx';
 import { visibleGraph, graphMarkdown, graphDiff, graphSvg } from './context-graph-model.mjs';
 import { WBC_ICONS } from './icons.jsx';
+import { createGraphReader, pollVisibleGraph } from './context-graph-reader.mjs';
 import { GraphContextMenu } from './context-graph-menu.jsx';
 import { WbcContextInspectorContent } from './context-indicator.jsx';
 const graphText = key => wbcT('workbenchChat.graph.' + key, key);
@@ -91,12 +92,14 @@ function graphSelection(state) {
 function useGraphRead(state) {
   const { setScope, setGraph, view, setView, nodes, selected, setSelected, detail, setDetail, setDraft, editing, setEditing, setError, inspectionChat, setInspectionChat, notes, setNotes, setConfirmDelete, setNewContext, layoutRevision, loadedView, graphRequest, viewRevision, dirtyView, chatId, onDirtyChange, node, branch, dirty } = state;
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty]);
+  const reader = useRef(null);
+  if (!reader.current) reader.current = createGraphReader();
   async function load() {
     const rev = ++graphRequest.current;
     try {
-      const result = await request(base(chatId));
+      const result = await reader.current.read(base(chatId));
       if (rev !== graphRequest.current) return;
-      setGraph(previous => JSON.stringify(previous) === JSON.stringify(result) ? previous : result); setError('');
+      setGraph(previous => previous?.graphRevision && previous.graphRevision === result.graphRevision ? previous : result); setError('');
       if (loadedView.current !== result.familyId) {
         loadedView.current = result.familyId; viewRevision.current = result.view.revision;
         const savedView = result.view.value.layoutVersion === 2 ? result.view.value : {};
@@ -106,11 +109,11 @@ function useGraphRead(state) {
         setSelected(result.view.value.selected || ''); setInspectionChat(result.view.value.inspectionChat || ''); dirtyView.current = false;
       }
       return result;
-    } catch (e) { if (rev === graphRequest.current) setError(e.message); }
+    } catch (e) { if (e.name !== 'AbortError' && rev === graphRequest.current) setError(e.message); }
   }
   useEffect(() => {
-    load(); const timer = setInterval(load, 5000);
-    return () => { clearInterval(timer); graphRequest.current++; layoutRevision.current++; };
+    const stop = pollVisibleGraph(load);
+    return () => { stop(); reader.current.abort(); graphRequest.current++; layoutRevision.current++; };
   }, [chatId]);
   useEffect(() => {
     if (!node?.nodeId) { setDetail(null); return; }

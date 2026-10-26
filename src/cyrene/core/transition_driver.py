@@ -32,6 +32,7 @@ class TransitionDriver:
         self.closed = False
         self.condition = threading.Condition(threading.RLock())
         self.pending: set[str] = set()
+        self.paused_runs: set[str] = set()
         self.work: queue.Queue[tuple[str, ContextNode] | None] = queue.Queue()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.active_task: asyncio.Task[None] | None = None
@@ -51,12 +52,18 @@ class TransitionDriver:
         if self.thread is not threading.current_thread():
             self.thread.join()
 
+    def pause_run(self, run_id: str) -> None:
+        """Fence restored work before starting the worker, including queued Hooks."""
+        if run_id:
+            with self.condition:
+                self.paused_runs.add(run_id)
+
     def enqueue(self, kind: str, node: ContextNode) -> None:
         key = f"{kind}:{self.callbacks.key(node)}"
         run_id = self.callbacks.run_id(node)
         cancelled = self.callbacks.cancelled(run_id)
         with self.condition:
-            if self.closed or cancelled or key in self.pending:
+            if self.closed or cancelled or run_id in self.paused_runs or key in self.pending:
                 log_operation(
                     logger,
                     "cyrene.core.session",
@@ -132,7 +139,7 @@ class TransitionDriver:
         try:
             cancelled = self.callbacks.cancelled(run_id)
             with self.condition:
-                if self.closed or cancelled:
+                if self.closed or cancelled or run_id in self.paused_runs:
                     log_operation(
                         logger,
                         "cyrene.core.session",

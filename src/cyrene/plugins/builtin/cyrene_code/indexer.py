@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -90,16 +91,50 @@ def _connect(index_db: Path) -> sqlite3.Connection:
     return conn
 
 
-def _hash_file(path: Path) -> str:
-    """Compute MD5 hash of a file using chunked reading."""
+_INDEX_BUFFER_LIMIT = 1024 * 1024
+
+
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _read_index_source(path: Path, previous_hash: str | None) -> tuple[str, str | None] | None:
+    """Reuse small-file bytes; never retain an unchanged large file in memory.
+
+    A changed large file needs a second read for AST parsing. Hash those exact
+    bytes again, and reject observable concurrent changes before committing.
+    """
     try:
-        h = hashlib.md5()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except OSError:
-        return ""
+        with path.open("rb") as stream:
+            before = _file_identity(os.fstat(stream.fileno()))
+            digest = hashlib.md5()
+            buffered: bytearray | None = bytearray()
+            for chunk in iter(lambda: stream.read(65536), b""):
+                digest.update(chunk)
+                if buffered is not None:
+                    if len(buffered) + len(chunk) <= _INDEX_BUFFER_LIMIT:
+                        buffered.extend(chunk)
+                    else:
+                        buffered = None
+            file_hash = digest.hexdigest()
+            if before != _file_identity(os.fstat(stream.fileno())) or before != _file_identity(path.stat()):
+                return None
+            if previous_hash == file_hash:
+                return file_hash, None
+            if buffered is None:
+                stream.seek(0)
+                raw = stream.read()
+                file_hash = hashlib.md5(raw).hexdigest()
+            else:
+                raw = bytes(buffered)
+            if before != _file_identity(os.fstat(stream.fileno())) or before != _file_identity(path.stat()):
+                return None
+        # Match Path.read_text's universal-newline handling, including CR-only
+        # files. The persisted hash remains a hash of the original bytes.
+        source = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        return file_hash, source
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _compute_rel_path(file_path: Path, project_root: Path) -> str | None:
@@ -240,25 +275,21 @@ def _index_file(
     conn: sqlite3.Connection,
     file_path: Path,
     project_root: Path,
+    *,
+    force: bool = False,
 ) -> dict | None:
     """Index a single Python file. Returns dict or None if file is gone."""
     rel_path = _compute_rel_path(file_path, project_root)
     if rel_path is None:
         return None
 
-    file_hash = _hash_file(file_path)
-    if not file_hash:
-        return None  # file unreadable or gone
-
-    cur = conn.execute("SELECT id, hash FROM files WHERE path = ?", (rel_path,))
-    row = cur.fetchone()
-    if row and row[1] == file_hash:
-        return {"path": rel_path, "symbols": 0, "refs": 0, "imports": 0, "skipped": True}
-
-    try:
-        source = file_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    row = conn.execute("SELECT id, hash FROM files WHERE path = ?", (rel_path,)).fetchone()
+    loaded = _read_index_source(file_path, row[1] if row and not force else None)
+    if loaded is None:
         return None
+    file_hash, source = loaded
+    if source is None:
+        return {"path": rel_path, "symbols": 0, "refs": 0, "imports": 0, "skipped": True}
 
     if row:
         file_id = row[0]
@@ -331,10 +362,17 @@ def _index_file(
 def _collect_py_files(root: Path) -> list[Path]:
     exclude = {"__pycache__", ".venv", ".git", "node_modules", "dist", "build", ".tox", "venv", "env"}
     files = []
-    for path in root.rglob("*.py"):
-        if any(p in exclude for p in path.parts):
-            continue
-        files.append(path)
+    if any(part in exclude for part in root.parts):
+        return files
+
+    def failed(error):
+        # An incomplete traversal must never be mistaken for deleted files.
+        raise error
+
+    for directory, children, names in os.walk(root, topdown=True, onerror=failed, followlinks=False):
+        children[:] = [name for name in children if name not in exclude]
+        files.extend(Path(directory) / name for name in names if name.endswith(".py"))
+
     return files
 
 
@@ -356,12 +394,6 @@ def build_index(
 
     conn = _connect(index_db)
     try:
-        if force:
-            conn.execute("DELETE FROM refs")
-            conn.execute("DELETE FROM symbols")
-            conn.execute("DELETE FROM imports")
-            conn.execute("DELETE FROM files")
-
         if resolved.is_file():
             py_files = [resolved]
         elif resolved.is_dir():
@@ -378,19 +410,22 @@ def build_index(
 
         results = []
         for fp in py_files:
-            result = _index_file(conn, fp, project_root)
+            result = _index_file(conn, fp, project_root, force=force)
             if result is not None:
                 results.append(result)
 
-        # Clean up stale entries for deleted files
-        if not force:
-            cur = conn.execute("SELECT id, path FROM files")
-            for row in cur.fetchall():
-                if row[1] not in current_paths:
-                    conn.execute("DELETE FROM symbols WHERE file_id = ?", (row[0],))
-                    conn.execute("DELETE FROM refs WHERE source_file_id = ?", (row[0],))
-                    conn.execute("DELETE FROM imports WHERE file_id = ?", (row[0],))
-                    conn.execute("DELETE FROM files WHERE id = ?", (row[0],))
+        # Only this scan's scope is authoritative. Partial/forced indexing
+        # must not delete valid entries belonging to other project directories.
+        scope = resolved.relative_to(project_root)
+        scope_is_file = resolved.is_file()
+        for file_id, stored_path in conn.execute("SELECT id, path FROM files").fetchall():
+            stored = Path(stored_path)
+            in_scope = stored == scope if scope_is_file else stored.is_relative_to(scope)
+            if in_scope and stored_path not in current_paths:
+                conn.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
+                conn.execute("DELETE FROM refs WHERE source_file_id = ?", (file_id,))
+                conn.execute("DELETE FROM imports WHERE file_id = ?", (file_id,))
+                conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
 
         conn.commit()
 

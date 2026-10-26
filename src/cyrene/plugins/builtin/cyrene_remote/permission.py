@@ -38,6 +38,34 @@ def _exact_reason(args: Mapping[str, Any], fallback: str) -> str:
     )
 
 
+def _remote_boundary_context(args, device_id, project_id):
+    return {
+        "path_hint": str(device_id),
+        "reason": _exact_reason(args, "执行用户请求的远程操作"),
+        "requires_human": False,
+        "device_id": str(device_id),
+        "project_id": str(project_id),
+    }
+
+
+def _file_session_scope(device_id, project_id, operation):
+    return {
+        "device_id": str(device_id),
+        "project_id": str(project_id),
+        "operation": "file_delete" if operation in _DESTRUCTIVE_FILE_OPERATIONS else operation,
+    }
+
+
+def _harness_session_scope(device_id, project_id, capability_id, destructive, invoke_arguments):
+    return {
+        "device_id": str(device_id),
+        "project_id": str(project_id),
+        "capability_id": capability_id,
+        "operation": ((destructive.get("session_scope") or {}).get("operation")
+                      or str(invoke_arguments.get("operation") or capability_id)),
+    }
+
+
 def remote_permission_request(
     tool_name: str,
     args: Mapping[str, Any],
@@ -49,13 +77,7 @@ def remote_permission_request(
     """Return the exact boundary and whether it is destructively classified."""
 
     operation = str(args.get("operation") or args.get("command") or "").strip()
-    common = {
-        "path_hint": str(device_id),
-        "reason": _exact_reason(args, "执行用户请求的远程操作"),
-        "requires_human": False,
-        "device_id": str(device_id),
-        "project_id": str(project_id),
-    }
+    common = _remote_boundary_context(args, device_id, project_id)
     if tool_name in {"RemoteCyreneAction", "RunRemoteCyrene"}:
         return ({
             **common,
@@ -120,6 +142,7 @@ def remote_permission_request(
                 ),
                 "path_hint": path_hint,
                 "requires_human": True,
+                "session_scope": _file_session_scope(device_id, project_id, operation),
                 "scope_hint": "破坏性/不可逆的 ",
                 "options": ["允许这次", "本次会话内总是允许", "拒绝"],
             }, True)
@@ -179,6 +202,7 @@ def remote_permission_request(
                 "kind": "destructive_confirmation",
                 "operation": str(destructive.get("operation") or f"远程调用 {capability_id}"),
                 "requires_human": True,
+                "session_scope": _harness_session_scope(device_id, project_id, capability_id, destructive, invoke_arguments),
                 "scope_hint": "破坏性/不可逆的 ",
                 "options": ["允许这次", "本次会话内总是允许", "拒绝"],
             }, True)

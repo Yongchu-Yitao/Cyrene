@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import uuid
 
+from .stream_buffer import append_argument
+
 
 class StreamDecoder:
     def __init__(self, adapter, callback, diagnostics, *, usage_for, parse_response,
@@ -67,7 +69,7 @@ class StreamDecoder:
                 key = str(data.get("index") or 0)
                 if key not in self.tool_calls:
                     self.tool_calls[key] = {"id": f"toolu_{uuid.uuid4().hex}", "name": "", "arguments": ""}
-                self.tool_calls[key]["arguments"] += str(delta.get("partial_json") or "")
+                append_argument(self.tool_calls[key], str(delta.get("partial_json") or ""))
                 return
             if delta.get("type") == "thinking_delta":
                 reasoning = str(delta.get("thinking") or "")
@@ -97,7 +99,7 @@ class StreamDecoder:
             # for every argument fragment.
             if key not in self.tool_calls:
                 self.tool_calls[key] = {"id": str(data.get("item_id") or f"call_{uuid.uuid4().hex}"), "name": str(data.get("name") or ""), "arguments": ""}
-            self.tool_calls[key]["arguments"] += str(data.get("delta") or "")
+            append_argument(self.tool_calls[key], str(data.get("delta") or ""))
             return
         if event_type == "response.function_call_arguments.done":
             self.responses_arguments_done(data)

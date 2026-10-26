@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from cyrene.core.context.graph_reads import graph_version, graph_snapshot
+
 from cyrene.core.context import (
     ContextError,
     ContextStoreRouter,
@@ -385,3 +387,63 @@ def test_inflight_effect_results_do_not_rewrite_assistant_nodes(tmp_path):
     assert reopened.clear_effect_results(tree.id, assistant.id) == 1
     assert reopened.effect_results(tree.id, assistant.id) == {}
     reopened.close()
+
+
+def test_graph_version_tracks_writes_across_instances_and_rollback(tmp_path):
+    with ContextStoreRouter(tmp_path) as reader, ContextStoreRouter(tmp_path) as writer:
+        tree = reader.create_tree({'role': 'system'}, tree_id='graph-tree')
+        first = graph_version(reader, tree.id)
+        node = writer.mount(tree.id, tree.root_id, {'role': 'assistant', 'run_id': 'r'})
+        second = graph_version(reader, tree.id)
+        assert first[0] == second[0] and second[1] > first[1]
+        writer.commit_state(tree.id, node.id, 'r')
+        third = graph_version(reader, tree.id)
+        assert third[1] > second[1]
+        writer.commit_state(tree.id, node.id, 'r')
+        assert graph_version(reader, tree.id) == third
+        database = reader.tree_database_path(tree.id)
+        with sqlite3.connect(database) as connection:
+            connection.execute('BEGIN')
+            connection.execute("UPDATE context_nodes SET value_json = '{}' WHERE node_id = ?", (node.id,))
+            connection.rollback()
+        assert graph_version(reader, tree.id) == third
+        with sqlite3.connect(database) as connection:
+            connection.execute('UPDATE context_nodes SET path_token_count = path_token_count + 1')
+        assert graph_version(reader, tree.id) == third
+        nodes, leaf, version = graph_snapshot(reader, tree.id)
+        assert leaf == node.id and version == third
+        assert {n.id for n in nodes} == {tree.root_id, node.id}
+
+
+def test_graph_version_migrates_legacy_tree_and_distinguishes_recreation(tmp_path):
+    with ContextStoreRouter(tmp_path) as router:
+        tree = router.create_tree({}, tree_id='same')
+        database = router.tree_database_path(tree.id)
+    with sqlite3.connect(database) as connection:
+        for trigger in ('graph_node_insert', 'graph_node_delete', 'graph_node_update', 'graph_commit_update'):
+            connection.execute('DROP TRIGGER ' + trigger)
+        connection.execute('DROP TABLE context_graph_revision')
+    with ContextStoreRouter(tmp_path) as router:
+        version = graph_version(router, 'same')
+        router.update_node('same', tree.root_id, {'updated': True})
+        assert graph_version(router, 'same')[1] > version[1]
+        router.delete_tree('same')
+        router.create_tree({}, tree_id='same')
+        assert graph_version(router, 'same')[0] != version[0]
+
+
+def test_graph_snapshot_keeps_nodes_and_commit_pointer_in_one_read(tmp_path, monkeypatch):
+    with ContextStoreRouter(tmp_path) as reader, ContextStoreRouter(tmp_path) as writer:
+        tree = reader.create_tree({}, tree_id='snapshot')
+        first = writer.mount(tree.id, tree.root_id, {'run_id': 'a'})
+        writer.commit_state(tree.id, first.id, 'a')
+        original = ContextTreeStore.get_subtree
+        def race(store, node_id):
+            nodes = original(store, node_id)
+            second = writer.mount(tree.id, first.id, {'run_id': 'b'})
+            writer.commit_state(tree.id, second.id, 'b')
+            return nodes
+        monkeypatch.setattr(ContextTreeStore, 'get_subtree', race)
+        nodes, leaf, _version = graph_snapshot(reader, tree.id)
+        assert leaf == first.id
+        assert {n.id for n in nodes} == {tree.root_id, first.id}

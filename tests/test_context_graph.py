@@ -309,3 +309,127 @@ def test_user_revision_exposes_original_content_for_inverse_revision(graph_env):
     target = e.graph.materialize('source', operation(e, e.user, 'edit', content='revised user'))['chat']['id']
     draft = next(n for n in e.graph.graph(target)['nodes'] if n.get('chatId') == target and n.get('draft'))
     assert e.graph.detail(target, draft['nodeId'])['previousContent'] == 'original question'
+
+
+def test_unchanged_graph_reuses_document_without_loading_nodes_or_messages(graph_env, monkeypatch):
+    from cyrene.core.context import ContextTreeStore
+    e = graph_env
+    first, revision = e.graph.graph_document('source')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('unchanged graph loaded full content')
+    monkeypatch.setattr(ContextTreeStore, 'get_subtree', forbidden)
+    monkeypatch.setattr(e.service.repository, 'get', forbidden)
+    assert e.graph.graph_document('source') == (first, revision)
+    copy = e.graph.graph('source')
+    copy['nodes'].clear()
+    assert e.graph.graph('source')['nodes']
+
+
+def test_graph_cache_invalidates_for_other_writer_and_commit_pointer(graph_env):
+    e = graph_env
+    before = e.graph.graph('source')
+    with ContextStoreRouter(e.directory) as writer:
+        retry = writer.mount('source', e.root, {'role': 'user', 'content': 'retry', 'run_id': 'r2', 'metadata': {'retry': True}})
+        answer = writer.mount('source', retry.id, {'role': 'assistant', 'content': 'other answer', 'run_id': 'r2', 'answer_complete': True})
+    added = e.graph.graph('source')
+    assert added['graphRevision'] != before['graphRevision']
+    assert added['branches'][0]['leafId'] == e.answer.id
+    with ContextStoreRouter(e.directory) as writer:
+        writer.commit_state('source', answer.id, 'r2')
+    committed = e.graph.graph('source')
+    assert committed['graphRevision'] != added['graphRevision']
+    assert committed['branches'][0]['leafId'] == answer.id
+    assert committed['branches'][0]['treeRevision'] == added['branches'][0]['treeRevision']
+    with ContextStoreRouter(e.directory) as writer:
+        writer.update_node('source', answer.id, {**answer.value, 'content': 'changed'})
+    updated = e.graph.graph('source')
+    node = next(n for n in updated['nodes'] if n['nodeId'] == answer.id)
+    assert node['preview'] == 'changed'
+    assert node['contentHash'] != next(n for n in committed['nodes'] if n['nodeId'] == answer.id)['contentHash']
+    with ContextStoreRouter(e.directory) as writer:
+        writer.commit_state('source', e.answer.id, 'r1')
+        writer.delete_node('source', answer.id)
+    assert not any(n['nodeId'] == answer.id for n in e.graph.graph('source')['nodes'])
+
+
+def test_graph_cache_tracks_view_branch_metadata_chat_config_and_lineage(graph_env):
+    e = graph_env
+    previous = e.graph.graph('source')['graphRevision']
+    changes = [
+        lambda: e.graph.store.write('view:source', {'positions': {'x': {'x': 1}}}, 0),
+        lambda: e.graph.store.write('branch:source', {'notes': 'notes'}, 0),
+        lambda: e.service.repository.mutate_metadata('source', lambda c: c.update(model='another')),
+        lambda: e.graph.store.write('lineage:source', {'parent': 'missing-parent'}, 1),
+    ]
+    for change in changes:
+        change()
+        current = e.graph.graph('source')
+        assert current['graphRevision'] != previous
+        previous = current['graphRevision']
+    assert current['familyId'] == 'missing-parent'
+
+
+def test_graph_does_not_cache_dependency_change_during_build(graph_env, monkeypatch):
+    e = graph_env
+    original = e.graph._build_graph
+    changed = False
+    def race(*args):
+        nonlocal changed
+        graph = original(*args)
+        if not changed:
+            changed = True
+            with ContextStoreRouter(e.directory) as writer:
+                writer.update_node('source', e.answer.id, {**e.answer.value, 'content': 'concurrent edit'})
+        return graph
+    monkeypatch.setattr(e.graph, '_build_graph', race)
+    e.graph.graph('source')
+    assert 'source' not in e.graph._graph_cache
+    fresh = e.graph.graph('source')
+    assert next(n for n in fresh['nodes'] if n['nodeId'] == e.answer.id)['preview'] == 'concurrent edit'
+
+
+def test_graph_cache_bounds_oversized_metadata(graph_env):
+    e = graph_env
+    e.graph.store.write('branch:source', {'notes': 'x' * 2_000_000}, 0)
+    graph = e.graph.graph('source')
+    assert graph['branches'][0]['value']['notes']
+    assert not e.graph._graph_cache
+
+
+def test_graph_http_conditional_read_and_invalidation(graph_env):
+    from fastapi import FastAPI, APIRouter
+    from fastapi.testclient import TestClient
+    from cyrene.workbench.http.workbench.chat_routes.context_graph_routes import register_context_graph_routes
+    e = graph_env
+    router = APIRouter()
+    register_context_graph_routes(router, SimpleNamespace(service=e.service, db_path=e.graph.store.db_path,
+        conversation_context=SimpleNamespace(agent_states=SimpleNamespace(context_directory=e.directory))))
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        url = '/api/workbench/chats/source/context-graph'
+        first = client.get(url)
+        assert first.status_code == 200
+        headers = {'If-None-Match': first.headers['etag']}
+        unchanged = client.get(url, headers=headers)
+        assert unchanged.status_code == 304
+        assert unchanged.content == b''
+        client.patch(url + '/view', json={'value': {'collapsed': ['x']}, 'expectedRevision': 0})
+        changed = client.get(url, headers=headers)
+        assert changed.status_code == 200
+        assert changed.headers['etag'] != first.headers['etag']
+
+
+def test_graph_cache_handles_equal_timestamp_edits(graph_env):
+    import json
+    import sqlite3
+    e = graph_env
+    first = e.graph.graph('source')
+    with ContextStoreRouter(e.directory) as router:
+        database = router.tree_database_path('source')
+    with sqlite3.connect(database) as db:
+        db.execute('UPDATE context_nodes SET value_json = ? WHERE node_id = ?',
+                   (json.dumps({**e.answer.value, 'content': 'same timestamp edit'}), e.answer.id))
+    second = e.graph.graph('source')
+    assert second['graphRevision'] != first['graphRevision']
+    assert next(n for n in second['nodes'] if n['nodeId'] == e.answer.id)['preview'] == 'same timestamp edit'

@@ -429,3 +429,43 @@ async def test_retry_replaces_interrupted_checkpoint_without_resuming_old_work(t
             store.close()
     finally:
         await runtime.shutdown(grace_seconds=0)
+
+
+def test_paused_restore_fences_already_queued_and_late_hook_transitions(tmp_path, monkeypatch):
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.core.session import AgentSession
+
+    seed = make_session(tmp_path)
+    tree_id, root_id = seed.tree.id, seed.tree.root_id
+    seed.close()
+    with ContextStoreRouter(tmp_path / 'data' / 'context') as store:
+        old_user = store.mount(tree_id, root_id, {
+            'role': 'user', 'content': 'old request', 'run_id': 'old', 'trigger_model': True,
+        })
+    calls = []
+    async def model(arguments, context):
+        calls.append(context.data['run_id'])
+        return {'content': 'new answer', 'tool_calls': []}
+
+    restore = AgentSession._restore
+    def queued_before_restore(session, *, resume=True):
+        # A persisted ContextChange Hook may enqueue before recovery chooses
+        # to pause. Force that order instead of depending on thread timing.
+        session._enqueue_transition('advance', old_user)
+        restore(session, resume=resume)
+    monkeypatch.setattr(AgentSession, '_restore', queued_before_restore)
+    reopened = make_session(tmp_path, model, tree_id=tree_id, resume_on_restore=False)
+    try:
+        reopened._enqueue_transition('advance', old_user)  # A late Hook too.
+        asyncio.run(reopened.hooks.drain())
+        reopened._wait_for_transitions()
+        assert calls == []
+        assert reopened.snapshot()['status'] != 'idle'
+        asyncio.run(reopened.cancel('replaced_by_retry'))
+        reopened.prepare_retry()
+        reopened.submit('new request', run_id='new')
+        drain(reopened)
+        assert calls == ['new']
+        assert reopened.final_output('new')['content'] == 'new answer'
+    finally:
+        reopened.close()

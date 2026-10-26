@@ -1,9 +1,15 @@
 """Strict text decoding and content-free errors for provider streams."""
 
 import codecs
+import re
 from typing import Any, AsyncIterator, Mapping
 
 import httpx
+
+from .stream_buffer import TextBuffer
+
+
+_LINE_ENDINGS = re.compile(r"\r\n|\r|\n")
 
 
 class ModelStreamError(RuntimeError):
@@ -52,43 +58,37 @@ async def strict_utf8_lines(
     """
 
     decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
-    buffered = ""
-
-    def complete_line() -> tuple[str, str] | None:
-        newline_indexes = [
-            index for index in (buffered.find("\r"), buffered.find("\n"))
-            if index >= 0
-        ]
-        if not newline_indexes:
-            return None
-        index = min(newline_indexes)
-        if buffered[index] == "\r" and index + 1 == len(buffered):
-            return None
-        separator_length = (
-            2 if buffered[index:index + 2] == "\r\n" else 1
-        )
-        return buffered[:index], buffered[index + separator_length:]
+    pending = TextBuffer()
+    pending_cr = False
 
     try:
         async for chunk in byte_stream if byte_stream is not None else response.aiter_bytes():
-            buffered += decoder.decode(chunk, final=False)
-            while (line_and_rest := complete_line()) is not None:
-                line, buffered = line_and_rest
-                yield line
-        buffered += decoder.decode(b"", final=True)
+            # Decode the entire transport chunk before exposing any of its
+            # lines, preserving the strict decoder's failure boundary.
+            text = decoder.decode(chunk, final=False)
+            if not text:
+                continue
+            cursor = 0
+            if pending_cr:
+                yield str(pending)
+                pending = TextBuffer()
+                pending_cr = False
+                if text.startswith("\n"):
+                    cursor = 1
+            for match in _LINE_ENDINGS.finditer(text, cursor):
+                pending.append(text[cursor:match.start()])
+                cursor = match.end()
+                if match.group() == "\r" and cursor == len(text):
+                    pending_cr = True
+                    break
+                yield str(pending)
+                pending = TextBuffer()
+            pending.append(text[cursor:])
+        # UTF-8 produces no residual text on successful finalization. An
+        # incomplete sequence must fail before a pending CR/last line is sent.
+        decoder.decode(b"", final=True)
     except UnicodeDecodeError as exc:
         _raise_invalid_stream_encoding(diagnostics, exc)
 
-    while True:
-        newline_indexes = [
-            index for index in (buffered.find("\r"), buffered.find("\n"))
-            if index >= 0
-        ]
-        if not newline_indexes:
-            break
-        index = min(newline_indexes)
-        separator_length = 2 if buffered[index:index + 2] == "\r\n" else 1
-        yield buffered[:index]
-        buffered = buffered[index + separator_length:]
-    if buffered:
-        yield buffered
+    if pending_cr or pending:
+        yield str(pending)

@@ -130,7 +130,38 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
         "WHERE self_token_count IS NULL OR path_token_count IS NULL"
     )
     _ensure_tree_metadata_columns(connection)
+    _ensure_graph_revision(connection)
     _ensure_closed_hook_failure_policy(connection)
+
+
+def _ensure_graph_revision(connection: sqlite3.Connection) -> None:
+    """Version graph-visible writes in the same transaction, across writers.
+
+    The incarnation distinguishes a newly created database from a deleted tree
+    with the same public id. Token accounting and Hook queue writes do not
+    invalidate a graph whose visible content has not changed.
+    """
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS context_graph_revision (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            incarnation TEXT NOT NULL,
+            revision INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO context_graph_revision
+            VALUES (1, lower(hex(randomblob(16))), 0);
+        CREATE TRIGGER IF NOT EXISTS graph_node_insert AFTER INSERT ON context_nodes
+        BEGIN UPDATE context_graph_revision SET revision = revision + 1; END;
+        CREATE TRIGGER IF NOT EXISTS graph_node_delete AFTER DELETE ON context_nodes
+        BEGIN UPDATE context_graph_revision SET revision = revision + 1; END;
+        CREATE TRIGGER IF NOT EXISTS graph_node_update
+        AFTER UPDATE OF value_json, parent_id, created_at, updated_at ON context_nodes
+        BEGIN UPDATE context_graph_revision SET revision = revision + 1; END;
+        CREATE TRIGGER IF NOT EXISTS graph_commit_update
+        AFTER UPDATE OF committed_leaf_id, committed_run_id ON context_tree_metadata
+        WHEN NEW.committed_leaf_id IS NOT OLD.committed_leaf_id
+          OR NEW.committed_run_id IS NOT OLD.committed_run_id
+        BEGIN UPDATE context_graph_revision SET revision = revision + 1; END;
+    """)
 
 
 def _ensure_tree_metadata_columns(connection: sqlite3.Connection) -> None:

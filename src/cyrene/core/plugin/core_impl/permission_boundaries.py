@@ -348,6 +348,11 @@ def bash_boundary(
             "reason": destructive["detail"],
             "requires_human": True,
             "single_use": False,
+            "session_scope": {
+                "operation": destructive["kind"],
+                "workspace": str(Path(context.workspace).expanduser().resolve())
+                if context.workspace is not None else str(Path.cwd().resolve()),
+            },
         }
     workspace = (
         Path(context.workspace).expanduser().resolve()

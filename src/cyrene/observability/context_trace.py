@@ -10,24 +10,35 @@ from __future__ import annotations
 
 import hashlib
 import re
+from functools import lru_cache
 from typing import Any
 
 CTX_KEY = "_ctx"
+_TOKEN_RUNS = re.compile(r"([A-Za-z0-9_]+)|([^\sA-Za-z0-9_]+)")
 
 
 def approx_token_count(text: Any) -> int:
     """Small CJK-aware token estimate used for debugging summaries."""
     source = str(text or "")
-    if not source.strip():
-        return 0
-    units = re.findall(r"[一-鿿]|[A-Za-z0-9_]+|[^\s]", source)
-    total = 0
-    for unit in units:
-        if re.fullmatch(r"[A-Za-z0-9_]+", unit):
-            total += max(1, (len(unit) + 3) // 4)
-        else:
-            total += 1
-    return total
+    # Bound both entry count and retained text (at most ~4 MiB of Unicode
+    # payload). Large tool results are scanned without retaining another cache.
+    if len(source) <= 16384:
+        return _cached_token_count(source)
+    return _count_token_runs(source)
+
+
+def _count_token_runs(source: str) -> int:
+    # The old CJK alternative was a subset of non-whitespace. Every non-ASCII
+    # non-whitespace character still contributes exactly one token.
+    return sum(
+        (len(match[1]) + 3) // 4 if match[1] is not None else len(match[2])
+        for match in _TOKEN_RUNS.finditer(source)
+    )
+
+
+@lru_cache(maxsize=64)
+def _cached_token_count(source: str) -> int:
+    return _count_token_runs(source)
 
 
 def content_fingerprint(content: Any) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from cyrene.core.context import NodeNotFoundError, TreeNotFoundError
 from cyrene.workbench.chat.chat_events import publish_chat_changed
@@ -40,8 +40,13 @@ def register_context_graph_routes(router: APIRouter, context):
         return value
 
     @router.get('/api/workbench/chats/{chat_id}/context-graph')
-    async def get_context_graph(chat_id: str):
-        return await call(get_graph().graph, chat_id)
+    async def get_context_graph(chat_id: str, request: Request):
+        encoded, revision = await call(get_graph().graph_document, chat_id)
+        etag = '"' + revision + '"'
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(content=encoded, media_type="application/json", headers=headers)
 
     @router.get('/api/workbench/chats/{chat_id}/context-graph/nodes/{node_id}')
     async def get_graph_node(chat_id: str, node_id: str):

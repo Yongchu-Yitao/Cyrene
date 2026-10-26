@@ -67,6 +67,21 @@ class ContextGraphStore:
             row = db.execute('SELECT revision,payload FROM workbench_context_graph WHERE key=?', (key,)).fetchone()
         return {"revision": row[0], "value": json.loads(row[1])} if row else {"revision": 0, "value": {}}
 
+    def read_many(self, keys):
+        """Read just this family's metadata in a single read transaction."""
+        keys = list(dict.fromkeys(keys))
+        result = {key: {"revision": 0, "value": {}} for key in keys}
+        with self.connection() as db:
+            db.execute('BEGIN')
+            for offset in range(0, len(keys), 500):
+                batch = keys[offset:offset + 500]
+                placeholders = ','.join('?' for _ in batch)
+                rows = db.execute(
+                    f'SELECT key,revision,payload FROM workbench_context_graph WHERE key IN ({placeholders})', batch,
+                ).fetchall()
+                result.update({key: {"revision": revision, "value": json.loads(payload)} for key, revision, payload in rows})
+        return result
+
     def write(self, key, value, expected):
         encoded = json.dumps(value, ensure_ascii=False)
         if len(encoded) > 4_000_000:

@@ -23,6 +23,8 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import httpx
 
 from .stream_encoding import ModelStreamError, strict_utf8_lines
+from .stream_buffer import append_argument
+from .stream_diagnostics import enrich_stream_errors, new_stream_diagnostics
 
 from cyrene.model.stream_decoder import StreamDecoder
 
@@ -1154,7 +1156,7 @@ def _update_tool_stream_diagnostics(
     diagnostics: dict[str, Any],
     tool_calls: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    # Text-only chunks have no tool state to sort, hash or validate.
+    # Materialize only at a stream outcome, never for each argument fragment.
     diagnostics["tool_calls"] = _tool_stream_diagnostics(tool_calls) if tool_calls else []
 
 
@@ -1173,7 +1175,7 @@ def _append_openai_tool_call(tool_calls, raw_call):
     if function.get("name"):
         call["name"] += str(function["name"])
     if function.get("arguments"):
-        call["arguments"] += str(function["arguments"])
+        append_argument(call, str(function["arguments"]))
 
 
 async def _openai_chat_stream_event(
@@ -1239,7 +1241,7 @@ def _completed_stream_message(
             {
                 "id": value["id"],
                 "type": "function",
-                "function": {"name": value["name"], "arguments": value["arguments"] or "{}"},
+                "function": {"name": value["name"], "arguments": str(value["arguments"] or "{}")},
             }
             for _key, value in sorted(tool_calls.items(), key=lambda item: item[0])
         ]
@@ -1251,10 +1253,9 @@ def _completed_stream_message(
         message["model"] = returned_model
     if stream_diagnostics is not None:
         message["stream_diagnostics"] = {
-            **dict(stream_diagnostics),
+            **deepcopy(dict(stream_diagnostics)),
             "finish_reason": str(message.get("finish_reason") or ""),
             "stream_completed": True,
-            "tool_calls": _tool_stream_diagnostics(tool_calls),
         }
     return message
 
@@ -1305,18 +1306,7 @@ async def handle_stream(
     finish = ""
     response_id = ""
     returned_model = ""
-    stream_diagnostics: dict[str, Any] = {
-        "adapter": adapter,
-        "line_count": 0,
-        "data_chunk_count": 0,
-        "event_count": 0,
-        "invalid_json_line_count": 0,
-        "saw_done_marker": False,
-        "http_status": 0,
-        "terminal_event_seen": False,
-        "stream_completed": False,
-        "termination_reason": "",
-    }
+    stream_diagnostics = new_stream_diagnostics(adapter)
     decoder = StreamDecoder(
         adapter, callback, stream_diagnostics, usage_for=_usage,
         parse_response=parse_response, update_diagnostics=_update_tool_stream_diagnostics,
@@ -1341,24 +1331,26 @@ async def handle_stream(
             except Exception:
                 pass
         byte_stream = response.aiter_bytes()
-        async for data in _stream_payloads(
-            response,
-            stream_diagnostics,
-            protocol_trace,
-            byte_stream,
-        ):
-            if timing is not None and "ttft_ms" not in timing:
-                timing["ttft_ms"] = (time.monotonic() - request_started) * 1000
-            response_id = str(data.get("id") or response_id)
-            returned_model = str(data.get("model") or returned_model)
-            await decoder.consume(data)
-            finish = decoder.finish
+        with enrich_stream_errors(tool_calls, _tool_stream_diagnostics):
+            async for data in _stream_payloads(
+                response,
+                stream_diagnostics,
+                protocol_trace,
+                byte_stream,
+            ):
+                if timing is not None and "ttft_ms" not in timing:
+                    timing["ttft_ms"] = (time.monotonic() - request_started) * 1000
+                response_id = str(data.get("id") or response_id)
+                returned_model = str(data.get("model") or returned_model)
+                await decoder.consume(data)
+                finish = decoder.finish
 
-            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
-            stream_diagnostics["finish_reason"] = finish
-            if stream_diagnostics.get("terminal_event_seen"):
-                break
-
+                # Keep the text-only diagnostic shape without repeatedly
+                # parsing and hashing the growing tool argument strings.
+                stream_diagnostics.setdefault("tool_calls", [])
+                stream_diagnostics["finish_reason"] = finish
+                if stream_diagnostics.get("terminal_event_seen"):
+                    break
         if stream_diagnostics.get("terminal_event_seen") or stream_diagnostics.get("saw_done_marker"):
             # A protocol terminal event can precede HTTP's final chunk. Read
             # that tail so HTTPX can return the connection to its pool. Never
@@ -1371,6 +1363,7 @@ async def handle_stream(
             except (TimeoutError, httpx.TransportError, OSError):
                 pass
 
+        _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
         normalized_finish = (
             "length"
             if finish.lower() in {"max_tokens", "max_tokens_reached", "max_output_tokens"}
@@ -1384,7 +1377,6 @@ async def handle_stream(
         )
         if not terminal_seen:
             stream_diagnostics["termination_reason"] = "eof_without_terminal_event"
-            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
             raise ModelStreamError(
                 "upstream_incomplete",
                 "The model stream ended before a terminal event was received.",
@@ -1392,7 +1384,7 @@ async def handle_stream(
             )
         invalid_calls = [
             item
-            for item in _tool_stream_diagnostics(tool_calls)
+            for item in stream_diagnostics["tool_calls"]
             if item["arguments_validation"] != "valid_object"
         ]
         if invalid_calls:
@@ -1401,7 +1393,6 @@ async def handle_stream(
                 if normalized_finish == "length"
                 else "invalid_tool_arguments"
             )
-            _update_tool_stream_diagnostics(stream_diagnostics, tool_calls)
             raise ModelStreamError(
                 "invalid_tool_arguments",
                 "The model stream ended with invalid tool arguments.",
@@ -1427,7 +1418,7 @@ async def handle_stream(
                 await protocol_trace({
                     "type": "response_end",
                     "status": "completed",
-                    "diagnostics": dict(stream_diagnostics),
+                    "diagnostics": deepcopy(stream_diagnostics),
                 })
             except Exception:
                 pass

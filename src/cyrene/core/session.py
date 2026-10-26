@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .transition_driver import TransitionCallbacks, TransitionDriver
-from .plugin.permission_grants import PermissionGrants
+from .plugin.permission_grants import PermissionGrants, permission_question
 from .plugin.session_plugins import SessionPlugins
 from .context.mounts import stored_context_mounts, unique_context_mounts, contribution_mounts
 from .plugin.result_codec import json_value, decoded_plugin_value, question_options, stored_result, restored_result
@@ -574,8 +574,10 @@ class AgentSession:
 
     _permission_fingerprint = staticmethod(PermissionGrants.fingerprint)
 
-    def _consume_permission_grant(self, fingerprint: str) -> bool:
-        return self._permission_grants.consume(fingerprint)
+    def _consume_permission_grant(
+        self, fingerprint: str, session_fingerprint: str = "",
+    ) -> bool:
+        return self._permission_grants.consume(fingerprint, session_fingerprint)
 
     def _persist_session_permission_grant(self, fingerprint: str) -> None:
         self._permission_grants.persist(fingerprint, self.store, self.tree)
@@ -596,11 +598,17 @@ class AgentSession:
         tool_name = str(tool.get("name") or "")
         arguments = tool.get("arguments")
         arguments = arguments if isinstance(arguments, Mapping) else {}
+        session_fingerprint = PermissionGrants.session_fingerprint(tool_name, request)
+        if self._permission_grants.has_session_grant(session_fingerprint):
+            return PermissionRequirement(
+                "allow",
+                "A user-approved session grant covers this operation.",
+            )
         fingerprint = self._permission_fingerprint(tool_name, arguments, request)
         if self._consume_permission_grant(fingerprint):
             return PermissionRequirement(
                 "allow",
-                "An exact user-approved permission grant was consumed.",
+                "A user-approved permission grant covers this operation.",
             )
 
         run_context = self._plugin_context_data.get("run_context")
@@ -661,45 +669,13 @@ class AgentSession:
         if (mode == "auto" or always_review) and not requires_human:
             return PermissionRequirement("review")
 
-        path_hint = str(request.get("path_hint") or "").strip()
-        reason = str(request.get("reason") or "").strip()
-        detail = f"\n📂 目标：{path_hint}" if path_hint else ""
-        why = f"\n💡 原因：{reason}" if reason else ""
-        authored_options = request.get("options")
-        if requires_human:
-            options = (
-                [str(item) for item in authored_options if str(item).strip()]
-                if isinstance(authored_options, list) and authored_options
-                else ["允许这次", "拒绝"]
-                if bool(request.get("single_use"))
-                else ["允许这次", "本次会话内总是允许", "拒绝"]
-            )
-        else:
-            options = (
-                [str(item) for item in authored_options if str(item).strip()]
-                if isinstance(authored_options, list) and authored_options
-                else ["在本次会话同意", "同意一次", "拒绝"]
-            )
-        scope_hint = str(request.get("scope_hint") or "").strip()
-        question = {
-            "status": "awaiting_user",
-            "question_id": f"permission_{fingerprint[:24]}",
-            "kind": kind,
-            "text": (
-                f"⚠️ Agent 尝试执行 {scope_hint}{operation}\n\n"
-                f"工具：{tool_name}{detail}{why}\n\n"
-                "请确认是否允许此精确操作。"
-            ),
-            "options": options,
-            "allow_custom": False,
-            "round_id": str(run_context.get("round_id") or self._current_run_id),
-            "client_request_id": str(run_context.get("client_request_id") or ""),
-            "permission": {
-                **request,
-                "fingerprint": fingerprint,
-                "tool_name": tool_name,
-            },
-        }
+        question = permission_question(
+            request, tool_name=tool_name, operation=operation, kind=kind,
+            requires_human=requires_human, fingerprint=fingerprint,
+            session_fingerprint=session_fingerprint,
+            round_id=str(run_context.get("round_id") or self._current_run_id),
+            client_request_id=str(run_context.get("client_request_id") or ""),
+        )
         return PermissionRequirement(
             "confirm",
             "This boundary requires an exact user decision.",
@@ -1938,11 +1914,7 @@ class AgentSession:
             ),
             {},
         )
-        self._permission_grants.session = {
-            str(item).strip()
-            for item in root_value.get("permission_session_grants") or ()
-            if str(item).strip()
-        }
+        self._permission_grants.restore(root_value)
         self._cancelled_run_ids = {
             str(node.value.get("run_id") or "")
             for node in nodes
@@ -1996,6 +1968,7 @@ class AgentSession:
             # Retry must cancel the restored run before any old model, tool,
             # context, or SessionEnd transition is scheduled. Keep it non-idle
             # so the normal cancellation protocol persists a terminal marker.
+            self._transitions.pause_run(self._current_run_id)
             self._set_state("queued", _l("Restored paused run", "已恢复暂停的运行"), leaf_id=leaf.id)
             log_restore(leaf, len(nodes), outcome="paused")
             return
@@ -2256,22 +2229,9 @@ class AgentSession:
                 ))
             permission = pending.get("permission")
             if isinstance(permission, Mapping):
-                fingerprint = str(permission.get("fingerprint") or "").strip()
-                option_labels = {
-                    str(item.get("label") or "").strip()
-                    for item in pending.get("options") or ()
-                    if isinstance(item, Mapping)
-                }
-                negative = normalized_answer.strip().lower() in {
-                    "拒绝", "否", "不允许", "no", "n", "deny", "cancel",
-                }
-                if fingerprint and normalized_answer in option_labels and not negative:
-                    with self._state_lock:
-                        if "本次会话" in normalized_answer or "始终" in normalized_answer:
-                            self._permission_grants.session.add(fingerprint)
-                            self._persist_session_permission_grant(fingerprint)
-                        else:
-                            self._permission_grants.once.add(fingerprint)
+                self._permission_grants.record_answer(
+                    pending, normalized_answer, self.store, self.tree,
+                )
             elif resume and str(pending.get("kind") or "") == "clarification":
                 self._append_clarification_authorization(run_id, normalized_answer)
 
