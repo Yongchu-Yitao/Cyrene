@@ -2218,21 +2218,21 @@
     "WebFetch": {
       "en": {
         "name": "Fetch URL",
-        "description": "Fetch a URL. HTML responses are automatically converted to readable text with a limited number of HTTP(S) links preserved; other text responses are returned unchanged."
+        "description": "Fetch a URL. Uses DeepSeek Fetch for Markdown when configured and enabled, with direct retrieval as fallback. Direct HTML responses are converted to readable text with a limited number of HTTP(S) links preserved; other text responses are returned unchanged."
       },
       "zh": {
         "name": "获取网页",
-        "description": "获取网址内容，将 HTML 转为可读文本并保留有限链接。"
+        "description": "抓取 URL。配置并启用 DeepSeek 时，优先通过 Fetch 返回 Markdown，失败后回退到直接抓取。直接抓取的 HTML 会转换为可读文本，并保留有限数量的 HTTP(S) 链接；其他文本响应原样返回。"
       }
     },
     "WebSearch": {
       "en": {
         "name": "Web search",
-        "description": "Search the web and return source evidence. Use detail=\"preview\" for ordinary queries; it fetches only the first three result pages, waits without a deadline for the first successful page, then waits at most 5 seconds for the other pages. Use detail=\"content\" when broader page-level evidence is needed. Synthesize the answer from the returned evidence."
+        "description": "Search the web and return source evidence. Use detail=\"preview\" for ordinary queries. DeepSeek returns query-specific summaries in preview mode and requests page content in content mode. SimpleXNG preview fetches only the first three result pages, waits without a deadline for the first successful page, then waits at most 5 seconds for the other pages. Use detail=\"content\" when broader page-level evidence is needed. Synthesize the answer from the returned evidence. Keep queries concise; DeepSeek accepts up to 128 Unicode characters."
       },
       "zh": {
         "name": "网络搜索",
-        "description": "搜索网页并返回来源证据，供回答综合引用。"
+        "description": "搜索网页并返回来源证据。普通查询使用 detail=\"preview\"：DeepSeek 返回与查询相关的摘要，detail=\"content\" 则请求网页正文。SimpleXNG 的 preview 模式仅抓取前三个结果页面，不设截止时间等待第一个成功页面，再最多等待其他页面 5 秒。需要更广泛的页面证据时使用 detail=\"content\"。依据返回证据综合回答。查询应简洁；DeepSeek 最多接受 128 个 Unicode 字符。"
       }
     },
     "Write": {
