@@ -1,0 +1,61 @@
+{
+  "completed_at": "2026-10-27T16:02:32.745909+08:00",
+  "computer_use": true,
+  "surface": "Real Cyrene Workbench in in-app browser, served from current source with isolated runtime/config copy",
+  "ui_flow": [
+    "Open profile -> settings -> Web search",
+    "Disable SimpleXNG in disposable config; keep DeepSeek enabled",
+    "Return to chat, fill composer, click Send",
+    "Observe preview search and content search, tool discovery and WebFetch execution",
+    "Observe final answer, API paths, length limits, and source links",
+    "Click official source link; browser inventory confirms title Search & Fetch | DeepSeek API Docs and URL https://api-docs.deepseek.com/guides/search/"
+  ],
+  "ui_displayed_duration_seconds": 17,
+  "api_calls": [
+    {
+      "method": "POST",
+      "path": "/v1/tools/search",
+      "parameters": {
+        "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com",
+        "count": 2,
+        "need_content": false
+      },
+      "status": 200,
+      "seconds": 0.636
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tools/search",
+      "parameters": {
+        "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com",
+        "count": 2,
+        "need_content": true
+      },
+      "status": 200,
+      "seconds": 1.209
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tools/fetch",
+      "parameters": {
+        "url": "https://api-docs.deepseek.com/guides/search/"
+      },
+      "status": 200,
+      "seconds": 0.877
+    }
+  ],
+  "screenshots": [
+    "ui-search-settings.jpg",
+    "ui-running.jpg",
+    "ui-result.jpg"
+  ],
+  "native_electron_tested": false,
+  "network_mocks": false,
+  "source_configuration_unchanged": true,
+  "notes": [
+    "Source-link click navigated successfully; subsequent CUA page attachment timed out on the official documentation page."
+  ],
+  "teardown_notes": [
+    "Temporary server stopped after UI verification; shutdown emitted Model HTTP owner loop stopped before pool shutdown and KeyboardInterrupt. Original config checksum remained unchanged."
+  ]
+}

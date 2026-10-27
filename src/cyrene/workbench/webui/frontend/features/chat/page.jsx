@@ -8,7 +8,7 @@ import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { wbcSaveDraftAgentBinding } from "./capabilities.jsx"
 import { PluginFrontendService, PluginView, pluginLocalizedField } from "../../platform/plugins.jsx"
 import { WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcT } from "../../workbench-chat.jsx"
-import { WBC_PROJECT_FILE_DRAFTS, WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcChatSplit, WbcChatSplitHost, WbcMapPaneContent, WbcMapSplitHost, WbcPaneCardFrame, WbcPaneColumnResizer, WbcPaneContextTrackDropSurface, WbcPaneRowResizer, WbcSide, WbcSideAgentSplit, WbcSideAgentSplitHost, WbcSplitGripBar, WbcSubagentsSplitHost, WbcSubagentsTab, wbcArtifactFileKey, wbcChatArtifactFiles, wbcDiscardProjectFileDraft, wbcProjectFileDraftKey } from "./split-pane.jsx"
+import { WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcChatSplit, WbcChatSplitHost, WbcMapPaneContent, WbcMapSplitHost, WbcPaneCardFrame, WbcPaneColumnResizer, WbcPaneContextTrackDropSurface, WbcPaneRowResizer, WbcSide, WbcSideAgentSplit, WbcSideAgentSplitHost, WbcSplitGripBar, WbcSubagentsSplitHost, WbcSubagentsTab, wbcArtifactFileKey, wbcChatArtifactFiles } from "./split-pane.jsx"
 import { WorkbenchChatRuntimes, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence } from "./file-resources.jsx"
 
 import { WorkbenchFileDropOverlay, useWorkbenchFileDrop } from "../../shared/file-drop.jsx"
@@ -28,6 +28,7 @@ import { WbcPaneSemanticController, wbcPaneSemanticNodeId } from "./pane-semanti
 import { wbcLoadSubagents, wbcMarkViewerFileRead, wbcOpenProjectFile, wbcOpenViewer, wbcRevealTopbarResource } from "./page-resource-controller.jsx"
 import { useWbcRuntimePageHooks, wbcMergeChatSummary } from "./runtime-page-hooks.jsx"
 import { wbcCloseDeletedChatSplits, wbcClosePaneCard, wbcCreatePaneConversation, wbcMovePaneCard, wbcMovePaneCardOtherSide, wbcOpenPaneContent, wbcPaneContentCard, wbcPaneLayoutFor, wbcPaneOwnerKey, wbcProjectPaneOwnerKey, wbcResizePaneRow, wbcRestoreTerminalReplacement, wbcSwapPaneCards, wbcUpdatePaneCard, wbcUpdatePaneLayout } from "./pane-layout-controller.jsx"
+import { wbcClosePaneCardsWithConfirmation } from "./pane-close-controller.jsx"
 import { wbcCloseActiveSplit, wbcCloseMainConversationSplit, wbcCloseNamedSplit, wbcCloseResourceSplit, wbcDeleteSideAgent, wbcRestoreSplitState, wbcSelectArtifact, wbcSelectChange, wbcSelectResourceSplit, wbcSelectSideAgent, wbcSplitStateSnapshot, wbcUpdateSideAgent } from "./split-selection-controller.jsx"
 import { wbcAnswerQuestionForChat, wbcHandleCreateChat, wbcHandleEditMessage, wbcHandleGuidance, wbcHandleRename, wbcHandleRenameChat, wbcHandleRetryMessage, wbcOpenQuickRename } from "./chat-action-controller.jsx"
 import { useWbcLiveEventController } from "./live-event-controller.jsx"
@@ -2232,58 +2233,14 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   }
 
   function closePaneCardWithConfirmation(card, ownerChatId) {
-    var surfaceResource = card.kind === "surface" && card.payload && card.payload.resource || null;
-    var draftKey = card.kind === "file" || card.kind === "viewer"
-      ? wbcProjectFileDraftKey(card.payload)
-      : surfaceResource && surfaceResource.kind === "file"
-      ? wbcProjectFileDraftKey({
-          source: "project",
-          projectId: surfaceResource.projectId || surfaceResource.project_id || projectId,
-          path: surfaceResource.path,
-        })
-      : "";
-    function suppressAutomaticSurface() {
-      if (card.kind !== "surface" || !card.meta || card.meta.origin !== "agent") return;
-      var payload = card.payload || {};
-      surfaceSuppressionRef.current.set(
-        String(payload.runId || "") + "\n" + String(payload.resourceKey || ""),
-        true
-      );
-    }
-    if (!draftKey || !WBC_PROJECT_FILE_DRAFTS[draftKey]) {
-      suppressAutomaticSurface();
-      var pluginState = card.kind === "plugin-view" && card.payload && card.payload.state || {};
-      var closeMethod = String(pluginState && pluginState.closeMethod || "");
-      var closeSessionId = String(pluginState && pluginState.session_id || "");
-      if (closeMethod && closeSessionId) {
-        return PluginFrontendService.call(
-          String(card.payload && card.payload.packId || ""),
-          closeMethod,
-          { session_id: closeSessionId },
-          projectId
-        ).catch(function () {}).then(function () {
-          closePaneCard(card.id, ownerChatId);
-          return { closed: true, card_id: String(card.id || "") };
-        });
-      }
-      closePaneCard(card.id, ownerChatId);
-      return Promise.resolve({ closed: true, card_id: String(card.id || "") });
-    }
-    var feedback = workbenchServices.feedback();
-    var request = feedback.confirmModal ? feedback.confirmModal({
-      title: wbcT("workbenchChat.editorUnsavedTitle", "Unsaved changes"),
-      body: wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?"),
-      confirmLabel: wbcT("workbenchChat.editorDiscard", "Discard changes"),
-      danger: true,
-    }) : Promise.resolve(window.confirm(wbcT("workbenchChat.editorUnsavedBody", "Discard the changes made to this file?")));
-    return Promise.resolve(request).then(function (confirmed) {
-      if (!confirmed) return { closed: false, cancelled: true, card_id: String(card.id || "") };
-      if (surfaceResource) delete WBC_PROJECT_FILE_DRAFTS[draftKey];
-      else wbcDiscardProjectFileDraft(card.payload);
-      suppressAutomaticSurface();
-      closePaneCard(card.id, ownerChatId);
-      return { closed: true, discarded_draft: true, card_id: String(card.id || "") };
-    });
+    var owner = ownerChatId == null ? String(activeChatIdRef.current || "") : ownerChatId;
+    return wbcClosePaneCardsWithConfirmation({ projectId, surfaceSuppressionRef, closePaneCard }, [card], owner);
+  }
+
+  function closePaneColumn(side) {
+    return wbcClosePaneCardsWithConfirmation(
+      { projectId, surfaceSuppressionRef, closePaneCard }, paneLayout[side], String(activeChatIdRef.current || "")
+    );
   }
 
   useWbcEffect(function () {
@@ -2703,7 +2660,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         style={cards.length === 2 ? { gridTemplateRows: ratio + "fr " + (1 - ratio) + "fr" } : undefined}
       >
         {cards.map(function (card, index) { return renderPaneCard(card, side, cards.length, side + ":" + index); })}
-        {cards.length === 2 ? <WbcPaneRowResizer active={isActive} side={side} ratio={ratio} onResize={function (next) { resizePaneRow(side, next); }} /> : null}
+        {cards.length === 2 ? <WbcPaneRowResizer active={isActive} side={side} ratio={ratio} onResize={function (next) { resizePaneRow(side, next); }} onClose={function (index) { return closePaneCardWithConfirmation(cards[index]); }} /> : null}
       </section>
     );
   }
@@ -2957,7 +2914,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
           : <React.Fragment>
               {renderPaneColumn("left", paneLayout.left)}
               {renderPaneColumn("right", paneLayout.right)}
-              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} onResize={resizePaneColumn} /> : null}
+              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} onResize={resizePaneColumn} onClose={closePaneColumn} /> : null}
             </React.Fragment>}
       </div>
       <WbcChatPageContextMenu

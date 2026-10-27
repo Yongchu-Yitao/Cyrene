@@ -113,14 +113,21 @@ The scheduler reads it at startup.
 | `SEARXNG_URL` | External SearXNG URL (overrides auto-start) | — |
 | `SEARCH_PROXY` | Manual proxy for search HTTP requests | — |
 
-> When an official DeepSeek V4 model is configured with an
-> `https://api.deepseek.com` API key, Cyrene uses DeepSeek's server-side
-> [Responses API Web Search](https://api-docs.deepseek.com/guides/responses_api/)
-> first. The documented `deepseek-v4-flash` model is
-> used as the search worker. If native search is unavailable or fails, Cyrene
-> automatically falls back to SimpleXNG. Third-party DeepSeek-compatible
-> endpoints do not activate native search. The older DDG/Bing/Baidu scrapers
-> remain removed.
+> An enabled official DeepSeek model profile with an API key and an endpoint of
+> `https://api.deepseek.com` (optionally `/v1`) supplies credentials for the independent
+> [Search / Fetch APIs](https://api-docs.deepseek.com/guides/search/).
+> No chat model is invoked for search. `WebSearch` sends `max_results` as `count`;
+> `detail="preview"` returns query-specific summaries, while `detail="content"`
+> requests page content and uses summaries when content is unavailable.
+> Search providers run in the order saved in Settings and fall back on failure.
+> The default order prefers DeepSeek on Windows and SimpleXNG on macOS/Linux.
+> `WebFetch` prefers DeepSeek Fetch when that provider is enabled and credentials
+> are available, returning Markdown with direct HTTP retrieval as fallback.
+> Direct retrieval uses the same search proxy. Localhost and local-network URLs
+> are retrieved directly on this machine without sending them to DeepSeek or the proxy.
+> Third-party DeepSeek-compatible endpoints do not activate these APIs.
+> Search and Fetch are billed per successful request under DeepSeek's pricing,
+> independently of model token usage.
 
 ### Web UI
 
@@ -142,7 +149,7 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 - **Models** — Manage Provider Plugin connections, profiles, and role routes
 - **Plugin packs and standalone Plugins** — Enable or disable Agent capabilities
 - **Agents** — Main-agent execution is completion-driven with no tool-round limit; configure execution subagent lease checkpoints, tool/time/cost/context safety limits, and separate discussion round/message/information-gain limits. Repeated tool results do not stop execution subagents.
-- **Search** — official DeepSeek Responses Web Search when configured, with built-in SimpleXNG fallback
+- **Search** — independent DeepSeek Search / Fetch APIs when configured, plus built-in SimpleXNG and provider fallback
 - **MCP Servers** — Add, remove, and restart MCP server connections
 - **SOUL.md** — Edit the personality document directly
 - **Budget** — Configure estimated-cost tracking, CNY/USD display, billing

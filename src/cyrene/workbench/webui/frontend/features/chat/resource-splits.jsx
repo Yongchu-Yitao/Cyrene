@@ -1,4 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { resizeCollapseEdge } from "../layout/resize-collapse.mjs"
+import { startPointerResize } from "../layout/pointer-resize.mjs"
 import { PluginFrontendService } from "../../platform/plugins.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, WbcSplitPickerMenu, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcClampSideSplitWidthForPage, wbcErrorText, wbcFileViewKind, wbcNotifyBrowserLayoutChanged, wbcRenderMapMarkdown, wbcT } from "../../workbench-chat.jsx"
 import { wbcBrowserStateForChat } from "./composer.jsx"
@@ -469,7 +471,7 @@ function WbcMapList({ chatId, onSelect, available }) {
   );
 }
 
-function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
+function WbcSideAgentSplitResizer({ width, onResize, splitSide, onClose }) {
   function clampWidth(next, page) {
     return wbcClampSideSplitWidthForPage(next, page);
   }
@@ -479,45 +481,25 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide }) {
     event.preventDefault();
     var startX = event.clientX;
     var startWidth = Number(width) || 520;
-    var handle = event.currentTarget;
-    var page = handle && handle.closest ? handle.closest(".wbc-page") : null;
-    var frame = 0;
+    var page = event.currentTarget.closest(".wbc-page");
     var nextWidth = startWidth;
-
-    function paint() {
-      frame = 0;
-      if (page) page.style.setProperty("--wbc-side-track-width", nextWidth + "px");
-    }
-    function move(moveEvent) {
-      var delta = splitSide === "left"
-        ? (moveEvent.clientX - startX)
-        : (startX - moveEvent.clientX);
-      nextWidth = clampWidth(startWidth + delta, page);
-      if (!frame) frame = requestAnimationFrame(paint);
-    }
-    function stop() {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-      if (frame) {
-        cancelAnimationFrame(frame);
-        paint();
-      }
-      if (handle && handle.releasePointerCapture && handle.hasPointerCapture && handle.hasPointerCapture(event.pointerId)) {
-        handle.releasePointerCapture(event.pointerId);
-      }
-      document.body.classList.remove("wbc-resizing-side-agent");
-      onResize(nextWidth);
-      window.dispatchEvent(new CustomEvent("workbench:split-resize-end", {
-        detail: { width: nextWidth, side: splitSide },
-      }));
-      wbcNotifyBrowserLayoutChanged();
-    }
-    if (handle && handle.setPointerCapture) handle.setPointerCapture(event.pointerId);
-    document.body.classList.add("wbc-resizing-side-agent");
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop, { once: true });
-    window.addEventListener("pointercancel", stop, { once: true });
+    var minimum = clampWidth(-Infinity, page);
+    startPointerResize(event, {
+      bodyClass: "wbc-resizing-side-agent",
+      start: function () { window.dispatchEvent(new CustomEvent("workbench:split-resize-start")); },
+      update: function (moveEvent) {
+        var delta = splitSide === "left" ? moveEvent.clientX - startX : startX - moveEvent.clientX;
+        nextWidth = clampWidth(startWidth + delta, page);
+        return resizeCollapseEdge(startWidth + delta, minimum);
+      },
+      paint: function () { if (page) page.style.setProperty("--wbc-side-track-width", nextWidth + "px"); },
+      commit: function () {
+        onResize(nextWidth);
+        window.dispatchEvent(new CustomEvent("workbench:split-resize-end", { detail: { width: nextWidth, side: splitSide } }));
+        wbcNotifyBrowserLayoutChanged();
+      },
+      close: onClose,
+    });
   }
 
   function resizeWithKeyboard(event) {
@@ -570,7 +552,7 @@ function WbcResourceSplitHost({ openKey, children, closingChildren, width, onRes
   }, [openKey]);
   if (!visibleChildren) return null;
   return <div className={"wbc-side-agent-split-motion" + (entered ? " open" : "")} data-split-open={openKey ? "true" : "false"}>
-    <WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} />
+    <WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} onClose={onClose} />
     {visibleChildren}
   </div>;
 }

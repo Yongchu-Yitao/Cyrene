@@ -1,0 +1,11 @@
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 0.33}
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 0.489}
+{"method": "POST", "path": "/v1/tools/search", "parameters": {"query": "DeepSeek Search Fetch API site:api-docs.deepseek.com", "count": 2, "need_content": false}, "status": 200, "seconds": 0.636}
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 0.254}
+{"method": "POST", "path": "/v1/tools/search", "parameters": {"query": "DeepSeek Search Fetch API site:api-docs.deepseek.com", "count": 2, "need_content": true}, "status": 200, "seconds": 1.209}
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 0.463}
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 0.124}
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 0.243}
+{"method": "POST", "path": "/v1/tools/fetch", "parameters": {"url": "https://api-docs.deepseek.com/guides/search/"}, "status": 200, "seconds": 0.877}
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 1.001}
+{"method": "POST", "path": "/v1/chat/completions", "parameters": {"model": "deepseek-flash"}, "status": 200, "seconds": 0.186}

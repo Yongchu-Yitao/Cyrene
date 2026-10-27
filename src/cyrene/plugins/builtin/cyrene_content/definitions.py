@@ -30,7 +30,8 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               'required': ['path']}}},
  {'type': 'function',
   'function': {'name': 'WebFetch',
-               'description': 'Fetch a URL. HTML responses are automatically converted to readable '
+               'description': 'Fetch a URL. Uses DeepSeek Fetch for Markdown when configured and enabled, '
+                              'with direct retrieval as fallback. Direct HTML responses are converted to readable '
                               'text with a limited number of HTTP(S) links preserved; other text '
                               'responses are returned unchanged.',
                'parameters': {'type': 'object',
@@ -39,11 +40,14 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
  {'type': 'function',
   'function': {'name': 'WebSearch',
                'description': 'Search the web and return source evidence. Use detail="preview" for '
-                              'ordinary queries; it fetches only the first three result pages, '
+                              'ordinary queries. DeepSeek returns query-specific summaries in preview mode '
+                              'and requests page content in content mode. SimpleXNG preview fetches '
+                              'only the first three result pages, '
                               'waits without a deadline for the first successful page, then waits '
                               'at most 5 seconds for the other pages. Use detail="content" when '
                               'broader page-level evidence is needed. Synthesize the answer from '
-                              'the returned evidence.',
+                              'the returned evidence. Keep queries concise; DeepSeek accepts up to '
+                              '128 Unicode characters.',
                'parameters': {'type': 'object',
                               'properties': {'query': {'type': 'string'},
                                              'detail': {'type': 'string',

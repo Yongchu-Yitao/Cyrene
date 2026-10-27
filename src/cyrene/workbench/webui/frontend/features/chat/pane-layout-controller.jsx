@@ -106,16 +106,18 @@ function wbcClosePaneCard(context, cardId, requestedOwnerChatId) {
   window.dispatchEvent(new CustomEvent("workbench:pane-layout-change"));
   var ownerChatId = String(requestedOwnerChatId != null ? requestedOwnerChatId : (context.activeChatIdRef.current || ""));
   var ownerId = wbcPaneOwnerKey(context, ownerChatId);
-  var restore = context.paneLayoutRestoreRef.current[cardId];
+  var cardIds = [].concat(cardId);
+  var restore = cardIds.length === 1 && context.paneLayoutRestoreRef.current[cardIds[0]];
   if (restore) {
-    delete context.paneLayoutRestoreRef.current[cardId];
+    delete context.paneLayoutRestoreRef.current[cardIds[0]];
     wbcUpdatePaneLayout(context, restore, ownerChatId);
     return;
   }
   var layout = wbcPaneLayoutFor(context, ownerChatId);
-  var location = wbcPaneCardLocation(layout, cardId);
+  var location = wbcPaneCardLocation(layout, cardIds[0]);
   if (!location) return;
-  var { next, nextChat } = closePaneLayout(layout, cardId, ownerChatId, location);
+  cardIds.forEach(function (id) { delete context.paneLayoutRestoreRef.current[id]; });
+  var { next, nextChat } = closePaneLayout(layout, cardIds, ownerChatId);
   if (nextChat && nextChat.payload) {
     context.setPaneLayoutsByChat(function (current) {
       var updated = Object.assign({}, current);

@@ -1366,10 +1366,11 @@ def test_workbench_chat_single_card_uses_independent_hidden_gutter_resize_handle
     assert card_start < side.index(resizer)
     assert resizer in browser
     assert 'surfaceId: "conversation"' in side
+    assert "onClose: onToggleSide" in side
     assert 'surfaceId: "browser"' in browser
     assert "cardEdge: true" not in side
     assert "widthResizable={!floating && paneCardCount === 1}" in chat
-    assert "function WbColResizer({ cardEdge, trackGutter, surfaceId })" in shell
+    assert "function WbColResizer({ cardEdge, trackGutter, surfaceId, onClose })" in shell
     assert 'page.querySelector(":scope > .wbc-side")' in shell
     dynamic_max = shell.split("function wbRightDynamicMax(panel)", 1)[1].split(
         "function wbApplyStoredRightWidth", 1
@@ -1985,7 +1986,7 @@ def test_workbench_artifacts_use_the_shared_resizable_split_preview():
     assert 'context.splitSelection.select(chatId, "artifact", key)' in select_handler
     # Atomic selection clears other slots; behavior is covered by split-selection-state.test.mjs.
     assert "function WbcArtifactSplitHost" in source
-    assert "<WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} />" in source
+    assert "<WbcSideAgentSplitResizer width={width} onResize={onResize} splitSide={splitSide} onClose={onClose} />" in source
     assert "<WbcSideSplitGrip" not in source
     assert 'className="wbc-side-agent-split wbc-artifact-split"' in artifact_split
     assert 'className="wbc-side-agent-split-picker"' in artifact_split
@@ -5264,7 +5265,8 @@ def test_dynamic_surfaces_reuse_plugin_snapshot_and_protect_user_panes():
     assert 'card.kind !== "surface" || meta.origin !== "agent"' in broker
     assert "meta.claimedByUser === true || meta.pinned === true" in broker
     assert 'outcome: SURFACE_OUTCOMES.DEFERRED' in broker
-    assert "wbcProjectFileDraftKey" in page
+    assert "wbcClosePaneCardsWithConfirmation" in page
+    assert "wbcProjectFileDraftKey" in frontend_module_source("features/chat/pane-close-controller.jsx")
     assert "surfaceSuppressionRef" in page
     assert "wbcRevealSurface(previous" in frontend_module_source("features/chat/workspace-surface-controller.jsx")
     assert 'card.kind === "surface"' in page

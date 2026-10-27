@@ -1,14 +1,13 @@
-"""DeepSeek Responses API backed web search.
+"""DeepSeek's standalone Search and Fetch JSON APIs.
 
 This module deliberately recognizes only DeepSeek's official API endpoint.
 OpenAI-compatible proxies that happen to expose a DeepSeek-named model must not
-receive the server-side ``web_search`` request or an unrelated provider key.
+receive requests or an unrelated provider key.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-import logging
+from dataclasses import dataclass, field
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -18,15 +17,13 @@ import httpx
 from cyrene.plugins.model_catalog import candidate_provider_id, model_plugin_catalog
 from .search_service import get_effective_search_proxy
 
-logger = logging.getLogger(__name__)
-
 _OFFICIAL_HOST = "api.deepseek.com"
 _OFFICIAL_PATHS = {"", "/", "/v1", "/v1/"}
-_CONFIGURED_MODEL_IDS = {"deepseek-v4-flash", "deepseek-v4-pro"}
-_OPENAI_CHAT_ADAPTERS = {"openai", "openai_compatible"}
-_SEARCH_MODEL = "deepseek-v4-flash"
-_RESPONSES_ENDPOINT = "https://api.deepseek.com/responses"
+_SEARCH_ENDPOINT = "https://api.deepseek.com/v1/tools/search"
+_FETCH_ENDPOINT = "https://api.deepseek.com/v1/tools/fetch"
 _TIMEOUT_SECONDS = 120.0
+_PREVIEW_EVIDENCE_CHARS = 1500
+_CONTENT_EVIDENCE_CHARS = 8000
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,22 +32,25 @@ class DeepSeekSearchCandidate:
 
     candidate_id: str
     configured_model: str
-    api_key: str
-    search_model: str = _SEARCH_MODEL
+    api_key: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class DeepSeekWebSearchResult:
-    """Normalized native-search result consumed by Cyrene's WebSearch tool."""
+    """Source evidence consumed by Cyrene's WebSearch tool (no LLM call)."""
 
     text: str
-    usage: dict[str, int]
     duration_ms: int
-    model: str = _SEARCH_MODEL
+    result_count: int
 
 
 class DeepSeekWebSearchError(RuntimeError):
-    """A safe, credential-free failure from the native search backend."""
+    """A safe, credential-free failure from the Search or Fetch API."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, error_code: str = "provider_request_failed") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
 
 
 def _is_official_deepseek_url(base_url: str) -> bool:
@@ -79,8 +79,7 @@ def _configured_model_id(raw: dict[str, Any]) -> str:
 
 
 def _uses_deepseek_plugin(raw: dict[str, Any]) -> bool:
-    adapter = str(raw.get("adapter") or raw.get("provider") or "").strip().lower()
-    return candidate_provider_id(raw) == "deepseek" and adapter in _OPENAI_CHAT_ADAPTERS
+    return candidate_provider_id(raw) == "deepseek"
 
 
 def _configured_deepseek_models() -> list[dict[str, Any]]:
@@ -113,7 +112,7 @@ def _configured_deepseek_models() -> list[dict[str, Any]]:
 def find_official_deepseek_search_candidate(
     models: list[dict[str, Any]] | None = None,
 ) -> DeepSeekSearchCandidate | None:
-    """Find the first enabled official DeepSeek V4 Plugin profile."""
+    """Reuse an enabled official DeepSeek profile's key, independent of model."""
 
     configured = list(_configured_deepseek_models() if models is None else models)
 
@@ -123,7 +122,7 @@ def find_official_deepseek_search_candidate(
         configured_model = _configured_model_id(item)
         if (
             not _uses_deepseek_plugin(item)
-            or configured_model not in _CONFIGURED_MODEL_IDS
+            or item.get("enabled") is False
             or not _is_official_deepseek_url(str(item.get("base_url") or ""))
         ):
             continue
@@ -140,127 +139,37 @@ def find_official_deepseek_search_candidate(
     return None
 
 
-def _normalized_usage(raw: Any) -> dict[str, int]:
-    usage = raw if isinstance(raw, dict) else {}
-    input_tokens = int(usage.get("input_tokens") or 0)
-    output_tokens = int(usage.get("output_tokens") or 0)
-    total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens)
-    details = usage.get("input_tokens_details")
-    cached_tokens = (
-        int(details.get("cached_tokens") or 0)
-        if isinstance(details, dict)
-        else 0
-    )
-    return {
-        "prompt_tokens": input_tokens,
-        "completion_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "prompt_cache_hit_tokens": cached_tokens,
-        "prompt_cache_miss_tokens": max(0, input_tokens - cached_tokens),
-    }
-
-
-def _citation_from_annotation(annotation: Any) -> tuple[str, str] | None:
-    if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
-        return None
-    nested = annotation.get("url_citation")
-    citation = nested if isinstance(nested, dict) else annotation
-    url = str(citation.get("url") or "").strip()
+def _http_url(value: Any) -> str:
+    url = value.strip() if isinstance(value, str) else ""
     try:
         parsed = urlparse(url)
+        port = parsed.port
     except ValueError:
-        return None
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    title = " ".join(str(citation.get("title") or parsed.netloc).split())
-    title = title.replace("[", "\\[").replace("]", "\\]")
-    return title or parsed.netloc, url
+        return ""
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or (port is not None and port < 1)
+    ):
+        return ""
+    return url
 
 
-def _parse_response(data: Any) -> tuple[str, dict[str, int]]:
-    if not isinstance(data, dict):
-        raise DeepSeekWebSearchError("DeepSeek returned a non-object response")
-
-    text_parts: list[str] = []
-    sources: list[tuple[str, str]] = []
-    saw_search_call = False
-    output = data.get("output")
-    if isinstance(output, list):
-        for item in output:
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") == "web_search_call":
-                status = str(item.get("status") or "").strip().lower()
-                saw_search_call = status in {"", "completed"}
-                continue
-            content = item.get("content")
-            if not isinstance(content, list):
-                continue
-            for part in content:
-                if not isinstance(part, dict) or part.get("type") != "output_text":
-                    continue
-                text = str(part.get("text") or "").strip()
-                if text:
-                    text_parts.append(text)
-                for annotation in part.get("annotations") or []:
-                    citation = _citation_from_annotation(annotation)
-                    if citation is not None:
-                        sources.append(citation)
-
-    # Some compatible gateways serialize the SDK's convenience field. Keep it
-    # as a fallback without duplicating the canonical output-item text.
-    if not text_parts:
-        convenience_text = str(data.get("output_text") or "").strip()
-        if convenience_text:
-            text_parts.append(convenience_text)
-
-    if not saw_search_call:
-        raise DeepSeekWebSearchError("DeepSeek response did not execute web_search")
-    if not text_parts:
-        raise DeepSeekWebSearchError("DeepSeek web_search returned no answer text")
-
-    deduped_sources: list[tuple[str, str]] = []
-    seen_urls: set[str] = set()
-    for title, url in sources:
-        if url not in seen_urls:
-            seen_urls.add(url)
-            deduped_sources.append((title, url))
-
-    answer = "\n\n".join(text_parts)
-    if deduped_sources:
-        source_lines = [f"- [{title}]({url})" for title, url in deduped_sources]
-        answer = f"{answer}\n\nSources:\n" + "\n".join(source_lines)
-    return answer, _normalized_usage(data.get("usage"))
-
-
-async def search_with_deepseek(
-    query: str,
+async def _request(
+    endpoint: str,
+    payload: dict[str, Any],
     candidate: DeepSeekSearchCandidate,
-) -> DeepSeekWebSearchResult:
-    """Run one forced server-side web search through DeepSeek Responses API."""
-    payload = {
-        "model": candidate.search_model,
-        "instructions": (
-            "Search the web to answer the user's question. Follow these rules exactly:\n"
-            "1. Answer in the same language as the question.\n"
-            "2. Start with a direct conclusion, then present the key facts.\n"
-            "3. Ground every factual claim in the search results; never invent information.\n"
-            "4. End with the sources as a markdown list: - [title](url), using only URLs the search returned."
-        ),
-        "input": str(query),
-        "tools": [{"type": "web_search"}],
-        "tool_choice": {"type": "web_search"},
-        "thinking": {"type": "disabled"},
-    }
+    *,
+    operation: str,
+) -> dict[str, Any]:
+    """Use the search proxy without forwarding credentials on redirects/errors."""
     headers = {
         "Authorization": f"Bearer {candidate.api_key}",
         "Content-Type": "application/json",
     }
-    timeout = httpx.Timeout(
-        _TIMEOUT_SECONDS,
-        connect=min(5.0, _TIMEOUT_SECONDS),
-    )
-    started = time.monotonic()
+    timeout = httpx.Timeout(_TIMEOUT_SECONDS, connect=5.0)
     try:
         proxy_url = get_effective_search_proxy()
         async with httpx.AsyncClient(
@@ -269,32 +178,109 @@ async def search_with_deepseek(
             proxy=proxy_url or None,
             trust_env=False,
         ) as client:
-            response = await client.post(
-                _RESPONSES_ENDPOINT,
-                json=payload,
-                headers=headers,
-            )
+            response = await client.post(endpoint, json=payload, headers=headers)
     except httpx.HTTPError as exc:
         raise DeepSeekWebSearchError(
-            f"DeepSeek web_search transport failed ({exc.__class__.__name__})"
+            f"DeepSeek {operation} transport failed ({exc.__class__.__name__})"
         ) from exc
-
-    if response.status_code < 200 or response.status_code >= 300:
+    if response.status_code != 200:
         raise DeepSeekWebSearchError(
-            f"DeepSeek web_search returned HTTP {response.status_code}"
+            f"DeepSeek {operation} returned HTTP {response.status_code}",
+            status_code=response.status_code,
         )
     try:
         data = response.json()
     except ValueError as exc:
-        raise DeepSeekWebSearchError("DeepSeek web_search returned invalid JSON") from exc
+        raise DeepSeekWebSearchError(f"DeepSeek {operation} returned invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise DeepSeekWebSearchError(f"DeepSeek {operation} returned a non-object response")
+    return data
 
-    text, usage = _parse_response(data)
+
+def _search_evidence(data: dict[str, Any], *, need_content: bool, count: int) -> tuple[str, int]:
+    results = data.get("results")
+    if not isinstance(results, list):
+        raise DeepSeekWebSearchError("DeepSeek search returned invalid results")
+    sections = [
+        "WebSearch returned source evidence from DeepSeek Search. "
+        "Synthesize the answer from the evidence below; no internal answer synthesis was performed.",
+    ]
+    seen: set[str] = set()
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        url = _http_url(result.get("url"))
+        if not url or url in seen:
+            continue
+        # Prefer the long, query-specific summary when page content is unavailable.
+        content = result.get("content") if need_content else ""
+        evidence = next((
+            value.strip() for value in (content, result.get("summary"), result.get("snippet"))
+            if isinstance(value, str) and value.strip()
+        ), "")
+        if not evidence:
+            continue
+        seen.add(url)
+        title = " ".join(str(result.get("title") or url).split())
+        sections.extend(["", f"[{len(seen)}] {title}", f"URL: {url}"])
+        for key in ("date", "site_name", "rerank_score", "authority"):
+            value = result.get(key)
+            if value is not None:
+                sections.append(f"{key}: {value}")
+        limit = _CONTENT_EVIDENCE_CHARS if need_content else _PREVIEW_EVIDENCE_CHARS
+        sections.append(f"Evidence: {evidence[:limit]}")
+        if len(seen) >= count:
+            break
+    if not seen:
+        raise DeepSeekWebSearchError("DeepSeek search returned no usable results", error_code="no_results")
+    return "\n".join(sections), len(seen)
+
+
+async def search_with_deepseek(
+    query: str,
+    candidate: DeepSeekSearchCandidate,
+    *,
+    detail: str = "content",
+    max_results: int = 5,
+) -> DeepSeekWebSearchResult:
+    """Return ranked evidence from the standalone API without a model call."""
+    query = str(query)
+    if not query.strip() or len(query) > 128:
+        raise DeepSeekWebSearchError(
+            "DeepSeek search query must contain 1 to 128 characters",
+            error_code="invalid_arguments",
+        )
+    if detail not in {"preview", "content"}:
+        raise DeepSeekWebSearchError("Invalid DeepSeek search detail", error_code="invalid_arguments")
+    count = max(1, min(50, int(max_results)))
+    need_content = detail == "content"
+    started = time.monotonic()
+    data = await _request(
+        _SEARCH_ENDPOINT,
+        {"query": query, "count": count, "need_content": need_content},
+        candidate,
+        operation="search",
+    )
+    text, result_count = _search_evidence(data, need_content=need_content, count=count)
     return DeepSeekWebSearchResult(
         text=text,
-        usage=usage,
         duration_ms=int((time.monotonic() - started) * 1000),
-        model=candidate.search_model,
+        result_count=result_count,
     )
+
+
+async def fetch_with_deepseek(url: str, candidate: DeepSeekSearchCandidate) -> str:
+    """Retrieve one page as Markdown through the standalone Fetch API."""
+    url = str(url)
+    if len(url) > 8192 or not _http_url(url):
+        raise DeepSeekWebSearchError("Invalid DeepSeek fetch URL", error_code="invalid_arguments")
+    data = await _request(_FETCH_ENDPOINT, {"url": url}, candidate, operation="fetch")
+    content = data.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise DeepSeekWebSearchError("DeepSeek fetch returned no page content", error_code="no_results")
+    title = " ".join(str(data.get("title") or "").split())
+    heading = f"{title}\n" if title else ""
+    return f"{heading}URL: {url}\n\n{content.strip()}"
 
 
 __all__ = [
@@ -303,4 +289,5 @@ __all__ = [
     "DeepSeekWebSearchResult",
     "find_official_deepseek_search_candidate",
     "search_with_deepseek",
+    "fetch_with_deepseek",
 ]

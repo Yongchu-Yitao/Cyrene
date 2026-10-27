@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+import ipaddress
 import re
 from typing import Any
 
@@ -12,6 +13,13 @@ from urllib.parse import urldefrag, urljoin, urlparse
 import httpx
 
 from .definitions import get_native_tool_def
+from .deepseek_web_search import (
+    DeepSeekWebSearchError,
+    fetch_with_deepseek,
+    find_official_deepseek_search_candidate,
+)
+from .search_settings import runtime_settings
+from .search_service import get_effective_search_proxy
 from cyrene.model.messages import truncate
 
 TOOL_NAME = 'WebFetch'
@@ -132,9 +140,35 @@ def _extract_response_text(
     return parser.text()
 
 
+def _is_local_url(url: str) -> bool:
+    """Local pages must be retrieved on this machine rather than by DeepSeek."""
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    if host == "localhost" or host.endswith((".localhost", ".local")) or "." not in host and ":" not in host:
+        return True
+    try:
+        return not ipaddress.ip_address(host).is_global
+    except ValueError:
+        return False
+
+
 async def _tool_webfetch(args: dict[str, Any], context: PluginContext) -> str:
     url = str(args["url"])
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+    local = _is_local_url(url)
+    settings = runtime_settings("WebFetch")
+    if not local and settings.enabled and "deepseek" in settings.providers:
+        candidate = find_official_deepseek_search_candidate()
+        if candidate is not None:
+            try:
+                return truncate(await fetch_with_deepseek(url, candidate))
+            except DeepSeekWebSearchError:
+                # Preserve direct retrieval when the API is unavailable or has no content.
+                pass
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=30.0,
+        proxy=None if local else get_effective_search_proxy() or None,
+        trust_env=False,
+    ) as client:
         response = await client.get(url)
         response.raise_for_status()
     content_type = response.headers.get("content-type", "")

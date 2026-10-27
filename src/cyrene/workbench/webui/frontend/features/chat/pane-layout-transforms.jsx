@@ -80,13 +80,19 @@ export function openPaneLayout(layout, card, opts) {
 }
 
 
-export function closePaneLayout(layout, cardId, ownerChatId, location) {
-  var remaining = layout.left.concat(layout.right).filter(function (card) { return String(card.id) !== String(cardId); });
-  var nextChat = location.card.kind === "chat" && String(location.card.payload || "") === ownerChatId
+export function closePaneLayout(layout, cardId, ownerChatId) {
+  var closingIds = [].concat(cardId).map(String);
+  function retained(card) { return closingIds.indexOf(String(card.id)) < 0; }
+  var cards = layout.left.concat(layout.right);
+  var remaining = cards.filter(retained);
+  var closesOwner = cards.some(function (card) {
+    return !retained(card) && card.kind === "chat" && String(card.payload || "") === ownerChatId;
+  });
+  var nextChat = closesOwner
     ? remaining.find(function (card) { return card.kind === "chat"; }) : null;
   var next = {
-    left: layout.left.filter(function (card) { return String(card.id) !== String(cardId); }),
-    right: layout.right.filter(function (card) { return String(card.id) !== String(cardId); }),
+    left: layout.left.filter(retained),
+    right: layout.right.filter(retained),
     leftRatio: layout.leftRatio, rightRatio: layout.rightRatio,
   };
   if (!next.left.length && next.right.length) { next.left = next.right; next.right = []; }

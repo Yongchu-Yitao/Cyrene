@@ -107,13 +107,19 @@ embedding 路由。模型目录与推理操作由可编辑的 Model Plugin 提�
 | `SEARXNG_URL` | 外部 SearXNG URL | — |
 | `SEARCH_PROXY` | Search HTTP 手动代理 | — |
 
-配置带 API Key 的官方 DeepSeek V4 模型（Endpoint 为
-`https://api.deepseek.com`）后，Cyrene 会优先使用
-[DeepSeek Responses API](https://api-docs.deepseek.com/zh-cn/guides/responses_api/)
-提供的服务端联网搜索。搜索工作模型使用官方文档明确支持的
-`deepseek-v4-flash`；未配置、调用失败或原生搜索不可用时会自动回退到
-SimpleXNG。第三方 DeepSeek 兼容 Endpoint 不会启用原生搜索。旧
-DDG/Bing/Baidu Scraper 仍已从主路径移除。
+启用带 API Key 的官方 DeepSeek 模型配置（Endpoint 为
+`https://api.deepseek.com`，可带 `/v1`）后，Cyrene 会复用其凭据调用
+[独立 Search / Fetch API](https://api-docs.deepseek.com/zh-cn/guides/search/)，
+搜索不再调用聊天模型。`WebSearch` 将 `max_results` 映射为 `count`；
+`detail="preview"` 返回与查询相关的摘要，`detail="content"` 请求网页正文，
+正文不可用时使用摘要。
+
+搜索按设置中的服务顺序执行，失败后尝试下一个已启用服务；默认 Windows
+优先 DeepSeek，macOS/Linux 优先 SimpleXNG。DeepSeek 服务已启用且凭据可用时，
+`WebFetch` 优先调用 Fetch API 返回 Markdown，失败后回退到直接 HTTP 抓取。
+直接抓取沿用搜索代理；localhost 和局域网地址则在本机读取，不发送到 DeepSeek 或代理。
+第三方 DeepSeek 兼容 Endpoint 不会启用这些接口。Search 与 Fetch 按 DeepSeek
+官方规则按成功请求次数计费，独立于模型 Token 用量。
 
 ### Web 与 Map
 

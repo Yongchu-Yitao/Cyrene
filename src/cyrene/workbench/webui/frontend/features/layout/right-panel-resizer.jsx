@@ -1,4 +1,6 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { resizeCollapseEdge } from "./resize-collapse.mjs"
+import { startPointerResize } from "./pointer-resize.mjs"
 var { useEffect: useWorkbenchEffect, useRef: useWorkbenchRef } = React;
 
 var WB_RIGHT_MIN = 280;
@@ -103,7 +105,7 @@ function wbApplyStoredRightWidth(node) {
     } catch (err) {}
   }
 
-function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
+function WbColResizer({ cardEdge, trackGutter, surfaceId, onClose }) {
   var handleRef = useWorkbenchRef(null);
   function resolvePanel(handle) { return resolveRightPanel(handle, trackGutter); }
   function onPointerDown(e) {
@@ -115,41 +117,30 @@ function WbColResizer({ cardEdge, trackGutter, surfaceId }) {
     if (!panel || !grid) return;
     var rightEdge = panel.getBoundingClientRect().right;
     var maxW = wbRightDynamicMax(panel);
-    try { handle.setPointerCapture(e.pointerId); } catch (err) {}
-    document.body.classList.add("wb-col-resizing");
-    if (trackGutter) handle.classList.add("is-resizing");
-    emitResizePhase("start");
-    function onMove(ev) {
-      var w = Math.round(rightEdge - ev.clientX);
-      if (w < WB_RIGHT_MIN) w = WB_RIGHT_MIN;
-      if (w > maxW) w = maxW;
-      grid.style.setProperty("--wb-right-w", w + "px");
-      // Keep dependants such as the browser PiP on the same pointer frame as
-      // the context panel. ResizeObserver delivery alone trails fast drags.
-      emitResizePhase("move", w);
-    }
-    var finished = false;
-    function onUp() {
-      if (finished) return;
-      finished = true;
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
-      handle.removeEventListener("pointercancel", onUp);
-      handle.removeEventListener("lostpointercapture", onUp);
-      window.removeEventListener("blur", onUp);
-      document.body.classList.remove("wb-col-resizing");
-      handle.classList.remove("is-resizing");
-      emitResizePhase("end");
-      try {
-        var cur = parseInt(grid.style.getPropertyValue("--wb-right-w"), 10);
-        if (isFinite(cur)) localStorage.setItem(WB_RIGHT_STORE, String(cur));
-      } catch (err) {}
-    }
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
-    handle.addEventListener("pointercancel", onUp);
-    handle.addEventListener("lostpointercapture", onUp);
-    window.addEventListener("blur", onUp);
+    startPointerResize(e, {
+      bodyClass: "wb-col-resizing",
+      start: function () {
+        if (trackGutter) handle.classList.add("is-resizing");
+        emitResizePhase("start");
+      },
+      update: function (ev) {
+        var requestedWidth = Math.round(rightEdge - ev.clientX);
+        var w = Math.max(WB_RIGHT_MIN, Math.min(maxW, requestedWidth));
+        grid.style.setProperty("--wb-right-w", w + "px");
+        // Keep the browser PiP aligned on the same pointer frame.
+        emitResizePhase("move", w);
+        return resizeCollapseEdge(requestedWidth, WB_RIGHT_MIN);
+      },
+      commit: function () {
+        handle.classList.remove("is-resizing");
+        emitResizePhase("end");
+        try {
+          var cur = parseInt(grid.style.getPropertyValue("--wb-right-w"), 10);
+          if (isFinite(cur)) localStorage.setItem(WB_RIGHT_STORE, String(cur));
+        } catch (err) {}
+      },
+      close: onClose,
+    });
   }
   function onDoubleClick() {
     var grid = document.querySelector(".workbench-grid");

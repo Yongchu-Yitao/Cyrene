@@ -193,7 +193,7 @@ async def test_all_simplexng_engine_failures_continue_to_next_provider(monkeypat
         lambda: SearchRuntimeSettings(True, ("simplexng", "deepseek")),
     )
 
-    async def deepseek_result(_topic):
+    async def deepseek_result(_topic, **_kwargs):
         return "DeepSeek fallback result"
 
     monkeypatch.setattr(search, "_deep_search_deepseek", deepseek_result)

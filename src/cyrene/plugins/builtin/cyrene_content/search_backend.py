@@ -888,8 +888,8 @@ async def _deep_search_simplexng(
     return result
 
 
-async def _deep_search_deepseek(topic: str) -> str:
-    """Native DeepSeek Responses-API web search."""
+async def _deep_search_deepseek(topic: str, *, detail: str = "content", max_results: int = 5) -> str:
+    """Standalone DeepSeek Search API evidence."""
     candidate = find_official_deepseek_search_candidate()
     if candidate is None:
         raise SearchBackendUnavailable(
@@ -902,14 +902,12 @@ async def _deep_search_deepseek(topic: str) -> str:
     async with trace_span(
         "search_stage",
         "deepseek_pipeline",
-        attributes={"backend": "deepseek", "model": candidate.search_model},
+        attributes={"backend": "deepseek", "api": "search"},
     ) as deepseek_span:
-        result = await search_with_deepseek(topic, candidate)
+        result = await search_with_deepseek(topic, candidate, detail=detail, max_results=max_results)
         deepseek_span.set_attribute("answer_chars", len(result.text))
         deepseek_span.set_attribute("duration_ms", result.duration_ms)
-        deepseek_span.set_attribute(
-            "total_tokens", result.usage.get("total_tokens", 0)
-        )
+        deepseek_span.set_attribute("result_count", result.result_count)
         return result.text
 
 
@@ -928,7 +926,7 @@ async def _run_search_provider(
                 max_results=max_results,
             )
         if provider == "deepseek":
-            return await _deep_search_deepseek(topic)
+            return await _deep_search_deepseek(topic, detail=detail, max_results=max_results)
         if provider == "tavily":
             return await _search_tavily(topic, max_results=max_results)
         if provider == "brave":
@@ -943,8 +941,18 @@ async def _run_search_provider(
     except SearchBackendUnavailable as exc:
         raise exc.for_provider(provider) from exc
     except DeepSeekWebSearchError as exc:
-        status_match = re.search(r"HTTP\s+(\d{3})", str(exc))
-        status_code = int(status_match.group(1)) if status_match else None
+        status_code = exc.status_code
+        if exc.error_code in {"no_results", "invalid_arguments"}:
+            raise SearchBackendUnavailable(
+                str(exc),
+                provider=provider,
+                error_code=exc.error_code,
+                retryable=True,
+                retry_scope="different_arguments",
+                retry_after_ms=None,
+                affects_health=False,
+                circuit_scope="none",
+            ) from exc
         if status_code in {401, 403}:
             raise SearchBackendUnavailable(
                 "DeepSeek rejected its configured credentials.",
@@ -962,6 +970,26 @@ async def _run_search_provider(
                 retryable=True,
                 retry_scope="after_delay",
                 retry_after_ms=60_000,
+            ) from exc
+        if status_code == 402:
+            raise SearchBackendUnavailable(
+                "DeepSeek account has insufficient balance.",
+                provider=provider,
+                error_code="insufficient_balance",
+                retryable=False,
+                retry_scope="after_config_change",
+                retry_after_ms=None,
+            ) from exc
+        if status_code is not None and 400 <= status_code < 500 and status_code != 408:
+            raise SearchBackendUnavailable(
+                str(exc),
+                provider=provider,
+                error_code="invalid_arguments",
+                retryable=True,
+                retry_scope="different_arguments",
+                retry_after_ms=None,
+                affects_health=False,
+                circuit_scope="none",
             ) from exc
         raise SearchBackendUnavailable(
             str(exc),
@@ -996,6 +1024,8 @@ def _search_failure_policy(
     ]
     if only_no_results:
         return "search_no_results", "different_arguments", "none", None
+    if failures and all(failure.retry_scope == "different_arguments" for failure in failures):
+        return "search_invalid_arguments", "different_arguments", "none", None
     if retry_after_values:
         return (
             "search_providers_unavailable",

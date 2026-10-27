@@ -1,0 +1,553 @@
+{
+  "cases": [
+    {
+      "name": "tool_search_preview",
+      "success": true,
+      "characters": 3650,
+      "sha256": "cb0ae89480fc87716bf02b9fd3d223bbeb8c84fe4d82e62eed0da025ffb5a869",
+      "excerpt": "WebSearch returned source evidence from DeepSeek Search. Synthesize the answer from the evidence below; no internal answer synthesis was performed.\n\n[1] Change Log | DeepSeek API Docs - Search / Fetch API is now available, powered by our in-house search engine and supporting web ",
+      "seconds": 0.687,
+      "http_range": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "tool_search_content",
+      "success": true,
+      "characters": 25269,
+      "sha256": "4360e7ecd8430e7f4807e3129b88e94af74e906ac7bd600e3f4da76bf8878d62",
+      "excerpt": "WebSearch returned source evidence from DeepSeek Search. Synthesize the answer from the evidence below; no internal answer synthesis was performed.\n\n[1] Change Log | DeepSeek API Docs - Search / Fetch API is now available, powered by our in-house search engine and supporting web ",
+      "seconds": 0.668,
+      "http_range": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "tool_fetch_markdown",
+      "success": true,
+      "characters": 10368,
+      "sha256": "bf261a2279466f1eaea94714430ff84528aa485780afea5716f9b11e04f7c5e3",
+      "excerpt": "Search & Fetch | DeepSeek API Docs\nURL: https://api-docs.deepseek.com/guides/search/\n\nSearch \\/ Fetch API is now available\\, powered by our in\\-house search engine and supporting web search and fetch\\. Click here to view the guide\\.\n\n\\# Search \\& Fetch\n\nThe Search API and the Fet",
+      "seconds": 0.407,
+      "http_range": [
+        2,
+        3
+      ]
+    },
+    {
+      "name": "tool_fetch_real_401_fallback",
+      "success": true,
+      "characters": 171,
+      "sha256": "cbf3f738cc4646f250e5964ab74741b434912a67e1cce86c798bf71af1cf85c8",
+      "excerpt": "Example Domain\nThis domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.",
+      "fault_injection": "Invalid key in temporary configuration only; real HTTP 401 then direct HTTP 200",
+      "seconds": 8.859,
+      "http_range": [
+        3,
+        5
+      ]
+    },
+    {
+      "name": "tool_fetch_loopback",
+      "success": true,
+      "characters": 31,
+      "sha256": "cfdcd2ef31e0200982dc0ab5d140c7cf94fbba980b77c4d3c214c5149d62db64",
+      "excerpt": "Cyrene local Fetch verification",
+      "seconds": 0.518,
+      "http_range": [
+        5,
+        6
+      ]
+    },
+    {
+      "name": "production_agent_session",
+      "success": true,
+      "answer": "三次工具调用都已执行完成。\n\n**Search / Fetch API（DeepSeek）**\n\n- **Search**：由 DeepSeek 自研搜索引擎提供支持，根据查询词查找网页并返回结构化结果（标题、URL、摘要、相关性分数等）。请求路径为 `POST https://api.deepseek.com/v1/tools/search`；`query` 必填，长度限制为 **1–128 个 Unicode 字符**，不能全为空白。\n- **Fetch**：抓取单个网页，并返回以 Markdown 格式呈现的正文。请求路径为 `POST https://api.deepseek.com/v1/tools/fetch`；`url` 必填，长度**最多 8192 字符**，且须是不含用户名密码的 HTTP/HTTPS 地址。\n- 两者都用 Bearer Token 鉴权，属于只读接口。\n\n来源：\n- https://api-docs.deepseek.com/guides/search/\n- https://api-docs.deepseek.com/updates/",
+      "completed_tools": 3,
+      "model": "deepseek-flash",
+      "seconds": 6.871,
+      "http_range": [
+        6,
+        13
+      ]
+    }
+  ],
+  "http": [
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/tools/search",
+      "parameters": {
+        "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com",
+        "count": 3,
+        "need_content": false
+      },
+      "tool_names": [],
+      "status": 200,
+      "results": [
+        {
+          "url": "https://api-docs.deepseek.com/updates/?accessToken=eyJhbGciOiJIUzI1NiIsImtpZCI6ImRlZmF1bHQiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjE3NTY5NTMwMzEsImZpbGVHVUlEIjoid1YzVk1ZTXZkT0lHZ05BeSIsImlhdCI6MTc1Njk1MjczMSwiaXNzIjoidXBsb2FkZXJfYWNjZXNzX3Jlc291cmNlIiwicGFhIjoiYWxsOmFsbDoiLCJ1c2VySWQiOjk3NzcxNjQzfQ.J3ByhArflRYOsJ6HMCKKfCDAyLBBLgi2wSF6oXNnbr8#1",
+          "summary_chars": 408,
+          "content_chars": 0
+        },
+        {
+          "url": "https://api-docs.deepseek.com/updates/?me=130Wiki&where=CaelLabWiki#1",
+          "summary_chars": 472,
+          "content_chars": 0
+        },
+        {
+          "url": "https://api-docs.deepseek.com/guides/search/?utm_source=tldrnewsletter#1",
+          "summary_chars": 3846,
+          "content_chars": 0
+        }
+      ],
+      "seconds": 0.639
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/tools/search",
+      "parameters": {
+        "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com",
+        "count": 3,
+        "need_content": true
+      },
+      "tool_names": [],
+      "status": 200,
+      "results": [
+        {
+          "url": "https://api-docs.deepseek.com/updates/?accessToken=eyJhbGciOiJIUzI1NiIsImtpZCI6ImRlZmF1bHQiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjE3NTY5NTMwMzEsImZpbGVHVUlEIjoid1YzVk1ZTXZkT0lHZ05BeSIsImlhdCI6MTc1Njk1MjczMSwiaXNzIjoidXBsb2FkZXJfYWNjZXNzX3Jlc291cmNlIiwicGFhIjoiYWxsOmFsbDoiLCJ1c2VySWQiOjk3NzcxNjQzfQ.J3ByhArflRYOsJ6HMCKKfCDAyLBBLgi2wSF6oXNnbr8#1",
+          "summary_chars": 408,
+          "content_chars": 17429
+        },
+        {
+          "url": "https://api-docs.deepseek.com/updates/?me=130Wiki&where=CaelLabWiki#1",
+          "summary_chars": 472,
+          "content_chars": 17428
+        },
+        {
+          "url": "https://api-docs.deepseek.com/guides/search/?utm_source=tldrnewsletter#1",
+          "summary_chars": 3846,
+          "content_chars": 9407
+        }
+      ],
+      "seconds": 0.639
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/tools/fetch",
+      "parameters": {
+        "url": "https://api-docs.deepseek.com/guides/search/"
+      },
+      "tool_names": [],
+      "status": 200,
+      "seconds": 0.375
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/tools/fetch",
+      "parameters": {
+        "url": "https://example.com/"
+      },
+      "tool_names": [],
+      "status": 401,
+      "seconds": 0.358
+    },
+    {
+      "method": "GET",
+      "url": "https://example.com/",
+      "status": 200,
+      "seconds": 8.427
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:49948/",
+      "status": 200,
+      "seconds": 0.001
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/chat/completions",
+      "parameters": {
+        "model": "deepseek-flash"
+      },
+      "tool_names": [
+        "Bash",
+        "Read",
+        "WebSearch",
+        "Write",
+        "append_context",
+        "load_context",
+        "replace_context",
+        "toolbox",
+        "unload_context",
+        "WebFetch"
+      ],
+      "status": 200,
+      "seconds": 0.292
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/tools/search",
+      "parameters": {
+        "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com",
+        "count": 2,
+        "need_content": false
+      },
+      "tool_names": [],
+      "status": 200,
+      "results": [
+        {
+          "url": "https://api-docs.deepseek.com/updates/?accessToken=eyJhbGciOiJIUzI1NiIsImtpZCI6ImRlZmF1bHQiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjE3NTY5NTMwMzEsImZpbGVHVUlEIjoid1YzVk1ZTXZkT0lHZ05BeSIsImlhdCI6MTc1Njk1MjczMSwiaXNzIjoidXBsb2FkZXJfYWNjZXNzX3Jlc291cmNlIiwicGFhIjoiYWxsOmFsbDoiLCJ1c2VySWQiOjk3NzcxNjQzfQ.J3ByhArflRYOsJ6HMCKKfCDAyLBBLgi2wSF6oXNnbr8#1",
+          "summary_chars": 408,
+          "content_chars": 0
+        },
+        {
+          "url": "https://api-docs.deepseek.com/updates/?me=130Wiki&where=CaelLabWiki#1",
+          "summary_chars": 472,
+          "content_chars": 0
+        }
+      ],
+      "seconds": 0.824
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/chat/completions",
+      "parameters": {
+        "model": "deepseek-flash"
+      },
+      "tool_names": [
+        "Bash",
+        "Read",
+        "WebSearch",
+        "Write",
+        "append_context",
+        "load_context",
+        "replace_context",
+        "toolbox",
+        "unload_context",
+        "WebFetch"
+      ],
+      "status": 200,
+      "seconds": 0.203
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/tools/search",
+      "parameters": {
+        "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com",
+        "count": 2,
+        "need_content": true
+      },
+      "tool_names": [],
+      "status": 200,
+      "results": [
+        {
+          "url": "https://api-docs.deepseek.com/updates/?accessToken=eyJhbGciOiJIUzI1NiIsImtpZCI6ImRlZmF1bHQiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjE3NTY5NTMwMzEsImZpbGVHVUlEIjoid1YzVk1ZTXZkT0lHZ05BeSIsImlhdCI6MTc1Njk1MjczMSwiaXNzIjoidXBsb2FkZXJfYWNjZXNzX3Jlc291cmNlIiwicGFhIjoiYWxsOmFsbDoiLCJ1c2VySWQiOjk3NzcxNjQzfQ.J3ByhArflRYOsJ6HMCKKfCDAyLBBLgi2wSF6oXNnbr8#1",
+          "summary_chars": 408,
+          "content_chars": 17429
+        },
+        {
+          "url": "https://api-docs.deepseek.com/updates/?me=130Wiki&where=CaelLabWiki#1",
+          "summary_chars": 472,
+          "content_chars": 17428
+        }
+      ],
+      "seconds": 0.594
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/chat/completions",
+      "parameters": {
+        "model": "deepseek-flash"
+      },
+      "tool_names": [
+        "Bash",
+        "Read",
+        "WebSearch",
+        "Write",
+        "append_context",
+        "load_context",
+        "replace_context",
+        "toolbox",
+        "unload_context",
+        "WebFetch"
+      ],
+      "status": 200,
+      "seconds": 0.186
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/tools/fetch",
+      "parameters": {
+        "url": "https://api-docs.deepseek.com/guides/search/"
+      },
+      "tool_names": [],
+      "status": 200,
+      "seconds": 0.388
+    },
+    {
+      "method": "POST",
+      "url": "https://api.deepseek.com/v1/chat/completions",
+      "parameters": {
+        "model": "deepseek-flash"
+      },
+      "tool_names": [
+        "Bash",
+        "Read",
+        "WebSearch",
+        "Write",
+        "append_context",
+        "load_context",
+        "replace_context",
+        "toolbox",
+        "unload_context",
+        "WebFetch"
+      ],
+      "status": 200,
+      "seconds": 0.204
+    }
+  ],
+  "agent_events": [
+    {
+      "type": "assistant.tool_calls",
+      "data": {
+        "role": "assistant",
+        "content": "我会按顺序执行这些工具步骤。",
+        "reasoning": "",
+        "reasoning_details": [],
+        "tool_calls": [
+          {
+            "id": "call_00_ET_Jd63QwzuWtft6sqP4r3k8532",
+            "name": "WebSearch",
+            "arguments": {
+              "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com",
+              "detail": "preview",
+              "max_results": 2
+            },
+            "_arguments_normalized": true,
+            "_nested_arguments_normalized": false
+          }
+        ],
+        "model": "deepseek-flash",
+        "model_identity": {
+          "candidateId": "deepseek-chat",
+          "adapter": "openai",
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
+          "endpoint": "https://api.deepseek.com",
+          "reasoningEffort": ""
+        },
+        "usage": {
+          "prompt_tokens": 3347,
+          "completion_tokens": 92,
+          "total_tokens": 3439,
+          "prompt_cache_hit_tokens": 3072,
+          "prompt_cache_miss_tokens": 275
+        },
+        "model_observation_id": "model_observation_2f0040e154fa411016ea1308f87e8a3a",
+        "model_latency_ms": 1267.9434169549495,
+        "finish_reason": "tool_calls",
+        "response_id": "a037ff02-357d-4dca-9017-0e00c3075505",
+        "streamed": true,
+        "stream_source_id": "assistant_6a97afdcd3475664f6a74a1eb21f66ed",
+        "run_id": "deepseek-live-agent",
+        "caused_by": "node_ed9edd38b0574bef8155d37793e4ad58:2026-10-27T07:48:50.474208+00:00",
+        "batch_key": "batch_14aca2d5ff4e98565e02bc88e36062a8",
+        "task_context_id": "ctx_224073df3f0e4a00",
+        "task_control": false,
+        "answer_complete": false
+      }
+    },
+    {
+      "type": "tool.completed",
+      "data": {
+        "call_id": "call_00_ET_Jd63QwzuWtft6sqP4r3k8532",
+        "name": "WebSearch",
+        "success": true,
+        "value": "WebSearch returned source evidence from DeepSeek Search. Synthesize the answer from the evidence below; no internal answer synthesis was performed.\n\n[1] Change Log | DeepSeek API Docs - Search / Fetch API is now available, powered by our in-house search engine and supporting web search and fetch\nURL: https://api-docs.deepseek.com/updates/?accessToken=eyJhbGciOiJIUzI1NiIsImtpZCI6ImRlZmF1bHQiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjE3NTY5NTMwMzEsImZpbGVHVUlEIjoid1YzVk1ZTXZkT0lHZ05BeSIsImlhdCI6MTc1Njk1MjczMSwiaXNzIjoidXBsb2FkZXJfYWNjZXNzX3Jlc291cmNlIiwicGFhIjoiYWxsOmFsbDoiLCJ1c2VySWQiOjk3NzcxNjQzfQ.J3ByhArflRYOsJ6HMCKKfCDAyLBBLgi2wSF6oXNnbr8#1\ndate: 2026-10-16T16:00:00+00:00\nsite_name: DeepSeek\nrerank_score: 2.382854461669922\nauthority: 3\nEvidence: The DeepSeek API now supports V4-Pro and V4-Flash, available via both the OpenAI ChatCompletions interface and the Anthropic interface. To access the new models, the base_url remains unchanged, and the model parameter should be set todeepseek-v4-pro or deepseek-v4-flash.\n...\n- Agent capabilities: Further optimized the performance of the Code Agent and Search Agent.\n...\nImproved Chinese Search Capabilities\n\n[2] Change Log | DeepSeek API Docs\nURL: https://api-docs.deepseek.com/updates/?me=130Wiki&where=CaelLabWiki#1\ndate: 2026-10-16T16:00:00+00:00\nsite_name: DeepSeek\nrerank_score: 2.367229461669922\nauthority: 3\nEvidence: The DeepSeek API now supports V4-Pro and V4-Flash, available via both the OpenAI ChatCompletions interface and the Anthropic interface. To access the new models, the base_url remains unchanged, and the model parameter should be set todeepseek-v4-pro or deepseek-v4-flash.\n...\n- Agent capabilities: Further optimized the performance of the Code Agent and Search Agent.\n...\nImproved Chinese Search Capabilities\n\n- Enhanced report analysis requests with more detailed outputs",
+        "error": "",
+        "time": "2026-10-27T07:48:52.632165+00:00"
+      }
+    },
+    {
+      "type": "assistant.tool_calls",
+      "data": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": "",
+        "reasoning_details": [],
+        "tool_calls": [
+          {
+            "id": "call_00_20Zf9FGDoZL9Ttfb0fUd5599",
+            "name": "WebSearch",
+            "arguments": {
+              "detail": "content",
+              "max_results": 2,
+              "query": "DeepSeek Search Fetch API site:api-docs.deepseek.com"
+            },
+            "_arguments_normalized": true,
+            "_nested_arguments_normalized": false
+          }
+        ],
+        "model": "deepseek-flash",
+        "model_identity": {
+          "candidateId": "deepseek-chat",
+          "adapter": "openai",
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
+          "endpoint": "https://api.deepseek.com",
+          "reasoningEffort": ""
+        },
+        "usage": {
+          "prompt_tokens": 4049,
+          "completion_tokens": 83,
+          "total_tokens": 4132,
+          "prompt_cache_hit_tokens": 2944,
+          "prompt_cache_miss_tokens": 1105
+        },
+        "model_observation_id": "model_observation_5854aa21ace0195228e46cd142041d35",
+        "model_latency_ms": 862.2636250220239,
+        "finish_reason": "tool_calls",
+        "response_id": "813007ee-df6c-4412-bf4e-a896e48d752f",
+        "streamed": true,
+        "stream_source_id": "assistant_4387508e3e72fbf90a11a7079ff7c6c3",
+        "run_id": "deepseek-live-agent",
+        "caused_by": "tool_results_827f6781721e0d158253c069ec8e22a3:2026-10-27T07:48:52.633437+00:00",
+        "batch_key": "batch_7f49583ef353f372622d8f573e25f71c",
+        "task_context_id": "ctx_224073df3f0e4a00",
+        "task_control": false,
+        "answer_complete": false
+      }
+    },
+    {
+      "type": "tool.completed",
+      "data": {
+        "call_id": "call_00_20Zf9FGDoZL9Ttfb0fUd5599",
+        "name": "WebSearch",
+        "success": true,
+        "value": "WebSearch returned source evidence from DeepSeek Search. Synthesize the answer from the evidence below; no internal answer synthesis was performed.\n\n[1] Change Log | DeepSeek API Docs - Search / Fetch API is now available, powered by our in-house search engine and supporting web search and fetch\nURL: https://api-docs.deepseek.com/updates/?accessToken=eyJhbGciOiJIUzI1NiIsImtpZCI6ImRlZmF1bHQiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjE3NTY5NTMwMzEsImZpbGVHVUlEIjoid1YzVk1ZTXZkT0lHZ05BeSIsImlhdCI6MTc1Njk1MjczMSwiaXNzIjoidXBsb2FkZXJfYWNjZXNzX3Jlc291cmNlIiwicGFhIjoiYWxsOmFsbDoiLCJ1c2VySWQiOjk3NzcxNjQzfQ.J3ByhArflRYOsJ6HMCKKfCDAyLBBLgi2wSF6oXNnbr8#1\ndate: 2026-10-16T16:00:00+00:00\nsite_name: DeepSeek\nrerank_score: 2.382854461669922\nauthority: 3\nEvidence: Search / Fetch API is now available, powered by our in-house search engine and supporting web search and fetch. Click here to view the guide.\n\n# Change Log\n\n## Date: 2026-10-17\n\n### Opening up the in-house search API\n\nDeepSeek's web and API search capabilities are powered by our in-house DeepSeek search engine, which reliably handles hundreds of millions of search requests from around the world every day. DeepSeek Search is an AI-native general-purpose search engine that indexes hundreds of billions of web pages, supports multilingual search, and returns highly relevant, authoritative, and timely results in real time. It filters SEO spam, GEO manipulation, and low-quality AIGC through strict detection mechanisms, ensuring authoritative and trustworthy information for users and LLMs. For usage details, see the Search & Fetch guide.\n\n### DeepSeek-V4.1-Flash-1017 Update\n\nDeepSeek V4.1 Flash has been upgraded to DeepSeek-V4.1-Flash-1017. The official web and APP models have also been updated to the new version. The API calling method and pricing remain unchanged — simply usedeepseek-flash to access the latest model.\n\nCompared with the previous DeepSeek V4.1, the new model delivers substantial improvements across benchmarks:\n\n- HLE (w/o tools): 42.6 (44.0*)\n- Terminal-Bench 4.0: 42.3\n- DeepSWE v1.1: 77.0\n- ProgramBench: 29.1\n- NL2Repo-Bench: 68.2\n- Automation-Bench v1.0.6: 60.5\n- Agents' Last Exam: 35.4\n- Apex Bench v1.1: 72.1\n- Chartography (w/tools): 83.0\n- BabyVision (w/tools): 92.5\n- ZeroBench-main (w/tools): 51.0\n\n* Tested only on the pure-text subset of the HLE benchmark set. Terminal-Bench 4.0 was tested with the Claude Code framework, and DeepSWE with the Mini-SWE-V2 framework. ZeroBench-main was evaluated with Pass@5.\n\nWhile improving performance, we also reduced the model's task runtime and output length, enabling users to complete tasks at lower cost and higher speed and achieving a new performance–cost Pareto optimum across multiple harnesses. We specifically optimized for DeepSeek Harness, Tencent CodeBuddy, WorkBuddy, and other platforms. Please upgrade to DeepSeek Harness 0.2.1-rc.1 or later for the best experience with the new model.\n\n## Date: 2026-09-10\n\n### DeepSeek-V4.1-Flash Release\n\nToday, we officially release the DeepSeek-V4.1-Flash model. It is the smallest model in our new architecture family, with native multimodal visual understanding. The new architecture is designed for a higher capability ceiling, faster inference, higher throughput, and scaling to larger models.\n\n- GPQA Diamond: 90.9\n- HLE: 36.8 (39.1*)\n- Codeforces (Rating): 3471\n- MathArena Apex: 65.6\n- Terminal-Bench 2.1: 90.6\n- Terminal-Bench 3.0: 30.0\n- Terminal-Bench 4.0: 31.2\n- DeepSWE v1.1: 74.2\n- ProgramBench: 20.3\n- NL2Repo-Bench: 65.4\n- CyberGym: 88.1\n- SEC-Bench Pro: 62.8\n- ExploitGym: 15.3\n- HLE (w/tools): 63.9\n- Automation-Bench: 54.8\n- Agents' Last Exam: 31.8\n- Chartography (w/tools): 78.9\n- BabyVision (w/tools): 89.6\n- ZeroBench-main (w/tools): 49.0\n\nAPI changes\n\n* Tested only on the pure-text subset of the HLE benchmark set.\n\nDeepSeek V4.1 Flash is now available on the DeepSeek API with native multimodal support. Change the model name todeepseek-flash to call the latest V4.1 Flash model. The previous-generation models V4 Flash and V4 Flash Vision Exp have been retired; for compatibility, the model names deepseek-v4-flash and deepseek-v4-flash-vision-exp are temporarily routed to V4.1 Flash.\n\nIn response to user demand, we have decided to continue providing API services for DeepSeek V4 Pro after September 14, 2026, with the billing method remaining unchanged. We will provide further notice should there be any changes. Thank you for your understanding and support!\nAPI pricing adjustment\nWith the release of DeepSeek-V4.1-Flash, API prices have been reduced accordingly. For details, please refer to Models & Pricing.\n\nFor more details, please refer to this documentation.\n\n## Date: 2026-08-21\n\n### DeepSeek-V4-Flash-Vision-Exp Release\n\nToday, the new multimodal vision understanding model DeepSeek-V4-Flash-Vision-Exp is now available on the DeepSeek API platform. This is an experimental model that can be accessed by settingmodel='deepseek-v4-flash-vision-exp'.\n\n- Terminal Bench 2.1: 83.9\n- NL2Repo: 57.7\n- DeepSWE: 59.3\n- DSBench-Hard: 63.6\n- AutomationBench (Public): 25.7\n- ApexBench (Pass@1): 36.5\n- Agents' Last Exam: 27.3\n- Chartography: 64.3\n- ZeroBench (Pass@5): 35.0\n\n* For the Code Agent text tasks in the public benchmark sets, the DeepSeek family models were tested using the DeepSeek Harness minimal mode as the framework, with the max effort level, topp=0.95, and temperature=1.0; in the ApexBench and Agents' Last Exam evaluations, the text model DeepSeek-V4-Flash ignores the multimodal elements within them.\n\nIn terms of pure-text capabilities (agent, reasoning, world knowledge, etc.), DeepSeek-V4-Flash-Vision-Exp is on par with the official DeepSeek-V4-Flash.\n\nOn agent benchmarks that require visual understanding, DeepSeek-V4-Flash-Vision-Exp delivers a significant leap over DeepSeek-V4-Flash, bringing its multimodal agent capabilities close to Opus-4.8.\n\nFor usage details, please refer to the Vision guide.\n\n## Date: 2026-08-13\n\n### DeepSeek-V4-Pro Update\n\nThe GA release of DeepSeek-V4-Pro has been rolled out on the APP, Web, and API. The API calling method remains unchanged — simply set the model name todeepseek-v4-pro to use the latest version.\n\nThe GA version of DeepSeek V4 Pro greatly enhances agent capabilities, with particularly significant performance improvements in production environments.\n\n- HLE (wo / w tools): 42.7/60.0\n- Terminal Bench 2.1: 87.9\n- NL2Repo: 61.5\n- Cybergym: 83.3\n- DeepSWE: 62.7\n- Toolathlon-Verified: 74.1\n- Agents' Last Exam: 25.7\n- AutomationBench (Public): 31.8\n- DSBench-FullStack: 71.1\n- DSBench-Hard: 67.2\n\nThe DeepSeek API now natively supports the OpenAI Responses API format and is specifically adapted for Codex. Users can refer to the official documentation and complete the Codex configuration with a one-click configuration script.\nMore flexible thinking effort control\nThe thinking modes of V4-Pro and V4-Flash now support three thinking effort levels: low / high / max. In real-world usage, users can flexibly choose based on task complexity: use low for simple tasks, high for daily Agent tasks, and max for more complex scenarios. For setup instructions, please refer to the official API documentation: Thinking Mode.\nAPI Pricing Adjustment\nWith the official release of the DeepSeek V4 model family, we will update and adjust API pricing. To allocate resources more reasonably, we will adopt peak/off-peak pricing, with off-peak prices set at half of the peak-hour prices, encouraging users to schedule their tasks based on actual usage. The new prices will take effect at 16:00 (UTC Time) on August 16, 2026.\n\nFor more details, please refer to this documentation.\n\n## Date: 2026-07-31\n\n### DeepSeek-V4-Flash Update\n\nThe official release of the DeepSeek-V4-Flash API is now in public beta. The API calling method remains unchanged — simply set the model name todeepseek-v4-flash to use the latest version.\n\n- Terminal Bench 2.1: 82.7\n- NL2Repo: 54.2\n- Cybergym: 76.7\n- DeepSWE: 54.4\n- Toolathlon verified: 70.3\n- Agent Last Exam: 25.2\n- Automation Bench (Public): 25.1\n- DSBench-FullStack: 68.7\n- DSBench-Hard: 59.6\n\nThe official V4-Flash natively supports the Responses API format and is specifically adapted for Codex. For the specific configuration, please refer to the documentation.\n\nNote 1: For the Code Agent tasks in the public benchmark sets, the official DeepSeek-V4-Flash was tested using the DeepSeek Harness minimal mode (to be released soon) as the framework, with the max effort level, topp=0.95, and temperature=1.0\nNote 2: DSBench-FullStack is an internal full-stack development test set, and DSBench-Hard is an internal Coding Agent hard-problem test set\n\nDeepSeek-V4-Flash-0731 keeps the same model architecture and size as DeepSeek-V4-Fla\n\n[2] Change Log | DeepSeek API Docs\nURL: https://api-docs.deepseek.com/updates/?me=130Wiki&where=CaelLabWiki#1\ndate: 2026-10-16T16:00:00+00:00\nsite_name: DeepSeek\nrerank_score: 2.367229461669922\nauthority: 3\nEvidence: Search / Fetch API is now available, powered by our in-house search engine and supporting web search and fetch. Click here to view the guide.\n\n# Change Log\n\n## Date: 2026-10-17\n\n### Opening up the in-house search API\n\nDeepSeek's web and API search capabilities are powered by our in-house DeepSeek search engine, which reliably handles hundreds of millions of search requests from around the world every day. DeepSeek Search is an AI-native general-purpose search engine that indexes hundreds of billions of web pages, supports multilingual search, and returns highly relevant, authoritative, and timely results in real time. It filters SEO spam, GEO manipulation, and low-quality AIGC through strict detection mechanisms, ensuring authoritative and trustworthy information for users and LLMs. For usage details, see the Search & Fetch guide.\n\n### DeepSeek-V4.1-Flash-1017 Update\n\nDeepSeek V4.1 Flash has been upgraded to DeepSeek-V4.1-Flash-1017. The official web and APP models have also been updated to the new version. The API calling method and pricing remain unchanged — simply usedeepseek-flash to access the latest model.\n\nCompared with the previous DeepSeek V4.1, the new model delivers substantial improvements across benchmarks:\n\n- HLE (w/o tools): 42.6 (44.0*)\n- Terminal-Bench 4.0: 42.3\n- DeepSWE v1.1: 77.0\n- ProgramBench: 29.1\n- NL2Repo-Bench: 68.2\n- Automation-Bench v1.0.6: 60.5\n- Agents' Last Exam: 35.4\n- Apex Bench v1.1: 72.1\n- Chartography (w/tools): 83.0\n- BabyVision (w/tools): 92.5\n- ZeroBench-main (w/tools): 51.0\n\n* Tested only on the pure-text subset of the HLE benchmark set. Terminal-Bench 4.0 was tested with the Claude Code framework, and DeepSWE with the Mini-SWE-V2 framework. ZeroBench-main was evaluated with Pass@5.\n\nWhile improving performance, we also reduced the model's task runtime and output length, enabling users to complete tasks at lower cost and higher speed and achieving a new performance–cost Pareto optimum across multiple harnesses. We specifically optimized for DeepSeek Harness, Tencent CodeBuddy, WorkBuddy, and other platforms. Please upgrade to DeepSeek Harness 0.2.1-rc.1 or later for the best experience with the new model.\n\n## Date: 2026-09-10\n\n### DeepSeek-V4.1-Flash Release\n\nToday, we officially release the DeepSeek-V4.1-Flash model. It is the smallest model in our new architecture family, with native multimodal visual understanding. The new architecture is designed for a higher capability ceiling, faster inference, higher throughput, and scaling to larger models.\n\n- GPQA Diamond: 90.9\n- HLE: 36.8 (39.1*)\n- Codeforces (Rating): 3471\n- MathArena Apex: 65.6\n- Terminal-Bench 2.1: 90.6\n- Terminal-Bench 3.0: 30.0\n- Terminal-Bench 4.0: 31.2\n- DeepSWE v1.1: 74.2\n- ProgramBench: 20.3\n- NL2Repo-Bench: 65.4\n- CyberGym: 88.1\n- SEC-Bench Pro: 62.8\n- ExploitGym: 15.3\n- HLE (w/tools): 63.9\n- Automation-Bench: 54.8\n- Agents' Last Exam: 31.8\n- Chartography (w/tools): 78.9\n- BabyVision (w/tools): 89.6\n- ZeroBench-main (w/tools): 49.0\n\nAPI changes\n\n* Tested only on the pure-text subset of the HLE benchmark set.\n\nDeepSeek V4.1 Flash is now available on the DeepSeek API with native multimodal support. Change the model name todeepseek-flash to call the latest V4.1 Flash model. The previous-generation models V4 Flash and V4 Flash Vision Exp have been retired; for compatibility, the model names deepseek-v4-flash and deepseek-v4-flash-vision-exp are temporarily routed to V4.1 Flash.\n\nIn response to user demand, we have decided to continue providing API services for DeepSeek V4 Pro after September 14, 2026, with the billing method remaining unchanged. We will provide further notice should there be any changes. Thank you for your understanding and support!\nAPI pricing adjustment\nWith the release of DeepSeek-V4.1-Flash, API prices have been reduced accordingly. For details, please refer to Models & Pricing.\n\nFor more details, please refer to this documentation.\n\n## Date: 2026-08-21\n\n### DeepSeek-V4-Flash-Vision-Exp Release\n\nToday, the new multimodal vision understanding model DeepSeek-V4-Flash-Vision-Exp is now available on the DeepSeek API platform. This is an experimental model that can be accessed by settingmodel='deepseek-v4-flash-vision-exp'.\n\n- Terminal Bench 2.1: 83.9\n- NL2Repo: 57.7\n- DeepSWE: 59.3\n- DSBench-Hard: 63.6\n- AutomationBench (Public): 25.7\n- ApexBench (Pass@1): 36.5\n- Agents' Last Exam: 27.3\n- Chartography: 64.3\n- ZeroBench (Pass@5): 35.0\n\n* For the Code Agent text tasks in the public benchmark sets, the DeepSeek family models were tested using the DeepSeek Harness minimal mode as the framework, with the max effort level, topp=0.95, and temperature=1.0; in the ApexBench and Agents' Last Exam evaluations, the text model DeepSeek-V4-Flash ignores the multimodal elements within them.\n\nIn terms of pure-text capabilities (agent, reasoning, world knowledge, etc.), DeepSeek-V4-Flash-Vision-Exp is on par with the official DeepSeek-V4-Flash.\n\nOn agent benchmarks that require visual understanding, DeepSeek-V4-Flash-Vision-Exp delivers a significant leap over DeepSeek-V4-Flash, bringing its multimodal agent capabilities close to Opus-4.8.\n\nFor usage details, please refer to the Vision guide.\n\n## Date: 2026-08-13\n\n### DeepSeek-V4-Pro Update\n\nThe GA release of DeepSeek-V4-Pro has been rolled out on the APP, Web, and API. The API calling method remains unchanged — simply set the model name todeepseek-v4-pro to use the latest version.\n\nThe GA version of DeepSeek V4 Pro greatly enhances agent capabilities, with particularly significant performance improvements in production environments.\n\n- HLE (wo / w tools): 42.7/60.0\n- Terminal Bench 2.1: 87.9\n- NL2Repo: 61.5\n- Cybergym: 83.3\n- DeepSWE: 62.7\n- Toolathlon-Verified: 74.1\n- Agents' Last Exam: 25.7\n- AutomationBench (Public): 31.8\n- DSBench-FullStack: 71.1\n- DSBench-Hard: 67.2\n\nThe DeepSeek API now natively supports the OpenAI Responses API format and is specifically adapted for Codex. Users can refer to the official documentation and complete the Codex configuration with a one-click configuration script.\nMore flexible thinking effort control\nThe thinking modes of V4-Pro and V4-Flash now support three thinking effort levels: low / high / max. In real-world usage, users can flexibly choose based on task complexity: use low for simple tasks, high for daily Agent tasks, and max for more complex scenarios. For setup instructions, please refer to the official API documentation: Thinking Mode.\nAPI Pricing Adjustment\nWith the official release of the DeepSeek V4 model family, we will update and adjust API pricing. To allocate resources more reasonably, we will adopt peak/off-peak pricing, with off-peak prices set at half of the peak-hour prices, encouraging users to schedule their tasks based on actual usage. The new prices will take effect at 16:00 (UTC Time) on August 16, 2026.\n\nFor more details, please refer to this documentation.\n\n## Date: 2026-07-31\n\n### DeepSeek-V4-Flash Update\n\nThe official release of the DeepSeek-V4-Flash API is now in public beta. The API calling method remains unchanged — simply set the model name todeepseek-v4-flash to use the latest version.\n\n- Terminal Bench 2.1: 82.7\n- NL2Repo: 54.2\n- Cybergym: 76.7\n- DeepSWE: 54.4\n- Toolathlon verified: 70.3\n- Agent Last Exam: 25.2\n- Automation Bench (Public): 25.1\n- DSBench-FullStack: 68.7\n- DSBench-Hard: 59.6\n\nThe official V4-Flash natively supports the Responses API format and is specifically adapted for Codex. For the specific configuration, please refer to the documentation.\n\nNote 1: For the Code Agent tasks in the public benchmark sets, the official DeepSeek-V4-Flash was tested using the DeepSeek Harness minimal mode (to be released soon) as the framework, with the max effort level, topp=0.95, and temperature=1.0\nNote 2: DSBench-FullStack is an internal full-stack development test set, and DSBench-Hard is an internal Coding Agent hard-problem test set\n\nDeepSeek-V4-Flash-0731 keeps the same model architecture and size as DeepSeek-V4-Fla",
+        "error": "",
+        "time": "2026-10-27T07:48:54.155878+00:00"
+      }
+    },
+    {
+      "type": "assistant.tool_calls",
+      "data": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": "",
+        "reasoning_details": [],
+        "tool_calls": [
+          {
+            "id": "call_00_KLQl9dCnkW8wBkpXUJJZ2838",
+            "name": "WebFetch",
+            "arguments": {
+              "url": "https://api-docs.deepseek.com/guides/search/"
+            },
+            "_arguments_normalized": true,
+            "_nested_arguments_normalized": false
+          }
+        ],
+        "model": "deepseek-flash",
+        "model_identity": {
+          "candidateId": "deepseek-chat",
+          "adapter": "openai",
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
+          "endpoint": "https://api.deepseek.com",
+          "reasoningEffort": ""
+        },
+        "usage": {
+          "prompt_tokens": 9341,
+          "completion_tokens": 48,
+          "total_tokens": 9389,
+          "prompt_cache_hit_tokens": 4096,
+          "prompt_cache_miss_tokens": 5245
+        },
+        "model_observation_id": "model_observation_d4ad565507be3c32a0dfea23d5294ee5",
+        "model_latency_ms": 915.9149579936638,
+        "finish_reason": "tool_calls",
+        "response_id": "6805b994-4ccc-4a57-bc52-a530742415ea",
+        "streamed": true,
+        "stream_source_id": "assistant_9a4103298b86485de5812081144d5e82",
+        "run_id": "deepseek-live-agent",
+        "caused_by": "tool_results_3e1ea12010a90afebf6f4305049ecbf9:2026-10-27T07:48:54.158808+00:00",
+        "batch_key": "batch_5f6438ee85d5f5c99e699bbdaee80b59",
+        "task_context_id": "ctx_224073df3f0e4a00",
+        "task_control": false,
+        "answer_complete": false
+      }
+    },
+    {
+      "type": "tool.completed",
+      "data": {
+        "call_id": "call_00_KLQl9dCnkW8wBkpXUJJZ2838",
+        "name": "WebFetch",
+        "success": true,
+        "value": "Search & Fetch | DeepSeek API Docs\nURL: https://api-docs.deepseek.com/guides/search/\n\nSearch \\/ Fetch API is now available\\, powered by our in\\-house search engine and supporting web search and fetch\\. Click here to view the guide\\.\n\n\\# Search \\& Fetch\n\nThe Search API and the Fetch API give agents and RAG applications access to live web content\\:\n\n\\- Search API finds web pages for a query and returns structured results\\. It is powered by DeepSeek\\'s in\\-house search engine\\.\n\\- Fetch API retrieves a single web page and returns its content as Markdown\\.\n\nBoth are raw JSON APIs\\. They use the same bearer authentication as the DeepSeek API\\.\n\nThe base URL ishttps\\:\\/\\/api\\.deepseek\\.com\\:\n\nAPI \\| Endpoint \n\\-\\-\\-\\|\\-\\-\\-\nSearch \\| POST https\\:\\/\\/api\\.deepseek\\.com\\/v1\\/tools\\/search \nFetch \\| POST https\\:\\/\\/api\\.deepseek\\.com\\/v1\\/tools\\/fetch \n\nSee the Search API Reference and Fetch API Reference for the complete request and response schemas\\.\n\n\\#\\# Authentication\n\nSend your API key and the JSON content type in the request headers\\:\n\nHeader \\| Required \\| Value \n\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\nAuthorization \\| Yes \\| Bearer \\<DeepSeek API Key\\> \nContent\\-Type \\| Yes \\| application\\/json \n\n\\#\\# Search API\n\n\\#\\#\\# Request\ncurl https\\:\\/\\/api\\.deepseek\\.com\\/v1\\/tools\\/search \\\\\n  \\-H \\\"Authorization\\: Bearer \\<DeepSeek API Key\\>\\\" \\\\\n  \\-H \\\"Content\\-Type\\: application\\/json\\\" \\\\\n  \\-d \\'\\{\n    \\\"query\\\"\\: \\\"DeepSeek V4 release\\\"\\,\n    \\\"count\\\"\\: 5\\,\n    \\\"need\\_content\\\"\\: true\n  \\}\\'\nimport requests\n\nresponse \\= requests\\.post\\(\n    \\\"https\\:\\/\\/api\\.deepseek\\.com\\/v1\\/tools\\/search\\\"\\,\n    headers\\=\\{\n        \\\"Authorization\\\"\\: \\\"Bearer \\<DeepSeek API Key\\>\\\"\\,\n    \\}\\,\n    json\\=\\{\n        \\\"query\\\"\\: \\\"DeepSeek V4 release\\\"\\,\n        \\\"count\\\"\\: 5\\,\n        \\\"need\\_content\\\"\\: True\\,\n    \\}\\,\n\\)\nresponse\\.raise\\_for\\_status\\(\\)\n\nfor result in response\\.json\\(\\)\\[\\\"results\\\"\\]\\:\n    print\\(result\\[\\\"title\\\"\\]\\, result\\[\\\"url\\\"\\]\\)\n    print\\(result\\[\\\"summary\\\"\\]\\)\n\nRequest fields\\:\n\nField \\| Type \\| Required \\| Default \\| Description \n\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\nquery \\| string \\| Yes \\| \\- \\| The search query must contain 1 to 128 Unicode characters\\, cannot be all whitespace\\, and supports the query operators listed below\\. \ncount \\| integer \\| No \\| 10 \\| The number of results to return\\, between 1 and 50\\. \nori\\_question \\| string \\| No \\| \\- \\| The user\\'s original question that triggered the search\\, between 1 and 128 characters\\, to improve query understanding\\, with null treated as not provided\\. \nlocalization \\| string \\| No \\| \\\"\\\" \\| An optional IP address used to localize search results\\. \nneed\\_content \\| boolean \\| No \\| false \\| Whether to return page content in content\\, which is always an empty string when false\\. \n\nUnknown fields in the request body are ignored\\.\n\n\\#\\#\\# Query Operators\n\nThe query is forwarded with its search syntax intact\\. The examples below combine operators with a search term\\; you can combine multiple operators in one query\\.\n\nOperator \\| Example \\| Description \n\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\nsite\\: \\| DeepSeek site\\:github\\.com \\| Restrict results to the given site\\, and to target multiple sites\\, separate the site\\: clauses with spaces and join them with OR\\, for example DeepSeek site\\:github\\.com OR site\\:huggingface\\.co\\. \n\\-site\\: \\| DeepSeek \\-site\\:example\\.com \\| Exclude the given site\\, and separate multiple sites with spaces\\. \n\\- \\| DeepSeek \\-advertisement \\| Exclude pages containing the term\\, and separate multiple terms with spaces\\. \n\\-\\\"\\.\\.\\.\\\" \\| DeepSeek \\-\\\"release notes\\\" \\| Exclude pages containing the exact phrase\\, which can contain spaces\\, and separate multiple phrases with spaces\\. \n\\\"\\.\\.\\.\\\" \\| DeepSeek \\\"exact phrase\\\" \\| Match an exact phrase\\, and separate multiple phrases with spaces\\. \nlang\\: \\| DeepSeek lang\\:zh\\,en \\| Restrict results to the given language codes\\, separating multiple codes with commas\\, for example lang\\:zh\\,en\\. \nafter\\: \\| DeepSeek after\\:2025 or DeepSeek after\\:2025\\-01\\-01 \\| Restrict results to pages published after a date\\. \nbefore\\: \\| DeepSeek before\\:2026 or DeepSeek before\\:2026\\-06\\-01 \\| Restrict results to pages published before a date\\. \n\nFor example\\:\n\\{\n  \\\"query\\\"\\: \\\"DeepSeek site\\:github\\.com OR site\\:huggingface\\.co lang\\:en after\\:2025\\\"\\,\n  \\\"count\\\"\\: 10\n\\}\n\n\\#\\#\\# Response\n\nA successful request returns HTTP 200 with aresults array\\. A normal search with no matches returns an empty array\\.\n\\{\n  \\\"results\\\"\\: \\[\n    \\{\n      \\\"rerank\\_score\\\"\\: 2\\.4\\,\n      \\\"title\\\"\\: \\\"DeepSeek V4 model released\\\"\\,\n      \\\"url\\\"\\: \\\"https\\:\\/\\/example\\.com\\/deepseek\\-v4\\\"\\,\n      \\\"snippet\\\"\\: \\\"DeepSeek V4 is now available\\, with tool calling and long\\-context support\\.\\\"\\,\n      \\\"summary\\\"\\: \\\"DeepSeek has released the V4 model\\. The release adds improved tool calling and long\\-context support for agent workflows\\.\\\"\\,\n      \\\"content\\\"\\: \\\"DeepSeek V4 is now generally available\\.\\.\\.\\\"\\,\n      \\\"site\\_name\\\"\\: \\\"Example News\\\"\\,\n      \\\"site\\_icon\\\"\\: \\\"https\\:\\/\\/example\\.com\\/favicon\\.ico\\\"\\,\n      \\\"date\\\"\\: \\\"2026\\-06\\-01T00\\:00\\:00\\+00\\:00\\\"\\,\n      \\\"authority\\\"\\: 3\n    \\}\n  \\]\n\\}\n\nEach item inresults contains\\:\n\nField \\| Type \\| Description \n\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\nrerank\\_score \\| number \\| A relevance score from 0 to 3 that combines signals such as relevance\\, authority\\, and freshness\\, with scores of 1\\.5 or above considered high\\-quality results\\. \ntitle \\| string \\| The title of the result\\. \nurl \\| string \\| The URL of the result\\. \nsnippet \\| string \\| A short summary related to the query\\, typically 100 to 200 characters\\, intended for display in a UI\\. \nsummary \\| string \\| A long summary related to the query\\, typically 600 to 800 characters\\, intended to be read by a model\\. \ncontent \\| string \\| The page content\\, which is empty when need\\_content is false or when the content is unavailable\\. \nsite\\_name \\| string or null \\| The name of the site\\, or null when unavailable\\. \nsite\\_icon \\| string or null \\| The URL of the site icon\\, or null when unavailable\\. \ndate \\| string or null \\| The publication time in UTC\\, formatted as RFC 3339\\, or null when unknown\\. \nauthority \\| integer \\| The authority tier of the page\\, 0 to 4 \\(\\-1 means unknown\\)\\, with values of 3 or above indicating highly authoritative sources\\. \n\n\\#\\# Fetch API\n\n\\#\\#\\# Request\ncurl https\\:\\/\\/api\\.deepseek\\.com\\/v1\\/tools\\/fetch \\\\\n  \\-H \\\"Authorization\\: Bearer \\<DeepSeek API Key\\>\\\" \\\\\n  \\-H \\\"Content\\-Type\\: application\\/json\\\" \\\\\n  \\-d \\'\\{\n    \\\"url\\\"\\: \\\"https\\:\\/\\/example\\.com\\/article\\\"\n  \\}\\'\nimport requests\n\nresponse \\= requests\\.post\\(\n    \\\"https\\:\\/\\/api\\.deepseek\\.com\\/v1\\/tools\\/fetch\\\"\\,\n    headers\\=\\{\n        \\\"Authorization\\\"\\: \\\"Bearer \\<DeepSeek API Key\\>\\\"\\,\n    \\}\\,\n    json\\=\\{\\\"url\\\"\\: \\\"https\\:\\/\\/example\\.com\\/article\\\"\\}\\,\n\\)\nresponse\\.raise\\_for\\_status\\(\\)\n\npage \\= response\\.json\\(\\)\nprint\\(page\\[\\\"title\\\"\\]\\)\nprint\\(page\\[\\\"content\\\"\\]\\)\n\nRequest fields\\:\n\nField \\| Type \\| Required \\| Description \n\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\nurl \\| string \\| Yes \\| The page URL to fetch\\, which must be at most 8192 characters\\, an HTTP or HTTPS URL with a host\\, and must not contain a username or password\\. \n\n\\#\\#\\# Response\n\\{\n  \\\"title\\\"\\: \\\"Example article\\\"\\,\n  \\\"content\\\"\\: \\\"\\# Example article\\\\n\\\\nArticle content\\.\\\"\n\\}\n\nField \\| Type \\| Description \n\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\ntitle \\| string \\| The title of the page\\, empty when the title is unavailable\\. \ncontent \\| string \\| The fetched page content as Markdown text\\. \n\nFetching is subject to the target site\\'s availability and access policies\\.\n\n\\#\\# Errors\n\nErrors follow the OpenAI\\-compatible error format\\. Theparam field is always null\\.\n\\{\n  \\\"error\\\"\\: \\{\n    \\\"message\\\"\\: \\\"\\'count\\' must be between 1 and 50\\\"\\,\n    \\\"type\\\"\\: \\\"invalid\\_request\\_error\\\"\\,\n    \\\"param\\\"\\: null\\,\n    \\\"code\\\"\\: \\\"invalid\\_request\\_error\\\"\n  \\}\n\\}\n\nHTTP Status \\| Description \n\\-\\-\\-\\|\\-\\-\\-\n400 \\| The request headers or body are invalid\\, including malformed JSON or an invalid field value\\. \n401 \\| The API key is missing or invalid\\. \n402 \\| The account has insufficient balance\\. \n403 \\| The Fetch request was rejected by the security policy\\. \n404 \\| Fetch could not retrieve usable page content\\, for example due to an unavailable URL\\, a URL blocked by site policy\\, an error from the target site\\, an unsupported content type\\, or a page with no extractable Markdown content\\. \n408 \\| Reading the request body timed out\\. \n413 \\| The request body is too large\\. \n429 \\| The Search or Fetch QPS limit was exceeded\\. \n500 \\| An internal server error occurred\\. \n504 \\| A downstream request timed out\\. \n\nSearch and Fetch are read\\-only\\. For HTTP 408\\, 429\\, or 5xx errors\\, wait and retry\\. For HTTP 402\\, top up your account before retrying\\. Do not retry other 4xx errors without changing the request\\.\n\n\\#\\# Billing\n\nSearch and Fetch are billed per successful request\\, not by tokens or by the number of returned results\\:\n\nAPI \\| Unit \\| Price \n\\-\\-\\-\\|\\-\\-\\-\\|\\-\\-\\-\nSearch \\| Per 1\\,000 successful requests \\| \\$0\\.75 \nFetch \\| Per 1\\,000 successful requests \\| \\$0\\.75 \n\nA request is billable only when it returns HTTP 200 and produces a result \\(Search must return a non\\-emptyresults array\\, and Fetch must return page content\\)\\. Failed requests\\, empty search results\\, and timeouts are not billed\\. count only controls how many results are returned and does not affect the per\\-request price\\.\n\nNote\\: when you use the DeepSeek API through DeepSeek Harness\\, Claude Code\\, or Codex\\, server\\-side tool calls already hit the Search and Fetch APIs\\. These calls are currently free of charge\\; per\\-request billing starts at 00\\:00 Beijing time on November 1\\, 2026\\.\n\n\\#\\# Rate Limits\n\nFor each account\\, Search and Fetch are limited independently\\, and traffic to one does not consume the other\\'s quota\\:\n\nAPI \\| QPS Limit \n\\-\\-\\-\\|\\-\\-\\-\nSearch \\| 100 \nFetch \\| 25 \n\nThe QPS \\(requests per second\\) limits are calculated at the account level\\, regardless of which API key is used\\, and are separate from the model concurrency limits\\. Requests above the account\\-level QPS limit receive HTTP 429\\. In addition to the account\\-level limit\\, Fetch is also subject to a per\\-domain QPS limit\\, and requests above that limit also receive HTTP 429\\.",
+        "error": "",
+        "time": "2026-10-27T07:48:55.519224+00:00"
+      }
+    },
+    {
+      "type": "assistant.completed",
+      "data": {
+        "role": "assistant",
+        "content": "三次工具调用都已执行完成。\n\n**Search / Fetch API（DeepSeek）**\n\n- **Search**：由 DeepSeek 自研搜索引擎提供支持，根据查询词查找网页并返回结构化结果（标题、URL、摘要、相关性分数等）。请求路径为 `POST https://api.deepseek.com/v1/tools/search`；`query` 必填，长度限制为 **1–128 个 Unicode 字符**，不能全为空白。\n- **Fetch**：抓取单个网页，并返回以 Markdown 格式呈现的正文。请求路径为 `POST https://api.deepseek.com/v1/tools/fetch`；`url` 必填，长度**最多 8192 字符**，且须是不含用户名密码的 HTTP/HTTPS 地址。\n- 两者都用 Bearer Token 鉴权，属于只读接口。\n\n来源：\n- https://api-docs.deepseek.com/guides/search/\n- https://api-docs.deepseek.com/updates/",
+        "reasoning": "",
+        "reasoning_details": [],
+        "tool_calls": [],
+        "model": "deepseek-flash",
+        "model_identity": {
+          "candidateId": "deepseek-chat",
+          "adapter": "openai",
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
+          "endpoint": "https://api.deepseek.com",
+          "reasoningEffort": ""
+        },
+        "usage": {
+          "prompt_tokens": 13399,
+          "completion_tokens": 213,
+          "total_tokens": 13612,
+          "prompt_cache_hit_tokens": 9344,
+          "prompt_cache_miss_tokens": 4055
+        },
+        "model_observation_id": "model_observation_b8092b84a46db08838a97d1b59cc58c4",
+        "model_latency_ms": 1761.8704590713605,
+        "finish_reason": "stop",
+        "response_id": "023fc316-3a08-4b31-8c92-572d2b967d4c",
+        "streamed": true,
+        "stream_source_id": "assistant_f81183d34c0b1028b06d50ee0e4f5ebc",
+        "run_id": "deepseek-live-agent",
+        "caused_by": "tool_results_37f31281b34bdf1c37f824de3743071e:2026-10-27T07:48:55.522196+00:00",
+        "batch_key": "batch_8bc5fa66d1d6ec1d1aaae835482689f1",
+        "task_context_id": "ctx_224073df3f0e4a00",
+        "task_control": false,
+        "answer_complete": true
+      }
+    }
+  ],
+  "model": "deepseek-flash",
+  "success": true,
+  "source_configuration_unchanged": true,
+  "completed_at": "2026-10-27T15:48:57.653558+08:00",
+  "review_fixes": [
+    "Direct WebFetch fallback honors the search proxy with trust_env=False.",
+    "Localhost and local-network pages bypass the remote API and proxy.",
+    "Aggregated invalid-argument failures retain different_arguments retry scope."
+  ],
+  "validation": {
+    "focused_pytest_passed": 102,
+    "ruff_passed": true,
+    "scope": "Production AgentSession -> model router -> real deepseek-flash -> PluginRuntime -> web_search application service -> real Search / Fetch APIs -> tool context -> real model final answer",
+    "network_mocking": false,
+    "failure_injection": "Temporary copied configuration only: invalid key to produce a real Fetch HTTP 401; direct request returned HTTP 200.",
+    "official_api_key_absent_from_report": true
+  }
+}
