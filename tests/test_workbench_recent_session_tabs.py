@@ -636,10 +636,9 @@ def test_topbar_activity_controls_hover_preview_and_overflow_are_separate():
         ".workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group.exceptional {",
         1,
     )[1].split("}", 1)[0]
-    assert "height: 54%" in exceptional_css
     assert "min-height: 0" in exceptional_css
-    assert "max-height: 300px" in exceptional_css
-    assert "flex: 1 1 54%" in exceptional_css
+    assert "max-height: min(54%, 300px)" in exceptional_css
+    assert "flex: 0 1 auto" in exceptional_css
     assert ".workbench-session-overflow-group-items::-webkit-scrollbar" in css
     assert "window.innerHeight - rect.bottom - 16" in shell
     assert ".workbench-session-tab-more" in css
