@@ -163,11 +163,17 @@ def historical_assistant(value):
     content = str(value.get('content') or '')
     calls = []
     for call in value.get('tool_calls', []):
-        arguments = json.dumps(call.get('arguments', {}), ensure_ascii=False, default=str)
+        # Execution nodes use flat calls; compacted message tails use the
+        # model-facing function envelope with already serialized arguments.
+        function = call.get('function')
+        source = function if isinstance(function, dict) else call
+        raw_arguments = source.get('arguments', {})
+        arguments = (raw_arguments if isinstance(raw_arguments, str)
+                     else json.dumps(raw_arguments, ensure_ascii=False, default=str))
         preview = arguments[:ARGUMENT_PREVIEW_CHARS]
         if len(arguments) > ARGUMENT_PREVIEW_CHARS:
             preview = preview[:-1] + '…'
-        calls.append({'name': call.get('name', ''), 'arguments_preview': preview})
+        calls.append({'name': source.get('name', ''), 'arguments_preview': preview})
     if calls:
         content += ('\n\n' if content else '') + '[Historical tool calls; completed records, results discarded]\n' + json.dumps(calls, ensure_ascii=False)
     return {'role': 'assistant', 'content': content}
