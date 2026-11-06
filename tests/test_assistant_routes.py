@@ -10,7 +10,7 @@ from cyrene.plugins.builtin.session_management.host import WorkbenchHost
 
 @pytest.mark.asyncio
 async def test_assistant_entry_is_global_durable_and_does_not_read_contexts(tmp_path):
-    from cyrene.workbench.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+    from cyrene.workbench.projects.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
     from cyrene.workbench.chat.chat_repository import ChatRepository
 
     repo = ChatRepository(str(tmp_path / "app.db"))
@@ -49,7 +49,7 @@ async def test_assistant_entry_is_global_durable_and_does_not_read_contexts(tmp_
 
 
 def test_assistant_execution_scope_survives_without_any_user_project(monkeypatch, tmp_path):
-    from cyrene.workbench.assistant import ASSISTANT_SCOPE_ID
+    from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID
     from cyrene.workbench.projects import project_repository
     from cyrene.workbench.chat.chat_application import resolve_chat_workspace_dir
     from cyrene import config
@@ -65,7 +65,7 @@ def test_assistant_execution_scope_survives_without_any_user_project(monkeypatch
 
 
 def test_single_assistant_is_preserved_across_restarts_without_scanning_chats(tmp_path, monkeypatch):
-    from cyrene.workbench.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+    from cyrene.workbench.projects.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
     from cyrene.workbench.chat.chat_repository import ChatRepository
 
     repo = ChatRepository(str(tmp_path / "app.db"))

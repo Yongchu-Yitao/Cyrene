@@ -231,10 +231,10 @@ def test_chat_page_restores_only_a_valid_persisted_terminal_workspace():
     page = _frontend_source("features/chat/page.jsx")
     terminal_controller = _frontend_source("features/chat/terminal-controller.jsx")
 
-    assert "var restored = wbcReadPaneWorkspace(projectId);" in page
+    assert "var restored = wbcReadPaneWorkspace(paneStorageId);" in page
     assert "wbcValidatePaneWorkspace(stored, chats, terminals)" in page
-    assert "wbcWritePaneWorkspace(projectId, activeChatId, paneLayout);" in page
-    assert "wbcClearPaneWorkspace(projectId);" in page
+    assert "wbcWritePaneWorkspace(paneStorageId, activeChatId, paneLayout);" in page
+    assert "wbcClearPaneWorkspace(paneStorageId);" in page
     assert "persistedWorkspace && persistedWorkspace.activeChatId" in page
     assert "hydrated: loadedProjectId === String(projectId || \"\")" in terminal_controller
     assert "Opening a terminal\n      // pane remains an explicit user or Agent presentation action." in terminal_controller

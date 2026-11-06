@@ -871,7 +871,7 @@ def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
         ".wbc-chat-card:focus,\n.wbc-chat-card:focus-visible {", 1
     )[1].split("}", 1)[0]
     dark_page_css = styles.split(
-        'html[data-theme="dark"] .wbc-page {', 1
+        'html[data-theme="dark"] .wbc-page,\nhtml[data-theme="dark"] .assistant-chat-card-slot {', 1
     )[1].split("}", 1)[0]
     rail_hover_css = styles.split(
         ".wbc-rail .wbc-chat-card:hover,", 1
@@ -879,7 +879,7 @@ def test_workbench_chat_cards_are_borderless_and_compact_overview_is_flat():
     rail_active_hover_css = styles.split(
         ".wbc-rail .wbc-chat-card.active:hover {", 1
     )[1].split("}", 1)[0]
-    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
+    page_css = styles.split(".wbc-page,\n.assistant-chat-card-slot {", 1)[1].split("}", 1)[0]
 
     assert "border: 0;" in chat_card_css
     assert "box-shadow: var(--wbc-control-shadow);" in chat_card_css
@@ -1180,12 +1180,13 @@ def test_workbench_chat_rail_uses_the_shared_physical_card_and_fixed_header():
     assert 'className="wbc-rail-filter"' not in source
     assert 'className="wbc-rail-toolbar"' not in source
     assert 'className="wbc-module-nav"' not in source
-    assert 'aria-label={wbcT("workbenchChat.newChat"' in source
-    rail_markup = source.split('<div className="wbc-rail-glass">', 1)[1].split(
+    assert 'actionLabel={wbcT("workbenchChat.newChat"' in source
+    assert "aria-label={actionLabel}" in source
+    rail_markup = source.split("<WbcRailToolbar", 1)[1].split(
         "{menuId &&", 1
     )[0]
-    assert rail_markup.index('data-cyrene-node-id="new_chat"') < rail_markup.index(
-        'data-cyrene-node-id="chat_search_input"'
+    assert rail_markup.index('actionNodeId="new_chat"') < rail_markup.index(
+        'searchNodeId="chat_search_input"'
     )
     assert 'workbenchChat.railTitle' not in rail_markup
     assert '<span>{wbcT("workbenchChat.newChat"' not in rail_markup
@@ -1247,8 +1248,8 @@ def test_workbench_chat_sidebar_is_a_top_aligned_floating_accordion():
 def test_workbench_chat_primary_cards_share_an_opaque_dark_surface():
     styles = workbench_style_source()
 
-    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
-    dark_page_css = styles.split('html[data-theme="dark"] .wbc-page {', 1)[1].split("}", 1)[0]
+    page_css = styles.split(".wbc-page,\n.assistant-chat-card-slot {", 1)[1].split("}", 1)[0]
+    dark_page_css = styles.split('html[data-theme="dark"] .wbc-page,\nhtml[data-theme="dark"] .assistant-chat-card-slot {', 1)[1].split("}", 1)[0]
     rail_card_css = styles.split(".wbc-rail::before {", 1)[1].split("}", 1)[0]
     pane_card_css = styles.split(".wbc-pane-card {", 1)[1].split("}", 1)[0]
     panel_surface_css = styles.split(".wbc-panel-accordion-surface {", 1)[1].split("}", 1)[0]
@@ -2101,7 +2102,7 @@ def test_project_files_open_in_a_project_scoped_pane_without_an_active_chat():
     assert 'String(card.id || "") === "new-conversation"' in pane_card_renderer
     assert "var isActiveConversation = isNewConversation || (" in pane_card_renderer
     assert "var singlePane = isNewConversation || paneCardCount === 1;" in pane_card_renderer
-    assert pane_card_renderer.index("if (isActiveConversation && singlePane)") < pane_card_renderer.index(
+    assert pane_card_renderer.index("if ((isActiveConversation && singlePane) || (renderConversation && card.kind === \"chat\"))") < pane_card_renderer.index(
         '} else if (card.kind === "chat")'
     )
     split_pane = frontend_module_source("features/chat/split-pane.jsx")
@@ -4179,7 +4180,7 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert 'transition: "commit"' in browser_view
     sync_view_block = main.split("  syncAttachedView() {", 1)[1].split("\n  setBounds(", 1)[0]
     set_bounds_index = sync_view_block.index("active.view.setBounds(targetBounds)")
-    attach_index = sync_view_block.index("win.contentView.addChildView(active.view)")
+    attach_index = sync_view_block.index("win.contentView.addChildView(active.view)", set_bounds_index)
     assert set_bounds_index < attach_index
     assert "active.view.setVisible(false)" in sync_view_block
     assert "active.view.setVisible(true)" in sync_view_block
@@ -4222,7 +4223,8 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "return this.commitBoundsTransition();" in settle_transition_block
     assert "info.transition === 'prepare'" in set_bounds_block
     assert "info.transition === 'commit'" in set_bounds_block
-    assert "Page.captureScreenshot" in main
+    capture = (root / "electron" / "browser" / "browser-screenshot.js").read_text(encoding="utf-8")
+    assert "Page.captureScreenshot" in capture
     assert "cssVisualViewport" in main
     assert "const surfaceRef = React.useRef(null);" in browser_view
     assert 'const browserWindow = node.closest(".wbc-browser-window")' in browser_view
@@ -6316,7 +6318,7 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
 
 def test_unified_search_only_shows_loading_status_while_results_are_pending():
     source = (frontend_module_source("features/chat/rail.jsx") + "\n" + frontend_module_source("features/chat/rail-terminal-view.jsx"))
-    input_markup = source.split('data-cyrene-node-id="chat_search_input"', 1)[1].split(
+    input_markup = source.split('searchNodeId="chat_search_input"', 1)[1].split(
         "/>\n", 1
     )[0]
     unified_results = source.split("{unifiedSearchActive ? (", 1)[1].split(
@@ -6419,7 +6421,7 @@ def test_work_navigation_toggles_board_and_cyrene_is_independent():
     navigation = "\n".join(
         line for line in navigation.splitlines() if not line.startswith("import ")
     ).rsplit("\nexport {", 1)[0]
-    script = "const React = {};\n" + navigation + """
+    script = "const React = {}; const events = []; const window = {dispatchEvent: e => events.push(e.type)}; const CustomEvent = class {constructor(type) {this.type = type;}};\n" + navigation + """
 const assert = require("node:assert/strict");
 let page = "schedule";
 const actions = () => createWorkbenchNavigationActions(
@@ -6448,6 +6450,7 @@ actions().onModuleWheel({
   target: {closest: () => true}, deltaX: 50, deltaY: 0, preventDefault() {}
 });
 assert.equal(page, "cyrene");
+assert.deepEqual(events, ["cyrene:assistant-home", "cyrene:assistant-home", "cyrene:assistant-home"]);
 """
     subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
 
@@ -6966,8 +6969,8 @@ def test_workbench_permission_mode_is_preserved_across_secondary_entry_points():
     assert 'mode: input.mode || "default"' in source
     assert "preparedInput.mode = wbcNormalizePermissionMode(" in source
     assert "activeChat.permissionMode" in source
-    assert "var answerMode = wbcNormalizePermissionMode(" in source
-    assert "{ mode: answerMode }" in source
+    assert 'mode: wbcNormalizePermissionMode(resumeMode, permissionMode || "default")' in source
+    assert "context.activeChat.permissionMode : summary.permissionMode" in source
     assert "var replayMode = wbcNormalizePermissionMode(" in source
     assert "{ retry: true, forkReplay: true, mode: replayMode }" in source
     assert 'mode: "auto", command: ""' not in source

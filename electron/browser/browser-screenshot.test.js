@@ -8,6 +8,7 @@ const source = fs.readFileSync(require.resolve('../main.js'), 'utf8');
 const method = source.slice(source.indexOf('  async screenshot('), source.indexOf('\n  goBack()', source.indexOf('  async screenshot(')));
 const screenshot = vm.runInNewContext(`({${method}}).screenshot`, {
   Buffer,
+  browserScreenshot: require('./browser-screenshot').browserScreenshot,
   PAGE_CSS_TARGET_WIDTH: 1100,
   validatePngBuffer(buffer) {
     if (!buffer.length) throw Error('screenshot data is empty');
@@ -100,10 +101,9 @@ test('an inactive task page is hosted hidden once, without changing the visible 
   assert.equal(mutations.filter(x => x[0] === 'bounds').length, 1);
 });
 
-const initializeMethod = source.slice(source.indexOf('  async initializeHiddenPageViewport('), source.indexOf('\n  async pageSnapshot(', source.indexOf('  async initializeHiddenPageViewport(')));
-const initializeHiddenPageViewport = vm.runInNewContext(`({${initializeMethod}}).initializeHiddenPageViewport`, {
-  PAGE_CSS_TARGET_WIDTH: 1100,
-});
+const initializeHiddenPageViewport = function (tab) {
+  return require('./browser-screenshot').initializeHiddenPageViewport(this, tab, 1100);
+};
 test('new hidden pages initialize their layout before navigation returns and restore hosting on error', async () => {
   for (const fail of [false, true]) {
     const changes = [];

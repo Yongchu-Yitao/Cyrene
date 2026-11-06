@@ -190,6 +190,7 @@
       "desktop/host-control.js",
       "browser/browser-input.js",
       "browser/browser-rpc.js",
+      "browser/browser-screenshot.js",
       "browser/browser-local-preview.js",
       "browser/browser-deep-dom.js",
       "browser/browser-context-menu.js",

@@ -96,6 +96,7 @@ _WORKBENCH_CHAT_SOURCE_FILES = (
     "features/chat/rail-drop-controller.jsx",
     "features/chat/rail-ordering.jsx",
     "features/chat/rail.jsx",
+    "features/chat/rail-toolbar.jsx",
     "features/chat/conversation.jsx",
     "features/chat/conversation-navigator.jsx",
     "features/chat/messages.jsx",

@@ -91,7 +91,7 @@
     "decisions": 26
   },
   "electron/main.js": {
-    "module_lines": 6525
+    "module_lines": 6487
   },
   "electron/main.js::<anonymous>.<anonymous>#35": {
     "decisions": 23
@@ -154,9 +154,6 @@
   "electron/main.js::BrowserTabManager.recordUserEvent": {
     "decisions": 25
   },
-  "electron/main.js::BrowserTabManager.screenshot": {
-    "decisions": 28
-  },
   "electron/main.js::BrowserTabManager.scroll": {
     "decisions": 41
   },
@@ -167,7 +164,7 @@
     "decisions": 48
   },
   "electron/main.js::BrowserTabManager.syncAttachedView": {
-    "decisions": 47
+    "decisions": 46
   },
   "electron/main.js::BrowserTabManager.syncChatOverlay": {
     "decisions": 30
@@ -356,11 +353,11 @@
     "lines": 119
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx": {
-    "module_lines": 1569
+    "module_lines": 1579
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer": {
-    "lines": 1365,
-    "decisions": 503,
+    "lines": 1375,
+    "decisions": 519,
     "hooks": 51
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#17": {
@@ -500,7 +497,7 @@
     "decisions": 28
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain": {
-    "lines": 607,
+    "lines": 608,
     "decisions": 65,
     "hooks": 33
   },
@@ -622,7 +619,7 @@
     "module_lines": 1852
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcActivityGroup": {
-    "decisions": 41
+    "decisions": 44
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::wbcActivityMessageView": {
     "decisions": 30
@@ -681,15 +678,15 @@
     "nesting": 21
   },
   "src/cyrene/workbench/webui/frontend/features/chat/model-api.jsx::sendMessage": {
-    "decisions": 35
+    "decisions": 40
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx": {
-    "module_lines": 3104
+    "module_lines": 3108
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage": {
     "lines": 3037,
-    "decisions": 190,
-    "hooks": 126
+    "decisions": 215,
+    "hooks": 131
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#43": {
     "decisions": 67
@@ -704,7 +701,7 @@
     "decisions": 32
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.applyChatSummaryEvent": {
-    "decisions": 22
+    "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.closePaneCardWithConfirmation": {
     "decisions": 32
@@ -716,11 +713,11 @@
     "nesting": 7
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderActiveConversationCard": {
-    "decisions": 22
+    "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard": {
     "lines": 334,
-    "decisions": 97,
+    "decisions": 102,
     "nesting": 11
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>.<anonymous>#4": {
@@ -755,14 +752,14 @@
     "decisions": 23
   },
   "src/cyrene/workbench/webui/frontend/features/chat/pane-drop-controller.jsx::wbcDroppedPaneCard": {
-    "decisions": 62,
-    "nesting": 7
+    "decisions": 72,
+    "nesting": 8
   },
   "src/cyrene/workbench/webui/frontend/features/chat/pane-drop-controller.jsx::wbcHandlePaneDrop": {
     "decisions": 28
   },
   "src/cyrene/workbench/webui/frontend/features/chat/pane-layout-controller.jsx::wbcOpenPaneContent": {
-    "decisions": 33
+    "decisions": 38
   },
   "src/cyrene/workbench/webui/frontend/features/chat/pane-semantic-controller.jsx::WbcPaneSemanticController": {
     "lines": 116
@@ -777,7 +774,7 @@
     "decisions": 22
   },
   "src/cyrene/workbench/webui/frontend/features/chat/pane-workspace.jsx::wbcPaneWorkspacePresentation": {
-    "decisions": 42
+    "decisions": 43
   },
   "src/cyrene/workbench/webui/frontend/features/chat/presentation.jsx::wbcBrowserFullscreenStatusText": {
     "decisions": 31
@@ -1104,7 +1101,7 @@
     "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/settings/data.jsx::DataPanel": {
-    "lines": 260,
+    "lines": 288,
     "decisions": 43
   },
   "src/cyrene/workbench/webui/frontend/features/settings/general.jsx::GeneralPanel": {
@@ -1440,10 +1437,10 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4319
+    "module_lines": 4340
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4319
+    "module_lines": 4340
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
     "module_lines": 1234
@@ -1691,7 +1688,44 @@
   },
   "src/cyrene/workbench/webui/frontend/workbench.jsx::WorkbenchApp": {
     "lines": 460,
-    "decisions": 38,
-    "hooks": 41
+    "decisions": 41,
+    "hooks": 42
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::wbcGroupConsecutiveActivityMessages.<anonymous>": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#29": {
+    "decisions": 25
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#45": {
+    "decisions": 67
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#61": {
+    "decisions": 49
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#72": {
+    "decisions": 32
+  },
+  "src/cyrene/workbench/webui/frontend/features/layout/pointer-resize.mjs::startPointerResize": {
+    "lines": 121
+  },
+  "src/cyrene/workbench/webui/frontend/features/layout/resize-collapse.mjs::createResizeCollapseGuard.resizeCollapseEdge": {
+    "decisions": 24
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat": {
+    "lines": 122,
+    "decisions": 48
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat.<anonymous>.refresh": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/assistant-page.jsx::PersonalAssistantPage": {
+    "lines": 121
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/cyrene-activity.mjs::cyreneActivityState": {
+    "decisions": 30
+  },
+  "src/cyrene/workbench/webui/frontend/features/shell/cyrene-activity.mjs::observeCyreneActivity.refresh": {
+    "decisions": 29
   }
 }

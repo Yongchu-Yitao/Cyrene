@@ -422,6 +422,16 @@
         "name": "对话通信",
         "description": "发现运行中的对话，让各对话的 Agent 互相发送消息。"
       }
+    },
+    "session_management": {
+      "en": {
+        "name": "Task execution",
+        "description": "Start and manage task execution, inspect evidence and handle questions."
+      },
+      "zh": {
+        "name": "任务执行",
+        "description": "启动和管理任务执行、检查任务证据并处理问题。"
+      }
     }
   },
   "plugins": {
@@ -788,11 +798,11 @@
     "DeepReflect": {
       "en": {
         "name": "Deep reflection",
-        "description": "Main agent only. Reframe the next working context when the current approach is not satisfying the user's goal, repeated work is not converging, or user guidance shows the direction is wrong. Do not use this merely because one tool failed. The visible transcript is preserved; future LLM context uses a compressed reflection packet. Call this as the only tool in its tool-call turn; after it completes, continue automatically from the rewritten context."
+        "description": "Main agent only. Reframe the next working context only when multiple consecutive attempts fail to meet the required standards or the user's requirements, and none of the approaches tried can achieve the goal. Do not use this merely because one tool failed. The visible transcript is preserved; future LLM context uses a compressed reflection packet. Call this as the only tool in its tool-call turn; after it completes, continue automatically from the rewritten context."
       },
       "zh": {
         "name": "深度反思",
-        "description": "当当前方法无法收敛时，为主代理重构下一阶段工作上下文。"
+        "description": "仅主 Agent 使用。只有连续多次尝试仍无法达到标准或用户要求，且已尝试的方法均无法实现目标时，才重构下一阶段的工作上下文。不要仅因一次工具失败就调用。保留可见对话记录，后续模型上下文使用压缩后的反思内容。必须在该轮作为唯一工具调用；完成后从重构后的上下文自动继续。"
       }
     },
     "DeepSeek": {
@@ -3048,11 +3058,11 @@
     "send_message": {
       "en": {
         "name": "Send message",
-        "description": "Main agent only. Send a brief user-visible mid-run reply in the current chat. For tool-using work this MUST be the first call in the first execution batch, immediately followed by the first useful tool call in the same batch whenever safe. Never use this for subagent coordination or subagent final delivery."
+        "description": "Main agent only. Send a brief user-visible mid-run reply in the current chat. After any required context switching, use this before execution, immediately followed by the first useful tool call in the same batch whenever safe. Never use this for subagent coordination or subagent final delivery."
       },
       "zh": {
         "name": "发送消息",
-        "description": "在当前对话中发送简短、用户可见的执行中进度消息。"
+        "description": "仅主 Agent 使用。在当前对话中发送简短的执行进度回复。如需切换上下文，应先完成切换，再于执行前调用；在安全可行时，同一批次紧接第一个有用的工具调用。不得用于子 Agent 协调或子 Agent 最终交付。"
       }
     },
     "send_message_to_user": {
@@ -3243,6 +3253,76 @@
       "zh": {
         "name": "发送对话消息",
         "description": "向其他对话的 Agent 发送消息，空闲时自动唤醒；回复也使用本工具。"
+      }
+    },
+    "task_start": {
+      "en": {
+        "name": "Start task",
+        "description": "Start NEW work. If a different goal is active in your context catalog, first save its progress and call unload_context in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion."
+      },
+      "zh": {
+        "name": "启动任务",
+        "description": "开始新任务。如果上下文目录中有其他活动目标，先保存进展并在单独一轮调用 unload_context。任务拥有已启用的完整执行能力，包括浏览器和桌面工具，以及独立的浏览器状态。重试或跟进已有任务请使用 task_update。受理不代表完成。"
+      }
+    },
+    "task_list": {
+      "en": {
+        "name": "List tasks",
+        "description": "List your tasks, their progress, pending questions and failures."
+      },
+      "zh": {
+        "name": "列出任务",
+        "description": "列出你的任务、进展、待回答的问题和失败信息。"
+      }
+    },
+    "task_inspect": {
+      "en": {
+        "name": "Inspect task",
+        "description": "Inspect task evidence; pass block_ids from the directory to read paginated contents without loading them."
+      },
+      "zh": {
+        "name": "检查任务",
+        "description": "检查任务证据；传入目录中的 block_ids 可分页读取内容，而不加载到上下文。"
+      }
+    },
+    "task_load_context": {
+      "en": {
+        "name": "Load task evidence",
+        "description": "Load selected task evidence into one reference slot, replacing the previous snapshot. Leaves your active context and source evidence unchanged."
+      },
+      "zh": {
+        "name": "加载任务证据",
+        "description": "将选定任务证据加载到唯一的参考槽，替换此前快照。保持当前活动上下文及来源证据不变。"
+      }
+    },
+    "task_update": {
+      "en": {
+        "name": "Update task",
+        "description": "Continue or retry an existing task, reusing its browser and working state. First resume the matching goal context with load_context if inactive. Resumes completed or stopped work too. Acceptance is not completion; the result arrives automatically."
+      },
+      "zh": {
+        "name": "更新任务",
+        "description": "继续或重试已有任务，复用其浏览器和工作状态。如果对应目标上下文未激活，先用 load_context 恢复。也可恢复已完成或已停止的任务。受理不代表完成，结果会自动送达。"
+      }
+    },
+    "task_answer_question": {
+      "en": {
+        "name": "Answer task question",
+        "description": "Answer a task clarification using known context. Ask the user only when a necessary fact or decision is missing. This tool cannot grant human permission approvals."
+      },
+      "zh": {
+        "name": "回答任务问题",
+        "description": "根据已知上下文回答任务的澄清问题。仅在缺少必要事实或决策时询问用户。此工具不能代替用户授权。"
+      }
+    },
+    "task_stop": {
+      "en": {
+        "name": "Stop task",
+        "description": "Stop a task and pause pending updates; preserve its evidence and artifacts."
+      },
+      "zh": {
+        "name": "停止任务",
+        "description": "停止任务并暂停待处理的更新，保留任务证据和产物。"
       }
     }
   }

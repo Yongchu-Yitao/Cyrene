@@ -1,7 +1,7 @@
 """Personal assistant entry and sidebar; conversations use the existing chat API."""
 
 import asyncio
-from cyrene.workbench.assistant import assistant_scope
+from cyrene.workbench.projects.assistant import assistant_scope
 
 
 def register_routes(context, service):

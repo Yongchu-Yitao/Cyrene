@@ -63,7 +63,7 @@ def test_board_rail_open_actions_activate_work_before_opening_content():
     shell = workbench_shell_source()
     chat = workbench_chat_source()
 
-    assert 'onActivateWorkspace: function () { context.navigation.openPage("work"); }' in shell
+    assert 'onActivateWorkspace: function () { context.navigation.openPage("chat"); }' in shell
     assert "workspaceContent, onActivateWorkspace, newChatRequestId" in chat
     assert "function activateWorkspace()" in chat
     assert "if (onActivateWorkspace) onActivateWorkspace();" in chat

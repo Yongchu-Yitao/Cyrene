@@ -31,7 +31,7 @@ class SessionManagementService:
 
     def initialize_assistant(self):
         """Create the one application-wide assistant if it does not exist."""
-        from cyrene.workbench.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+        from cyrene.workbench.projects.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
 
         chat = self.host.chat(ASSISTANT_ID)
         if chat:

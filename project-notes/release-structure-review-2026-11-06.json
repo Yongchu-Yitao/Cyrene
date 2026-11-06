@@ -1,0 +1,451 @@
+{
+  "base_commit": "c8c2e366",
+  "scope": "Release repair; preserve existing and newly added behavior. Global limits and failure checks are unchanged. Individual reviewed feature-growth allowances are technical debt, not a claim of reduced complexity.",
+  "extractions": [
+    "Electron viewport staging and screenshot capture moved to browser/browser-screenshot.js; original manager budgets no longer exceeded.",
+    "Interrupted tool handshake projection moved to core/context/interrupted_tools.py and missing-result calculation split out."
+  ],
+  "allowances": [
+    {
+      "scope": "src/cyrene/core/context/projection.py::project_model_messages",
+      "metric": "lines",
+      "previous_limit": 196,
+      "reviewed_limit": 198,
+      "reason": "Project the completed interrupted handshake before serializing model messages; reference snapshots retain latest-value semantics."
+    },
+    {
+      "scope": "src/cyrene/core/hook/registry.py",
+      "metric": "module_lines",
+      "previous_limit": 1688,
+      "reviewed_limit": 1689,
+      "reason": "Preserve reference lifecycle and enforce assistant-only tool audience through discovery, overrides and execution."
+    },
+    {
+      "scope": "src/cyrene/core/plugin/plugin.py::Plugin.__post_init__",
+      "metric": "decisions",
+      "previous_limit": 40,
+      "reviewed_limit": 41,
+      "reason": "Accept the explicit assistant audience alongside boolean model visibility."
+    },
+    {
+      "scope": "src/cyrene/core/plugin/registry.py",
+      "metric": "module_lines",
+      "previous_limit": 1687,
+      "reviewed_limit": 1693,
+      "reason": "Preserve reference lifecycle and enforce assistant-only tool audience through discovery, overrides and execution."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_browser/browser_screenshot.py::_tool_browser_screenshot",
+      "metric": "lines",
+      "previous_limit": 122,
+      "reviewed_limit": 130,
+      "reason": "Propagate high-resolution capture dimensions without dropping the original file or delivery response."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_browser/runtime.py",
+      "metric": "module_lines",
+      "previous_limit": 4100,
+      "reviewed_limit": 4101,
+      "reason": "Carry screenshot dimensions through browser runtime dispatch."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_browser/runtime.py::screenshot",
+      "metric": "lines",
+      "previous_limit": 115,
+      "reviewed_limit": 116,
+      "reason": "Carry screenshot dimensions through browser runtime dispatch."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_delivery/send_file.py::_tool_send_file",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 22,
+      "reason": "Allow only the assistant owner to export files inside its current owned task workspaces."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py",
+      "metric": "module_lines",
+      "previous_limit": 1746,
+      "reviewed_limit": 1769,
+      "reason": "Add separate bilingual assistant memory guidance while preserving ordinary project instructions."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService.context_block",
+      "metric": "lines",
+      "previous_limit": 100,
+      "reviewed_limit": 105,
+      "reason": "Include assistant memory guidance without depending on a project snapshot; keep project and user scopes separate."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_memory/service.py::MemoryService.context_block",
+      "metric": "decisions",
+      "previous_limit": 21,
+      "reviewed_limit": 24,
+      "reason": "Include assistant memory guidance without depending on a project snapshot; keep project and user scopes separate."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_model/_shared.py",
+      "metric": "module_lines",
+      "previous_limit": 1273,
+      "reviewed_limit": 1279,
+      "reason": "Validate streamed and final model text and preserve typed retry errors."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_model/_shared.py::complete_model",
+      "metric": "lines",
+      "previous_limit": 158,
+      "reviewed_limit": 161,
+      "reason": "Validate streamed and final model text and preserve typed retry errors."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_model/_shared.py::complete_model",
+      "metric": "decisions",
+      "previous_limit": 32,
+      "reviewed_limit": 33,
+      "reason": "Validate streamed and final model text and preserve typed retry errors."
+    },
+    {
+      "scope": "src/cyrene/plugins/model_router.py::route_model_call",
+      "metric": "lines",
+      "previous_limit": 199,
+      "reviewed_limit": 204,
+      "reason": "Stop invalid-request fallback rather than replaying the same malformed history across providers."
+    },
+    {
+      "scope": "src/cyrene/plugins/model_router.py::route_model_call",
+      "metric": "decisions",
+      "previous_limit": 32,
+      "reviewed_limit": 33,
+      "reason": "Stop invalid-request fallback rather than replaying the same malformed history across providers."
+    },
+    {
+      "scope": "src/cyrene/workbench/application/inbox.py",
+      "metric": "module_lines",
+      "previous_limit": 1895,
+      "reviewed_limit": 1898,
+      "reason": "Persist notification provenance independently of text content."
+    },
+    {
+      "scope": "src/cyrene/workbench/chat/chat_application.py",
+      "metric": "module_lines",
+      "previous_limit": 1579,
+      "reviewed_limit": 1586,
+      "reason": "Canonicalize permission activity identities to deduplicate durable and streamed cards."
+    },
+    {
+      "scope": "src/cyrene/workbench/chat/chat_guidance_service.py::ChatGuidanceApplicationService.submit",
+      "metric": "lines",
+      "previous_limit": 107,
+      "reviewed_limit": 111,
+      "reason": "Persist and validate agent message kind during idempotent guidance admission."
+    },
+    {
+      "scope": "src/cyrene/workbench/chat/chat_runs.py",
+      "metric": "module_lines",
+      "previous_limit": 1750,
+      "reviewed_limit": 1754,
+      "reason": "Carry notification provenance during inbox reconciliation and settle ownerless runs on startup."
+    },
+    {
+      "scope": "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager._reconcile_inbox_guidance_messages",
+      "metric": "decisions",
+      "previous_limit": 28,
+      "reviewed_limit": 29,
+      "reason": "Carry notification provenance during inbox reconciliation and settle ownerless runs on startup."
+    },
+    {
+      "scope": "src/cyrene/workbench/chat/chat_runs.py::ChatRunManager.startup",
+      "metric": "decisions",
+      "previous_limit": 26,
+      "reviewed_limit": 28,
+      "reason": "Carry notification provenance during inbox reconciliation and settle ownerless runs on startup."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py",
+      "metric": "module_lines",
+      "previous_limit": 1008,
+      "reviewed_limit": 1071,
+      "reason": "Apply assistant tool scopes and cancel interrupted owners before new work without replaying effects."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge",
+      "metric": "lines",
+      "previous_limit": 117,
+      "reviewed_limit": 127,
+      "reason": "Apply assistant tool scopes and cancel interrupted owners before new work without replaying effects."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge",
+      "metric": "decisions",
+      "previous_limit": 28,
+      "reviewed_limit": 33,
+      "reason": "Apply assistant tool scopes and cancel interrupted owners before new work without replaying effects."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.send",
+      "metric": "lines",
+      "previous_limit": 99,
+      "reviewed_limit": 115,
+      "reason": "Apply assistant tool scopes and cancel interrupted owners before new work without replaying effects."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.send.operate",
+      "metric": "decisions",
+      "previous_limit": 27,
+      "reviewed_limit": 28,
+      "reason": "Apply assistant tool scopes and cancel interrupted owners before new work without replaying effects."
+    },
+    {
+      "scope": "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py",
+      "metric": "module_lines",
+      "previous_limit": 1612,
+      "reviewed_limit": 1616,
+      "reason": "Pass typed agent message provenance into normal send admission."
+    },
+    {
+      "scope": "src/cyrene/workbench/http/workbench/chat_routes/send_input.py::append_user_message",
+      "metric": "decisions",
+      "previous_limit": 23,
+      "reviewed_limit": 25,
+      "reason": "Reject conflicting idempotency keys and retain typed notification provenance."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx",
+      "metric": "module_lines",
+      "previous_limit": 1569,
+      "reviewed_limit": 1579,
+      "reason": "Support clarification answers and restore rejected drafts while preserving human approval restrictions."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer",
+      "metric": "lines",
+      "previous_limit": 1365,
+      "reviewed_limit": 1375,
+      "reason": "Support clarification answers and restore rejected drafts while preserving human approval restrictions."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer",
+      "metric": "decisions",
+      "previous_limit": 503,
+      "reviewed_limit": 519,
+      "reason": "Support clarification answers and restore rejected drafts while preserving human approval restrictions."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::WbcMain",
+      "metric": "lines",
+      "previous_limit": 607,
+      "reviewed_limit": 608,
+      "reason": "Forward clarification answer callbacks into the shared composer."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::wbcGroupConsecutiveActivityMessages.<anonymous>",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 24,
+      "reason": "Keep handoffs in their owning activity group and preserve disclosure state through completion."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcActivityGroup",
+      "metric": "decisions",
+      "previous_limit": 41,
+      "reviewed_limit": 44,
+      "reason": "Keep handoffs in their owning activity group and preserve disclosure state through completion."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/model-api.jsx::sendMessage",
+      "metric": "decisions",
+      "previous_limit": 35,
+      "reviewed_limit": 40,
+      "reason": "Route question answers through the answer endpoint while preserving the permission mode."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx",
+      "metric": "module_lines",
+      "previous_limit": 3104,
+      "reviewed_limit": 3108,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage",
+      "metric": "decisions",
+      "previous_limit": 190,
+      "reviewed_limit": 215,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage",
+      "metric": "hooks",
+      "previous_limit": 126,
+      "reviewed_limit": 131,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.applyChatSummaryEvent",
+      "metric": "decisions",
+      "previous_limit": 22,
+      "reviewed_limit": 24,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#29",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 25,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#45",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 67,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderActiveConversationCard",
+      "metric": "decisions",
+      "previous_limit": 22,
+      "reviewed_limit": 25,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#61",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 49,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard",
+      "metric": "decisions",
+      "previous_limit": 97,
+      "reviewed_limit": 102,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#72",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 32,
+      "reason": "Support isolated assistant pane storage, custom conversation surfaces, and cross-task resources. Anonymous callback indices shift with added hooks; inspect source scopes rather than treating index changes as new behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/pane-drop-controller.jsx::wbcDroppedPaneCard",
+      "metric": "decisions",
+      "previous_limit": 62,
+      "reviewed_limit": 72,
+      "reason": "Preserve source task ownership across drops and move already visible browsers without duplicates."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/pane-drop-controller.jsx::wbcDroppedPaneCard",
+      "metric": "nesting",
+      "previous_limit": 7,
+      "reviewed_limit": 8,
+      "reason": "Preserve source task ownership across drops and move already visible browsers without duplicates."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/pane-layout-controller.jsx::wbcOpenPaneContent",
+      "metric": "decisions",
+      "previous_limit": 33,
+      "reviewed_limit": 38,
+      "reason": "Resolve existing task resource panes without replacing the visible split workspace."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/pane-workspace.jsx::wbcPaneWorkspacePresentation",
+      "metric": "decisions",
+      "previous_limit": 42,
+      "reviewed_limit": 43,
+      "reason": "Distinguish isolated assistant surfaces from ordinary project conversation layouts."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/layout/pointer-resize.mjs::startPointerResize",
+      "metric": "lines",
+      "previous_limit": 99,
+      "reviewed_limit": 121,
+      "reason": "Animate collapse and reversal with reduced-motion handling and pointer cleanup."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/layout/resize-collapse.mjs::createResizeCollapseGuard.resizeCollapseEdge",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 24,
+      "reason": "Bound minimum and maximum edge dwell and reversible collapse behavior."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/settings/data.jsx::DataPanel",
+      "metric": "lines",
+      "previous_limit": 260,
+      "reviewed_limit": 288,
+      "reason": "Confirm, reset and refresh only the singleton assistant through the existing clear API."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat",
+      "metric": "lines",
+      "previous_limit": 99,
+      "reviewed_limit": 122,
+      "reason": "Use the shared engine with local subscriptions, cancellation-safe hydration, answer deduplication and permission forwarding."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 48,
+      "reason": "Use the shared engine with local subscriptions, cancellation-safe hydration, answer deduplication and permission forwarding."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat.<anonymous>.refresh",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 23,
+      "reason": "Use the shared engine with local subscriptions, cancellation-safe hydration, answer deduplication and permission forwarding."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/assistant-page.jsx::PersonalAssistantPage",
+      "metric": "lines",
+      "previous_limit": 99,
+      "reviewed_limit": 121,
+      "reason": "Own task sidebar selection, search, resource routing and the singleton home action."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/cyrene-activity.mjs::cyreneActivityState",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 30,
+      "reason": "Derive activity from live runtime and reconcile background completion with generation guards."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/cyrene-activity.mjs::observeCyreneActivity.refresh",
+      "metric": "decisions",
+      "previous_limit": 20,
+      "reviewed_limit": 29,
+      "reason": "Derive activity from live runtime and reconcile background completion with generation guards."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx",
+      "metric": "module_lines",
+      "previous_limit": 4319,
+      "reviewed_limit": 4340,
+      "reason": "User-visible assistant reset and task tool labels; data-only catalog growth."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx",
+      "metric": "module_lines",
+      "previous_limit": 4319,
+      "reviewed_limit": 4340,
+      "reason": "User-visible assistant reset and task tool labels; data-only catalog growth."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/workbench.jsx::WorkbenchApp",
+      "metric": "decisions",
+      "previous_limit": 38,
+      "reviewed_limit": 41,
+      "reason": "Keep assistant activity and session identity in the persistent shell."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/workbench.jsx::WorkbenchApp",
+      "metric": "hooks",
+      "previous_limit": 41,
+      "reviewed_limit": 42,
+      "reason": "Keep assistant activity and session identity in the persistent shell."
+    }
+  ]
+}

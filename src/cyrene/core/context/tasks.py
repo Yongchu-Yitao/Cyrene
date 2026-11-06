@@ -200,9 +200,10 @@ def task_nodes(path, state, context_id):
 
 
 def task_messages(path, state, context_id, *, live=False, observation_services=()):
-    from .projection import project_model_messages, _settle_interrupted_tool_calls
+    from .projection import project_model_messages
+    from .interrupted_tools import settle_interrupted_tool_calls
     # Retain interruption evidence before task filtering removes terminal nodes.
-    path = _settle_interrupted_tool_calls(path)
+    path = settle_interrupted_tool_calls(path)
     doc = state['documents'][context_id]
     nodes = task_nodes(path, state, context_id)
     archived = archived_calls(path, doc)
