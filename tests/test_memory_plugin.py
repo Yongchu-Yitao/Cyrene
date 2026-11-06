@@ -266,6 +266,60 @@ def test_memory_plugin_does_not_treat_recent_conversation_as_proactive_work(
     assert called is False
 
 
+@pytest.mark.parametrize("language", ["en", "zh"])
+@pytest.mark.parametrize("with_project", [False, True])
+def test_assistant_memory_delegates_without_requiring_project(tmp_path, language, with_project):
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
+
+    service = MemoryService(
+        workspace=tmp_path, tree=None, tree_id="assistant",
+        data={
+            "personal_assistant": True,
+            "language": language,
+            "memory_short_term_enabled": False,
+            "memory_project_enabled": with_project,
+            "project_id": "legacy-project" if with_project else "",
+            "project_memory_snapshot": {
+                "prompt": "Stored evidence", "shortTermContext": "", "structuredContext": "",
+            } if with_project else None,
+        },
+    )
+
+    context = service.context_block()
+    assert "session_create" in context
+    assert "workspace_path" in context
+    assert "toolbox" not in context
+    assert "trigger_project_memory_learning" not in context
+    assert ("Stored evidence" in context) is with_project
+
+    service.data["memory_trigger_enabled"] = False
+    assert "session_create" not in service.context_block()
+    service.data["memory_trigger_enabled"] = True
+    service.agent_id = "child"
+    assert "session_create" not in service.context_block()
+
+
+def test_memory_prompt_role_change_invalidates_session_start_cache(tmp_path):
+    from cyrene.plugins.builtin.cyrene_memory.service import MemoryService
+
+    service = MemoryService(
+        workspace=tmp_path, tree=None, tree_id="chat",
+        data={
+            "project_id": "project-a", "language": "en",
+            "project_memory_snapshot": {
+                "prompt": "", "shortTermContext": "", "structuredContext": "",
+            },
+        },
+    )
+    ordinary = service.session_start_cache_fingerprint(None)
+    assert "toolbox" in service.context_block()
+    service.data["personal_assistant"] = True
+    assistant = service.session_start_cache_fingerprint(None)
+    assert assistant != ordinary
+    assert "session_create" in service.context_block()
+    assert "toolbox" not in service.context_block()
+
+
 def test_memory_context_uses_chat_snapshot_instead_of_live_project_store(
     monkeypatch,
     tmp_path,

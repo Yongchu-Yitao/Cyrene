@@ -114,3 +114,14 @@ export function flipPaneLayout(layout, cardId) {
 }
 
 export { wbcPromotePaneSourceLayout, wbcMovePaneCardLayout, wbcSwapPaneCardsLayout };
+
+// Returning home preserves the existing conversation card identity so its
+// transcript, composer and scroll position do not remount on every tab switch.
+export function restoreConversationPaneLayout(layout, chatId) {
+  var card = layout.left.concat(layout.right).find(function (item) {
+    return item.kind === "chat" && String(item.payload) === String(chatId);
+  });
+  if (!card) return wbcDefaultPaneLayout(chatId);
+  if (layout.left.length === 1 && layout.left[0] === card && !layout.right.length) return layout;
+  return {...layout, left: [card], right: []};
+}

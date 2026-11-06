@@ -1413,15 +1413,14 @@ html[data-platform="darwin"] .workbench-top-project-menu {
 }
 
 .workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group.exceptional {
-  height: 54%;
   min-height: 0;
-  max-height: 300px;
-  flex: 1 1 54%;
+  max-height: min(54%, 300px);
+  flex: 0 1 auto;
 }
 
 .workbench-session-overflow-list.has-regular.has-exceptions .workbench-session-overflow-group:not(.exceptional) {
   min-height: 108px;
-  flex: 1 1 46%;
+  flex: 1 1 0;
 }
 
 .workbench-session-overflow-group-head {

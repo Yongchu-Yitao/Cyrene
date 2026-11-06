@@ -1580,6 +1580,7 @@ class HookSet:
                         "position": position,
                         "context_kind": context_kind,
                         "context_source": context_source,
+                        **({"context_lifecycle": "reference"} if isinstance(result, Mapping) and result.get("context_lifecycle") == "reference" else {}),
                     },
                 ))
         return tuple(value for _priority, _index, value in sorted(contexts))

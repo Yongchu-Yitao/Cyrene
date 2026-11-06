@@ -40,6 +40,10 @@ def find_workbench_project_lightweight(project_id: str) -> dict[str, Any] | None
     target_id = str(project_id or "").strip()
     if not target_id:
         return None
+    from cyrene.workbench.assistant import ASSISTANT_SCOPE_ID, assistant_scope
+
+    if target_id == ASSISTANT_SCOPE_ID:
+        return assistant_scope()
     project = _workbench_find_project(_read_workbench_store(), target_id)
     if not isinstance(project, dict):
         return None
@@ -144,6 +148,10 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
 def _workbench_find_project(
     payload: dict[str, Any], project_id: str
 ) -> dict[str, Any] | None:
+    from cyrene.workbench.assistant import ASSISTANT_SCOPE_ID, assistant_scope
+
+    if project_id == ASSISTANT_SCOPE_ID:
+        return assistant_scope()
     for project in payload.get("projects", []):
         if str(project.get("id") or "") == project_id:
             return project

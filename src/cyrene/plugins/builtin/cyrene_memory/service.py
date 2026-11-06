@@ -144,6 +144,10 @@ class MemoryService:
         parts: list[str] = []
         run_data = self.run_data
         language = self.language
+        personal_assistant = self.data.get("personal_assistant") is True
+        include_trigger = self.is_main and _bool(
+            self.data, run_data, "memory_trigger_enabled", True,
+        )
         include_short_term = _bool(
             self.data,
             run_data,
@@ -183,6 +187,13 @@ class MemoryService:
             except Exception:
                 logger.exception("Failed to render short-term memory")
 
+        # Assistant delegation does not depend on project memory being enabled
+        # or on a project snapshot existing.
+        if personal_assistant and include_trigger:
+            from .project_memory import build_memory_trigger_prompt
+
+            parts.append(build_memory_trigger_prompt(personal_assistant=True, language=language))
+
         project_id = self.project_id
         if project_id and include_project:
             self.configure_stores()
@@ -214,15 +225,9 @@ class MemoryService:
                     build_main_agent_suffix,
                 )
 
-                include_trigger = self.is_main and _bool(
-                    self.data,
-                    run_data,
-                    "memory_trigger_enabled",
-                    True,
-                )
                 prompt = build_main_agent_suffix(
                     snapshot,
-                    include_trigger=include_trigger,
+                    include_trigger=include_trigger and not personal_assistant,
                     language=language,
                 ).strip()
                 if prompt:
@@ -343,6 +348,8 @@ class MemoryService:
         }.issubset(raw):
             return {
                 "language": self.language,
+                "personal_assistant": self.data.get("personal_assistant") is True,
+                "is_main": self.is_main,
                 "project_id": self.project_id,
                 "memory_trigger_enabled": _bool(
                     self.data,

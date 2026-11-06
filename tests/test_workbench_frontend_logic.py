@@ -629,8 +629,8 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "calc(100% - 16px) 1px no-repeat" in group_region_css
     assert group_region_css.count("linear-gradient(") == 1
     assert "var(--wb-floating-rail-bg)" not in group_region_css
-    assert ".wbc-chat-list.has-groups.menu-active," in styles
-    assert ".wbc-chat-list-group-region:has(.menu-open)" in styles
+    assert ".wbc-chat-list.has-groups.menu-active:has(.wbc-chat-card.menu-open)," in styles
+    assert ".wbc-chat-list-group-region:has(.wbc-chat-card.menu-open)" in styles
     assert "WBC_CHAT_GROUP_DRAG_MIME" in source
     assert "function wbcMoveChatOrderBlock(" in source
     assert 'dragKind: "group"' in rail
@@ -695,7 +695,9 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "padding: 5px 0;" in rail_group_css
     assert "var(--wb-card-bg) 42%" in rail_group_css
     assert "gap: 0;" in rail_collapsed_group_css
-    assert "padding: 0 10px 0 8px;" in rail_group_head_css
+    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);" in rail_group_css
+    assert "margin-inline: 6px;" in rail_group_head_css
+    assert "padding: 0 4px 0 2px;" in rail_group_head_css
     assert ".wbc-rail .wbc-chat-group.expanded .wbc-chat-group-head:hover {" in styles
     assert ".wbc-rail .wbc-chat-group-head:hover {" not in styles
     assert "margin-left: 0;" in rail_children_css
@@ -5788,8 +5790,8 @@ def test_status_preview_answers_the_target_background_chat_without_opening_it():
         "function WbcRail", 1
     )[0]
 
-    assert "model.answerChat(chatId, questionId, optionText" in answer
-    assert "runtimeEngine.update(chatId" in answer
+    assert "message: optionText, questionId: questionId" in answer
+    assert "runtimeEngine.start(chatId" in answer
     assert "setChats(function (previous)" in answer
     assert "chatCache.details[chatId]" in answer
     assert "return answerQuestionForChat(chatId" in page_answer_bridge
@@ -5874,7 +5876,7 @@ def test_workbench_split_chat_renders_and_answers_pending_question():
 
     assert "function answerPendingQuestion(questionId, optionText, resumeMode)" in split_chat
     assert "var current = chatIdRef.current;" in split_chat
-    assert "WorkbenchChatModel.answerChat(current, questionId, answer" in split_chat
+    assert "message: String(answer), questionId: questionId" in split_chat
     assert "message.questionPrompt" in split_chat
     assert "chat.pendingQuestion" in split_chat
     assert "<WbcQuestionPrompt" in split_chat
@@ -6341,7 +6343,7 @@ def test_every_workspace_sidebar_card_can_swipe_between_module_tabs():
     )[0]
     assert 'target.closest(".workbench-integrated-rail, .workbench-sidebar-dock.is-persistent")' in sidebar_wheel
     assert 'var moduleOrder = Array.isArray(enabledModules) && enabledModules.length' in navigation
-    assert '["schedule", "board", "work", "knowledge", "memory"]' in navigation
+    assert '["schedule", "work", "cyrene", "knowledge", "memory"]' in navigation
     assert "Math.abs(deltaX) <= Math.abs(deltaY) * 1.15" in sidebar_wheel
     assert "Math.abs(gesture.delta) < 44" in sidebar_wheel
     assert "gesture.lockedUntil = now + 420" in sidebar_wheel
@@ -6412,6 +6414,44 @@ def test_board_search_only_filters_manually_added_conversations():
     assert '"conversationBoard.searchPlaceholder": "搜索看板中的对话"' in translations
 
 
+def test_work_navigation_toggles_board_and_cyrene_is_independent():
+    navigation = frontend_module_source("features/shell/navigation-controller.jsx")
+    navigation = "\n".join(
+        line for line in navigation.splitlines() if not line.startswith("import ")
+    ).rsplit("\nexport {", 1)[0]
+    script = "const React = {};\n" + navigation + """
+const assert = require("node:assert/strict");
+let page = "schedule";
+const actions = () => createWorkbenchNavigationActions(
+  page, value => { page = value; }, () => {}, () => {}, () => {},
+  {current: {delta: 0, direction: 0, lockedUntil: 0}},
+  () => !page || page === "chat" ? "work" : page
+);
+actions().openPage("work");
+assert.equal(page, "chat");
+actions().openPage("work");
+assert.equal(page, null);
+actions().openPage("cyrene");
+assert.equal(page, "cyrene");
+actions().openPage("cyrene");
+assert.equal(page, "cyrene");
+actions().openPage("work");
+assert.equal(page, "chat");
+actions().openPage("chat");
+assert.equal(page, "chat");
+actions().openPage("work");
+assert.equal(page, null);
+actions().openPage("work");
+assert.equal(page, "chat");
+page = null;
+actions().onModuleWheel({
+  target: {closest: () => true}, deltaX: 50, deltaY: 0, preventDefault() {}
+});
+assert.equal(page, "cyrene");
+"""
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
+
 def test_board_chat_navigation_uses_the_work_module_gate():
     navigation = frontend_module_source("features/shell/shell-navigation.jsx")
     navigation = "\n".join(
@@ -6427,7 +6467,7 @@ const setTimeout = () => 0;
 const project = {id: "project-1"};
 wbNavigateFromSearch({
   store: {projects: [project], activeProject: project, activeProjectId: project.id},
-  enabledModules: ["schedule", "board", "work", "knowledge", "memory"],
+  enabledModules: ["schedule", "work", "cyrene", "knowledge", "memory"],
   setFullPage: (page) => opened.push(page),
   getSelectProject: () => () => {},
 }, {type: "chat", projectId: project.id, chatId: "chat-1"});
@@ -6605,11 +6645,11 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     module_dock = source.split("function WorkbenchSidebarDock(", 1)[1].split(
         "var WB_CONVERSATION_BOARD_COLUMNS", 1
     )[0]
-    for module_id in ("work", "board", "knowledge", "schedule", "memory"):
+    for module_id in ("work", "cyrene", "knowledge", "schedule", "memory"):
         assert f'id: "{module_id}"' in module_dock
     dock_item_positions = [
         module_dock.index(f'id: "{module_id}"')
-        for module_id in ("schedule", "board", "work", "knowledge", "memory")
+        for module_id in ("schedule", "work", "cyrene", "knowledge", "memory")
     ]
     assert dock_item_positions == sorted(dock_item_positions)
     assert "WorkbenchModuleAccount" not in module_dock
@@ -9459,7 +9499,7 @@ def test_project_memory_failed_status_shows_attempt_details():
     assert ".workbench-project-memory-learning-status small {" in styles
 
 
-def test_external_pending_question_disables_chat_composer_controls():
+def test_pending_question_routes_text_to_answer_and_keeps_attachment_controls_disabled():
     chat = workbench_chat_source()
     chat_composer = chat.split("function WbcComposer(", 1)[1].split(
         "function wbcClearComposerDraft", 1
@@ -9467,10 +9507,10 @@ def test_external_pending_question_disables_chat_composer_controls():
     chat_attachments = frontend_module_source("features/chat/composer-attachments.jsx")
 
     assert "var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id)" in chat_composer
-    assert "&& !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));" in chat_composer
-    assert "if (awaitingAnswer) return;" in chat_composer
-    assert "var sendDisabled = awaitingAnswer ||" in chat_composer
-    assert "disabled={awaitingAnswer || !capText" in chat_composer
+    assert 'chat.pendingQuestion.kind === "permission.requested"' in chat_composer
+    assert "onAnswer(chat.pendingQuestion.id, text)" in chat_composer
+    assert "var sendDisabled = awaitingAnswer ?" in chat_composer
+    assert "disabled={(awaitingAnswer && !canAnswerInComposer)" in chat_composer
     assert "disabled={uploading || running || awaitingAnswer}" in chat_composer
     assert "disabled={awaitingAnswer || voicePhase" in chat_composer
     assert "if (awaitingAnswer) return\n      var detail" in chat_attachments

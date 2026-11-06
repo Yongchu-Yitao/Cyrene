@@ -2643,7 +2643,7 @@ class AgentSession:
         gateway = self._plugin_services().get("model")
         complete = getattr(gateway, "complete", None)
         if not callable(complete):
-            return messages, False, "secondary model gateway is unavailable"
+            return messages, False, "model gateway is unavailable"
         try:
             output = await complete(
                 [
@@ -2664,7 +2664,8 @@ class AgentSession:
                     max(256, int(max(1, context_limit) * 0.1)),
                 ),
                 temperature=0.1,
-                route="secondary",
+                # Inherit the session route/identity, just like a normal turn.
+                # The router defaults to primary and honors its model selection.
                 caller="context_compactor",
                 session_id=self.tree.id,
                 context=PluginContext(
@@ -2682,12 +2683,12 @@ class AgentSession:
             )
             summary = str(output.get("content") or "").strip()
             if not summary:
-                return messages, False, "secondary model returned an empty summary"
+                return messages, False, "model returned an empty summary"
             distilled = replace_compacted_summary(messages, summary)
             mechanical_tokens = messages_token_estimate(messages) + reserved_tokens
             distilled_tokens = messages_token_estimate(distilled) + reserved_tokens
             if distilled_tokens >= mechanical_tokens:
-                return messages, False, "secondary summary was not smaller"
+                return messages, False, "model summary was not smaller"
             return distilled, True, ""
         except Exception as exc:
             logger.warning(

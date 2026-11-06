@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+
+import pytest
 from datetime import datetime, timezone
 
 from cyrene.core import AgentSession
@@ -166,6 +168,8 @@ def test_reflection_uses_only_visible_conversation_messages_and_preserves_user_o
     )
 
     assert len(gateway.calls) == 2
+    assert all(call["route"] == "primary" for call in gateway.calls)
+    assert all(call["session_id"] == tree.id for call in gateway.calls)
     assert all("max_tokens" not in call for call in gateway.calls)
     submitted_messages = gateway.calls[-1]["messages"]
     assert [message["role"] for message in submitted_messages] == [
@@ -349,3 +353,20 @@ def test_memory_committed_turn_hook_keeps_workspace_conversation_archive(tmp_pat
     assert [entry["round_id"] for entry in entries] == ["run-archive"]
     assert entries[0]["user_body"] == "original visible request"
     assert entries[0]["assistant_body"] == "archived answer"
+
+
+@pytest.mark.parametrize("failure", [ConnectionError("offline"), ValueError("context too large")])
+def test_reflection_does_not_repeat_failed_model_requests(tmp_path, failure):
+    calls = []
+
+    class OfflineGateway:
+        async def complete(self, messages, **kwargs):
+            calls.append(kwargs)
+            raise failure
+
+    context = PluginContext(workspace=tmp_path, tree_id="chat", services={"model": OfflineGateway()})
+    with pytest.raises(type(failure)) as caught:
+        run(DeepReflectionService().reflect([], {}, context))
+    assert caught.value is failure
+    assert len(calls) == 1
+    assert calls[0]["route"] == "primary"

@@ -71,7 +71,7 @@ def contribution_mounts(
             "content": content,
             "source": str(item.get("context_source") or "").strip()
             or (system_source if is_system else ordinary_source),
-            "lifecycle": lifecycle,
+            "lifecycle": "reference" if item.get("context_lifecycle") == "reference" else lifecycle,
         })
     return mounts
 

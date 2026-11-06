@@ -8,10 +8,18 @@
   margin-top: calc(0px - var(--wb-topbar-height));
 }
 
-.wbc-page {
+/* Conversation surfaces share tokens without inheriting the workspace grid. */
+.wbc-page,
+.assistant-chat-card-slot {
   --wbc-composer-reserve-height: calc(164px * var(--wb-ui-font-scale, 1));
-  --wbc-card-gutter: 12px;
   --wbc-panel-surface: var(--wb-floating-rail-bg);
+  --wbc-control-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.028),
+    0 5px 14px rgba(15, 23, 42, 0.02);
+}
+
+.wbc-page {
+  --wbc-card-gutter: 12px;
   --wbc-topbar-clearance: 58px;
   /* The 32px session tabs are vertically centred in the 58px topbar, so their
      visible lower edge is 45px. Keep the card row one shared gutter below it,
@@ -35,9 +43,6 @@
   --wbc-collapsed-lane-growth: clamp(144px, 12vw, 208px);
   --wbc-reclaimed-side-width: 0px;
   --wbc-conversation-shift: 0px;
-  --wbc-control-shadow:
-    0 1px 2px rgba(15, 23, 42, 0.028),
-    0 5px 14px rgba(15, 23, 42, 0.02);
   display: grid;
   /* Always four tracks, so an anchored-side swap animates as a pure width
      interpolation (0 <-> split track) instead of a track-count change, which
@@ -55,7 +60,8 @@
   background: var(--wb-main-bg);
 }
 
-html[data-theme="dark"] .wbc-page {
+html[data-theme="dark"] .wbc-page,
+html[data-theme="dark"] .assistant-chat-card-slot {
   /* Keep the three primary chat cards on one opaque surface. A translucent
      fill resolves differently over each track and creates a visible tint
      shift between the rail, conversation, and detail panel. */
@@ -529,8 +535,8 @@ body.wb-col-resizing .wbc-page {
 /* Menus may be taller than the reserved group region in a compact window.
    While one is open, let it paint across the neighbouring rail space; the
    existing menu-active stacking layer keeps it above the Dock and scrim. */
-.wbc-chat-list.has-groups.menu-active,
-.wbc-chat-list-group-region:has(.menu-open) {
+.wbc-chat-list.has-groups.menu-active:has(.wbc-chat-card.menu-open),
+.wbc-chat-list-group-region:has(.wbc-chat-card.menu-open) {
   overflow: visible;
 }
 
@@ -973,6 +979,18 @@ span.wbc-chat-group-toggle {
   top: 28px;
   right: 20px;
   min-width: 160px;
+}
+
+.wbc-chat-group-actions .wb-card-menu[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  min-width: min(160px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  pointer-events: auto;
 }
 
 .wbc-chat-group-actions .wb-card-menu button {
@@ -1569,7 +1587,7 @@ span.wbc-chat-group-toggle {
 .wbc-rail .wbc-chat-group {
   gap: 2px;
   padding: 5px 0;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
   border-radius: 13px;
   background: color-mix(in srgb, var(--wb-card-bg) 42%, transparent);
   box-shadow: none;
@@ -1619,6 +1637,7 @@ span.wbc-chat-group-toggle {
 
 .wbc-rail .wbc-chat-group-preview .wbc-chat-group-head {
   min-height: 36px;
+  margin-inline: 0;
   padding: 0 7px 0 4px;
 }
 
@@ -1651,7 +1670,8 @@ span.wbc-chat-group-toggle {
 
 .wbc-rail .wbc-chat-group-head {
   min-height: 40px;
-  padding: 0 10px 0 8px;
+  margin-inline: 6px;
+  padding: 0 4px 0 2px;
   border-radius: 9px;
   transition: background-color 140ms ease;
 }
@@ -2189,6 +2209,7 @@ span.wbc-chat-group-toggle {
   min-width: 0;
   min-height: 0;
   margin: var(--wbc-card-top-inset) 0 var(--wbc-card-gutter);
+  overflow: hidden;
   pointer-events: none;
 }
 
@@ -4355,4 +4376,68 @@ html[data-platform="darwin"] .wbc-browser-split.maximized .wbc-side-agent-split-
 
 .wbc-menu button.danger {
   color: var(--wb-red);
+}
+
+/* Track motion is driven from measured pixels by pointer-resize so ordinary
+   resizing stays immediate and collapse/reopen can reverse mid-animation. */
+.wbc-pane-layout > .wbc-pane-column,
+.wbc-pane-column > .wbc-pane-card {
+  transition: opacity 240ms ease, visibility 0s;
+}
+
+/* Drag-close is reversible until pointerup. Keep content and the captured
+   separator mounted while collapsing its track; restore on reverse travel. */
+.wbc-pane-layout.split[data-resize-collapsed="column-minimum"] {
+  grid-template-columns: minmax(0, 1fr) 0px 0px;
+}
+.wbc-pane-layout.split[data-resize-collapsed="column-maximum"] {
+  grid-template-columns: 0px 0px minmax(0, 1fr);
+}
+.wbc-pane-layout[data-resize-collapsed="column-minimum"] > .right,
+.wbc-pane-layout[data-resize-collapsed="column-maximum"] > .left {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 240ms ease, visibility 0s linear 240ms;
+  pointer-events: none;
+  overflow: hidden;
+}
+.wbc-pane-column[data-resize-collapsed="row-minimum"] {
+  grid-template-rows: 0px minmax(0, 1fr);
+  gap: 0;
+}
+.wbc-pane-column[data-resize-collapsed="row-maximum"] {
+  grid-template-rows: minmax(0, 1fr) 0px;
+  gap: 0;
+}
+.wbc-pane-column[data-resize-collapsed="row-minimum"] > .wbc-pane-card:first-child,
+.wbc-pane-column[data-resize-collapsed="row-maximum"] > .wbc-pane-card:nth-child(2) {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 240ms ease, visibility 0s linear 240ms;
+  pointer-events: none;
+}
+.wbc-pane-column[data-resize-collapsed="row-minimum"] > .wbc-pane-row-resizer { top: 0 !important; }
+.wbc-pane-column[data-resize-collapsed="row-maximum"] > .wbc-pane-row-resizer { top: 100% !important; }
+[data-resize-collapsed="resource-minimum"],
+[data-resize-collapsed="panel-minimum"] .wbc-page {
+  --wbc-side-track-width: 0px !important;
+}
+[data-resize-collapsed="panel-minimum"] { --wb-right-w: 0px !important; }
+[data-resize-collapsed="resource-minimum"] .wbc-side-agent-split-motion,
+[data-resize-collapsed="panel-minimum"] .wbc-side,
+[data-resize-collapsed="panel-minimum"] .workbench-right-panel {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 240ms ease, visibility 0s linear 240ms;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-resize-collapsed] > .wbc-pane-column,
+  [data-resize-collapsed] > .wbc-pane-card,
+  [data-resize-collapsed] .wbc-side-agent-split-motion,
+  [data-resize-collapsed] .wbc-side,
+  [data-resize-collapsed] .workbench-right-panel {
+    transition: none;
+  }
 }

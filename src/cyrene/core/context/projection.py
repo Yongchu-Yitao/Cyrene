@@ -30,6 +30,7 @@ def selected_context_node_ids(
 
     current_stable_by_kind: dict[str, str] = {}
     turn_by_run_kind: dict[tuple[str, str], str] = {}
+    references_by_kind: dict[str, str] = {}
     for node in nodes:
         value = getattr(node, "value", None)
         if not isinstance(value, Mapping) or value.get("role") != "context":
@@ -37,13 +38,18 @@ def selected_context_node_ids(
         node_id = str(getattr(node, "id", "") or "")
         run_id = str(value.get("run_id") or "")
         kind = str(value.get("context_kind") or node_id)
-        if context_is_turn(value):
+        if value.get("context_lifecycle") == "reference":
+            # Session-wide replaceable reference: history remains in the tree,
+            # but only the latest snapshot is part of any rebuilt model input.
+            references_by_kind[kind] = node_id
+        elif context_is_turn(value):
             turn_by_run_kind[(run_id, kind)] = node_id
         elif run_id == str(current_run_id or ""):
             current_stable_by_kind[kind] = node_id
     return {
         *current_stable_by_kind.values(),
         *turn_by_run_kind.values(),
+        *references_by_kind.values(),
     }
 
 
@@ -56,7 +62,7 @@ def project_context_message(
     content = str(value.get("content") or "").strip()
     if not content:
         return
-    if value.get("context_lifecycle") == "model":
+    if value.get("context_lifecycle") in {"model", "reference"}:
         # Mid-turn plugin guidance appends to the request; it must not rewrite
         # the earlier user message and invalidate its cached tool-chain prefix.
         messages.append({"role": "user", "content": content})
@@ -83,6 +89,57 @@ def project_context_message(
     )
 
 
+def _settle_interrupted_tool_calls(path: Sequence[Any]) -> list[Any]:
+    """Close interrupted tool handshakes in model input, never execution history.
+
+    Cancellation can interrupt a batch before its result node is committed.
+    Preserve real results and describe missing outcomes without inventing success
+    or implying that side effects are safe to repeat.
+    """
+    from dataclasses import replace
+
+    terminated = {
+        str(node.value.get("run_id") or "") for node in path
+        if isinstance(node.value, Mapping)
+        and (node.value.get("cancelled") is True or node.value.get("error") is True)
+    } - {""}
+    if not terminated:
+        return list(path)
+    results = {
+        node.parent_id: node for node in path
+        if isinstance(node.value, Mapping) and node.value.get("role") == "tool_results"
+    }
+    missing_by_call = {}
+    for node in path:
+        value = node.value
+        if value.get("role") != "assistant" or value.get("run_id") not in terminated:
+            continue
+        result_node = results.get(node.id)
+        recorded = {item.get("call_id") for item in (result_node.value.get("results", []) if result_node else [])}
+        missing = [
+            {"call_id": call["id"], "name": call.get("name", ""), "success": False,
+             "value": None, "error": "Run stopped before a tool result was recorded; execution outcome is unknown. Check side effects before retrying."}
+            for call in value.get("tool_calls", [])
+            if call.get("id") and call["id"] not in recorded
+        ]
+        if missing:
+            missing_by_call[node.id] = missing
+    projected = []
+    for node in path:
+        if node.value.get("role") == "tool_results" and node.parent_id in missing_by_call:
+            node = replace(node, value={**node.value, "results": [
+                *node.value.get("results", []), *missing_by_call[node.parent_id],
+            ]})
+        projected.append(node)
+        if node.id in missing_by_call and node.id not in results:
+            projected.append(replace(node, id=node.id + ":interrupted-results", parent_id=node.id, value={
+                "role": "tool_results", "run_id": node.value.get("run_id"),
+                "task_context_id": node.value.get("task_context_id"),
+                "results": missing_by_call[node.id],
+            }))
+    return projected
+
+
 def project_model_messages(
     path: Sequence[Any],
     *,
@@ -93,6 +150,8 @@ def project_model_messages(
     Optional services materialize transient observations for the live model call;
     durable consumers share the same projection without storing binary content.
     """
+
+    path = _settle_interrupted_tool_calls(path)
 
     # Branch-scoped overrides are applied after providers materialize their
     # snapshots and before either task or ordinary message projection.

@@ -1,4 +1,6 @@
 import { openDoctor, preloadDoctor } from "../doctor/doctor.jsx"
+import { CyreneIcon } from "./cyrene-icon.jsx"
+import { useCyreneActivity } from "./use-cyrene-activity.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { wbErrorText } from "../../shared/errors.jsx"
 import { wbSetBrowserOverlayObscured } from "../../shared/browser/overlays.jsx"
@@ -591,17 +593,22 @@ function WorkbenchSidebarCollapseControl({ collapsed, onToggle }) {
   );
 }
 
-function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSettings, collapsed, persistent, enabledModules }) {
+function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSettings, collapsed, persistent, enabledModules, assistantSessionId = "" }) {
   var { t } = workbenchServices.i18n().use();
+  var cyreneState = useCyreneActivity(assistantSessionId);
+  var cyreneLabel = "Cyrene · " + t("workbench.cyreneStatus." + cyreneState);
+  var isBoard = !activePage;
   var items = [
     { id: "schedule", label: t("workbench.page.schedule"), icon: (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>
     ) },
-    { id: "board", label: t("workbench.page.board", null, "Board"), icon: (
+    { id: "work", label: isBoard ? t("workbench.page.board", null, "Board") : t("workbench.page.work", null, "Work"), icon: isBoard ? (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="18" rx="2"/><rect x="14" y="3" width="7" height="10" rx="2"/><path d="M14 17h7M14 21h7"/></svg>
-    ) },
-    { id: "work", label: t("workbench.page.work", null, "Work"), icon: (
+    ) : (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M9.5 12v2h5v-2"/></svg>
+    ) },
+    { id: "cyrene", label: "Cyrene", icon: (
+      <CyreneIcon state={cyreneState} />
     ) },
     { id: "knowledge", label: t("workbench.page.knowledge"), icon: (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v15H7.5A2.5 2.5 0 0 0 5 19.5Z"/><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H20"/></svg>
@@ -623,10 +630,21 @@ function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSet
               type="button"
               data-tour={"rail_" + item.id}
               className={active ? "active" : ""}
-              title={item.label}
-              aria-label={item.label}
+              title={item.id === "cyrene" ? cyreneLabel : item.label}
+              aria-label={item.id === "cyrene" ? cyreneLabel : item.label}
               aria-current={active ? "page" : undefined}
-              onClick={function () { if (onOpenPage) onOpenPage(item.id); }}
+              onClick={function (event) {
+                if (item.id === "cyrene") {
+                  var icon = event.currentTarget.querySelector(".cyrene-motion");
+                  if (icon && icon.animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                      && document.documentElement.dataset.performanceMode !== "on") {
+                    icon.animate([{transform: "scale(1)"}, {transform: "scale(.82) rotate(-12deg)", offset: .25},
+                      {transform: "scale(1.18) rotate(8deg)", offset: .6}, {transform: "scale(1)"}],
+                      {duration: 440, easing: "ease-out"});
+                  }
+                }
+                if (onOpenPage) onOpenPage(item.id);
+              }}
             >
               <span aria-hidden="true">{item.icon}</span>
               <b>{item.label}</b>

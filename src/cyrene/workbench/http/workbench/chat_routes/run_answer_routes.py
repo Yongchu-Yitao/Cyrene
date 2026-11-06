@@ -102,6 +102,14 @@ class _AnswerOperation:
                 language=self.language,
             )
         self.run = run
+        if self.body.get("agentOriginated") and self.body.get("background"):
+            # Do not acknowledge a purely in-memory runner to the durable caller.
+            async with asyncio.timeout(20):
+                while not getattr(self, "answer_persisted", False):
+                    if run.done.is_set():
+                        return self._response(run)
+                    await asyncio.sleep(0.01)
+            return {"session_id": self.chat_id, "question_id": self.question_id, "status": "answer_submitted"}
         if self.wants_stream:
             return StreamingResponse(
                 self.service.run_manager.stream(run),
@@ -174,6 +182,10 @@ class _AnswerOperation:
                 "pending_question_not_found",
                 language=self.language,
             )
+        if self.body.get("agentOriginated"):
+            if pending.get("kind", "clarification") != "clarification":
+                return localized_error_response("Human authorization required.", "需要用户授权。", 403, "human_authorization_required")
+            self.answer_text = "[Answer from assistant session " + str(self.body.get("sourceSessionId") or "") + "; not new human authorization]\n" + self.answer_text
         self._apply_pending_context(pending, checkpoint)
         self.routes = self.context.runtime()
         self.project_id = str(self.chat.get("projectId") or "")
@@ -216,11 +228,14 @@ class _AnswerOperation:
             self.now,
             self.service.short_id,
         )
+        if self.body.get("agentOriginated"):
+            self.answer_entry.update(agentOriginated=True, sourceSessionId=self.body.get("sourceSessionId"), clientRequestId=self.body.get("clientRequestId"))
         self.service.merge_chat_messages_chronologically(
             self.chat,
             [self.answer_entry],
         )
         self.chat["status"] = "running"
+        self.chat.pop("pendingQuestion", None)
         self.service.mark_user_activity(self.chat, self.now)
         await asyncio.to_thread(
             self.service.repository.write_one,
@@ -232,11 +247,7 @@ class _AnswerOperation:
         # durable write rather than how far the preparation happened to get.
         self.answer_persisted = True
         running_summary = self.service.public_chat_light(self.chat)
-        # The durable pending question stays in the store until the resumed run
-        # settles so an agent failure can still restore the prompt.  The live
-        # projection must hide it immediately, though; otherwise this event
-        # overwrites the frontend's optimistic clear and mounts the answered
-        # question card again while the agent is running.
+        # The answer is durable; list/detail refreshes must not revive its card.
         running_summary["pendingQuestion"] = None
         await publish_chat_changed(
             self.chat_id,
@@ -246,6 +257,11 @@ class _AnswerOperation:
             chatSummary=running_summary,
             userMessage=self.service.public_message(self.answer_entry),
         )
+        if self.wants_stream:
+            await run.publish({
+                "type": "ack", "chatId": self.chat_id,
+                "userMessage": self.service.public_message(self.answer_entry),
+            })
         self.changes_before = await self.service.capture_workspace_changes_baseline(
             self.workspace_dir,
             self.agent_run_id or run.run_id,

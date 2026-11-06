@@ -1,0 +1,10 @@
+{
+  "result": "passed",
+  "build": "passed",
+  "consoleErrors": 0,
+  "consoleWarnings": 0,
+  "viewportWidths": [1586, 1280, 900, 390],
+  "flows": ["sidebar search", "global search", "modal dismissal", "connection", "pause/resume", "task completion", "review confirmation", "artifact creation", "document preview", "download", "schedule CRUD and completion", "memory CRUD and toggles", "knowledge search", "chat replies", "task creation from chat", "attachment metadata", "reload persistence", "theme", "panel toggles", "responsive layout"],
+  "reruns": ["resumed after correcting an exact textarea locator", "rechecked attachment flow after snapshotting the live FileList before state update, then completed remaining checks"],
+  "scope": "isolated frontend demo; no backend calls"
+}

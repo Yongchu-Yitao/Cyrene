@@ -673,6 +673,11 @@ async def route_model_call(
                 status="failed",
                 error=error,
             )
+            # A malformed request is shared by every candidate. Switching models
+            # hides the cause and replays the same invalid tool/message history.
+            if public_failures[-1].code == "model_request_invalid":
+                await _persist_fallback_result(context, candidate, status="failed")
+                raise ModelCallError(public_failures[-1], diagnostics=stream_diagnostics)
             await _publish_next_fallback(context, candidate, eligible, index)
             continue
 

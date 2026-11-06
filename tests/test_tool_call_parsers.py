@@ -264,3 +264,22 @@ def test_parser_does_not_make_hidden_tool_model_callable():
     assert repeated.success is False
     assert repeated.failure is not None
     assert repeated.failure.error_code == "provider_tool_unavailable"
+
+
+def test_explicit_schema_cannot_expose_globally_hidden_or_out_of_scope_tool():
+    from dataclasses import replace
+    from cyrene.core.plugin.tool_scope import PluginToolScope, ScopedPluginRegistry
+
+    plugin = _target_plugin(agent_exposure="hidden")
+    plugin = replace(plugin, metadata={**plugin.metadata, "model_visible": False})
+    registry = PluginRegistry(include_core=False)
+    registry.register_plugin(plugin, source="test")
+    ensure_model_router(registry)
+    args = {"path": "a", "old_string": "old", "new_string": "new"}
+    call = {"name": plugin.name, "arguments": args}
+    request = {"tool_calls": [call], "tools": [plugin.tool_definition()]}
+    visible = PluginRuntime(registry)
+    assert not _parse(visible, request).success
+    assert not _parse(visible, {**request, "tools": []}).success
+    scoped = PluginRuntime(ScopedPluginRegistry(registry, PluginToolScope()))
+    assert not _parse(scoped, request).success

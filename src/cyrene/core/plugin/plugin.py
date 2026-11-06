@@ -164,8 +164,8 @@ class Plugin:
             raise TypeError("Plugin metadata must be a mapping")
         metadata = deepcopy(dict(self.metadata))
         model_visible = metadata.get("model_visible", True)
-        if not isinstance(model_visible, bool):
-            raise TypeError("Plugin metadata.model_visible must be a boolean")
+        if not isinstance(model_visible, bool) and model_visible != "assistant":
+            raise TypeError("Plugin metadata.model_visible must be a boolean or assistant")
         public_errors = metadata.get("public_errors", False)
         if not isinstance(public_errors, bool):
             raise TypeError("Plugin metadata.public_errors must be a boolean")
@@ -249,9 +249,9 @@ class Plugin:
 
     @property
     def model_visible(self) -> bool:
-        """Whether model-facing discovery may list, describe, or invoke it."""
+        """Whether unscoped model discovery may expose it; assistant views resolve audience metadata."""
 
-        return bool(self.metadata.get("model_visible", True))
+        return self.metadata.get("model_visible", True) is True
 
     @property
     def main_only(self) -> bool:

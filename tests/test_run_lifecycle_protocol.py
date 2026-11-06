@@ -261,7 +261,7 @@ async def test_caller_cancel_does_not_release_bridge_or_chat_lock(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_different_run_id_does_not_cancel_unfinished_run(tmp_path, monkeypatch):
+async def test_agent_message_does_not_cancel_unfinished_run(tmp_path, monkeypatch):
     runtime = ConversationRuntime()
     cancelled = []
     bridge = SimpleNamespace(snapshot=lambda: {"status": "tools", "run_id": "old"},
@@ -272,7 +272,7 @@ async def test_different_run_id_does_not_cancel_unfinished_run(tmp_path, monkeyp
     monkeypatch.setattr(runtime, "kick_commit_outbox", lambda _: None)
     config = ConversationConfig(session_id="chat", workspace_dir=str(tmp_path), db_path="")
     with pytest.raises(RuntimeError, match="unfinished run"):
-        await runtime.send(config, "new request", run_id="new")
+        await runtime.send(config, "new request", run_id="new", metadata={"agent_originated": True})
     assert not cancelled
 
 
@@ -343,7 +343,9 @@ def test_partial_context_write_failure_recovers_without_duplicate_model_call(tmp
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["model", "tools", "context"])
 @pytest.mark.parametrize("interrupt_retry", [False, True])
-async def test_retry_replaces_interrupted_checkpoint_without_resuming_old_work(tmp_path, monkeypatch, stage, interrupt_retry):
+@pytest.mark.parametrize("retry_branch", [False, True])
+@pytest.mark.parametrize("restart", [False, True])
+async def test_user_turn_replaces_interrupted_checkpoint_without_resuming_old_work(tmp_path, monkeypatch, stage, interrupt_retry, retry_branch, restart):
     from cyrene.core.context import ContextStoreRouter
     from cyrene.workbench.core_adapter.bridge import WorkbenchSessionBridge
 
@@ -402,8 +404,24 @@ async def test_retry_replaces_interrupted_checkpoint_without_resuming_old_work(t
     monkeypatch.setattr(runtime, "context_checkpoint", checkpoint)
     monkeypatch.setattr(runtime, "_open_bridge", open_bridge)
     monkeypatch.setattr(runtime, "kick_commit_outbox", lambda _: None)
-    config = ConversationConfig(session_id=tree_id, workspace_dir=str(tmp_path), db_path="", retry=True)
+    config = ConversationConfig(session_id=tree_id, workspace_dir=str(tmp_path), db_path="", retry=retry_branch)
     assert checkpoint()["status"] == "running"
+    if restart:
+        from cyrene.workbench.chat.chat_runs import ChatRunManager
+        from cyrene.platform.database import init_db
+        db = str(tmp_path / "workbench.db")
+        await init_db(db)
+        manager = ChatRunManager()
+        manager.configure(db)
+        manager.conversation_runtime = runtime
+        manager._repository.write({"chats": [{"id": tree_id, "status": "idle"}]})
+        manager.startup()
+        manager.startup()  # Recovery is idempotent, including previously idle projections.
+        recovered = manager._repository.read()["chats"][0]
+        assert recovered["lastRun"]["status"] == "cancelled"
+        assert recovered["lastRun"]["terminationReason"] == "process_restarted"
+        assert checkpoint()["status"] == "cancelled"
+        assert calls == effects == []
     try:
         if interrupt_retry:
             result = await runtime.send(config, "hello", run_id="interrupted-retry", publish=lambda _: None)
@@ -420,11 +438,17 @@ async def test_retry_replaces_interrupted_checkpoint_without_resuming_old_work(t
         store = ContextStoreRouter(tmp_path / "data" / "context")
         try:
             values = [node.value for node in store.get_subtree(tree_id, root_id)]
-            assert any(value.get("run_id") == "old" and value.get("cancel_reason") == "replaced_by_retry"
+            reason = "process_restarted" if restart else ("replaced_by_retry" if retry_branch else "replaced_by_new_message")
+            assert any(value.get("run_id") == "old" and value.get("cancel_reason") == reason
                        for value in values)
+            assert any(value.get("role") == "user" and value.get("run_id") == "old"
+                       and value.get("content") == "hello" for value in values)
             retries = [value for value in values if value.get("role") == "user" and value.get("run_id") == "retry-1"]
             assert len(retries) == 1
-            assert retries[0]["metadata"]["retry_of_run_id"] == ("interrupted-retry" if interrupt_retry else "old")
+            if retry_branch:
+                assert retries[0]["metadata"]["retry_of_run_id"] == ("interrupted-retry" if interrupt_retry else "old")
+            else:
+                assert "retry_of_run_id" not in retries[0].get("metadata", {})
         finally:
             store.close()
     finally:
@@ -469,3 +493,55 @@ def test_paused_restore_fences_already_queued_and_late_hook_transitions(tmp_path
         assert reopened.final_output('new')['content'] == 'new answer'
     finally:
         reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_exhausted_runtime_retries_stop_checkpoint_and_accept_new_command(tmp_path, monkeypatch):
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.workbench.core_adapter.bridge import WorkbenchSessionBridge
+
+    seed = make_session(tmp_path)
+    tree_id, root_id = seed.tree.id, seed.tree.root_id
+    seed.close()
+    with ContextStoreRouter(tmp_path / "data" / "context") as store:
+        store.mount(tree_id, root_id, {
+            "role": "user", "content": "old request", "run_id": "old", "trigger_model": True,
+        })
+    runtime = ConversationRuntime()
+    monkeypatch.setattr(runtime, "_state_root", lambda config=None: tmp_path / "data")
+    monkeypatch.setattr(runtime, "kick_commit_outbox", lambda _: None)
+    attempts = []
+    model_calls = []
+
+    async def model(arguments, context):
+        model_calls.append(context.data.get("run_id"))
+        return {"content": "new answer", "tool_calls": []}
+
+    def open_bridge(config, **kwargs):
+        # Inject a persistent failure at the bridge resume boundary. Keep the
+        # real tree paused so cleanup must settle it without executing old work.
+        bridge = WorkbenchSessionBridge(make_session(
+            tmp_path, model, tree_id=tree_id, resume_on_restore=False,
+        ))
+        async def broken_resume(**kwargs):
+            attempts.append("resume")
+            raise OSError("persistent bridge failure")
+        bridge.resume_result = broken_resume
+        return bridge
+
+    monkeypatch.setattr(runtime, "_open_bridge", open_bridge)
+    config = ConversationConfig(session_id=tree_id, workspace_dir=str(tmp_path), db_path="")
+    try:
+        with pytest.raises(OSError, match="persistent bridge failure"):
+            await runtime.send(config, "old request", run_id="old")
+        assert len(attempts) == 4  # Initial attempt plus three retries.
+        assert runtime.context_checkpoint(tree_id)["status"] == "cancelled"
+        with ContextStoreRouter(tmp_path / "data" / "context") as store:
+            nodes = store.get_subtree(tree_id, root_id)
+            assert any(n.value.get("cancel_reason") == "runtime_retry_exhausted" for n in nodes)
+        result = await runtime.send(config, "new command", run_id="new")
+        assert result.text == "new answer"
+        assert model_calls == ["new"]
+        assert runtime.context_checkpoint(tree_id)["status"] == "completed"
+    finally:
+        await runtime.shutdown(grace_seconds=0)

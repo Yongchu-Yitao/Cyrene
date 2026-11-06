@@ -1,4 +1,4 @@
-"""Required SessionStart mount for the editable base system prompt."""
+"""Required SessionStart mount for the selected Agent system prompt."""
 
 from __future__ import annotations
 
@@ -10,18 +10,23 @@ from cyrene.core.hook import (
 from cyrene.core.plugin import PluginSetupContext
 
 from .system_prompt import SYSTEM_PROMPT
+from .assistant_prompt import ASSISTANT_SYSTEM_PROMPT
 
 _HOOK_ID = "cyrene-system-prompt-session-start"
 _PLUGIN_ID = "cyrene_system_prompt.mount"
 
 
 def setup_system_prompt(context: PluginSetupContext) -> None:
-    """Mount the base prompt before every other system-context contribution."""
+    """Mount the selected prompt before other system-context contributions."""
 
     def rendered_prompt() -> str:
-        return str(SYSTEM_PROMPT or "").replace(
-            "{workspace}", str(context.workspace)
-        ).strip()
+        selected = (
+            ASSISTANT_SYSTEM_PROMPT
+            if context.data.get("personal_assistant") is True
+            else SYSTEM_PROMPT
+        )
+        prompt = str(selected or "")
+        return prompt.replace("{workspace}", str(context.workspace)).strip()
 
     async def mount_system_prompt(_event: HookEvent) -> dict[str, str]:
         content = rendered_prompt()

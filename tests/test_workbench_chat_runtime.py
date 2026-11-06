@@ -456,13 +456,16 @@ def test_model_router_falls_back_through_provider_plugins(monkeypatch):
     assert result.value["provider_plugin"] == "ProviderTwo"
 
 
-def test_model_router_does_not_fallback_on_provider_protocol_error(monkeypatch):
+@pytest.mark.parametrize("request_error", [False, True])
+def test_model_router_does_not_fallback_on_provider_protocol_error(monkeypatch, request_error):
     calls = []
     fallbacks = []
     route_statuses = []
 
     async def protocol_invalid(_arguments, _context):
         calls.append("primary")
+        if request_error:
+            raise ModelCallError(classify_model_error("HTTP 400 invalid request"))
         return {
             "content": "",
             "model": "primary",
@@ -562,8 +565,8 @@ def test_model_router_does_not_fallback_on_provider_protocol_error(monkeypatch):
     )
 
     assert result.success is False
-    assert result.error_details["code"] == "model_response_invalid"
-    assert result.error_details["detail_key"] == "workbenchChat.error.modelResponseInvalid"
+    assert result.error_details["code"] == ("model_request_invalid" if request_error else "model_response_invalid")
+    assert result.error_details["detail_key"] == ("workbenchChat.error.modelRequestInvalid" if request_error else "workbenchChat.error.modelResponseInvalid")
     assert calls == ["primary"]
     assert fallbacks == []
     assert route_statuses == [("primary", "failed")]
@@ -1469,3 +1472,58 @@ def test_builtin_runtime_message_fields_preserve_latest_request_usage():
     assert fields["usage"]["prompt_cache_hit_tokens"] == 41300
     assert fields["latestRequestUsage"]["prompt_cache_hit_tokens"] == 41044
     assert fields["latestRequestUsage"]["prompt_cache_miss_tokens"] == 15373
+
+
+@pytest.mark.parametrize("agent_originated", [False, True])
+def test_persisted_answer_clears_card_and_acknowledges_stream(monkeypatch, agent_originated):
+    import asyncio
+    from types import SimpleNamespace
+    from cyrene.workbench.http.workbench.chat_routes import run_answer_routes
+
+    operation = object.__new__(run_answer_routes._AnswerOperation)
+    operation.chat_id = "chat"
+    operation.project_id = "project"
+    operation.question_id = "question"
+    operation.body = {"agentOriginated": agent_originated, "sourceSessionId": "assistant", "clientRequestId": "answer-1"}
+    operation.answer_text = "全部要"
+    operation.chat = {"id": "chat", "pendingQuestion": {"id": "question"}, "messages": []}
+    operation.base_chat = dict(operation.chat)
+    operation.wants_stream = True
+    operation.workspace_dir = "/tmp"
+    operation.agent_run_id = "run"
+    saved, events = [], []
+
+    async def publish(event):
+        events.append(event)
+
+    async def changed(*args, **kwargs):
+        assert kwargs["chatSummary"]["pendingQuestion"] is None
+
+    async def baseline(*args):
+        # Stop after durable persistence and the acknowledgement under test.
+        raise RuntimeError("checkpoint")
+
+    operation.service = SimpleNamespace(
+        utc_now_iso=lambda: "2026-11-06T00:00:00Z",
+        short_id=lambda prefix: "answer",
+        merge_chat_messages_chronologically=lambda chat, entries: chat["messages"].extend(entries),
+        mark_user_activity=lambda *args: None,
+        repository=SimpleNamespace(write_one=lambda chat, **kwargs: saved.append(dict(chat))),
+        public_chat_light=lambda chat: dict(chat),
+        public_message=lambda entry: entry,
+        capture_workspace_changes_baseline=baseline,
+    )
+    monkeypatch.setattr(run_answer_routes, "publish_chat_changed", changed)
+    try:
+        asyncio.run(operation._persist_answer(SimpleNamespace(run_id="run", publish=publish)))
+    except RuntimeError as exc:
+        assert str(exc) == "checkpoint"
+    assert "pendingQuestion" not in saved[0]
+    assert operation.answer_persisted is True
+    assert events[0]["type"] == "ack"
+    assert events[0]["userMessage"]["answerToQuestionId"] == "question"
+
+    if agent_originated:
+        assert saved[0]["messages"][0]["agentOriginated"] is True
+        assert saved[0]["messages"][0]["sourceSessionId"] == "assistant"
+        assert saved[0]["messages"][0]["clientRequestId"] == "answer-1"

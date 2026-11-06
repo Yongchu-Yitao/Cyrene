@@ -133,7 +133,7 @@ async def test_transient_provider_retry_publishes_retry_card_status(
             "status": "retry",
             "model": "primary-model",
             "retry_count": 1,
-            "retry_limit": 5,
+            "retry_limit": 3,
         },
         {
             "chat_id": "chat-retry",
@@ -195,10 +195,10 @@ async def test_model_connect_retry_waits_ten_seconds_and_stops_after_five(
             has_fallback=False,
         )
 
-    assert attempts == 6
-    assert delays == [10.0] * 5
-    assert [item["retry_count"] for item in published] == [1, 2, 3, 4, 5]
-    assert {item["retry_limit"] for item in published} == {5}
+    assert attempts == 4
+    assert delays == [10.0] * 3
+    assert [item["retry_count"] for item in published] == [1, 2, 3]
+    assert {item["retry_limit"] for item in published} == {3}
 
 
 @pytest.mark.asyncio

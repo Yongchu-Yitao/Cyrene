@@ -397,7 +397,12 @@ import { wbcErrorText } from "./errors.jsx"
     if (Object.prototype.hasOwnProperty.call(input, "contextActivations")) {
       body.contextActivations = input.contextActivations || {};
     }
-    return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/messages", {
+    var endpoint = input.questionId ? "/answer" : "/messages";
+    if (input.questionId) {
+      body.question_id = input.questionId;
+      body.answer = input.message || "";
+    }
+    return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

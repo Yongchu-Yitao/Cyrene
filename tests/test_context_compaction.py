@@ -155,3 +155,61 @@ def test_shared_prose_is_not_compacted_as_task_content(tmp_path):
         assert "exact shared request" in str(messages)
     finally:
         session.close()
+
+
+def test_distillation_inherits_chat_route_and_identity(tmp_path):
+    from cyrene.plugins.model_router import _route_call_inputs
+
+    for index, inherited in enumerate(({}, {"model_route": "secondary"}, {
+        "model_identity": {"candidateId": "selected-deepseek", "model": "deepseek-flash"},
+    })):
+        calls = []
+
+        async def model(arguments, context):
+            _, _, session_id, route, _ = _route_call_inputs(arguments, context)
+            calls.append((session_id, route, context.data))
+            return {"content": "Retained task checkpoint.", "tool_calls": []}
+
+        directory = tmp_path / str(index)
+        plugins = directory / "plugins"
+        plugins.mkdir(parents=True)
+        session = AgentSession(directory / "data", directory, plugins,
+                               registry=_model_registry(model), plugin_context_data=inherited)
+        messages = [{"role": "system", "compacted_block": True,
+                     "content": COMPACT_BLOCK_PREFIX + "\n" + "earlier evidence " * 300}]
+        try:
+            result, distilled, error = run(session._distill_compacted_messages(
+                messages, context_limit=1_000_000, reserved_tokens=0,
+                run_id="compaction-run", node_id=session.tree.root_id,
+            ))
+            assert distilled and not error
+            assert result[0]["content"].endswith("Retained task checkpoint.")
+            session_id, route, data = calls[0]
+            assert session_id == session.tree.id
+            assert route == inherited.get("model_route", "primary")
+            assert data.get("model_identity") == inherited.get("model_identity")
+            assert data["caller"] == "context_compactor"
+            assert data["model_call_kind"] == "compaction"
+        finally:
+            session.close()
+
+
+def test_distillation_failure_preserves_mechanical_record(tmp_path):
+    async def model(arguments, context):
+        raise RuntimeError("model unavailable")
+
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    session = AgentSession(tmp_path / "data", tmp_path, plugins, registry=_model_registry(model))
+    messages = [{"role": "system", "compacted_block": True,
+                 "content": COMPACT_BLOCK_PREFIX + "\nExact checkpoint evidence"}]
+    try:
+        result, distilled, error = run(session._distill_compacted_messages(
+            messages, context_limit=1_000_000, reserved_tokens=0,
+            run_id="compaction-run", node_id=session.tree.root_id,
+        ))
+        assert result == messages
+        assert not distilled
+        assert error
+    finally:
+        session.close()

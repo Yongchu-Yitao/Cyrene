@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { resizeCollapseEdge } from "./resize-collapse.mjs"
+import { createResizeCollapseGuard } from "./resize-collapse.mjs"
 import { startPointerResize } from "./pointer-resize.mjs"
 var { useEffect: useWorkbenchEffect, useRef: useWorkbenchRef } = React;
 
@@ -117,8 +117,11 @@ function WbColResizer({ cardEdge, trackGutter, surfaceId, onClose }) {
     if (!panel || !grid) return;
     var rightEdge = panel.getBoundingClientRect().right;
     var maxW = wbRightDynamicMax(panel);
+    var resizeCollapseEdge = createResizeCollapseGuard();
     startPointerResize(e, {
       bodyClass: "wb-col-resizing",
+      collapsePreview: { element: grid, kind: "panel", axis: "x", direction: function () { return 1; } },
+      resetCollapse: resizeCollapseEdge.reset,
       start: function () {
         if (trackGutter) handle.classList.add("is-resizing");
         emitResizePhase("start");
@@ -132,6 +135,7 @@ function WbColResizer({ cardEdge, trackGutter, surfaceId, onClose }) {
         return resizeCollapseEdge(requestedWidth, WB_RIGHT_MIN);
       },
       commit: function () {
+        resizeCollapseEdge.dispose();
         handle.classList.remove("is-resizing");
         emitResizePhase("end");
         try {

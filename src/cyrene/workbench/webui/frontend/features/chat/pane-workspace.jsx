@@ -5,7 +5,8 @@ function wbcPaneWorkspacePresentation(
   paneCardDragId,
   chatDragSession,
   resourceDragSession,
-  activeChatId
+  activeChatId,
+  dockedContextVisible
 ) {
   var paneCardCount = paneLayout.left.length + paneLayout.right.length;
   var paneHasTwoColumns = !!(paneLayout.left.length && paneLayout.right.length);
@@ -17,7 +18,8 @@ function wbcPaneWorkspacePresentation(
   );
   var paneOnlyCard = paneLayout.left[0] || paneLayout.right[0] || null;
   var singlePaneDropUsesContextTracks = !!(
-    paneCardCount === 1
+    dockedContextVisible
+    && paneCardCount === 1
     && paneOnlyCard
     && paneOnlyCard.kind === "chat"
   );

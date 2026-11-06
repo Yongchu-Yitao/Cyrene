@@ -17,7 +17,7 @@ function wbcMergeChatSummary(chat, summary, runStatus) {
 function wbcRuntimeUserMessage(context, chatId, userMessage) {
   context.setActiveChat(function (previous) {
     if (!previous || previous.id !== chatId) return previous;
-    return { ...previous, messages: wbcMergeChronologicalMessages(previous.messages || [], [userMessage]) };
+    return { ...previous, pendingQuestion: null, messages: wbcMergeChronologicalMessages(previous.messages || [], [userMessage]) };
   });
 }
 
@@ -263,6 +263,7 @@ function wbcRuntimePageHooks(context) {
 
 function useWbcRuntimePageHooks(context) {
   useWbcEffect(function () {
+    if (context.enabled === false) return;
     context.runtimeEngine.setHooks(wbcRuntimePageHooks(context));
     return function () { context.runtimeEngine.setHooks(null); };
   });

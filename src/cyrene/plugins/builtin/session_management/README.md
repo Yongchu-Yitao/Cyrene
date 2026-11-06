@@ -1,0 +1,51 @@
+# Session Management
+
+`session_management` 管理助理创建的任务 Session。任务使用现有 Workbench / ContextTree 运行内核，类型为 `assistant-task`，不进入普通聊天列表，也不进入 `cyrene_sessions` 的普通会话通信范围。每个工具按调用会话 ID 检查任务归属。
+
+## 暴露方式
+
+七个工具默认 `model_visible=False`、`main_only=True`。普通 Agent 的直接工具和 Toolbox 都看不到它们。不新增助理身份认证机制；助理入口在创建 `ConversationConfig`（或 `AgentSession`）时，显式传入本包 `TOOL_NAMES` 作为 `extra_direct_tool_names`。需先启用并加载本包及应用服务。不要全局改成可见，也不要把该参数传给普通聊天或任务执行 Session。
+
+```python
+from cyrene.plugins.builtin.session_management import TOOL_NAMES
+
+config = ConversationConfig(..., extra_direct_tool_names=TOOL_NAMES)
+```
+
+Cyrene 页面通过本包的 `/api/workbench/assistant` 入口持久化全软件唯一、与项目选择无关的个人助理会话（`personal-assistant`）。旧项目助理保留为可检查的历史任务，原任务、消息队列和通知移交给全局助理。内部执行 scope 仅适配聊天内核，不加入项目列表。普通聊天不转换为助理；任务会话继续使用 `assistant-task`。左侧展示任务与助理自身的任务上下文目录，正文复用正常聊天组件。
+
+## 工具
+
+- `session_create(title, workspace_path, message?, files?)`：创建独立任务，可同时提交初始消息和文件。必须指定已存在的绝对工作目录（不存在时先创建）；继承项目、上下文选择和模型，不复制对话、记忆或授权。工具重放不会重复创建。
+- `session_list()`：返回当前助理创建的任务、状态、待处理消息数、投递错误与等待用户的问题，包括空闲和停止任务。
+- `session_context_blocks(session_id, block_ids?, offset?, limit?, content_offset?, content_limit?)`：默认列上下文块目录；选 ID 后分页读取正文。块包括 shared、任务文档及其消息、系统和动态挂载、当前请求；目录中的历史挂载并不等同于当前有效挂载。
+- `session_load_context_blocks(session_id, block_ids)`：将所选块保存到上下文树中的单一跨 Session 引用位置，由 ModelStart Hook 挂入模型输入；成功加载新内容会自动卸载旧快照，不修改助理当前任务文档。附来源、版本、时间和参考资料提示。源 Session 不改变；不执行历史工具调用、不提升历史指令权限、不自动同步。上限 60000 字符；超过时先分块查看。
+- `session_send_message(session_id, message?, files?)`：接受文字或文件，返回持久队列回执。每次最多 10 个非空文件、合计 20 MiB，文字最多 20000 字符。相对路径相对于助理工作区；文件内容保存为内容寻址的托管附件，排队后原文件变化不影响快照。
+- `session_stop(session_id)`：暂停未投递消息，取消并等待正在运行的任务结束，保留会话和产物。之后一次新的发送会恢复队列；重放旧发送不会恢复。
+
+- `session_answer_question(session_id, question_id, answer)`：回答当前澄清问题并异步恢复执行；拒绝过期问题和非澄清类授权请求。
+
+## 运行与恢复
+
+消息按目标会话顺序投递。当前实现等待目标运行结束后，使用正常消息入口提交文字和附件；不会打断当前模型调用。等待问题回答时保留普通消息排队；助理通过 `session_answer_question` 回答澄清问题并恢复原任务，缺少信息时才在主对话询问用户。权限卡片汇集到主助理对话，由用户直接回答原任务的授权请求，仍走现有人类授权流程，不通过 Agent 的回答工具。返回 `queued` 或 `delivered` 均不代表任务完成；通过列表和上下文块查看结果。
+
+队列、归属和工具回执位于应用数据目录 `plugin_data/session_management/sessions.sqlite3`。应用生命周期启动单个投递 worker；重启保留停止标记与消息。重试复用收件方持久接纳 ID；永久目标错误或 12 次投递异常后标记失败。插件停用停止投递。工作区仍可共享，本包不提供文件系统写隔离。
+
+## 主动通知
+
+Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读取运行检查点；完成、失败、取消和等待用户处理会生成带源 Session、run、节点 ID 的通知。复用现有 `dispatch_agent_message`：助理空闲时唤醒，运行时进入现有 guidance 通道；助理等待用户时暂存，不能代替人类授权。通知回执持久化，重启重试使用同一接纳 ID。运行失败通知携带错误详情；消息投递最终失败也生成通知。现有 worker 仅重试待投递通知，不轮询任务状态。
+
+## 个人助理工具配置
+
+入口可调用 `cyrene.workbench.core_adapter.assistant_profile.personal_assistant_config(config)`，每次启动、恢复和通知唤醒时使用返回的配置。该配置提供本包七个工具、`ask_user`、`send_message` 和 `WebSearch`（用户所称 web_search，来自 `cyrene_content`）。核心工具自动保留，其中已包含 `load_context`、`unload_context`、`append_context`、`replace_context`，无需重复添加动态上下文工具包。宿主需加载相应插件和应用服务；普通聊天和助理创建的任务不应用此配置。ConversationRuntime 在每次打开个人助理会话时自动应用此配置，覆盖恢复和通知唤醒。个人助理使用 `cyrene_system_prompt/assistant_prompt.py` 的独立完整的英文 system prompt，不拼接普通 Agent 的提示词，由原有 SessionStart Hook 挂载并计算缓存指纹。普通 Agent 保持原有提示词。
+
+## 助理会话工具范围
+
+个人助理入口声明 `PluginToolScope`，通过会话局部的 `ScopedPluginRegistry`
+限制直接工具、Toolbox 发现/描述/调用及直接执行。保留除 toolbox 外的核心工具，只额外允许
+本包七个工具、ask_user、send_message、WebSearch；不开放这些工具所属包的其他工具。
+视图跟随宿主插件更新，不改变全局启用状态、模型 Provider 或生命周期插件。
+普通会话和委派任务仍使用原注册表；普通 Agent 的工具列表不会新增 session_management。
+通知 Hook 仅安装到已登记的委派任务，普通会话恢复时移除旧版误装的通知 Hook。
+
+助理的 16 个工具均直接暴露；toolbox 在助理会话中既不可见也不可调用。普通 Agent 的 Toolbox 保持原有行为。

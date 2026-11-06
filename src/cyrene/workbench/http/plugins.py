@@ -139,7 +139,7 @@ def _plugin_value(
         "standalone": pack_id is None,
         **plugin_status(registry, registered, host),
         "locked": registry.plugin_locked(plugin.name),
-        "model_visible": plugin.model_visible,
+        "model_visible": plugin.metadata.get("model_visible", True),
         "agent_exposure": (
             "direct" if source == "core" and plugin.kind == "tool"
             else plugin.agent_exposure

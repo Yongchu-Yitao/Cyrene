@@ -1,5 +1,5 @@
 import { paneRowGeometry, paneColumnBounds } from "./pane-resize-geometry.mjs"
-import { resizeCollapseEdge } from "../layout/resize-collapse.mjs"
+import { createResizeCollapseGuard } from "../layout/resize-collapse.mjs"
 import { startPointerResize } from "../layout/pointer-resize.mjs"
 import { useSplitTranscriptResize } from "./transcript-resize-hooks.jsx"
 import { WbcTranscript } from "./messages.jsx"
@@ -369,54 +369,17 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
         });
       });
     }
-    var optimisticAnswer = {
-      id: "chat_split_answer_pending_" + Date.now(),
-      role: "user",
-      content: String(answer),
-      createdAt: new Date().toISOString(),
-      answerToQuestionId: questionId,
-      optimistic: true,
-    };
     setError("");
-    runStartedAtRef.current = Date.now();
-    runtimeEngine.update(current, {
-      chatId: current,
-      text: "",
-      progress: [],
-      activities: [],
-      activitySeq: 0,
-      segments: [],
-      notifications: [],
-      userMessages: [optimisticAnswer],
-      startedAt: runStartedAtRef.current,
-      lastEventAt: runStartedAtRef.current,
-      replying: true,
-    });
     setChat(function (prev) {
-      if (!prev || String(prev.id || "") !== String(current)) return prev;
-      return {
-        ...prev,
-        pendingQuestion: null,
-        status: "running",
-        messages: wbcMergeChronologicalMessages(prev.messages || [], [optimisticAnswer]),
-      };
+      return prev && String(prev.id || "") === String(current)
+        ? { ...prev, pendingQuestion: null, status: "running" } : prev;
     });
-    var answerMode = wbcNormalizePermissionMode(
-      resumeMode,
-      chat && chat.permissionMode ? chat.permissionMode : "default"
-    );
-    WorkbenchChatModel.answerChat(current, questionId, answer, { mode: answerMode })
-      .then(function () { return refresh(true); })
-      .catch(function (err) {
-        if (disposedRef.current || String(chatIdRef.current || "") !== String(current)) return;
-        setError(wbcErrorText(err));
-        // Restore the durable pending question so the user can retry.
-        refresh(true).catch(function () {});
-      })
-      .finally(function () {
-        if (disposedRef.current || String(chatIdRef.current || "") !== String(current)) return;
-        runtimeEngine.update(current, null);
-      });
+    return Promise.resolve(runtimeEngine.start(current, {
+      message: String(answer), questionId: questionId,
+      mode: wbcNormalizePermissionMode(resumeMode, chat && chat.permissionMode || "default"),
+    }, WorkbenchChatModel)).finally(function () {
+      if (!disposedRef.current && String(chatIdRef.current || "") === String(current)) return refresh(true);
+    });
   }
 
   function openContent(type, payload) {
@@ -525,6 +488,7 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
         runtime={streamRuntime}
         running={running}
         onSend={submit}
+        onAnswer={answerPendingQuestion}
         onGuidance={guide}
         onInterrupt={stop}
         draftNamespace={"chat-split:"}
@@ -726,8 +690,11 @@ function WbcPaneRowResizer({ active, side, ratio, onResize, onClose }) {
     var rect = column.getBoundingClientRect();
     var trackHeight = Math.max(1, rect.height - 12);
     var nextRatio = safeRatio;
+    var resizeCollapseEdge = createResizeCollapseGuard();
     startPointerResize(event, {
       bodyClass: "wbc-resizing-pane-row",
+      collapsePreview: { element: column, kind: "row", axis: "y", direction: function (edge) { return edge === "minimum" ? -1 : 1; } },
+      resetCollapse: resizeCollapseEdge.reset,
       start: function () { window.dispatchEvent(new CustomEvent("workbench:split-resize-start")); },
       update: function (moveEvent) {
         var next = moveEvent.clientY - rect.top - 6;
@@ -739,6 +706,7 @@ function WbcPaneRowResizer({ active, side, ratio, onResize, onClose }) {
         handle.style.top = "calc(" + (nextRatio * 100) + "% + " + (6 - nextRatio * 12) + "px)";
       },
       commit: function () {
+        resizeCollapseEdge.dispose();
         onResize(nextRatio);
         window.dispatchEvent(new CustomEvent("workbench:split-resize-end", { detail: { ratio: nextRatio, side: side } }));
       },
@@ -817,8 +785,11 @@ function WbcPaneColumnResizer({ active, width, onResize, onClose }) {
     var bounds = paneColumnBounds(layout);
     var startWidth = Math.max(bounds.minimum, Math.min(bounds.maximum, Number(width) || 520));
     var nextWidth = startWidth;
+    var resizeCollapseEdge = createResizeCollapseGuard();
     startPointerResize(event, {
       bodyClass: "wbc-resizing-pane-column",
+      collapsePreview: { element: layout, kind: "column", axis: "x", direction: function (edge) { return edge === "minimum" ? 1 : -1; } },
+      resetCollapse: resizeCollapseEdge.reset,
       start: function () { window.dispatchEvent(new CustomEvent("workbench:split-resize-start")); },
       update: function (moveEvent) {
         var next = startWidth + (startX - moveEvent.clientX);
@@ -827,6 +798,7 @@ function WbcPaneColumnResizer({ active, width, onResize, onClose }) {
       },
       paint: function () { layout.style.setProperty("--wbc-pane-right-width", nextWidth + "px"); },
       commit: function () {
+        resizeCollapseEdge.dispose();
         onResize(nextWidth);
         window.dispatchEvent(new CustomEvent("workbench:split-resize-end", { detail: { width: nextWidth } }));
       },

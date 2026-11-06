@@ -1540,7 +1540,7 @@ class ChatRunManager:
         return repaired
 
     def startup(self) -> None:
-        """Reconcile Chat projections while preserving durable ContextTree runs."""
+        """End ownerless runs through AgentSession before admitting new work."""
         self.closed = False
         try:
             if not self._db_path:
@@ -1548,7 +1548,11 @@ class ChatRunManager:
             payload = self._repository.read()
             changed = False
             for chat in payload.get("chats", []) or []:
-                if str(chat.get("status") or "") == "running":
+                chat_id = str(chat.get("id") or "")
+                stopped = self.conversation_runtime.stop_interrupted(
+                    chat_id, reason="process_restarted",
+                ) if chat_id else False
+                if stopped or str(chat.get("status") or "") == "running":
                     checkpoint = (
                         self.conversation_runtime.context_checkpoint(
                             str(chat.get("id") or "")
@@ -1575,16 +1579,15 @@ class ChatRunManager:
                             "createdAt": str(chat.get("updatedAt") or ""),
                             "completedAt": datetime.now(timezone.utc).isoformat(),
                         }
-                    elif checkpoint and checkpoint.get("status") == "running":
-                        # The Agent tree remains resumable under its original
-                        # run id. Do not synthesize a cancellation marker.
+                    elif stopped:
+                        chat.pop("pendingQuestion", None)
                         chat["lastRun"] = {
                             "id": str(checkpoint.get("run_id") or ""),
-                            "status": "recoverable",
+                            "status": "cancelled",
                             "terminationReason": "process_restarted",
-                            "outcome": "recoverable",
+                            "outcome": "cancelled",
                             "createdAt": str(chat.get("updatedAt") or ""),
-                            "completedAt": "",
+                            "completedAt": datetime.now(timezone.utc).isoformat(),
                         }
                     else:
                         chat.pop("pendingQuestion", None)

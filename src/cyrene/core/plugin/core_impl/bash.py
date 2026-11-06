@@ -82,8 +82,9 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
             error_code="plugin_timeout",
             message=message,
             retryable=True,
-            retry_scope="after_delay",
-            circuit_scope="run_plugin",
+            retry_scope="different_arguments",
+            # A command deadline does not make the shell executor unavailable.
+            circuit_scope="none",
             details={"timeout_ms": timeout_ms},
         )) from None
     except asyncio.CancelledError:

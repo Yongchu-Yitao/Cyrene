@@ -79,7 +79,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   dataStore.useVersion();
   var dataState = dataStore.state;
   var pluginModules = Array.isArray(dataState.pluginModules) ? dataState.pluginModules : [];
-  var enabledModules = ["schedule", "board", "work", "knowledge", "memory"].filter(function (module) {
+  var enabledModules = ["schedule", "work", "cyrene", "knowledge", "memory"].filter(function (module) {
     return ["schedule", "knowledge", "memory"].indexOf(module) < 0
       || pluginModules.indexOf(module) >= 0;
   });
@@ -114,6 +114,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [editMemoryProject, setEditMemoryProject] = useWorkbenchState(null);
   var [notifications, setNotifications] = useWorkbenchState({ items: [], counts: { all: 0, mention: 0, comment: 0, system: 0 }, unreadByTab: { all: 0, mention: 0, comment: 0, system: 0 }, unreadCount: 0 });
   var [activeChatId, setActiveChatId] = useWorkbenchState("");
+  var [assistantSessionId, setAssistantSessionId] = useWorkbenchState("");
   var [recentChatsByProject, setRecentChatsByProject] = useWorkbenchState({});
   var [workspaceTabState, setWorkspaceTabState] = useWorkbenchState({ items: [], activeKey: "" });
   var [workspaceTabRequest, setWorkspaceTabRequest] = useWorkbenchState(null);
@@ -400,6 +401,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   }
   var shellContext = {
     model: model, t: t, store: store, setStore: setStore,
+    assistant: { setSessionId: setAssistantSessionId },
     appearance: { theme: theme, actualTheme: actualTheme, onToggleTheme: onToggleTheme },
     presentation: modulePresentation,
     navigation: {
@@ -481,8 +483,9 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div ref={mobileGridRef} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat || modulePresentation.isBoard ? " is-chat" : "") + (modulePresentation.isBoard ? " is-conversation-board" : "") + (isSettings ? " is-settings" : "")}>
+        <div ref={mobileGridRef} className={"workbench-grid integrated-sidebars" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat || modulePresentation.isBoard ? " is-chat" : "") + (modulePresentation.isBoard ? " is-conversation-board" : "") + (isSettings ? " is-settings" : "") + (modulePresentation.isCyrene ? " is-cyrene" : "")}>
           <WorkbenchSidebarDock
+            assistantSessionId={assistantSessionId}
             persistent={true}
             collapsed={railCollapsed}
             activePage={fullPage}

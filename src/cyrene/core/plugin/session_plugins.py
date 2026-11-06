@@ -310,7 +310,7 @@ class SessionPlugins:
             if host is not None:
                 authoritative_directory = host.registry.directory_revision
                 if (
-                    host.registry is not self.registry
+                    host.registry is not getattr(self.registry, "authoritative_registry", self.registry)
                     and self.directory_revision is not None
                     and authoritative_directory != self.directory_revision
                 ):

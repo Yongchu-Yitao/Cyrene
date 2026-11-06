@@ -1,6 +1,7 @@
 import { snapshotStaticMessage, equalAssistantProps } from "./message-memo.mjs"
 import { createDisclosureSubscriptions, subscribeDisclosureUpdates } from "./disclosure-subscriptions.mjs"
 import { wbcProjectTranscript } from "./runtime-timeline.jsx"
+import { presentConversationMessages } from "./message-presentation.mjs"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
 import { WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm } from "./conversation.jsx"
@@ -600,7 +601,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
       <div className="wbc-msg-row">
         <time>{wbcFormatTime(msg.createdAt)}</time>
         <div className={bubbleClassName}>
-          {msg.agentOriginated ? <small>{wbcT("workbenchChat.agentSessionSource", "Agent message from session")} {msg.originSessionId || ""}</small> : null}
+          {msg.agentOriginated && msg.assistantTaskMessage ? <small>{wbcT("workbenchChat.assistantMessageSource", "From assistant Agent")}</small> : null}
           {msg.content ? <p>{msg.content}</p> : null}
           {attachments.length > 0 && (
             <div className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}>
@@ -1704,7 +1705,7 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
 }
 
 function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion, onAnswer }) {
-  var timeline = wbcGroupConsecutiveActivityMessages(wbcProjectTranscript(messages || [], runtime), runtime);
+  var timeline = wbcGroupConsecutiveActivityMessages(presentConversationMessages(wbcProjectTranscript(messages || [], runtime)), runtime);
   return <React.Fragment>{timeline.map(function (message) {
     if (message.questionPrompt && pendingQuestion && message.questionId === pendingQuestion.id) return <WbcThreadItem key={message.id}><WbcQuestionPrompt pending={pendingQuestion} onAnswer={onAnswer} busy={false} /></WbcThreadItem>;
     if (message.runtimeContinuation) return <WbcContinuationIndicator key={message.id} />;

@@ -21,7 +21,7 @@ export function useDrawerCards(state, root, sideRef, syncCards, setAvailable) {
         if (active) { if (which === 'left') left = true; else right = true; }
         node.inert = !active || sideRef.current !== which;
       });
-      shell.querySelectorAll('.workbench-topbar, .wbc-pane-column.left, .wbc-page > .wbc-main, .wb-lib-main, .wb-sched-main, .wb-mem-main, .workbench-conversation-board').forEach(node => {
+      shell.querySelectorAll('.workbench-topbar, .wbc-pane-column.left, .wbc-page > .wbc-main, .wb-lib-main, .wb-sched-main, .wb-mem-main, .workbench-conversation-board, .assistant-chat-card-slot').forEach(node => {
         if (node.closest('[data-mobile-card]')) return;
         if (!background.has(node)) background.set(node, node.inert);
         node.inert = !!sideRef.current;

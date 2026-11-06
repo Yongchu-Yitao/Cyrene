@@ -605,6 +605,8 @@ class _SendOperation:
                     language=self.options.lang,
                 )
         self.chat["status"] = "running"
+        if not self.origin.agent_originated and not self.options.retry:
+            self.chat.pop("pendingQuestion", None)
         if self.environment.model.candidate is None and not self.environment.model.agent_managed:
             self.chat["model"] = self.routes.get_model()
         self.service.mark_user_activity(self.chat, self.turn.now)

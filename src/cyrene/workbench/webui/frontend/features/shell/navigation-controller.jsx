@@ -14,11 +14,11 @@ function createWorkbenchNavigationActions(
 ) {
   var moduleOrder = Array.isArray(enabledModules) && enabledModules.length
     ? enabledModules
-    : ["schedule", "board", "work", "knowledge", "memory"];
+    : ["schedule", "work", "cyrene", "knowledge", "memory"];
 
   function openPage(page) {
     var destination = page;
-    if (["schedule", "board", "work", "knowledge", "memory"].indexOf(destination) >= 0
+    if (["schedule", "work", "cyrene", "knowledge", "memory"].indexOf(destination) >= 0
         && moduleOrder.indexOf(destination) < 0) return;
     if (page === "board") {
       if (!fullPage) return;
@@ -26,8 +26,7 @@ function createWorkbenchNavigationActions(
       return;
     }
     if (page === "work") {
-      if (fullPage === "chat") return;
-      setFullPage("chat");
+      setFullPage(fullPage === "chat" ? null : "chat");
       return;
     }
     if (page === "profile") {
@@ -36,6 +35,7 @@ function createWorkbenchNavigationActions(
       setFullPage("settings");
       return;
     }
+    if (page === "cyrene") window.dispatchEvent(new CustomEvent("cyrene:assistant-home"));
     if (fullPage === page) return;
     setFullPage(page);
   }
@@ -103,11 +103,11 @@ function useWorkbenchNavigationSurface(
     var unregister = [];
     var enabled = Array.isArray(enabledModules)
       ? enabledModules
-      : ["schedule", "board", "work", "knowledge", "memory"];
+      : ["schedule", "work", "cyrene", "knowledge", "memory"];
     var modules = [
       ["schedule", t("rail.schedule", "Schedule")],
-      ["board", t("workbench.page.board", "Board")],
-      ["work", t("workbench.page.work", "Work")],
+      ["work", !fullPage ? t("workbench.page.board", "Board") : t("workbench.page.work", "Work")],
+      ["cyrene", "Cyrene"],
       ["knowledge", t("rail.knowledge", "Knowledge")],
       ["memory", t("rail.memory", "Memory")],
     ].filter(function (item) { return enabled.indexOf(item[0]) >= 0; });
@@ -122,8 +122,7 @@ function useWorkbenchNavigationSurface(
             role: "navigation_item",
             name: item[1],
             state: {
-              selected: page === "board" ? !fullPage
-                : page === "work" ? fullPage === "chat" : fullPage === page,
+              selected: page === "work" ? !fullPage || fullPage === "chat" : fullPage === page,
             },
           };
         },

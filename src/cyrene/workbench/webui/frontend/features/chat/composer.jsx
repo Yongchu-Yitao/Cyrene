@@ -51,7 +51,7 @@ function wbcTranslateSlashCommand(declared) {
 }
 
 // Workbench chat feature module with explicit ESM dependencies.
-function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder, runningPlaceholder, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
+function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, hideToolsButton = false, placeholder, runningPlaceholder, topOverlay, draftAgent, onDraftAgentChange, onSwitchAgent, onOpenAgentDetail }) {
   var model = WorkbenchChatModel;
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
@@ -65,10 +65,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var mcpMarkerAvailable = composerContextAvailable && pluginModules.indexOf("mcp") >= 0;
   var skillsMarkerAvailable = composerContextAvailable && pluginModules.indexOf("skills") >= 0;
   var chatId = chat ? chat.id : "";
-  // A fresh built-in Agent message denies the pending operation server-side.
-  // External Agents still require their protocol-specific answer flow.
-  var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id)
-    && !!wbcChatAgent(chat) && !wbcIsBuiltinAgent(wbcChatAgent(chat));
+  var awaitingAnswer = !!(chat && chat.pendingQuestion && chat.pendingQuestion.id);
+  // External permission requests require protocol option IDs, not free text.
+  var canAnswerInComposer = (!!onAnswer || !wbcChatAgent(chat) || wbcIsBuiltinAgent(wbcChatAgent(chat))) && !(awaitingAnswer
+    && chat.pendingQuestion.kind === "permission.requested");
   var projectId = (project && project.id) || "";
   var projectWorkspacePath = (project && project.workspacePath) || "";
   // Surface-scoped storage prefix (empty for the main chat). The quick-chat
@@ -422,8 +422,18 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [running, error, errorKind]);
 
   function submit(messageOverride) {
-    if (awaitingAnswer) return;
     var text = String(typeof messageOverride === "string" ? messageOverride : draft).trim();
+    if (awaitingAnswer) {
+      if (!text || !canAnswerInComposer) return;
+      draftRef.current = "";
+      setDraft("");
+      persistCurrentDraft();
+      Promise.resolve(onAnswer ? onAnswer(chat.pendingQuestion.id, text) : onSend({ message: text })).catch(function () {
+        draftRef.current = text;
+        setDraft(text);
+      });
+      return;
+    }
     if (running) {
       if (!text || !onGuidance) return;
       draftRef.current = "";
@@ -753,8 +763,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   // An Agent without interaction.cancel never shows a misleading Stop action;
   // the composer waits (read-only) until the Agent finishes (handoff §13).
   var waitingForAgent = running && !capCancel && !hasRuntimeGuidance;
-  var showStopButton = running && !hasRuntimeGuidance && capCancel;
-  var sendDisabled = awaitingAnswer || (running
+  var showStopButton = !awaitingAnswer && running && !hasRuntimeGuidance && capCancel;
+  var sendDisabled = awaitingAnswer ? (!canAnswerInComposer || !draft.trim()) : (running
     ? waitingForAgent
     : (!draft.trim() && attachments.length === 0 && !command) || (!!draft.trim() && !capText));
   // Self-management may prepare text in the current visible composer. Submit
@@ -906,7 +916,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           aria-expanded={slashDraftOpen}
           aria-controls={slashDraftOpen ? "wbc-command-listbox" : undefined}
           aria-activedescendant={slashDraftOpen && slashItems[slashActiveIndex] ? wbcCommandOptionId(slashItems[slashActiveIndex].id) : undefined}
-          disabled={awaitingAnswer || !capText || (running && !capSteer) || cancelUnsupported}
+          disabled={(awaitingAnswer && !canAnswerInComposer) || !capText || (!awaitingAnswer && ((running && !capSteer) || cancelUnsupported))}
           onChange={function (e) {
             draftRef.current = e.target.value;
             setDraft(e.target.value);
@@ -933,7 +943,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           )}
           {!compact && (
             <span className="wbc-pop-anchor wbc-tools-anchor" ref={toolsPickerRef}>
-              {composerContextAvailable ? <button
+              {composerContextAvailable && !hideToolsButton ? <button
                 type="button"
                 data-tour="chat_tools"
                 className={"wbc-composer-icon wbc-tools-trigger" + (enabledContentCount > 0 ? " has-content" : "") + (showToolsMenu ? " active" : "")}

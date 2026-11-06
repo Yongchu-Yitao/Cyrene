@@ -227,6 +227,21 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.workbench-grid.integrated-sidebars.is-cyrene {
+  grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
+}
+
+.workbench-cyrene-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workbench-cyrene-rail-body {
+  flex: 1;
+  min-height: 0;
+}
+
 .workbench-grid.integrated-sidebars.is-conversation-board {
   grid-template-columns: 300px minmax(0, 1fr);
 }
@@ -1790,3 +1805,38 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 
 
 }
+
+/* Personal assistant sidebar reuses the integrated rail and conversation surface. */
+.assistant-muted { color: var(--text-3); font-size: 12px; }
+.assistant-muted { color: var(--text-muted, #687588); font-size: 12px; }
+.assistant-muted { padding: 0 8px; line-height: 1.7; }
+.assistant-error { color: #bb4242; overflow-wrap: anywhere; }
+
+/* Assistant content uses the shared PaneCardFrame. Only its placement lives
+   here; border, radius, shadow and motion remain in the common card rules. */
+.assistant-chat-card-slot {
+  grid-column: 3;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  padding: var(--wb-floating-card-top-gap) 12px var(--wb-floating-card-bottom-gap) 8px;
+}
+.assistant-chat-card-slot > .wbc-pane-card { flex: 1; display: flex; flex-direction: column; }
+.assistant-chat-card-state { flex: 1; min-height: 0; }
+.assistant-chat-welcome { text-align: center; padding: clamp(40px, 14vh, 160px) 0 48px; }
+.assistant-chat-wordmark { font-size: 14px; font-weight: 600; color: var(--text-3); }
+.assistant-chat-welcome h1 { font-size: clamp(24px, 2.5vw, 34px); font-weight: 600; margin: 16px 0; letter-spacing: -.02em; }
+.assistant-chat-welcome p { color: var(--text-3); line-height: 1.7; }
+.assistant-chat button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* The assistant uses the same pane workspace, within its module's card row. */
+.workbench-grid.integrated-sidebars .wbc-page.assistant-workspace {
+  grid-column: 1 / -1;
+  --wbc-card-top-inset: var(--wb-floating-card-top-gap);
+}
+
+
+/* Assistant rows use the Work list's existing geometry and status colors. */
+.assistant-resource-empty { font-size: 11px; color: var(--text-3); padding: 4px 10px; margin: 0; }

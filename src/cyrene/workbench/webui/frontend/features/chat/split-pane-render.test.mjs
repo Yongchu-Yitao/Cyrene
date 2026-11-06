@@ -1,3 +1,4 @@
+import { resizeClock } from "../layout/test-helpers/resize-clock.mjs"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
@@ -5,7 +6,7 @@ import vm from "node:vm"
 import { transformSync } from "esbuild"
 import React from "react"
 import { paneColumnBounds, paneRowGeometry } from "./pane-resize-geometry.mjs"
-import { resizeCollapseEdge } from "../layout/resize-collapse.mjs"
+import { createResizeCollapseGuard } from "../layout/resize-collapse.mjs"
 
 const source = readFileSync(new URL("./split-pane.jsx", import.meta.url), "utf8")
 const { code } = transformSync(source, { loader: "jsx", format: "cjs" })
@@ -77,20 +78,21 @@ function resizeHarness(kind, { closable = false, layoutWidth = 1236, width = 520
   let paints = 0
   const style = { setProperty(key, value) { this[key] = value; paints++ } }
   let captured = false
-  const layout = { style, getBoundingClientRect() { reads++; return { width: layoutWidth, height: 812, top: 0 } } }
+  const layout = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v }, removeAttribute(k) { delete this.attrs[k] }, style, getBoundingClientRect() { reads++; return { width: layoutWidth, height: 812, top: 0 } } }
   const handle = {
     style: {}, closest: () => layout,
     addEventListener: (name, fn) => handleListeners.set(name, fn),
     removeEventListener: name => handleListeners.delete(name),
     setPointerCapture() { captured = true }, hasPointerCapture: () => captured,
-    releasePointerCapture() { captured = false; handleListeners.get("lostpointercapture")?.({ pointerId: 1 }) },
+    releasePointerCapture() { captured = false; handleListeners.get("lostpointercapture")?.({ pointerId: 1, type: "lostpointercapture" }) },
   }
   const dependencies = { useWbcRef: () => ({ current: handle }), useWbcEffect() {}, wbcT: (_key, fallback) => fallback }
+  const clock = resizeClock()
   let pointerResize
   const context = {
     module: { exports: {} }, require: name => {
       if (name.includes("pane-resize-geometry")) return { paneColumnBounds, paneRowGeometry }
-      if (name.includes("resize-collapse")) return { resizeCollapseEdge }
+      if (name.includes("resize-collapse")) return { createResizeCollapseGuard: () => createResizeCollapseGuard(clock) }
       if (name.includes("pointer-resize")) return pointerResize
       return dependencies
     }, React,
@@ -116,8 +118,10 @@ function resizeHarness(kind, { closable = false, layoutWidth = 1236, width = 520
     commits, closes, events, frames, layout, handle, classes, handleListeners,
     captured: () => captured,
     reads: () => reads, paints: () => paints,
+    wait(ms = 400, blocked = false) { clock.advance(ms, blocked) },
+    pendingTimers: clock.pending,
     move(x, y, pointerId = 1, buttons = 1) { listeners.get("pointermove")?.({ clientX: x, clientY: y, pointerId, pointerType: "mouse", buttons }) },
-    stop(type = "pointerup", pointerId = 1) { (listeners.get(type) || handleListeners.get(type))?.({ pointerId }) },
+    stop(type = "pointerup", pointerId = 1) { (listeners.get(type) || handleListeners.get(type))?.({ pointerId, type }) },
     flush() { for (const [id, fn] of frames) { frames.delete(id); fn() } },
     listeners,
   }
@@ -137,6 +141,7 @@ test("column dragging coalesces moves without state commits or repeated layout r
   assert.deepEqual(drag.commits, [820])
   assert.equal(drag.layout.style["--wbc-pane-right-width"], "820px")
   assert.equal(drag.frames.size, 0)
+  assert.equal(drag.pendingTimers(), 0)
   assert.equal(drag.listeners.size, 0)
   assert.deepEqual(drag.events.map(event => event.type), ["workbench:split-resize-start", "workbench:split-resize-end"])
 })
@@ -154,11 +159,13 @@ test("row dragging previews tracks and separator, then commits once on cancellat
   assert.equal(drag.layout.style.gridTemplateRows, "0.75fr 0.25fr")
   assert.equal(drag.handle.style.top, "calc(75% + -3px)")
   assert.equal(drag.frames.size, 0)
+  assert.equal(drag.pendingTimers(), 0)
   assert.equal(drag.listeners.size, 0)
 })
 
 function assertDragFinished(drag) {
   assert.equal(drag.frames.size, 0)
+  assert.equal(drag.pendingTimers(), 0)
   assert.equal(drag.listeners.size, 0)
   assert.equal(drag.handleListeners.size, 0)
   assert.equal(drag.classes.size, 0)
@@ -166,13 +173,17 @@ function assertDragFinished(drag) {
   assert.deepEqual(drag.events.map(event => event.type), ["workbench:split-resize-start", "workbench:split-resize-end"])
 }
 
-test("either column closes only after 48px of travel beyond its minimum width", () => {
+test("either column closes only after pausing at minimum width and dragging another 48px", () => {
   for (const [side, limitX, closeX, committedWidth] of [["right", 840, 888, 380], ["left", 400, 352, 820]]) {
     const drag = resizeHarness("column", { closable: true })
     drag.move(limitX, 0)
+    drag.wait()
     drag.move(closeX + (side === "right" ? -1 : 1), 0)
     assert.deepEqual(drag.closes, [])
     drag.move(closeX, 0)
+    assert.deepEqual(drag.closes, [])
+    assert.ok(drag.layout.attrs["data-resize-collapsed"])
+    drag.stop()
     assert.deepEqual(drag.closes, [side])
     assert.deepEqual(drag.commits, [committedWidth])
     assert.equal(drag.layout.style["--wbc-pane-right-width"], committedWidth + "px")
@@ -187,6 +198,10 @@ test("compact columns can close even when both tracks are already at their minim
   for (const [x, side] of [[748, "right"], [652, "left"]]) {
     const drag = resizeHarness("column", { closable: true, layoutWidth: 636, width: 520 })
     drag.move(x, 0)
+    assert.deepEqual(drag.closes, [])
+    drag.wait()
+    drag.move(x + (side === "right" ? 48 : -48), 0)
+    drag.stop()
     assert.deepEqual(drag.closes, [side])
     assert.deepEqual(drag.commits, [300])
     assertDragFinished(drag)
@@ -196,9 +211,11 @@ test("compact columns can close even when both tracks are already at their minim
 test("vertical resizing closes the compressed top or bottom pane", () => {
   for (const [y, index, ratio] of [[118, 0, 0.2], [694, 1, 0.8]]) {
     const drag = resizeHarness("row", { closable: true })
-    drag.move(0, y + (index === 0 ? 1 : -1))
+    drag.move(0, y + (index === 0 ? 48 : -48))
+    drag.wait()
     assert.deepEqual(drag.closes, [])
     drag.move(0, y)
+    drag.stop()
     assert.deepEqual(drag.closes, [index])
     assert.deepEqual(drag.commits, [ratio])
     assertDragFinished(drag)
@@ -215,6 +232,100 @@ test("cancel, blur, lost capture and a released mouse end resizing without closi
     else drag.stop(type)
     assert.deepEqual(drag.closes, [])
     assert.deepEqual(drag.commits, [380])
+    assertDragFinished(drag)
+  }
+})
+
+
+test("fast overshoot stays at minimum, then needs a pause and fresh closing travel", () => {
+  const drag = resizeHarness("column", { closable: true })
+  drag.move(1000, 0)
+  drag.flush()
+  assert.equal(drag.layout.style["--wbc-pane-right-width"], "380px")
+  for (let x = 1010; x <= 1200; x += 10) {
+    drag.wait(16)
+    drag.move(x, 0)
+  }
+  assert.deepEqual(drag.closes, [])
+  drag.wait()
+  drag.move(1247, 0)
+  assert.deepEqual(drag.closes, [])
+  drag.move(1248, 0)
+  drag.stop()
+  assert.deepEqual(drag.closes, ["right"])
+  assertDragFinished(drag)
+})
+
+test("releasing after a pause at minimum keeps the pane open", () => {
+  const drag = resizeHarness("column", { closable: true })
+  drag.move(1000, 0)
+  drag.wait(1000)
+  drag.stop()
+  assert.deepEqual(drag.closes, [])
+  assert.deepEqual(drag.commits, [380])
+  assertDragFinished(drag)
+})
+
+test("blocked event processing does not itself arm closing", () => {
+  const drag = resizeHarness("column", { closable: true })
+  drag.move(840, 0)
+  drag.wait(500, true)
+  drag.move(1000, 0)
+  assert.deepEqual(drag.closes, [])
+  drag.wait()
+  drag.move(1048, 0)
+  drag.stop()
+  assert.deepEqual(drag.closes, ["right"])
+  assertDragFinished(drag)
+})
+
+test("reverse dragging restores either column without releasing or losing content", () => {
+  for (const [limit, close, reverse, edge] of [[840, 888, 864, "minimum"], [400, 352, 376, "maximum"]]) {
+    const drag = resizeHarness("column", { closable: true })
+    drag.move(limit, 0)
+    drag.wait()
+    drag.move(close, 0)
+    assert.equal(drag.layout.attrs["data-resize-collapsed"], "column-" + edge)
+    assert.equal(drag.captured(), true)
+    assert.deepEqual(drag.commits, [])
+    assert.deepEqual(drag.closes, [])
+    drag.move(reverse, 0)
+    assert.equal(drag.layout.attrs["data-resize-collapsed"], undefined)
+    drag.stop()
+    assert.deepEqual(drag.closes, [])
+    assertDragFinished(drag)
+  }
+})
+
+test("top and bottom panes reopen on reverse and can be closed again in the same gesture", () => {
+  for (const [limit, close, reverse, index] of [[166, 118, 142, 0], [646, 694, 670, 1]]) {
+    const drag = resizeHarness("row", { closable: true })
+    drag.move(0, limit)
+    drag.wait()
+    drag.move(0, close)
+    assert.ok(drag.layout.attrs["data-resize-collapsed"])
+    drag.move(0, reverse)
+    assert.equal(drag.layout.attrs["data-resize-collapsed"], undefined)
+    drag.wait()
+    drag.move(0, reverse + (index === 0 ? -48 : 48))
+    assert.ok(drag.layout.attrs["data-resize-collapsed"])
+    drag.stop()
+    assert.deepEqual(drag.closes, [index])
+    assertDragFinished(drag)
+  }
+})
+
+test("canceling a visually collapsed pane restores it and clears the gesture", () => {
+  for (const type of ["pointercancel", "blur", "lostpointercapture", "released-mouse"]) {
+    const drag = resizeHarness("column", { closable: true })
+    drag.move(840, 0)
+    drag.wait()
+    drag.move(888, 0)
+    assert.ok(drag.layout.attrs["data-resize-collapsed"])
+    if (type === "released-mouse") drag.move(900, 0, 1, 0)
+    else drag.stop(type)
+    assert.equal(drag.layout.attrs["data-resize-collapsed"], undefined)
+    assert.deepEqual(drag.closes, [])
     assertDragFinished(drag)
   }
 })

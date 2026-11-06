@@ -1,0 +1,66 @@
+.cyrene-motion .cyrene-icon-logo {display:block;overflow:visible;color:var(--wb-text)}
+.cyrene-motion .cyrene-icon-body {transform-origin:16px 16px}
+.cyrene-motion .cyrene-icon-ring {transform-origin:16px 16px}
+.cyrene-motion .cyrene-icon-eye {transform-box:fill-box;transform-origin:center}
+.cyrene-motion .cyrene-icon-gaze {transform-origin:16px 15px}
+.cyrene-motion .cyrene-icon-glint {opacity:0;stroke-dasharray:24 76;stroke-dashoffset:24}
+.cyrene-motion .cyrene-icon-badge {display:none}
+.cyrene-motion .cyrene-icon-badge circle {fill:var(--wb-card-bg);stroke-width:1.2}
+.cyrene-motion .cyrene-icon-badge path {fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.cyrene-motion [data-state="idle"] .cyrene-icon-body {animation:cyrene-icon-breathe 3.2s ease-in-out infinite}
+.cyrene-motion [data-state="idle"] .cyrene-icon-gaze {animation:cyrene-icon-blink 4.2s infinite}
+.cyrene-motion [data-state="thinking"] .cyrene-icon-body {animation:cyrene-icon-think 2.2s ease-in-out infinite}
+.cyrene-motion [data-state="thinking"] .cyrene-icon-gaze {animation:cyrene-icon-look 2.2s ease-in-out infinite}
+.cyrene-motion [data-state="tool"] .cyrene-icon-body {animation:cyrene-icon-work 1.2s ease-in-out infinite}
+.cyrene-motion [data-state="tool"] .cyrene-icon-ring {animation:cyrene-icon-spin 2s linear infinite}
+.cyrene-motion [data-state="tool"] .cyrene-icon-glint {opacity:.95;animation:cyrene-icon-flow .95s linear infinite}
+.cyrene-motion [data-state="tool"] .cyrene-icon-gaze {animation:cyrene-icon-blink 2.4s infinite}
+.cyrene-motion [data-state="replying"] .cyrene-icon-body {animation:cyrene-icon-bounce .9s ease-in-out infinite}
+.cyrene-motion [data-state="replying"] .cyrene-icon-eye {animation:cyrene-icon-talk .45s ease-in-out infinite}
+.cyrene-motion [data-state="replying"] .cyrene-icon-eye-right {animation-delay:-.225s}
+.cyrene-motion [data-state="waiting"] .cyrene-icon-body {animation:cyrene-icon-listen 2.7s ease-in-out infinite}
+.cyrene-motion [data-state="waiting"] .cyrene-icon-gaze {transform:translateY(-1px)}
+.cyrene-motion [data-state="waiting"] .cyrene-icon-wait {display:block;stroke:#ad660d}
+.cyrene-motion [data-state="done"] .cyrene-icon-body {animation:cyrene-icon-nod .85s ease-out 1}
+.cyrene-motion [data-state="done"] .cyrene-icon-done {display:block;stroke:#079b72}
+.cyrene-motion [data-state="done"] .cyrene-icon-done {transform-origin:26.3px 25.6px;animation:cyrene-icon-check .65s ease-out 1}
+.cyrene-motion [data-state="error"] .cyrene-icon-body {animation:cyrene-icon-shake .65s ease-out 1}
+.cyrene-motion [data-state="error"] .cyrene-icon-error {display:block;stroke:#d54b50}
+.cyrene-motion [data-state="stopped"] .cyrene-icon-pause {display:block;stroke:#677285}
+.cyrene-motion [data-state="stopped"] .cyrene-icon-eye {transform:scaleY(.55)}
+.cyrene-motion [data-state="reconnecting"] .cyrene-icon-glint {opacity:.7;animation:cyrene-icon-reconnect 2s ease-in-out infinite}
+.cyrene-motion [data-state="reconnecting"] .cyrene-icon-ring {animation:cyrene-icon-search 2s ease-in-out infinite}
+.cyrene-motion [data-state="reconnecting"] .cyrene-icon-reconnect {display:block;stroke:#677285}
+@media(prefers-reduced-motion:reduce){.cyrene-motion .cyrene-icon-logo *{animation:none!important}.cyrene-motion [data-state="tool"] .cyrene-icon-glint{stroke-dashoffset:-30}}
+@keyframes cyrene-icon-blink {0%,43%,47%,100%{transform:scaleY(1)}45%{transform:scaleY(.12)}}
+@keyframes cyrene-icon-breathe {0%,100%{transform:translateY(.3px) scale(.97)}50%{transform:translateY(-.8px) scale(1.03)}}
+@keyframes cyrene-icon-think {0%,100%{transform:translate(-.8px,0) rotate(-10deg)}25%{transform:translate(-.8px,-1.2px) rotate(-10deg)}50%,70%{transform:translate(.9px,-.3px) rotate(10deg)}}
+@keyframes cyrene-icon-look {0%,30%,100%{transform:translate(-1.8px,-1px)}50%,75%{transform:translate(1.8px,-.6px)}}
+@keyframes cyrene-icon-spin {to{transform:rotate(360deg)}}
+@keyframes cyrene-icon-work {0%,100%{transform:translateY(.5px) scale(1.03,.96)}50%{transform:translateY(-1.5px) scale(.97,1.04)}}
+@keyframes cyrene-icon-flow {from{stroke-dashoffset:24}to{stroke-dashoffset:-76}}
+@keyframes cyrene-icon-bounce {0%,100%{transform:translateY(.6px) scale(1.07,.91)}42%{transform:translateY(-2.2px) scale(.95,1.07)}70%{transform:translateY(-.8px) scale(1.01,.99)}}
+@keyframes cyrene-icon-talk {0%,100%{transform:scaleY(.4)}50%{transform:scaleY(1.25)}}
+@keyframes cyrene-icon-listen {0%,100%{transform:rotate(0)}20%,55%{transform:translateY(-1px) rotate(-12deg)}70%{transform:translateY(-2px) rotate(5deg)}85%{transform:translateY(0) rotate(-4deg)}}
+@keyframes cyrene-icon-nod {0%,100%{transform:translateY(0)}20%{transform:translateY(1px) scale(1.1,.88)}48%{transform:translateY(-3px) scale(.94,1.08) rotate(-8deg)}72%{transform:translateY(.8px) scale(1.06,.94)}87%{transform:translateY(-.6px)}}
+@keyframes cyrene-icon-check {0%,25%{transform:scale(.4);opacity:0}65%{transform:scale(1.25);opacity:1}100%{transform:scale(1);opacity:1}}
+@keyframes cyrene-icon-shake {0%,100%{transform:translateX(0)}18%,54%{transform:translateX(-2px) rotate(-8deg)}36%,72%{transform:translateX(2px) rotate(8deg)}88%{transform:translateX(-.7px)}}
+@keyframes cyrene-icon-search {0%,100%{transform:rotate(-30deg)}50%{transform:rotate(55deg)}}
+@keyframes cyrene-icon-reconnect {0%,100%{stroke-dashoffset:-10;opacity:.2}50%{stroke-dashoffset:-45;opacity:.9}}
+
+html[data-performance-mode="on"] .cyrene-motion * {animation:none!important}
+
+/* Geometry belongs to the shared dock icon slot, including collapsed mode. */
+.cyrene-motion {display:inline-flex;line-height:0}
+
+.workbench-sidebar-dock [data-tour="rail_cyrene"] .cyrene-motion {
+  transition: transform .2s ease, filter .2s ease;
+}
+.workbench-sidebar-dock [data-tour="rail_cyrene"]:is(:hover, :focus-visible) .cyrene-motion {
+  transform: translateY(-2px) rotate(-8deg) scale(1.12);
+  filter: drop-shadow(0 2px 5px #00b9ec40);
+}
+@media (prefers-reduced-motion: reduce) {
+  .workbench-sidebar-dock [data-tour="rail_cyrene"] .cyrene-motion { transition: none; transform: none; }
+}
+html[data-performance-mode="on"] .workbench-sidebar-dock [data-tour="rail_cyrene"] .cyrene-motion { transition: none; transform: none; }

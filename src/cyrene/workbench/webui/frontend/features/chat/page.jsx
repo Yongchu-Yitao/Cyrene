@@ -1,3 +1,5 @@
+import { restoreConversationPaneLayout } from "./pane-layout-transforms.jsx"
+import { acceptsAssistantScope } from "./assistant-scope.mjs"
 import { graphActivationListener } from "./context-graph-activation.jsx";
 import { beginFloatingPanelSplit as beginFloatingPaneHandoff, restoreFloatingPanelSplit as restoreFloatingPaneHandoff, abandonFloatingPaneHandoff } from "./floating-pane-handoff.jsx"
 import { useWbcSplitSelection } from "./split-selection-state.jsx"
@@ -61,7 +63,7 @@ function wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer) {
   return Promise.resolve();
 }
 
-function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
+function WorkbenchChatPage({ active, project, modelOverride, railOverride, isolated, requestedChatId, requestedChatRevision, renderConversation, hideConversationPanel, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
   workbenchServices.i18n().use();
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
@@ -77,7 +79,8 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   var pinnedChatIds = pinnedSessions.chatIds;
   var onTogglePinnedChat = pinnedSessions.onToggleChat;
   var isActive = active !== false;
-  var model = WorkbenchChatModel;
+  var model = modelOverride || WorkbenchChatModel;
+  var paneStorageId = isolated ? "assistant:" + String(project && project.id || "") : String(project && project.id || "");
   var projectId = project ? project.id : "";
   var terminalModule = workbenchServices.terminal();
   var terminalCatalog = useWbcTerminalCatalog(projectId, codeAvailable);
@@ -93,7 +96,8 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   // Switching the rail is browsing, not navigation. Hide selection in the
   // newly opened list until the user explicitly chooses one of its cards.
   var [railSelectionSuppressed, setRailSelectionSuppressed] = useWbcState(false);
-  var chatCache = wbcChatCache();
+  var privateCache = useWbcRef({ lists: {}, details: {}, subagents: {} });
+  var chatCache = isolated ? privateCache.current : wbcChatCache();
   var { chats, setChats, chatsRef, chatsProjectIdRef, activeChat, setActiveChat } = useWbcChatProjections(projectId, chatCache, onChatsChange);
   var requestSequencer = useWbcChatRequestSequencer();
   var beginChatHydration = requestSequencer.beginHydration;
@@ -251,7 +255,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     // Remember the open conversation per project so switching to another module
     // and back restores it (rather than snapping to the most-recent chat) — key
     // for not "losing" a conversation whose run is streaming in the background.
-    if (activeChatId) {
+    if (activeChatId && !isolated) {
       wbcLastChatByProject[projectId] = activeChatId;
     }
   }, [activeChatId]);
@@ -267,7 +271,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   }, []);
   var { splitSide, toggleSplitSide, setSplitSideDirect } = useWbcSplitSide();
   var [paneLayoutsByChat, setPaneLayoutsByChat] = useWbcState(function () {
-    var restored = wbcReadPaneWorkspace(projectId);
+    var restored = wbcReadPaneWorkspace(paneStorageId);
     if (!restored) return {};
     var ownerId = restored.activeChatId || (projectId ? "project:" + String(projectId) : "");
     return ownerId ? { [ownerId]: restored.layout } : {};
@@ -279,7 +283,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     if (paneWorkspaceLoadedProjectRef.current === projectId) return;
     paneWorkspaceLoadedProjectRef.current = projectId;
     paneWorkspaceValidatedProjectRef.current = "";
-    var restored = wbcReadPaneWorkspace(projectId);
+    var restored = wbcReadPaneWorkspace(paneStorageId);
     if (!restored) return;
     var ownerId = restored.activeChatId || (projectId ? "project:" + String(projectId) : "");
     if (!ownerId) return;
@@ -491,7 +495,20 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     if (splitOverlayCleanupRef.current) splitOverlayCleanupRef.current();
   }
   var [sideTab, setSideTab] = useWbcState("");
-  var [sideVisible, setSideVisible] = useWbcState(true);
+  var [sideVisibleState, setSideVisible] = useWbcState(true);
+  var sideVisible = !hideConversationPanel && sideVisibleState;
+  // Match the CSS breakpoint that removes the docked context track. A hidden
+  // track must never intercept the card's five-way split targets.
+  var [compactContextLayout, setCompactContextLayout] = useWbcState(function () {
+    return window.matchMedia("(max-width: 980px)").matches;
+  });
+  useWbcEffect(function () {
+    var query = window.matchMedia("(max-width: 980px)");
+    function update() { setCompactContextLayout(query.matches); }
+    update();
+    query.addEventListener("change", update);
+    return function () { query.removeEventListener("change", update); };
+  }, []);
   var [sideAgents, setSideAgents] = useWbcState([]);
   var [sideAgentsLoading, setSideAgentsLoading] = useWbcState(false);
   var [sideAgentCreating, setSideAgentCreating] = useWbcState(false);
@@ -777,6 +794,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     if (!chatId || (summaryProjectId && summaryProjectId !== String(projectIdRef.current || ""))) {
       return false;
     }
+    if (!acceptsAssistantScope(Object.assign({}, summary, { id: chatId }), isolated)) return false;
     var runStatus = String(event.run_status || "");
     var projected = wbcMergeChatSummary({ id: chatId }, summary, runStatus);
     if (Object.prototype.hasOwnProperty.call(event, "activeGoal")) {
@@ -847,11 +865,13 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     if (pendingChatId && pending.topbarResource) {
       pendingTopbarResourceRef.current = { chatId: pendingChatId, resource: pending.topbarResource };
     }
-    var persistedWorkspace = wbcReadPaneWorkspace(projectId);
-    var remembered = wbcLastChatByProject[projectId]
+    var persistedWorkspace = wbcReadPaneWorkspace(paneStorageId);
+    var remembered = (!isolated && wbcLastChatByProject[projectId])
       || (persistedWorkspace && persistedWorkspace.activeChatId || "");
     function selectFrom(list) {
-      var targetId = pendingChatId && list.some(function (c) { return c.id === pendingChatId; })
+      var targetId = requestedChatId && list.some(function (c) { return c.id === requestedChatId; })
+        ? requestedChatId
+        : pendingChatId && list.some(function (c) { return c.id === pendingChatId; })
         ? pendingChatId
         : (remembered && list.some(function (c) { return c.id === remembered; })
           ? remembered
@@ -891,6 +911,18 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         ) setLoading(false);
       });
   }, [projectId]);
+
+  useWbcEffect(function () {
+    if (requestedChatId && requestedChatId !== activeChatId) selectChat(requestedChatId);
+  }, [requestedChatId, loading]);
+
+  // A home action must restore the conversation even if its id is unchanged
+  // and the user has replaced that workspace's main pane with a resource.
+  useWbcEffect(function () {
+    if (!requestedChatRevision || !requestedChatId) return;
+    selectChat(requestedChatId);
+    updatePaneLayout(function (layout) { return restoreConversationPaneLayout(layout, requestedChatId); }, requestedChatId);
+  }, [requestedChatRevision]);
 
   // Apply a chat id requested by global search once the chat list is available.
   useWbcEffect(function () {
@@ -1286,6 +1318,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   }
 
   useWbcRuntimePageHooks({
+    enabled: !renderConversation,
     runtimeEngine: runtimeEngine, model: model, chatCache: chatCache,
     activeChatIdRef: activeChatIdRef, projectIdRef: projectIdRef,
     setActiveChat: setActiveChat, setChats: setChats,
@@ -1915,12 +1948,12 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       || paneWorkspaceValidatedProjectRef.current === projectId
     ) return;
     paneWorkspaceValidatedProjectRef.current = projectId;
-    var stored = wbcReadPaneWorkspace(projectId);
+    var stored = wbcReadPaneWorkspace(paneStorageId);
     if (!stored) return;
     paneWorkspaceSkipPersistRef.current = true;
     var restored = wbcValidatePaneWorkspace(stored, chats, terminals);
     if (!restored) {
-      wbcClearPaneWorkspace(projectId);
+      wbcClearPaneWorkspace(paneStorageId);
       var staleOwnerId = stored.activeChatId || "project:" + String(projectId);
       setPaneLayoutsByChat(function (current) {
         if (!Object.prototype.hasOwnProperty.call(current, staleOwnerId)) return current;
@@ -1941,7 +1974,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       paneWorkspaceSkipPersistRef.current = false;
       return;
     }
-    wbcWritePaneWorkspace(projectId, activeChatId, paneLayout);
+    wbcWritePaneWorkspace(paneStorageId, activeChatId, paneLayout);
   }, [projectId, activeChatId, paneLayoutProjectionKey, loading, terminalsHydrated]);
   useWbcEffect(function () {
     if (!onWorkspaceTabsChange) return;
@@ -2002,7 +2035,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   }, [projectId, activeChatId, paneLayoutProjectionKey]);
   var panePresentation = wbcPaneWorkspacePresentation(
     paneLayout, paneCardDragId, chatDragSession, resourceDragSession,
-    activeChatId
+    activeChatId, sideVisible && !floatingConversationPanelOpen && !compactContextLayout
   );
   var paneCardCount = panePresentation.paneCardCount;
   var paneHasTwoColumns = panePresentation.paneHasTwoColumns;
@@ -2088,6 +2121,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   }
 
   function renderConversationPanel(floating) {
+    if (hideConversationPanel) return null;
     function openPanelContent(type, payload) {
       if ((type === "map" && !mapAvailable) || (type === "browser" && !browserAvailable)) return;
       if (type === "viewer" && payload) setViewerFile(payload);
@@ -2169,6 +2203,11 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   }
 
   function renderActiveConversationCard(card) {
+    if (renderConversation && activeChatId) return renderConversation({
+      sessionId: String(card.payload || activeChatId),
+      chatCache: chatCache,
+      onOpenFile: function (file) { openPaneContent("file", file, { sourceCardId: card.id }); },
+    });
     return (
       <WbcMain
         project={project}
@@ -2221,6 +2260,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
   }
 
   function openConversationPanelFromMainGrip() {
+    if (hideConversationPanel) return;
     // In the single-card workspace this action means restoring the docked
     // conversation panel that the user collapsed. A floating copy is only
     // appropriate while multiple content cards already occupy the workspace.
@@ -2339,14 +2379,14 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
       || resourceObservationStates[
         "resource:" + String(cardPayloadState.resource_kind || "") + ":" + String(cardPayloadState.resource_id || cardPayloadState.session_id || "")
       ] || null;
-    if (isActiveConversation && singlePane) {
+    if ((isActiveConversation && singlePane) || (renderConversation && card.kind === "chat")) {
       content = renderActiveConversationCard(card);
       grip = <WbcSplitGripBar
         dragSource={card.id}
         menuDisabled={singlePane}
         onToggleSide={move}
         onClose={close}
-        onOpenConversationPanel={openConversationPanelFromMainGrip}
+        onOpenConversationPanel={hideConversationPanel ? null : openConversationPanelFromMainGrip}
         onSplitPointerDown={pointerDown}
         onSplitDragStart={dragStart}
         onSplitDragEnd={handlePaneCardDragEnd}
@@ -2669,6 +2709,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
     <div
       ref={pageRef}
       className={"wbc-page"
+        + (isolated ? " assistant-workspace" : "")
         + (workspaceContent ? " wbc-external-workspace" : "")
         + (sideVisible ? "" : " wbc-side-hidden")
         + (navCollapsed ? " wbc-nav-collapsed" : "")
@@ -2768,7 +2809,16 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
           </div>
         </div>
       ) : null}
-      <WbcRail
+      {(typeof railOverride === "function" ? railOverride({
+        openResource: function (ownerId, type, payload) {
+          if (type === "browser") {
+            setBrowserWindowModeForChat(ownerId, "pip");
+            var bridge = window.cyrene && window.cyrene.browser;
+            if (bridge && bridge.activateTab) bridge.activateTab({sessionId: ownerId, tabId: payload}).catch(function (err) { setError(wbcErrorText(err)); });
+          }
+          return openPaneContent(type, payload, {resourceOwnerChatId: ownerId, side: "right"});
+        },
+      }) : railOverride) || <WbcRail
         codeAvailable={codeAvailable}
         projectId={projectId}
         projectName={project && project.name || ""}
@@ -2877,7 +2927,7 @@ function WorkbenchChatPage({ active, project, workspaceContent, onActivateWorksp
         onToggleCollapsed={onToggleNavCollapsed}
         collapseControl={collapseControl}
         moduleDock={moduleDock}
-      />
+      />}
       {workspaceContent ? <div className="wbc-external-workspace-host">{workspaceContent}</div> : null}
       <div
         className={"wbc-pane-layout" + (paneHasTwoColumns ? " split" : " single")}

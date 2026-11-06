@@ -86,14 +86,15 @@ function useWorkbenchModulePresentation(
   var memoryEnabled = !Array.isArray(enabledModules)
     || enabledModules.indexOf("memory") >= 0;
   var boardEnabled = !Array.isArray(enabledModules)
-    || enabledModules.indexOf("board") >= 0;
+    || enabledModules.indexOf("work") >= 0;
   var isKnowledge = knowledgeEnabled && fullPage === "knowledge";
   var isSchedule = scheduleEnabled && fullPage === "schedule";
   var isMemory = memoryEnabled && fullPage === "memory";
   var isChat = fullPage === "chat";
+  var isCyrene = fullPage === "cyrene";
   var isSettings = fullPage === "settings";
   var isBoard = boardEnabled && !fullPage;
-  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isBoard || isSettings;
+  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isBoard || isSettings || isCyrene;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
 
   useEffect(function () {
@@ -107,8 +108,7 @@ function useWorkbenchModulePresentation(
   var activeDestination = isSchedule ? "schedule"
     : isKnowledge ? "knowledge"
       : isMemory ? "memory"
-        : isChat ? "work"
-          : isBoard ? "board" : "work";
+        : isCyrene ? "cyrene" : "work";
   var activeSessionKey = isChat && activeChatId ? "chat:" + activeChatId : "";
   var sessions = workbenchSessionTabsPresentation(
     store, recentChatsByProject, sessionKeys, chatRuntimes,
@@ -119,11 +119,13 @@ function useWorkbenchModulePresentation(
     isSchedule: isSchedule,
     isMemory: isMemory,
     isChat: isChat,
+    isCyrene: isCyrene,
     isSettings: isSettings,
     isBoard: isBoard,
     isModulePage: isModulePage,
     fullPageConfig: fullPageConfig,
     showChatPage: isChat || mountedPages.chat,
+    showCyrenePage: isCyrene || mountedPages.cyrene,
     showKnowledgePage: knowledgeEnabled && (isKnowledge || mountedPages.knowledge),
     showSchedulePage: scheduleEnabled && (isSchedule || mountedPages.schedule),
     showMemoryPage: memoryEnabled && (isMemory || mountedPages.memory),

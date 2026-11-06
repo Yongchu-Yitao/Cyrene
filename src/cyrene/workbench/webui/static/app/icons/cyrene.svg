@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <g id="cyrene-assistant">
+    <defs><linearGradient id="cyrene-brand" x1="4" y1="27" x2="25" y2="6" gradientUnits="userSpaceOnUse"><stop stop-color="#0879ff"/><stop offset=".5" stop-color="#00b9ec"/><stop offset="1" stop-color="#00dfaf"/></linearGradient></defs>
+    <g transform="translate(1.25 0)">
+      <path d="M23.6 8.4a10.75 10.75 0 1 0 0 15.2" stroke="url(#cyrene-brand)" stroke-width="4.8" stroke-linecap="round"/>
+      <g fill="currentColor"><rect x="12.15" y="13.1" width="2.2" height="4.5" rx="1.1"/><rect x="17.2" y="13.1" width="2.2" height="4.5" rx="1.1"/></g>
+    </g>
+  </g>
+</svg>

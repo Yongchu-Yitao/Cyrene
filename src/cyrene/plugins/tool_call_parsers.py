@@ -148,7 +148,13 @@ def _canonical_arguments(
     agent_id = str(run_context_value(context, "agent_id", "main") or "main")
     try:
         plugin = execution.runtime.registry.resolve(name, agent_id=agent_id)
-    except (PluginNotFoundError, PluginUnavailableError):
+    except PluginUnavailableError as exc:
+        # An explicit schema grants visibility, never activation or scope access.
+        raise _provider_tool_call_error(
+            f"Model Provider Plugin requested unavailable tool: {name}",
+            error_code="provider_tool_unavailable",
+        ) from exc
+    except PluginNotFoundError:
         plugin = None
     if plugin is not None:
         if (

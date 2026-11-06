@@ -1,7 +1,6 @@
-import { beginAnswerProjection, guidanceProjection, settleAnswerProjection, hydrateAnswerProjection } from "./answer-projection.mjs"
+import { beginAnswerProjection, guidanceProjection, hydrateAnswerProjection } from "./answer-projection.mjs"
 import { WbcVoice, wbcClearModelOutputForRetry, wbcErrorText, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcRetryTurnSelection } from "../../workbench-chat.jsx"
 import { wbcIsLiveAgentRequest } from "./conversation.jsx"
-import { settleChatListItem as wbcSettleChatListItem } from "./behavior.mjs"
 
 function wbcHandleGuidance(context, message) {
   var chatId = context.activeChatIdRef.current;
@@ -38,8 +37,22 @@ function wbcAnswerLiveAgentRequest(context, chatId, questionId, optionText, form
     : (formAnswer
       ? { type: "form", form: optionText.values && typeof optionText.values === "object" ? optionText.values : {} }
       : { type: "text", text: String(optionText || "") });
-  beginAnswerProjection({ setChats: context.setChats, setActiveChat: context.setActiveChat }, chatId);
+  beginAnswerProjection({ setChats: context.setChats, setActiveChat: context.setActiveChat,
+    cache: context.chatCache.details }, chatId);
+  context.runtimeEngine.update(chatId, function (runtime) {
+    return runtime ? { ...runtime, pendingQuestion: null } : runtime;
+  });
   return context.model.answerAgentRequest(chatId, questionId, response).catch(function (error) {
+    context.runtimeEngine.update(chatId, function (runtime) {
+      return runtime ? { ...runtime, pendingQuestion: request } : runtime;
+    });
+    if (context.chatCache.details[chatId]) {
+      context.chatCache.details[chatId] = { ...context.chatCache.details[chatId], pendingQuestion: request, status: "idle" };
+    }
+    context.setChats(function (chats) {
+      return chats.map(function (chat) { return String(chat.id || "") === chatId
+        ? { ...chat, pendingQuestion: request, status: "idle", runStatus: "awaiting_user" } : chat; });
+    });
     context.setActiveChat(function (previous) {
       return previous && String(previous.id || "") === chatId
         ? { ...previous, pendingQuestion: request, status: "idle" } : previous;
@@ -47,23 +60,6 @@ function wbcAnswerLiveAgentRequest(context, chatId, questionId, optionText, form
     if (context.activeChatIdRef.current === chatId) context.setError(wbcErrorText(error));
     throw error;
   });
-}
-
-function wbcBeginAnswerRuntime(context, chatId, questionId, optionText) {
-  var optimistic = {
-    id: "answer_pending_" + Date.now(), role: "user", content: optionText,
-    createdAt: new Date().toISOString(), answerToQuestionId: questionId, optimistic: true,
-  };
-  beginAnswerProjection({
-    setChats: context.setChats, setActiveChat: context.setActiveChat, cache: context.chatCache.details,
-  }, chatId, optimistic, wbcMergeChronologicalMessages);
-  var startedAt = Date.parse(String(optimistic.createdAt || "")) || Date.now();
-  context.runtimeEngine.update(chatId, {
-    chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0,
-    segments: [], notifications: [], userMessages: [optimistic],
-    startedAt: startedAt, lastEventAt: startedAt, replying: true,
-  });
-  return optimistic;
 }
 
 function wbcHydrateAnsweredChat(context, chatId) {
@@ -78,29 +74,17 @@ function wbcHydrateAnsweredChat(context, chatId) {
 }
 
 function wbcAnswerRegularQuestion(context, chatId, questionId, optionText, resumeMode, summary) {
-  wbcBeginAnswerRuntime(context, chatId, questionId, optionText);
   var permissionMode = context.activeChatIdRef.current === chatId
     && context.activeChat && context.activeChat.permissionMode
     ? context.activeChat.permissionMode : summary.permissionMode;
-  var answerMode = wbcNormalizePermissionMode(resumeMode, permissionMode || "default");
-  var answerSettled = false;
-  return context.model.answerChat(chatId, questionId, optionText, { mode: answerMode }).then(function (result) {
-    answerSettled = true;
-    var status = result && result.interrupted
-      ? "cancelled" : (result && result.awaitingUser ? "awaiting_user" : "completed");
-    settleAnswerProjection(context, chatId, status, result, wbcSettleChatListItem, function () {
-      context.beginChatListRequest(String(context.projectIdRef.current || ""));
-    });
-    return wbcHydrateAnsweredChat(context, chatId);
-  }).then(function () {
-    return context.refreshChats();
-  }).catch(function (error) {
-    if (!answerSettled) context.runtimeEngine.publishLifecycle(chatId, "failed", {});
-    context.runtimeEngine.update(chatId, null);
-    if (context.activeChatIdRef.current === chatId) context.setError(wbcErrorText(error));
-    return wbcHydrateAnsweredChat(context, chatId).catch(function () {}).then(function () {
-      return context.refreshChats().catch(function () {});
-    }).then(function () { throw error; });
+  beginAnswerProjection({ setChats: context.setChats, setActiveChat: context.setActiveChat,
+    cache: context.chatCache.details }, chatId);
+  context.beginChatHydration(chatId);
+  return Promise.resolve(context.runtimeEngine.start(chatId, {
+    message: optionText, questionId: questionId,
+    mode: wbcNormalizePermissionMode(resumeMode, permissionMode || "default"),
+  }, context.model)).finally(function () {
+    return wbcHydrateAnsweredChat(context, chatId).then(function () { return context.refreshChats(); });
   });
 }
 

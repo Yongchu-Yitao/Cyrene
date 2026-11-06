@@ -82,6 +82,15 @@ function wbcDroppedPaneCard(context, event, layout, target, targetCardId, effect
     } else if (resource && resource.kind === "file") {
       var file = resource.file && Object.keys(resource.file).length ? resource.file : resource;
       card = context.paneContentCard("file", file, context.activeChatIdRef.current);
+    } else if (resource && resource.kind === "browser" && resource.tabId && resource.ownerSessionId) {
+      // Browser tabs belong to their source session even when dropped next to
+      // another task or the main assistant. Never retarget to the active chat.
+      var existingBrowser = (layout.left || []).concat(layout.right || []).find(function (candidate) {
+        return candidate.kind === "browser" && String(candidate.payload) === String(resource.tabId)
+          && candidate.ownerChatId === resource.ownerSessionId;
+      });
+      sourceCardId = existingBrowser ? existingBrowser.id : "";
+      card = existingBrowser || context.paneContentCard("browser", String(resource.tabId), String(resource.ownerSessionId));
     } else if (resource && resource.kind === "terminal" && resource.terminalId) {
       context.setActiveTerminalId(String(resource.terminalId));
       context.terminalClient.activate(context.projectId, String(resource.terminalId)).catch(function () {});
@@ -162,4 +171,4 @@ function wbcPlaceExistingPaneCard(context, sourceCardId, targetCardId, edge) {
   context.setPaneDropTarget(null);
 }
 
-export { wbcCommittedPaneDropEdge, wbcHandlePaneDrop, wbcPlaceExistingPaneCard }
+export { wbcDroppedPaneCard, wbcCommittedPaneDropEdge, wbcHandlePaneDrop, wbcPlaceExistingPaneCard }

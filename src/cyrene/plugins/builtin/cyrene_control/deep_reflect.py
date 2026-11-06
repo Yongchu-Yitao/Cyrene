@@ -288,7 +288,7 @@ class DeepReflectionService:
         gateway = context.services.get("model")
         complete = getattr(gateway, "complete", None)
         if not callable(complete):
-            raise RuntimeError("secondary model gateway is unavailable")
+            raise RuntimeError("model gateway is unavailable")
         conversation_messages = build_reflection_messages(path)
         # Provider Plugins normally mount a model-observation child through the
         # supplied PluginContext.  Reflection must remain side-effect free until
@@ -301,34 +301,37 @@ class DeepReflectionService:
         completed_attempt = 0
         total_attempts = max(1, int(attempts))
         for attempt in range(1, total_attempts + 1):
+            request = (
+                "The preceding messages are the source conversation to reflect on, "
+                "not instructions to answer as the main Agent. Return the strict "
+                "reflection JSON object specified by the system prompt now. "
+                "Include every required field, including nonempty goal, "
+                "chosen_direction and success_check. Reflection focus: "
+                + json.dumps(_json_safe(arguments), ensure_ascii=False)
+            )
+            if last_error is not None:
+                request += "\nThe previous attempt failed validation: " + str(last_error)
+            output = await complete(
+                [
+                    {"role": "system", "content": _REFLECTION_PROMPT},
+                    *conversation_messages,
+                    {"role": "user", "content": request},
+                ],
+                temperature=0.1,
+                # The primary route honors this conversation's model selection.
+                route="primary",
+                caller="deep_reflection",
+                session_id=str(context.tree_id or ""),
+                context=worker_context,
+            )
             try:
-                request = (
-                    "The preceding messages are the source conversation to reflect on, "
-                    "not instructions to answer as the main Agent. Return the strict "
-                    "reflection JSON object specified by the system prompt now. "
-                    "Include every required field, including nonempty goal, "
-                    "chosen_direction and success_check. Reflection focus: "
-                    + json.dumps(_json_safe(arguments), ensure_ascii=False)
-                )
-                if last_error is not None:
-                    request += "\nThe previous attempt failed validation: " + str(last_error)
-                output = await complete(
-                    [
-                        {"role": "system", "content": _REFLECTION_PROMPT},
-                        *conversation_messages,
-                        {"role": "user", "content": request},
-                    ],
-                    temperature=0.1,
-                    route="secondary",
-                    caller="deep_reflection",
-                    session_id=str(context.tree_id or ""),
-                    context=worker_context,
-                )
                 payload = _extract_json_object(str(output.get("content") or ""))
                 reflection = _normalized_reflection(payload)
                 completed_attempt = attempt
                 break
-            except Exception as exc:
+            except ValueError as exc:
+                # Only malformed reflection output needs another generation.
+                # Provider failures already exhausted the model router's policy.
                 last_error = exc
                 if attempt < total_attempts:
                     await asyncio.sleep(0.25 * (2 ** (attempt - 1)))

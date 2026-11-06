@@ -7,9 +7,10 @@ from typing import Any
 
 _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
   'function': {'name': 'DeepReflect',
-               'description': 'Main agent only. Reframe the next working context when the current '
-                              "approach is not satisfying the user's goal, repeated work is not "
-                              'converging, or user guidance shows the direction is wrong. Do not '
+               'description': 'Main agent only. Reframe the next working context only when '
+                              'multiple consecutive attempts fail to meet the required standards '
+                              "or the user's requirements, and none of the approaches tried can "
+                              'achieve the goal. Do not '
                               'use this merely because one tool failed. The visible transcript is '
                               'preserved; future LLM context uses a compressed reflection packet. '
                               'Call this as the only tool in its tool-call turn; after it completes, '

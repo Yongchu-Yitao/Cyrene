@@ -51,7 +51,7 @@ def _plugin_value(
         **state,
         "startup_error": _startup_error(host, pack_id),
         "locked": registry.plugin_locked(plugin.name),
-        "model_visible": plugin.model_visible,
+        "model_visible": plugin.metadata.get("model_visible", True),
         "main_only": plugin.main_only,
         "source": source,
         "source_path": source_path,

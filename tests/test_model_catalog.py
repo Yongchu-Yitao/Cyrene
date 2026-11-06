@@ -90,6 +90,7 @@ def test_configured_candidates_prepend_session_selection_outside_primary_route(
         "model": "primary-model",
         "base_url": "https://primary.example/v1",
         "capabilities": ["chat"],
+        "context_limit": 100_000,
     }
     selected = {
         "id": "selected",
@@ -98,6 +99,7 @@ def test_configured_candidates_prepend_session_selection_outside_primary_route(
         "model": "selected-model",
         "base_url": "https://selected.example/v1",
         "capabilities": ["chat", "vision"],
+        "context_limit": 1_000_000,
     }
     service = SimpleNamespace(
         candidates_for_route=lambda route: [primary] if route == "primary" else [],
@@ -132,6 +134,12 @@ def test_configured_candidates_prepend_session_selection_outside_primary_route(
     assert candidates[0]["_session_selected"] is True
     assert candidates[0]["reasoning_effort"] == "high"
     assert candidates[1].get("_session_selected") is not True
+
+    assert model_catalog.configured_context_limit("chat-1") == 1_000_000
+    assert model_catalog.configured_context_limit("unselected-chat") == 100_000
+    # A selection with no declared window must not borrow a fallback's limit.
+    selected["context_limit"] = 0
+    assert model_catalog.configured_context_limit("chat-1") == 0
 
 
 def test_candidate_identity_never_exposes_credentials_or_paths():

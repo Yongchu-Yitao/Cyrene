@@ -2,6 +2,7 @@ import { useNativeWheelElement } from "../../shared/native-wheel.jsx"
 import { wbcProjectRuntimeTranscript, wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { openDoctor } from "../doctor/doctor.jsx"
 import { failureScope } from '../doctor/failure-scope.mjs'
+import { presentConversationMessages } from './message-presentation.mjs'
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, useWbcCallback, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserAvoidancePlan, wbcBrowserFullscreenStatusText, wbcBrowserPageTitle, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcBrowserWindowTitle, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcClampBrowserWindowFrame, wbcConversationTabAtPoint, wbcCycleTopbarSessionTab, wbcHandleHorizontalWheelGesture, wbcHasAgentCapabilitySnapshot, wbcHasChatDrag, wbcIsBuiltinAgent, wbcKeepBrowserWindowClearOfComposer, wbcLoadBrowserWindowFrame, wbcMergeChronologicalMessages, wbcNotifyBrowserLayoutChanged, wbcNotifyBrowserWindowInteraction, wbcNotifyResourceShelfPointerDrag, wbcPointInsideResourceShelf, wbcReadChatDrag, wbcReconcileLiveUserMessages, wbcRuntimeSegmentMessages, wbcRuntimeTimelineMessages, wbcSaveBrowserWindowFrame, wbcT, wbcTraceDedupeKey } from "../../workbench-chat.jsx"
 import { WbcActivityGroup, WbcAgentNotification, WbcAssistantMessage, WbcContinuationIndicator, WbcErrorNotice, WbcLiveActivityCard, WbcLiveMessage, WbcModelStatusMessage, WbcQuestionPrompt, WbcUserMessage, wbcGroupConsecutiveActivityMessages, wbcIsActivityMessage } from "./messages.jsx"
@@ -1427,9 +1428,10 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
     return new Set(retryClearingKey ? retryClearingKey.split("\u0000") : []);
   }, [retryClearingKey]);
   var messages = useWbcMemo(function () {
-    return runtime && runtime.timeline
+    var transcript = runtime && runtime.timeline
       ? wbcProjectTranscript(chatMessages, runtime)
       : wbcProjectRuntimeTranscript(durableMessages, runtimeTimeline);
+    return presentConversationMessages(transcript);
   }, [durableMessages, runtimeTimeline, runtime && runtime.timeline, runtime && runtime.pendingQuestion, runtime && runtime.reconnecting]);
   var activityTraceKeys = useWbcMemo(function () {
     var keys = new Set();
@@ -1562,11 +1564,11 @@ function wbcRenderHistoryMessage(msg, context) {
   );
 }
 
-function useWbcComposerReserveHeight(mainRef, chatId) {
+function useWbcComposerReserveHeight(mainRef, chatId, localSurface) {
   useWbcEffect(function () {
     var main = mainRef.current;
     if (!main) return undefined;
-    var page = main.closest(".wbc-page");
+    var page = localSurface ? main : (main.closest(".wbc-page") || main);
     var composer = main.querySelector(":scope > .wbc-composer");
     if (!page || !composer) return undefined;
     var resizeRaf = 0;
@@ -1592,7 +1594,7 @@ function useWbcComposerReserveHeight(mainRef, chatId) {
       if (resizeRaf) cancelAnimationFrame(resizeRaf);
       page.style.removeProperty("--wbc-composer-reserve-height");
     };
-  }, [chatId]);
+  }, [chatId, localSurface]);
 }
 
 class WbcFloatingBrowserAlignment {
@@ -2415,6 +2417,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
           </button>
         ) : null}
         onSend={onSend}
+        onAnswer={onAnswer}
         onGuidance={onGuidance}
         onInterrupt={onInterrupt}
         draftAgent={draftAgent}
@@ -2581,4 +2584,4 @@ function wbcValidateElicitationForm(fields, values) {
 // clarification (ask_user). Renders the question + option buttons inline at the
 // bottom of the thread; each answer resumes the same round server-side.
 
-export { WbcMain, WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcIsLiveAgentRequest, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm, wbcVoiceQuestionText }
+export { useWbcComposerReserveHeight, WbcMain, WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcIsLiveAgentRequest, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm, wbcVoiceQuestionText }

@@ -1,3 +1,4 @@
+import { WbcRailToolbar } from "./rail-toolbar.jsx"
 import { useNativeWheelElement } from "../../shared/native-wheel.jsx"
 import { pluginToolKey, useRailPluginCollections } from "./rail-plugin-collections.jsx"
 import { renderTerminalCard } from "./rail-terminal-view.jsx"
@@ -658,6 +659,21 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       requestAnimationFrame(function () {
         if (!actions.isConnected) return;
         var menu = actions.querySelector(".wb-card-menu");
+        if (menu && menu.hasAttribute("popover")) {
+          // Keep the group's scroll container and scroll offset intact. The
+          // top layer lets this menu escape clipping without moving the list.
+          menu.showPopover();
+          var anchor = actions.getBoundingClientRect();
+          var bounds = menu.getBoundingClientRect();
+          var gutter = 8;
+          var viewportWidth = document.documentElement.clientWidth;
+          var viewportHeight = document.documentElement.clientHeight;
+          var top = anchor.bottom + 4;
+          if (top + bounds.height > viewportHeight - gutter) top = anchor.top - bounds.height - 4;
+          menu.style.left = Math.max(gutter, Math.min(anchor.right - bounds.width, viewportWidth - bounds.width - gutter)) + "px";
+          menu.style.top = Math.max(gutter, Math.min(top, viewportHeight - bounds.height - gutter)) + "px";
+          return;
+        }
         if (menu) menu.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
       });
     });
@@ -1459,7 +1475,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
               onClick={toggleGroupMenu}
             >{WBC_ICONS.dots}</button>
             {isMenuOpen && (
-              <div className="wb-card-menu" role="menu">
+              <div className="wb-card-menu" role="menu" popover="manual">
                 <button type="button" role="menuitem" onClick={function (event) {
                   event.stopPropagation();
                   setMenuId("");
@@ -2236,50 +2252,16 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
       + (collapsed ? " is-collapsed" : "")
       + (anyProjectToolExpanded ? " has-expanded-project-tool" : "")
       + (renderedRailMotionPhase ? (" is-status-" + renderedRailMotionPhase) : "")}>
-      <div className="wbc-rail-glass">
-        <div className="wbc-nav-card">
-          <div className="wbc-nav-card-head workbench-integrated-rail-head workbench-integrated-rail-search-head">
-            {!collapsed && railMode === "chat" && (
-              <button
-                ref={newChatButtonRef}
-                data-cyrene-node-id="new_chat"
-                type="button"
-                className="wbc-project-new-chat"
-                onClick={onCreate}
-                title={wbcT("workbenchChat.newChat", "New chat")}
-                aria-label={wbcT("workbenchChat.newChat", "New chat")}
-              >{WBC_ICONS.plus}</button>
-            )}
-            {!collapsed && (
-              <div className="wbc-search">
-                <span className="wbc-search-icon">{WBC_ICONS.search}</span>
-                <input
-                  ref={chatSearchRef}
-                  data-cyrene-node-id="chat_search_input"
-                  value={query}
-                  onChange={function (e) {
-                    var nextQuery = e.target.value;
-                    setGlobalFilesLoading(fileEntryAvailable && Boolean(nextQuery.trim()));
-                    setQuery(nextQuery);
-                  }}
-                  placeholder={wbcT("rail.searchEverythingShort", "Search all")}
-                  aria-label={wbcT("rail.searchEverything", "Search chats, files, and terminals")}
-                />
-              </div>
-            )}
-            {collapseControl || (
-              <button
-                type="button"
-                className="workbench-sidebar-collapse-control"
-                onClick={onToggleCollapsed}
-                title={collapsed ? wbcT("rail.expand", "Expand sidebar") : wbcT("rail.collapse", "Collapse sidebar")}
-                aria-label={collapsed ? wbcT("rail.expand", "Expand sidebar") : wbcT("rail.collapse", "Collapse sidebar")}
-              >{WBC_ICONS.sidebar}</button>
-            )}
-          </div>
-
-        </div>
-      </div>
+      <WbcRailToolbar collapsed={collapsed}
+        onAction={railMode === "chat" ? onCreate : null}
+        actionLabel={wbcT("workbenchChat.newChat", "New chat")}
+        actionRef={newChatButtonRef} actionNodeId="new_chat"
+        query={query} searchRef={chatSearchRef} searchNodeId="chat_search_input"
+        onQueryChange={function (nextQuery) {
+          setGlobalFilesLoading(fileEntryAvailable && Boolean(nextQuery.trim()));
+          setQuery(nextQuery);
+        }}
+        collapseControl={collapseControl} onToggleCollapsed={onToggleCollapsed} />
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       {unifiedSearchActive ? (
         <div

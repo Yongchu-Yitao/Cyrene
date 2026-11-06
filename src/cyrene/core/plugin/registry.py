@@ -494,7 +494,8 @@ class PluginRegistry:
             return None
         if plugin.kind == "tool" and "agent_exposure" in override:
             metadata["agent_exposure"] = override["agent_exposure"]
-            metadata["model_visible"] = override["agent_exposure"] != "hidden"
+            if metadata.get("model_visible") != "assistant":
+                metadata["model_visible"] = override["agent_exposure"] != "hidden"
         metadata["customized_description"] = "description" in override
         return dataclass_replace(
             plugin,
@@ -984,11 +985,14 @@ class PluginRegistry:
         name: str,
         *,
         agent_id: str = "main",
+        model_audience: str = "default",
     ) -> bool:
-        """Return whether activation and Agent scope permit execution."""
+        """Return whether activation, model audience and Agent scope permit execution."""
 
         registered = self._registered_value(name)
         if not self._registered_enabled(registered):
+            return False
+        if registered.plugin.metadata.get("model_visible") == "assistant" and model_audience != "assistant":
             return False
         is_main = self._main_agent(agent_id)
         return not (
@@ -1024,7 +1028,7 @@ class PluginRegistry:
         snapshot.packs[normalized_id] = enabled
         self._activation.replace(plugins=snapshot.plugins, packs=snapshot.packs)
 
-    def resolve(self, name: str, *, agent_id: str = "main") -> Plugin:
+    def resolve(self, name: str, *, agent_id: str = "main", model_audience: str = "default") -> Plugin:
         with self._lock:
             registered = self._plugins.get(str(name))
         if registered is None:
@@ -1049,6 +1053,8 @@ class PluginRegistry:
                 error="disabled",
             )
             raise PluginUnavailableError(f"Plugin is disabled: {name}")
+        if registered.plugin.metadata.get("model_visible") == "assistant" and model_audience != "assistant":
+            raise PluginUnavailableError(f"Plugin is only available to assistant Agents: {name}")
         if registered.plugin.main_only and not self._main_agent(agent_id):
             log_operation(
                 logger,

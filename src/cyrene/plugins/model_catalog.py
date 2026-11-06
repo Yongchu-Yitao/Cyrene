@@ -389,7 +389,7 @@ def configured_context_limit(
     *,
     route: str = "primary",
 ) -> int:
-    """Return the smallest declared window across one automatic route."""
+    """Honor a session selection; otherwise use the automatic route minimum."""
 
     # Catalog consumers such as the Memory overview are informational and
     # must remain available when the optional model-configuration pack is not
@@ -401,6 +401,12 @@ def configured_context_limit(
         if "model configuration Plugin is not available" not in str(exc):
             raise
         return 0
+    # Composer overrides prepend the selected profile but retain automatic
+    # fallbacks. Their smaller windows must not shrink the selected model's
+    # compaction budget; the router checks each fallback's fit at call time.
+    selected = next((item for item in candidates if item.get("_session_selected")), None)
+    if selected is not None:
+        candidates = [selected]
     limits: list[int] = []
     for candidate in candidates:
         try:

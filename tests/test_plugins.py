@@ -2183,7 +2183,8 @@ def test_aliyun_bailian_model_plugin_discovers_paginated_catalog():
     run(scenario())
 
 
-def test_model_provider_retries_mixed_transport_failures_before_streaming():
+def test_model_provider_retries_mixed_transport_failures_before_streaming(monkeypatch):
+    monkeypatch.setattr("cyrene.plugins.builtin.cyrene_model._shared.MODEL_CONNECT_RETRY_DELAY_SECONDS", 0)
     async def scenario():
         from cyrene.plugins.builtin.cyrene_model._shared import (
             ModelProvider,
@@ -2197,7 +2198,7 @@ def test_model_provider_retries_mixed_transport_failures_before_streaming():
             attempts += 1
             if attempts < 3:
                 raise httpx.ConnectError("temporary disconnect", request=request)
-            if attempts < 5:
+            if attempts < 4:
                 raise httpx.RemoteProtocolError(
                     "server disconnected before responding",
                     request=request,
@@ -2236,7 +2237,7 @@ def test_model_provider_retries_mixed_transport_failures_before_streaming():
             ),
         )
 
-        assert attempts == 5
+        assert attempts == 4
         assert result["content"] == "ok"
 
     run(scenario())

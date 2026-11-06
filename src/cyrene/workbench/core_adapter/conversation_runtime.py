@@ -18,6 +18,7 @@ from typing import Any
 from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
 from cyrene.core.permission import runtime_permission_mode
 from cyrene.core.plugin import application_plugin_scope, default_plugin_impl_directory
+from cyrene.core.plugin.tool_scope import PluginToolScope, ScopedPluginRegistry
 from cyrene.plugins import resolve_plugin_registry
 from cyrene.core.plugin.session_state import (
     plugin_child_context_ids,
@@ -193,6 +194,7 @@ class ConversationConfig:
     data_directory: str | Path | None = None
     max_model_calls: int | None = None
     extra_direct_tool_names: Sequence[str] = ()
+    tool_scope: PluginToolScope | None = None
     guidance_channel: Any = None
     read_only: bool = False
 
@@ -251,6 +253,38 @@ class ConversationRuntime:
         finally:
             router.close()
         return context_checkpoint_from_nodes(nodes, committed)
+
+    def stop_interrupted(
+        self, chat_id: str, *, reason: str, config: ConversationConfig | None = None,
+        expected_run_id: str = "",
+    ) -> bool:
+        """Settle an ownerless checkpoint using the Session cancellation protocol.
+
+        Used before startup admission, or while the caller owns the chat lock.
+        Paused restoration prevents model requests and tool replay during cleanup.
+        """
+        with self._active_lock:
+            if chat_id in self._active:
+                return False
+        checkpoint = self.context_checkpoint(chat_id, config)
+        if not checkpoint or checkpoint.get("status") != "running":
+            return False
+        if expected_run_id and checkpoint.get("run_id") != expected_run_id:
+            return False
+        config = config or ConversationConfig(
+            session_id=chat_id, workspace_dir=str(self._state_root()), db_path=self._db_path,
+        )
+        owner_loop = asyncio.new_event_loop()
+        try:
+            bridge = self._open_bridge(
+                config, owner_loop=owner_loop, raw_publisher=None, resume_on_restore=False,
+            )
+            try:
+                return bridge.session.request_cancel(reason)
+            finally:
+                bridge.close()
+        finally:
+            owner_loop.close()
 
     def has_admitted_agent_message(self, chat_id: str, request_id: str) -> bool:
         """Only committed ContextTree input proves idle-run admission."""
@@ -485,10 +519,19 @@ class ConversationRuntime:
         raw_publisher: WorkbenchPublisher | None,
         resume_on_restore: bool = True,
     ) -> WorkbenchSessionBridge:
+        from .assistant_profile import personal_assistant_config
+        host = application_plugin_scope()
+        management = host.active_services.get("session_management") if host else None
+        chat = management.host.chat(str(config.session_id)) if management else None
+        personal_assistant = bool(chat and chat.get('kind') == 'personal-assistant')
+        if personal_assistant:
+            config = personal_assistant_config(config)
         plugin_root = Path(
             config.plugin_directory or default_plugin_impl_directory()
         ).expanduser().resolve()
         registry, load_plugins = resolve_plugin_registry(plugin_root)
+        if config.tool_scope is not None:
+            registry = ScopedPluginRegistry(registry, config.tool_scope)
 
         worker_publisher: WorkbenchPublisher | None = None
         if raw_publisher is not None:
@@ -568,6 +611,7 @@ class ConversationRuntime:
             "owner_call": self._owner_caller(owner_loop),
             "run_context": run_context,
         }
+        plugin_context_data["personal_assistant"] = personal_assistant
         if config.model_identity:
             plugin_context_data["model_identity"] = deepcopy(
                 dict(config.model_identity)
@@ -737,6 +781,14 @@ class ConversationRuntime:
             )
         )
 
+        # A fresh user turn may replace a checkpoint whose execution owner has
+        # exited. _own_bridge acquires the chat lock before restoring it, and
+        # pauses restoration so neither the old model nor tools run again.
+        replace_interrupted = retry_branch or bool(
+            str(text or "").strip()
+            and not (metadata and metadata.get("agent_originated"))
+        )
+
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
             snapshot = bridge.snapshot()
             status = str(snapshot.get("status") or "")
@@ -752,11 +804,12 @@ class ConversationRuntime:
                 status = "idle"
             if status == "idle" and restored_run_id == normalized_run_id:
                 return bridge.current_result(restored_run_id)
-            if status != "idle" and restored_run_id != normalized_run_id and retry_branch:
-                # The chat lock excludes the previous execution owner. Explicit
-                # retry replaces its durable checkpoint using normal cancellation,
-                # then forks the original user turn without deleting history.
-                await bridge.cancel("replaced_by_retry")
+            if status != "idle" and restored_run_id != normalized_run_id and replace_interrupted:
+                # Preserve the transcript and settle the abandoned run locally;
+                # cancellation must not depend on its model becoming available.
+                await bridge.cancel(
+                    "replaced_by_retry" if retry_branch else "replaced_by_new_message"
+                )
                 status = str(bridge.snapshot().get("status") or "")
             if status != "idle":
                 if restored_run_id == normalized_run_id:
@@ -800,7 +853,7 @@ class ConversationRuntime:
 
         try:
             bridge_options = {}
-            if retry_branch:
+            if replace_interrupted:
                 bridge_options["replace_interrupted_run"] = True
             from cyrene.core.retry import retry_runtime_operation
 
@@ -810,6 +863,15 @@ class ConversationRuntime:
                                          **bridge_options),
                 should_retry=lambda: not self._stopping,
             )
+        except Exception as exc:
+            if getattr(exc, "_cyrene_runtime_retry_exhausted", False):
+                async with self._chat_lock(config.session_id):
+                    await asyncio.to_thread(
+                        self.stop_interrupted, config.session_id,
+                        reason="runtime_retry_exhausted", config=config,
+                        expected_run_id=normalized_run_id,
+                    )
+            raise
         finally:
             self.kick_commit_outbox(config.session_id)
 
@@ -827,6 +889,7 @@ class ConversationRuntime:
                 config = self._configs.get(target)
         if config is None or not target:
             return 0
+
         from cyrene.workbench.chat.chat_repository import ChatRepository
 
         repository = ChatRepository(config.db_path)

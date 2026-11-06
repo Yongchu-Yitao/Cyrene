@@ -1,3 +1,4 @@
+import { PersonalAssistantPage } from "./assistant-page.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WorkbenchTopbar } from "./topbar.jsx"
 import { ConversationBoard } from "../chat/conversation-board.jsx"
@@ -159,7 +160,7 @@ function WorkbenchChatModuleSurface({ context }) {
         active: presentation.isChat,
         project: context.store.activeProject,
         workspaceContent: sharedWorkspace,
-        onActivateWorkspace: function () { context.navigation.openPage("work"); },
+        onActivateWorkspace: function () { context.navigation.openPage("chat"); },
         newChatRequestId: context.chat.newChatRequestId,
         onActiveChatIdChange: sessions.setActiveChatId,
         onChatsChange: sessions.updateRecentChats,
@@ -223,6 +224,9 @@ function WorkbenchSecondaryModuleSurfaces({ context }) {
 
 function WorkbenchModuleSurfaces({ context }) {
   return <>
+    {context.presentation.showCyrenePage && <WorkbenchStableSurface active={context.presentation.isCyrene}>
+      <PersonalAssistantPage context={context} active={context.presentation.isCyrene} />
+    </WorkbenchStableSurface>}
     <WorkbenchChatModuleSurface context={context} />
     <WorkbenchSecondaryModuleSurfaces context={context} />
   </>;

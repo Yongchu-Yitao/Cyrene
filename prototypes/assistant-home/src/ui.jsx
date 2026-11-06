@@ -1,0 +1,11 @@
+import React, { useEffect, useRef } from 'react';
+export function Icon({name, size=19, className=''}) { return <span aria-hidden="true" className={`icon ${className}`} style={{width:size,height:size,maskImage:`url(/assets/icons/${name}.svg)`,WebkitMaskImage:`url(/assets/icons/${name}.svg)`}}/>; }
+export function IconButton({icon,label,onClick,...props}) { return <button className="icon-button" aria-label={label} title={label} onClick={onClick} {...props}><Icon name={icon}/></button>; }
+export function Badge({status,children}) { return <span className={`badge ${status}`}><Icon name={status==='done'?'check':status==='running'?'circle-dot':'clock'} size={13}/>{children}</span>; }
+export function Modal({title,children,onClose,wide=false}) {
+ const ref=useRef(null);
+ useEffect(()=>{const previous=document.activeElement; const box=ref.current; box?.querySelector('button,input,textarea')?.focus();function key(e){if(e.key==='Escape')onClose();if(e.key==='Tab'){const list=[...box.querySelectorAll('button:not(:disabled),input,textarea,select,[tabindex="0"]')];const first=list[0],last=list.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}}document.addEventListener('keydown',key);return()=>{document.removeEventListener('keydown',key);previous?.focus();};},[onClose]);
+ return <div className="modal-scrim" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><section ref={ref} className={`modal ${wide?'wide':''}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><IconButton icon="x" label="关闭弹窗" onClick={onClose}/></header>{children}</section></div>;
+}
+export function DocumentBody({content}) {return <article className="document-body">{content.split('\n').map((line,i)=>line.startsWith('# ')?<h1 key={i}>{line.slice(2)}</h1>:line.startsWith('## ')?<h2 key={i}>{line.slice(3)}</h2>:line.startsWith('- ')?<p className="document-bullet" key={i}>{line.slice(2)}</p>:line?<p key={i}>{line}</p>:<div className="document-space" key={i}/>)}</article>;}
+export function Empty({title,description,children}) {return <div className="empty"><Icon name="circle-check" size={36}/><h3>{title}</h3><p>{description}</p>{children}</div>;}

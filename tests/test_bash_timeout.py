@@ -69,8 +69,9 @@ async def test_bash_stops_descendants_on_timeout_or_cancel(tmp_path, cancel):
 
 
 @pytest.mark.asyncio
-async def test_bash_timeout_is_a_retryable_runtime_result(tmp_path):
+async def test_bash_timeout_allows_another_command_in_the_same_run(tmp_path):
     runtime = PluginRuntime(PluginRegistry())
+    context = PluginContext(workspace=tmp_path, data={'run_id': 'run-bash-timeout'})
     result = await runtime.call(
         'Bash',
         {
@@ -80,16 +81,25 @@ async def test_bash_timeout_is_a_retryable_runtime_result(tmp_path):
             ),
             'timeout_ms': 20,
         },
-        PluginContext(workspace=tmp_path),
+        context,
     )
 
     assert result.success is False
     assert result.failure is not None
     assert result.failure.error_code == 'plugin_timeout'
     assert result.failure.retryable is True
-    assert result.failure.retry_scope == 'after_delay'
+    assert result.failure.retry_scope == 'different_arguments'
+    assert result.failure.circuit_scope == 'none'
     assert result.failure.details == {'timeout_ms': 20}
     assert result.error == 'Bash command timed out after 0.02 seconds.'
+    assert runtime.circuit_failure('Bash', 'run-bash-timeout') is None
+
+    recovered = await runtime.call(
+        'Bash', {'command': 'echo recovered', 'timeout_ms': 5_000}, context,
+    )
+    assert recovered.success is True
+    assert recovered.value['exit_code'] == 0
+    assert recovered.value['stdout'].strip() == 'recovered'
 
 
 def test_bash_boundary_requires_confirmation_for_root_scan(tmp_path):

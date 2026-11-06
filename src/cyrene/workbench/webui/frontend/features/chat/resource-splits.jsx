@@ -1,5 +1,5 @@
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { resizeCollapseEdge } from "../layout/resize-collapse.mjs"
+import { createResizeCollapseGuard } from "../layout/resize-collapse.mjs"
 import { startPointerResize } from "../layout/pointer-resize.mjs"
 import { PluginFrontendService } from "../../platform/plugins.jsx"
 import { WBC_ICONS, WBC_SIDE_TAB_ICONS, WbcSplitPickerMenu, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAttachmentTypeLabel, wbcBrowserTabPickerPayload, wbcBrowserTabPickerToggleIsDebounced, wbcClampSideSplitWidthForPage, wbcErrorText, wbcFileViewKind, wbcNotifyBrowserLayoutChanged, wbcRenderMapMarkdown, wbcT } from "../../workbench-chat.jsx"
@@ -484,8 +484,11 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide, onClose }) {
     var page = event.currentTarget.closest(".wbc-page");
     var nextWidth = startWidth;
     var minimum = clampWidth(-Infinity, page);
+    var resizeCollapseEdge = createResizeCollapseGuard();
     startPointerResize(event, {
       bodyClass: "wbc-resizing-side-agent",
+      collapsePreview: page && { element: page, kind: "resource", axis: "x", direction: function () { return splitSide === "left" ? -1 : 1; } },
+      resetCollapse: resizeCollapseEdge.reset,
       start: function () { window.dispatchEvent(new CustomEvent("workbench:split-resize-start")); },
       update: function (moveEvent) {
         var delta = splitSide === "left" ? moveEvent.clientX - startX : startX - moveEvent.clientX;
@@ -494,6 +497,7 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide, onClose }) {
       },
       paint: function () { if (page) page.style.setProperty("--wbc-side-track-width", nextWidth + "px"); },
       commit: function () {
+        resizeCollapseEdge.dispose();
         onResize(nextWidth);
         window.dispatchEvent(new CustomEvent("workbench:split-resize-end", { detail: { width: nextWidth, side: splitSide } }));
         wbcNotifyBrowserLayoutChanged();

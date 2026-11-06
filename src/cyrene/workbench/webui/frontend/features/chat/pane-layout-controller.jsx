@@ -61,7 +61,8 @@ function wbcOpenPaneContent(context, type, payload, options) {
   }
   var canonicalId = ["chat", "terminal"].indexOf(normalizedType) >= 0 && payload
     ? normalizedType + ":" + String(payload) : "";
-  var baseCard = wbcPaneContentCard(context, normalizedType, payload, ownerId);
+  var contentOwnerId = String(opts.resourceOwnerChatId || ownerId);
+  var baseCard = wbcPaneContentCard(context, normalizedType, payload, contentOwnerId);
   if (opts.origin === "agent") {
     baseCard = Object.assign({}, baseCard, {
       meta: Object.assign({}, baseCard.meta || {}, {
@@ -73,9 +74,17 @@ function wbcOpenPaneContent(context, type, payload, options) {
   }
   var reusableId = canonicalId || (normalizedType === "plugin-view" ? baseCard.id : "");
   var existing = reusableId ? wbcPaneCardLocation(wbcPaneLayoutFor(context, ownerChatId), reusableId) : null;
+  if (normalizedType === "browser") {
+    var browser = wbcPaneLayoutFor(context, ownerChatId);
+    var mountedBrowser = browser.left.concat(browser.right).find(function (candidate) {
+      return candidate.kind === "browser" && String(candidate.payload) === String(payload)
+        && candidate.ownerChatId === contentOwnerId;
+    });
+    if (mountedBrowser && !opts.replaceWorkspace) return mountedBrowser;
+  }
   if (normalizedType === "terminal" && existing && !opts.replaceWorkspace) return existing.card;
   var card = existing
-    ? wbcPaneCard(normalizedType, payload, { ownerChatId: ownerId, freshInstance: true })
+    ? wbcPaneCard(normalizedType, payload, { ownerChatId: contentOwnerId, freshInstance: true })
     : baseCard;
   wbcUpdatePaneLayout(context, function (layout) {
     if (opts.restore) context.paneLayoutRestoreRef.current[card.id] = layout;

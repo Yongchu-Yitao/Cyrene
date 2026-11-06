@@ -1,0 +1,370 @@
+"""Assistant-owned sessions, serialized control and durable attachment delivery."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+import hashlib
+import json
+import logging
+from pathlib import Path
+
+from .host import KIND, OWNER
+from .store import Store
+
+logger = logging.getLogger(__name__)
+MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_LOAD_CHARS = 60000
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+class SessionManagementService:
+    def __init__(self, directory, host):
+        self.store = Store(Path(directory) / "sessions.sqlite3")
+        self.host = host
+        self.loop = None
+        self.lock = None
+        self.worker = None
+
+    def initialize_assistant(self):
+        """Bind the singleton entry to an existing conversation before creating one.
+
+        Keep the original session id: its transcript, context tree, receipts and
+        attachment URLs are all keyed by that id. Never substitute an empty chat.
+        """
+        from cyrene.workbench.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+        from cyrene.workbench.persistence.store import read_document, write_document
+
+        repository = self.host.port().service.repository
+        key = "personal_assistant_identity"
+        identity = read_document(repository._database(), key, dict)
+        target = str(identity.get("session_id") or "")
+        if not target or not repository.get_metadata(target):
+            candidates = []
+            for summary in repository.read_summaries()["chats"]:
+                metadata = repository.get_metadata(summary["id"]) or {}
+                if metadata.get("kind") == "personal-assistant" or metadata.get("legacyPersonalAssistant"):
+                    candidates.append(metadata)
+            # Repair the former migration which created assistant_global and
+            # archived the original main conversation. Existing identity wins
+            # on subsequent starts, regardless of new/updated task histories.
+            originals = [item for item in candidates if item["id"] != ASSISTANT_ID]
+            source = min(originals or candidates, key=lambda item: (item.get("createdAt", ""), item["id"]), default=None)
+            target = source["id"] if source else ASSISTANT_ID
+        if not repository.get_metadata(target):
+            chat = self.host.port().service.create_chat(
+                ASSISTANT_SCOPE_ID, "Cyrene", soul_active=True,
+                workspace_active=True, project_memory_active=False,
+            )
+            chat.update(id=target, kind="personal-assistant")
+            repository.insert(chat)
+        self.migrate_legacy_assistants(target)
+
+        def promote(value):
+            previous_project = value.get("projectId", "")
+            if previous_project != ASSISTANT_SCOPE_ID:
+                from cyrene.workbench.projects.project_repository import find_workbench_project_lightweight
+                project = find_workbench_project_lightweight(previous_project) or {}
+                if not value.get("workspaceOverride") and project.get("workspacePath"):
+                    value["workspaceOverride"] = project["workspacePath"]
+                value["originalProjectId"] = previous_project
+            value.update(kind="personal-assistant", projectId=ASSISTANT_SCOPE_ID)
+            value.pop(OWNER, None)
+            value.pop("legacyPersonalAssistant", None)
+
+        repository.mutate_metadata(target, promote)
+        self.store.unregister(target)
+        write_document(repository._database(), key, {"session_id": target}, dict)
+        return self.host.chat(target)
+
+    def migrate_legacy_assistants(self, owner):
+        """Keep old conversations as inspectable tasks; retry safely after a crash."""
+        from cyrene.workbench.assistant import ASSISTANT_SCOPE_ID
+        from cyrene.workbench.projects.project_repository import find_workbench_project_lightweight
+
+        repository = self.host.port().service.repository
+
+        def adopt(value):
+            previous_project = value.get("projectId", "")
+            if previous_project != ASSISTANT_SCOPE_ID:
+                project = find_workbench_project_lightweight(previous_project) or {}
+                if not value.get("workspaceOverride") and project.get("workspacePath"):
+                    value["workspaceOverride"] = project["workspacePath"]
+                value["originalProjectId"] = previous_project
+                value["projectId"] = ASSISTANT_SCOPE_ID
+            value[OWNER] = owner
+
+        for summary in repository.read_summaries()["chats"]:
+            previous = summary["id"]
+            chat = repository.get_metadata(previous) or {}
+            if previous == owner or not (chat.get("kind") == "personal-assistant"
+                                        or chat.get("legacyPersonalAssistant")):
+                continue
+            # Metadata first, durable ownership last; repeated migration repairs either side.
+            for task in self.store.sessions(previous):
+                if task["id"] != owner:
+                    repository.mutate_metadata(task["id"], adopt)
+            self.store.reassign_owner(previous, owner, self.host.version(self.host.chat(owner)))
+            def archive(value):
+                adopt(value)
+                value.update(kind=KIND, legacyPersonalAssistant=True)
+            repository.mutate_metadata(previous, archive)
+            self.store.register(previous, owner)
+
+    async def start(self):
+        self.loop = asyncio.get_running_loop()
+        self.lock = asyncio.Lock()
+        self.worker = asyncio.create_task(self._worker(), name="session-management-delivery")
+
+    async def stop(self):
+        if self.worker:
+            self.worker.cancel()
+            await asyncio.gather(self.worker, return_exceptions=True)
+            self.worker = None
+        self.loop = None
+
+    async def _on_owner(self, operation):
+        if self.loop is None or self.loop.is_closed():
+            raise RuntimeError("session_management is not running")
+        if asyncio.get_running_loop() is self.loop:
+            return await operation()
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(operation(), self.loop))
+
+    def _owned(self, owner, target):
+        record = self.store.owned(owner, target)
+        chat = self.host.chat(target)
+        if not chat or chat.get("kind") != KIND or chat.get(OWNER) != owner:
+            raise ValueError("Managed session was deleted or its ownership changed")
+        if not self.host.chat(owner):
+            raise ValueError("Assistant session no longer exists")
+        return record, chat
+
+    def _files(self, paths, workspace):
+        if len(paths) > 10:
+            raise ValueError("At most ten files can be attached")
+        result = []
+        total = 0
+        for raw in paths:
+            path = Path(raw).expanduser()
+            if not path.is_absolute():
+                path = Path(workspace) / path
+            if not path.is_file():
+                raise ValueError(f"Attachment is not a file: {path}")
+            # Bound the actual read too; a file may grow between stat and read.
+            with path.open("rb") as stream:
+                content = stream.read(MAX_FILE_BYTES + 1)
+            total += len(content)
+            if not content or total > MAX_FILE_BYTES:
+                raise ValueError("Attachments must be nonempty and total at most 20 MiB")
+            result.append(self.host.attachment(content, path.name))
+        return result
+
+    async def command(self, owner, operation, args, effect, workspace):
+        async def perform():
+            async with self.lock:
+                key = f"{owner}:{operation}:{effect}"
+                fingerprint = digest(args)
+                replay = self.store.replay(key, fingerprint)
+                if replay is not None:
+                    return replay
+                self.store.reserve(key, fingerprint)
+                if operation == "session_create":
+                    target = "managed_" + digest(key)[:24]
+                    from cyrene.workbench.chat.chat_application import normalize_workspace_override
+
+                    task_workspace = normalize_workspace_override(args.get("workspace_path"))
+                    if not task_workspace:
+                        raise ValueError("workspace_path is required")
+                    await asyncio.to_thread(self.host.create, owner, target, args["title"], task_workspace)
+                    self.store.register(target, owner)
+                    result = {"session_id": target, "status": "idle"}
+                    if args.get("message") or args.get("files"):
+                        message = await self._enqueue(owner, target, args, key, workspace)
+                        result.update(message)
+                else:
+                    target = args["session_id"]
+                    self._owned(owner, target)
+                    if operation == "session_send_message":
+                        result = await self._enqueue(owner, target, args, key, workspace)
+                    elif operation == "session_answer_question":
+                        result = await self.host.answer(owner, target, args["question_id"], args["answer"], "managed_answer_" + digest(key)[:24])
+                    elif operation == "session_stop":
+                        self.store.pause(target)
+                        stopped = await self.host.stop(target)
+                        result = {
+                            "session_id": target,
+                            "status": "stopped",
+                            "cancelled_running_execution": bool(stopped),
+                            "queued_messages_paused": self.store.pending_count(target),
+                        }
+                    else:
+                        raise ValueError("Unknown session operation")
+                self.store.save(key, fingerprint, result)
+                return result
+
+        return await self._on_owner(perform)
+
+    async def _enqueue(self, owner, target, args, key, workspace):
+        message_id = "managed_msg_" + digest(key)[:24]
+        # A crash after acceptance must reuse the original file snapshots.
+        existing = self.store.message(message_id)
+        if existing is None:
+            _, chat = self._owned(owner, target)
+            text = str(args.get("message") or "").strip()
+            if len(text) > 20000 or (not text and not args.get("files")):
+                raise ValueError("Provide a message (at most 20000 characters) or files")
+            attachments = await asyncio.to_thread(self._files, args.get("files", []), workspace)
+            self.store.enqueue(
+                owner,
+                target,
+                message_id,
+                {
+                    "content": text,
+                    "attachments": attachments,
+                    "version": self.host.version(chat),
+                },
+            )
+        return {"session_id": target, "message_id": message_id, "status": self.store.message(message_id)["status"]}
+
+    async def list(self, owner):
+        async def perform():
+            async with self.lock:
+                result = []
+                for record in self.store.sessions(owner):
+                    try:
+                        _, chat = self._owned(owner, record["id"])
+                    except ValueError:
+                        continue
+                    result.append(
+                        {
+                            "session_id": record["id"],
+                            "title": chat.get("title", ""),
+                            "workspace_path": chat.get("workspaceOverride", ""),
+                            "status": "stopped" if record["paused"] else self.host.status(record["id"]),
+                            "pending_messages": self.store.pending_count(record["id"]),
+                            "delivery_error": self.store.delivery_error(record["id"]),
+                            "pending_question": chat.get("pendingQuestion"),
+                            "updated_at": chat.get("updatedAt", ""),
+                        }
+                    )
+                return {"sessions": result}
+
+        return await self._on_owner(perform)
+
+    async def blocks(self, owner, args, *, load=False):
+        async def perform():
+            async with self.lock:
+                target = args["session_id"]
+                _, chat = self._owned(owner, target)
+                snapshot = await asyncio.to_thread(self.host.blocks, target)
+                ids = args.get("block_ids", [])
+                blocks = snapshot["blocks"]
+                if ids:
+                    by_id = {b["block_id"]: b for b in blocks}
+                    if any(i not in by_id for i in ids):
+                        raise ValueError("Unknown context block ID; refresh the block directory")
+                    blocks = [by_id[i] for i in dict.fromkeys(ids)]
+                if load and not ids:
+                    raise ValueError("Select explicit block_ids to load")
+                result = {"session_id": target, "title": chat.get("title", ""), "revision": snapshot["revision"], "captured_at": datetime.now(timezone.utc).isoformat()}
+                if load:
+                    if sum(len(b["content"]) for b in blocks) > MAX_LOAD_CHARS:
+                        raise ValueError("Selected blocks exceed 60000 characters; inspect smaller blocks first")
+                    result["blocks"] = blocks
+                else:
+                    offset, limit = args.get("offset", 0), args.get("limit", 50)
+                    page = blocks[offset : offset + limit]
+                    result["blocks"] = [
+                        {k: v for k, v in b.items() if k != "content"}
+                        | (
+                            {
+                                "content": b["content"][args.get("content_offset", 0) : args.get("content_offset", 0) + args.get("content_limit", 4000)],
+                                "content_offset": args.get("content_offset", 0),
+                                "truncated": len(b["content"]) > args.get("content_offset", 0) + args.get("content_limit", 4000),
+                            }
+                            if ids
+                            else {"preview": b["content"][:200]}
+                        )
+                        for b in page
+                    ]
+                    result["next_offset"] = offset + len(page) if offset + len(page) < len(blocks) else None
+                return result
+
+        return await self._on_owner(perform)
+
+    async def capture_notification(self, target, node_id):
+        # Called by the tree's ContextChange Hook after a committed mutation.
+        record = self.store.session(target)
+        if record is None:
+            return
+        owner = record["owner"]
+        try:
+            _, chat = self._owned(owner, target)
+        except ValueError:
+            return
+        event = await asyncio.to_thread(self.host.notification, target, node_id)
+        if event:
+            event = {**event, "session_id": target}
+            event_id = "managed_event_" + digest([target, self.host.version(chat), event.get("run_id"), event.get("node_id"), event["status"]])
+            self.store.notify(
+                event_id,
+                owner,
+                target,
+                {
+                    "event": event,
+                    "owner_version": self.host.version(self.host.chat(owner)),
+                },
+            )
+
+    async def notify_tasks(self):
+        for row in self.store.notifications():
+            try:
+                if await self.host.notify(row["owner"], row["target"], row["id"], json.loads(row["payload"])):
+                    self.store.acknowledge(row["id"])
+            except Exception:
+                logger.exception("Managed session notification will retry")
+
+    def delivery_failed(self, row, error):
+        owner = self.host.chat(row["owner"])
+        if owner is None:
+            return
+        self.store.notify("delivery_failure_" + row["id"], row["owner"], row["target"], {
+            "owner_version": self.host.version(owner),
+            "event": {"status": "failed", "phase": "delivery", "session_id": row["target"],
+                      "message_id": row["id"], "error": error},
+        })
+
+    async def tick(self):
+        await self.notify_tasks()
+        for row in self.store.pending():
+            async with self.lock:
+                try:
+                    record, _chat = self._owned(row["owner"], row["target"])
+                    if record["paused"]:
+                        continue
+                    payload = json.loads(row["payload"])
+                    accepted = await self.host.deliver(row["owner"], row["target"], row["id"], payload)
+                    if accepted:
+                        self.store.update(row["id"], "delivered")
+                    else:
+                        # Busy targets must not monopolize the bounded batch.
+                        self.store.defer(row["id"])
+                except ValueError as exc:
+                    self.store.update(row["id"], "failed", str(exc))
+                    self.delivery_failed(row, str(exc))
+                except Exception as exc:
+                    self.store.update(row["id"], "failed" if row["attempts"] >= 11 else "queued", str(exc))
+                    if row["attempts"] >= 11:
+                        self.delivery_failed(row, str(exc))
+        await self.notify_tasks()
+
+    async def _worker(self):
+        while True:
+            try:
+                await self.tick()
+            except Exception:
+                logger.exception("Managed session queue failed")
+            await asyncio.sleep(1)

@@ -183,3 +183,65 @@ def test_oversized_restore_snapshot_does_not_rehydrate_discarded_results(tmp_pat
         assert [record['id'] for record in records] == [user.id, call.id]
     finally:
         s.close()
+
+
+@pytest.mark.parametrize('terminal', ['cancelled', 'error', None])
+@pytest.mark.parametrize('partial', [False, True])
+@pytest.mark.parametrize('task_scoped', [False, True])
+def test_interrupted_tool_handshake_projects_unknown_results_without_mutating_history(
+    tmp_path, terminal, partial, task_scoped,
+):
+    from cyrene.core.context.projection import project_model_messages
+
+    session = make_session(tmp_path, resume_on_restore=False)
+    try:
+        active = session.task_contexts.ensure('request') if task_scoped else None
+        parent = session.store.mount(session.tree.id, session.tree.root_id, {
+            'role': 'user', 'content': 'old request', 'run_id': 'old',
+        })
+        call = session.store.mount(session.tree.id, parent.id, {
+            'role': 'assistant', 'content': 'starting tools', 'run_id': 'old',
+            'task_context_id': active,
+            'tool_calls': [{'id': 'first', 'name': 'Write', 'arguments': {}},
+                           {'id': 'second', 'name': 'DeepReflect', 'arguments': {}}],
+        })
+        parent = call
+        if partial:
+            parent = session.store.mount(session.tree.id, parent.id, {
+                'role': 'tool_results', 'run_id': 'old', 'task_context_id': active,
+                'results': [{'call_id': 'first', 'name': 'Write', 'success': True, 'value': 'saved'}],
+            })
+        if terminal:
+            parent = session.store.mount(session.tree.id, parent.id, {
+                'role': 'assistant', 'content': '', 'run_id': 'old', terminal: True,
+            })
+            parent = session.store.mount(session.tree.id, parent.id, {
+                'role': 'user', 'content': 'new command', 'run_id': 'new',
+            })
+        path = session.store.get_path(session.tree.id, parent.id)
+        before = deepcopy([node.value for node in path])
+        if not task_scoped:
+            from dataclasses import replace
+            from cyrene.core.context.tasks import STATE_KEY
+            path[0] = replace(path[0], value={k: v for k, v in path[0].value.items() if k != STATE_KEY})
+        messages = project_model_messages(path)
+        tools = [m for m in messages if m['role'] == 'tool']
+        assert [m['tool_call_id'] for m in tools] == (
+            ['first', 'second'] if terminal else (['first'] if partial else [])
+        )
+        if terminal:
+            unknown = [json.loads(m['content']) for m in tools if m['tool_call_id'] != 'first' or not partial]
+            assert all(m['success'] is False and 'outcome is unknown' in m['error'] for m in unknown)
+            first_call = next(i for i, m in enumerate(messages) if m.get('tool_calls'))
+            assert [m['role'] for m in messages[first_call:first_call + 3]] == ['assistant', 'tool', 'tool']
+        if task_scoped and terminal:
+            from cyrene.core.context.tasks import task_messages
+            task_history = task_messages(path, session.task_contexts.read(), active)
+            assert [m['tool_call_id'] for m in task_history if m['role'] == 'tool'] == ['first', 'second']
+        if partial:
+            assert json.loads(tools[0]['content'])['value'] == 'saved'
+            assert json.loads(tools[0]['content'])['success'] is True
+        assert [node.value for node in session.store.get_path(session.tree.id, parent.id)] == before
+        assert project_model_messages(path) == messages
+    finally:
+        session.close()

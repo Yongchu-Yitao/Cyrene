@@ -27,7 +27,7 @@ from cyrene.plugins.tool_call_parsers import GENERIC_TOOL_CALL_PARSER
 
 
 logger = logging.getLogger(__name__)
-MODEL_CONNECT_RETRY_LIMIT = 5
+MODEL_CONNECT_RETRY_LIMIT = 3
 MODEL_CONNECT_RETRY_DELAY_SECONDS = 10.0
 
 
