@@ -10,7 +10,7 @@ from cyrene.core.plugin.tool_scope import PluginToolScope
 from cyrene.plugins.builtin.session_management import TOOL_NAMES
 from .conversation_runtime import ConversationConfig
 
-ASSISTANT_DIRECT_TOOL_NAMES = (*TOOL_NAMES, "ask_user", "send_message", "WebSearch")
+ASSISTANT_DIRECT_TOOL_NAMES = (*TOOL_NAMES, "ask_user", "send_message", "send_file", "WebSearch")
 
 
 def personal_assistant_config(config: ConversationConfig) -> ConversationConfig:

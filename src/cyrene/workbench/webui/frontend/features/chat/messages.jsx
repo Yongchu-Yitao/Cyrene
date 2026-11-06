@@ -829,6 +829,19 @@ function wbcGroupConsecutiveActivityMessages(messages, runtime) {
       return;
     }
     flush(message);
+    // A quiet handoff belongs in the existing disclosure, not a second row.
+    // Keep its identity and child statuses so open details stay open and
+    // completed tools do not start animating again. Only reuse this run's tail.
+    var previous = grouped[grouped.length - 1];
+    if (message.runtimeContinuation && message.runId && previous && previous.activityGroup) {
+      var lastActivity = previous.activities[previous.activities.length - 1];
+      if (lastActivity.runId === message.runId) {
+        previous.active = true;
+        previous.continuing = true;
+        previous.durationMs = null;
+        return;
+      }
+    }
     grouped.push(message);
   });
   flush(null);
@@ -1591,7 +1604,10 @@ function WbcActivityGroup({ group }) {
   var detailsMountedRef = useWbcRef(expanded);
   if (expanded) detailsMountedRef.current = true;
   var duration = item.durationMs == null ? "" : wbcFormatProcessingDuration(item.durationMs);
-  var runningSummary = active ? wbcActivityGroupRunningSummary(activities) : null;
+  var runningSummary = active ? (item.continuing ? {
+    label: wbcT("workbenchChat.continueProcessing", "Processing"),
+    icon: WBC_ICONS.brain,
+  } : wbcActivityGroupRunningSummary(activities)) : null;
   var summary = active
     ? runningSummary.label
     : (duration

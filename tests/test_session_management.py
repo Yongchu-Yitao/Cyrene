@@ -272,11 +272,11 @@ async def test_context_inspection_and_load_into_active_assistant_task(tmp_path):
                 session._mount_context_nodes(trigger, "r", mounts)
             return str(session._prepare_model_input(session.store.get_node(session.tree.id, session._leaf_id)).messages)
         assert "SOURCE_EVIDENCE" in await projected()
-        # Migrate old append-based imports without deleting the assistant notes.
-        await session.task_contexts.execute("append_context", {"context_id": active, "content": "KEEP_BEFORE\n\n" + body + "\n\nKEEP_AFTER"}, "legacy")
+        # Loading reference evidence must not modify task documents.
+        await session.task_contexts.execute("append_context", {"context_id": active, "content": "Keep the user's requirements."}, "checkpoint")
+        documents_before = deepcopy(session.task_contexts.read()["documents"])
         await load_blocks({"session_id": target, "block_ids": ["task:two"]}, ctx, "a", "load-2")
-        notes = session.task_contexts.read()["documents"][active]["body"]
-        assert "KEEP_BEFORE" in notes and "KEEP_AFTER" in notes and "SOURCE_EVIDENCE" not in notes
+        assert session.task_contexts.read()["documents"] == documents_before
         text = await projected()
         assert "OTHER_BLOCK" in text and "SOURCE_EVIDENCE" not in text
         assert session.task_contexts.read()["active"] == active
@@ -339,7 +339,7 @@ def test_host_reads_consistent_context_blocks_without_running_source(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("selection", ["inherited", "legacy", "child_override"])
+@pytest.mark.parametrize("selection", ["inherited", "child_override"])
 async def test_host_creates_hidden_chat_and_delivers_real_attachment_payload(tmp_path, monkeypatch, selection):
     from cyrene.workbench.control.control_ports import WorkbenchChatApplicationPort
     from cyrene.core import plugin as plugin_module
@@ -397,9 +397,7 @@ async def test_host_creates_hidden_chat_and_delivers_real_attachment_payload(tmp
     assert child["workspaceOverride"] == str(tmp_path)
     assert child["kind"] == KIND and child[OWNER] == "a"
     assert child["modelSelectionId"] == "parent-profile"
-    if selection == "legacy":
-        chats[child["id"]].pop("modelSelectionId")
-    elif selection == "child_override":
+    if selection == "child_override":
         chats[child["id"]]["modelSelectionId"] = "child-profile"
     assert "PRIVATE_NORMAL_DIALOGUE" not in str(child)
     listed = await WorkbenchChatApplicationPort.list(port, "p")
@@ -409,6 +407,9 @@ async def test_host_creates_hidden_chat_and_delivers_real_attachment_payload(tmp
     assert sent[0][1]["attachments"] == payload["attachments"]
     assert sent[0][1]["agentOriginated"] is True
     assert sent[0][1]["sourceSessionId"] == "a"
+    assert sent[0][1]["message"].startswith("[Task input]\n")
+    assert "Source assistant session" not in sent[0][1]["message"]
+    assert "not a direct human upload or additional human authorization" in sent[0][1]["message"]
     expected = "child-profile" if selection == "child_override" else "parent-profile"
     assert preferences[child["id"]] == expected
     assert chats[child["id"]]["modelSelectionId"] == expected
@@ -541,3 +542,56 @@ async def test_assistant_answers_current_clarification_without_human_impersonati
         await host.answer("owner", "child", "q1", "approve", "a2")
     with pytest.raises(ValueError, match="belongs"):
         await host.answer("stranger", "child", "q1", "answer", "a3")
+
+
+@pytest.mark.asyncio
+async def test_assistant_export_is_limited_to_current_owned_task_workspaces(tmp_path):
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    workspace = tmp_path / 'task-output'
+    workspace.mkdir()
+    artifact = workspace / 'result.txt'
+    artifact.write_text('verified output')
+    outside = tmp_path / 'unrelated.txt'
+    outside.write_text('unrelated')
+    (workspace / 'escape').symlink_to(outside)
+    try:
+        result = await create(service, workspace_path=str(workspace))
+        assert service.export_path('a', artifact) == artifact
+        assert service.export_path('b', artifact) is None
+        assert service.export_path('a', outside) is None
+        assert service.export_path('a', workspace / 'escape') is None
+        host.chats[result['session_id']][OWNER] = 'b'
+        assert service.export_path('a', artifact) is None
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_assistant_send_file_delivers_owned_task_output(tmp_path, monkeypatch):
+    from cyrene.plugins.builtin.cyrene_delivery import send_file
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    workspace = tmp_path / 'task-output'
+    workspace.mkdir()
+    artifact = workspace / 'result.txt'
+    artifact.write_text('verified output')
+    events = []
+    def outside_workspace(_):
+        raise ValueError('outside assistant workspace')
+    monkeypatch.setattr(send_file, 'resolve_exportable_path', outside_workspace)
+    monkeypatch.setattr(send_file, 'register_generated_attachment', lambda path, **kw: {
+        'id': 'result.txt', 'path': path, 'name': 'result.txt', 'size': artifact.stat().st_size,
+        'content_type': 'text/plain', 'kind': 'file', 'url': '/api/workbench/exports/result.txt'})
+    try:
+        await create(service, workspace_path=str(workspace))
+        context = PluginContext(workspace=tmp_path / 'assistant', services={
+            'session_management': service, 'runtime_events': events.append},
+            data={'personal_assistant': True, 'session_id': 'a', 'round_id': 'r'})
+        result = await send_file.handler({'path': str(artifact)}, context)
+        assert 'sent' in result
+        assert any(event.get('message', {}).get('attachments') for event in events)
+        with pytest.raises(ValueError):
+            await send_file.handler({'path': str(tmp_path / 'unrelated.txt')}, context)
+    finally:
+        await service.stop()

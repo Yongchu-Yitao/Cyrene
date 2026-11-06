@@ -7,14 +7,12 @@ import { AssistantChat } from "./assistant-chat.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WbcPaneCardFrame } from "../chat/split-pane.jsx"
 
-async function assistantApi(url, method) {
-  var response = await fetch(url, { method: method || "GET", headers: { "Content-Type": "application/json" } });
+async function assistantApi(url) {
+  var response = await fetch(url, { method: "GET" });
   if (!response.ok) {
     var detail = await response.text();
     try { detail = JSON.parse(detail).detail || detail; } catch (_) {}
-    var error = new Error(detail || String(response.status));
-    error.status = response.status;
-    throw error;
+    throw new Error(detail || String(response.status));
   }
   return response.json();
 }
@@ -33,10 +31,7 @@ function PersonalAssistantPage({ context, active = true }) {
       return JSON.stringify(previous[id]) === JSON.stringify(files) ? previous : {...previous, [id]: files};
     });
   }; }, []);
-  // Migrated project assistants remain stored as history, but are not child tasks.
-  var tasks = snapshot ? snapshot.sessions.filter(function (task) {
-    return task.session_id !== snapshot.assistant_id && !String(task.session_id).startsWith("assistant_");
-  }) : [];
+  var tasks = snapshot ? snapshot.sessions : [];
   var fileOwners = assistantFileOwners(tasks, filesByTask);
   var search = query.trim().toLocaleLowerCase();
   var base = "/api/workbench/assistant";
@@ -53,13 +48,7 @@ function PersonalAssistantPage({ context, active = true }) {
     var timer;
     async function refresh() {
       try {
-        var next;
-        try { next = await assistantApi(base); }
-        catch (err) {
-          if (err.status !== 404) throw err;
-          await assistantApi(base, "POST");
-          next = await assistantApi(base);
-        }
+        var next = await assistantApi(base);
         if (!cancelled) { snapshotRef.current = next; setSnapshot(next); setError(""); }
       } catch (err) { if (!cancelled) setError(err.message); }
       if (!cancelled) timer = setTimeout(refresh, 3000);

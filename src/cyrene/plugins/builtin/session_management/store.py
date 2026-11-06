@@ -59,21 +59,6 @@ class Store:
         with self.connect() as db:
             db.execute("INSERT OR IGNORE INTO sessions(id,owner) VALUES (?,?)", (session_id, owner))
 
-    def unregister(self, session_id):
-        # Promotion removes only the task index, never conversation data or receipts.
-        with self.connect() as db:
-            db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-
-    def reassign_owner(self, previous, owner, owner_version):
-        with self.connect() as db:
-            db.execute("UPDATE sessions SET owner=? WHERE owner=?", (owner, previous))
-            db.execute("UPDATE messages SET owner=? WHERE owner=?", (owner, previous))
-            for row in db.execute("SELECT id,payload FROM notifications WHERE owner=?", (previous,)).fetchall():
-                payload = json.loads(row["payload"])
-                payload["owner_version"] = owner_version
-                db.execute("UPDATE notifications SET owner=?,payload=? WHERE id=?",
-                           (owner, json.dumps(payload, ensure_ascii=False), row["id"]))
-
     def sessions(self, owner):
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM sessions WHERE owner=? ORDER BY rowid", (owner,))]
@@ -82,7 +67,7 @@ class Store:
         with self.connect() as db:
             row = db.execute("SELECT * FROM sessions WHERE id=? AND owner=?", (target, owner)).fetchone()
         if not row:
-            raise ValueError("Session is not owned by this assistant")
+            raise ValueError("Task is not owned by this assistant")
         return dict(row)
 
     def pause(self, target):
@@ -96,7 +81,7 @@ class Store:
             if not existing:
                 count = db.execute("SELECT count(*) FROM messages WHERE target=? AND status='queued'", (target,)).fetchone()[0]
                 if count >= 100:
-                    raise ValueError("Session inbox is full")
+                    raise ValueError("Task inbox is full")
                 db.execute("INSERT INTO messages(id,owner,target,payload) VALUES (?,?,?,?)", (message_id, owner, target, json.dumps(payload, ensure_ascii=False)))
                 # Only a new explicit message resumes the queue, never replay.
                 db.execute("UPDATE sessions SET paused=0 WHERE id=?", (target,))

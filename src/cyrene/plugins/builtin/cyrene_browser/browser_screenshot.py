@@ -66,7 +66,7 @@ async def _tool_browser_screenshot(args: dict[str, Any], context: PluginContext)
     if result.get("ok"):
         path = str(result.get("path") or "")
         try:
-            validate_screenshot_file(path)
+            image_info = validate_screenshot_file(path)
         except Exception:
             logger.warning("Browser screenshot validation failed", exc_info=True)
             return plugin_localized(
@@ -74,10 +74,18 @@ async def _tool_browser_screenshot(args: dict[str, Any], context: PluginContext)
                 "Screenshot failed: the screenshot file is invalid.",
                 "截图失败：截图文件无效。",
             )
+        # Expose a managed artifact, not a cache path outside task workspaces.
+        # It can be inspected/delivered through the existing attachment tools.
+        from cyrene.platform.attachments import register_generated_attachment
+
+        attachment = register_generated_attachment(path)
+        path = str(attachment["path"])
         parts = [
             plugin_localized(context, "Screenshot taken.", "截图已完成。"),
             plugin_localized(context, "Path: {path}", "路径：{path}", path=path or "—"),
             plugin_localized(context, "Title: {title}", "标题：{title}", title=result.get("title", "—")),
+            plugin_localized(context, "PNG: {width}×{height} pixels, {size} bytes. Ready for send_file.",
+                             "PNG：{width}×{height} 像素，{size} 字节。可直接使用 send_file 交付。", **image_info),
         ]
         if read_only:
             parts.append(

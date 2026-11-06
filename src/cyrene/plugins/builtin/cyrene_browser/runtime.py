@@ -3221,6 +3221,7 @@ async def screenshot(
                 round_id="" if read_only else None,
             )
             if result.get("ok") is not True:
+                logger.warning("Electron screenshot rejected: code=%s error=%s", result.get("code"), result.get("error"))
                 return _sanitize_browser_result(
                     {**result, "ok": False},
                     "Electron desktop browser screenshot failed.",

@@ -6,19 +6,20 @@ import { WBC_ICONS, wbcSetResourceDrag, wbcFileDragPayload, wbcFormatTime } from
 // directories even though they share the global assistant's execution scope.
 export function assistantTaskFiles(chat) {
   var files = new Map();
-  function add(file, output) {
+  function add(file) {
     if (!file) return;
     var path = String(file.path || "").replace(/\\/g, "/");
     var key = path || file.url || file.id;
     if (!key) return;
     var url = file.url || (path ? "/api/workbench/chats/" + encodeURIComponent(chat.id) + "/files/" + path.split("/").map(encodeURIComponent).join("/") : "");
-    var previous = files.get(key);
-    files.set(key, { ...file, url: url, source: "assistant-task", output: output || previous && previous.output,
+    files.set(key, { ...file, url: url, source: "assistant-task", output: true,
       name: file.name || path.split("/").pop() || "文件" });
   }
-  (chat.files || []).forEach(function (file) { add(file, false); });
+  // Workspace files include scratch scripts and screenshots. Only attachments
+  // delivered in assistant replies belong in the assistant's output list.
   (chat.messages || []).forEach(function (message) {
-    (message.attachments || []).forEach(function (file) { add(file, message.role === "assistant"); });
+    if (message.role !== "assistant" || message.questionPrompt) return;
+    (message.attachments || []).forEach(add);
   });
   return Array.from(files.values());
 }

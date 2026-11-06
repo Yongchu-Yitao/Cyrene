@@ -102,3 +102,25 @@ test('browser click dispatch waits for movement and press before sending input',
   assert.match(dispatch, /TARGET_OBSCURED/);
   assert.match(dispatch, /TARGET_UNSTABLE/);
 });
+
+test('hidden-page target lookup settles without animation frames and revalidates the element', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  const method = source.slice(source.indexOf('  async _findTarget('), source.indexOf('\n  async _pointTarget(', source.indexOf('  async _findTarget(')));
+  const findTarget = vm.runInNewContext(`({${method}})._findTarget`, {
+    BROWSER_FIND_TARGET_SCRIPT: 'findTarget', BROWSER_FIND_NESTED_TARGET_SCRIPT: 'findTarget',
+  });
+  let lookups = 0;
+  const wc = {
+    mainFrame: {},
+    async executeJavaScript(script) {
+      return vm.runInNewContext(script, {
+        window: { requestAnimationFrame() {} }, setTimeout, clearTimeout,
+        findTarget() { lookups++; return { ok: true, x: lookups, y: 10, hitMatches: true }; },
+      });
+    },
+  };
+  const result = await findTarget.call({}, wc, { value: '#button' });
+  assert.equal(result.ok, true);
+  assert.equal(result.x, 2);
+  assert.equal(lookups, 2);
+});

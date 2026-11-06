@@ -13,7 +13,7 @@ def test_assistant_profile_preserves_ordinary_config_and_resolves_real_tools():
     assistant = personal_assistant_config(ordinary)
     assert ordinary.extra_direct_tool_names == ()
     assert assistant == personal_assistant_config(assistant)
-    assert set(assistant.extra_direct_tool_names) == {*TOOL_NAMES, "ask_user", "send_message", "WebSearch"}
+    assert set(assistant.extra_direct_tool_names) == {*TOOL_NAMES, "ask_user", "send_message", "send_file", "WebSearch"}
     registry = PluginRegistry()
     for pack in (management, content, delivery):
         registry.register_pack(pack, source="test")
@@ -78,10 +78,11 @@ def test_assistant_two_turns_parse_and_execute_session_creation(tmp_path, monkey
                 return {'content': '你好', 'tool_calls': []}
             if len(calls) == 2:
                 names = {t['function']['name'] for t in args['tools']}
-                assert 'session_create' in names
+                assert 'task_start' in names
+                assert not any(name.startswith('session_') for name in names)
                 return {'content': '', 'tool_calls': [{'id': 'create-once', 'function': {
-                    'name': 'session_create', 'arguments': json.dumps({
-                        'title': '验证会话', 'workspace_path': str(tmp_path),
+                    'name': 'task_start', 'arguments': json.dumps({
+                        'title': '验证任务', 'workspace_path': str(tmp_path), 'message': '检查目录并汇报结果',
                     })}}]}
             result = next(m for m in reversed(args['messages']) if m['role'] == 'tool')
             assert result['tool_call_id'] == 'create-once'

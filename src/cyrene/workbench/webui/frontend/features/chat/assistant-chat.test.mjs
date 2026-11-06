@@ -209,7 +209,7 @@ test('assistant page uses one global scope across project changes and forwards t
   let active = true;
   const permission = {session_id: 'managed_one', title: 'Task', pending_question: {id: 'q', kind: 'permission'}};
   const snapshot = {assistant_id: 'assistant_global', scope: {id: '__personal_assistant__'},
-    sessions: [permission, {session_id:'assistant_legacy', title:'Old main'}, {session_id:'assistant_global', title:'Main'}], blocks: [], chats: [{id: 'assistant_global'}]};
+    sessions: [permission], chats: [{id: 'assistant_global'}]};
   const context = {store: {activeProject: null}, assistant: {setSessionId: id => identities.push(id)},
     navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
   const service = {Model: {}, Page: 'page'};
@@ -252,7 +252,6 @@ test('assistant page uses one global scope across project changes and forwards t
   assert.equal(railText.includes('Cyrene · 个人助理'), false);
   assert.ok(rail.props.className.split(' ').includes('wbc-rail'));
   assert.equal(railText.includes('assistant-task-group'), false);
-  assert.equal(railText.includes('Old main'), false);
   assert.equal(railText.includes('assistant_global'), false);
   const toolbar = find(rail, 'rail-toolbar');
   toolbar.props.onQueryChange('not-found'); h.flush();
@@ -272,6 +271,29 @@ test('assistant page uses one global scope across project changes and forwards t
   h.unmount();
 });
 
+
+test('assistant API errors are reported without trying an old initialization endpoint', async () => {
+  const React = {createElement(type,props,...children) {return {type,props:{...props,children}};}};
+  const calls = [];
+  const context = {assistant: {setSessionId: () => {}},
+    navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
+  const h = harness('../shell/assistant-page.jsx', {React, workbenchServices: {chat: () => ({Model: {}})},
+    WbcRailToolbar: 'rail-toolbar', assistantFileOwners: () => ({}), WBC_ICONS: {}});
+  h.context.fetch = async (url, options) => {
+    calls.push([url, options.method]);
+    return {ok: false, status: 404, text: async () => '{"detail":"Assistant service unavailable"}'};
+  };
+  h.context.setTimeout = h.context.window.setTimeout;
+  h.context.clearTimeout = h.context.window.clearTimeout;
+  h.run((mod, hooks) => {
+    Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useMemo: hooks.useWbcMemo, useEffect: hooks.useWbcEffect});
+    return mod.PersonalAssistantPage({context});
+  });
+  await settle(); h.flush();
+  assert.deepEqual(calls, [['/api/workbench/assistant', 'GET']]);
+  assert.ok(JSON.stringify(h.value).includes('Assistant service unavailable'));
+  h.unmount();
+});
 
 test('assistant transcript paints the workspace cache before the background request completes', async () => {
   const React = {createElement(type,props,...children) {return {type,props:{...props,children}};}};

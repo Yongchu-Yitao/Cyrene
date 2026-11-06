@@ -34,3 +34,23 @@ def test_options_preserve_false_missing_truthiness_and_payload_identity():
     assert options.voice_command is False
     assert SendOptions.parse({}).requested_context_activations is None
     assert SendOptions.parse({"contextActivations": False}).requested_context_activations is False
+
+
+@pytest.mark.parametrize("agent,kind,expected", [
+    (True, "task_notification", "task_notification"),
+    (False, "task_notification", ""),
+    (True, "unknown", ""),
+])
+def test_notification_type_survives_send_and_replay(agent, kind, expected):
+    from cyrene.workbench.http.workbench.chat_routes.send_input import SendInput, append_user_message
+    from cyrene.workbench.chat.chat_application import public_message
+    origin = SendOrigin.parse({"agentOriginated": agent, "agentMessageKind": kind, "clientRequestId": "notice"})
+    assert origin.agent_message_kind == expected
+    chat = {"messages": []}
+    source = SendInput("status data", "status data", "", [], [])
+    turn = append_user_message(chat, chat["messages"], source, origin, "now", lambda _: "msg")
+    assert public_message(turn.user_entry).get("agentMessageKind", "") == expected
+    if agent:
+        replay = append_user_message(chat, chat["messages"], source, origin, "later", lambda _: "other")
+        assert replay.user_entry is turn.user_entry
+        assert len(chat["messages"]) == 1

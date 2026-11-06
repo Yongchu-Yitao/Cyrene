@@ -7,6 +7,7 @@ must replay original reasoning even for assistant turns without tool calls.
 
 from collections.abc import Mapping
 from copy import deepcopy
+import json
 
 
 def _reasoning(message):
@@ -30,18 +31,30 @@ def _signature(message):
     if not isinstance(content, str):
         return None
     calls = message.get("tool_calls") or []
-    ids = tuple(str(call.get("id") or "") for call in calls)
+    if calls:
+        signature = []
+        for call in calls:
+            source = call.get("function") or call
+            arguments = source.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    return None
+            if not call.get("id"):
+                return None
+            signature.append((call["id"], source.get("name"),
+                              json.dumps(arguments, sort_keys=True, ensure_ascii=False)))
+        return content, tuple(signature)
     # Empty or transformed assistant records cannot identify a stored response.
-    if not content or ids:
-        return None
-    return content
+    return (content, ()) if content else None
 
 
 def restore_reasoning(messages, context, model):
     """Recover only exact, unambiguous responses on this conversation's path.
 
-    Tool turns already carry reasoning_details through the core projection.
-    Plain assistant turns omit it, but retain the original text in the tree.
+    Nonempty tool reasoning travels through the core projection. Empty reasoning
+    and plain assistant reasoning must also be replayed from the exact record.
     Never fetch another branch or guess reasoning for summaries/foreign models.
     """
     result = deepcopy(messages)

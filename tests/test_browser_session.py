@@ -936,8 +936,8 @@ async def test_screenshot_path_closes_file_handle(monkeypatch):
     os.unlink(path)
 
 
-async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
-    """The tool handler keeps the temp PNG path so agents can inspect current-page screenshots."""
+async def test_tool_browser_screenshot_returns_managed_file(monkeypatch, tmp_path):
+    """Screenshots expose managed artifacts and dimensions, not inaccessible cache paths."""
     import os
     import tempfile
 
@@ -955,19 +955,23 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     from cyrene.plugins.builtin.cyrene_browser import runtime as _browser
     monkeypatch.setattr(_browser, "screenshot", fake_screenshot)
     monkeypatch.setattr(_attachments, "primary_model_supports_vision", lambda: False)
+    monkeypatch.setattr(_attachments, "EXPORTS_DIR", tmp_path / "exports")
 
     result = await _mod._tool_browser_screenshot(
         {"url": "https://example.com"}, PluginContext(data={"language": "en"})
     )
 
     assert "Screenshot taken" in result
-    assert tmp.name in result
+    assert str(tmp_path / "exports") in result
+    assert tmp.name not in result
+    assert "pixels" in result and "Ready for send_file" in result
+    assert next((tmp_path / "exports").iterdir()).read_bytes() == _VALID_PNG
     assert "Test Page" in result
     assert os.path.exists(tmp.name)
     os.unlink(tmp.name)
 
 
-async def test_tool_browser_screenshot_returns_primary_model_visual_observation(monkeypatch):
+async def test_tool_browser_screenshot_returns_primary_model_visual_observation(monkeypatch, tmp_path):
     """A verified primary model receives the screenshot and reports it to the agent."""
     import os
     import tempfile
@@ -992,13 +996,14 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
 
     monkeypatch.setattr(_browser, "screenshot", fake_screenshot)
     monkeypatch.setattr(_attachments, "primary_model_supports_vision", lambda: True)
+    monkeypatch.setattr(_attachments, "EXPORTS_DIR", tmp_path / "exports")
     monkeypatch.setattr(_attachments, "analyze_image_with_primary_model", fake_analyze)
 
     result = await _mod._tool_browser_screenshot(
         {}, PluginContext(data={"language": "en"})
     )
 
-    assert seen["path"] == tmp.name
+    assert str(tmp_path / "exports") in seen["path"]
     assert "untrusted data" in seen["prompt"]
     assert "Visual observation from the primary model" in result
     assert "green confirmation button" in result

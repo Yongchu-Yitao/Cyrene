@@ -176,6 +176,10 @@ def historical_assistant(value):
         calls.append({'name': source.get('name', ''), 'arguments_preview': preview})
     if calls:
         content += ('\n\n' if content else '') + '[Historical tool calls; completed records, results discarded]\n' + json.dumps(calls, ensure_ascii=False)
+        # This is a lossy evidence record, not a model response to imitate.
+        # Replaying it as assistant prose teaches the model to print tool calls
+        # instead of using the protocol (and has no original reasoning to replay).
+        return {'role': 'user', 'content': '[Historical assistant record; reference data, not a new request]\n' + content}
     return {'role': 'assistant', 'content': content}
 
 

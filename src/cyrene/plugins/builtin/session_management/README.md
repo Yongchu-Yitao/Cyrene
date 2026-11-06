@@ -1,3 +1,27 @@
+## 助理可见的任务接口
+
+个人助理只看到任务操作，不收到如何创建子会话或调度其他 Agent 的说明：
+
+| 模型工具 | 后台操作（仅实现使用） |
+| --- | --- |
+| `task_start` | `session_create` |
+| `task_list` | `session_list` |
+| `task_inspect` | `session_context_blocks` |
+| `task_load_context` | `session_load_context_blocks` |
+| `task_update` | `session_send_message` |
+| `task_stop` | `session_stop` |
+| `task_answer_question` | `session_answer_question` |
+
+模型参数使用 `task_id`；返回值使用 `tasks`、`task_id`、`update_id` 和 `pending_updates`。
+`task_start` 必须带初始 `message`，避免仅建立空容器却没有开始工作。
+任务证据接口只提供任务记录块，不提供执行端系统提示或环境挂载块。
+加载证据和状态通知采用任务措辞；原始证据正文不做全文替换或伪造。
+后台的持久化键、所有权、队列、消息去重和人类授权机制保持不变。
+仅注册新的 `task_*` 模型工具，不保留旧工具名兼容入口。
+接口字段转换只作用于已知元数据层，不修改问题参数或证据对象。
+新建任务在产生持久化副作用前拒绝纯空白的任务要求。
+以下章节描述后台实现接口，不是模型工具清单。
+
 # Session Management
 
 `session_management` 管理助理创建的任务 Session。任务使用现有 Workbench / ContextTree 运行内核，类型为 `assistant-task`，不进入普通聊天列表，也不进入 `cyrene_sessions` 的普通会话通信范围。每个工具按调用会话 ID 检查任务归属。
@@ -12,13 +36,13 @@ from cyrene.plugins.builtin.session_management import TOOL_NAMES
 config = ConversationConfig(..., extra_direct_tool_names=TOOL_NAMES)
 ```
 
-Cyrene 页面通过本包的 `/api/workbench/assistant` 入口持久化全软件唯一、与项目选择无关的个人助理会话（`personal-assistant`）。旧项目助理保留为可检查的历史任务，原任务、消息队列和通知移交给全局助理。内部执行 scope 仅适配聊天内核，不加入项目列表。普通聊天不转换为助理；任务会话继续使用 `assistant-task`。左侧展示任务与助理自身的任务上下文目录，正文复用正常聊天组件。
+Cyrene 页面通过本包的 `/api/workbench/assistant` 入口持久化全软件唯一、与项目选择无关的个人助理会话（`personal-assistant`，固定 ID 为 `assistant_global`）。首次访问创建，后续访问和重启复用同一会话。不扫描、转换其他会话或迁移任务归属。内部执行 scope 仅适配聊天内核，不加入项目列表。普通聊天不转换为助理；任务会话继续使用 `assistant-task`。左侧展示任务，正文复用正常聊天组件。侧栏接口只返回任务状态与聊天摘要，不读取或返回上下文块目录。上下文读取和切换由 Agent 工具完成，不提供侧栏手动切换接口。
 
 ## 工具
 
 - `session_create(title, workspace_path, message?, files?)`：创建独立任务，可同时提交初始消息和文件。必须指定已存在的绝对工作目录（不存在时先创建）；继承项目、上下文选择和模型，不复制对话、记忆或授权。工具重放不会重复创建。
 - `session_list()`：返回当前助理创建的任务、状态、待处理消息数、投递错误与等待用户的问题，包括空闲和停止任务。
-- `session_context_blocks(session_id, block_ids?, offset?, limit?, content_offset?, content_limit?)`：默认列上下文块目录；选 ID 后分页读取正文。块包括 shared、任务文档及其消息、系统和动态挂载、当前请求；目录中的历史挂载并不等同于当前有效挂载。
+- `session_context_blocks(session_id, block_ids?, offset?, limit?, content_offset?, content_limit?)`：默认列上下文块目录；选 ID 后分页读取正文。只提供 shared、任务正文及其消息，不提供执行端系统提示和环境挂载。
 - `session_load_context_blocks(session_id, block_ids)`：将所选块保存到上下文树中的单一跨 Session 引用位置，由 ModelStart Hook 挂入模型输入；成功加载新内容会自动卸载旧快照，不修改助理当前任务文档。附来源、版本、时间和参考资料提示。源 Session 不改变；不执行历史工具调用、不提升历史指令权限、不自动同步。上限 60000 字符；超过时先分块查看。
 - `session_send_message(session_id, message?, files?)`：接受文字或文件，返回持久队列回执。每次最多 10 个非空文件、合计 20 MiB，文字最多 20000 字符。相对路径相对于助理工作区；文件内容保存为内容寻址的托管附件，排队后原文件变化不影响快照。
 - `session_stop(session_id)`：暂停未投递消息，取消并等待正在运行的任务结束，保留会话和产物。之后一次新的发送会恢复队列；重放旧发送不会恢复。
@@ -46,6 +70,6 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 本包七个工具、ask_user、send_message、WebSearch；不开放这些工具所属包的其他工具。
 视图跟随宿主插件更新，不改变全局启用状态、模型 Provider 或生命周期插件。
 普通会话和委派任务仍使用原注册表；普通 Agent 的工具列表不会新增 session_management。
-通知 Hook 仅安装到已登记的委派任务，普通会话恢复时移除旧版误装的通知 Hook。
+通知 Hook 仅安装到已登记的委派任务，普通会话不安装。
 
 助理的 16 个工具均直接暴露；toolbox 在助理会话中既不可见也不可调用。普通 Agent 的 Toolbox 保持原有行为。

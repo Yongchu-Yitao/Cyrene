@@ -23,6 +23,7 @@ from cyrene.core.observability import log_operation
 from cyrene.core.plugin import Plugin, PluginContext
 from cyrene.model.status import publish_context_model_status
 from cyrene.plugins.builtin.cyrene_model.deepseek_requests import adapt_provider_payload, restore_provider_reasoning
+from cyrene.plugins.builtin.cyrene_model.response_guard import ResponseStreamGuard, validate_response_text
 from cyrene.plugins.tool_call_parsers import GENERIC_TOOL_CALL_PARSER
 
 
@@ -415,6 +416,7 @@ def _normalized_result(
     endpoint: str = "",
 ) -> dict[str, Any]:
     usage = dict(_mapping(message.get("usage")))
+    validate_response_text(message.get("content"))
     reasoning = _reasoning_text(message)
     try:
         observation_node_id = _mount_observation(
@@ -825,6 +827,8 @@ async def complete_model(
     stream_callback = context.services.get("model_stream")
     if not callable(stream_callback):
         stream_callback = None
+    else:
+        stream_callback = ResponseStreamGuard(stream_callback)
 
     if provider.adapter == "codex_oauth":
         from cyrene.model.codex_provider import get_codex_provider
@@ -933,6 +937,10 @@ async def complete_model(
                     has_fallback=endpoint_index + 1 < len(ordered_endpoints),
                     retry_state=retry_state,
                 )
+            except ModelCallError:
+                # Preserve typed validation failures for the session's bounded
+                # retry policy instead of reclassifying their public prose.
+                raise
             except Exception as exc:
                 public_failures.append(classify_model_error(exc))
                 diagnostics = getattr(exc, "diagnostics", None)

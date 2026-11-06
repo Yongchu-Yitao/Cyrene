@@ -497,7 +497,7 @@ function wbcProjectTranscript(messages, runtime) {
     return message.status === "running" && (message.activityCard || String(message.content || "").trim().length > 0);
   });
   if (patch.status === "running" && !busy && !runtime.pendingQuestion && !runtime.reconnecting) {
-    merged.push({ id: patch.runId + ":continuation", role: "assistant", runtimeContinuation: true });
+    merged.push({ id: patch.runId + ":continuation", runId: patch.runId, role: "assistant", runtimeContinuation: true });
   }
   return merged;
 }

@@ -157,3 +157,19 @@ async def test_real_plugin_sends_compatible_permission_and_followup_requests():
     assert requests[1]["messages"][1]["reasoning_content"] == "Exact original"
     assert requests[1]["reasoning_effort"] == "high"
     assert "thinking" not in requests[1]
+
+
+def test_empty_tool_reasoning_does_not_silently_disable_thinking():
+    nodes = [SimpleNamespace(value={
+        'role': 'assistant', 'content': '', 'model': 'deepseek-flash',
+        'reasoning': '', 'reasoning_details': [],
+        'tool_calls': [{'id': 'c1', 'name': 'task_update', 'arguments': {'task_id': 't1'}}],
+    })]
+    messages = project_model_messages(nodes)
+    context = PluginContext(tree=SimpleNamespace(get_path=lambda *_: nodes), tree_id='a', node_id='leaf')
+    restored = restore_reasoning(messages, context, 'deepseek-flash')
+    assert restored[0]['reasoning_content'] == ''
+    assert 'thinking' not in payload(restored)
+    # A different call must never borrow another call's reasoning.
+    messages[0]['tool_calls'][0]['function']['arguments'] = '{"task_id":"t2"}'
+    assert 'reasoning_content' not in restore_reasoning(messages, context, 'deepseek-flash')[0]

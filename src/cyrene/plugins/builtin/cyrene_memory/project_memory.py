@@ -76,30 +76,20 @@ _MAIN_AGENT_MEMORY_TRIGGER_PROMPT_ZH = (
 )
 
 ASSISTANT_MEMORY_TRIGGER_PROMPT = (
-    "When the user explicitly asks you to remember something, or supported stable "
-    "preferences, long-term facts or corrections emerge, create a child task "
-    "conversation with session_create and delegate the memory work there. Supply "
-    "a descriptive title, an existing absolute workspace_path and an initial message "
-    "containing the evidence, its source, the intended memory scope and acceptance "
-    "criteria. The personal assistant is independent of projects; a working directory "
-    "does not make user memory project memory. Ask the child conversation to inspect "
-    "existing memory, reconcile duplicates or corrections, and persist the change "
-    "using its available memory tools. If that scope is unsupported, it must report "
-    "the limitation instead of saving to an unrelated project. Complete the memory "
-    "work in that child conversation and follow it through to a verified result; "
-    "submission is not completion. Do not store temporary task progress as long-term "
-    "memory or claim a memory was saved without evidence."
+    "When the user asks you to remember something, or supported stable preferences, "
+    "long-term facts or corrections emerge, use task_start to update memory. Include "
+    "the evidence, source and intended scope. Reconcile existing memory before "
+    "persisting changes. The personal assistant is independent of projects; do not "
+    "save user memory to an unrelated project or treat temporary task progress as "
+    "long-term memory. If the intended scope is unsupported, report the limitation. "
+    "Tell the user what you remembered or corrected only after verifying persistence."
 )
 
 _ASSISTANT_MEMORY_TRIGGER_PROMPT_ZH = (
-    "当用户明确要求记住信息，或出现有充分依据的稳定偏好、长期事实及纠正时，"
-    "使用 session_create 新建一个子任务对话，将记忆整理工作委派给它。"
-    "提供明确的标题、已存在目录的绝对路径 workspace_path，以及包含证据、来源、"
-    "目标记忆范围和验收要求的初始 message。助理独立于项目；工作目录不代表"
-    "用户记忆属于该项目。要求子对话检查已有记忆、合并重复项或纠正旧信息，"
-    "并使用它可用的记忆工具完成持久化；若不支持目标记忆范围，应报告限制，"
-    "不要写入无关项目。在该子对话中完成这项工作，并跟进、核实实际结果；"
-    "提交任务不等于完成。不要将临时任务进度存为长期记忆，未取得证据前不要声称已记住。"
+    "当用户要求记住信息，或出现有充分依据的稳定偏好、长期事实及纠正时，"
+    "使用 task_start 更新记忆，附上证据、来源和目标范围。先核对已有记忆，再持久化变更。"
+    "助理独立于项目，不要将用户记忆写入无关项目，也不要把临时任务进度当作长期记忆。"
+    "若不支持目标范围，应报告限制。核实持久化成功后，再告诉用户你记住或纠正了什么。"
 )
 
 

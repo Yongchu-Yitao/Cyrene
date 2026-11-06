@@ -472,12 +472,19 @@ def _activity_tool_call_key(message: Mapping[str, Any]) -> tuple[str, ...]:
     trace = message.get("trace")
     if not isinstance(trace, list):
         return ()
-    return tuple(sorted({
-        str(entry.get("toolCallId") or entry.get("tool_call_id") or "")
-        for entry in trace
-        if isinstance(entry, Mapping)
-        and str(entry.get("toolCallId") or entry.get("tool_call_id") or "")
-    }))
+    identities: set[str] = set()
+    for entry in trace:
+        if not isinstance(entry, Mapping):
+            continue
+        identity = str(entry.get("toolCallId") or entry.get("tool_call_id") or "")
+        if not identity:
+            continue
+        if entry.get("kind") == "permission":
+            # ContextTree stores the review id; RunTimeline namespaces it.
+            # Both identify the same review, including in older saved cards.
+            identity = "permission:" + identity.removeprefix("permission:")
+        identities.add(identity)
+    return tuple(sorted(identities))
 
 
 def _canonical_timeline_rank(message: Mapping[str, Any]) -> int:

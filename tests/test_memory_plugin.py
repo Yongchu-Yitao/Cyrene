@@ -286,17 +286,16 @@ def test_assistant_memory_delegates_without_requiring_project(tmp_path, language
     )
 
     context = service.context_block()
-    assert "session_create" in context
-    assert "workspace_path" in context
+    assert "task_start" in context
     assert "toolbox" not in context
     assert "trigger_project_memory_learning" not in context
     assert ("Stored evidence" in context) is with_project
 
     service.data["memory_trigger_enabled"] = False
-    assert "session_create" not in service.context_block()
+    assert "task_start" not in service.context_block()
     service.data["memory_trigger_enabled"] = True
     service.agent_id = "child"
-    assert "session_create" not in service.context_block()
+    assert "task_start" not in service.context_block()
 
 
 def test_memory_prompt_role_change_invalidates_session_start_cache(tmp_path):
@@ -316,7 +315,7 @@ def test_memory_prompt_role_change_invalidates_session_start_cache(tmp_path):
     service.data["personal_assistant"] = True
     assistant = service.session_start_cache_fingerprint(None)
     assert assistant != ordinary
-    assert "session_create" in service.context_block()
+    assert "task_start" in service.context_block()
     assert "toolbox" not in service.context_block()
 
 

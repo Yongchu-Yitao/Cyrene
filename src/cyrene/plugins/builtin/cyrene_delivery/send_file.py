@@ -35,7 +35,15 @@ async def _tool_send_file(args: dict[str, Any], context: PluginContext) -> str:
     if str(run_context_value(context, "agent_id", "main")) != "main":
         return plugin_localized(context, "Only the main Agent can send a file to the Web UI.", "只有主 Agent 可以向 Web UI 发送文件。")
 
-    path = resolve_exportable_path(path_arg)
+    try:
+        path = resolve_exportable_path(path_arg)
+    except ValueError:
+        # The global assistant's workspace is independent of task workspaces.
+        # Keep the existing boundary, with access only to its owned tasks.
+        tasks = context.services.get("session_management") if context.data.get("personal_assistant") else None
+        path = tasks.export_path(str(run_context_value(context, "session_id") or ""), path_arg) if tasks else None
+        if path is None:
+            raise
     if not path.exists() or not path.is_file():
         return plugin_localized(context, "Error: file not found: {path}", "错误：未找到文件：{path}", path=path)
 

@@ -838,6 +838,7 @@ class _SendOperation:
                 "client_request_id": self.origin.client_request_id,
                 "agent_originated": self.origin.agent_originated,
                 "origin_session_id": self.origin.origin_session_id,
+                "agent_message_kind": self.origin.agent_message_kind,
                 "public_user_message": self.turn.input.public_message,
                 "public_attachments": [dict(item) for item in self.turn.input.public_attachments],
                 "command": self.turn.input.command,
@@ -1006,7 +1007,8 @@ class _SendOperation:
             completed_turn_count=int(chat.get("completedTurnCount") or 0),
             metadata={"command": self.turn.input.command,
                       "agent_originated": self.origin.agent_originated,
-                      "origin_session_id": self.origin.origin_session_id},
+                      "origin_session_id": self.origin.origin_session_id,
+                      "agent_message_kind": self.origin.agent_message_kind},
         ).as_event()
 
     def _builtin_result_payload(

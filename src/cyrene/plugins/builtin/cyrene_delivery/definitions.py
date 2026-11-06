@@ -30,8 +30,8 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
  {'type': 'function',
   'function': {'name': 'send_message',
                'description': 'Main agent only. Send a brief user-visible mid-run reply in the '
-                              'current chat. For tool-using work this MUST be the first call in '
-                              'the first execution batch, immediately followed by the first useful '
+                              'current chat. After any required context switching, use this before '
+                              'execution, immediately followed by the first useful '
                               'tool call in the same batch whenever safe. Never use this for '
                               'subagent coordination or subagent final delivery.',
                'parameters': {'type': 'object',

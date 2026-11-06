@@ -83,6 +83,7 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-session-export", tab: "data", labelKey: "settings.sessionExport", hintKey: "settings.sessionExportHint", keywords: ["导出", "export", "会话"] },
     { id: "setting-clear-session", tab: "data", labelKey: "settings.clearSession", hintKey: "settings.clearSessionHint", keywords: ["清空", "clear", "清理"] },
     { id: "setting-redact-secrets", tab: "data", labelKey: "settings.redactSecrets", hintKey: "settings.redactSecretsHint", keywords: ["密钥", "secret", "敏感", "redact"] },
+    { id: "setting-reset-assistant", tab: "data", labelKey: "settings.resetAssistant", hintKey: "settings.resetAssistantHint", keywords: ["个人助理", "重置", "assistant", "reset"] },
     { id: "setting-reset-app-data", tab: "data", labelKey: "settings.resetAppData", hintKey: "settings.resetAppDataHint", keywords: ["重置", "reset", "恢复出厂"] },
     // ── Budget ──
     { id: "setting-budget", tab: "budget", labelKey: "settings.budgetConfig", keywords: ["预算", "budget", "限额", "limit"] },

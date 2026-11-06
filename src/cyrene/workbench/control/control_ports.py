@@ -194,7 +194,7 @@ class WorkbenchChatApplicationPort:
 
     async def dispatch_agent_message(
         self, chat_id: str, message: str, *, origin_session_id: str = "",
-        client_request_id: str = "", expected_version: str | None = None,
+        client_request_id: str = "", agent_message_kind: str = "", expected_version: str | None = None,
     ) -> dict[str, Any]:
         from cyrene.workbench.sessions.admission import session_admission
         import json
@@ -212,6 +212,7 @@ class WorkbenchChatApplicationPort:
                 return await self._dispatch_agent_message(
                     chat_id, message, origin_session_id=origin_session_id,
                     client_request_id=client_request_id,
+                    agent_message_kind=agent_message_kind,
                 )
 
         # Cancellation must not release exclusion while an off-thread write is
@@ -232,6 +233,7 @@ class WorkbenchChatApplicationPort:
         *,
         origin_session_id: str = "",
         client_request_id: str = "",
+        agent_message_kind: str = "",
     ) -> dict[str, Any]:
         """Send one cross-session Agent message through the normal Chat kernel."""
 
@@ -252,6 +254,7 @@ class WorkbenchChatApplicationPort:
                 client_request_id=request_id,
                 agent_originated=True,
                 origin_session_id=origin,
+                agent_message_kind=agent_message_kind,
             )
             if result.status_code >= 400:
                 raise ControlServiceError(
@@ -284,6 +287,7 @@ class WorkbenchChatApplicationPort:
                     "conversationSource": "agent_session",
                     "agentOriginated": True,
                     "sourceSessionId": origin,
+                    "agentMessageKind": agent_message_kind,
                     "stream": True,
                 },
             )

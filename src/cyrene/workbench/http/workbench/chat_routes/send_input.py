@@ -113,6 +113,7 @@ def append_user_message(chat, messages, source: SendInput, origin, now, short_id
         if existing is not None:
             if (not existing.get("agentOriginated")
                     or existing.get("originSessionId", "") != origin.origin_session_id
+                    or existing.get("agentMessageKind", "") != origin.agent_message_kind
                     or existing.get("content") != source.public_message):
                 raise ValueError("Agent message request ID conflicts with an existing turn")
             return PreparedUserTurn(source, existing, now)
@@ -129,6 +130,8 @@ def append_user_message(chat, messages, source: SendInput, origin, now, short_id
         user_entry["clientRequestId"] = origin.client_request_id
     if origin.agent_originated:
         user_entry["agentOriginated"] = True
+        if origin.agent_message_kind:
+            user_entry["agentMessageKind"] = origin.agent_message_kind
     if origin.origin_session_id:
         user_entry["originSessionId"] = origin.origin_session_id
     if source.public_attachments:

@@ -266,14 +266,16 @@ async def test_real_dispatch_port_idle_and_running_provenance(tmp_path):
 
     port.send = send
     port._guidance = SimpleNamespace(submit=guide)
-    assert (await port.dispatch_agent_message("b", "peer", origin_session_id="a", client_request_id="message"))["status"] == "started"
+    assert (await port.dispatch_agent_message("b", "peer", origin_session_id="a", client_request_id="message", agent_message_kind="task_notification"))["status"] == "started"
     assert calls[-1]["agentOriginated"] is True
     assert calls[-1]["sourceSessionId"] == "a"
+    assert calls[-1]["agentMessageKind"] == "task_notification"
     admitted = False
     port.run_manager.get = lambda _: SimpleNamespace(events=[])
-    assert (await port.dispatch_agent_message("b", "peer", origin_session_id="a", client_request_id="message"))["status"] == "guided"
+    assert (await port.dispatch_agent_message("b", "peer", origin_session_id="a", client_request_id="message", agent_message_kind="task_notification"))["status"] == "guided"
     assert calls[-1]["agent_originated"] is True
     assert calls[-1]["client_request_id"] == "message"
+    assert calls[-1]["agent_message_kind"] == "task_notification"
 
 
 def test_plugin_registry_enforces_parameterless_list_and_main_only():
@@ -414,9 +416,11 @@ async def test_public_persist_without_runtime_admission_is_replayed_once(tmp_pat
     row = service.store.get(first["message_id"])
     content = service.render(row)
     source = SendInput(content, content, "", [], [])
-    origin = SimpleNamespace(agent_originated=True, client_request_id=row["id"], origin_session_id="a")
+    from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin
+    origin = SendOrigin.parse({"agentOriginated": True, "clientRequestId": row["id"], "sourceSessionId": "a"})
     op = object.__new__(_SendOperation)
     op.chat_id = "b"
+    op.origin = origin
     op.chat = port.service.repository.get("b")
     op.base_chat = copy.deepcopy(op.chat)
     op.is_side_agent = False
@@ -487,10 +491,11 @@ async def test_recovered_inbox_preserves_and_repairs_peer_provenance(tmp_path):
     inbox = WorkbenchAgentInbox("b", port.service.repository._database(), run_id="run-b")
     try:
         await inbox.put_guidance("peer", client_request_id="peer-id", public_message_id="public-id",
-                                 agent_originated=True, origin_session_id="a")
+                                 agent_originated=True, origin_session_id="a", agent_message_kind="task_notification")
         port.run_manager._reconcile_inbox_guidance_messages()
         entry = port.service.repository.get("b")["messages"][0]
         assert entry["agentOriginated"] is True and entry["originSessionId"] == "a"
+        assert entry["agentMessageKind"] == "task_notification"
         def strip(chat):
             chat["messages"][0].pop("agentOriginated")
             chat["messages"][0].pop("originSessionId")
@@ -650,13 +655,14 @@ async def test_real_failed_checkpoint_wakes_new_agent_run(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_replay_as_guidance_reuses_previously_persisted_turn(tmp_path):
+@pytest.mark.parametrize("kind", ["", "task_notification"])
+async def test_replay_as_guidance_reuses_previously_persisted_turn(tmp_path, kind):
     from cyrene.workbench.chat.chat_guidance_service import ChatGuidanceApplicationService, ChatGuidanceDependencies
     port = durable_port(tmp_path)
     repository = port.service.repository
     repository.mutate_one("b", lambda chat: chat["messages"].append({
         "id": "original-id", "role": "user", "content": "peer", "clientRequestId": "req",
-        "createdAt": "2026-01-01", "agentOriginated": True, "originSessionId": "a",
+        "createdAt": "2026-01-01", "agentOriginated": True, "originSessionId": "a", "agentMessageKind": kind,
     }))
     ready = asyncio.Event()
     ready.set()
@@ -671,11 +677,13 @@ async def test_replay_as_guidance_reuses_previously_persisted_turn(tmp_path):
     ))
     try:
         result = await guidance.submit(chat_id="b", message="peer", client_request_id="req",
-                                       agent_originated=True, origin_session_id="a")
+                                       agent_originated=True, origin_session_id="a", agent_message_kind=kind)
         assert result.status_code == 200
         messages = repository.get("b")["messages"]
         assert len(messages) == 1
         assert messages[0]["id"] == "original-id" and messages[0]["guidance"]
+        assert messages[0].get("agentMessageKind", "") == kind
+        assert result.payload["userMessage"].get("agentMessageKind", "") == kind
         assert await port.agent_message_admitted("b", "req")
     finally:
         await inbox.close(termination_reason="completed")

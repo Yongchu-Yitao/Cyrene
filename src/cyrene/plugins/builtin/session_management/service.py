@@ -30,89 +30,19 @@ class SessionManagementService:
         self.worker = None
 
     def initialize_assistant(self):
-        """Bind the singleton entry to an existing conversation before creating one.
-
-        Keep the original session id: its transcript, context tree, receipts and
-        attachment URLs are all keyed by that id. Never substitute an empty chat.
-        """
+        """Create the one application-wide assistant if it does not exist."""
         from cyrene.workbench.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
-        from cyrene.workbench.persistence.store import read_document, write_document
 
-        repository = self.host.port().service.repository
-        key = "personal_assistant_identity"
-        identity = read_document(repository._database(), key, dict)
-        target = str(identity.get("session_id") or "")
-        if not target or not repository.get_metadata(target):
-            candidates = []
-            for summary in repository.read_summaries()["chats"]:
-                metadata = repository.get_metadata(summary["id"]) or {}
-                if metadata.get("kind") == "personal-assistant" or metadata.get("legacyPersonalAssistant"):
-                    candidates.append(metadata)
-            # Repair the former migration which created assistant_global and
-            # archived the original main conversation. Existing identity wins
-            # on subsequent starts, regardless of new/updated task histories.
-            originals = [item for item in candidates if item["id"] != ASSISTANT_ID]
-            source = min(originals or candidates, key=lambda item: (item.get("createdAt", ""), item["id"]), default=None)
-            target = source["id"] if source else ASSISTANT_ID
-        if not repository.get_metadata(target):
-            chat = self.host.port().service.create_chat(
-                ASSISTANT_SCOPE_ID, "Cyrene", soul_active=True,
-                workspace_active=True, project_memory_active=False,
-            )
-            chat.update(id=target, kind="personal-assistant")
-            repository.insert(chat)
-        self.migrate_legacy_assistants(target)
-
-        def promote(value):
-            previous_project = value.get("projectId", "")
-            if previous_project != ASSISTANT_SCOPE_ID:
-                from cyrene.workbench.projects.project_repository import find_workbench_project_lightweight
-                project = find_workbench_project_lightweight(previous_project) or {}
-                if not value.get("workspaceOverride") and project.get("workspacePath"):
-                    value["workspaceOverride"] = project["workspacePath"]
-                value["originalProjectId"] = previous_project
-            value.update(kind="personal-assistant", projectId=ASSISTANT_SCOPE_ID)
-            value.pop(OWNER, None)
-            value.pop("legacyPersonalAssistant", None)
-
-        repository.mutate_metadata(target, promote)
-        self.store.unregister(target)
-        write_document(repository._database(), key, {"session_id": target}, dict)
-        return self.host.chat(target)
-
-    def migrate_legacy_assistants(self, owner):
-        """Keep old conversations as inspectable tasks; retry safely after a crash."""
-        from cyrene.workbench.assistant import ASSISTANT_SCOPE_ID
-        from cyrene.workbench.projects.project_repository import find_workbench_project_lightweight
-
-        repository = self.host.port().service.repository
-
-        def adopt(value):
-            previous_project = value.get("projectId", "")
-            if previous_project != ASSISTANT_SCOPE_ID:
-                project = find_workbench_project_lightweight(previous_project) or {}
-                if not value.get("workspaceOverride") and project.get("workspacePath"):
-                    value["workspaceOverride"] = project["workspacePath"]
-                value["originalProjectId"] = previous_project
-                value["projectId"] = ASSISTANT_SCOPE_ID
-            value[OWNER] = owner
-
-        for summary in repository.read_summaries()["chats"]:
-            previous = summary["id"]
-            chat = repository.get_metadata(previous) or {}
-            if previous == owner or not (chat.get("kind") == "personal-assistant"
-                                        or chat.get("legacyPersonalAssistant")):
-                continue
-            # Metadata first, durable ownership last; repeated migration repairs either side.
-            for task in self.store.sessions(previous):
-                if task["id"] != owner:
-                    repository.mutate_metadata(task["id"], adopt)
-            self.store.reassign_owner(previous, owner, self.host.version(self.host.chat(owner)))
-            def archive(value):
-                adopt(value)
-                value.update(kind=KIND, legacyPersonalAssistant=True)
-            repository.mutate_metadata(previous, archive)
-            self.store.register(previous, owner)
+        chat = self.host.chat(ASSISTANT_ID)
+        if chat:
+            return chat
+        port = self.host.port()
+        chat = port.service.create_chat(
+            ASSISTANT_SCOPE_ID, "Cyrene", soul_active=True,
+            workspace_active=True, project_memory_active=False,
+        )
+        chat.update(id=ASSISTANT_ID, kind="personal-assistant")
+        return port.service.repository.insert(chat)
 
     async def start(self):
         self.loop = asyncio.get_running_loop()
@@ -128,7 +58,7 @@ class SessionManagementService:
 
     async def _on_owner(self, operation):
         if self.loop is None or self.loop.is_closed():
-            raise RuntimeError("session_management is not running")
+            raise RuntimeError("Task execution is not running")
         if asyncio.get_running_loop() is self.loop:
             return await operation()
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(operation(), self.loop))
@@ -137,9 +67,9 @@ class SessionManagementService:
         record = self.store.owned(owner, target)
         chat = self.host.chat(target)
         if not chat or chat.get("kind") != KIND or chat.get(OWNER) != owner:
-            raise ValueError("Managed session was deleted or its ownership changed")
+            raise ValueError("Task was deleted or its ownership changed")
         if not self.host.chat(owner):
-            raise ValueError("Assistant session no longer exists")
+            raise ValueError("Task owner no longer exists")
         return record, chat
 
     def _files(self, paths, workspace):
@@ -161,6 +91,19 @@ class SessionManagementService:
                 raise ValueError("Attachments must be nonempty and total at most 20 MiB")
             result.append(self.host.attachment(content, path.name))
         return result
+
+    def export_path(self, owner, path):
+        """Allow the assistant to deliver files from its own task workspaces."""
+        resolved = Path(path).expanduser().resolve()
+        for record in self.store.sessions(owner):
+            try:
+                _, chat = self._owned(owner, record["id"])
+            except ValueError:
+                continue
+            workspace = chat.get("workspaceOverride")
+            if workspace and resolved.is_relative_to(Path(workspace).expanduser().resolve()):
+                return resolved
+        return None
 
     async def command(self, owner, operation, args, effect, workspace):
         async def perform():
@@ -261,7 +204,8 @@ class SessionManagementService:
                 _, chat = self._owned(owner, target)
                 snapshot = await asyncio.to_thread(self.host.blocks, target)
                 ids = args.get("block_ids", [])
-                blocks = snapshot["blocks"]
+                # Only task evidence is exposed, never executor system prompts.
+                blocks = [block for block in snapshot["blocks"] if block.get("kind") == "task"]
                 if ids:
                     by_id = {b["block_id"]: b for b in blocks}
                     if any(i not in by_id for i in ids):

@@ -221,6 +221,30 @@ function DataPanel(p) {
     });
   }
 
+  async function resetAssistant() {
+    if (resetting) return;
+    setResetting(true);
+    try {
+      var feedback = workbenchServices.feedback();
+      var title = t("settings.resetAssistant");
+      var body = t("settings.resetAssistantConfirm");
+      var confirmed = feedback && typeof feedback.confirmModal === "function"
+        ? await feedback.confirmModal({ title: title, body: body, confirmLabel: title, danger: true })
+        : window.confirm([title, "", body].join("\n"));
+      if (!confirmed) return;
+      var assistant = await settingsFetch("/api/workbench/assistant").then(readSettingsResponse);
+      if (!assistant.assistant_id) throw new Error(t("settings.resetAssistantFailed"));
+      await settingsFetch("/api/workbench/sessions/" + encodeURIComponent(assistant.assistant_id) + "/clear", {
+        method: "POST",
+      }).then(readSettingsResponse);
+      window.location.reload();
+    } catch (error) {
+      showSettingsToast(t("settings.resetAssistantFailed") + ": " + (error.message || String(error)), "error");
+    } finally {
+      setResetting(false);
+    }
+  }
+
   function backupDefaultName() {
     var now = new Date();
     function pad(value) { return String(value).padStart(2, "0"); }
@@ -328,6 +352,10 @@ function DataPanel(p) {
     FieldRow(t("settings.clearSession"), t("settings.clearSessionHint"),
       React.createElement("button", { className: "wb-btn muted", onClick: clearSession, disabled: !exportSessions.length }, t("settings.clearSessionBtn")),
       undefined, "setting-clear-session",
+    ),
+    FieldRow(t("settings.resetAssistant"), t("settings.resetAssistantHint"),
+      React.createElement("button", { className: "wb-btn danger", "data-cyrene-risk": "R3", onClick: resetAssistant, disabled: resetting }, t("settings.resetAssistant")),
+      undefined, "setting-reset-assistant",
     ),
     React.createElement("div", { className: "wb-field wb-field-stack wb-field-danger", id: "setting-reset-app-data" },
       React.createElement("div", { className: "wb-label" },

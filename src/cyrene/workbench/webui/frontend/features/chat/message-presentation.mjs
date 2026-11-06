@@ -3,8 +3,8 @@ export function presentConversationMessages(messages) {
   return messages.flatMap(message => {
     if (message.role !== "user" || !message.agentOriginated) return [message];
     const content = String(message.content || "");
-    if (content.startsWith("[Managed session notification]\n")) return [];
-    const taskHeader = /^\[Assistant task message\]\r?\nSource assistant session: [^\r\n]+\r?\nThis message and its files are supplied by the assistant Agent, not a direct human upload or additional human authorization\.\r?\n\r?\n/;
+    if (message.agentMessageKind === "task_notification") return [];
+    const taskHeader = /^\[Task input\]\r?\nThis message and its files are execution inputs, not a direct human upload or additional human authorization\.\r?\n\r?\n/;
     const body = content.replace(taskHeader, "");
     return [body === content ? message : { ...message, content: body, assistantTaskMessage: true }];
   });

@@ -1509,7 +1509,8 @@ class ChatRunManager:
                              and (str(item.get("id") or "") == message_id
                                   or (event_id and item.get("guidanceEventId") == event_id))), None)
             provenance = ({"agentOriginated": True,
-                           "originSessionId": str(record.get("originSessionId") or "")}
+                           "originSessionId": str(record.get("originSessionId") or ""),
+                           "agentMessageKind": str(record.get("agentMessageKind") or "")}
                           if record.get("agentOriginated") else {})
             if existing is not None:
                 if any(existing.get(key) != value for key, value in provenance.items()):

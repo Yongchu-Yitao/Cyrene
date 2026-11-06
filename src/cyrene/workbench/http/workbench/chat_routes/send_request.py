@@ -13,6 +13,7 @@ class SendOrigin:
     conversation_source: str
     agent_originated: bool
     origin_session_id: str
+    agent_message_kind: str = ""
 
     @classmethod
     def parse(cls, body: dict[str, Any]) -> SendOrigin:
@@ -28,6 +29,8 @@ class SendOrigin:
             conversation_source=str(body.get("conversationSource") or "").strip(),
             agent_originated=body.get("agentOriginated") is True,
             origin_session_id=str(body.get("sourceSessionId") or "").strip(),
+            agent_message_kind=("task_notification" if body.get("agentOriginated") is True
+                                and body.get("agentMessageKind") == "task_notification" else ""),
         )
 
 

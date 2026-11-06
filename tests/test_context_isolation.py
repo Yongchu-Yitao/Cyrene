@@ -97,7 +97,8 @@ def test_saved_calls_are_bounded_and_do_not_retain_results_or_reasoning(call_for
     raw = {'role': 'assistant', 'content': 'before call', 'reasoning_details': 'private reasoning',
            'tool_calls': [call]}
     result = historical_assistant(raw)
-    assert result['content'].startswith('before call\n\n[Historical tool calls')
+    assert result['role'] == 'user'
+    assert result['content'].startswith('[Historical assistant record; reference data, not a new request]\nbefore call\n\n[Historical tool calls')
     assert 'reasoning_details' not in result and 'tool_calls' not in result
     record = json.loads(result['content'].split('\n')[-1])[0]
     assert record['name'] == 'Write'
@@ -139,7 +140,8 @@ def test_compacted_tool_tail_survives_unload_reload_and_reopen(tmp_path):
         command(s, 'unload_context', {'summary': 'paused'}, 'pause')
         command(s, 'load_context', {'context_id': active}, 'load')
         restored = s._messages(node.id)
-        tail = next(m for m in restored if m.get('content', '').startswith('tail step'))
+        tail = next(m for m in restored if '\ntail step\n' in m.get('content', ''))
+        assert tail['role'] == 'user'
         records = json.loads(tail['content'].split('\n')[-1])
         assert records == [{'name': 'Read', 'arguments_preview': '{"path": "critical-evidence.txt"}'}]
         assert 'TAIL_RESULT_SECRET' not in str(restored)

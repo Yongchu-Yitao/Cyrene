@@ -14,6 +14,7 @@ from cyrene.plugins.builtin.cyrene_control.state import (
     write_plan_file,
 )
 from cyrene.workbench.chat.chat_events import publish_chat_changed
+from cyrene.workbench.chat.chat_application import deduplicate_projected_messages
 from cyrene.workbench.http import schemas as api_models
 from cyrene.workbench.http.errors import localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
@@ -182,7 +183,10 @@ def _merge_context_activity_messages(
             str(message.get("createdAt") or ""),
         )
     )
-    result["messages"] = messages
+    # ContextTree and RunTimeline use different card ids for the same work.
+    # Reconcile after adding both sources, retaining the canonical timeline.
+    result["messages"] = deduplicate_projected_messages(messages)
+    result["messageCount"] = len(result["messages"])
     return result
 
 

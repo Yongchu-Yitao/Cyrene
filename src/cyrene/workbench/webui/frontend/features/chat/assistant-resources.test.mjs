@@ -11,19 +11,40 @@ test('task files deduplicate outputs and preserve owning workspace URLs', () => 
   const h = harness('../shell/assistant-task-resources.jsx');
   h.run(mod => mod.assistantTaskFiles({id:'task-a', files:[{path:'reports/a b.md',source:'agent'}],
     messages:[{role:'assistant',attachments:[{path:'reports/a b.md', name:'Report'}]},
+      {role:'assistant',attachments:[{path:'reports/a b.md', name:'Updated report'}]},
       {role:'user',attachments:[{id:'input',url:'/uploads/input.pdf',name:'Input'}]}]}));
-  assert.equal(h.value.length, 2);
+  assert.equal(h.value.length, 1);
   assert.equal(h.value[0].output, true);
   assert.equal(h.value[0].source, 'assistant-task');
   assert.equal(h.value[0].url, '/api/workbench/chats/task-a/files/reports/a%20b.md');
-  assert.equal(h.value[1].url, '/uploads/input.pdf');
+  assert.equal(h.value[0].name, 'Updated report');
+});
+test('task outputs exclude scratch files, uploads, tool results and pending questions', () => {
+  const h = harness('../shell/assistant-task-resources.jsx');
+  const chat = {id:'task-a', files:[{path:'dbg.png'}, {path:'grab.mjs'}, {path:'report.pdf'}],
+    generatedFiles:[{path:'dump.mjs'}], messages:[
+      {role:'user',attachments:[{url:'/uploads/input.pdf'}]},
+      {role:'tool',attachments:[{path:'probe.png'}]},
+      {role:'assistant',questionPrompt:true,attachments:[{path:'login.png'}]},
+    ]};
+  h.run(mod => mod.assistantTaskFiles(chat));
+  assert.equal(h.value.length, 0);
+  chat.messages.push({role:'assistant',attachments:[
+    {path:'report.pdf'}, {url:'/media/final.png',name:'Final image'},
+  ]});
+  h.flush();
+  assert.deepEqual(Array.from(h.value, file => file.url), [
+    '/api/workbench/chats/task-a/files/report.pdf', '/media/final.png',
+  ]);
+  assert.ok(h.value.every(file => file.output));
 });
 test('resource rows open files, owned terminals and every browser tab in the originating task', async () => {
   const React = {createElement(type,props,...children) {return {type,props:{...props,children}};}};
   const opened=[], requests=[];
   let query='';
   const h = harness('../shell/assistant-task-resources.jsx', {React,WBC_ICONS:{},wbcFormatTime:()=>'',wbcSetResourceDrag:(_e,p)=>opened.push(['drag',p]),wbcFileDragPayload:(file,ownerSessionId)=>({kind:'file',file,ownerSessionId}),
-    workbenchServices:{chat:()=>({Model:{getChat:async()=>({id:'a',files:[{path:'result.md'}]})}}),
+    workbenchServices:{chat:()=>({Model:{getChat:async()=>({id:'a',files:[{path:'dbg.png'},{path:'grab.mjs'}],
+        messages:[{role:'assistant',attachments:[{path:'result.md'}]}]})}}),
       api:()=>({json:async url=>{requests.push(url);return {terminals:[{id:'t',ownerChatId:'a'},{id:'other',ownerChatId:'b'}]};}})}});
   h.context.setTimeout=h.context.window.setTimeout;h.context.clearTimeout=h.context.window.clearTimeout;
   h.context.window.cyrene={browser:{getState:async id=>({tabs:[{id:'tab1',title:'One'},{id:'tab2',title:'Two'}]})}};

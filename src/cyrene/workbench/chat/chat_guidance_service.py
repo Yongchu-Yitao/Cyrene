@@ -41,6 +41,7 @@ class ChatGuidanceApplicationService:
         client_request_id: str,
         agent_originated: bool = False,
         origin_session_id: str = "",
+        agent_message_kind: str = "",
     ) -> ChatGuidanceResult:
         if not message:
             return self._error(
@@ -68,6 +69,7 @@ class ChatGuidanceApplicationService:
         if previous is not None and (
             not previous.get("agentOriginated")
             or previous.get("originSessionId", "") != origin_session_id
+            or previous.get("agentMessageKind", "") != agent_message_kind
             or previous.get("content") != message
         ):
             return self._error("Agent message request ID conflicts with an existing turn.",
@@ -83,6 +85,7 @@ class ChatGuidanceApplicationService:
                 public_created_at=now,
                 agent_originated=agent_originated,
                 origin_session_id=origin_session_id,
+                agent_message_kind=agent_message_kind,
             )
         except GuidanceAdmissionClosed:
             await run.done.wait()
@@ -108,6 +111,7 @@ class ChatGuidanceApplicationService:
             client_request_id,
             agent_originated=agent_originated,
             origin_session_id=origin_session_id,
+            agent_message_kind=agent_message_kind,
         )
 
         def persist(current: dict[str, Any]) -> None:
@@ -184,6 +188,7 @@ class ChatGuidanceApplicationService:
         *,
         agent_originated: bool = False,
         origin_session_id: str = "",
+        agent_message_kind: str = "",
     ) -> dict[str, Any]:
         entry = {
             "id": message_id,
@@ -198,6 +203,8 @@ class ChatGuidanceApplicationService:
             entry["clientRequestId"] = client_request_id
         if agent_originated:
             entry["agentOriginated"] = True
+            if agent_message_kind:
+                entry["agentMessageKind"] = agent_message_kind
         if origin_session_id:
             entry["originSessionId"] = str(origin_session_id)
         return entry

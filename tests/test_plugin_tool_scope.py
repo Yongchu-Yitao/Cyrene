@@ -96,17 +96,14 @@ def test_ordinary_session_has_no_assistant_notification_hook():
     from types import SimpleNamespace
     from cyrene.plugins.builtin.session_management import setup
 
-    removed = []
     hooks = SimpleNamespace(
-        list=lambda: [SimpleNamespace(id="session-management-notify")],
-        unregister=removed.append,
+        list=lambda: [],
         register=lambda *a, **k: pytest.fail("Ordinary session acquired assistant Hook"),
     )
     setup(SimpleNamespace(
         services={"session_management": SimpleNamespace(store=SimpleNamespace(session=lambda _: None))},
         agent_id="main", data={"session_id": "ordinary"}, tree_id="ordinary", hooks=hooks,
     ))
-    assert removed == ["session-management-notify"]
 
 
 

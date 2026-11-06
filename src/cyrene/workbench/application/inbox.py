@@ -878,6 +878,7 @@ class WorkbenchAgentInbox:
         public_created_at: str = "",
         agent_originated: bool = False,
         origin_session_id: str = "",
+        agent_message_kind: str = "",
     ) -> dict[str, Any]:
         dedupe_key = f"guidance:{client_request_id}" if client_request_id else ""
         async with self._guidance_admission_lock:
@@ -901,6 +902,7 @@ class WorkbenchAgentInbox:
                     "public_created_at": str(public_created_at),
                     "agent_originated": bool(agent_originated),
                     "origin_session_id": str(origin_session_id),
+                    "agent_message_kind": str(agent_message_kind),
                 },
                 priority=100,
                 dedupe_key=dedupe_key,
@@ -1863,6 +1865,7 @@ def read_workbench_guidance_records(db_path: str) -> list[dict[str, Any]]:
                 "content": text,
                 "agentOriginated": payload.get("agent_originated") is True,
                 "originSessionId": str(payload.get("origin_session_id") or ""),
+                "agentMessageKind": str(payload.get("agent_message_kind") or ""),
                 "createdAt": str(payload.get("public_created_at") or created_at or ""),
             })
         return records
