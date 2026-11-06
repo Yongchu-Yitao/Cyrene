@@ -2,6 +2,40 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.1.0] - 2026-11-07
+
+### Features and interface updates
+
+- Reorganize the bottom module navigation: Work now contains both conversations and the board, with repeated selection switching between them, alongside a separate Cyrene assistant entry. Horizontal sidebar gestures follow the new module order.
+- Add a dedicated Cyrene personal assistant page with one application-wide conversation. Continue the same assistant conversation across projects, module changes and app restarts while ordinary project chats keep their existing behavior.
+- Let the assistant start independent tasks, follow up with more requirements, retry existing work and stop tasks. Each task retains its own working directory and browser state, so follow-ups continue the original work and stopping preserves its records and outputs.
+- Add an assistant task sidebar showing titles, recent updates, execution states, pending questions and failures, with search and task switching. Use the home action or select the Cyrene entry again to return from task and resource views to the main assistant conversation.
+- Reuse the familiar chat experience for assistant and task messages, thinking, tool activity, attachments and composition. Replies keep running across navigation; reopening a conversation shows cached history before refreshing it to reduce waiting and flicker.
+- Let the assistant handle task clarifications from known information and ask the user when necessary details are missing. Users can answer clarification cards or type in the composer. Failed submissions remain retryable, with safeguards against duplicate answers and stale question cards.
+- Show task permission requests in the main assistant conversation and apply the user's approval or denial to the original task. Tasks do not share authorization, the assistant cannot approve on the user's behalf, and existing permission modes remain in effect.
+- Expose delivered files, terminals and browser tabs in the task sidebar, including drag-and-drop into split panes. Opening another task's resources preserves the current layout and resource ownership; dragging an already visible browser moves its pane instead of opening a duplicate.
+- Improve task file lists by merging duplicate deliveries, excluding scratch files, uploaded inputs and internal tool output, and retaining the delivering task when workspaces are shared. The assistant can deliver files from its owned task workspaces for users to open or download.
+- Let the assistant inspect task progress and relevant evidence, preserving progress when switching goals. Internal task status updates stay out of user messages while task results remain visible as normal assistant replies.
+- Improve assistant memory handling for preferences, lasting facts and corrections by checking existing information and the intended scope, keeping temporary progress out of long-term memory and user information out of unrelated projects.
+- Add a Reset assistant action to data settings. Confirmation clears the assistant conversation and refreshes the page without clearing ordinary chats. Cancellation preserves data; failures display an error and allow retrying.
+- Refresh the Cyrene entry icon with states for thinking, replying, tool use, waiting, completion, errors, stopping and reconnection. Status continues to update while another page is open and respects reduced-motion preferences.
+- Align assistant sidebars, conversation cards and split panes with shared corners, shadows, dark surfaces and composer spacing. Reuse Work's task-row geometry and status colors, and complete English and Chinese task-tool labels and descriptions.
+- Upgrade DeepSeek web search and page retrieval. Enabled official DeepSeek configurations can return query-specific summaries or page content, with readable page retrieval and direct retrieval fallback when the service is unavailable. DeepSeek search and page retrieval are billed separately from chat-model usage under the service’s pricing rules.
+- Keep search aligned with enabled services and their configured order, trying the next available service after a failure. Direct page retrieval follows the search proxy; local and LAN pages stay local. Improve query-length, credential, quota and service-error messages.
+- Improve drag-to-collapse for split panes. Hold briefly at an edge and continue dragging to collapse a panel, row or column; reverse before release to restore it. Ordinary resizing avoids accidental closure, transitions remain continuous, and cancellation restores the layout.
+- Confirm unsaved edits before closing a whole column or a pane containing edited files. Cancelling preserves edits and layout. Closing keeps remaining conversations and resources correctly displayed instead of leaving an empty or unowned workspace.
+- Fix hidden side panels intercepting drop targets in narrow windows, improve mobile drawer behavior with the assistant page, and remove excess blank space around the exceptional-status group in the top tab overflow list.
+- Preserve the existing conversation pane when returning to the assistant home view, reducing reloads and retaining composer and scroll position. Store assistant and ordinary project split layouts separately so they do not overwrite one another.
+- Improve the agent's understanding of the current split view. Closing or replacing panes updates the layout information; when the layout cannot be read, earlier left/right pane positions are no longer mistaken for the current state.
+- Repair missing or malformed historical tool names, arguments and outcomes after task context restoration. Keep past work as reference material rather than treating it as new instructions to execute.
+- Improve recovery after app restarts, interrupted tasks and new messages. Abandoned runs no longer remain indefinitely marked as running; operations with unknown outcomes retain interruption information instead of being marked successful or immediately repeated.
+- Fix blank or tiny screenshots and stalled click targeting in background task browsers that have not been opened in the foreground. Pages can initialize and capture in the background without switching the task or page the user is viewing, retaining high-resolution capture and native screenshot fallback.
+- Honor the manually selected model’s context capacity for long conversations, avoiding premature history compression caused by a smaller fallback model.
+- Improve DeepSeek multi-turn replies and continuation after tool calls, reducing failures caused by mismatched thinking history. Abnormal tool-protocol text is no longer shown as a normal answer; the incomplete reply is withdrawn and handled by the existing recovery path.
+- Report invalid requests more directly instead of repeatedly switching models only to encounter the same error. A single terminal command timeout no longer makes all later terminal operations unavailable for that run.
+- Refine reflection and progress updates: reconsider the approach after repeated unsuccessful attempts rather than abandoning it after one ordinary tool failure. Complete required task-context switches before reporting subsequent execution progress.
+- Fix duplicate permission activity across saved and live messages. Keep continuation work in its existing activity group with the same disclosure state, and prevent reconnection or waiting from relabeling completed work as processing.
+
 ## [0.9.0.2] - 2026-10-26
 
 ### Features and interface updates

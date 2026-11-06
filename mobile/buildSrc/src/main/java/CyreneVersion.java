@@ -15,10 +15,11 @@ public final class CyreneVersion {
         int major = Integer.parseInt(match.group(1));
         int minor = Integer.parseInt(match.group(2));
         int patch = Integer.parseInt(match.group(3));
+        // A trailing .0 is the explicit spelling of the base stable release.
         int revision = match.group(4) == null ? 0 : Integer.parseInt(match.group(4));
         int sequence = match.group(6) == null ? 0 : Integer.parseInt(match.group(6));
         if (major > 20 || minor > 99 || patch > 99 || sequence > 999 || revision > 999
-                || (match.group(4) != null && (revision == 0 || match.group(5) != null))) {
+                || (match.group(4) != null && match.group(5) != null)) {
             throw new IllegalArgumentException("Cyrene version exceeds Android encoding bounds: " + version);
         }
         int phase = match.group(5) == null ? 9 : switch (match.group(5)) {
