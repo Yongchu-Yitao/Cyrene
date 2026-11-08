@@ -28,6 +28,8 @@ def _client(tmp_path, notifications):
     db_path = str(tmp_path / "schedule.sqlite3")
     asyncio.run(init_db(db_path))
     ensure_workbench_schema(db_path)
+    from cyrene.workbench.sessions.context import configure_store
+    configure_store(db_path)
     project = {"id": "project_1", "dataKey": "workspace_1"}
     resolver = WorkspaceProjectResolver(
         find_project_lightweight=(
@@ -163,3 +165,50 @@ def test_schedule_pack_owns_routes_service_and_frontend_module(tmp_path):
         }
     assert {"scheduled_tasks", "task_run_logs"} <= tables
     asyncio.run(host.shutdown())
+
+
+@pytest.mark.parametrize("delegated", [False, True])
+def test_assistant_schedules_shared_across_project_calendars(tmp_path, delegated):
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_schedule.tools import create_schedule
+    from cyrene.workbench.projects.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+
+    client, db_path, service = _client(tmp_path, [])
+    runtime = service.gateway.service
+    context = PluginContext(
+        data={
+            "session_id": "delegated-child" if delegated else ASSISTANT_ID,
+            "project_id": "unrelated-current-project",
+            "assistant_owner_session_id": ASSISTANT_ID if delegated else "",
+        },
+        services={"schedules": runtime},
+    )
+    created = asyncio.run(create_schedule({
+        "prompt": "Shared reminder", "schedule_type": "once",
+        "schedule_value": "2099-01-02T10:00:00+00:00", "action_type": "message",
+    }, context))
+    task_id = created["id"]
+    assert created["task"]["project_id"] == ASSISTANT_SCOPE_ID
+    assert created["task"]["origin_session_id"] == context.data["session_id"]
+    local = client.post("/api/workbench/schedule/tasks?workspace=project_1", json={
+        "prompt": "Local", "schedule_type": "interval", "schedule_value": "3600",
+    }).json()["id"]
+    for workspace in ("project_1", "project_2", ASSISTANT_SCOPE_ID):
+        tasks = client.get(f"/api/workbench/schedule/tasks?workspace={workspace}").json()["tasks"]
+        assert [t["id"] for t in tasks].count(task_id) == 1
+        assert (local in {t["id"] for t in tasks}) == (workspace == "project_1")
+        events = asyncio.run(service.list_occurrences(workspace, "2099-01-02", "2099-01-03"))["events"]
+        assert sum(e.get("task_id") == task_id for e in events) == 1
+    all_tasks = asyncio.run(service.list_all_tasks())
+    assert sum(t["id"] == task_id for t in all_tasks) == 1
+    updated = client.put(f"/api/workbench/schedule/tasks/{task_id}?workspace=project_2",
+                         json={"prompt": "Changed globally", "status": "paused"})
+    assert updated.status_code == 200
+    stored = asyncio.run(runtime.repository.get(task_id))
+    assert stored.project_id == ASSISTANT_SCOPE_ID
+    assert stored.prompt == "Changed globally" and stored.status == "paused"
+    asyncio.run(runtime.repository.log_run(task_id, 1, "success", result="done"))
+    assert len(client.get(f"/api/workbench/schedule/tasks/{task_id}/runs?workspace=project_1").json()["runs"]) == 1
+    assert client.delete(f"/api/workbench/schedule/tasks/{task_id}?workspace=project_2").status_code == 200
+    assert asyncio.run(runtime.repository.get(task_id)) is None
+    assert asyncio.run(runtime.repository.get(local)) is not None

@@ -598,3 +598,78 @@ def test_switch_retains_current_request_control_receipts(tmp_path):
         assert s.task_contexts.read()['active'] == a
     finally:
         s.close()
+
+
+def test_atomic_switch_metadata_rollback_and_receipt(tmp_path, monkeypatch):
+    from cyrene.core.context.tasks import context_catalog
+    from cyrene.core.context import capacity
+    s = make_session(tmp_path)
+    try:
+        a = s.task_contexts.ensure('a')
+        args = {'context_id': None, 'title': '网站实现', 'summary': '成绩表已交付'}
+        receipt = command(s, 'switch_context', args, 'new-site')
+        b = receipt['active_context_id']
+        saved = s.task_contexts.read()
+        assert saved['documents'][a]['summary'] == '成绩表已交付'
+        assert next(d for d in context_catalog(saved) if d['id'] == b)['title'] == '网站实现'
+        assert saved['documents'][b]['last_active_at']
+        assert command(s, 'switch_context', args, 'new-site') == receipt
+        assert s.task_contexts.read() == saved
+        for bad in ({'context_id': 'missing', 'summary': 'pause'},
+                    {'context_id': 'shared', 'summary': 'pause'},
+                    {'context_id': None, 'title': ' '},
+                    {'context_id': a}):
+            with pytest.raises(ValueError):
+                command(s, 'switch_context', bad, 'invalid')
+            assert s.task_contexts.read() == saved
+        def fail(*args):
+            raise ValueError('capacity rejected')
+        monkeypatch.setattr(capacity, 'check_load', fail)
+        with pytest.raises(ValueError, match='capacity'):
+            command(s, 'switch_context', {'context_id': a, 'summary': 'site paused'}, 'capacity')
+        assert s.task_contexts.read() == saved
+        monkeypatch.undo()
+        command(s, 'switch_context', {'context_id': a, 'title': '成绩表', 'summary': 'site paused'}, 'resume')
+        assert s.task_contexts.read()['active'] == a
+        stamp = s.task_contexts.read()['documents'][a]['last_active_at']
+        s.task_contexts.ensure('ordinary-next-step')
+        command(s, 'append_context', {'context_id': a, 'content': 'note'}, 'note')
+        assert s.task_contexts.read()['documents'][a]['last_active_at'] == stamp
+    finally:
+        s.close()
+    reopened = make_session(tmp_path)
+    try:
+        assert reopened.task_contexts.read()['documents'][a]['title'] == '成绩表'
+    finally:
+        reopened.close()
+
+
+def test_switch_model_handshake_cache_and_fork(tmp_path):
+    from cyrene.core.context.tasks import fork_task_state, context_catalog
+    inputs = []
+    async def model(arguments, context):
+        messages = deepcopy(arguments['messages'])
+        inputs.append(messages)
+        if len(inputs) == 1:
+            return {'content': '', 'tool_calls': [{'id': 'switch', 'name': 'switch_context',
+                'arguments': {'context_id': None, 'title': '新目标', 'summary': '旧目标暂停'}}]}
+        if len(inputs) == 2:
+            assert any(m.get('role') == 'tool' and 'active_context_id' in m.get('content', '') for m in messages)
+            return {'content': '', 'tool_calls': [{'id': 'read', 'name': 'Read', 'arguments': {'path': str(tmp_path / 'evidence.txt')}}]}
+        assert messages[:len(inputs[-2])] == inputs[-2]
+        return {'content': 'done', 'tool_calls': []}
+    (tmp_path / 'evidence.txt').write_text('evidence')
+    s = make_session(tmp_path, model)
+    try:
+        s.submit('开始新目标', run_id='switch-run')
+        run(s.drain())
+        assert len(inputs) == 3
+        state = s.task_contexts.read()
+        path = s.store.get_path(s.tree.id, s.snapshot()['leaf_id'])
+        replayed = fork_task_state(path)
+        assert replayed['active'] == state['active']
+        assert context_catalog(replayed) == context_catalog(state)
+        # Projection and ordinary execution never refresh timestamp-bearing mounts.
+        assert s._messages(s.snapshot()['leaf_id']) == s._messages(s.snapshot()['leaf_id'])
+    finally:
+        s.close()

@@ -1,0 +1,18 @@
+{
+  "result": "passed",
+  "focusedTests": 11,
+  "build": "passed",
+  "browserRuntimeErrors": [],
+  "checks": [
+    "task-driven Agent cards",
+    "center pin and deduplication",
+    "map and budget live synchronization",
+    "natural-language card creation",
+    "research phase cards",
+    "cross-task and reload persistence",
+    "original-task archival",
+    "unpin/hide/restore/collapse",
+    "mobile overlay"
+  ],
+  "preview": "http://127.0.0.1:4173/#research"
+}

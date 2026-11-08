@@ -11,44 +11,45 @@ import json
 import threading
 from contextlib import asynccontextmanager
 from copy import copy, deepcopy
+from datetime import datetime, timezone
 from dataclasses import is_dataclass, replace as dataclass_replace
 from pathlib import Path
 
 STATE_KEY = "_task_contexts"
 SHARED_ID = "shared"
-TOOLS = frozenset({"load_context", "unload_context", "append_context", "replace_context"})
-PROMPT = """Manage task contexts proactively and silently; do not ask the user to manage
-IDs or call a tool merely to announce task ownership. A context follows a user
-goal or a distinct workstream within that goal, not a message, topic keyword,
-tool, or file. Leave context-management call prose empty and put checkpoints in arguments. Unless asked, omit internal
-operations, IDs and state from replies and send_message; report only task
-progress or actionable blockers.
+TOOLS = frozenset({"load_context", "unload_context", "append_context", "replace_context", "switch_context"})
+PROMPT = """Before progress messages or task-specific tools, silently select CONTINUE,
+NEW or RESUME for the current request using the active context and catalog.
+A context follows a user goal or an independently resumable workstream within
+that goal, not a message, topic keyword, tool or file.
 
-- CONTINUE: use the initial context without unloading or a startup checkpoint;
-  keep tightly coupled steps, explanations, progress questions, clarifications,
-  corrections, tests and reports together. Do not switch merely to save, finish,
-  wait, or because a message, file or topic changed.
-- NEW: proactively separate goals or substantial subtasks with independently
-  resumable evidence, decisions and progress, even within one request (e.g.
-  frontend, backend or a security audit sharing an API contract). This includes
-  text-only work and work after a context demonstration. A previous load is not
-  a new switch. Unload the active context before starting;
-  if none is active, new task work creates one automatically.
-- RESUME: match both goal and subtask to the catalog. If inactive, unload the
-  current context, if any, then load the exact matching ID; match the work,
-  not recency or project name. If already active,
-  continue. Never use an unrelated placeholder or create a duplicate.
+- CONTINUE: keep related follow-ups, corrections, tightly coupled steps, tests
+  and reports in the active context. Use the initial context without a startup
+  checkpoint. Delivery or waiting alone does not require unloading.
+- NEW: before starting an independent goal or substantial workstream with its
+  own evidence, decisions and progress, call switch_context with context_id=null,
+  a short title and a checkpoint for the active context, if any. This applies
+  to text-only work too, even when the previous goal is complete.
+- RESUME: match both goal and workstream to the catalog. If already active,
+  continue; otherwise call switch_context with the exact matching ID and a
+  checkpoint for the active context, if any, before proceeding. Never create a
+  duplicate or use an unrelated placeholder. Remembering the work does not activate its context.
+
+After delivery, retain the context for related follow-ups. When an independent
+goal arrives, checkpoint and switch before working on it. Do not ask the user
+to manage IDs or output the decision labels. Leave context-management call prose
+empty and put checkpoints in arguments. Unless asked, omit internal operations,
+IDs and state from replies and send_message; report progress or actionable blockers.
 Honor explicit workstream boundaries, but do not split every checklist item or
 brief lookup; split for capacity only when warned. Reports alone do not start new
-goals; resume the implementation context when returning from research or reporting.
+goals; when returning from a separate research workstream, resume the matching
+implementation context.
 A switch pauses a workstream, not the overall request: continue remaining work
 without asking the user to restart it. Keep common goals and contracts in shared,
 local progress in its context; verify source evidence when integrating findings.
-Remembering dialogue or rereading files
-does not restore a context.
 
-Use the always-visible task_context_catalog (IDs, last unload summaries, active
-status) and successful receipts as current state, never invented IDs or earlier
+Use the always-visible task_context_catalog (IDs, titles, last unload summaries, active
+status and last_active_at recording creation/activation/unload boundaries) and successful receipts as current state, never invented IDs or earlier
 narratives. Do not claim a missing active context or stale catalog without
 evidence; an earlier unload does not prove that no task is active now.
 The current request remains available while switching; other inactive-task
@@ -114,9 +115,33 @@ def state_from(path):
 def context_catalog(state):
     return [
         {"id": SHARED_ID, "active": False, "always_loaded": True},
-        *({"id": key, "summary": doc.get("summary", ""), "active": key == state.get("active")}
+        *({"id": key, "title": doc.get("title", ""), "summary": doc.get("summary", ""),
+           "last_active_at": doc.get("last_active_at"), "active": key == state.get("active")}
           for key, doc in state["documents"].items()),
     ]
+
+
+def activity_time():
+    # Only transition boundaries update catalog metadata, never projection or
+    # ordinary tool turns: the mounted prefix remains byte-stable between switches.
+    return datetime.now(timezone.utc).isoformat()
+
+
+def context_title(value):
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 40:
+        raise ValueError("title must contain 1 to 40 characters")
+    return value.strip()
+
+
+def pause_document(state, target, summary, path):
+    doc = state['documents'][target]
+    doc['summary'] = clip_summary(summary)
+    doc['unloaded_nodes'] = list(dict.fromkeys([
+        *doc.get('unloaded_nodes', []),
+        *(n.id for n in path if n.value.get('task_context_id') == target
+          and n.value.get('role') in {'assistant', 'tool_results'}),
+    ]))
+    doc['messages'] = saved_messages(doc.get('messages', []))
 
 
 def clip_summary(text: str) -> str:
@@ -279,7 +304,7 @@ def project_tasks(path, state, *, observation_services=()):
                 continue
         elif role == "assistant":
             transition = bool(value.get('tool_calls')) and all(
-                c.get('name') in {'load_context', 'unload_context'} for c in value['tool_calls'])
+                c.get('name') in {'load_context', 'unload_context', 'switch_context'} for c in value['tool_calls'])
             handshake = bool(value.get('task_control') and index >= control_start and node.id not in covered
                              and (transition or (value.get('task_context_id') == active and node.id not in archived)))
             if not handshake and (not active or value.get('task_context_id') != active or node.id in covered):
@@ -404,7 +429,8 @@ class TaskContexts:
         state = self.read()
         if not state["active"]:
             context_id = "ctx_" + hashlib.sha256(str(key).encode()).hexdigest()[:16]
-            state["documents"].setdefault(context_id, {"body": "", "summary": "", "messages": [], "covered": []})
+            state["documents"].setdefault(context_id, {"body": "", "summary": "", "messages": [], "covered": [],
+                                                      "title": "", "last_active_at": activity_time()})
             state["active"] = context_id
             self.write(state)
         path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
@@ -421,22 +447,43 @@ class TaskContexts:
             if receipt in state["receipts"]:
                 return state["receipts"][receipt]
             target = args.get("context_id")
-            if name == "unload_context":
-                summary = clip_summary(args["summary"])
-                target = state["active"]
+            metadata = {}
+            if name == "switch_context":
+                previous = state['active']
+                if target == SHARED_ID:
+                    raise ValueError("shared is always loaded")
+                if target is not None and target not in state['documents']:
+                    raise ValueError("Unknown context_id; use the context catalog")
+                title = context_title(args['title']) if 'title' in args else None
+                if target is None:
+                    if title is None:
+                        raise ValueError("A new context requires a title")
+                    target = "ctx_" + hashlib.sha256(receipt.encode()).hexdigest()[:16]
+                    state['documents'][target] = {"body": "", "summary": "", "messages": [], "covered": []}
+                if previous and previous != target:
+                    path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
+                    pause_document(state, previous, args.get('summary', ''), path)
+                if title is not None:
+                    state['documents'][target]['title'] = title
+                if previous != target:
+                    stamp = activity_time()
+                    for key in {previous, target} - {None}:
+                        state['documents'][key]['last_active_at'] = stamp
+                    from .capacity import check_load
+                    check_load(self, state, target)
+                state['active'] = target
+                metadata = {key: {field: state['documents'][key].get(field, '' if field == 'title' else None)
+                                  for field in ('title', 'last_active_at')}
+                            for key in sorted({previous, target} - {None})}
+            elif name == "unload_context":
+                target = state['active']
                 if not target:
                     raise ValueError("No active context to unload")
-                state["documents"][target]["summary"] = summary
-                s = self.session
-                path = s.store.get_path(s.tree.id, s._leaf_id)
-                doc = state['documents'][target]
-                doc['unloaded_nodes'] = list(dict.fromkeys([
-                    *doc.get('unloaded_nodes', []),
-                    *(n.id for n in path if n.value.get('task_context_id') == target
-                      and n.value.get('role') in {'assistant', 'tool_results'}),
-                ]))
-                doc['messages'] = saved_messages(doc.get('messages', []))
-                state["active"] = None
+                path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
+                pause_document(state, target, args['summary'], path)
+                state['documents'][target]['last_active_at'] = activity_time()
+                metadata = {target: {'last_active_at': state['documents'][target]['last_active_at']}}
+                state['active'] = None
             else:
                 if target == SHARED_ID:
                     if name != "append_context" and name != "replace_context":
@@ -453,6 +500,11 @@ class TaskContexts:
                     # their old observation files are not load dependencies.
                     from .capacity import check_load
                     check_load(self, state, target)
+                    if state["active"] != target:
+                        doc["last_active_at"] = activity_time()
+                    if "title" in args:
+                        doc["title"] = context_title(args["title"])
+                    metadata = {target: {field: doc.get(field, "" if field == "title" else None) for field in ("title", "last_active_at")}}
                     state["active"] = target
                 elif name == "append_context":
                     doc["body"] += ("\n\n" if doc["body"] else "") + args["content"]
@@ -461,6 +513,8 @@ class TaskContexts:
                 else:
                     raise ValueError("Unknown context operation")
             result = {"context_id": target, "active_context_id": state["active"], "saved": True}
+            if metadata:
+                result["context_metadata"] = metadata
             state["receipts"][receipt] = result
             self.write(state)
             return result
@@ -532,7 +586,15 @@ def fork_task_state(path):
                 continue
             args = call.get("arguments", {})
             target = args.get("context_id")
-            if name == "unload_context":
+            payload = result.get('value') or {}
+            if name == "switch_context":
+                previous = state['active']
+                target = payload['active_context_id']
+                if previous and previous != target:
+                    pause_document(state, previous, args['summary'], path[:path.index(node) + 1])
+                state['documents'].setdefault(target, {"body": "", "summary": "", "messages": [], "covered": []})
+                state['active'] = target
+            elif name == "unload_context":
                 target = owner or state["active"]
                 if target in state["documents"]:
                     state["documents"][target]["summary"] = clip_summary(args["summary"])
@@ -549,4 +611,7 @@ def fork_task_state(path):
                 if doc is not None:
                     content = str(args.get("content", ""))
                     doc["body"] = ((doc["body"] + "\n\n") if doc["body"] else "") + content if name == "append_context" else content
+            for key, fields in payload.get('context_metadata', {}).items():
+                if key in state['documents']:
+                    state['documents'][key].update(fields)
     return state

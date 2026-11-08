@@ -406,12 +406,12 @@ TOOL_I18N = {
     "schedule.create": (
         "Create schedule",
         "创建定时任务",
-        "在当前项目中创建精确消息或 Agent 定时任务。",
+        "在当前项目或个人助理的全局范围创建精确消息或 Agent 定时任务。",
     ),
     "schedule.list": (
         "List schedules",
         "列出定时任务",
-        "列出当前项目中的定时任务。",
+        "列出当前项目或个人助理全局范围的定时任务。",
     ),
     "schedule.occurrences": (
         "Schedule occurrences",
@@ -481,7 +481,7 @@ def _plugin(
 plugins = (
     _plugin(
         "schedule.create",
-        "Create an exact-message or Agent scheduled task in the current project.",
+        "Create an exact-message or Agent scheduled task in the current project or global personal-assistant scope.",
         _schema(
             {
                 "prompt": {"type": "string", "minLength": 1},
@@ -498,7 +498,7 @@ plugins = (
     ),
     _plugin(
         "schedule.list",
-        "List scheduled tasks in the current project.",
+        "List scheduled tasks in the current project or global personal-assistant scope.",
         _schema({}),
         list_schedules,
         allow_parallel=True,

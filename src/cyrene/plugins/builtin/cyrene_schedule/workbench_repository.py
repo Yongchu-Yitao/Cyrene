@@ -6,6 +6,8 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID
+
 
 def safe_workspace_id(workspace_id: str | None) -> str:
     raw = str(workspace_id or "").strip()
@@ -28,6 +30,8 @@ class WorkspaceProjectResolver:
 
     def resolve(self, workspace_id: str | None) -> str:
         raw = str(workspace_id or "").strip()
+        if raw == ASSISTANT_SCOPE_ID:
+            return ASSISTANT_SCOPE_ID
         project = self._find_project_lightweight(raw)
         if project:
             return self._project_key(project)

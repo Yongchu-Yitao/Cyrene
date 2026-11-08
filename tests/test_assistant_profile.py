@@ -4,7 +4,8 @@ from cyrene.plugins.builtin import ask_user
 from cyrene.plugins.builtin.cyrene_content import plugin_pack as content
 from cyrene.plugins.builtin.cyrene_delivery import plugin_pack as delivery
 from cyrene.plugins.builtin.session_management import TOOL_NAMES, plugin_pack as management
-from cyrene.workbench.core_adapter.assistant_profile import personal_assistant_config
+from cyrene.workbench.core_adapter.assistant_profile import personal_assistant_config, ASSISTANT_SCHEDULE_TOOL_NAMES
+from cyrene.plugins.builtin.cyrene_schedule import plugin_pack as schedule
 from cyrene.workbench.core_adapter.conversation_runtime import ConversationConfig
 
 
@@ -13,9 +14,9 @@ def test_assistant_profile_preserves_ordinary_config_and_resolves_real_tools():
     assistant = personal_assistant_config(ordinary)
     assert ordinary.extra_direct_tool_names == ()
     assert assistant == personal_assistant_config(assistant)
-    assert set(assistant.extra_direct_tool_names) == {*TOOL_NAMES, "ask_user", "send_message", "send_file", "WebSearch"}
+    assert set(assistant.extra_direct_tool_names) == {*TOOL_NAMES, *ASSISTANT_SCHEDULE_TOOL_NAMES, "ask_user", "send_message", "send_file", "WebSearch"}
     registry = PluginRegistry()
-    for pack in (management, content, delivery):
+    for pack in (management, content, delivery, schedule):
         registry.register_pack(pack, source="test")
     assert ask_user.TOOL_NAME == "ask_user"
     from cyrene.core.plugin.tool_scope import ScopedPluginRegistry
@@ -89,7 +90,7 @@ def test_assistant_two_turns_parse_and_execute_session_creation(tmp_path, monkey
             assert json.loads(result['content'])['success'] is True
             return {'content': '已创建对话', 'tool_calls': []}
         registry = PluginRegistry()
-        for pack in (management, content, delivery):
+        for pack in (management, content, delivery, schedule):
             registry.register_pack(pack, source='test')
         registry.register_plugin(ask_user.plugin, source='test')
         registry.register_plugin(Plugin('TestProvider', 'test', {'type': 'object'}, provider, kind='model',

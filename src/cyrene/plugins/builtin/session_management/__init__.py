@@ -150,7 +150,7 @@ plugin_pack = PluginPack(
     plugins=(
         _tool(
             "session_create",
-            "Start NEW work. If a different goal is active in your context catalog, first save its progress and call unload_context in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion.",
+            "Start NEW work. If a different goal is active in your context catalog, first call switch_context with context_id=null, a title and a progress checkpoint in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion.",
             {"title": {"type": "string", "minLength": 1, "maxLength": 80}, "workspace_path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Required absolute path to an existing directory containing this task's input files and deliverables. Use the relevant workspace root, not a scratch subdirectory when outputs are outside it. Create the directory first if needed."}, "message": MESSAGE, "files": FILES},
             ["title", "workspace_path"],
         ),

@@ -64,6 +64,8 @@ def runtime_adapter_for_provider(
 ) -> str:
     """Resolve provider presets whose models use more than one wire protocol.
 
+    Official GPT-6 models use Responses for Agent/tool requests. Existing
+    OpenAI connections may still be saved with the Chat Completions adapter.
     OpenCode Go publishes one model catalog backed by Chat Completions,
     Responses, and Anthropic Messages endpoints. The durable connection stays
     a single service while each selected profile is routed over the protocol
@@ -72,9 +74,15 @@ def runtime_adapter_for_provider(
 
     adapter = str(adapter_id or "openai_compatible").strip().lower()
     preset = str(provider_preset or "").strip().lower()
+    model_id = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    if (
+        preset == "openai"
+        and adapter in {"openai", "openai_compatible"}
+        and model_id.startswith("gpt-6")
+    ):
+        return "openai_responses"
     if preset != "opencode_go":
         return adapter
-    model_id = str(model or "").strip().lower().rsplit("/", 1)[-1]
     if model_id.startswith(_OPENCODE_GO_ANTHROPIC_MODEL_PREFIXES):
         return "anthropic"
     if model_id.startswith(_OPENCODE_GO_RESPONSES_MODEL_PREFIXES):
@@ -643,8 +651,9 @@ def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         content = message.get("content")
         blocks: list[dict[str, Any]] = []
+        text_type = "output_text" if role == "assistant" else "input_text"
         if isinstance(content, str):
-            blocks = [{"type": "input_text", "text": content}] if content else []
+            blocks = [{"type": text_type, "text": content}] if content else []
         else:
             for block in content if isinstance(content, list) else []:
                 if not isinstance(block, dict):
@@ -652,10 +661,14 @@ def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if block.get("type") in {"text", "input_text", "output_text"}:
                     text = str(block.get("text") or "")
                     if text:
-                        blocks.append({"type": "input_text", "text": text})
+                        blocks.append({"type": text_type, "text": text})
                 elif block.get("type") in {"image_url", "input_image"}:
                     blocks.append({"type": "input_image", "image_url": _openai_image_url(block)})
-        result.append({"type": "message", "role": role, "content": blocks})
+        # Assistant history is model output, even when it is replayed as input.
+        # Tool-only turns are represented by function_call items below; an
+        # empty assistant message is not a valid Responses output message.
+        if blocks or role != "assistant":
+            result.append({"type": "message", "role": role, "content": blocks})
         if role == "assistant":
             for call in message.get("tool_calls") or []:
                 function = call.get("function") if isinstance(call, dict) else {}

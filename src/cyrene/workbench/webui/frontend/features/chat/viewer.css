@@ -1436,7 +1436,7 @@
   cursor: grab;
 }
 
-.wbc-agent-file.wbc-file-pointer-drag-source {
+.wbc-file-pointer-drag-source {
   opacity: .42;
 }
 

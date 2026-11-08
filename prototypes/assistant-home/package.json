@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "5.0.4",
-    "vite": "6.4.2",
+    "leaflet": "^1.9.4",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
-  },
-  "devDependencies": {}
+    "react-dom": "19.2.0",
+    "vite": "6.4.2"
+  }
 }

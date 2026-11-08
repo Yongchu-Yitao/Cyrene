@@ -4,7 +4,7 @@ import { workbenchServices } from "../../shared/runtime/services.jsx"
 
 // A conversation surface, not a pane workspace. The shared engine owns streams
 // across navigation; subscribing here must never replace its global hooks.
-function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = [], active = true, cache }) {
+function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = [], active = true, personalAssistant = false, cache }) {
   var chatService = workbenchServices.chat();
   var model = chatService.Model;
   var engine = chatService.Runtimes;
@@ -111,7 +111,7 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
 
   var failure = engine.getFailure && engine.getFailure(sessionId);
   var displayError = error || (failure && failure.message) || "";
-  return <section ref={mainRef} className="wbc-main assistant-chat" aria-label={title || "Cyrene 个人助理"}>
+  return <section ref={mainRef} className="wbc-main assistant-chat" data-cyrene-personal-composer={personalAssistant && active ? "true" : undefined} aria-label={title || "Cyrene 个人助理"}>
     {displayError && <WbcErrorNotice message={displayError} kind={chat ? "message" : "load"} />}
     <div className="wbc-thread-stage">
       <div className={"wbc-thread" + (visible.length || runtime ? " wbc-thread-messages" : "")} ref={scrollRef} onScroll={function (event) { var el = event.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>

@@ -1,6 +1,15 @@
+import { attachCyreneMotion } from './cyrene-motion-dom.mjs';
+
 export function CyreneIcon({ state = "idle" }) {
   const gradientId = "cyrene-brand-" + React.useId().replace(/:/g, "");
-  return <span className="cyrene-motion"><svg className="cyrene-icon-logo" viewBox="0 0 32 32" fill="none" aria-hidden="true" data-state={state}>
+  const svgRef = React.useRef(null);
+  const controllerRef = React.useRef(null);
+  React.useEffect(() => {
+    controllerRef.current = attachCyreneMotion(svgRef.current);
+    return () => { controllerRef.current.destroy(); controllerRef.current = null; };
+  }, []);
+  React.useEffect(() => { controllerRef.current?.setState(state); }, [state]);
+  return <span className="cyrene-motion"><svg ref={svgRef} className="cyrene-icon-logo" viewBox="0 0 32 32" fill="none" aria-hidden="true" data-state={state}>
       <defs><linearGradient id={gradientId} x1="4" y1="27" x2="25" y2="6" gradientUnits="userSpaceOnUse"><stop stopColor="#0879ff"/><stop offset=".5" stopColor="#00b9ec"/><stop offset="1" stopColor="#00dfaf"/></linearGradient></defs>
       <g transform="translate(1.25 0)"><g className="cyrene-icon-body">
         <g className="cyrene-icon-ring">

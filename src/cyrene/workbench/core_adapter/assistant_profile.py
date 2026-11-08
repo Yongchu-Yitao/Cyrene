@@ -10,7 +10,10 @@ from cyrene.core.plugin.tool_scope import PluginToolScope
 from cyrene.plugins.builtin.session_management import TOOL_NAMES
 from .conversation_runtime import ConversationConfig
 
-ASSISTANT_DIRECT_TOOL_NAMES = (*TOOL_NAMES, "ask_user", "send_message", "send_file", "WebSearch")
+ASSISTANT_SCHEDULE_TOOL_NAMES = tuple(
+    f"schedule.{action}" for action in ("create", "list", "edit", "pause", "resume", "cancel", "runs")
+)
+ASSISTANT_DIRECT_TOOL_NAMES = (*TOOL_NAMES, *ASSISTANT_SCHEDULE_TOOL_NAMES, "ask_user", "send_message", "send_file", "WebSearch")
 
 
 def personal_assistant_config(config: ConversationConfig) -> ConversationConfig:

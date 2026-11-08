@@ -121,7 +121,25 @@ def test_opencode_go_selects_each_models_documented_protocol(
     ) == expected
 
 
+@pytest.mark.parametrize("adapter", ["openai", "openai_compatible", "openai_responses"])
+@pytest.mark.parametrize("model", ["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"])
+def test_official_gpt6_uses_responses_for_existing_connections(adapter, model) -> None:
+    assert runtime_adapter_for_provider(
+        adapter, model, provider_preset="openai",
+    ) == "openai_responses"
+
+
+@pytest.mark.parametrize("preset", ["", "openai_compatible", "openrouter"])
+def test_gpt6_compatible_services_keep_the_configured_protocol(preset) -> None:
+    assert runtime_adapter_for_provider(
+        "openai", "gpt-6.1-terra", provider_preset=preset,
+    ) == "openai"
+
+
 def test_other_provider_presets_keep_the_configured_adapter() -> None:
+    assert runtime_adapter_for_provider(
+        "openai", "gpt-4.1", provider_preset="openai",
+    ) == "openai"
     assert runtime_adapter_for_provider(
         "gemini",
         "gemini-3.7-flash",
@@ -466,7 +484,7 @@ def test_prepare_openai_responses_request_converts_function_history_and_options(
     assert request.payload["input"][2] == {
         "type": "message",
         "role": "assistant",
-        "content": [{"type": "input_text", "text": "Checking."}],
+        "content": [{"type": "output_text", "text": "Checking."}],
     }
     assert request.payload["input"][-2:] == [
         {
@@ -489,6 +507,29 @@ def test_prepare_openai_responses_request_converts_function_history_and_options(
             "strict": True,
         }
     ]
+
+
+@pytest.mark.parametrize("content", [
+    "Hello!",
+    [{"type": "text", "text": "Hello!"}],
+    [{"type": "input_text", "text": "Hello!"}],
+    [{"type": "output_text", "text": "Hello!"}],
+])
+def test_openai_responses_replays_assistant_text_as_output(content) -> None:
+    request = prepare_request(
+        "openai_responses", api_key="test", model="gpt-6.1-terra",
+        messages=[
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": "What model are you?"},
+        ],
+        tools=None, max_tokens=None, stream=True, response_format=None,
+    )
+    assert request.payload["input"][1] == {
+        "type": "message", "role": "assistant",
+        "content": [{"type": "output_text", "text": "Hello!"}],
+    }
+    assert request.payload["input"][2]["content"][0]["type"] == "input_text"
 
 
 def test_openai_responses_strict_schema_preserves_optional_plugin_fields() -> None:

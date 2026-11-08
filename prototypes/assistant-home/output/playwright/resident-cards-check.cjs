@@ -1,0 +1,38 @@
+async(page)=>{
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const b=name=>page.getByRole('button',{name,exact:true});
+ const assert=(value,msg)=>{if(!value)throw Error(msg)};
+ const out='/Users/syw/Documents/playground/Cyrene/prototypes/assistant-home/output/playwright/';
+ await page.reload();await page.getByRole('complementary',{name:'常驻卡片',exact:true}).waitFor();
+ await b('折叠研究进度').click();await b('取消常驻今日安排').click();
+ await b('旅行规划').click();await page.locator('.travel-map').waitFor();
+ assert(await b('展开研究进度').count()===1,'Collapsed state persists between workspaces');
+ assert(await page.locator('[data-card="agenda"]').count()===0,'Removed card stays removed');
+ await page.reload();await b('展开研究进度').waitFor();
+ assert(await page.locator('[data-card="agenda"]').count()===0,'Removed card persists on reload');
+ await b('管理常驻卡片').click();await page.locator('.resident-picker').getByLabel('今日安排',{exact:true}).check();await b('管理常驻卡片').click();
+ await b('展开研究进度').click();
+ await page.waitForFunction(()=>document.querySelectorAll('.leaflet-tile-loaded').length>0);
+ const before=await page.locator('.resident-budget-total>strong').innerText();
+ await page.locator('[data-card="travel"]').getByRole('button',{name:'移出行程',exact:true}).click();
+ await page.locator('[data-card="travel"]').getByRole('button',{name:'加入行程',exact:true}).waitFor();
+ const after=await page.locator('.resident-budget-total>strong').innerText();assert(before!==after,'Card action updates budget');
+ assert(await page.locator('.leaflet-marker-icon[title="灵隐寺周边"]').count()===0,'Card action removes selected map marker');
+ await b('展开对话记录').click();await page.locator('.workspace-transcript').getByText('灵隐寺周边已移出行程。地图、每日安排和预算已同步。',{exact:true}).waitFor();
+ assert(await page.locator('.resident-panel .smart-message').count()===0,'No chat stream in card rail');
+ await b('收起对话记录').click();
+ await page.locator('[data-card="travel"]').getByRole('button',{name:'加入行程',exact:true}).click();await page.locator('.leaflet-marker-icon[title="灵隐寺周边"]').waitFor();
+ await b('查看预算明细').click();await page.locator('.budget-view').waitFor();
+ await b('打开地图与行程').click();await page.locator('.day-list').waitFor();
+ await page.locator('.workspace-scroll').evaluate(el=>el.scrollTop=0);
+ await page.waitForFunction(()=>{const tiles=[...document.querySelectorAll('.leaflet-tile-pane img')];return tiles.length>0&&tiles.every(t=>t.complete&&t.naturalWidth>0)&&!document.querySelector('.map-loading')},null,{timeout:30000});
+ await page.screenshot({path:out+'resident-cards-travel.png'});
+ await b('打开研究成果').click();await page.locator('.generated-report').waitFor();assert(await page.locator('.resident-card').count()===4,'All cards remain across scenarios');
+ await page.screenshot({path:out+'resident-cards-research.png'});
+ await page.setViewportSize({width:390,height:844});await b('展开右侧面板').click();await page.locator('.resident-panel').waitFor();
+ const width=await page.evaluate(()=>({doc:document.documentElement.scrollWidth,view:innerWidth}));assert(width.doc===width.view,'No mobile horizontal overflow');
+ await page.screenshot({path:out+'resident-cards-mobile.png'});await b('收起常驻卡片').click();assert(await page.locator('.resident-panel').count()===0,'Mobile rail closes');
+ await page.setViewportSize({width:1586,height:992});await b('展开右侧面板').click();await b('旅行规划').click();await page.locator('.day-list').waitFor();
+ if(errors.length)throw Error(errors.join(';'));
+ return {result:'passed',errors,checks:['Collapse and remove persist across workspace changes and reload','Re-add card','Card action updates map and budget','Conversation is beside central composer','Open budget and research from cards','Mobile panel opens/closes without overflow']};
+}

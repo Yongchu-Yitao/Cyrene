@@ -1,0 +1,16 @@
+import React,{useEffect,useRef,useState} from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+const pin=L.icon({iconUrl:markerIcon,iconRetinaUrl:markerIcon2x,shadowUrl:markerShadow,iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41]});
+export function MapView({workspace:w,onSelect}){
+ const container=useRef(null),map=useRef(null),markers=useRef(null),onSelectRef=useRef(onSelect),lastCity=useRef('');const [loading,setLoading]=useState(true),[failed,setFailed]=useState(false);
+ useEffect(()=>{onSelectRef.current=onSelect;},[onSelect]);
+ useEffect(()=>{if(!container.current)return;const instance=L.map(container.current,{zoomControl:false,scrollWheelZoom:false}).setView(w.city.center,12);map.current=instance;L.control.zoom({position:'bottomright'}).addTo(instance);const tiles=L.tileLayer(import.meta.env.VITE_MAP_TILE_URL||'https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>'}).addTo(instance);tiles.on('loading',()=>{setLoading(true);setFailed(false);});tiles.on('load',()=>setLoading(false));tiles.on('tileerror',()=>setFailed(true));markers.current=L.layerGroup().addTo(instance);const resize=new ResizeObserver(()=>instance.invalidateSize());resize.observe(container.current);return()=>{resize.disconnect();instance.remove();map.current=null;};},[]);
+ useEffect(()=>{if(!map.current||!markers.current)return;markers.current.clearLayers();const visible=w.places.filter(p=>p.included&&(!w.dayFilter||p.day===w.dayFilter)).sort((a,b)=>a.day-b.day||a.time.localeCompare(b.time));for(const p of visible){const marker=L.marker([p.lat,p.lng],{icon:pin,title:p.name,alt:p.name,opacity:p.id===w.selectedPlaceId?1:.75}).addTo(markers.current);const el=document.createElement('span');el.textContent=`${p.name} · Day ${p.day}`;marker.bindTooltip(el,{direction:'top',offset:[0,-30]});marker.on('click',()=>onSelectRef.current(p.id));if(p.id===w.selectedPlaceId)marker.openTooltip();}if(visible.length>1)L.polyline(visible.map(p=>[p.lat,p.lng]),{color:'#b26655',weight:3,opacity:.6,dashArray:'6 9'}).addTo(markers.current);
+ if(lastCity.current!==w.city.name){map.current.setView(w.city.center,12);lastCity.current=w.city.name;}
+ },[w.city.name,w.places,w.dayFilter,w.selectedPlaceId]);
+ return <div className="map-shell"><div ref={container} className="travel-map" aria-label={`${w.city.name}交互地图`}/><div className="map-top-label"><span className="online-dot"/> {w.city.name} · {w.places.filter(p=>p.included).length} 个地点</div><button className="map-fit" onClick={()=>{const ps=w.places.filter(p=>p.included);if(ps.length)map.current.fitBounds(ps.map(p=>[p.lat,p.lng]),{padding:[45,45],maxZoom:14});else map.current.setView(w.city.center,12);}}>显示全部地点</button>{(loading||failed)&&<div className="map-loading" role="status">{failed?'部分地图底图未能加载，地点列表仍可使用。':'正在加载地图…'}</div>}<div className="map-legend">虚线仅表示访问顺序，不是导航路线</div></div>;
+}

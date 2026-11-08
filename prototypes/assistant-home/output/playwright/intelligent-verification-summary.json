@@ -1,0 +1,26 @@
+{
+  "result": "passed",
+  "engine_tests": 6,
+  "build": "passed",
+  "browser_flows": [
+    "research source selection and requirements",
+    "sandbox report action bridge",
+    "report export and reload",
+    "map tile rendering and attribution",
+    "map selection to contextual chat",
+    "remove/re-add place",
+    "days/budget/economy updates",
+    "travel export and reload",
+    "request idempotency and stale revisions",
+    "tile failure status and recovery",
+    "responsive 1280/900/390",
+    "neutral home context"
+  ],
+  "final_targeted_page_errors": [],
+  "limitations": [
+    "deterministic demo runner, no LLM",
+    "preloaded research and travel data",
+    "local API requires Vite development server"
+  ],
+  "preview": "http://127.0.0.1:4173/#intelligent"
+}

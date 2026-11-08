@@ -179,27 +179,21 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
   var capCancel = wbcCapabilityEnabled(capabilitySource, "interaction", "cancel", { strictUnknown: true });
   var capReasoningEffort = wbcCapabilityEnabled(capabilitySource, "model", "reasoningEffort");
   var capSwitchModel = wbcCapabilityEnabled(capabilitySource, "model", "switchDuringSession", { strictUnknown: true });
-  var composerAttachments = useWbcComposerAttachments({
+  var {
+    attachRef, attachments, failedImagePreviews, fileRef, onFilePick, onPaste, pickFiles,
+    setAttachments, setFailedImagePreviews, uploading,
+  } = useWbcComposerAttachments({
     awaitingAnswer: awaitingAnswer,
     canAttachFiles: capFile,
     canAttachImages: capImage,
     chatId: chatId,
+    composerBoxRef: composerBoxRef,
     draftNamespace: draftNs,
     model: model,
     previousChatIdRef: prevChatIdRef,
     running: running,
     setDraft: setDraft,
   });
-  var attachRef = composerAttachments.attachRef;
-  var attachments = composerAttachments.attachments;
-  var failedImagePreviews = composerAttachments.failedImagePreviews;
-  var fileRef = composerAttachments.fileRef;
-  var onFilePick = composerAttachments.onFilePick;
-  var onPaste = composerAttachments.onPaste;
-  var pickFiles = composerAttachments.pickFiles;
-  var setAttachments = composerAttachments.setAttachments;
-  var setFailedImagePreviews = composerAttachments.setFailedImagePreviews;
-  var uploading = composerAttachments.uploading;
   var effectiveModelAccess = (effectiveCatalogAgent && effectiveCatalogAgent.modelAccess)
     || (draftAgent && draftAgent.modelAccess)
     || (chat && chat.modelAccess)

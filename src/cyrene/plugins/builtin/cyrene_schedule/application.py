@@ -108,12 +108,16 @@ def setup_application(context: PluginApplicationContext) -> None:
             ),
         )
         results = []
+        seen_tasks = set()
         for (project_id, project_name, _scope), tasks, entities in zip(
             scopes,
             task_groups,
             entity_groups,
         ):
             for task in tasks:
+                if task.get("id") in seen_tasks:
+                    continue
+                seen_tasks.add(task.get("id"))
                 prompt = str(task.get("prompt") or "")
                 if needle and needle not in " ".join(prompt.casefold().split()):
                     continue

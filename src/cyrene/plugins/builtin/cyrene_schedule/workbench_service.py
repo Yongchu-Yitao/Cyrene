@@ -15,6 +15,7 @@ from cyrene.core.plugin import (
 )
 
 from cyrene.localization import app_language, localized
+from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID
 from .workbench_domain import entity_events, occurrence_window
 from .workbench_repository import WorkspaceProjectResolver
 
@@ -59,6 +60,28 @@ class SchedulePluginGateway:
         arguments: dict[str, Any],
         *,
         project_id: str,
+    ) -> dict[str, Any]:
+        # Global assistant schedules are one stored task, shared by all calendars.
+        if name in {"schedule.list", "schedule.occurrences"}:
+            result = await self._call(name, arguments, project_id=project_id)
+            if project_id != ASSISTANT_SCOPE_ID:
+                shared = await self._call(name, arguments, project_id=ASSISTANT_SCOPE_ID)
+                key = "tasks" if name == "schedule.list" else "events"
+                result[key] = [*result.get(key, []), *shared.get(key, [])]
+                if key == "tasks":
+                    result["count"] = len(result[key])
+            return result
+        if name in {"schedule.edit", "schedule.cancel", "schedule.runs"}:
+            await self.service.ensure_ready()
+            shared = await self.service.repository.get(
+                str(arguments.get("task_id") or ""), ASSISTANT_SCOPE_ID
+            )
+            if shared is not None:
+                project_id = ASSISTANT_SCOPE_ID
+        return await self._call(name, arguments, project_id=project_id)
+
+    async def _call(
+        self, name: str, arguments: dict[str, Any], *, project_id: str,
     ) -> dict[str, Any]:
         result = await self.runtime.call_canonical(
             name,
@@ -138,7 +161,7 @@ class ScheduleApplicationService:
                 for project_id in self.workspace_resolver.scopes()
             )
         )
-        return [task for group in groups for task in group]
+        return list({task["id"]: task for group in groups for task in group}.values())
 
     async def list_occurrences(
         self, workspace: str, start: str, end: str

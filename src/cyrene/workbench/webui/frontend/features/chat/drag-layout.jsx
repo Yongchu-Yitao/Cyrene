@@ -4,6 +4,7 @@ function wbcWorkspaceDisplayName(path) {
 }
 
 var WBC_RESOURCE_DRAG_MIME = "application/x-cyrene-work-resource+json";
+var WBC_FILE_RESOURCE_DRAG_MIME = "application/x-cyrene-file-resource";
 var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";
 var WBC_PLUGIN_VIEW_DRAG_MIME = "application/x-cyrene-plugin-view+json";
 var WBC_CHAT_GROUP_DRAG_MIME = "application/x-cyrene-chat-group+json";
@@ -637,6 +638,7 @@ function wbcSetResourceDrag(event, payload) {
   try {
     transfer.effectAllowed = "copy";
     transfer.setData(WBC_RESOURCE_DRAG_MIME, JSON.stringify(payload));
+    if (payload.kind === "file") transfer.setData(WBC_FILE_RESOURCE_DRAG_MIME, "1");
     transfer.setData("text/plain", payload.kind === "snippet"
       ? String(payload.text || "")
       : String(payload.title || payload.name || payload.url || ""));
@@ -694,6 +696,11 @@ function wbcHasResourceDrag(event) {
   } catch (e) {
     return false;
   }
+}
+
+export function wbcHasFileResourceDrag(event) {
+  var transfer = event && event.dataTransfer;
+  return !!(transfer && Array.prototype.includes.call(transfer.types || [], WBC_FILE_RESOURCE_DRAG_MIME));
 }
 
 function wbcFileDragPayload(file, ownerSessionId, ownerProjectId) {

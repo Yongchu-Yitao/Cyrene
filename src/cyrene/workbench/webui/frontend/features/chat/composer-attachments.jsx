@@ -7,12 +7,80 @@ import {
   wbcT,
 } from "../../workbench-chat.jsx"
 import { wbcLoadAttachments, wbcSaveAttachments } from "./messages.jsx"
+import { wbcHasFileResourceDrag, wbcReadResourceDrag } from "./drag-layout.jsx"
+
+function wbcComposerAtFileDrop(event) {
+  var target = event.target
+  if (!target || !target.closest) return null
+  var box = target.closest(".wbc-composer-box")
+  if (box || !target.closest(".wbc-pane-card-drop-layer")) return box
+  // Split sensors sit on top of the conversation during a resource drag.
+  // Give the input beneath those sensors first refusal on files.
+  for (var node of document.elementsFromPoint(event.clientX, event.clientY)) {
+    box = node.closest(".wbc-composer-box")
+    if (box) return box
+  }
+  return null
+}
+
+function wbcAttachmentKey(file) {
+  return String(file.id || file.path || file.url || file.name || "")
+}
+
+function useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, running, addResourceFile, addFiles, setDraft }) {
+  useWbcEffect(function () {
+    function onDroppedFiles(event) {
+      if (awaitingAnswer) return
+      var detail = event && event.detail || {}
+      if (detail.targetChatId && String(detail.targetChatId) !== String(chatId)) return
+      if (detail.resource && detail.resource.kind === "file") {
+        addResourceFile(detail.resource.file || detail.resource)
+        return
+      }
+      if (detail.resource && detail.resource.kind === "snippet") {
+        var quote = String(detail.resource.text || "").trim().split("\n").map(function (line) {
+          return "> " + line
+        }).join("\n")
+        if (quote) setDraft(function (prev) { return prev ? prev + "\n\n" + quote : quote })
+        return
+      }
+      addFiles(detail.files)
+    }
+    window.addEventListener("cyrene:add-chat-attachments", onDroppedFiles)
+    return function () { window.removeEventListener("cyrene:add-chat-attachments", onDroppedFiles) }
+  }, [chatId, awaitingAnswer, addResourceFile, addFiles, setDraft])
+
+  useWbcEffect(function () {
+    if (!composerBoxRef) return
+    function acceptFileResource(event) {
+      var box = composerBoxRef.current
+      if (!box || !wbcHasFileResourceDrag(event) || wbcComposerAtFileDrop(event) !== box) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (awaitingAnswer || running) {
+        event.dataTransfer.dropEffect = "none"
+        return
+      }
+      event.dataTransfer.dropEffect = "copy"
+      if (event.type !== "drop") return
+      var resource = wbcReadResourceDrag(event)
+      if (resource && resource.kind === "file") addResourceFile(resource.file || resource)
+    }
+    document.addEventListener("dragover", acceptFileResource, true)
+    document.addEventListener("drop", acceptFileResource, true)
+    return function () {
+      document.removeEventListener("dragover", acceptFileResource, true)
+      document.removeEventListener("drop", acceptFileResource, true)
+    }
+  }, [composerBoxRef, awaitingAnswer, running, addResourceFile])
+}
 
 function useWbcComposerAttachments({
   awaitingAnswer,
   canAttachFiles,
   canAttachImages,
   chatId,
+  composerBoxRef,
   draftNamespace,
   model,
   previousChatIdRef,
@@ -71,10 +139,16 @@ function useWbcComposerAttachments({
       })
       if (!files.length) return
     }
+    uploadFiles(function () { return model.uploadFiles(files) }, function (uploaded) {
+      setAttachments(function (prev) { return prev.concat(uploaded) })
+    })
+  }
+
+  function uploadFiles(upload, onUploaded) {
     uploadCountRef.current += 1
     setUploading(true)
-    model.uploadFiles(files)
-      .then(function (uploaded) { setAttachments(function (prev) { return prev.concat(uploaded) }) })
+    upload()
+      .then(onUploaded)
       .catch(function (error) {
         workbenchServices.feedback().showToast(
           wbcT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: wbcErrorText(error) }),
@@ -86,6 +160,38 @@ function useWbcComposerAttachments({
         if (uploadCountRef.current === 0) setUploading(false)
         if (fileRef.current) fileRef.current.value = ""
       })
+  }
+
+  function addResourceFile(file) {
+    if (awaitingAnswer || !file) return
+    var image = String(file.kind || "") === "image"
+      || String(file.content_type || file.type || "").indexOf("image/") === 0
+    if (image ? !canAttachImages : !canAttachFiles) {
+      workbenchServices.feedback().showToast(image
+        ? wbcT("workbenchChat.capability.noImage", "This Agent does not support image input")
+        : wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"), "error")
+      return
+    }
+    var key = wbcAttachmentKey(file)
+    if (file.path) {
+      setAttachments(function (prev) {
+        return key && prev.some(function (item) { return wbcAttachmentKey(item) === key }) ? prev : prev.concat([file])
+      })
+    } else if (file.url) {
+      // Transcript attachments expose URLs rather than private file paths.
+      // Upload the original bytes so the draft can actually send this file.
+      uploadFiles(async function () {
+        var response = await fetch(file.url)
+        if (!response.ok) throw new Error("HTTP " + response.status)
+        var blob = await response.blob()
+        return model.uploadFiles([new File([blob], file.name || "file", { type: file.content_type || blob.type })])
+      }, function (uploaded) {
+        if (previousChatIdRef.current !== chatId) return
+        setAttachments(function (prev) {
+          return prev.filter(function (item) { return item.path || wbcAttachmentKey(item) !== key }).concat(uploaded)
+        })
+      })
+    }
   }
 
   function onFilePick(event) {
@@ -107,56 +213,11 @@ function useWbcComposerAttachments({
     addFiles(files)
   }
 
-  useWbcEffect(function () {
-    function onDroppedFiles(event) {
-      if (awaitingAnswer) return
-      var detail = event && event.detail || {}
-      if (detail.targetChatId && String(detail.targetChatId) !== String(chatId)) return
-      if (detail.resource && detail.resource.kind === "file") {
-        var file = detail.resource.file || detail.resource
-        var resourceIsImage = file
-          && (String(file.kind || "") === "image" || String(file.content_type || file.type || "").indexOf("image/") === 0)
-        if (!canAttachImages && resourceIsImage) {
-          workbenchServices.feedback().showToast(wbcT("workbenchChat.capability.noImage", "This Agent does not support image input"), "error")
-          return
-        }
-        if (!canAttachFiles && !resourceIsImage) {
-          workbenchServices.feedback().showToast(wbcT("workbenchChat.capability.noFile", "This Agent does not support file input"), "error")
-          return
-        }
-        setAttachments(function (prev) {
-          var key = String(file.id || file.path || file.url || file.name || "")
-          if (key && prev.some(function (item) {
-            return String(item.id || item.path || item.url || item.name || "") === key
-          })) return prev
-          return prev.concat([file])
-        })
-        return
-      }
-      if (detail.resource && detail.resource.kind === "snippet") {
-        var quote = String(detail.resource.text || "").trim().split("\n").map(function (line) {
-          return "> " + line
-        }).join("\n")
-        if (quote) setDraft(function (prev) { return prev ? prev + "\n\n" + quote : quote })
-        return
-      }
-      addFiles(detail.files)
-    }
-    window.addEventListener("cyrene:add-chat-attachments", onDroppedFiles)
-    return function () { window.removeEventListener("cyrene:add-chat-attachments", onDroppedFiles) }
-  }, [chatId, awaitingAnswer, canAttachFiles, canAttachImages])
+  useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, running, addResourceFile, addFiles, setDraft })
 
   return {
-    attachRef: attachRef,
-    attachments: attachments,
-    failedImagePreviews: failedImagePreviews,
-    fileRef: fileRef,
-    onFilePick: onFilePick,
-    onPaste: onPaste,
-    pickFiles: pickFiles,
-    setAttachments: setAttachments,
-    setFailedImagePreviews: setFailedImagePreviews,
-    uploading: uploading,
+    attachRef, attachments, failedImagePreviews, fileRef, onFilePick, onPaste,
+    pickFiles, setAttachments, setFailedImagePreviews, uploading,
   }
 }
 

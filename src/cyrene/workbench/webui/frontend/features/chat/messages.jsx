@@ -5,7 +5,8 @@ import { presentConversationMessages } from "./message-presentation.mjs"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_ICONS, WbcVoice, useWbcEffect, useWbcLayoutEffect, useWbcMemo, useWbcRef, useWbcState, wbcAgentErrorPresentation, wbcAttachmentTypeLabel, wbcCompactNumber, wbcErrorText, wbcFileViewKind, wbcFormatProcessingDuration, wbcFormatTime, wbcRandomThinkingPhrase, wbcRenderMarkdown, wbcRuntimeTimelineMessages, wbcT, wbcToolPresentationKind, wbcToolPresentationText, wbcToolPreviewText } from "../../workbench-chat.jsx"
 import { WbcThreadItem, wbcElicitationFields, wbcElicitationInitialValues, wbcPermissionOptionLabel, wbcPermissionQuestionText, wbcQuestionOptionValue, wbcValidateElicitationForm } from "./conversation.jsx"
-import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag, wbcStartFilePointerDrag, wbcUsesFilePointerDrag } from "./file-resources.jsx"
+import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag } from "./file-resources.jsx"
+import { wbcFileDragHandlers } from "./file-pointer-drag.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
 import { wbcClearStreamingFades, wbcFadeInStreamingTail } from "./streaming-fade.mjs"
 
@@ -443,12 +444,12 @@ function WbcInlineImageAttachment({ file, onOpenFile, setImageFailed }) {
   return (
     <div
       className="wbc-inline-image"
-      draggable="true"
-      onDragStart={function (event) { wbcStartFileDrag(event, file); }}
+      {...wbcFileDragHandlers(file)}
     >
       <button
         type="button"
         className="wbc-inline-image-preview"
+        data-file-drag-handle=""
         onClick={open}
         title={wbcT("workbenchChat.viewInSide", "View on the right")}
       >
@@ -685,9 +686,7 @@ function WbcAgentFiles({ files, onOpenFile }) {
           <div
             className="wbc-agent-file"
             key={file.id || file.url || i}
-            draggable={wbcUsesFilePointerDrag() ? undefined : "true"}
-            onDragStart={function (event) { wbcStartFileDrag(event, file); }}
-            onPointerDown={function (event) { wbcStartFilePointerDrag(event, file); }}
+            {...wbcFileDragHandlers(file)}
           >
             <span className="wbc-file-icon">{WBC_ICONS.file}</span>
             <span className="wbc-file-meta">

@@ -810,6 +810,26 @@ async def complete_model(
     context: PluginContext,
     provider: ModelProvider,
 ) -> dict[str, Any]:
+    from cyrene.model.tool_names import ToolNames
+
+    # Restore reasoning against canonical stored calls before aliasing their names.
+    # The inner provider restoration then leaves these exact responses intact.
+    model = _provider_value(arguments, context, provider, "model")
+    arguments = restore_provider_reasoning(
+        arguments, provider.id, arguments.get("messages") or [], context, model,
+    )
+    names = ToolNames()
+    result = await _complete_model_wire(names.request(arguments), context, provider)
+    # Stream callbacks contain prose/reasoning only; tool deltas are assembled by
+    # the decoder and restored here before routing, execution or persistence.
+    return names.response(result)
+
+
+async def _complete_model_wire(
+    arguments: dict[str, Any],
+    context: PluginContext,
+    provider: ModelProvider,
+) -> dict[str, Any]:
     messages = arguments.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ValueError("messages must be a non-empty array")

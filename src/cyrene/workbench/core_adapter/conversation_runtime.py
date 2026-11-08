@@ -612,6 +612,10 @@ class ConversationRuntime:
             "run_context": run_context,
         }
         plugin_context_data["personal_assistant"] = personal_assistant
+        plugin_context_data["assistant_owner_session_id"] = (
+            str(chat.get("assistantOwnerSessionId") or "")
+            if chat and chat.get("kind") == "assistant-task" else ""
+        )
         if config.model_identity:
             plugin_context_data["model_identity"] = deepcopy(
                 dict(config.model_identity)

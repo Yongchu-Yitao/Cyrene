@@ -1,0 +1,34 @@
+async(page)=>{
+ const errors=[],checks=[];page.on('pageerror',e=>errors.push(e.message));
+ const b=name=>page.getByRole('button',{name,exact:true});
+ const assert=(v,msg)=>{if(!v)throw Error(msg)};
+ const out='/Users/syw/Documents/playground/Cyrene/prototypes/assistant-home/output/playwright/';
+ await page.evaluate(()=>localStorage.setItem('cyrene-intelligent-demo-id',crypto.randomUUID()));await page.reload();
+ await b('旅行规划').click();await page.getByRole('textbox',{name:'旅行需求'}).fill('去杭州玩3天，预算2000元，节奏轻松一点');await b('生成工作区').click();await page.locator('.resident-card[data-origin="agent"][data-card="budget"]').waitFor();
+ assert(await page.locator('.resident-card[data-origin="user"]').count()===0,'No fixed catalog pre-pinned');checks.push('Agent produces itinerary and budget from task');
+ await b('固定到右侧：杭州 · 地图').click();await page.locator('.resident-card[data-origin="user"][data-card="map"]').waitFor();await b('查看已固定的杭州 · 地图').click();
+ assert(await page.locator('.resident-card[data-origin="user"][data-card="map"]').count()===1,'Repeated pin does not duplicate');
+ await b('预算估算').click();await b('固定到右侧：杭州 · 旅行预算').click();await page.locator('.resident-card[data-origin="user"][data-card="budget"]').waitFor();
+ assert(await page.locator('.resident-card[data-origin="agent"][data-card="budget"]').count()===0,'Agent card promoted to user pin');checks.push('Center map and budget pin and deduplicate');
+ const budget=page.locator('.resident-card[data-origin="user"][data-card="budget"] .resident-budget-total>strong');const before=await budget.innerText();
+ await page.locator('.travel-map-block .leaflet-marker-icon[title="灵隐寺周边"]').click();await page.locator('.selected-place').getByRole('heading',{name:'灵隐寺周边'}).waitFor();
+ await page.getByRole('textbox',{name:'给 Cyrene 发消息',exact:true}).fill('移除这个地点');await b('发送消息').click();await page.locator('.selected-place').getByRole('button',{name:'加入行程',exact:true}).waitFor();
+ assert(await budget.innerText()!==before,'Pinned budget follows task changes');assert(await page.locator('.resident-mini-map .leaflet-marker-icon[title="灵隐寺周边"]').count()===0,'Pinned map follows task changes');checks.push('Pinned map and budget synchronize');
+ await page.getByRole('textbox',{name:'给 Cyrene 发消息',exact:true}).fill('生成出行提示卡片');await b('发送消息').click();await page.locator('.resident-card[data-origin="agent"][data-card="notes"]').waitFor();
+ await page.locator('.workspace-scroll').evaluate(el=>el.scrollTop=0);await page.locator('.resident-stack').evaluate(el=>el.scrollTop=0);
+ await page.waitForFunction(()=>{const tiles=[...document.querySelectorAll('.leaflet-tile-pane img')];return tiles.length&&tiles.every(t=>t.complete&&t.naturalWidth&&getComputedStyle(t).opacity==='1')},null,{timeout:30000});
+ await page.screenshot({path:out+'dynamic-cards-travel.png'});
+ await b('固定杭州 · 出行提示').click();await page.locator('.resident-card[data-origin="user"][data-card="notes"]').waitFor();checks.push('Agent creates requested card and user keeps it');
+ await b('调研工作台').click();await b('生成工作区').click();await page.locator('.resident-card[data-origin="agent"][data-card="sources"]').waitFor();
+ assert(await page.locator('.resident-card[data-origin="user"]').count()===3,'Travel pins survive research switch');
+ await page.getByRole('textbox',{name:'补充研究要求'}).fill('列出风险与限制');await b('使用选定资料继续').click();await page.locator('.resident-card[data-origin="agent"][data-card="result"]').waitFor();await page.locator('.resident-card[data-origin="agent"][data-card="risks"]').waitFor();
+ assert(await page.locator('.resident-card[data-origin="agent"][data-card="sources"]').count()===0,'Agent cards evolve with research phase');
+ await b('固定到右侧：研究成果').click();await page.locator('.resident-card[data-origin="user"][data-card="result"]').waitFor();
+ const pinIDs=await page.locator('.resident-card[data-origin="user"]').evaluateAll(els=>els.map(e=>e.dataset.cardId));await page.reload();await page.locator('.resident-card[data-origin="user"][data-card="result"]').waitFor();assert(JSON.stringify(await page.locator('.resident-card[data-origin="user"]').evaluateAll(els=>els.map(e=>e.dataset.cardId)))===JSON.stringify(pinIDs),'Pins survive reload in stable order');checks.push('Research phase changes and cross-task persistence');
+ await b('旅行规划').click();page.once('dialog',d=>d.accept());await b('重新开始').click();await page.getByRole('textbox',{name:'旅行需求'}).fill('去上海2天，预算1500元');await b('生成工作区').click();await page.getByRole('heading',{name:'上海 2 日旅行'}).waitFor();await page.locator('.generation-progress').waitFor({state:'hidden'});
+ const oldBudget=page.locator('.resident-card[data-origin="user"][data-card="budget"]');assert((await oldBudget.innerText()).includes('杭州'),'Old pin not retargeted');assert((await oldBudget.innerText()).includes('已保留 · 原任务'),'Old task status visible');assert(await oldBudget.getByRole('button',{name:'回到工作区',exact:true}).count()===0,'Old task link cannot open unrelated new task');
+ await oldBudget.getByRole('button',{name:'查看内容',exact:true}).click();await page.getByRole('dialog',{name:'杭州 · 旅行预算'}).waitFor();await b('关闭弹窗').click();checks.push('New same-kind task preserves archived pin and content');
+ await page.setViewportSize({width:390,height:844});await b('展开右侧面板').click();await page.locator('.resident-panel').waitFor();assert(await page.evaluate(()=>document.documentElement.scrollWidth===innerWidth),'Mobile width fits');await page.screenshot({path:out+'dynamic-cards-mobile.png'});await b('收起常驻卡片').click();
+ await page.setViewportSize({width:1586,height:992});await b('展开右侧面板').click();await b('调研工作台').click();await page.locator('.generated-report').waitFor();await page.locator('.resident-stack').evaluate(el=>el.scrollTop=el.scrollHeight);await page.screenshot({path:out+'dynamic-cards-research.png'});
+ if(errors.length)throw Error(errors.join(';'));return {result:'passed',checks,errors};
+}

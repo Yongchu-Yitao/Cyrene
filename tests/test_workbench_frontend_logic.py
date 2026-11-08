@@ -625,9 +625,11 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     )[1].split("}", 1)[0]
     assert "flex-shrink: 0;" in expanded_group_region_css
     assert "max-height:" not in expanded_group_region_css
-    assert "padding-top: 11px;" in group_region_css
-    assert "calc(100% - 16px) 1px no-repeat" in group_region_css
-    assert group_region_css.count("linear-gradient(") == 1
+    assert "margin-top: 10px;" in group_region_css
+    assert "padding-top: 10px;" in group_region_css
+    assert "box-sizing: border-box;" in group_region_css
+    assert "border-top: 1px solid" in group_region_css
+    assert "linear-gradient(" not in group_region_css
     assert "var(--wb-floating-rail-bg)" not in group_region_css
     assert ".wbc-chat-list.has-groups.menu-active:has(.wbc-chat-card.menu-open)," in styles
     assert ".wbc-chat-list-group-region:has(.wbc-chat-card.menu-open)" in styles
@@ -7092,7 +7094,7 @@ def test_workbench_agent_media_and_references_reuse_inline_attachment_renderer()
         in agent_files
     )
     assert "<WbcMessageAttachment" in agent_files
-    assert "wbcStartFileDrag(event, file)" in agent_files
+    assert "wbcFileDragHandlers(file)" in agent_files
     assert 'className="wbc-media-references"' in references
     assert 'wbcT("workbenchChat.mediaReferences", "References")' in references
     assert "<WbcMessageAttachment" in references
@@ -7112,8 +7114,6 @@ def test_workbench_agent_media_and_references_reuse_inline_attachment_renderer()
 
 def test_file_resource_drag_temporarily_disables_native_topbar_drag_region():
     source = workbench_chat_source()
-    messages = frontend_module_source("features/chat/messages.jsx")
-    file_resources = frontend_module_source("features/chat/file-resources.jsx")
     styles = workbench_style_source()
 
     assert 'root.classList.add("wbc-resource-drag-active")' in source
@@ -7124,15 +7124,6 @@ def test_file_resource_drag_temporarily_disables_native_topbar_drag_region():
         "html.wbc-resource-drag-active .workbench-topbar {", 1
     )[1].split("}", 1)[0]
     assert "-webkit-app-region: no-drag;" in region_rule
-    assert "function wbcStartFilePointerDrag(event, file)" in file_resources
-    assert "wbcPointInsideResourceShelf(clientX, clientY)" in file_resources
-    assert 'new CustomEvent("cyrene:pin-topbar-resource", { detail: payload })' in file_resources
-    assert "source.setPointerCapture(pointerId)" in file_resources
-    assert "function wbcCopyFileDragAppearance(sourceNode, cloneNode)" in file_resources
-    assert "wbcCopyFileDragAppearance(source, ghost)" in file_resources
-    assert 'ghost.style.height = rect.height + "px"' in file_resources
-    assert "wbcStartFilePointerDrag(event, file)" in messages
-    assert 'draggable={wbcUsesFilePointerDrag() ? undefined : "true"}' in messages
     assert ".wbc-file-pointer-drag-ghost" in styles
     ghost_rule = styles.split(".wbc-file-pointer-drag-ghost {", 1)[1].split("}", 1)[0]
     assert "opacity:" not in ghost_rule

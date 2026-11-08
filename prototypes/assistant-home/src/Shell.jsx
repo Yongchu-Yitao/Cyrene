@@ -9,6 +9,6 @@ export function Sidebar({query,setQuery,collapsed,setCollapsed,module,setModule,
  </aside>
 }
 export function Topbar({view,setView,onNew,onModal,rightOpen,setRightOpen,light,setLight}) {
- const tabs=[['新对话',null],['今天','home'],['金丝熊饲养调研','hamster'],['本周工作总结','weekly'],['周末出行','weekend']];
+ const tabs=[['新对话',null],['智能工作区','intelligent'],['调研工作台','research'],['旅行规划','travel'],['今天','home']];
  return <header className="topbar"><div className="window-brand"><div className="traffic-lights" aria-hidden="true"><i/><i/><i/></div><img src="/assets/logo.png" alt=""/><b>Cyrene</b><IconButton icon="chevron-down" label="关于 Cyrene demo" onClick={()=>onModal('about')}/></div><nav className="workspace-tabs" aria-label="打开的工作区">{tabs.map(([label,id])=><button key={label} className={view===id?'active':''} onClick={()=>id?setView(id):onNew()}><Icon name={!id?'plus':id==='home'?'home':'check'} size={15}/><span>{label}</span></button>)}</nav><div className="top-actions"><span className="demo-tag">DEMO</span><IconButton icon="search" label="全局搜索" onClick={()=>onModal('search')}/><IconButton icon="bell" label="通知" onClick={()=>onModal('notifications')}/><IconButton icon={light?'moon':'sun'} label="切换主题" onClick={()=>setLight(!light)}/><IconButton icon="layout-sidebar-right" label={rightOpen?'收起右侧面板':'展开右侧面板'} onClick={()=>setRightOpen(!rightOpen)}/><button className="avatar" aria-label="演示设置" onClick={()=>onModal('settings')}>S</button></div></header>
 }

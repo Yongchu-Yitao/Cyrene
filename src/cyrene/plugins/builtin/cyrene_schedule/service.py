@@ -128,6 +128,14 @@ class ScheduleRuntimeService:
             from cyrene.workbench.sessions.context import resolve_workbench_project_id_for_session
 
             project_id = str(resolve_workbench_project_id_for_session(session_id) or "")
+        from cyrene.workbench.projects.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+
+        if (
+            data.get("personal_assistant")
+            or session_id == ASSISTANT_ID
+            or data.get("assistant_owner_session_id") == ASSISTANT_ID
+        ):
+            project_id = ASSISTANT_SCOPE_ID
         try:
             chat_id = int(data.get("chat_id", -1))
         except (TypeError, ValueError):

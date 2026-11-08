@@ -130,6 +130,7 @@ function PersonalAssistantPage({ context, active = true }) {
     renderConversation: function (surface) {
       var task = tasks.find(function (item) { return item.session_id === surface.sessionId; });
       return <AssistantChat key={surface.sessionId} sessionId={surface.sessionId} active={active} cache={surface.chatCache}
+        personalAssistant={surface.sessionId === personalAssistantId}
         project={project} title={task ? task.title : "Cyrene"} onOpenFile={surface.onOpenFile}
         permissionRequests={surface.sessionId === personalAssistantId ? snapshot.sessions.filter(function (item) {
           return item.pending_question && item.pending_question.kind && item.pending_question.kind !== "clarification";

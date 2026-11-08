@@ -73,3 +73,10 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 通知 Hook 仅安装到已登记的委派任务，普通会话不安装。
 
 助理的 16 个工具均直接暴露；toolbox 在助理会话中既不可见也不可调用。普通 Agent 的 Toolbox 保持原有行为。
+
+
+### 个人助理定时任务
+
+个人助理直接暴露 `schedule.create/list/edit/pause/resume/cancel/runs`，可直接设置提醒及周期任务。宿主需加载 `cyrene_schedule`。个人助理及其委派子会话创建的定时任务统一归属 `__personal_assistant__`；子会话通过运行上下文中的 `assistant_owner_session_id` 保留归属。来源会话仍单独记录，用于结果投递。
+
+所有项目日程合并显示该全局范围的任务及日历事件；从任一项目编辑、暂停、删除或读取运行历史都操作同一条全局任务。全局汇总与搜索按任务 ID 去重，不复制任务，不增加调度执行次数。普通项目创建的任务仍只属于该项目。
