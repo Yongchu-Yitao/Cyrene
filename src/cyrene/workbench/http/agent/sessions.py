@@ -14,7 +14,8 @@ from cyrene.workbench.sessions.session_presentation import WorkbenchSessionError
 from cyrene.workbench.http.errors import error_response
 
 
-async def _session_call(call: Callable[[], Awaitable[Any]]) -> Any:
+async def session_call(call: Callable[[], Awaitable[Any]]) -> Any:
+    """Apply the shared session error response contract to an HTTP operation."""
     try:
         return await call()
     except WorkbenchSessionError as exc:
@@ -37,7 +38,7 @@ def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/workbench/sessions")
     async def api_workbench_sessions(include_status: bool = False):
-        result = await _session_call(lambda: service.list_sessions(include_status=include_status))
+        result = await session_call(lambda: service.list_sessions(include_status=include_status))
         if isinstance(result, dict) and result.get("status_error"):
             # Keep HTTP failure visible to diagnostics while allowing the UI
             # to apply the independently successful session projection.
@@ -46,15 +47,15 @@ def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/workbench/sessions/{chat_id}/clear")
     async def api_workbench_clear_session(chat_id: str):
-        return await _session_call(lambda: service.clear_session(chat_id))
+        return await session_call(lambda: service.clear_session(chat_id))
 
     @router.delete("/api/workbench/sessions/{chat_id}")
     async def api_workbench_delete_session(chat_id: str):
-        return await _session_call(lambda: service.delete_session(chat_id))
+        return await session_call(lambda: service.delete_session(chat_id))
 
     @router.get("/api/workbench/sessions/{chat_id}/export")
     async def api_workbench_export_session(chat_id: str, format: str = "markdown"):
-        result = await _session_call(lambda: service.export_session(chat_id, format))
+        result = await session_call(lambda: service.export_session(chat_id, format))
         if isinstance(result, JSONResponse):
             return result
         return StreamingResponse(
@@ -64,4 +65,4 @@ def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         )
 
 
-__all__ = ["register_session_routes"]
+__all__ = ["register_session_routes", "session_call"]

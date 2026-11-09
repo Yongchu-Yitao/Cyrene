@@ -26,7 +26,7 @@ async def test_assistant_entry_is_global_durable_and_does_not_read_contexts(tmp_
     await asyncio.gather(service.worker, return_exceptions=True)
     router = APIRouter()
     register_routes(SimpleNamespace(router=router), service)
-    assert [(r.path, r.methods) for r in router.routes] == [("/api/workbench/assistant", {"GET"})]
+    assert [(r.path, r.methods) for r in router.routes] == [("/api/workbench/assistant", {"GET"}), ("/api/workbench/assistant/reset", {"POST"})]
     sidebar = router.routes[0].endpoint
     try:
         first, second = await asyncio.gather(sidebar(), sidebar())
@@ -110,3 +110,62 @@ def test_single_assistant_is_preserved_across_restarts_without_scanning_chats(tm
     assert restarted.store.message("queued")["owner"] == ASSISTANT_ID
     assert restarted.store.notifications()[0]["owner"] == ASSISTANT_ID
     assert repo.get("ordinary") == ordinary_before
+
+
+@pytest.mark.asyncio
+async def test_assistant_reset_deletes_tasks_and_durable_queues(tmp_path):
+    from cyrene.workbench.projects.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+    from cyrene.workbench.sessions.session_presentation import WorkbenchSessionError
+
+    repo = ChatRepository(str(tmp_path / "app.db"))
+    for id, kind, owner in [(ASSISTANT_ID, "personal-assistant", ""),
+                            ("task", "assistant-task", ASSISTANT_ID),
+                            ("orphan", "assistant-task", ASSISTANT_ID),
+                            ("ordinary", "chat", "")]:
+        repo.insert({"id": id, "kind": kind, "projectId": ASSISTANT_SCOPE_ID,
+                     "assistantOwnerSessionId": owner, "status": "idle",
+                     "messages": [{"id": "message", "role": "user", "content": "keep?"}]})
+    ordinary = repo.get("ordinary")
+    host = WorkbenchHost(lambda: SimpleNamespace(service=SimpleNamespace(repository=repo)))
+    service = SessionManagementService(tmp_path, host)
+    service.store.register("task", ASSISTANT_ID)
+    service.store.register("missing", ASSISTANT_ID)
+    service.store.enqueue(ASSISTANT_ID, "task", "queued", {})
+    service.store.notify("notice", ASSISTANT_ID, "task", {})
+    service.store.save_presentation("task", {"title": "Old task"})
+    key = ASSISTANT_ID + ":session_create:old"
+    service.store.reserve(key, "fingerprint")
+    service.store.save(key, "fingerprint", {"session_id": "task"})
+    await service.start()
+    service.worker.cancel()
+    await asyncio.gather(service.worker, return_exceptions=True)
+    try:
+        # A busy task must prevent partial removal of any conversation.
+        task = repo.get("task")
+        task["status"] = "running"
+        repo.write_one(task)
+        with pytest.raises(WorkbenchSessionError):
+            await service.reset_assistant()
+        assert repo.get(ASSISTANT_ID)["messages"]
+        assert repo.get("orphan") is not None
+        assert service.store.message("queued") is not None
+        task["status"] = "idle"
+        repo.write_one(task)
+        router = APIRouter()
+        register_routes(SimpleNamespace(router=router), service)
+        result = await router.routes[1].endpoint()
+        assert result == {"ok": True, "deletedTasks": 2}
+        assert repo.get(ASSISTANT_ID)["messages"] == []
+        assert repo.get(ASSISTANT_ID)["messageGeneration"] == 1
+        assert repo.get("task") is None
+        assert repo.get("orphan") is None
+        assert repo.get("ordinary") == ordinary
+        assert service.store.sessions(ASSISTANT_ID) == []
+        assert service.store.message("queued") is None
+        assert service.store.notifications() == []
+        assert service.store.presentation("task") == {}
+        assert service.store.replay(key, "fingerprint") is None
+        assert (await service.reset_assistant())["deletedTasks"] == 0
+    finally:
+        await service.stop()

@@ -1,5 +1,6 @@
 import { useNativeWheel } from "../../shared/native-wheel.jsx"
 import { useMobileDrawers } from "./mobile-drawers.jsx"
+import { startSidebarGlassMotion } from "./sidebar-glass-motion.mjs"
 const { useState: useWorkbenchState } = React;
 export function useWorkspaceDrawers(fullPage, getWheelHandler, getToggleSidebar, wbApplyStoredRightWidth) {
   var [desktopRailCollapsed, setRailCollapsed] = useWorkbenchState(function () {
@@ -11,9 +12,23 @@ export function useWorkspaceDrawers(fullPage, getWheelHandler, getToggleSidebar,
   });
   var mobileDrawers = useMobileDrawers(fullPage);
   var railCollapsed = mobileDrawers.compact ? false : desktopRailCollapsed;
+  const gridElement = React.useRef(null);
+  const previousRail = React.useRef({ collapsed: railCollapsed, compact: mobileDrawers.compact });
+  const attachGrid = React.useCallback(node => {
+    gridElement.current = node;
+    wbApplyStoredRightWidth(node);
+  }, [wbApplyStoredRightWidth]);
   var mobileGridRef = useNativeWheel(function (event) {
     if (!mobileDrawers.compact) getWheelHandler()(event);
-  }, wbApplyStoredRightWidth);
+  }, attachGrid);
+  React.useLayoutEffect(() => {
+    const previous = previousRail.current;
+    previousRail.current = { collapsed: railCollapsed, compact: mobileDrawers.compact };
+    if (gridElement.current && !mobileDrawers.compact && !previous.compact
+        && previous.collapsed !== railCollapsed) {
+      return startSidebarGlassMotion(gridElement.current);
+    }
+  }, [railCollapsed, mobileDrawers.compact, fullPage]);
   var toggleWorkspaceSidebar = function () {
     if (mobileDrawers.compact) mobileDrawers.setSide(mobileDrawers.side === "left" ? "" : "left");
     else getToggleSidebar()();

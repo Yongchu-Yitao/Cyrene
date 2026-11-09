@@ -45,6 +45,16 @@ class SessionManagementService:
         chat.update(id=ASSISTANT_ID, kind="personal-assistant")
         return port.service.repository.insert(chat)
 
+    async def reset_assistant(self):
+        from cyrene.workbench.projects.assistant import ASSISTANT_ID
+
+        async def perform():
+            async with self.lock:
+                await asyncio.to_thread(self.initialize_assistant)
+                return await asyncio.to_thread(self.host.reset_assistant, ASSISTANT_ID, self.store)
+
+        return await self._on_owner(perform)
+
     async def start(self):
         self.loop = asyncio.get_running_loop()
         self.lock = asyncio.Lock()
@@ -261,7 +271,7 @@ class SessionManagementService:
         except ValueError:
             return
         event = await asyncio.to_thread(self.host.notification, target, node_id)
-        if event:
+        if event and self.store.session(target) == record and self.host.chat(target):
             event = {**event, "session_id": target}
             event_id = "managed_event_" + digest([target, self.host.version(chat), event.get("run_id"), event.get("node_id"), event["status"]])
             self.store.notify(
@@ -275,6 +285,10 @@ class SessionManagementService:
             )
 
     async def notify_tasks(self):
+        async with self.lock:
+            await self._notify_tasks()
+
+    async def _notify_tasks(self):
         for row in self.store.notifications():
             try:
                 if await self.host.notify(row["owner"], row["target"], row["id"], json.loads(row["payload"])):
@@ -296,6 +310,8 @@ class SessionManagementService:
         await self.notify_tasks()
         for row in self.store.pending():
             async with self.lock:
+                if self.store.message(row["id"]) is None:
+                    continue
                 try:
                     record, _chat = self._owned(row["owner"], row["target"])
                     if record["paused"]:

@@ -41,14 +41,14 @@ function setup({ confirmed = true, failure = false } = {}) {
     counts: () => ({ reloads, confirmation }) }
 }
 
-test('reset confirms and clears only the assistant before refreshing', async () => {
+test('reset confirms and clears the assistant and its tasks before refreshing', async () => {
   const h = setup()
   await h.button.props.onClick()
   assert.equal(h.counts().confirmation.danger, true)
   assert.deepEqual(h.requests.map(r => r.url), [
-    '/api/workbench/assistant', '/api/workbench/sessions/assistant_global/clear',
+    '/api/workbench/assistant/reset',
   ])
-  assert.equal(h.requests[1].options.method, 'POST')
+  assert.equal(h.requests[0].options.method, 'POST')
   assert.equal(h.counts().reloads, 1)
   assert.deepEqual(h.busy, [true, false])
 })

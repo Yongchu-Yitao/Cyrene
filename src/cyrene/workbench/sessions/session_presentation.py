@@ -303,7 +303,8 @@ def _markdown(chat: Mapping[str, Any], messages: list[dict[str, Any]]) -> str:
 class WorkbenchSessionPresentation:
     """Project Workbench chats and their ContextTrees into UI session records."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, *, kinds: tuple[str, ...] = ("chat",)) -> None:
+        self.kinds = kinds
         self.db_path = str(Path(db_path).expanduser().resolve())
         self.context_directory = (
             workbench_agent_data_directory(self.db_path) / "context"
@@ -424,7 +425,7 @@ class WorkbenchSessionPresentation:
     def get(self, chat_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
         target = str(chat_id or "").strip()
         chat = store.read_chat(self.db_path, target, _empty_chat_store)
-        if not isinstance(chat, dict) or str(chat.get("kind") or "chat") != "chat":
+        if not isinstance(chat, dict) or str(chat.get("kind") or "chat") not in self.kinds:
             raise WorkbenchSessionError(
                 localized("Conversation not found.", "未找到对话。"),
                 404,

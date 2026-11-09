@@ -21,3 +21,9 @@ def register_routes(context, service):
         sessions = (await service.list(target))["sessions"]
         chats = [chat] + [service.host.chat(s["session_id"]) for s in sessions]
         return {"scope": assistant_scope(), "assistant_id": target, "sessions": sessions, "chats": [service.host.port().service.public_chat_light(c) for c in chats if c]}
+
+    @router.post("/api/workbench/assistant/reset")
+    async def reset():
+        from cyrene.workbench.http.agent.sessions import session_call
+
+        return await session_call(service.reset_assistant)

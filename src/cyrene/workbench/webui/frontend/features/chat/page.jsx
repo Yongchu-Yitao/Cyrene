@@ -1604,6 +1604,18 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
       else openPaneContent("chat", droppedChatId, { side: "right" });
     }
   }
+  function openTaskChat(chatId) {
+    var targetId = String(chatId || "");
+    if (!targetId) return;
+    var layout = paneLayoutFor(activeChatIdRef.current);
+    var alreadyOpen = layout.left.concat(layout.right).some(function (card) {
+      return card.kind === "chat" && String(card.payload) === targetId;
+    });
+    // Expanding a task's resource group must not remount its open conversation.
+    if (alreadyOpen) return;
+    openChatSplit(targetId);
+  }
+
   function openChatSplit(chatId) {
     var parentId = String(activeChatIdRef.current || "");
     if (!parentId || !chatId) return;
@@ -2793,7 +2805,11 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
         </div>
       ) : null}
       {(typeof railOverride === "function" ? railOverride({
-        openChat: openChatSplit,
+        pinnedChatIds: pinnedChatIds,
+        togglePinned: onTogglePinnedChat,
+        renameChat: function (chat) { setQuickRenameChat(chat); },
+        deleteChat: handleDeleteChat,
+        openChat: openTaskChat,
         openResource: function (ownerId, type, payload) {
           if (type === "browser") {
             setBrowserWindowModeForChat(ownerId, "pip");

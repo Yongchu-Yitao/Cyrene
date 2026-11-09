@@ -232,9 +232,7 @@ function DataPanel(p) {
         ? await feedback.confirmModal({ title: title, body: body, confirmLabel: title, danger: true })
         : window.confirm([title, "", body].join("\n"));
       if (!confirmed) return;
-      var assistant = await settingsFetch("/api/workbench/assistant").then(readSettingsResponse);
-      if (!assistant.assistant_id) throw new Error(t("settings.resetAssistantFailed"));
-      await settingsFetch("/api/workbench/sessions/" + encodeURIComponent(assistant.assistant_id) + "/clear", {
+      await settingsFetch("/api/workbench/assistant/reset", {
         method: "POST",
       }).then(readSettingsResponse);
       window.location.reload();

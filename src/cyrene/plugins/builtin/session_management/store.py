@@ -158,3 +158,13 @@ class Store:
             document.update(changes)
             db.execute("INSERT OR REPLACE INTO task_presentation VALUES (?,?)", (target, json.dumps(document, ensure_ascii=False)))
         return document
+
+    def reset_owner(self, owner, targets):
+        with self.connect() as db:
+            for target in targets:
+                db.execute("DELETE FROM task_presentation WHERE task_id=?", (target,))
+            db.execute("DELETE FROM messages WHERE owner=?", (owner,))
+            db.execute("DELETE FROM notifications WHERE owner=?", (owner,))
+            db.execute("DELETE FROM sessions WHERE owner=?", (owner,))
+            prefix = owner + ":"
+            db.execute("DELETE FROM effects WHERE substr(key, 1, ?)=?", (len(prefix), prefix))

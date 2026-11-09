@@ -1909,7 +1909,12 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 
 .wbc-rail .assistant-task-group .wbc-chat-group-toggle b {
   font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
-  font-weight: 500;
+}
+
+/* Match the message body's 560 weight from the base typography. */
+.wbc-rail .assistant-task-group .wbc-chat-group-toggle b,
+.wbc-rail .assistant-task-group .assistant-resource-row .wbc-chat-card-title b {
+  font-weight: 560;
 }
 
 .wbc-rail .assistant-task-group {
@@ -1919,16 +1924,42 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   min-height: 36px;
 }
 
+/* Clip the original side strokes at the outer corners; the sticky cap must
+   not leave straight border tails behind those curves. Menus use a portal. */
+.wbc-rail .assistant-task-group.expanded {
+  clip-path: inset(var(--task-group-clip-top, 0px) 0 0 round 13px);
+}
+
 /* The header sticks within its own task, then yields to the following group. */
 .wbc-rail .assistant-task-group .wbc-chat-group-head {
   position: sticky;
-  top: 0;
+  /* Keep the cap inside the scroll viewport when the header sticks. */
+  top: 4px;
   z-index: 3;
+  isolation: isolate;
   flex-shrink: 0;
+  background: var(--wb-control-bg);
+}
+/* The group's original top edge scrolls away; carry its rounded cap with
+   the sticky header. At rest this overlaps the existing border exactly. */
+.wbc-rail .assistant-task-group.expanded .wbc-chat-group-head::before {
+  content: "";
+  position: absolute;
+  inset: -4px -1px 0;
+  z-index: -1;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
+  border-bottom: 0;
+  border-radius: 13px 13px 0 0;
   background: var(--wb-control-bg);
 }
 .wbc-rail .assistant-task-group.expanded .wbc-chat-group-head:hover {
   background: var(--wb-control-bg);
+}
+
+.wbc-rail .assistant-task-group.collapsed .wbc-chat-group-head {
+  position: static;
+  background: transparent;
 }
 
 /* Resource icons and titles align with the task header. */

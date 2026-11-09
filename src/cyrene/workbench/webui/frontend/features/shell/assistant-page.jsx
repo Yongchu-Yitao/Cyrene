@@ -107,6 +107,8 @@ function PersonalAssistantPage({ context, active = true }) {
           }).map(function (task) {
             var groupMatches = !search || String((task.presentation || {}).title || task.title || "").toLocaleLowerCase().includes(search);
             return <AssistantTaskGroup key={task.session_id} task={task} query={search} matches={groupMatches} hasChildren={resourceCounts[task.session_id] > 0}
+              chat={snapshot.chats.find(function (chat) { return chat.id === task.session_id; })}
+              menuActions={surface}
               onDragStart={function (event) { dragSession(event, task.session_id); }}
               onOpen={function () { if (surface) surface.openChat(task.session_id); }}>
             {surface && <AssistantTaskResources task={task} onOpen={surface.openResource} onFiles={receiveFiles} onCount={receiveResourceCount} fileOwners={fileOwners} query={groupMatches ? "" : search} active={active} />}

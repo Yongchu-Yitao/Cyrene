@@ -2170,3 +2170,24 @@ body.wbc-resizing-pane-column .wbc-plugin-view-frame {
 }
 
 .wbc-plugin-view-state strong { color: var(--wb-text); }
+
+/* During a sidebar morph the page behind every glass card is also resizing.
+   Suspend live sampling for that short interval, including nested surfaces;
+   the layout controller restores it after the actual transitions settle. */
+.workbench-grid[data-sidebar-motion] *,
+.workbench-grid[data-sidebar-motion] *::before,
+.workbench-grid[data-sidebar-motion] *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Resolve the translucent fill over the neutral canvas while sampling is
+   suspended. Otherwise moving text/board columns would show through sharply. */
+.workbench-grid[data-sidebar-motion] .workbench-integrated-rail {
+  background: linear-gradient(var(--wb-floating-rail-bg), var(--wb-floating-rail-bg)), var(--wb-surface) !important;
+}
+
+.workbench-grid[data-sidebar-motion] .workbench-sidebar-dock-nav,
+.workbench-grid[data-sidebar-motion] .wbc-composer-box {
+  background: linear-gradient(var(--wbc-composer-glass-background), var(--wbc-composer-glass-background)), var(--wb-surface) !important;
+}

@@ -298,8 +298,10 @@ def test_all_chat_action_menu_items_have_icons():
     card_menu = rail.split('className="wb-card-menu" role="menu"', 1)[1].split(
         "</div>", 1
     )[0]
+    assert "<WbcChatMenuActions" in card_menu
+    actions = frontend_module_source("features/chat/chat-menu-actions.jsx")
     for icon in ("pin", "edit", "trash"):
-        assert f"WBC_ICONS.{icon}" in card_menu
+        assert f"WBC_ICONS.{icon}" in actions
 
     header = chat.split("function WbcHeader(", 1)[1].split(
         "// Conversation thread", 1

@@ -49,6 +49,36 @@ class WorkbenchHost:
         # Do not inherit public dialogue, authorization or memory snapshots.
         return port.service.repository.insert(chat)
 
+    def reset_assistant(self, owner, store):
+        from contextlib import ExitStack
+        from cyrene.workbench.sessions.admission import session_admission
+        from cyrene.workbench.sessions.session_presentation import WorkbenchSessionPresentation
+
+        repository = self.port().service.repository
+        db_path = repository._database()
+        presentation = WorkbenchSessionPresentation(
+            db_path, kinds=("personal-assistant", KIND),
+        )
+        # Include orphaned task chats whose ownership registration was interrupted.
+        targets = {row["id"] for row in store.sessions(owner)}
+        targets.update(chat["id"] for chat in repository.read_summaries()["chats"]
+                       if chat.get("kind") == KIND and chat.get(OWNER) == owner)
+        with ExitStack() as stack:
+            for target in sorted({owner, *targets}):
+                stack.enter_context(session_admission(db_path, target))
+            existing = [target for target in targets if self.chat(target)
+                        and self.chat(target).get("kind") == KIND
+                        and self.chat(target).get(OWNER) == owner]
+            # Check every conversation before deleting anything.
+            for target in [owner, *existing]:
+                presentation._ensure_no_live_run(target)
+                presentation._ensure_mutable(*presentation.get(target))
+            for target in existing:
+                presentation._delete(target)
+            presentation._clear(owner)
+            store.reset_owner(owner, targets)
+        return {"ok": True, "deletedTasks": len(existing)}
+
     def checkpoint(self, session_id):
         return self.port().run_manager.conversation_runtime.context_checkpoint(session_id) or {}
 

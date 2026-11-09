@@ -11,14 +11,15 @@ test('task group opens its conversation only on expansion, preserves collapse an
   const storage = new Map();
   const React = {createElement(type,props,...children){return {type,props:{...props,children}};}};
   const WbcRailGroupToggle = 'group-toggle';
-  const h=harness('../shell/assistant-task-group.jsx',{React,wbcChatRailVisualState,WbcRailGroupToggle,WbcRailGroupContent:'group-content',TaskConversationIcon:'task-icon',localStorage:{
+  const h=harness('../shell/assistant-task-group.jsx',{React,createPortal:node=>node,trackTaskGroupClip:()=>()=>{},WbcChatMenuActions:'menu-actions',wbcChatRailVisualState,WbcRailGroupToggle,WbcRailGroupContent:'group-content',TaskConversationIcon:'task-icon',localStorage:{
     getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),
   }});
   let query='', opens=0, hasChildren=true, status='running';
   h.run((mod,hooks)=>{
+    React.useRef=hooks.useWbcRef;
     React.useState=hooks.useWbcState;
     React.useEffect=hooks.useWbcEffect;
-    return mod.AssistantTaskGroup({task:{session_id:'a',title:'Task',status},query,matches:true,hasChildren,onOpen:()=>opens++,children:'resources'});
+    return mod.AssistantTaskGroup({task:{session_id:'a',title:'Task',status},chat:{id:'a'},menuActions:{pinnedChatIds:['a']},query,matches:true,hasChildren,onOpen:()=>opens++,children:'resources'});
   });
   assert.match(h.value.props.className, /status-running/);
   status='planning';h.flush();
@@ -43,4 +44,14 @@ test('task group opens its conversation only on expansion, preserves collapse an
   toggle().props.onClick();h.flush();
   assert.equal(opens,2);
   assert.equal(toggle().props.expanded,false);
+  let prevented=0;
+  toggle().props.onContextMenu({preventDefault(){prevented++;},stopPropagation(){},clientX:790,clientY:590,currentTarget:{getBoundingClientRect:()=>({left:20,bottom:40})}});
+  h.flush();
+  assert.equal(prevented,1);
+  assert.equal(opens,2);
+  const menu=find(h.value,'menu-actions')[0];
+  assert.equal(menu.props.chat.id,'a');
+  assert.equal(menu.props.isPinned,true);
+  menu.props.onClose();h.flush();
+  assert.equal(find(h.value,'menu-actions').length,0);
 });

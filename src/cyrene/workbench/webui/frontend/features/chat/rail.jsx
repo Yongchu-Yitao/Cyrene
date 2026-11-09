@@ -1,3 +1,4 @@
+import { WbcChatMenuActions } from "./chat-menu-actions.jsx"
 import { WbcRailGroupToggle, WbcRailGroupContent } from "./rail-group.jsx"
 import { WbcRailToolbar } from "./rail-toolbar.jsx"
 import { useNativeWheelElement } from "../../shared/native-wheel.jsx"
@@ -1284,32 +1285,8 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
               </button>
               {isMenuOpen && (
                 <div className="wb-card-menu" role="menu" data-cyrene-node-id="chat_context_menu">
-                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_pin" className="wbc-chat-pin-action" onClick={function (e) {
-                    e.stopPropagation();
-                    setMenuId("");
-                    if (onTogglePinned) onTogglePinned(chat, !isPinned);
-                  }}>
-                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.pin}</span>
-                    <span>{isPinned
-                      ? wbcT("workbenchChat.unpin", "Unpin chat")
-                      : wbcT("workbenchChat.pin", "Pin chat")}</span>
-                  </button>
-                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_rename" className="wbc-chat-menu-action" onClick={function (e) {
-                    e.stopPropagation();
-                    setMenuId("");
-                    setRenameChat(chat);
-                  }}>
-                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
-                    <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
-                  </button>
-                  <button type="button" role="menuitem" data-cyrene-node-id="chat_menu_delete" className="wbc-chat-menu-action danger" onClick={function (e) {
-                    e.stopPropagation();
-                    setMenuId("");
-                    onDelete && onDelete(chat.id);
-                  }}>
-                    <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.trash}</span>
-                    <span>{wbcT("workbenchChat.delete", "Delete chat")}</span>
-                  </button>
+                  <WbcChatMenuActions chat={chat} isPinned={isPinned} onClose={function () { setMenuId(""); }}
+                    onTogglePinned={onTogglePinned} onRename={setRenameChat} onDelete={onDelete} />
                 </div>
               )}
             </span>
