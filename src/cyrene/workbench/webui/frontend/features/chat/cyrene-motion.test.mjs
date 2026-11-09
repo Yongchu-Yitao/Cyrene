@@ -34,15 +34,24 @@ test('live styles change after 6–10 seconds while terminal feedback plays once
 });
 
 test('state changes and rapid clicks preserve position and velocity instead of resetting',()=>{
-  const m=createCyreneMotion();m.setState('tool');advance(m,.7);
-  for(const state of CYRENE_STATES){
-    const pose={...m.pose},velocity={...m.velocity};
-    m.setState(state);m.press();m.release();
-    assert.deepEqual(m.pose,pose);assert.deepEqual(m.velocity,velocity);
-    m.step(1/120);
-    assert(Math.abs(m.pose.y-pose.y)<1,'no vertical jump');
-    assert(Math.abs(m.pose.angle-pose.angle)<15,'no ring reset');
-    for(const n of Object.values(m.pose))assert(Number.isFinite(n));
+  for(const choice of [0,.3,.6,.99]){
+    const m=createCyreneMotion({random:()=>choice,idleRandom:()=>.5});
+    m.setState('tool');advance(m,.7);
+    for(const state of CYRENE_STATES){
+      const pose={...m.pose},velocity={...m.velocity};
+      m.setState(state);m.press();m.release();
+      assert.deepEqual(m.pose,pose);assert.deepEqual(m.velocity,velocity);
+      const dt=1/120;
+      m.step(dt);
+      // Orbit clicks can legitimately accumulate rotation. A continuous spring
+      // step advances by velocity * dt; an angle reset violates that identity.
+      for(const key of Object.keys(m.pose)){
+        assert(Number.isFinite(m.pose[key]));
+        assert(Number.isFinite(m.velocity[key]));
+        assert(Math.abs(m.pose[key]-pose[key]-m.velocity[key]*dt)<1e-9,
+          `${choice} ${state} ${key}: continuous position`);
+      }
+    }
   }
 });
 
