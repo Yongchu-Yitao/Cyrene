@@ -2,6 +2,17 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.1.2] - 2026-11-10
+
+### Features and interface updates
+
+- Add a context menu to assistant task groups for pinning or unpinning, renaming and deleting the associated task conversation, matching ordinary chat actions. Open it with a right-click, the keyboard menu key or Shift+F10, and close it with Escape or a click outside. Opening the menu does not expand the task or open its conversation; the menu adjusts near window edges and remains visible outside rounded task-group boundaries.
+- Preserve an existing task conversation and its pane position when expanding its resource group if the conversation is already open in either the left or right split column. Tasks that are not open still open in a split pane, allowing files, terminals and browser resources to be browsed without reopening or reloading the conversation.
+- Refine task-group titles and borders while scrolling. Expanded titles remain sticky with a rounded top that follows the header, avoiding trailing straight borders and broken corners. Collapsed groups use a natural header layout with a transparent background. Task titles and resource names also use a consistent weight that better matches conversation text and improves readability.
+- Improve translucent surfaces while expanding or collapsing the desktop sidebar, reducing stutter and sharp background text showing through navigation, the composer and other glass surfaces as the page changes width. The original appearance returns after the transition, including rapid reversals, interrupted animations and leaving the page; the system's reduced-motion preference is respected.
+- Update “Reset personal assistant” in settings to clear the assistant's conversation history, context, all task conversations and related session archives together. It also removes task listings, task organization details, pending task messages and notifications so old tasks and reminders do not return after a reset. Other chats, long-term memory and app settings remain intact. The description and confirmation explain the deletion scope and irreversible nature, and a successful reset refreshes the page to show the cleared state.
+- Check the main assistant conversation and every related task for active replies before resetting. If any reply is still running, reject the reset and ask for it to be stopped first, avoiding partially cleared conversations. Associated tasks missing from the task listing are also removed, and resetting an already-cleared assistant completes normally.
+
 ## [0.9.1.1] - 2026-11-09
 
 ### Features and interface updates
