@@ -39,6 +39,8 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
         count=len(results),
     )]
     for index, result in enumerate(results, start=1):
+        if result.get("project_id"):
+            lines.append(f"project_id={result['project_id']}; project_name={result['project_name']}")
         similarity = result.get("cosine_similarity")
         similarity_text = f"; cosine_similarity={float(similarity):.6f}" if similarity is not None else ""
         content = str(result.get("content") or "").strip()[:500]

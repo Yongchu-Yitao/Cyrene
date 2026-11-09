@@ -1,3 +1,4 @@
+import { createGripLogoDrag } from "./grip-logo-drag.mjs"
 import { paneRowGeometry, paneColumnBounds } from "./pane-resize-geometry.mjs"
 import { createResizeCollapseGuard } from "../layout/resize-collapse.mjs"
 import { startPointerResize } from "../layout/pointer-resize.mjs"
@@ -678,7 +679,7 @@ function WbcPaneCardFrame({ card, semanticNodeId, dropKey, children, grip, dropE
   );
 }
 
-function WbcPaneRowResizer({ active, side, ratio, onResize, onClose }) {
+function WbcPaneRowResizer({ active, side, ratio, onResize, onClose, canClose }) {
   var handleRef = useWbcRef(null);
   var { safeRatio, seamTop } = paneRowGeometry(ratio);
   function startResize(event) {
@@ -699,7 +700,8 @@ function WbcPaneRowResizer({ active, side, ratio, onResize, onClose }) {
       update: function (moveEvent) {
         var next = moveEvent.clientY - rect.top - 6;
         nextRatio = Math.max(0.2, Math.min(0.8, next / trackHeight));
-        return resizeCollapseEdge(next, trackHeight * 0.2, trackHeight * 0.8);
+        var edge = resizeCollapseEdge(next, trackHeight * 0.2, trackHeight * 0.8);
+        return edge && (!canClose || canClose(edge === "minimum" ? 0 : 1)) ? edge : "";
       },
       paint: function () {
         column.style.gridTemplateRows = nextRatio + "fr " + (1 - nextRatio) + "fr";
@@ -769,7 +771,7 @@ function WbcPaneRowResizer({ active, side, ratio, onResize, onClose }) {
   );
 }
 
-function WbcPaneColumnResizer({ active, width, onResize, onClose }) {
+function WbcPaneColumnResizer({ active, width, onResize, onClose, canClose }) {
   var handleRef = useWbcRef(null);
   function clampFor(layout, value) {
     var bounds = paneColumnBounds(layout);
@@ -794,7 +796,8 @@ function WbcPaneColumnResizer({ active, width, onResize, onClose }) {
       update: function (moveEvent) {
         var next = startWidth + (startX - moveEvent.clientX);
         nextWidth = Math.max(bounds.minimum, Math.min(bounds.maximum, next));
-        return resizeCollapseEdge(next, bounds.minimum, bounds.maximum);
+        var edge = resizeCollapseEdge(next, bounds.minimum, bounds.maximum);
+        return edge && (!canClose || canClose(edge === "minimum" ? "right" : "left")) ? edge : "";
       },
       paint: function () { layout.style.setProperty("--wbc-pane-right-width", nextWidth + "px"); },
       commit: function () {
@@ -988,7 +991,64 @@ function WbcPanelAccordionSection({ icon, label, meta, expanded, onClick, disabl
   </section>;
 }
 
-function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled, menuContributions, menuState, onInvokeContribution }) {
+function gripPortalTheme(root) {
+  var portalTheme = {};
+  var page = root && root.closest(".wbc-page");
+  var grid = root && root.closest(".workbench-grid");
+  [grid, page].forEach(function (scope) {
+    if (!scope || !window.getComputedStyle) return;
+    var computed = window.getComputedStyle(scope);
+    for (var index = 0; index < computed.length; index += 1) {
+      var propertyName = computed[index];
+      if (propertyName.indexOf("--wb-") !== 0 && propertyName.indexOf("--wbc-") !== 0) continue;
+      portalTheme[propertyName] = computed.getPropertyValue(propertyName);
+    }
+  });
+  var card = root && root.closest(".wbc-pane-card, .wbc-side-card");
+  var cardStyle = card && window.getComputedStyle ? window.getComputedStyle(card) : null;
+  if (cardStyle && cardStyle.backgroundColor && cardStyle.backgroundColor !== "rgba(0, 0, 0, 0)") {
+    portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor;
+  }
+  if (cardStyle && cardStyle.borderRadius) portalTheme["--wbc-split-grip-radius"] = cardStyle.borderRadius;
+  if (cardStyle && cardStyle.boxShadow && cardStyle.boxShadow !== "none") {
+    portalTheme["--wbc-split-grip-shadow"] = cardStyle.boxShadow;
+  }
+  return portalTheme;
+}
+
+function gripContributionInfo(contribution, menuState) {
+  var contributionId = String(contribution && contribution.id || "");
+  var contributionKind = String(contribution && contribution.kind || "action");
+  var contributionIcon = WBC_ICONS[String(contribution && contribution.icon_name || "tool")] || WBC_ICONS.tool;
+  var active = Boolean(menuState && contribution.state_key && menuState[contribution.state_key]);
+  var informationFields = Array.isArray(contribution && contribution.fields) ? contribution.fields : [];
+  var informationDetails = informationFields.filter(function (field) { return String(field && field.group || "") !== "facts"; });
+  var informationFacts = informationFields.filter(function (field) { return String(field && field.group || "") === "facts"; });
+  return { contributionId, contributionKind, contributionIcon, active, informationDetails, informationFacts };
+}
+
+function gripSettingOptions(contribution, selected, onInvokeContribution) {
+  return (Array.isArray(contribution.options) ? contribution.options : []).map(function (option) {
+    var active = String(selected == null ? "" : selected) === String(option && option.value || "");
+    return <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={active ? "true" : "false"}
+      disabled={contribution.disabled === true}
+      className={active ? "is-selected" : ""}
+      key={String(option && option.value || "")}
+      onClick={function () {
+        if (active) return;
+        if (onInvokeContribution) Promise.resolve(onInvokeContribution(contribution, option.value)).catch(function () {});
+      }}
+    >
+      <span aria-hidden="true">{active ? WBC_ICONS.check : null}</span>
+      <span>{String(option && option.label || option && option.value || "")}</span>
+    </button>;
+  });
+}
+
+function WbcSplitGripBar({ logoOnlyDrag = false, dragSource, side, onToggleSide, onClose, onOpenConversationPanel, openPanelLabel, onNewConversation, menuType, onTogglePin, pinned, onSplitPointerDown, onSplitDragStart, onSplitDragEnd, menuDisabled, menuContributions, menuState, onInvokeContribution }) {
   var [menuOpen, setMenuOpen] = useWbcState(false);
   var [expandedTab, setExpandedTab] = useWbcState("");
   var settingsOpen = expandedTab === "settings";
@@ -997,6 +1057,10 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
   var gripRef = useWbcRef(null);
   var menuRef = useWbcRef(null);
   var pointerDragRef = useWbcRef(null);
+  var logoDragRef = useWbcRef(null);
+  useWbcEffect(function () {
+    return function () { logoDragRef.current?.destroy(); logoDragRef.current = null; pointerDragRef.current = null; };
+  }, [logoOnlyDrag]);
   var [menuPosition, setMenuPosition] = useWbcState({ top: 0, left: 0, portalTheme: {} });
   var rootMenuContributions = (Array.isArray(menuContributions) ? menuContributions : []).filter(function (contribution) {
     return String(contribution && contribution.placement || "settings") === "root";
@@ -1056,31 +1120,14 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     function positionMenu() {
       var grip = gripRef.current;
       if (!grip) return;
-      var rect = grip.getBoundingClientRect();
+      // Anchor to the stable logo slot, not the animated SVG or full-width grip.
+      // Clicking and animation continue to share the original grip handlers.
+      var logoSlot = grip.querySelector('.wbc-side-split-grip-bar-visual:has(> .cyrene-motion)');
+      var rect = (logoSlot || grip).getBoundingClientRect();
       // The popup is portalled to document.body to stay out of the Workbench
       // grid. Bridge the scoped theme tokens across that boundary so the
       // panel surface and plugin controls keep the conversation card styling.
-      var portalTheme = {};
-      var page = rootRef.current && rootRef.current.closest(".wbc-page");
-      var grid = rootRef.current && rootRef.current.closest(".workbench-grid");
-      [grid, page].forEach(function (scope) {
-        if (!scope || !window.getComputedStyle) return;
-        var computed = window.getComputedStyle(scope);
-        for (var index = 0; index < computed.length; index += 1) {
-          var propertyName = computed[index];
-          if (propertyName.indexOf("--wb-") !== 0 && propertyName.indexOf("--wbc-") !== 0) continue;
-          portalTheme[propertyName] = computed.getPropertyValue(propertyName);
-        }
-      });
-      var card = rootRef.current && rootRef.current.closest(".wbc-pane-card, .wbc-side-card");
-      var cardStyle = card && window.getComputedStyle ? window.getComputedStyle(card) : null;
-      if (cardStyle && cardStyle.backgroundColor && cardStyle.backgroundColor !== "rgba(0, 0, 0, 0)") {
-        portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor;
-      }
-      if (cardStyle && cardStyle.borderRadius) portalTheme["--wbc-split-grip-radius"] = cardStyle.borderRadius;
-      if (cardStyle && cardStyle.boxShadow && cardStyle.boxShadow !== "none") {
-        portalTheme["--wbc-split-grip-shadow"] = cardStyle.boxShadow;
-      }
+      var portalTheme = gripPortalTheme(rootRef.current);
       setMenuPosition({
         top: Math.round(rect.bottom + 4),
         left: Math.round(rect.left + rect.width / 2),
@@ -1111,6 +1158,9 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     if (event.button !== 0) return;
     var target = event.currentTarget;
     var rect = target.getBoundingClientRect();
+    logoDragRef.current?.destroy();
+    var logoSlot = logoOnlyDrag && target.querySelector('.wbc-side-split-grip-bar-visual:has(> .cyrene-motion)');
+    logoDragRef.current = logoSlot ? createGripLogoDrag(logoSlot, event) : null;
     target.dataset.wbcDragClientX = String(event.clientX);
     target.dataset.wbcDragClientY = String(event.clientY);
     target.dataset.wbcDragHandleX = String(event.clientX - rect.left);
@@ -1130,6 +1180,11 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
   function trackDragPointer(event) {
     var drag = pointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    if (logoDragRef.current) {
+      if (Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y) > 4) drag.moved = true;
+      if (drag.moved) logoDragRef.current.move(event);
+      return;
+    }
     if (!drag.moved && Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y) > 4) {
       drag.moved = true;
       // A click should only open the grip menu. Mounting the full-card drag
@@ -1143,11 +1198,12 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
     var drag = pointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     var target = event.currentTarget;
+    logoDragRef.current?.finish();
+    target.dataset.wbcPointerDragged = drag.moved ? "true" : "false";
+    pointerDragRef.current = null;
     if (typeof target.releasePointerCapture === "function") {
       try { target.releasePointerCapture(event.pointerId); } catch (e) {}
     }
-    target.dataset.wbcPointerDragged = drag.moved ? "true" : "false";
-    pointerDragRef.current = null;
   }
 
   var swapLabel = wbcT("workbenchChat.splitMoveOtherSide", "Move split to the other side");
@@ -1173,6 +1229,7 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
         onPointerMove={trackDragPointer}
         onPointerUp={releaseDragPointer}
         onPointerCancel={releaseDragPointer}
+        onLostPointerCapture={releaseDragPointer}
         onClick={function (event) {
           if (event.currentTarget.dataset.wbcPointerDragged === "true") {
             event.currentTarget.dataset.wbcPointerDragged = "false";
@@ -1228,13 +1285,7 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
             />
           ) : null}
           {rootMenuContributions.map(function (contribution) {
-            var contributionId = String(contribution && contribution.id || "");
-            var contributionKind = String(contribution && contribution.kind || "action");
-            var contributionIcon = WBC_ICONS[String(contribution && contribution.icon_name || "tool")] || WBC_ICONS.tool;
-            var active = Boolean(menuState && contribution.state_key && menuState[contribution.state_key]);
-            var informationFields = Array.isArray(contribution && contribution.fields) ? contribution.fields : [];
-            var informationDetails = informationFields.filter(function (field) { return String(field && field.group || "") !== "facts"; });
-            var informationFacts = informationFields.filter(function (field) { return String(field && field.group || "") === "facts"; });
+            var { contributionId, contributionKind, contributionIcon, active, informationDetails, informationFacts } = gripContributionInfo(contribution, menuState);
             if (contributionKind === "information") return <WbcPanelAccordionSection
                 menuItem={true}
                 key={contributionId}
@@ -1299,24 +1350,7 @@ function WbcSplitGripBar({ dragSource, side, onToggleSide, onClose, onOpenConver
                     {String(contribution && contribution.presentation || "") === "slider" ? <WbcSplitSettingSlider contribution={contribution} selected={selected} onInvokeContribution={onInvokeContribution} /> : <React.Fragment>
                     <span className="wbc-side-split-grip-setting-label">{String(contribution && contribution.label || contribution && contribution.id || "")}</span>
                     {String(contribution && contribution.kind || "") === "radio-group" ? <div role="group">
-                      {(Array.isArray(contribution.options) ? contribution.options : []).map(function (option) {
-                        var active = String(selected == null ? "" : selected) === String(option && option.value || "");
-                        return <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={active ? "true" : "false"}
-                          disabled={contribution.disabled === true}
-                          className={active ? "is-selected" : ""}
-                          key={String(option && option.value || "")}
-                          onClick={function () {
-                            if (active) return;
-                            if (onInvokeContribution) Promise.resolve(onInvokeContribution(contribution, option.value)).catch(function () {});
-                          }}
-                        >
-                          <span aria-hidden="true">{active ? WBC_ICONS.check : null}</span>
-                          <span>{String(option && option.label || option && option.value || "")}</span>
-                        </button>;
-                      })}
+                      {gripSettingOptions(contribution, selected, onInvokeContribution)}
                     </div> : null}
                     </React.Fragment>}
                   </div>;

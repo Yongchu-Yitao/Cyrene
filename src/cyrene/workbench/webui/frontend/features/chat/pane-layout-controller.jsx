@@ -110,6 +110,11 @@ function wbcUpdatePaneCard(context, cardId, updater) {
 }
 
 function wbcClosePaneCard(context, cardId, requestedOwnerChatId) {
+  var closingLayout = wbcPaneLayoutFor(context, requestedOwnerChatId);
+  if (context.canClosePaneCard && [].concat(cardId).some(function (id) {
+    var location = wbcPaneCardLocation(closingLayout, id);
+    return location && !context.canClosePaneCard(location.card);
+  })) return;
   // Measure retained transcripts before React removes a track and starts the
   // existing grid transition (including menu/keyboard initiated closes).
   window.dispatchEvent(new CustomEvent("workbench:pane-layout-change"));

@@ -3314,6 +3314,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "toolName.card.list": "List cards",
     "toolName.card.pin": "Pin card",
     "toolName.card.archive": "Archive card",
+    "toolName.task_organize": "Organize task",
     "toolName.task_start": "Start task",
     "toolName.task_list": "List tasks",
     "toolName.task_inspect": "Inspect task",

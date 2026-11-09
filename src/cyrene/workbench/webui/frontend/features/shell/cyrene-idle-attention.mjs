@@ -11,8 +11,8 @@ export function attachCyreneIdleAttention(svg, motion) {
     target.addEventListener(event, fn, { passive: true });
     removers.push(() => target.removeEventListener(event, fn));
   }
-  function visible(element) {
-    if (!element || !element.isConnected || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+  function visible(element, decorative = false) {
+    if (!element || !element.isConnected || element.closest(decorative ? '[hidden], [inert]' : '[hidden], [inert], [aria-hidden="true"]')) return false;
     const box = element.getBoundingClientRect();
     const css = win.getComputedStyle(element);
     return box.width > 0 && box.height > 0 && box.bottom > 0 && box.right > 0
@@ -24,14 +24,14 @@ export function attachCyreneIdleAttention(svg, motion) {
     const now = win.performance.now();
     if (!force && now - sampledAt < 80) return;
     sampledAt = now;
-    if (!visible(anchor)) { motion.setAttentionTargets({}); return; }
+    if (!visible(anchor, true)) { motion.setAttentionTargets({}); return; }
     const box = anchor.getBoundingClientRect();
     const direction = point => {
       const x = point.x - box.x - box.width / 2, y = point.y - box.y - box.height / 2;
       const length = Math.hypot(x, y) || 1;
       return { x: x / length, y: y / length };
     };
-    const composer = [...doc.querySelectorAll(composerSelector)].find(visible);
+    const composer = [...doc.querySelectorAll(composerSelector)].find(element => visible(element));
     const inputBox = composer?.getBoundingClientRect();
     motion.setAttentionTargets({
       pointer: pointer && now - pointerAt < 3000 ? direction(pointer) : null,

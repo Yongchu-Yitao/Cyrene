@@ -164,3 +164,138 @@ def test_legacy_exact_session_grants_do_not_expand_and_single_use_has_no_scope(t
     assert grants.session_fingerprint("Write", {"kind": "write_permission_request"}) == ""
     different_workspace = bash_boundary(first, PluginContext(workspace=tmp_path / "other"))
     assert grants.session_fingerprint("Bash", request) != grants.session_fingerprint("Bash", different_workspace)
+
+
+@pytest.mark.parametrize("command", [
+    "rm -f .cyrene/scratch/check.mjs .cyrene/scratch/screenshot.png",
+    "cd '{scratch}' && rm -f check.mjs screenshot.png",
+    "rm -rf .cyrene/scratch/temporary-preview",
+])
+def test_scratch_cleanup_routes_to_automatic_review(tmp_path, command):
+    from datetime import datetime, timezone
+    from cyrene.core.hook import HookEvent, PRE_TOOL_USE
+    from test_task_contexts import make_session
+
+    scratch = tmp_path / ".cyrene" / "scratch"
+    scratch.mkdir(parents=True)
+    command = command.format(scratch=scratch)
+    request = bash_boundary({"command": command}, PluginContext(workspace=tmp_path))
+    assert request["kind"] == "scratch_cleanup"
+    assert request["requires_human"] is False
+    assert command in request["reason"]
+    session = make_session(tmp_path)
+    try:
+        session._plugin_context_data["run_context"] = {"permission_mode": "auto"}
+        requirement = session._permission_requirement(HookEvent(
+            PRE_TOOL_USE, session.tree.id, datetime.now(timezone.utc),
+            payload={"tool": {"name": "Bash", "arguments": {"command": command}}, "permission": request},
+        ))
+        assert requirement.action == "review"
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("command", [
+    "rm -f .cyrene/scratch/check.mjs index.html",
+    "rm -rf .cyrene/scratch",
+    "rm -f .cyrene/scratch/../../index.html",
+    "cd .cyrene/scratch && rm -f ~/important.txt",
+    "cd .cyrene/scratch && rm -f *.png",
+    "cd .cyrene/scratch && rm -f check.mjs; rm index.html",
+    "rm -f .cyrene/scratch/link/important.txt",
+])
+def test_unbounded_or_deliverable_deletions_still_require_confirmation(tmp_path, command):
+    scratch = tmp_path / ".cyrene" / "scratch"
+    scratch.mkdir(parents=True)
+    outside = tmp_path / "user-files"
+    outside.mkdir()
+    (scratch / "link").symlink_to(outside, target_is_directory=True)
+    request = bash_boundary({"command": command}, PluginContext(workspace=tmp_path))
+    assert request["kind"] == "destructive_confirmation"
+    assert request["requires_human"] is True
+
+
+@pytest.mark.parametrize("style", ["absolute_cd", "relative", "absolute"])
+def test_nested_project_scratch_cleanup_matches_installed_task_layout(tmp_path, style):
+    workspace = tmp_path / "Application Support" / "Cyrene" / "workspace"
+    scratch = workspace / "split-bill" / ".cyrene" / "scratch"
+    scratch.mkdir(parents=True)
+    commands = {
+        "absolute_cd": f'cd "{scratch}" && rm -f capture-final.mjs final-numbers.mjs desktop-1280.png',
+        "relative": "rm -f split-bill/.cyrene/scratch/capture-final.mjs",
+        "absolute": f'rm -f "{scratch}/capture-final.mjs"',
+    }
+    request = bash_boundary({"command": commands[style]}, PluginContext(workspace=workspace))
+    assert request["kind"] == "scratch_cleanup"
+    assert request["requires_human"] is False
+    assert all(str(scratch) in path for path in request["paths"])
+
+
+@pytest.mark.parametrize("escape", ["symlink_project", "outside_workspace", "scratch_root", "mixed_deliverable"])
+def test_nested_scratch_cleanup_keeps_ownership_boundary(tmp_path, escape):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    (outside / ".cyrene" / "scratch").mkdir(parents=True)
+    (workspace / "linked-project").symlink_to(outside, target_is_directory=True)
+    commands = {
+        "symlink_project": "rm -f linked-project/.cyrene/scratch/test.mjs",
+        "outside_workspace": f'rm -f "{outside}/.cyrene/scratch/test.mjs"',
+        "scratch_root": "rm -rf split-bill/.cyrene/scratch",
+        "mixed_deliverable": "rm -f split-bill/.cyrene/scratch/test.mjs split-bill/index.html",
+    }
+    request = bash_boundary({"command": commands[escape]}, PluginContext(workspace=workspace))
+    assert request["requires_human"] is True
+
+
+def test_task_human_permission_is_blocked_without_pausing_or_deleting(tmp_path):
+    from test_task_contexts import make_session
+
+    target = tmp_path / "deliverable.txt"
+    target.write_text("keep")
+    calls = []
+
+    async def model(arguments, context):
+        calls.append(arguments)
+        if len(calls) == 1:
+            return {"content": "", "tool_calls": [{"id": "cleanup", "name": "Bash",
+                    "arguments": {"command": "rm deliverable.txt"}}]}
+        return {"content": "Kept the file and completed without optional cleanup.", "tool_calls": []}
+
+    session = make_session(tmp_path, model)
+    session._plugin_context_data["assistant_owner_session_id"] = "assistant_global"
+    session._plugin_context_data["run_context"] = {"permission_mode": "auto"}
+    try:
+        session.submit("Finish the task", run_id="task-denial")
+        asyncio.run(session.drain())
+        assert target.read_text() == "keep"
+        assert session.pending_output() is None
+        assert session.final_output("task-denial")["content"].startswith("Kept the file")
+        assert len(calls) == 2
+        assert "Task permission request denied by default" in str(calls[1])
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("task,kind,expected", [
+    (True, "destructive_confirmation", "deny"),
+    (False, "destructive_confirmation", "confirm"),
+    (True, "scratch_cleanup", "review"),
+])
+def test_task_denial_preserves_auto_review_and_parent_confirmation(tmp_path, task, kind, expected):
+    from datetime import datetime, timezone
+    from cyrene.core.hook import HookEvent, PRE_TOOL_USE
+    from test_task_contexts import make_session
+
+    session = make_session(tmp_path)
+    session._plugin_context_data["assistant_owner_session_id"] = "assistant_global" if task else ""
+    session._plugin_context_data["run_context"] = {"permission_mode": "auto"}
+    try:
+        result = session._permission_requirement(HookEvent(
+            PRE_TOOL_USE, session.tree.id, datetime.now(timezone.utc),
+            payload={"tool": {"name": "Bash", "arguments": {"command": "rm example"}},
+                     "permission": {"kind": kind, "operation": "cleanup", "reason": "test"}},
+        ))
+        assert result.action == expected
+    finally:
+        session.close()

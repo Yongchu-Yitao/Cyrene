@@ -6,7 +6,7 @@ import json
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from .definitions import LEGACY_TEMPLATES, SPEC, TEMPLATES
+from .definitions import INPUT_SCHEMA, LEGACY_TEMPLATES, SPEC, TEMPLATES
 
 MAX_BYTES = 256 * 1024
 
@@ -42,25 +42,11 @@ def unique(values, label):
 
 def input_schema(schema):
     """Only bounded flat form schemas; never resolve user-authored $ref or regex."""
-    allowed = {"type", "properties", "required", "additionalProperties"}
-    if not isinstance(schema, dict) or set(schema) - allowed or schema.get("type") != "object" or schema.get("additionalProperties") is not False:
-        raise CardError("invalid_input_schema", "Inputs require a closed object schema")
+    try:
+        validate(INPUT_SCHEMA, schema)
+    except CardError as exc:
+        raise CardError("invalid_input_schema", f"input_schema.{exc}") from exc
     properties = schema.get("properties", {})
-    if not isinstance(properties, dict) or len(properties) > 64:
-        raise CardError("invalid_input_schema", "At most 64 input fields are supported")
-    scalar = {"type", "enum", "minimum", "maximum", "minLength", "maxLength", "format", "minItems", "maxItems", "uniqueItems", "items"}
-    for key, field in properties.items():
-        validate({"type": "string", "minLength": 1, "maxLength": 160}, key)
-        if not isinstance(field, dict) or set(field) - scalar or field.get("type") not in {"string", "number", "integer", "boolean", "array"}:
-            raise CardError("invalid_input_schema", f"Unsupported input field: {key}")
-        if field.get("format") not in {None, "date", "date-time", "email"}:
-            raise CardError("invalid_input_schema", f"Unsupported format: {key}")
-        if field.get("type") == "array":
-            item = field.get("items", {})
-            if not isinstance(item, dict) or set(item) - {"type", "enum"} or item.get("type") not in {"string", "number", "integer", "boolean"}:
-                raise CardError("invalid_input_schema", "Array inputs require scalar items")
-        elif "items" in field:
-            raise CardError("invalid_input_schema", "Only array inputs accept items")
     try:
         Draft202012Validator.check_schema(schema)
     except Exception as exc:

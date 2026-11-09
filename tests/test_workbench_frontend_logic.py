@@ -541,10 +541,12 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert 'className="wbc-chat-group wbc-chat-group-preview drop-ready"' in rail
     assert 'wbcT("workbenchChat.releaseToGroup", "Release to create a chat group")' in rail
     assert 'wbcT("workbenchChat.releaseToExistingGroup", "Release to add to this chat group")' in rail
-    assert 'className={"wbc-chat-group-content" + (isCollapsed ? " collapsed" : " expanded")}' in rail
-    assert 'inert={isCollapsed ? "" : undefined}' in rail
-    assert 'className="wbc-chat-group-content-inner"' in rail
-    assert 'className="wbc-chat-group-children"' in rail
+    assert '<WbcRailGroupContent expanded={!isCollapsed}>' in rail
+    group = frontend_module_source("features/chat/rail-group.jsx")
+    assert '"wbc-chat-group-content " + (expanded ? "expanded" : "collapsed")' in group
+    assert 'inert={!expanded ? "" : undefined}' in group
+    assert 'className="wbc-chat-group-content-inner"' in group
+    assert 'className="wbc-chat-group-children"' in group
     assert "function openGroupMenu(event)" in rail
     assert "function toggleGroupMenu(event)" in rail
     assert "function revealRailMenu(actions)" in rail
@@ -643,7 +645,8 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert ".wbc-chat-group.dragging {" in styles
     assert rail.count('{group.chatIds.length + (groupDropReady ? 1 : 0)}') == 1
     assert '<span className="wbc-chat-group-leading-chevron expanded" aria-hidden="true">{WBC_ICONS.chevronRight}</span>' in rail
-    assert '<span className="wbc-chat-group-count">{group.chatIds.length + (groupDropReady ? 1 : 0)}</span>' in rail
+    assert 'count={group.chatIds.length + (groupDropReady ? 1 : 0)}' in rail
+    assert '<span className="wbc-chat-group-count">{count}</span>' in group
     assert '<span className="wbc-chat-group-count">2</span>' in rail
     assert 'className="wbc-chat-group-icon"' not in rail
     group_children_css = styles.split(".wbc-rail .wbc-chat-group-children {", 1)[1].split("}", 1)[0]
@@ -668,7 +671,8 @@ def test_workbench_chat_group_drop_uses_one_enclosing_frame_without_stacking():
     assert "titleLocked: true" in rail
     assert "metadataChatIds: signature" in rail
     assert "group.metadataLang !== groupMetadataLang" in rail
-    assert "<WbcHoverMarquee text={group.title}" in rail
+    assert "title={group.title}" in rail
+    assert "<WbcHoverMarquee text={title}" in group
     assert "group.summary || (groupMetadataPending[group.id]" in rail
     assert "@keyframes wbc-hover-marquee" in styles
     summary_css = styles.split(".wbc-chat-group-summary {", 1)[1].split("}", 1)[0]
@@ -911,8 +915,9 @@ def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
     shell_css = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
-    composer_material = styles.rsplit("\n.wbc-composer {", 1)[1].split("}", 1)[0]
-    composer_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+    composer_material = styles.rsplit("\n.wbc-composer,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
+    composer_css = (styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+        + styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0])
     assert "border: 1px solid" in search_css
     assert "box-shadow: none;" in search_css
     assert "border-color:" in search_focus_css
@@ -933,7 +938,8 @@ def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
     dock_css = styles.split("\n.wbc-main > .wbc-composer {", 1)[1].split("}", 1)[0]
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     topbar_css = styles.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
-    input_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+    input_css = (styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+        + styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0])
     scroll_css = styles.split(".wbc-scroll-to-bottom {", 1)[1].split("}", 1)[0]
     scroll_hover_css = styles.split(".wbc-scroll-to-bottom:hover {", 1)[1].split(
         "}", 1
@@ -1733,7 +1739,7 @@ def test_each_conversation_split_grip_closes_its_own_conversation():
     pane = source.split("function renderPaneCard", 1)[1].split(
         "function renderPaneColumn", 1
     )[0]
-    assert "var close = function () { return closePaneCardWithConfirmation(card); };" in pane
+    assert "var close = canClosePaneCard(card) ? function () { return closePaneCardWithConfirmation(card); } : null;" in pane
     assert "function closePaneCardWithConfirmation(card, ownerChatId)" in source
     assert "var move = function () { movePaneCardOtherSide(card.id); };" in pane
     assert "onClose={close}" in pane
@@ -1858,10 +1864,12 @@ def test_workbench_split_grip_opens_a_centered_floating_conversation_panel():
     assert 'typeof document !== "undefined" ? document.body : null' in grip_bar
     assert 'surfaceRef={menuRef}' in grip_bar
     assert 'insideMenu = menuRef.current && menuRef.current.contains(event.target)' in grip_bar
-    assert 'rootRef.current.closest(".workbench-grid")' in grip_bar
-    assert 'propertyName.indexOf("--wb-") !== 0' in grip_bar
-    assert 'rootRef.current.closest(".wbc-pane-card, .wbc-side-card")' in grip_bar
-    assert 'portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor' in grip_bar
+    assert 'gripPortalTheme(rootRef.current)' in grip_bar
+    portal_theme = source.split('function gripPortalTheme(root)', 1)[1].split('function gripContributionInfo', 1)[0]
+    assert 'root.closest(".workbench-grid")' in portal_theme
+    assert 'propertyName.indexOf("--wb-") !== 0' in portal_theme
+    assert 'root.closest(".wbc-pane-card, .wbc-side-card")' in portal_theme
+    assert 'portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor' in portal_theme
     assert 'style={Object.assign({}, menuPosition.portalTheme' in grip_bar
     split_menu_css = styles.split(".wbc-side-split-grip-menu {", 1)[1].split("}", 1)[0]
     assert "position: fixed;" in split_menu_css
@@ -2291,8 +2299,8 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
     styles = workbench_style_source()
 
     shell = styles.split("\n.workbench-shell {", 1)[1].split("}", 1)[0]
-    base = styles.split("\n.wbc-composer-box {", 1)[1].split("}", 1)[0]
-    light = styles.split('html[data-theme="light"] .wbc-composer-box {', 1)[1].split(
+    base = styles.split("\n.wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
+    light = styles.split('html[data-theme="light"] .wbc-composer-box,\nhtml[data-theme="light"] .workbench-sidebar-dock-nav {', 1)[1].split(
         "}", 1
     )[0]
     dark = styles.split(
@@ -6694,8 +6702,8 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
         ".workbench-sidebar-dock.is-persistent {", 1
     )[1].split("}", 1)[0]
     assert "position: absolute;" in persistent_dock_css
-    assert "left: 27px;" in persistent_dock_css
-    assert "width: calc(var(--wb-rail-w) - 46px);" in persistent_dock_css
+    assert "left: calc(13px + var(--wb-rail-content-padding));" in persistent_dock_css
+    assert "width: calc(var(--wb-rail-w) - 18px - 2 * var(--wb-rail-content-padding));" in persistent_dock_css
     assert (
         ".workbench-grid.integrated-sidebars.is-chat > "
         ".workbench-sidebar-dock.is-persistent {" not in styles
@@ -6780,7 +6788,8 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "wb-mem-rail-head workbench-integrated-rail-head" in memory
     assert "wb-mem-rail-scroll workbench-integrated-rail-body" in memory
     dock_css = styles.split(".workbench-sidebar-dock {", 1)[1].split("}", 1)[0]
-    dock_nav_css = styles.split(".workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
+    dock_nav_css = frontend_module_source("features/chat/shell.css").split(".workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
+    dock_material = styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
     dock_button_css = styles.split(".workbench-sidebar-dock-nav button {", 1)[1].split("}", 1)[0]
     dock_hover_css = styles.split(
         ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button:hover {",
@@ -6793,13 +6802,13 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "grid-template-rows: 56px 46px;" in dock_css
     assert "height: var(--wb-sidebar-dock-height);" in dock_css
     assert "min-height: var(--wb-sidebar-dock-height);" in dock_css
-    assert "margin: auto 14px 12px;" in dock_css
+    assert "margin: auto var(--wb-rail-content-padding) 12px;" in dock_css
     assert "height: 56px;" in dock_nav_css
     assert "grid-row: 1;" in dock_nav_css
-    assert "--wb-dock-nav-bg: color-mix(in srgb, var(--wb-card-bg) 78%, var(--wb-control-bg));" in dock_nav_css
-    assert "border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);" in dock_nav_css
+    assert "--wb-dock-nav-bg: var(--wbc-composer-glass-background);" in dock_nav_css
+    assert "border: var(--wbc-composer-glass-border);" in dock_material
     assert "border-radius: 15px;" in dock_nav_css
-    assert "background: var(--wb-dock-nav-bg);" in dock_nav_css
+    assert "background: var(--wbc-composer-glass-background);" in dock_material
     assert "height: 48px;" in dock_button_css
     assert ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button {" in styles
     assert "color: var(--wb-faint);" in dock_button_css
@@ -9515,7 +9524,8 @@ def test_pending_question_routes_text_to_answer_and_keeps_attachment_controls_di
 def test_workbench_model_picker_compacts_without_overlapping_send_button():
     styles = workbench_style_source()
 
-    composer_rule = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+    composer_rule = (styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+        + styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0])
     anchor_rule = styles.split(".wbc-model-anchor {", 1)[1].split("}", 1)[0]
     button_rule = styles.split(".wbc-model-button {", 1)[1].split("}", 1)[0]
     compact_rule = styles.split(

@@ -65,7 +65,7 @@ test("loaded split passes the pending question and messages to the transcript", 
   assert.equal(transcript.props.messages, messages)
 })
 
-function resizeHarness(kind, { closable = false, layoutWidth = 1236, width = 520 } = {}) {
+function resizeHarness(kind, { closable = false, canClose, layoutWidth = 1236, width = 520 } = {}) {
   const listeners = new Map()
   const handleListeners = new Map()
   const classes = new Set()
@@ -112,7 +112,7 @@ function resizeHarness(kind, { closable = false, layoutWidth = 1236, width = 520
   context.module = { exports: {} }
   vm.runInNewContext(code, context)
   const component = context.module.exports[kind === "column" ? "WbcPaneColumnResizer" : "WbcPaneRowResizer"]
-  const element = component({ width, ratio: 0.5, side: "left", onResize: value => commits.push(value), onClose: closable ? side => closes.push(side) : undefined })
+  const element = component({ width, canClose, ratio: 0.5, side: "left", onResize: value => commits.push(value), onClose: closable ? side => closes.push(side) : undefined })
   element.props.onPointerDown({ button: 0, clientX: 700, pointerId: 1, currentTarget: handle, preventDefault() {} })
   return {
     commits, closes, events, frames, layout, handle, classes, handleListeners,
@@ -327,5 +327,27 @@ test("canceling a visually collapsed pane restores it and clears the gesture", (
     assert.equal(drag.layout.attrs["data-resize-collapsed"], undefined)
     assert.deepEqual(drag.closes, [])
     assertDragFinished(drag)
+  }
+})
+
+
+test("protected panes remain at their minimum on every resize edge without a collapse preview", () => {
+  for (const [kind, target, x, y, startX, startY] of [
+    ["column", "right", 888, 0, 840, 0],
+    ["column", "left", 352, 0, 400, 0],
+    ["row", 0, 0, 118, 0, 166],
+    ["row", 1, 0, 694, 0, 646],
+  ]) {
+    for (const protectedTarget of [target, "other"]) {
+      const drag = resizeHarness(kind, { closable: true, canClose: value => value !== protectedTarget })
+      drag.move(startX, startY)
+      drag.wait()
+      drag.move(x, y)
+      assert.equal(Boolean(drag.layout.attrs["data-resize-collapsed"]), protectedTarget !== target)
+      drag.stop()
+      assert.deepEqual(drag.closes, protectedTarget === target ? [] : [target])
+      assert.equal(drag.commits.length, 1)
+      assertDragFinished(drag)
+    }
   }
 })

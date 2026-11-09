@@ -88,3 +88,8 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 个人助理直接暴露 `schedule.create/list/edit/pause/resume/cancel/runs`，可直接设置提醒及周期任务。宿主需加载 `cyrene_schedule`。个人助理及其委派子会话创建的定时任务统一归属 `__personal_assistant__`；子会话通过运行上下文中的 `assistant_owner_session_id` 保留归属。来源会话仍单独记录，用于结果投递。
 
 所有项目日程合并显示该全局范围的任务及日历事件；从任一项目编辑、暂停、删除或读取运行历史都操作同一条全局任务。全局汇总与搜索按任务 ID 去重，不复制任务，不增加调度执行次数。普通项目创建的任务仍只属于该项目。
+
+### 助理侧栏任务组
+
+每个已有执行 task 在左侧显示为普通对话组样式的可折叠分组，包含任务对话、交付文件、终端和所属浏览器标签。折叠偏好保存在客户端；搜索会临时展开。
+`task_organize` 可更新组标题、position（较小值靠前）、archived、hidden_resources（kind:key）及 attachment_ids。附件 ID 必须来自主助理已交付的附件；数组参数替换原选择，省略的字段保留。`task_list` 返回 presentation 和已关联 files，供助理保留旧选择。展示设置持久化在同一插件数据库的 task_presentation 表，操作仍检查任务归属并复用工具回执。归档不停止执行，可通过“显示已归档任务”找回。组操作不切换动态上下文、不创建会话、不改变资源所有者。

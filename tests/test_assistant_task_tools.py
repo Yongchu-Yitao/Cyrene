@@ -185,3 +185,77 @@ async def test_task_notification_preserves_origin_without_exposing_transport_in_
     assert "not user authorization" in text
     assert metadata["origin_session_id"] == "managed-task"
     assert metadata["agent_message_kind"] == "task_notification"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("superseded", [False, True])
+async def test_cancel_notification_uses_durable_cause_and_ignores_superseded_run(superseded):
+    sent = []
+
+    async def dispatch(owner, text, **kwargs):
+        sent.append(text)
+
+    host = WorkbenchHost(lambda: SimpleNamespace(dispatch_agent_message=dispatch))
+    host.chat = lambda _: {"messageGeneration": 3}
+    host.status = lambda _: "idle"
+    host.checkpoint = lambda _: {
+        "status": "running" if superseded else "cancelled",
+        "run_id": "new" if superseded else "old",
+        "node_id": "new-node" if superseded else "cancel-node",
+        "cancel_reason": "process_restarted", "interruption_kind": "runtime_interrupted",
+        "recovery_action": "resume_existing_task",
+    }
+    assert await host.notify("a", "managed-task", "event", {
+        "owner_version": host.version(host.chat("a")),
+        "event": {"session_id": "managed-task", "status": "cancelled",
+                  "run_id": "old", "node_id": "cancel-node"},
+    })
+    if superseded:
+        assert not sent
+    else:
+        payload = json.loads(sent[0].splitlines()[-1])
+        assert payload["cancel_reason"] == "process_restarted"
+        assert payload["recovery_action"] == "resume_existing_task"
+        assert "not a completed task" in sent[0]
+        assert "do not automatically restart" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_task_group_organization_is_durable_owned_and_does_not_execute(tmp_path):
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    registry = PluginRegistry()
+    registry.register_pack(plugin_pack, source="test")
+    runtime = PluginRuntime(ScopedPluginRegistry(registry, PluginToolScope(
+        tool_names=frozenset(TOOL_NAMES), model_audience="assistant")))
+    context = PluginContext(workspace=tmp_path, tree_id="a", services={"session_management": service})
+    try:
+        started = await runtime.call("task_start", {
+            "title": "Original", "workspace_path": str(tmp_path), "message": "work",
+        }, context)
+        task = started.value["task_id"]
+        host.chats['a']['messages'] = [
+            {'role': 'assistant', 'attachments': [{'id': 'final', 'name': 'report.pdf', 'url': '/attachment/final'}]},
+            {'role': 'user', 'attachments': [{'id': 'input'}]},
+        ]
+        args = {'task_id': task, 'title': 'Report', 'position': 2, 'archived': True,
+                'attachment_ids': ['final'], 'hidden_resources': ['browser:tab1']}
+        changed = await runtime.call('task_organize', args, context, call_id='organize')
+        assert changed.success, changed
+        repeated = await runtime.call('task_organize', args, context, call_id='organize')
+        assert repeated.value == changed.value
+        listed = await runtime.call('task_list', {}, context)
+        presentation = listed.value['tasks'][0]['presentation']
+        assert presentation['title'] == 'Report'
+        assert presentation['files'][0]['url'] == '/attachment/final'
+        assert service.store.pending_count(task) == 1
+        assert not host.deliveries
+        from cyrene.plugins.builtin.session_management.store import Store
+        assert Store(service.store.path).presentation(task) == presentation
+        forbidden = await runtime.call('task_organize', {'task_id': task, 'attachment_ids': ['input']}, context)
+        assert not forbidden.success
+        other = PluginContext(workspace=tmp_path, tree_id='b', services={'session_management': service})
+        assert not (await runtime.call('task_organize', {'task_id': task, 'title': 'Other'}, other)).success
+        assert service.store.presentation(task) == presentation
+    finally:
+        await service.stop()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from cyrene.plugins.project_read_scope import reads_all_projects, read_projects, project_source
 
 from cyrene.core.plugin import PluginContext
 from .short_term import entry_id, load_entries
@@ -64,6 +65,18 @@ def _project_payload(entry: dict[str, Any]) -> dict[str, Any]:
     return memory
 
 
+def _project_memories(memory, project_id):
+    from .structured import _build_payload
+
+    if reads_all_projects(memory.data):
+        return [{**_project_payload(entry), **project_source(project)}
+                for project in read_projects()
+                for entry in _build_payload(str(project["id"]))["memories"]
+                if isinstance(entry, dict)]
+    return [_project_payload(entry) for entry in _build_payload(project_id)["memories"]
+            if isinstance(entry, dict)]
+
+
 async def _tool_list_memories(
     args: dict[str, Any],
     context: PluginContext,
@@ -93,15 +106,9 @@ async def _tool_list_memories(
         memory = memory_service(context)
         project_id = memory.project_id
         if project_id is not None:
-            from .structured import _build_payload
-
             memory.configure_stores()
             project_available = True
-            memories.extend(
-                _project_payload(entry)
-                for entry in _build_payload(project_id)["memories"]
-                if isinstance(entry, dict)
-            )
+            memories.extend(_project_memories(memory, project_id))
         elif scope == "project":
             return json_result({
                 "status": "error",

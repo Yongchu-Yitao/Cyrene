@@ -3688,10 +3688,12 @@ html[data-theme="dark"] .wbc-command-chip {
   padding: 0;
 }
 
-.wbc-composer {
+/* The module Dock uses the exact input material, including theme overrides. */
+.wbc-composer,
+.workbench-sidebar-dock-nav {
   --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
-  --wbc-composer-glass-drop-shadow: var(--wbc-control-shadow);
+  --wbc-composer-glass-drop-shadow: var(--wbc-control-shadow, 0 1px 2px rgba(15, 23, 42, .028), 0 5px 14px rgba(15, 23, 42, .02));
   --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 10%, transparent);
   --wbc-composer-glass-inner-edge: color-mix(in srgb, var(--wb-line) 14%, transparent);
   --wbc-composer-glass-shadow:
@@ -3707,28 +3709,33 @@ html[data-theme="dark"] .wbc-command-chip {
   z-index: 21;
 }
 
-.wbc-composer-box {
+.wbc-composer-box,
+.workbench-sidebar-dock-nav {
   --wbc-composer-glass-shadow:
     var(--wbc-composer-glass-drop-shadow),
     inset 0 1px 0 var(--wbc-composer-glass-top-highlight),
     inset 0 0 0 1px var(--wbc-composer-glass-inner-edge);
-  position: relative;
-  container-name: wbc-composer;
-  container-type: inline-size;
   border: var(--wbc-composer-glass-border);
-  border-radius: 14px;
   background: var(--wbc-composer-glass-background);
-  padding: 10px 12px 8px;
   box-shadow: var(--wbc-composer-glass-shadow);
   -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
   backdrop-filter: var(--wbc-composer-glass-filter);
+}
+
+.wbc-composer-box {
+  position: relative;
+  container-name: wbc-composer;
+  container-type: inline-size;
+  border-radius: 14px;
+  padding: 10px 12px 8px;
 }
 
 /* Match the dark composer's glass construction in light mode. The material
    stays light, but uses the same translucency, blur and three-layer elevation
    instead of falling back to the nearly flat shared control shadow. */
 html[data-theme="light"] .wbc-composer,
-html[data-theme="light"] .wbc-composer-box {
+html[data-theme="light"] .wbc-composer-box,
+html[data-theme="light"] .workbench-sidebar-dock-nav {
   --wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);
   --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(15, 23, 42, .12);
   --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 90%, transparent);
@@ -3740,7 +3747,8 @@ html[data-theme="light"] .wbc-composer-box {
    canvas, so dark mode needs stronger edge contrast to carry the same visual
    weight. Only material colours change here: both themes retain the base
    three-layer shadow and the exact same compositor filter. */
-html[data-theme="dark"] .wbc-composer {
+html[data-theme="dark"] .wbc-composer,
+html[data-theme="dark"] .workbench-sidebar-dock-nav {
   --wbc-composer-glass-background: var(--wb-composer-surface);
   --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(0, 0, 0, .42);
   --wbc-composer-glass-top-highlight: color-mix(in srgb, #fff 14%, transparent);

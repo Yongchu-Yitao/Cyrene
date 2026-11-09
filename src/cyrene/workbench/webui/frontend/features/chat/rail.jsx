@@ -1,3 +1,4 @@
+import { WbcRailGroupToggle, WbcRailGroupContent } from "./rail-group.jsx"
 import { WbcRailToolbar } from "./rail-toolbar.jsx"
 import { useNativeWheelElement } from "../../shared/native-wheel.jsx"
 import { pluginToolKey, useRailPluginCollections } from "./rail-plugin-collections.jsx"
@@ -1416,11 +1417,11 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         }}
       >
         <header className="wbc-chat-group-head">
-          <button
-            type="button"
-            className="wbc-chat-group-toggle"
+          <WbcRailGroupToggle
+            title={group.title}
+            count={group.chatIds.length + (groupDropReady ? 1 : 0)}
             draggable="true"
-            title={wbcT("workbenchChat.dragGroup", "Drag to move {title}.", { title: group.title })}
+            aria-label={wbcT("workbenchChat.dragGroup", "Drag to move {title}.", { title: group.title })}
             onClick={function () {
               if (suppressGroupClickRef.current === group.id) return;
               setCollapsedGroups(function (current) { return { ...current, [group.id]: !isCollapsed }; });
@@ -1461,12 +1462,8 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
                 if (suppressGroupClickRef.current === group.id) suppressGroupClickRef.current = "";
               }, 0);
             }}
-            aria-expanded={!isCollapsed}
-          >
-            <span className={"wbc-chat-group-leading-chevron" + (!isCollapsed ? " expanded" : "")} aria-hidden="true">{WBC_ICONS.chevronRight}</span>
-            <span className="wbc-chat-group-count">{group.chatIds.length + (groupDropReady ? 1 : 0)}</span>
-            <b><WbcHoverMarquee text={group.title} /></b>
-          </button>
+            expanded={!isCollapsed}
+          />
           <span className="wbc-chat-group-actions">
             <button
               type="button"
@@ -1500,18 +1497,10 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
             ? wbcT("workbenchChat.groupSummaryGenerating", "Generating summary…")
             : groupChats.map(function (chat) { return chat.title; }).join(" · "))} />
         </div>
-        <div
-          className={"wbc-chat-group-content" + (isCollapsed ? " collapsed" : " expanded")}
-          aria-hidden={isCollapsed}
-          inert={isCollapsed ? "" : undefined}
-        >
-          <div className="wbc-chat-group-content-inner">
-            <div className="wbc-chat-group-children">
-              {groupChats.map(function (chat) { return renderChatCard(chat, { insideGroup: true }); })}
-              {groupDropReady ? renderDropClone(movingChat) : null}
-            </div>
-          </div>
-        </div>
+        <WbcRailGroupContent expanded={!isCollapsed}>
+          {groupChats.map(function (chat) { return renderChatCard(chat, { insideGroup: true }); })}
+          {groupDropReady ? renderDropClone(movingChat) : null}
+        </WbcRailGroupContent>
         {groupDropReady && (
           <span className="wbc-chat-group-drop-hint">{WBC_ICONS.copy}{wbcT("workbenchChat.releaseToExistingGroup", "Release to add to this chat group")}</span>
         )}

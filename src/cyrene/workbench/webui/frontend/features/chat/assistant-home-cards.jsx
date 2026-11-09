@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { requestCard, WbcAssistantCard } from './assistant-cards.jsx';
-import { weatherKind } from './card-weather-model.mjs';
+import { weatherKind, weatherPeriod } from './card-weather-model.mjs';
 
 export function AssistantHomeCards({ active, sessionId, onReady, visible = true }) {
   const [cards, setCards] = useState([]);
@@ -42,8 +42,8 @@ export function AssistantHomeCards({ active, sessionId, onReady, visible = true 
   useEffect(() => { if (cards.length) onReady?.(); }, [cards.length, onReady]);
   if (!visible || (!cards.length && !error)) return null;
   const weather = cards.find(card => card.spec.home_kind === 'overview')?.spec.blocks.find(block => block.type === 'weather');
-  return <section className="wbc-home-cards wbc-assistant-home" data-weather={weather ? weatherKind(weather) : undefined} aria-label="助理首页">
-    {weather && (<div className="wbc-home-atmosphere" data-weather={weatherKind(weather)} aria-hidden="true"><div className="wbc-home-precipitation">{Array.from({length:18}, (_, i) => <b key={i} style={{'--x': ((i * 31 + 7) % 100) + '%', '--y': ((i * 19 + 3) % 66) + '%', '--speed': (1.4 + (i % 5) * .23) + 's', '--delay': (-i * .37) + 's'}} />)}</div></div>)}
+  return <section className="wbc-home-cards wbc-assistant-home" data-weather={weather ? weatherKind(weather, displayTime) : undefined} data-period={weatherPeriod(displayTime)} aria-label="助理首页">
+    {weather && (<div className="wbc-home-atmosphere" data-period={weatherPeriod(displayTime)} data-weather={weatherKind(weather, displayTime)} aria-hidden="true"><div className="wbc-home-precipitation">{Array.from({length:18}, (_, i) => <b key={i} style={{'--x': ((i * 31 + 7) % 100) + '%', '--y': ((i * 19 + 3) % 66) + '%', '--speed': (1.4 + (i % 5) * .23) + 's', '--delay': (-i * .37) + 's'}} />)}</div></div>)}
     <div className="wbc-home-grid">{cards.map(card => <WbcAssistantCard key={card.card_id} cardId={card.card_id} initialCard={card} displayTime={displayTime} />)}</div>
     {error && <p className="wbc-card-notice" role="status">{error} <button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button></p>}
   </section>;

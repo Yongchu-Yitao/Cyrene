@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .host import KIND, OWNER
 from .store import Store
+from .organization import organize_task
 
 logger = logging.getLogger(__name__)
 MAX_FILE_BYTES = 20 * 1024 * 1024
@@ -130,25 +131,31 @@ class SessionManagementService:
                 else:
                     target = args["session_id"]
                     self._owned(owner, target)
-                    if operation == "session_send_message":
-                        result = await self._enqueue(owner, target, args, key, workspace)
-                    elif operation == "session_answer_question":
-                        result = await self.host.answer(owner, target, args["question_id"], args["answer"], "managed_answer_" + digest(key)[:24])
-                    elif operation == "session_stop":
-                        self.store.pause(target)
-                        stopped = await self.host.stop(target)
-                        result = {
-                            "session_id": target,
-                            "status": "stopped",
-                            "cancelled_running_execution": bool(stopped),
-                            "queued_messages_paused": self.store.pending_count(target),
-                        }
-                    else:
-                        raise ValueError("Unknown session operation")
+                    result = await self._command_existing(owner, target, operation, args, key, workspace)
                 self.store.save(key, fingerprint, result)
                 return result
 
         return await self._on_owner(perform)
+
+    async def _command_existing(self, owner, target, operation, args, key, workspace):
+        if operation == "session_organize":
+            result = organize_task(self.store, self.host, owner, target, args)
+        elif operation == "session_send_message":
+            result = await self._enqueue(owner, target, args, key, workspace)
+        elif operation == "session_answer_question":
+            result = await self.host.answer(owner, target, args["question_id"], args["answer"], "managed_answer_" + digest(key)[:24])
+        elif operation == "session_stop":
+            self.store.pause(target)
+            stopped = await self.host.stop(target)
+            result = {
+                "session_id": target,
+                "status": "stopped",
+                "cancelled_running_execution": bool(stopped),
+                "queued_messages_paused": self.store.pending_count(target),
+            }
+        else:
+            raise ValueError("Unknown session operation")
+        return result
 
     async def _enqueue(self, owner, target, args, key, workspace):
         message_id = "managed_msg_" + digest(key)[:24]
@@ -181,9 +188,13 @@ class SessionManagementService:
                         _, chat = self._owned(owner, record["id"])
                     except ValueError:
                         continue
+                    checkpoint = self.host.checkpoint(record["id"])
                     result.append(
                         {
+                            **{key: checkpoint[key] for key in
+                               ("run_id", "node_id", "cancel_reason", "interruption_kind", "recovery_action") if key in checkpoint},
                             "session_id": record["id"],
+                            "presentation": self.store.presentation(record["id"]),
                             "title": chat.get("title", ""),
                             "workspace_path": chat.get("workspaceOverride", ""),
                             "status": "stopped" if record["paused"] else self.host.status(record["id"]),

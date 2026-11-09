@@ -1,5 +1,17 @@
 const kinds = new Set(['clear', 'partly_cloudy', 'cloudy', 'rain', 'snow', 'storm', 'fog', 'night']);
-export function weatherKind(block) {
+// Match the home clock; saved observations must not freeze the display in daytime.
+export function weatherPeriod(now = new Date()) {
+  const hour = now.getHours();
+  return hour < 6 || hour >= 18 ? 'night' : 'day';
+}
+
+export function weatherKind(block, now = new Date()) {
+  const kind = conditionKind(block);
+  if (kind === 'clear' || kind === 'night') return weatherPeriod(now) === 'night' ? 'night' : 'clear';
+  return kind;
+}
+
+function conditionKind(block) {
   if (kinds.has(block.icon)) return block.icon;
   const condition = String(block.condition || '').toLowerCase();
   if (/雷|storm|thunder/.test(condition)) return 'storm';

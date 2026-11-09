@@ -47,7 +47,10 @@ def test_late_inbox_cannot_override_terminal_checkpoint_or_block_new_run(tmp_pat
         })
         store.mount(tree_id, late.id, {"role": "context", "trigger_model": False})
         checkpoint = context_checkpoint_from_nodes(store.get_subtree(tree_id, root_id))
-        assert checkpoint == {"status": status, "run_id": "old", "node_id": terminal.id}
+        expected = {"status": status, "run_id": "old", "node_id": terminal.id}
+        if status == "cancelled":
+            expected.update(cancel_reason="unknown", interruption_kind="unknown", recovery_action="inspect_before_retry")
+        assert checkpoint == expected
     finally:
         store.close()
 
@@ -545,3 +548,26 @@ async def test_exhausted_runtime_retries_stop_checkpoint_and_accept_new_command(
         assert runtime.context_checkpoint(tree_id)["status"] == "completed"
     finally:
         await runtime.shutdown(grace_seconds=0)
+
+
+@pytest.mark.parametrize("reason,kind,recovery", [
+    ("user_cancelled", "user_stop", "wait_for_user"),
+    ("user_interrupted", "user_stop", "wait_for_user"),
+    ("shutdown_timeout", "app_shutdown", "resume_existing_task"),
+    ("process_restarted", "runtime_interrupted", "resume_existing_task"),
+    ("runtime_retry_exhausted", "runtime_interrupted", "inspect_before_retry"),
+    ("unrecognized", "unknown", "inspect_before_retry"),
+])
+def test_durable_cancellation_checkpoint_preserves_recovery_cause(tmp_path, reason, kind, recovery):
+    session = make_session(tmp_path)
+    try:
+        session.submit("unfinished work", run_id="interrupted")
+        assert session.request_cancel(reason)
+        nodes = session.store.get_subtree(session.tree.id, session.tree.root_id)
+        checkpoint = context_checkpoint_from_nodes(nodes)
+        assert checkpoint["status"] == "cancelled"
+        assert checkpoint["cancel_reason"] == reason
+        assert checkpoint["interruption_kind"] == kind
+        assert checkpoint["recovery_action"] == recovery
+    finally:
+        session.close()

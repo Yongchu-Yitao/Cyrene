@@ -12,6 +12,19 @@ from .service import CardService
 HOME_TOOLS = ("card.create", "card.update", "card.get", "card.list", "WebSearch")
 
 
+class HomeModelUnavailable(RuntimeError):
+    """Wait for model configuration rather than retrying an Agent turn."""
+
+
+def home_model_identity(owner):
+    from cyrene.plugins.model_catalog import candidate_identity, resolve_session_model_candidate
+
+    candidate = resolve_session_model_candidate(owner)
+    if candidate is None:
+        raise HomeModelUnavailable("No model is configured for the assistant home")
+    return candidate_identity(candidate)
+
+
 def home_tool_scope(registry):
     from cyrene.core.plugin.tool_scope import PluginToolScope
     # Provider parsers are hidden protocol dependencies, not model-callable tools.
@@ -87,6 +100,9 @@ async def prepare_home(service, port, owner, version, prompt, snapshot):
     chat = port.service.repository.get(owner)
     if not chat or chat.get("kind") != "personal-assistant":
         raise ValueError("Home maintenance requires a personal assistant")
+    # Resolve the owner's current selection before creating an isolated session.
+    # modelIdentity is historical reply metadata and may be absent or stale.
+    model_identity = home_model_identity(owner)
     database = port.service.repository._database()
     runtime = ConversationRuntime(database)
     # No ChatRepository record, UI publisher, foreground run manager or shared context.
@@ -96,7 +112,7 @@ async def prepare_home(service, port, owner, version, prompt, snapshot):
         config = ConversationConfig(
             session_id="home_maintenance_" + uuid4().hex, db_path=database,
             data_directory=Path(directory) / "agent", workspace_dir=chat.get("workspaceOverride") or str(WORKSPACE_DIR),
-            project_id=chat.get("projectId", ""), model_identity=chat.get("modelIdentity") or {},
+            project_id=chat.get("projectId", ""), model_identity=model_identity,
             command="home-maintenance", conversation_source="home-maintenance",
             workspace_enabled=False, soul_enabled=False, permission_mode="auto",
             memory_write_enabled=False, memory_trigger_enabled=False, memory_archive_enabled=False,

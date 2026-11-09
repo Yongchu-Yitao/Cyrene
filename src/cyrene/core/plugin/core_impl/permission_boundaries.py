@@ -119,6 +119,63 @@ def _is_safe_review_directory_refresh(
     )
 
 
+def _scratch_target(token, cwd, workspace):
+    path = Path(token)
+    target = Path(os.path.abspath(path if path.is_absolute() else cwd / path))
+    if target.name == "scratch" and target.parent.name == ".cyrene":
+        return None
+    root = next((parent for parent in target.parents
+                 if parent.name == "scratch" and parent.parent.name == ".cyrene"
+                 and workspace in parent.parents), None)
+    # Nested task projects may live below the shared workspace. Keep
+    # both lexical and resolved ownership checks to reject symlink escapes.
+    if root is None or root.resolve() != root:
+        return None
+    resolved = target.resolve()
+    if root not in resolved.parents:
+        return None
+    return str(resolved)
+
+
+def _scratch_cleanup(command: str, context: PluginContext) -> list[str] | None:
+    """Recognize bounded rm invocations, never interpret arbitrary shell code."""
+    if context.workspace is None or any(char in command for char in "~$`*?[]{}<>|;\n\r\\"):
+        return None
+    try:
+        # Use shell word parsing so paths with spaces and punctuation stay intact.
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="&")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+        workspace = Path(context.workspace).expanduser().resolve()
+        cwd = workspace
+        if tokens[:1] == ["cd"]:
+            if len(tokens) < 4 or tokens[2] != "&&":
+                return None
+            directory = Path(tokens[1])
+            cwd = (directory if directory.is_absolute() else workspace / directory).resolve()
+            tokens = tokens[3:]
+        if not tokens or tokens[0] != "rm" or any("&" in token for token in tokens):
+            return None
+        targets = []
+        options = True
+        for token in tokens[1:]:
+            if options and token == "--":
+                options = False
+                continue
+            if options and token.startswith("-"):
+                if token not in {"-f", "-r", "-rf", "-fr", "-R", "-Rf", "-fR", "--force", "--recursive"}:
+                    return None
+                continue
+            resolved = _scratch_target(token, cwd, workspace)
+            if resolved is None:
+                return None
+            targets.append(resolved)
+        return targets or None
+    except (ValueError, OSError, RuntimeError):
+        return None
+
+
 def _destructive_shell(
     command: str,
     context: PluginContext,
@@ -328,6 +385,32 @@ def _is_broad_read_root(path: Path) -> bool:
     )
 
 
+def _destructive_boundary(command, context, destructive):
+    scratch_targets = _scratch_cleanup(command, context)
+    if scratch_targets:
+        return {
+            "kind": "scratch_cleanup",
+            "operation": "任务中间产物清理",
+            "reason": "删除目标均位于当前 workspace 或其子项目的 .cyrene/scratch 内。请结合任务证据判断是否为可清理的中间产物。\n命令：" + command,
+            "paths": scratch_targets,
+            "requires_human": False,
+            "always_review": True,
+            "single_use": True,
+        }
+    return {
+        "kind": "destructive_confirmation",
+        "operation": destructive["operation"],
+        "reason": destructive["detail"],
+        "requires_human": True,
+        "single_use": False,
+        "session_scope": {
+            "operation": destructive["kind"],
+            "workspace": str(Path(context.workspace).expanduser().resolve())
+            if context.workspace is not None else str(Path.cwd().resolve()),
+        },
+    }
+
+
 def bash_boundary(
     arguments: dict[str, Any],
     context: PluginContext,
@@ -342,18 +425,7 @@ def bash_boundary(
         }
     destructive = _destructive_shell(command, context)
     if destructive is not None:
-        return {
-            "kind": "destructive_confirmation",
-            "operation": destructive["operation"],
-            "reason": destructive["detail"],
-            "requires_human": True,
-            "single_use": False,
-            "session_scope": {
-                "operation": destructive["kind"],
-                "workspace": str(Path(context.workspace).expanduser().resolve())
-                if context.workspace is not None else str(Path.cwd().resolve()),
-            },
-        }
+        return _destructive_boundary(command, context, destructive)
     workspace = (
         Path(context.workspace).expanduser().resolve()
         if context.workspace is not None

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+
+from cyrene.plugins.project_read_scope import (
+    reads_all_projects, read_projects, project_source, merge_project_results,
+)
 
 from cyrene.core.plugin import PluginContext
 from ._native import create_tool, service as memory_service
@@ -52,14 +57,34 @@ async def _tool_search_project_memory(
 
     memory.configure_stores()
 
-    memories = search_project_memories(
-        project_id,
-        query=query,
-        category=category,
-        source=source,
-        limit=limit,
-        include_stale=include_stale,
-    )
+    if reads_all_projects(memory.data):
+        groups = []
+        for project in read_projects():
+            items = search_project_memories(
+                str(project["id"]), query=query, category=category, source=source,
+                limit=limit, include_stale=include_stale,
+            )
+            groups.append([{**item, **project_source(project)} for item in items])
+        memories = merge_project_results(groups, limit)
+        # Preserve the existing aggregate content budget across all projects.
+        bounded = []
+        content_chars = 0
+        for item in memories:
+            size = len(json.dumps(item, ensure_ascii=False))
+            if bounded and content_chars + size > 6000:
+                break
+            bounded.append(item)
+            content_chars += size
+        memories = bounded
+    else:
+        memories = search_project_memories(
+            project_id,
+            query=query,
+            category=category,
+            source=source,
+            limit=limit,
+            include_stale=include_stale,
+        )
     return json_result({
         "status": "success",
         "search_mode": "keyword",

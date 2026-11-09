@@ -1146,31 +1146,31 @@
     "ListKnowledgeDocuments": {
       "en": {
         "name": "List documents",
-        "description": "List files in the current Workbench project's knowledge base, including indexing state, searchable chunks, document ID, size, and readable path."
+        "description": "List files in the current Workbench project's knowledge base, including indexing state, searchable chunks, document ID, size, and readable path. Assistant-created task sessions read all projects and include source project IDs and names."
       },
       "zh": {
         "name": "列出知识文档",
-        "description": "列出当前项目知识库文件及其索引状态、文档标识和可读路径。"
+        "description": "列出当前项目知识库文件及其索引状态、文档标识和可读路径。 助理创建的执行任务可读取所有项目，并在结果中标明来源项目 ID 和名称；普通项目对话保持原有范围。"
       }
     },
     "ListLibraryItems": {
       "en": {
         "name": "List literature",
-        "description": "List structured literature items in the current Workbench project, including stable paper IDs, bibliographic metadata, reading state, and citekeys."
+        "description": "List structured literature items in the current Workbench project, including stable paper IDs, bibliographic metadata, reading state, and citekeys. Assistant-created task sessions read all projects and include source project IDs and names."
       },
       "zh": {
         "name": "列出文献",
-        "description": "列出当前项目文献库条目、书目信息、阅读状态与引用键。"
+        "description": "列出当前项目文献库条目、书目信息、阅读状态与引用键。 助理创建的执行任务可读取所有项目，并在结果中标明来源项目 ID 和名称；普通项目对话保持原有范围。"
       }
     },
     "ListMemories": {
       "en": {
         "name": "List memories",
-        "description": "List memories without requiring a search query. By default this combines cross-session short-term memory and the current Workbench project memory. Use this to inspect the memory inventory, know exact totals, or enumerate memories completely. Results can be filtered and paged with limit and offset."
+        "description": "List memories without requiring a search query. By default this combines cross-session short-term memory and the current Workbench project memory. Use this to inspect the memory inventory, know exact totals, or enumerate memories completely. Results can be filtered and paged with limit and offset. Assistant-created task sessions read all projects and include project_id and project_name on project memories."
       },
       "zh": {
         "name": "列出记忆",
-        "description": "分页列出短期记忆和当前项目记忆，并支持筛选。"
+        "description": "分页列出短期记忆和当前项目记忆，并支持筛选。 助理创建的执行任务可读取所有项目，并在结果中标明来源项目 ID 和名称；普通项目对话保持原有范围。"
       }
     },
     "memory.short_term.cleanup": {
@@ -2186,21 +2186,21 @@
     "SearchKnowledge": {
       "en": {
         "name": "Search knowledge",
-        "description": "Search the current Workbench project's knowledge base using hybrid keyword and vector retrieval, returning the most relevant indexed passages."
+        "description": "Search the current Workbench project's knowledge base using hybrid keyword and vector retrieval, returning the most relevant indexed passages. Assistant-created task sessions read all projects and include source project IDs and names."
       },
       "zh": {
         "name": "搜索知识",
-        "description": "搜索当前项目知识库的已索引内容。"
+        "description": "搜索当前项目知识库的已索引内容。 助理创建的执行任务可读取所有项目，并在结果中标明来源项目 ID 和名称；普通项目对话保持原有范围。"
       }
     },
     "SearchLibrary": {
       "en": {
         "name": "Search literature",
-        "description": "Search the current project's literature library by bibliographic metadata and indexed evidence. Returns stable paper IDs and evidence passages."
+        "description": "Search the current project's literature library by bibliographic metadata and indexed evidence. Returns stable paper IDs and evidence passages. Assistant-created task sessions read all projects and include source project IDs and names."
       },
       "zh": {
         "name": "搜索文献",
-        "description": "搜索当前项目文献库及其书目信息。"
+        "description": "搜索当前项目文献库及其书目信息。 助理创建的执行任务可读取所有项目，并在结果中标明来源项目 ID 和名称；普通项目对话保持原有范围。"
       }
     },
     "SearchSkills": {
@@ -3076,11 +3076,11 @@
     "search_project_memory": {
       "en": {
         "name": "Search project memory",
-        "description": "Search durable memory belonging to the current Workbench project using keyword and phrase substring matching. This is not semantic or vector search and does not use embeddings. Use this for prior project decisions, constraints, working approaches, user preferences, or environment facts that may not be present in the automatically injected memory subset. Read-only; only works inside a Workbench project task or chat."
+        "description": "Assistant-created task sessions search all projects with source project IDs and names; other sessions search durable memory belonging to the current Workbench project using keyword and phrase substring matching. This is not semantic or vector search and does not use embeddings. Use this for prior project decisions, constraints, working approaches, user preferences, or environment facts that may not be present in the automatically injected memory subset. Read-only; only works inside a Workbench project task or chat."
       },
       "zh": {
         "name": "搜索项目记忆",
-        "description": "使用关键词和短语子串搜索当前项目的持久记忆。"
+        "description": "使用关键词和短语子串搜索当前项目的持久记忆。 助理创建的执行任务可读取所有项目，并在结果中标明来源项目 ID 和名称；普通项目对话保持原有范围。"
       }
     },
     "skills.learning.tick": {
@@ -3386,11 +3386,11 @@
     "card.create": {
       "en": {
         "name": "Create card",
-        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with html and may include native blocks around it. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
+        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with html and may include native blocks around it. Place input_schema and actions inside spec, never at the tool argument root. Action fields and data-card-field bindings must name properties in spec.input_schema. Generate the requested card directly from this contract; do not create disposable probe cards. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
       },
       "zh": {
         "name": "创建卡片",
-        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。"
+        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。 输入定义和操作必须放在卡片规格内，字段绑定须对应已声明的输入字段；直接创建所需卡片，不创建试探用的临时卡片。"
       }
     },
     "card.update": {
@@ -3436,11 +3436,11 @@
     "card.archive": {
       "en": {
         "name": "Archive card",
-        "description": "Archive an existing card as read-only, preserving final content, inputs and pinning. A completed model turn alone does not end a card."
+        "description": "Archive an existing card as read-only, preserving final content, inputs and pinning. Archived cards remain visible in conversation; this is not deletion or temporary-card cleanup. A completed model turn alone does not end a card."
       },
       "zh": {
         "name": "归档卡片",
-        "description": "将已有卡片归档为只读，保留最终内容、用户输入和固定状态。一次模型回复结束不代表卡片任务结束。"
+        "description": "将已有卡片归档为只读，保留最终内容、用户输入和固定状态。一次模型回复结束不代表卡片任务结束。 归档卡片仍保留在对话中，不能用于删除或清理临时卡片。"
       }
     },
     "switch_context": {
@@ -3451,6 +3451,16 @@
       "zh": {
         "name": "切换任务上下文",
         "description": "处理独立目标或恢复其他任务时，在发送进展或调用工具前使用此工具完成切换。使用目录中的准确 ID 恢复上下文，或传入 null 和标题创建上下文。离开活动上下文时提供进展检查点；切换失败会保留原状态。相关后续请求留在当前上下文。此工具必须单独调用并等待成功。"
+      }
+    },
+    "task_organize": {
+      "en": {
+        "name": "Organize task",
+        "description": "Organize an existing task group in the assistant sidebar. Does not execute, stop or delete work. Use title, position (lower first), archived, hidden_resources (kind:key), and attachment_ids from successful send_file results to associate files delivered in the main conversation. Supplied arrays replace their previous selections; omitted fields remain unchanged."
+      },
+      "zh": {
+        "name": "整理任务",
+        "description": "整理助理侧栏中的已有任务分组，可修改标题、顺序、归档状态和资源可见性，并关联主对话中已交付的文件。不会执行、停止或删除任务；提供的列表替换原选择，省略的设置保持不变。"
       }
     }
   }

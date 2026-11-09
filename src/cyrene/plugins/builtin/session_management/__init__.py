@@ -12,6 +12,7 @@ from .presentation import task_result
 # Internal operations remain stable for durable receipts and queued work.
 TASK_OPERATIONS = {
     "task_start": "session_create",
+    "task_organize": "session_organize",
     "task_list": "session_list",
     "task_inspect": "session_context_blocks",
     "task_load_context": "session_load_context_blocks",
@@ -154,6 +155,11 @@ plugin_pack = PluginPack(
             {"title": {"type": "string", "minLength": 1, "maxLength": 80}, "workspace_path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Required absolute path to an existing directory containing this task's input files and deliverables. Use the relevant workspace root, not a scratch subdirectory when outputs are outside it. Create the directory first if needed."}, "message": MESSAGE, "files": FILES},
             ["title", "workspace_path"],
         ),
+        _tool("session_organize", "Organize an existing task group in the assistant sidebar. Does not execute, stop or delete work. Use title, position (lower first), archived, hidden_resources (kind:key), and attachment_ids from successful send_file results to associate files delivered in the main conversation. Supplied arrays replace their previous selections; omitted fields remain unchanged.",
+              {"session_id": ID, "title": {"type": "string", "minLength": 1, "maxLength": 80},
+               "position": {"type": "integer", "minimum": 0}, "archived": {"type": "boolean"},
+               "hidden_resources": {"type": "array", "maxItems": 100, "items": ID},
+               "attachment_ids": {"type": "array", "maxItems": 100, "items": ID}}, ["session_id"]),
         _tool("session_list", "List your tasks, their progress, pending questions and failures.", {}, read_only=True),
         _tool(
             "session_context_blocks",

@@ -337,12 +337,12 @@ test('assistant page uses one global scope across project changes and forwards t
     navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
   const service = {Model: {}, Page: 'page'};
   const h = harness('../shell/assistant-page.jsx', {usePinnedAssistantCards: () => ({cards: [], error: ''}), React, workbenchServices: {chat: () => service},
-    WbcRailToolbar: 'rail-toolbar', AssistantChat: 'assistant-chat', assistantFileOwners: () => ({}), wbcChatRailVisualState: () => ({}), wbcFormatTime: () => '', WBC_ICONS: {}});
+    WbcRailToolbar: 'rail-toolbar', AssistantTaskGroup: 'task-group', AssistantTaskResources: 'task-resources', AssistantChat: 'assistant-chat', assistantFileOwners: () => ({}), wbcChatRailVisualState: () => ({}), wbcFormatTime: () => '', WBC_ICONS: {}});
   h.context.fetch = async (url, options) => {calls.push([url, options.method]); return {ok:true,json:async () => snapshot};};
   h.context.setTimeout = h.context.window.setTimeout;
   h.context.clearTimeout = h.context.window.clearTimeout;
   h.run((mod, hooks) => {
-    Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useMemo: hooks.useWbcMemo, useEffect: hooks.useWbcEffect});
+    Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useMemo: hooks.useWbcMemo, useCallback: hooks.useWbcCallback, useEffect: hooks.useWbcEffect});
     return mod.PersonalAssistantPage({context, active});
   });
   await settle(); h.flush();
@@ -409,7 +409,7 @@ test('assistant API errors are reported without trying an old initialization end
   h.context.setTimeout = h.context.window.setTimeout;
   h.context.clearTimeout = h.context.window.clearTimeout;
   h.run((mod, hooks) => {
-    Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useMemo: hooks.useWbcMemo, useEffect: hooks.useWbcEffect});
+    Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useMemo: hooks.useWbcMemo, useCallback: hooks.useWbcCallback, useEffect: hooks.useWbcEffect});
     return mod.PersonalAssistantPage({context});
   });
   await settle(); h.flush();

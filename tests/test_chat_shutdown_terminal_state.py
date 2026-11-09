@@ -65,6 +65,9 @@ async def test_terminal_chat_allows_next_turn_without_checkpoint_replacement(tmp
         assert run.done.is_set()
         assert checkpoint()["status"] == ("cancelled" if failure == "shutdown_timeout" else "failed")
         assert checkpoint()["run_id"] == run.run_id
+        if failure == "shutdown_timeout":
+            assert checkpoint()["cancel_reason"] == "shutdown_timeout"
+            assert checkpoint()["recovery_action"] == "resume_existing_task"
 
         # Simulate the next process. No send-time repair, cancellation, or
         # paused restore is allowed: the previous run must already be terminal.

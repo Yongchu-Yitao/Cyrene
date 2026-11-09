@@ -129,3 +129,21 @@ def test_weather_timestamps_and_fingerprint():
     assert before != evidence(chat, [], {'task': {'body': 'done'}})
     chat['messages'].extend([{'role': 'user', 'agentMessageKind': 'welcome_refresh'}, {'role': 'assistant', 'content': 'refreshed'}])
     assert before == evidence(chat, [], {'task': {'body': 'in progress'}})
+
+
+@pytest.mark.asyncio
+async def test_missing_model_preserves_cards_and_recovers_without_backoff(home_rig, caplog):
+    from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeModelUnavailable
+    r = home_rig
+    await add_overview(r)
+    before = await r.home.saved('assistant')
+    async def unavailable(*args):
+        raise HomeModelUnavailable('No configured model')
+    r.home.prepare = unavailable
+    for _ in range(3):
+        assert (await r.home.refresh('assistant', {}))['status'] == 'model_unavailable'
+        r.clock[0] += 30
+    assert await r.home.saved('assistant') == before
+    assert 'Background home preparation failed' not in caplog.text
+    r.home.prepare = r.prepare
+    assert (await r.home.refresh('assistant', {}))['status'] == 'updated'

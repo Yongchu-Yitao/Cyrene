@@ -43,7 +43,7 @@ def test_persistent_dock_has_equal_visible_side_and_bottom_insets():
     dock_override = css.rsplit(".workbench-sidebar-dock.is-persistent {", 1)[1].split(
         "}", 1
     )[0]
-    assert "bottom: 19px;" in dock_override
+    assert "bottom: calc(var(--wb-floating-card-bottom-gap, 12px) + 1px + var(--wb-rail-content-padding) - 8px);" in dock_override
 
 
 def test_board_rail_preserves_work_topbar_clearance():

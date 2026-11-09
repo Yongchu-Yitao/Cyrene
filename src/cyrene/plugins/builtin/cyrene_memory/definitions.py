@@ -11,7 +11,8 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               'combines cross-session short-term memory and the current Workbench '
                               'project memory. Use this to inspect the memory inventory, know '
                               'exact totals, or enumerate memories completely. Results can be '
-                              'filtered and paged with limit and offset.',
+                              'filtered and paged with limit and offset. Assistant-created task sessions '
+                              'read all projects and include project_id and project_name on project memories.',
                'parameters': {'type': 'object',
                               'properties': {'scope': {'type': 'string',
                                                        'enum': ['all', 'short_term', 'project'],
@@ -242,7 +243,8 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               'required': ['content']}}},
  {'type': 'function',
   'function': {'name': 'search_project_memory',
-               'description': 'Search durable memory belonging to the current Workbench project '
+               'description': 'Assistant-created task sessions search all projects with source project IDs and names; '
+                              'other sessions search durable memory belonging to the current Workbench project '
                               'using keyword and phrase substring matching. This is not semantic '
                               'or vector search and does not use embeddings. Use this for prior '
                               'project decisions, constraints, working approaches, user '

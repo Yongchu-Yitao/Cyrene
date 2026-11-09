@@ -10,9 +10,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .definitions import ID, obj
 from .schemas import validate
 
-from .home_preparation import prepare_home, source_snapshot
+from .home_preparation import HomeModelUnavailable, prepare_home, source_snapshot
 from .home_freshness import RETRY_SECONDS, evidence, weather_expired, display_slot, task_documents
 logger = logging.getLogger(__name__)
+HOME_CHECK_INTERVAL_SECONDS = 2 * 60 * 60
 
 
 class HomeCards:
@@ -48,7 +49,7 @@ class HomeCards:
                 await self.refresh(ASSISTANT_ID, {})
             except Exception:
                 logger.exception("Welcome card preparation failed; keeping saved cards")
-            await asyncio.sleep(30)
+            await asyncio.sleep(HOME_CHECK_INTERVAL_SECONDS)
 
     async def saved(self, owner):
         def read():
@@ -159,6 +160,14 @@ class HomeCards:
                 await self.prepare(self.service, port, owner, version, prompt, source_snapshot(chat, siblings, contexts))
             except asyncio.CancelledError:
                 raise
+            except HomeModelUnavailable:
+                # Configuration checks are cheap: no Agent, model request or
+                # error-log loop. Recheck on the next maintenance tick so a
+                # newly configured model can recover without an app restart.
+                state["retry_after"] = 0
+                with self.service.store.connect(write=True) as db:
+                    self._save_state(db, owner, state)
+                return {"status": "model_unavailable"}
             except Exception:
                 state["retry_after"] = time.time() + RETRY_SECONDS
                 with self.service.store.connect(write=True) as db:

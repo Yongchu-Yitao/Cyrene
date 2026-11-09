@@ -608,7 +608,7 @@ function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSet
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M9.5 12v2h5v-2"/></svg>
     ) },
     { id: "cyrene", label: "Cyrene", icon: (
-      <CyreneIcon state={cyreneState} />
+      <CyreneIcon animated={false} />
     ) },
     { id: "knowledge", label: t("workbench.page.knowledge"), icon: (
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v15H7.5A2.5 2.5 0 0 0 5 19.5Z"/><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H20"/></svg>
@@ -634,15 +634,6 @@ function WorkbenchSidebarDock({ activePage, activeDestination, onOpenPage, onSet
               aria-label={item.id === "cyrene" ? cyreneLabel : item.label}
               aria-current={active ? "page" : undefined}
               onClick={function (event) {
-                if (item.id === "cyrene") {
-                  var icon = event.currentTarget.querySelector(".cyrene-motion");
-                  if (icon && icon.animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-                      && document.documentElement.dataset.performanceMode !== "on") {
-                    icon.animate([{transform: "scale(1)"}, {transform: "scale(.82) rotate(-12deg)", offset: .25},
-                      {transform: "scale(1.18) rotate(8deg)", offset: .6}, {transform: "scale(1)"}],
-                      {duration: 440, easing: "ease-out"});
-                  }
-                }
                 if (onOpenPage) onOpenPage(item.id);
               }}
             >

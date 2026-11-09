@@ -608,3 +608,45 @@ async def test_home_headline_edits_reuse_slot_and_cannot_archive_recreate(rig):
     listed = await call(rig, 'card.list', {'scope': 'home'})
     assert len(listed['cards']) == 1
     assert listed['cards'][0]['title'] == '新的问候 3'
+
+
+@pytest.mark.asyncio
+async def test_custom_card_contract_creates_labeled_fields_on_first_call(rig):
+    spec = {
+        "title": "Split bill",
+        "blocks": [{"block_id": "app", "type": "embed",
+                    "html": '<input data-card-field="meal_amount">'}],
+        "input_schema": {"type": "object", "additionalProperties": False,
+                         "properties": {"meal_amount": {"type": "string", "title": "Meal amount",
+                                                         "description": "Amount in yuan"}},
+                         "required": ["meal_amount"]},
+        "actions": [{"action_id": "check", "label": "Check", "kind": "submit",
+                     "fields": ["meal_amount"], "intent": "Check the bill"}],
+    }
+    from jsonschema import Draft202012Validator
+    tools = {item["function"]["name"]: item["function"] for item in rig.runtime.registry.tool_definitions()}
+    parameters = tools["card.create"]["parameters"]
+    Draft202012Validator(parameters).validate({"template": "custom", "spec": spec})
+    declared = parameters["properties"]["spec"]["properties"]["input_schema"]
+    assert declared["properties"]["additionalProperties"] == {"const": False}
+    assert "title" in declared["properties"]["properties"]["additionalProperties"]["properties"]
+    result = await create(rig, template="custom", spec=spec)
+    assert result["ok"]
+    assert len((await call(rig, "card.list", {}))["cards"]) == 1
+
+
+@pytest.mark.parametrize("field", [
+    {"type": "string", "pattern": ".*"},
+    {"type": "object"},
+    {"type": "array", "items": {"type": "object"}},
+    {"type": "string", "items": {"type": "string"}},
+    {"type": "array"},
+])
+def test_public_input_contract_and_runtime_reject_same_unsupported_fields(field):
+    from jsonschema import Draft202012Validator
+    from cyrene.plugins.builtin.cyrene_cards.schemas import input_schema
+    schema = {"type": "object", "additionalProperties": False, "properties": {"meal_amount": field}}
+    public = definition("card.create")[1]["properties"]["spec"]["properties"]["input_schema"]
+    assert not Draft202012Validator(public).is_valid(schema)
+    with pytest.raises(CardError, match="input_schema"):
+        input_schema(schema)

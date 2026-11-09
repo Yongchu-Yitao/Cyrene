@@ -851,7 +851,9 @@ html[data-performance-mode="on"] .wbc-composer .wb-chip:first-child {
 }
 
 .workbench-sidebar-dock.is-persistent {
-  bottom: 19px;
+  /* Align the visible nav with the rail's inner content inset on all three
+     sides. The 72px wrapper has 8px below its 56px nav and 8px top padding. */
+  bottom: calc(var(--wb-floating-card-bottom-gap, 12px) + 1px + var(--wb-rail-content-padding) - 8px);
 }
 
 .workbench-grid.integrated-sidebars .workbench-integrated-rail.is-collapsed > .workbench-sidebar-dock,

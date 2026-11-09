@@ -36,6 +36,9 @@ class Host:
         self.chats.setdefault(target, {"id": target, "title": title, "kind": KIND, OWNER: owner, "createdAt": target, "workspaceOverride": workspace_path})
         return self.chats[target]
 
+    def checkpoint(self, target):
+        return {"status": self.status(target)}
+
     def status(self, target):
         return self.states.get(target, "idle")
 
@@ -394,6 +397,7 @@ async def test_host_creates_hidden_chat_and_delivers_real_attachment_payload(tmp
     port = SimpleNamespace(service=service, run_manager=manager, send=send, agent_message_admitted=admitted, _wait_agent_message_admission=wait_admitted)
     host = WorkbenchHost(lambda: port)
     child = host.create("a", "managed-test", "task", str(tmp_path))
+    assert child["permissionMode"] == "auto"
     assert child["workspaceOverride"] == str(tmp_path)
     assert child["kind"] == KIND and child[OWNER] == "a"
     assert child["modelSelectionId"] == "parent-profile"

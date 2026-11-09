@@ -15,6 +15,40 @@ def array(items, maximum=100):
     return {"type": "array", "items": items, "maxItems": maximum}
 
 
+# The same schema describes model arguments and validates persisted input contracts.
+INPUT_ITEM = obj({"type": {"enum": ["string", "number", "integer", "boolean"]},
+                  "enum": {"type": "array", "minItems": 1, "uniqueItems": True}}, ["type"])
+INPUT_FIELD = obj({
+    "type": {"enum": ["string", "number", "integer", "boolean", "array"]},
+    "title": TEXT, "description": TEXT,
+    "enum": {"type": "array", "minItems": 1, "uniqueItems": True},
+    "minimum": {"type": "number"}, "maximum": {"type": "number"},
+    "minLength": {"type": "integer", "minimum": 0}, "maxLength": {"type": "integer", "minimum": 0},
+    "format": {"enum": ["date", "date-time", "email"]},
+    "minItems": {"type": "integer", "minimum": 0}, "maxItems": {"type": "integer", "minimum": 0},
+    "uniqueItems": {"type": "boolean"}, "items": INPUT_ITEM,
+}, ["type"])
+INPUT_FIELD["oneOf"] = [
+    {"properties": {"type": {"const": "array"}}, "required": ["items"]},
+    {"properties": {"type": {"enum": ["string", "number", "integer", "boolean"]}},
+     "not": {"required": ["items"]}},
+]
+INPUT_SCHEMA = obj({
+    "type": {"const": "object"}, "additionalProperties": {"const": False},
+    "properties": {"type": "object", "maxProperties": 64, "propertyNames": ID,
+                   "additionalProperties": INPUT_FIELD},
+    "required": {**array(ID, 64), "uniqueItems": True},
+}, ["type", "additionalProperties"])
+INPUT_SCHEMA["description"] = (
+    'Flat input contract under spec.input_schema (changes.input_schema for updates). '
+    'Always set type="object" and additionalProperties=false. Define each field in properties; '
+    'required may only name declared fields. Field names may contain underscores. '
+    'Use title/description for annotations; nested objects, $ref and pattern are unsupported. '
+    'Example: {"type":"object","additionalProperties":false,"properties":'
+    '{"meal_amount":{"type":"string","title":"Meal amount"}}}.'
+)
+
+
 # Templates are starting points, not limits on the blocks or domain of a card.
 TEMPLATES = {
     "content": "text", "collection": "list", "data": "table", "input": "form", "map": "map", "custom": "embed",
@@ -71,7 +105,7 @@ SPEC_PROPERTIES = {
     "subtitle": TEXT, "density": {"enum": ["compact", "comfortable"]},
     "layout": {"type": "string", "enum": ["stack", "grid"], "description": "Presentation hint: vertical stack or responsive grid; block order is preserved."},
     "blocks": {**array(BLOCK, 32), "minItems": 1},
-    "input_schema": {"type": "object"}, "actions": array(ACTION, 64),
+    "input_schema": INPUT_SCHEMA, "actions": array(ACTION, 64),
 }
 SPEC = obj(SPEC_PROPERTIES, ["title"])
 CHANGES = {**obj({k: v for k, v in SPEC_PROPERTIES.items() if k != "schema_version"}), "minProperties": 1}
@@ -82,6 +116,9 @@ DEFINITIONS = {
                     "All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. "
                     "Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. "
                     "Custom requires exactly one embed block with html and may include native blocks around it. "
+                    "Place input_schema and actions inside spec, never at the tool argument root. "
+                    "Action fields and data-card-field bindings must name properties in spec.input_schema. "
+                    "Generate the requested card directly from this contract; do not create disposable probe cards. "
                     "Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. "
                     "Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), "
                     "window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. "
@@ -98,7 +135,7 @@ DEFINITIONS = {
                        "limit": {"type": "integer", "minimum": 1, "maximum": 100}})),
     "card.pin": ("Pin an existing card with pinned=true or unpin with false. Keeps its conversation reference and source context. Respects a user's explicit unpin.",
                  obj({"card_id": ID, "pinned": {"type": "boolean"}, "expected_placement_revision": REVISION}, ["card_id", "pinned", "expected_placement_revision"])),
-    "card.archive": ("Archive an existing card as read-only, preserving final content, inputs and pinning. A completed model turn alone does not end a card.",
+    "card.archive": ("Archive an existing card as read-only, preserving final content, inputs and pinning. Archived cards remain visible in conversation; this is not deletion or temporary-card cleanup. A completed model turn alone does not end a card.",
                      obj({"card_id": ID, "expected_revision": REVISION, "reason": TEXT}, ["card_id", "expected_revision"])),
 }
 TOOL_NAMES = tuple(DEFINITIONS)

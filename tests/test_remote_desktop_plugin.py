@@ -428,7 +428,7 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     plugin_view_branch = page.split('} else if (card.kind === "plugin-view") {', 1)[1].split(
         "    } else {", 1
     )[0]
-    assert "pluginPaneState.paneMenu" in plugin_view_branch
+    assert "paneMenuContributions(pluginPaneState)" in plugin_view_branch
     assert "<WbcSplitGripBar" in plugin_view_branch
     assert "menuContributions={pluginPaneMenu}" in plugin_view_branch
     split_menu_css = styles.split(".wbc-side-split-grip-menu {", 1)[1].split("}", 1)[0]
@@ -437,9 +437,9 @@ def test_remote_desktop_frontend_and_electron_host_are_packaged():
     assert "height: max-content;" in split_menu_css
     assert "align-self: start;" in split_menu_css
     assert "height: max-content;" in split_menu_list_css
-    assert 'rootRef.current.closest(".workbench-grid")' in pane
+    assert 'root.closest(".workbench-grid")' in pane
     assert 'propertyName.indexOf("--wb-") !== 0' in pane
-    assert 'rootRef.current.closest(".wbc-pane-card, .wbc-side-card")' in pane
+    assert 'root.closest(".wbc-pane-card, .wbc-side-card")' in pane
     assert 'portalTheme["--wbc-split-grip-surface"] = cardStyle.backgroundColor' in pane
     assert 'style={Object.assign({}, menuPosition.portalTheme' in pane
     split_menu_surface_css = styles.split(

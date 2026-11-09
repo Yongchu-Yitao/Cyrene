@@ -3322,6 +3322,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "toolName.card.list": "列出卡片",
     "toolName.card.pin": "固定卡片",
     "toolName.card.archive": "归档卡片",
+    "toolName.task_organize": "整理任务",
     "toolName.task_start": "启动任务",
     "toolName.task_list": "列出任务",
     "toolName.task_inspect": "检查任务",

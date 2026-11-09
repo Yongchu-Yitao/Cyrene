@@ -1,3 +1,4 @@
+import { paneMenuContributions } from "./pane-menu-contributions.jsx"
 import { PinnedAssistantCard } from "./pinned-assistant-cards.jsx"
 import { restoreConversationPaneLayout } from "./pane-layout-transforms.jsx"
 import { acceptsAssistantScope } from "./assistant-scope.mjs"
@@ -9,7 +10,7 @@ import { resolveRefreshedChatSelection as wbcResolveRefreshedChatSelection } fro
 import { wbcWorkspaceSurfaceDescriptor, useWbcWorkspaceSurfaceState, useWbcSurfaceIntentListener, useWbcResourceObservations, wbcOpenStartedWorkspace } from "./workspace-surface-controller.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { wbcSaveDraftAgentBinding } from "./capabilities.jsx"
-import { PluginFrontendService, PluginView, pluginLocalizedField } from "../../platform/plugins.jsx"
+import { PluginFrontendService, PluginView } from "../../platform/plugins.jsx"
 import { WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcLayoutEffect, useWbcRef, useWbcState, wbcChatCache, wbcChatSideDropZone, wbcChatSideZoneRect, wbcClampSideSplitWidth, wbcClampSideSplitWidthForPage, wbcDefaultPaneLayout, wbcErrorText, wbcFileViewKind, wbcHasChatDrag, wbcHasPluginViewDrag, wbcHasResourceDrag, wbcHasSplitDrag, wbcLastChatByProject, wbcLoadDraftAgentBinding, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcNotifyBrowserWindowInteraction, wbcOpenAgentDetail, wbcPreserveLiveTimelineAnchors, wbcReadChatDrag, wbcReadPluginViewDrag, wbcT } from "../../workbench-chat.jsx"
 import { WbcArtifactSplit, WbcArtifactSplitHost, WbcBrowserSplit, WbcBrowserSplitHost, WbcChangeSplit, WbcChangeSplitHost, WbcChatSplit, WbcChatSplitHost, WbcMapPaneContent, WbcMapSplitHost, WbcPaneCardFrame, WbcPaneColumnResizer, WbcPaneContextTrackDropSurface, WbcPaneRowResizer, WbcSide, WbcSideAgentSplit, WbcSideAgentSplitHost, WbcSplitGripBar, WbcSubagentsSplitHost, WbcSubagentsTab, wbcArtifactFileKey, wbcChatArtifactFiles } from "./split-pane.jsx"
 import { WorkbenchChatRuntimes, wbcRuntimePresenceSnapshot, wbcSameRuntimePresence } from "./file-resources.jsx"
@@ -64,7 +65,7 @@ function wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer) {
   return Promise.resolve();
 }
 
-function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, project, modelOverride, railOverride, isolated, requestedChatId, requestedChatRevision, renderConversation, hideConversationPanel, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
+function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, project, modelOverride, railOverride, isolated, requestedChatId, requestedChatRevision, protectedChatId, renderConversation, hideConversationPanel, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
   workbenchServices.i18n().use();
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
@@ -408,6 +409,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
   function paneLayoutContext() {
     return {
       projectId: projectId, model: model, chatCache: chatCache,
+      canClosePaneCard: canClosePaneCard,
       paneLayoutsByChat: paneLayoutsByChat, activeChatIdRef: activeChatIdRef,
       paneLayoutRestoreRef: paneLayoutRestoreRef, floatingSplitRestoreRef: floatingSplitRestoreRef,
       terminalClient: terminalClient,
@@ -2273,14 +2275,23 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
     setFloatingConversationPanelOpen(true);
   }
 
+  function canClosePaneCard(card) {
+    return !(protectedChatId && card && card.kind === "chat"
+      && String(card.payload || "") === String(protectedChatId));
+  }
+
+  function canClosePaneColumn(side) {
+    return paneLayout[side].every(canClosePaneCard);
+  }
+
   function closePaneCardWithConfirmation(card, ownerChatId) {
     var owner = ownerChatId == null ? String(activeChatIdRef.current || "") : ownerChatId;
-    return wbcClosePaneCardsWithConfirmation({ projectId, surfaceSuppressionRef, closePaneCard }, [card], owner);
+    return wbcClosePaneCardsWithConfirmation({ projectId, surfaceSuppressionRef, closePaneCard, canClosePaneCard }, [card], owner);
   }
 
   function closePaneColumn(side) {
     return wbcClosePaneCardsWithConfirmation(
-      { projectId, surfaceSuppressionRef, closePaneCard }, paneLayout[side], String(activeChatIdRef.current || "")
+      { projectId, surfaceSuppressionRef, closePaneCard, canClosePaneCard }, paneLayout[side], String(activeChatIdRef.current || "")
     );
   }
 
@@ -2370,7 +2381,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
     var singlePane = isNewConversation || paneCardCount === 1;
     var content = null;
     var grip = null;
-    var close = function () { return closePaneCardWithConfirmation(card); };
+    var close = canClosePaneCard(card) ? function () { return closePaneCardWithConfirmation(card); } : null;
     var move = function () { movePaneCardOtherSide(card.id); };
     var dragStart = function (event) { handlePaneCardDragStart(event, card.id, card); };
     var pointerDown = function (event) { handlePaneCardPointerDown(event, card.id, card); };
@@ -2384,6 +2395,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
       content = renderActiveConversationCard(card);
       grip = <WbcSplitGripBar
         dragSource={card.id}
+        logoOnlyDrag={singlePane}
         menuDisabled={singlePane}
         onToggleSide={move}
         onClose={close}
@@ -2478,42 +2490,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
     } else if (card.kind === "plugin-view") {
       var pluginPaneState = card.payload && card.payload.state && typeof card.payload.state === "object"
         ? card.payload.state : {};
-      var pluginPaneMenu = (Array.isArray(pluginPaneState.paneMenu) ? pluginPaneState.paneMenu : []).filter(Boolean).map(function (contribution) {
-        var requiredState = String(contribution && contribution.requires_state || "");
-        var sessionKey = String(contribution.session_key || "session_id");
-        var disabled = Boolean(
-          (requiredState && !pluginPaneState[requiredState])
-          || (contribution.requires_session === true && !pluginPaneState[sessionKey])
-        );
-        var availableKey = String(contribution && contribution.available_values_state_key || "");
-        var availableValues = availableKey && Array.isArray(pluginPaneState[availableKey])
-          ? pluginPaneState[availableKey].map(String) : null;
-        return Object.assign({}, contribution, {
-          disabled: disabled,
-          label: pluginLocalizedField(contribution, "label") || String(contribution && contribution.id || "Settings"),
-          fields: (Array.isArray(contribution && contribution.fields) ? contribution.fields : []).map(function (field) {
-            var rawValue = pluginPaneState[String(field && field.state_key || "")];
-            var valueLabel = (Array.isArray(field && field.value_labels) ? field.value_labels : []).find(function (candidate) {
-              return String(candidate && candidate.value || "") === String(rawValue == null ? "" : rawValue);
-            });
-            var valueSuffix = pluginLocalizedField(field, "suffix");
-            return Object.assign({}, field, {
-              label: pluginLocalizedField(field, "label") || String(field && field.state_key || ""),
-              tone: String(valueLabel && valueLabel.tone || ""),
-              value: valueLabel
-                ? pluginLocalizedField(valueLabel, "label")
-                : String(rawValue == null || rawValue === ""
-                  ? pluginLocalizedField(field, "empty_label") || "—"
-                  : rawValue) + (rawValue == null || rawValue === "" ? "" : valueSuffix),
-            });
-          }),
-          options: (Array.isArray(contribution && contribution.options) ? contribution.options : []).filter(function (option) {
-            return !availableValues || availableValues.indexOf(String(option && option.value || "")) >= 0;
-          }).map(function (option) {
-            return Object.assign({}, option, { label: pluginLocalizedField(option, "label") || String(option && option.value || "") });
-          }),
-        });
-      });
+      var pluginPaneMenu = paneMenuContributions(pluginPaneState);
       function updatePluginPaneState(nextState) {
         if (!nextState || typeof nextState !== "object") return;
         updatePaneCard(card.id, function (current) {
@@ -2706,7 +2683,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
         style={cards.length === 2 ? { gridTemplateRows: ratio + "fr " + (1 - ratio) + "fr" } : undefined}
       >
         {cards.map(function (card, index) { return renderPaneCard(card, side, cards.length, side + ":" + index); })}
-        {cards.length === 2 ? <WbcPaneRowResizer active={isActive} side={side} ratio={ratio} onResize={function (next) { resizePaneRow(side, next); }} onClose={function (index) { return closePaneCardWithConfirmation(cards[index]); }} /> : null}
+        {cards.length === 2 ? <WbcPaneRowResizer active={isActive} side={side} ratio={ratio} canClose={function (index) { return canClosePaneCard(cards[index]); }} onResize={function (next) { resizePaneRow(side, next); }} onClose={function (index) { return closePaneCardWithConfirmation(cards[index]); }} /> : null}
       </section>
     );
   }
@@ -2816,6 +2793,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
         </div>
       ) : null}
       {(typeof railOverride === "function" ? railOverride({
+        openChat: openChatSplit,
         openResource: function (ownerId, type, payload) {
           if (type === "browser") {
             setBrowserWindowModeForChat(ownerId, "pip");
@@ -2970,7 +2948,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
           : <React.Fragment>
               {renderPaneColumn("left", paneLayout.left)}
               {renderPaneColumn("right", paneLayout.right)}
-              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} onResize={resizePaneColumn} onClose={pinnedCards.length ? null : closePaneColumn} /> : null}
+              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} canClose={canClosePaneColumn} onResize={resizePaneColumn} onClose={pinnedCards.length ? null : closePaneColumn} /> : null}
             </React.Fragment>}
       </div>
       <WbcChatPageContextMenu

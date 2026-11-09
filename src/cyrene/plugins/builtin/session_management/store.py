@@ -15,6 +15,8 @@ class Store:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY, owner TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS task_presentation (
+                    task_id TEXT PRIMARY KEY, document TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS effects (
                     key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS messages (
@@ -142,3 +144,17 @@ class Store:
     def acknowledge(self, event_id):
         with self.connect() as db:
             db.execute("UPDATE notifications SET delivered=1 WHERE id=?", (event_id,))
+
+    def presentation(self, target):
+        with self.connect() as db:
+            row = db.execute("SELECT document FROM task_presentation WHERE task_id=?", (target,)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_presentation(self, target, changes):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT document FROM task_presentation WHERE task_id=?", (target,)).fetchone()
+            document = json.loads(row[0]) if row else {}
+            document.update(changes)
+            db.execute("INSERT OR REPLACE INTO task_presentation VALUES (?,?)", (target, json.dumps(document, ensure_ascii=False)))
+        return document

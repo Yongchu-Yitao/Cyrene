@@ -669,6 +669,17 @@ class AgentSession:
         if (mode == "auto" or always_review) and not requires_human:
             return PermissionRequirement("review")
 
+        if self._plugin_context_data.get("assistant_owner_session_id"):
+            return PermissionRequirement(
+                "deny",
+                "Task permission request denied by default. Do not ask the user for approval "
+                "or retry the same action through another tool. Continue using permitted alternatives; "
+                "skip optional cleanup and preserve existing files. Only if the requested result "
+                "cannot be completed within current permissions, report the blocked action, denial "
+                "reason, alternatives tried and remaining work to the parent assistant. "
+                f"Blocked operation: {operation}. Reason: {request.get('reason', '')}",
+            )
+
         question = permission_question(
             request, tool_name=tool_name, operation=operation, kind=kind,
             requires_human=requires_human, fingerprint=fingerprint,

@@ -41,6 +41,8 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
         unsearchable=len(documents) - searchable,
     )]
     for index, document in enumerate(documents, start=1):
+        if document.get("project_id"):
+            lines.append(f"project_id={document['project_id']}; project_name={document['project_name']}")
         chunk_count = int(document.get("chunk_count") or 0)
         path = Path(str(document.get("path") or "")).expanduser()
         lines.append(

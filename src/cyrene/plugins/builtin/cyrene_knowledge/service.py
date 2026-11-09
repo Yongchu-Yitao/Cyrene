@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import unquote, urlsplit
 
+from cyrene.plugins.project_read_scope import (
+    reads_all_projects, read_all_projects,
+)
 from cyrene.core.plugin import PluginContext
 
+from .citations import creator_label as creator_label, render_citation as _render_citation
 from .content import extract_text, parse_bibliography
 from .retrieve import search_knowledge as retrieve_knowledge
 from .store import KnowledgeStore
@@ -49,18 +53,6 @@ def _default_data_root() -> Path:
     return Path(DATA_DIR).expanduser().resolve() / "plugin_data" / "cyrene_knowledge"
 
 
-def creator_label(creators: Sequence[Mapping[str, Any]]) -> str:
-    names: list[str] = []
-    for creator in creators:
-        literal = str(creator.get("name") or "").strip()
-        first = str(creator.get("first_name") or "").strip()
-        last = str(creator.get("last_name") or "").strip()
-        label = literal or " ".join(value for value in (first, last) if value)
-        if label:
-            names.append(label)
-    return ", ".join(names)
-
-
 def _has_value(value: Any) -> bool:
     return value not in (None, "", [], {})
 
@@ -68,24 +60,6 @@ def _has_value(value: Any) -> bool:
 def _snippet(text: Any, length: int = 160) -> str:
     normalized = " ".join(str(text or "").split())
     return normalized[:length] + ("…" if len(normalized) > length else "")
-
-
-def _render_citation(item: Mapping[str, Any], style: str) -> str:
-    authors = creator_label(list(item.get("creators") or [])) or "Unknown author"
-    title = str(item.get("title") or "Untitled")
-    year = str(item.get("year") or "n.d.")
-    venue = str(item.get("venue") or item.get("publisher") or "").strip()
-    doi = str(item.get("doi") or "").strip()
-    url = str(item.get("url") or "").strip()
-    source = f" https://doi.org/{doi}" if doi else (f" {url}" if url else "")
-    normalized_style = str(style or "ieee").casefold()
-    if normalized_style in {"apa", "apa7"}:
-        return f"{authors} ({year}). {title}. {venue}.{source}".strip()
-    if normalized_style in {"mla", "mla9"}:
-        return f'{authors}. "{title}." {venue}, {year}.{source}'.strip()
-    if normalized_style in {"chicago", "chicago-author-date"}:
-        return f'{authors}. {year}. "{title}." {venue}.{source}'.strip()
-    return f'{authors}, "{title}," {venue}, {year}.{source}'.strip()
 
 
 def _render_bibtex(item: Mapping[str, Any]) -> str:
@@ -305,6 +279,10 @@ class KnowledgeService:
         status: str = "",
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        if reads_all_projects(context.data):
+            result = await read_all_projects(context, self.list_documents,
+                limit=max(1, min(int(limit or 100), 500)), status=status)
+            return result["items"]
         workspace = self._context_workspace(context)
         return await asyncio.to_thread(
             self.store.list_documents,
@@ -320,6 +298,12 @@ class KnowledgeService:
         *,
         limit: int = 6,
     ) -> list[dict[str, Any]]:
+        if reads_all_projects(context.data):
+            if not str(query or "").strip():
+                raise ValueError("query cannot be empty")
+            result = await read_all_projects(context, self.search_knowledge,
+                limit=max(1, min(int(limit or 6), 50)), query=query)
+            return result["items"]
         workspace = self._context_workspace(context)
         needle = str(query or "").strip()
         if not needle:
@@ -346,6 +330,10 @@ class KnowledgeService:
         tag: str = "",
         limit: int = 50,
     ) -> dict[str, Any]:
+        if reads_all_projects(context.data):
+            return await read_all_projects(context, self.list_library_items,
+                limit=max(1, min(int(limit or 50), 200)), query=query,
+                status=status, collection_id=collection_id, tag=tag)
         return await self.items(
             self._context_workspace(context),
             q=query,
@@ -364,6 +352,12 @@ class KnowledgeService:
         status: str = "",
         tag: str = "",
     ) -> list[dict[str, Any]]:
+        if reads_all_projects(context.data):
+            if not str(query or "").strip():
+                raise ValueError("query cannot be empty")
+            result = await read_all_projects(context, self.search_library,
+                limit=max(1, min(int(limit or 8), 30)), query=query, status=status, tag=tag)
+            return result["items"]
         workspace = self._context_workspace(context)
         needle = str(query or "").strip()
         if not needle:

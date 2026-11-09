@@ -38,6 +38,7 @@ export function harness(file, extras = {}) {
     wbcT: (_key, fallback) => fallback,
     ...extras,
   };
+  dependencies.useWbcCallback = (callback, deps) => dependencies.useWbcMemo(() => callback, deps);
   dependencies.useWbcLayoutEffect ||= dependencies.useWbcEffect;
   const context = {module:{exports:{}}, require: () => dependencies, window:eventTarget, React:extras.React,
     document:{...eventTarget, visibilityState:'visible'}, AbortController, localStorage:extras.localStorage};

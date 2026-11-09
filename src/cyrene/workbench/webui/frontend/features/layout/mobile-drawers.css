@@ -87,7 +87,10 @@
     padding-bottom: var(--wb-mobile-dock-reserve, 84px); background: var(--wb-floating-rail-bg); box-shadow: var(--wb-floating-rail-shadow);
   }
   .workbench-shell[data-mobile-drawer] .workbench-sidebar-dock.is-persistent[data-mobile-card] {
-    width: min(318px, calc(100vw - 80px)) !important; left: 20px !important; bottom: 20px !important;
+    /* Use the same border and content inset as the conversation groups. */
+    width: calc(min(340px, 100vw - 56px) - 2px - 2 * var(--wb-rail-content-padding)) !important;
+    left: calc(9px + var(--wb-rail-content-padding)) !important;
+    bottom: calc(9px + var(--wb-rail-content-padding)) !important;
     /* The nav owns its rounded border and shadow, just as on desktop.
        This moving wrapper must not clip that material a second time. */
     background: transparent; border: 0; border-radius: 0; box-shadow: none;

@@ -19,6 +19,12 @@ TOOL_METADATA = {
 }
 
 
+def _source_lines(result):
+    if result.get("project_id"):
+        return [f"project_id={result['project_id']}; project_name={result['project_name']}"]
+    return []
+
+
 async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
     query = str(arguments.get("query") or "").strip()
     results = await knowledge_service(context).search_library(
@@ -43,6 +49,7 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
         query=query,
     )]
     for index, result in enumerate(results, start=1):
+        lines.extend(_source_lines(result))
         item = result["item"]
         paper_id = str(item.get("id") or "")
         authors = creator_label(item.get("creators") or []) or plugin_localized(

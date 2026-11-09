@@ -3,13 +3,13 @@ import { attachCyreneIdleAttention } from './cyrene-idle-attention.mjs';
 
 export function attachCyreneMotion(svg) {
   const motion=createCyreneMotion(), doc=svg.ownerDocument, win=doc.defaultView;
-  const button=svg.closest('button');
+  const button=svg.closest('button, [role="button"]');
   const find=name=>svg.querySelector('.cyrene-icon-'+name);
   const body=find('body'),ring=find('ring'),gaze=find('gaze'),left=find('eye'),right=find('eye-right'),glint=find('glint');
   const badges={waiting:find('wait'),done:find('done'),error:find('error'),stopped:find('pause'),reconnecting:find('reconnect')};
   const media=win.matchMedia('(prefers-reduced-motion: reduce)');
   const attention=attachCyreneIdleAttention(svg,motion);
-  let frame=null,last=null,disposed=false,reduced=false,lastKeyboard=-Infinity;
+  let frame=null,last=null,disposed=false,reduced=false,lastKeyboard=-Infinity, clickAnimation=null;
   const removers=[];
   function listen(target,event,fn){target?.addEventListener(event,fn);removers.push(()=>target?.removeEventListener(event,fn));}
   function paint(){
@@ -28,6 +28,14 @@ export function attachCyreneMotion(svg) {
       element.style.transform=`translateY(${(1-value)*2}px) scale(${Math.max(.1,.6+.4*value)})`;
     }
   }
+  function clickFeedback(){
+    if(reduced)return;
+    clickAnimation?.cancel();
+    clickAnimation=svg.parentElement.animate?.([
+      {transform:'scale(1)'},{transform:'scale(.82) rotate(-12deg)',offset:.25},
+      {transform:'scale(1.18) rotate(8deg)',offset:.6},{transform:'scale(1)'},
+    ],{duration:440,easing:'ease-out'}) || null;
+  }
   function stop(){if(frame!==null)win.cancelAnimationFrame(frame);frame=null;last=null;}
   function tick(time){frame=null;if(disposed||doc.hidden||reduced)return;
     attention.sample();
@@ -38,14 +46,14 @@ export function attachCyreneMotion(svg) {
   function preferences(){
     reduced=media.matches||doc.documentElement.dataset.performanceMode==='on';
     motion.setReduced(reduced);
-    if(reduced){attention.clear();stop();paint();}else wake();
+    if(reduced){clickAnimation?.cancel();attention.clear();stop();paint();}else wake();
   }
   listen(media,'change',preferences);
   listen(win,'cyrene:performance-mode',preferences);
   const observer=new win.MutationObserver(preferences);
   observer.observe(doc.documentElement,{attributes:true,attributeFilter:['data-performance-mode']});
   listen(doc,'visibilitychange',()=>{motion.cancelPress();if(doc.hidden)stop();else wake();});
-  listen(button,'pointerdown',event=>{if(event.button!==0)return;button.setPointerCapture?.(event.pointerId);motion.press();wake();});
+  listen(button,'pointerdown',event=>{if(event.button!==0)return;if(button.tagName==='BUTTON')button.setPointerCapture?.(event.pointerId);motion.press();wake();});
   listen(button,'pointerup',()=>{motion.release();wake();});
   listen(button,'pointercancel',()=>{motion.cancelPress();wake();});
   listen(button,'lostpointercapture',()=>{motion.cancelPress();wake();});
@@ -53,11 +61,16 @@ export function attachCyreneMotion(svg) {
   listen(button,'pointerleave',()=>{motion.setHover(false);wake();});
   listen(button,'blur',()=>{motion.cancelPress();wake();});
   listen(button,'keydown',event=>{if(!['Enter',' '].includes(event.key)||event.repeat)return;lastKeyboard=win.performance.now();motion.press();wake();});
-  listen(button,'keyup',event=>{if(!['Enter',' '].includes(event.key))return;lastKeyboard=win.performance.now();motion.release();wake();});
-  listen(button,'click',event=>{if(event.detail===0&&win.performance.now()-lastKeyboard>250){motion.press();motion.release();wake();}});
+  listen(button,'keyup',event=>{if(!['Enter',' '].includes(event.key))return;lastKeyboard=win.performance.now();motion.release();clickFeedback();wake();});
+  listen(button,'click',event=>{
+    if(button.dataset.wbcPointerDragged==='true')return;
+    if(event.detail===0&&win.performance.now()-lastKeyboard<=250)return;
+    if(event.detail===0){motion.press();motion.release();wake();}
+    clickFeedback();
+  });
   preferences();paint();wake();
   return {
     setState(state){if(state!==motion.state)attention.clear();motion.setState(state);if(reduced)paint();else wake();},
-    destroy(){disposed=true;stop();attention.destroy();observer.disconnect();removers.forEach(remove=>remove());},
+    destroy(){disposed=true;clickAnimation?.cancel();stop();attention.destroy();observer.disconnect();removers.forEach(remove=>remove());},
   };
 }

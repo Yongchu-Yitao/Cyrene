@@ -21,7 +21,7 @@ export function AssistantHomeLayout({ card, renderBlock, now = new Date() }) {
         {spec.home_kind === 'overview' && <div className="wbc-home-date">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(now)}</div>}
         <h3>{homeDisplayTitle(spec)}</h3>{spec.subtitle && <p>{spec.subtitle}</p>}
       </div>
-      {weather && <CardWeather block={weather} showMetadata={false} />}
+      {weather && <CardWeather block={weather} now={now} showMetadata={false} />}
     </div>
     <div className="wbc-home-content">{spec.blocks.filter(block => block !== weather).map(block => {
       if (spec.home_kind === 'resume' && block.type === 'timeline') return <details className="wbc-home-progress" key={block.block_id}>

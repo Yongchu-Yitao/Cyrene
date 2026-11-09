@@ -42,7 +42,7 @@ function cleanupClosedPane(context, card, draftKey) {
 }
 
 export async function wbcClosePaneCardsWithConfirmation(context, cards, ownerChatId) {
-  if (!cards.length) return { closed: false };
+  if (!cards.length || (context.canClosePaneCard && !cards.every(context.canClosePaneCard))) return { closed: false };
   var ids = cards.map(function (card) { return String(card.id); });
   var draftKeys = cards.map(function (card) {
     var key = paneDraftKey(card, context.projectId);

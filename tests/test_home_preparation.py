@@ -51,12 +51,19 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
     before = deepcopy(chat)
     port = SimpleNamespace(service=SimpleNamespace(repository=SimpleNamespace(get=lambda _: chat, _database=lambda: str(tmp_path / 'wb.db'))))
     observed = {}
+    candidate = {'id': 'selected', 'model': 'deepseek-flash', 'adapter': 'openai', 'provider': 'openai_compatible'}
+    def resolve(owner):
+        assert owner == 'assistant'
+        return candidate
+    monkeypatch.setattr('cyrene.plugins.model_catalog.resolve_session_model_candidate', resolve)
     class Runtime:
         def __init__(self, _db): pass
         async def send(self, config, prompt, **kwargs):
             observed['config'] = config
             assert config.session_id != 'assistant'
             assert config.assistant_home_owner == 'assistant'
+            assert config.model_identity['candidateId'] == 'selected'
+            assert config.model_identity['model'] == 'deepseek-flash'
             assert config.memory_write_enabled is False
             await kwargs['publish']({'type': 'tool.started'})
             await config.assistant_home_cards.command('assistant', None, 'card.update', {
@@ -71,6 +78,29 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
     assert not observed['config'].data_directory.parent.exists()
     assert chat == before
     assert (await live.command('assistant', None, 'card.get', {'card_id': card['card_id']}))['spec']['title'] == 'Ready'
+
+
+@pytest.mark.asyncio
+async def test_missing_model_does_not_create_runtime(tmp_path, monkeypatch):
+    from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeModelUnavailable
+    live = CardService(tmp_path / 'live')
+    chat = {'kind': 'personal-assistant'}
+    port = SimpleNamespace(service=SimpleNamespace(repository=SimpleNamespace(get=lambda _: chat)))
+    monkeypatch.setattr('cyrene.plugins.model_catalog.resolve_session_model_candidate', lambda _: None)
+    def forbidden(*args):
+        pytest.fail('Missing configuration must not create an Agent runtime')
+    monkeypatch.setattr('cyrene.workbench.core_adapter.ConversationRuntime', forbidden)
+    with pytest.raises(HomeModelUnavailable):
+        await prepare_home(live, port, 'assistant', 'version', 'maintain', {})
+
+
+def test_home_model_uses_current_selection(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_cards.home_preparation import home_model_identity
+    selected = {'id': 'new-profile', 'model': 'new-model', 'adapter': 'openai'}
+    monkeypatch.setattr('cyrene.plugins.model_catalog.resolve_session_model_candidate', lambda _: selected)
+    assert home_model_identity('assistant')['candidateId'] == 'new-profile'
+    selected['id'] = 'changed-profile'
+    assert home_model_identity('assistant')['candidateId'] == 'changed-profile'
 
 
 def test_runtime_scopes_background_assistant_and_redirects_cards_only(tmp_path, monkeypatch):

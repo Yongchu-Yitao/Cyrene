@@ -8,7 +8,7 @@ from typing import Any
 
 _SPECS: dict[str, dict[str, Any]] = {
     "ListKnowledgeDocuments": {
-        "description": ("List files in the current Workbench project's knowledge base, including indexing state, searchable chunks, document ID, size, and readable path."),
+        "description": ("List files in the current Workbench project's knowledge base, including indexing state, searchable chunks, document ID, size, and readable path." " Assistant-created task sessions read all projects and include source project IDs and names."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -26,7 +26,7 @@ _SPECS: dict[str, dict[str, Any]] = {
         },
     },
     "SearchKnowledge": {
-        "description": ("Search the current Workbench project's knowledge base using hybrid keyword and vector retrieval, returning the most relevant indexed passages."),
+        "description": ("Search the current Workbench project's knowledge base using hybrid keyword and vector retrieval, returning the most relevant indexed passages." " Assistant-created task sessions read all projects and include source project IDs and names."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -41,7 +41,7 @@ _SPECS: dict[str, dict[str, Any]] = {
         },
     },
     "ListLibraryItems": {
-        "description": ("List structured literature items in the current Workbench project, including stable paper IDs, bibliographic metadata, reading state, and citekeys."),
+        "description": ("List structured literature items in the current Workbench project, including stable paper IDs, bibliographic metadata, reading state, and citekeys." " Assistant-created task sessions read all projects and include source project IDs and names."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -68,7 +68,7 @@ _SPECS: dict[str, dict[str, Any]] = {
         },
     },
     "SearchLibrary": {
-        "description": ("Search the current project's literature library by bibliographic metadata and indexed evidence. Returns stable paper IDs and evidence passages."),
+        "description": ("Search the current project's literature library by bibliographic metadata and indexed evidence. Returns stable paper IDs and evidence passages." " Assistant-created task sessions read all projects and include source project IDs and names."),
         "input_schema": {
             "type": "object",
             "properties": {

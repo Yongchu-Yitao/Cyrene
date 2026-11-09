@@ -4,6 +4,8 @@ import { WbcScrollToBottomButton, useWbcComposerReserveHeight, wbcScrollThreadTo
 import { wbcMergeChatSummary } from "../chat/runtime-page-hooks.jsx"
 import { wbcMergeSavedAssistantMessages, wbcReconcileLiveUserMessages, wbcTruncateMessagesAfterUser } from "../chat/runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
+import { AssistantGripLogo } from "./assistant-grip-logo.jsx"
+import { CyreneIcon } from "./cyrene-icon.jsx"
 
 const EMPTY_PERMISSION_REQUESTS = [];
 
@@ -96,6 +98,24 @@ function useAssistantChatSync({ sessionId, model, engine, active, cache, answere
 
 // A conversation surface, not a pane workspace. The shared engine owns streams
 // across navigation; subscribing here must never replace its global hooks.
+function assistantGripVisible(personalAssistant, chat, visible, runtime) {
+  return personalAssistant && chat && (visible.length > 0 || runtime);
+}
+
+function assistantWelcome(chat, visible, runtime) {
+  return !chat ? <p role="status">正在加载对话…</p> : !visible.length && !runtime ? <AssistantWelcome /> : null;
+}
+
+function AssistantWelcome() {
+  return <section className="assistant-chat-welcome">
+          <div className="assistant-chat-brand">
+            <div className="assistant-chat-avatar"><CyreneIcon /></div>
+            <span>Cyrene</span>
+          </div>
+          <h1>需要我做什么？</h1>
+        </section>;
+}
+
 function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = EMPTY_PERMISSION_REQUESTS, active = true, personalAssistant = false, cache }) {
   var chatService = workbenchServices.chat();
   var model = chatService.Model;
@@ -189,12 +209,14 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
 
   var failure = engine.getFailure && engine.getFailure(sessionId);
   var displayError = error || (failure && failure.message) || "";
+  var showGrip = assistantGripVisible(personalAssistant, chat, visible, runtime);
   return <section ref={mainRef} className="wbc-main assistant-chat" data-cyrene-personal-composer={personalAssistant && active ? "true" : undefined} aria-label={title || "Cyrene 个人助理"}>
+    {showGrip ? <AssistantGripLogo surfaceRef={mainRef} sessionId={sessionId} /> : null}
     {refreshError && <p className="wbc-card-notice" role="status">{refreshError}</p>}
     {displayError && <WbcErrorNotice message={displayError} kind={chat ? "message" : "load"} />}
     <div className="wbc-thread-stage">
       <div className={"wbc-thread" + (visible.length || runtime ? " wbc-thread-messages" : "")} ref={scrollRef} onScroll={onScroll}>
-        {!chat ? <p role="status">正在加载对话…</p> : !visible.length && !runtime ? <section className="assistant-chat-welcome"><span className="assistant-chat-wordmark">Cyrene</span><h1>今天，有什么需要我帮忙？</h1><p>一起理清想法、推进任务，也可以从一个简单的问题开始。</p></section> : null}
+        {assistantWelcome(chat, visible, runtime)}
         {personalAssistant && chat
           ? <AssistantHomeTranscript key={sessionId} Transcript={chatService.Transcript} messages={visible} runtime={runtime} sessionId={sessionId} active={active} onOpenFile={onOpenFile} />
           : React.createElement(chatService.Transcript, { messages: visible, runtime: runtime, chatId: sessionId, onOpenFile: onOpenFile })}

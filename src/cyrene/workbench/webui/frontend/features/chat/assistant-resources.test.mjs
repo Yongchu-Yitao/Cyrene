@@ -1,53 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {harness} from './hook-harness.test.mjs';
+import {harness as baseHarness} from './hook-harness.test.mjs';
+const shared = baseHarness('./resource-splits.jsx');
+const sharedFiles = shared.run(mod => mod.wbcChatArtifactFiles);
+function harness(file, extras = {}) {
+  return baseHarness(file, {wbcChatArtifactFiles: sharedFiles, ...extras});
+}
 const settle = async () => {for (let i=0; i<15; i++) await Promise.resolve();};
 function all(element, type) {
   if (!element) return [];
   if (Array.isArray(element)) return element.flatMap(e => all(e,type));
   return (element.type === type ? [element] : []).concat(all(element.props?.children, type));
 }
-test('task files deduplicate outputs and preserve owning workspace URLs', () => {
+test('task files reuse the ordinary panel index for uploads, changes and live deliverables', () => {
   const h = harness('../shell/assistant-task-resources.jsx');
-  h.run(mod => mod.assistantTaskFiles({id:'task-a', files:[{path:'reports/a b.md',source:'agent'}],
-    messages:[{role:'assistant',attachments:[{path:'reports/a b.md', name:'Report'}]},
-      {role:'assistant',attachments:[{path:'reports/a b.md', name:'Updated report'}]},
-      {role:'user',attachments:[{id:'input',url:'/uploads/input.pdf',name:'Input'}]}]}));
-  assert.equal(h.value.length, 1);
-  assert.equal(h.value[0].output, true);
-  assert.equal(h.value[0].source, 'assistant-task');
-  assert.equal(h.value[0].url, '/api/workbench/chats/task-a/files/reports/a%20b.md');
-  assert.equal(h.value[0].name, 'Updated report');
-});
-test('task outputs exclude scratch files, uploads, tool results and pending questions', () => {
-  const h = harness('../shell/assistant-task-resources.jsx');
-  const chat = {id:'task-a', files:[{path:'dbg.png'}, {path:'grab.mjs'}, {path:'report.pdf'}],
-    generatedFiles:[{path:'dump.mjs'}], messages:[
-      {role:'user',attachments:[{url:'/uploads/input.pdf'}]},
-      {role:'tool',attachments:[{path:'probe.png'}]},
-      {role:'assistant',questionPrompt:true,attachments:[{path:'login.png'}]},
-    ]};
+  const chat = {id:'task-a', projectId:'__personal_assistant__', files:[
+    {path:'reports/report.md',name:'report.md',source:'agent'},
+    {path:'debug.js',name:'debug.js',source:'agent'},
+  ],messages:[
+    {role:'assistant',attachments:[{path:'reports/report.md',name:'report.md',url:'/exports/report.md'}]},
+    {role:'user',attachments:[{id:'input',url:'/uploads/input.pdf',name:'Input'}]},
+  ],liveAgentArtifacts:[{id:'live',name:'Live image',url:'/exports/live.png'}]};
   h.run(mod => mod.assistantTaskFiles(chat));
-  assert.equal(h.value.length, 0);
-  chat.messages.push({role:'assistant',attachments:[
-    {path:'report.pdf'}, {url:'/media/final.png',name:'Final image'},
-  ]});
-  h.flush();
-  assert.deepEqual(Array.from(h.value, file => file.url), [
-    '/api/workbench/chats/task-a/files/report.pdf', '/media/final.png',
-  ]);
-  assert.ok(h.value.every(file => file.output));
+  assert.deepEqual(Array.from(h.value, file => file.name), ['report.md','Input','debug.js','Live image']);
+  assert.equal(h.value[0].url, '/exports/report.md');
+  assert.equal(h.value[1].output, false);
+  assert.equal(h.value[2].url, '/api/workbench/chats/task-a/files/debug.js');
+  assert.equal(h.value[2].source, 'assistant-task');
 });
+
 test('resource rows open files, owned terminals and every browser tab in the originating task', async () => {
   const React = {createElement(type,props,...children) {return {type,props:{...props,children}};}};
   const opened=[], requests=[];
   let query='';
   const h = harness('../shell/assistant-task-resources.jsx', {React,WBC_ICONS:{},wbcFormatTime:()=>'',wbcSetResourceDrag:(_e,p)=>opened.push(['drag',p]),wbcFileDragPayload:(file,ownerSessionId)=>({kind:'file',file,ownerSessionId}),
-    workbenchServices:{chat:()=>({Model:{getChat:async()=>({id:'a',files:[{path:'dbg.png'},{path:'grab.mjs'}],
+    workbenchServices:{chat:()=>({Model:{getChat:async()=>({id:'a',files:[],
         messages:[{role:'assistant',attachments:[{path:'result.md'}]}]})}}),
       api:()=>({json:async url=>{requests.push(url);return {terminals:[{id:'t',ownerChatId:'a'},{id:'other',ownerChatId:'b'}]};}})}});
   h.context.setTimeout=h.context.window.setTimeout;h.context.clearTimeout=h.context.window.clearTimeout;
-  h.context.window.cyrene={browser:{getState:async id=>({tabs:[{id:'tab1',title:'One'},{id:'tab2',title:'Two'}]})}};
+  h.context.window.cyrene={browser:{getState:async id=>({tabs:[{id:'tab1',title:'One',favicon:'https://example.com/favicon.ico'},{id:'tab2',title:'Two'}]})}};
   h.run((mod,hooks)=>{
     Object.assign(React,{useState:hooks.useWbcState,useEffect:hooks.useWbcEffect});
     return mod.AssistantTaskResources({task:{session_id:'a'},query,onOpen:(...args)=>opened.push(args)});
@@ -55,6 +46,9 @@ test('resource rows open files, owned terminals and every browser tab in the ori
   await settle();h.flush();
   const rows=all(h.value,'div').filter(row=>row.props.role==='button');
   assert.equal(rows.length,4);
+  const favicon=all(h.value,'img')[0];
+  assert.equal(favicon.props.src,'https://example.com/favicon.ico');
+  const failed={hidden:false};favicon.props.onError({currentTarget:failed});assert.equal(failed.hidden,true);
   rows.forEach(row=>row.props.onClick());
   assert.deepEqual(opened.map(x=>x.slice(0,2)),[['a','file'],['a','terminal'],['a','browser'],['a','browser']]);
   assert.equal(opened[1][2],'t'); assert.equal(opened[3][2],'tab2');
@@ -125,4 +119,24 @@ test('dragging an already visible browser moves its pane instead of duplicating 
     {}, {left:[],right:[card]}, {}, 'main','bottom'));
   assert.equal(h.value.sourceCardId,'browser-existing');
   assert.equal(h.value.card,card);
+});
+
+test('main assistant deliveries keep their attachment URL and hidden resources stay hidden', async()=>{
+  const React={createElement(type,props,...children){return {type,props:{...props,children}};}};
+  const opened=[];
+  const h=harness('../shell/assistant-task-resources.jsx',{React,WBC_ICONS:{},wbcFormatTime:()=>'',
+    wbcFileDragPayload:()=>({}),workbenchServices:{chat:()=>({Model:{getChat:async()=>({messages:[]})}}),
+      api:()=>({json:async()=>({terminals:[]})})}});
+  h.context.setTimeout=h.context.window.setTimeout;h.context.clearTimeout=h.context.window.clearTimeout;
+  h.context.window.cyrene={browser:{getState:async()=>({tabs:[{id:'tab1',title:'Hidden'}]})}};
+  h.run((mod,hooks)=>{
+    React.useState=hooks.useWbcState;React.useEffect=hooks.useWbcEffect;
+    return mod.AssistantTaskResources({task:{session_id:'task',presentation:{hidden_resources:['browser:tab1'],
+      files:[{id:'final',name:'Report',url:'/api/attachments/final'}]}},onOpen:(...args)=>opened.push(args)});
+  });
+  await settle();h.flush();
+  const rows=all(h.value,'div').filter(row=>row.props.role==='button');
+  assert.equal(rows.length,1);rows[0].props.onClick();
+  assert.equal(opened[0][2].url,'/api/attachments/final');
+  h.unmount();
 });

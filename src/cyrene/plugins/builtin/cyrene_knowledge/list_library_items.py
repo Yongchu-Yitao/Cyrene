@@ -44,6 +44,8 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
         total=int(result.get("total") or 0),
     )]
     for index, item in enumerate(items, start=1):
+        if item.get("project_id"):
+            lines.append(f"project_id={item['project_id']}; project_name={item['project_name']}")
         authors = creator_label(item.get("creators") or []) or plugin_localized(
             context, "Unknown author", "未知作者"
         )

@@ -40,6 +40,7 @@ function closeHarness(layout, { drafts = {}, answers = [], pluginClose = () => P
   const onClose = (ids, requestedOwner) => { closes.push(plain(ids)); controller.wbcClosePaneCard(context, ids, requestedOwner) }
   return {
     context, closes, selected, discarded, calls, prompts, events, drafts,
+    closeDirect: ids => controller.wbcClosePaneCard(context, ids, owner),
     close: cards => confirmation.wbcClosePaneCardsWithConfirmation({ ...context, closePaneCard: onClose }, cards, owner),
     layout: () => plain(context.paneLayoutsByChat[selected.at(-1) || owner]),
   }
@@ -115,4 +116,22 @@ test("plugin session cleanup is attempted before closing and a cleanup failure s
   finish(new Error("already closed"))
   assert.equal((await closing).closed, true)
   assert.deepEqual(drag.closes, ["plugin"])
+})
+
+
+test("protected assistant blocks individual and whole-column closes before cleanup", async () => {
+  const assistant = card("main"), file = card("notes", "file"), other = card("task")
+  const layout = { left: [assistant, file], right: [other] }
+  const drag = closeHarness(layout, { drafts: { notes: "unsaved" }, answers: [true] })
+  drag.context.canClosePaneCard = item => item.payload !== "main"
+  for (const cards of [[assistant], [assistant, file]]) {
+    assert.equal((await drag.close(cards)).closed, false)
+    drag.closeDirect(cards.map(item => item.id))
+  }
+  assert.deepEqual(drag.prompts, [])
+  assert.deepEqual(drag.events, [])
+  assert.deepEqual(drag.discarded, [])
+  assert.deepEqual(drag.layout(), layout)
+  assert.equal((await drag.close([other])).closed, true)
+  assert.deepEqual(drag.layout().left.map(item => item.id), ["main", "notes"])
 })

@@ -9,13 +9,14 @@
 .wbc-card-map-toolbar label{font-size:12px;color:var(--card-muted)}.wbc-card-map-toolbar select{padding:6px;border:1px solid var(--card-line);border-radius:7px;background:var(--control-bg);color:var(--text)}.wbc-card-embed details{margin-top:10px;font-size:12px}.wbc-card-embed dl{display:grid;grid-template-columns:minmax(80px,1fr) 2fr;gap:8px;overflow-wrap:anywhere}.wbc-card-embed dd{margin:0}.wbc-card-embed-proposal{padding-top:12px}.wbc-card-embed-proposal button{margin-right:8px}
 
 .wbc-card-map-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:12px 0;font-size:12px}.wbc-card-map-legend>span{display:inline-flex;align-items:center;gap:7px}.wbc-card-map-legend i{display:inline-block;width:11px;height:11px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 1px #ffffff80}
+.wbc-assistant-card button.wbc-card-pin{padding:0}
 .wbc-card-pin>span{display:flex;align-items:center;justify-content:center}.wbc-assistant-card .wbc-card-pin[aria-pressed=true]{color:var(--accent);background:var(--accent-faint)}
 .wbc-pane-column.wbc-pinned-card-column{display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;gap:12px;min-height:0;padding-bottom:12px}.wbc-pinned-card-slot{flex:0 0 auto;min-width:0}.wbc-pinned-card-slot .wbc-assistant-card{width:calc(100% - 16px);max-width:none;margin:8px auto;border:0;background:transparent}.wbc-pinned-card-placeholder{padding:24px;min-height:180px}.wbc-pinned-ordinary-pane{flex:0 0 480px;min-height:320px;position:relative}.wbc-pinned-ordinary-pane>.wbc-pane-card{height:100%}
 
 .wbc-home-cards{min-width:0;padding:4px 0}.wbc-home-cards:empty{display:none}.wbc-card-weather{display:flex;flex-direction:column;gap:4px;padding:4px 0 14px;border-bottom:1px solid var(--card-line)}.wbc-card-weather strong{font-weight:500}.wbc-card-weather span,.wbc-card-weather small{color:var(--card-muted);font-size:12px}.wbc-card-action-list{list-style:none;padding:0;margin:0}.wbc-card-action-list>li{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:14px 0;border-bottom:1px solid var(--card-line)}.wbc-card-action-list>li:last-child{border:0}.wbc-card-action-list>li>div:first-child{flex:1;min-width:min(160px,100%)}.wbc-card-action-list strong{font-weight:500}.wbc-card-action-list small{display:block;color:var(--card-muted);font-size:12px}.wbc-card-row-actions{display:flex;gap:8px;flex-wrap:wrap}.wbc-assistant-card .wbc-card-list-toggle{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;height:auto;min-height:36px;text-align:left}.wbc-card-list-toggle>span{font-variant-numeric:tabular-nums;color:var(--card-muted)}
 
 .wbc-card-list-toggle-end{display:inline-flex;align-items:center;gap:10px;flex-shrink:0;white-space:nowrap}.wbc-card-disclosure-icon{display:flex;align-items:center;justify-content:center;width:18px;height:18px;transition:transform .18s ease}.wbc-card-disclosure-icon svg{display:block;width:16px;height:16px}.wbc-card-list-toggle[aria-expanded=true] .wbc-card-disclosure-icon{transform:rotate(180deg)}
-.wbc-weather-scene{--weather-color:#91a4b8;--weather-cloud:#aebdce;--weather-glow:rgba(145,164,184,.18);position:relative;isolation:isolate;overflow:hidden;padding:22px 24px 14px;border-radius:18px;background:radial-gradient(ellipse at 90% 15%,var(--weather-glow),transparent 68%),var(--control-bg)}.wbc-weather-main{display:flex;align-items:center;justify-content:space-between;gap:12px}.wbc-weather-copy{display:flex;flex-direction:column;min-width:0;gap:2px}.wbc-weather-location{font-size:13px;color:var(--card-muted)}.wbc-weather-copy .wbc-weather-temperature{font-size:40px;font-weight:500;line-height:1.25;letter-spacing:-1.5px}.wbc-weather-copy small{font-size:12px;color:var(--card-muted)}.wbc-weather-art{width:150px;flex:0 1 150px;min-width:90px;color:var(--weather-color);filter:drop-shadow(0 6px 12px var(--weather-glow))}.wbc-weather-art svg{display:block;width:100%;height:auto}.weather-sun-halo{fill:currentColor;opacity:.14;animation:wbc-weather-glow 5s ease-in-out infinite}.weather-sun-disc{fill:currentColor}.weather-rays{transform-origin:78px 48px;animation:wbc-weather-orbit 45s linear infinite}.weather-cloud{fill:var(--weather-cloud);animation:wbc-weather-drift 6s ease-in-out infinite}.weather-cloud-highlight{fill:none;stroke:#f0f6ff;stroke-width:2;opacity:.35}.weather-moon{fill:currentColor;animation:wbc-weather-drift 7s ease-in-out infinite}.weather-drop{animation:wbc-weather-rain 1.6s ease-in infinite}.weather-flake{animation:wbc-weather-rain 3.5s ease-in-out infinite}.drop-1{animation-delay:.5s}.drop-2{animation-delay:1s}.weather-lightning{fill:#ffd05a;stroke:var(--wb-card-bg,var(--surface-1));stroke-width:2}.weather-fog{color:var(--weather-color);opacity:.65;animation:wbc-weather-drift 8s ease-in-out infinite}.wbc-weather-scene .wbc-weather-advice{font-size:13px;margin:12px 0 8px}.wbc-weather-source{display:block;font-size:11px;color:var(--card-muted);overflow-wrap:anywhere}
+.wbc-weather-scene{--weather-color:#91a4b8;--weather-cloud:#aebdce;--weather-glow:rgba(145,164,184,.18);position:relative;isolation:isolate;overflow:hidden;padding:22px 24px 14px;border-radius:18px;background:radial-gradient(ellipse at 90% 15%,var(--weather-glow),transparent 68%),var(--control-bg)}.wbc-weather-main{display:flex;align-items:center;justify-content:space-between;gap:12px}.wbc-weather-copy{display:flex;flex-direction:column;min-width:0;gap:2px}.wbc-weather-location{font-size:13px;color:var(--card-muted)}.wbc-weather-copy .wbc-weather-temperature{font-size:40px;font-weight:500;line-height:1.25;letter-spacing:-1.5px}.wbc-weather-copy small{font-size:12px;color:var(--card-muted)}.wbc-weather-art{width:150px;flex:0 1 150px;min-width:90px;color:var(--weather-color);filter:drop-shadow(0 6px 12px var(--weather-glow))}.wbc-weather-art svg{display:block;width:100%;height:auto}.weather-sun-halo{fill:currentColor;opacity:.14;animation:wbc-weather-glow 5s ease-in-out infinite}.weather-sun-disc{fill:currentColor}.weather-rays{transform-origin:78px 48px;animation:wbc-weather-orbit 45s linear infinite}.weather-cloud{fill:var(--weather-cloud);animation:wbc-weather-drift 6s ease-in-out infinite}.weather-cloud-highlight{fill:none;stroke:#f0f6ff;stroke-width:2;opacity:.35}.weather-moon{fill:currentColor;animation:wbc-weather-drift 7s ease-in-out infinite}.weather-drop{animation:wbc-weather-rain 1.6s ease-in infinite}.weather-flake{animation:wbc-weather-rain 3.5s ease-in-out infinite}.drop-1{animation-delay:.5s}.drop-2{animation-delay:1s}.weather-lightning{fill:#ffdb70;stroke:none;filter:drop-shadow(0 0 3px #ffc94d66)}.wbc-weather-art .weather-fog{color:var(--weather-color);opacity:.65;animation:wbc-weather-drift 8s ease-in-out infinite}.wbc-weather-scene .wbc-weather-advice{font-size:13px;margin:12px 0 8px}.wbc-weather-source{display:block;font-size:11px;color:var(--card-muted);overflow-wrap:anywhere}
 @keyframes wbc-weather-orbit{to{transform:rotate(360deg)}}@keyframes wbc-weather-drift{0%,100%{transform:translateX(-3px)}50%{transform:translateX(4px)}}@keyframes wbc-weather-rain{0%{transform:translateY(-3px);opacity:0}25%{opacity:1}100%{transform:translate(-3px,12px);opacity:0}}@keyframes wbc-weather-glow{0%,100%{opacity:.1}50%{opacity:.24}}
 @media(max-width:420px){.wbc-weather-scene{padding:16px}.wbc-weather-art{flex-basis:110px}.wbc-weather-copy .wbc-weather-temperature{font-size:34px}}
 @media(prefers-reduced-motion:reduce){.wbc-weather-art *{animation:none!important}.wbc-card-disclosure-icon{transition:none}}
@@ -184,3 +185,52 @@ html[data-theme="light"] .wbc-home-cards.wbc-assistant-home {color-scheme:light}
 .wbc-home-section.home-results .wbc-card-row-actions button:hover {
   border-color:var(--wb-line-2,var(--line-2));background:var(--wb-control-hover-bg,var(--control-bg-hover));
 }
+
+/* Night is independent of conditions: keep rain, snow, lightning and fog visible. */
+.wbc-weather-scene[data-period=night] {--weather-glow:rgba(84,101,187,.26);--weather-cloud:#8291b0}
+.wbc-weather-scene[data-period=night]:is(.weather-night,.weather-partly_cloudy) {--weather-color:#f4dda6}
+.wbc-weather-scene[data-period=night].weather-cloudy {--weather-color:#8f9fc4}
+.wbc-weather-scene[data-period=night].weather-rain {--weather-color:#87b4e1}
+.wbc-weather-scene[data-period=night].weather-snow {--weather-color:#b7d6f3;--weather-cloud:#9aafca}
+.wbc-weather-scene[data-period=night].weather-storm {--weather-color:#9ba8dc;--weather-cloud:#737f9e}
+.wbc-weather-scene[data-period=night].weather-fog {--weather-color:#929eb8}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night] {--weather-area:light-dark(#9da8ce8c,#424e8599);--weather-middle:light-dark(#b8c1df5c,#303b6955);--weather-mist:light-dark(#dce1f780,#a5b2df2b);--weather-text:light-dark(#242b48,#fafaff);--weather-detail:light-dark(#3e4767,#eceefe)}
+
+/* Condition-specific atmosphere, with separate night hues instead of one blue wash. */
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-weather=cloudy] {--weather-area:light-dark(#a5b5cd99,#69778e80);--weather-mist:light-dark(#e5edf780,#bdcde54a)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-weather=fog] {--weather-area:light-dark(#aec4b699,#6b8d7885);--weather-mist:light-dark(#e8eee390,#d3dec04d)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night][data-weather=night] {--weather-area:light-dark(#a19bd18c,#6251a6ad);--weather-mist:light-dark(#efe1bd90,#e6bb684a)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night][data-weather=partly_cloudy] {--weather-area:light-dark(#aea0c78c,#8160949e);--weather-mist:light-dark(#e0d1ee80,#bd95d34d)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night][data-weather=cloudy] {--weather-area:light-dark(#a4afc38c,#50617e9e);--weather-mist:light-dark(#dce4ef80,#a7bed64a)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night][data-weather=rain] {--weather-area:light-dark(#80b6c38c,#167a91ad);--weather-mist:light-dark(#c3e9ed80,#69d4df4d)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night][data-weather=snow] {--weather-area:light-dark(#9bc9c98c,#408e91ad);--weather-mist:light-dark(#e2f4f180,#b0f2e866)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night][data-weather=storm] {--weather-area:light-dark(#b49bca8c,#864babad);--weather-mist:light-dark(#eed3ef80,#d393df55)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-period=night][data-weather=fog] {--weather-area:light-dark(#a2b5a18c,#5c80689e);--weather-mist:light-dark(#e5e8ce80,#c5d39a4d)}
+.wbc-weather-scene[data-period=night].weather-partly_cloudy {--weather-cloud:#b0a1c8;--weather-glow:#9773bd40}
+.wbc-weather-scene[data-period=night].weather-rain {--weather-color:#73d4e3;--weather-cloud:#789eae;--weather-glow:#249bb640}
+.wbc-weather-scene[data-period=night].weather-snow {--weather-color:#c0f5e9;--weather-cloud:#a5d3cd;--weather-glow:#75cebd40}
+.wbc-weather-scene[data-period=night].weather-storm {--weather-color:#c29ae8;--weather-cloud:#a38bbf;--weather-glow:#ad68d340}
+.wbc-weather-scene[data-period=night].weather-fog {--weather-color:#bac8aa;--weather-glow:#8fa87a40}
+.wbc-weather-scene.weather-fog[data-period=day] {--weather-color:#afc6b6;--weather-glow:#9ab7a240}
+.weather-moon circle {animation:wbc-weather-twinkle 4s ease-in-out infinite alternate}
+.weather-moon circle:nth-of-type(2) {animation-delay:-1.4s}
+.weather-moon circle:nth-of-type(3) {animation-delay:-2.8s}
+.weather-flake {animation-name:wbc-weather-snowfall;animation-duration:3.5s;animation-timing-function:ease-in-out}
+.weather-lightning {animation:wbc-weather-lightning 6s ease-in-out infinite}
+.wbc-weather-art .weather-fog path {animation:wbc-weather-fog-bank 7s ease-in-out infinite alternate}
+.wbc-weather-art .weather-fog path:nth-child(even) {animation-delay:-3.5s}
+@keyframes wbc-weather-twinkle {from{opacity:.35}to{opacity:1}}
+@keyframes wbc-weather-snowfall {0%{transform:translate(-3px,-4px);opacity:0}25%{opacity:1}65%{transform:translate(3px,7px);opacity:.85}100%{transform:translate(-1px,16px);opacity:0}}
+@keyframes wbc-weather-lightning {0%,60%,100%{opacity:.8}70%,78%{opacity:1}88%{opacity:.85}}
+@keyframes wbc-weather-fog-bank {from{transform:translateX(-5px);opacity:.5}to{transform:translateX(5px);opacity:1}}
+
+/* Layered cloud banks vary by weather; the bolt stays in front, clear of rain. */
+.weather-cloud-back {fill:color-mix(in srgb,var(--weather-cloud) 72%,#33455e);animation:wbc-weather-back-cloud 8s ease-in-out infinite alternate}
+.weather-cloud-front {fill:var(--weather-cloud)}
+.weather-cloudy .weather-cloud-system {animation-duration:7.5s}
+.weather-rain .weather-cloud-system {animation-duration:4s}
+.weather-snow .weather-cloud-system {animation-duration:6.5s}
+.weather-storm .weather-cloud-system {animation-duration:3.8s}
+.weather-storm .weather-cloud-back {fill:color-mix(in srgb,var(--weather-cloud) 62%,#322541);animation-duration:5s}
+.weather-snow .weather-cloud-back {fill:color-mix(in srgb,var(--weather-cloud) 80%,#629dba)}
+@keyframes wbc-weather-back-cloud {from{transform:translate(-3px,1px)}to{transform:translate(4px,-2px)}}

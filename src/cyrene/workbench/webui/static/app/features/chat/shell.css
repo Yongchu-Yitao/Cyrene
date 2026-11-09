@@ -7,6 +7,7 @@
 .workbench-grid.integrated-sidebars {
   --wb-rail-w: 300px;
   --wb-rail-w-open: 300px;
+  --wb-rail-content-padding: 10px;
   --wb-sidebar-dock-height: 120px;
   --wb-sidebar-motion-duration: 440ms;
   --wb-sidebar-motion-ease: cubic-bezier(.22, 1.14, .36, 1);
@@ -354,7 +355,23 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 }
 
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail .wbc-chat-list {
-  padding: 10px;
+  padding: 10px var(--wb-rail-content-padding);
+}
+
+/* Let assistant conversations scroll behind the floating module Dock all the
+   way to the card edge. Clearance belongs inside the scrolling content so
+   the last conversation can still be brought above the Dock. */
+.workbench-grid.integrated-sidebars .workbench-cyrene-rail:not(.is-collapsed) > .workbench-sidebar-dock-slot {
+  display: none;
+}
+
+.workbench-grid.integrated-sidebars .wbc-rail.workbench-cyrene-rail:not(.is-collapsed) > .wbc-chat-list {
+  padding-bottom: 0;
+}
+
+.workbench-cyrene-rail:not(.is-collapsed) .wbc-chat-list-primary {
+  padding-bottom: calc(var(--wb-sidebar-dock-height) + 18px);
+  scroll-padding-bottom: calc(var(--wb-sidebar-dock-height) + 18px);
 }
 
 .workbench-grid.integrated-sidebars .workbench-integrated-rail-head {
@@ -791,7 +808,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   /* Keep the Dock bottom-anchored in both states. Switching margin-top from
      0 to auto at collapse time caused a discrete downward jump before the
      Dock height transition moved the vertical stack back upward. */
-  margin: auto 14px 12px;
+  margin: auto var(--wb-rail-content-padding) 12px;
   padding: 12px 0 0;
   box-sizing: border-box;
   border-top: 0;
@@ -811,16 +828,18 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   width: auto;
   height: var(--wb-sidebar-dock-height);
   min-height: var(--wb-sidebar-dock-height);
-  margin: auto 14px 12px;
+  margin: auto var(--wb-rail-content-padding) 12px;
   pointer-events: none;
 }
 
 .workbench-sidebar-dock.is-persistent {
   position: absolute;
-  left: 27px;
+  /* Match group edges: 12px rail offset + 1px border + content padding.
+     The rail track also includes 16px outer margins and two 1px borders. */
+  left: calc(13px + var(--wb-rail-content-padding));
   bottom: 25px;
   z-index: 64;
-  width: calc(var(--wb-rail-w) - 46px);
+  width: calc(var(--wb-rail-w) - 18px - 2 * var(--wb-rail-content-padding));
   margin: 0;
   transition:
     left var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
@@ -848,7 +867,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 }
 
 .workbench-sidebar-dock-nav {
-  --wb-dock-nav-bg: color-mix(in srgb, var(--wb-card-bg) 78%, var(--wb-control-bg));
+  --wb-dock-nav-bg: var(--wbc-composer-glass-background);
   grid-row: 1;
   min-width: 0;
   /* Collapsed navigation items are vertically translated into a stack. During
@@ -865,12 +884,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   margin-top: 0;
   padding: 3px;
   box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--wb-line-2) 58%, transparent);
   border-radius: 15px;
-  background: var(--wb-dock-nav-bg);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent),
-    0 4px 12px rgba(9, 17, 30, .035);
   transition:
     height var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
     grid-template-columns var(--wb-sidebar-motion-duration) var(--wb-sidebar-motion-ease),
@@ -1825,10 +1839,28 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 }
 .assistant-chat-card-slot > .wbc-pane-card { flex: 1; display: flex; flex-direction: column; }
 .assistant-chat-card-state { flex: 1; min-height: 0; }
-.assistant-chat-welcome { text-align: center; padding: clamp(40px, 14vh, 160px) 0 48px; }
-.assistant-chat-wordmark { font-size: 14px; font-weight: 600; color: var(--text-3); }
-.assistant-chat-welcome h1 { font-size: clamp(24px, 2.5vw, 34px); font-weight: 600; margin: 16px 0; letter-spacing: -.02em; }
-.assistant-chat-welcome p { color: var(--text-3); line-height: 1.7; }
+.assistant-chat-welcome {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 500px;
+  margin: auto;
+  padding: 24px 0 40px;
+  text-align: left;
+}
+.assistant-chat-brand { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; color: var(--wb-text); font-size: 20px; font-weight: 500; letter-spacing: -.025em; }
+.assistant-chat-avatar { display: grid; place-items: center; width: 64px; height: 64px; }
+.assistant-chat-avatar .cyrene-motion { width: 100%; height: 100%; }
+.assistant-chat-avatar .cyrene-icon-logo { width: 100%; height: 100%; }
+.assistant-chat-welcome h1 { color: var(--wb-text); font-size: clamp(28px, 3vw, 36px); line-height: 1.4; font-weight: 500; margin: 0; letter-spacing: -.03em; text-wrap: balance; }
+@media (max-height: 600px) {
+  .assistant-chat-welcome { padding: 8px 0 16px; }
+  .assistant-chat-avatar { width: 48px; height: 48px; }
+  .assistant-chat-brand { margin-bottom: 16px; }
+}
 .assistant-chat button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 /* The assistant uses the same pane workspace, within its module's card row. */
@@ -1840,3 +1872,86 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 
 /* Assistant rows use the Work list's existing geometry and status colors. */
 .assistant-resource-empty { font-size: 11px; color: var(--text-3); padding: 4px 10px; margin: 0; }
+
+/* Task groups share ordinary chat-group framing and child rows. */
+.assistant-task-group.search-resources-only:not(:has(.wbc-chat-card)) { display: none; }
+
+.assistant-resource-file-icon { width: 22px; height: 22px; border-radius: 5px; }
+.assistant-resource-file-icon svg { width: 16px; height: 16px; }
+
+.assistant-task-conversation-icon { color: var(--wb-muted); }
+.assistant-task-group.status-running .assistant-task-conversation-icon { color: var(--wb-green); }
+.assistant-task-group.status-planning .assistant-task-conversation-icon { color: var(--wb-blue); }
+.assistant-task-group.status-completed .assistant-task-conversation-icon { color: var(--wb-green); }
+.assistant-task-group.status-attention .assistant-task-conversation-icon { color: var(--wb-amber); }
+.assistant-task-group.status-failed .assistant-task-conversation-icon { color: var(--wb-red); }
+
+.wbc-rail .assistant-task-group + .assistant-task-group { margin-top: 10px; }
+
+/* All tasks share the same icon/title columns; disclosure sits at the end. */
+.wbc-rail .assistant-task-group .wbc-chat-group-head {
+  margin-inline: 0;
+  padding-inline: 8px;
+}
+.wbc-rail .assistant-task-group .wbc-chat-group-toggle {
+  grid-template-columns: 22px minmax(0, 1fr) 14px;
+  gap: 6px;
+  padding: 0;
+  justify-content: start;
+}
+.wbc-rail .assistant-task-group .wbc-chat-group-toggle .wbc-chat-row-icon {
+  grid-column: 1;
+  grid-row: 1;
+  width: 22px;
+}
+.wbc-rail .assistant-task-group .wbc-chat-group-toggle b { grid-column: 2; grid-row: 1; }
+.wbc-rail .assistant-task-group .wbc-chat-group-leading-chevron { grid-column: 3; grid-row: 1; }
+
+.wbc-rail .assistant-task-group .wbc-chat-group-toggle b {
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 500;
+}
+
+.wbc-rail .assistant-task-group {
+  padding-block: 3px;
+}
+.wbc-rail .assistant-task-group .wbc-chat-group-head {
+  min-height: 36px;
+}
+
+/* The header sticks within its own task, then yields to the following group. */
+.wbc-rail .assistant-task-group .wbc-chat-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex-shrink: 0;
+  background: var(--wb-control-bg);
+}
+.wbc-rail .assistant-task-group.expanded .wbc-chat-group-head:hover {
+  background: var(--wb-control-bg);
+}
+
+/* Resource icons and titles align with the task header. */
+.wbc-rail .assistant-task-group .wbc-chat-group-children {
+  padding-inline: 8px;
+}
+.wbc-rail .assistant-task-group .assistant-resource-row {
+  padding-left: 0;
+  padding-right: 8px;
+}
+.wbc-rail .assistant-task-group .assistant-resource-row .wbc-chat-card-top {
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 6px;
+}
+.wbc-rail .assistant-task-group .assistant-resource-row .wbc-chat-row-icon,
+.wbc-rail .assistant-task-group .assistant-resource-row .wbc-browser-picker-favicon {
+  width: 22px;
+}
+.wbc-rail .assistant-task-group .assistant-resource-row {
+  margin-inline: 0;
+}
+.wbc-rail .assistant-task-group .assistant-resource-file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}

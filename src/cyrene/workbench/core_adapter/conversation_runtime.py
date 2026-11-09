@@ -27,12 +27,12 @@ from cyrene.core.plugin.session_state import (
 from cyrene.plugins.model_router import MODEL_ROUTER_PLUGIN
 from .bridge import (
     WorkbenchChatResult,
-    WorkbenchPendingQuestion,
     WorkbenchPublisher,
     WorkbenchSessionBridge,
 )
 from cyrene.localization import app_language
 from .publication import PublicationQueue
+from .checkpoint import context_checkpoint_from_nodes
 from cyrene.platform.task_lifecycle import cancel_and_wait
 
 logger = logging.getLogger(__name__)
@@ -88,70 +88,6 @@ def _conversation_data_directory(
     return Path(USER_DATA_DIR).expanduser().resolve() / "agent-state"
 
 
-def context_checkpoint_from_nodes(nodes: Sequence[Any], committed_leaf_id: str = "") -> dict[str, Any] | None:
-    """Project a durable run checkpoint from an already-loaded tree snapshot."""
-
-    dialogue = [
-        node
-        for node in nodes
-        if isinstance(node.value, Mapping)
-        and node.value.get("role")
-        in {
-            "system",
-            "user",
-            "context",
-            "context_compaction",
-            "context_reflection",
-            "assistant",
-            "tool_results",
-        }
-    ]
-    if not dialogue:
-        return None
-    from cyrene.core.context.paths import select_context_leaf
-    leaf = select_context_leaf(nodes, committed_leaf_id)
-    by_id = {node.id: node for node in nodes}
-    current = leaf
-    run_id = ""
-    while current is not None:
-        value = current.value if isinstance(current.value, Mapping) else {}
-        run_id = str(value.get("run_id") or "")
-        if run_id:
-            break
-        current = by_id.get(str(current.parent_id or ""))
-    value = leaf.value if isinstance(leaf.value, Mapping) else {}
-    pending = value.get("pending_question")
-    if (
-        value.get("role") == "tool_results"
-        and value.get("trigger_model") is False
-        and isinstance(pending, Mapping)
-        and str(pending.get("status") or "awaiting_user") == "awaiting_user"
-    ):
-        question = WorkbenchPendingQuestion.from_mapping(pending)
-        return {
-            "status": "awaiting_user",
-            "run_id": run_id,
-            "node_id": leaf.id,
-            "pending_question": question,
-            "active_plan": question.plan,
-        }
-    if value.get("cancelled") is True:
-        status = "cancelled"
-    elif value.get("error") is True:
-        status = "failed"
-    elif value.get("role") == "assistant" and (
-        value.get("session_end_complete") is True or value.get("answer_complete") is True
-    ):
-        status = "completed"
-    elif value.get("role") in {"context_compaction", "context_reflection"} and value.get("resume_model") is not True:
-        status = "completed"
-    else:
-        status = "running"
-    return {
-        "status": status,
-        "run_id": run_id,
-        "node_id": leaf.id,
-    }
 
 
 @dataclass(frozen=True, slots=True)
