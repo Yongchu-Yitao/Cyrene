@@ -38,6 +38,8 @@ def test_options_preserve_false_missing_truthiness_and_payload_identity():
 
 @pytest.mark.parametrize("agent,kind,expected", [
     (True, "task_notification", "task_notification"),
+    (True, "welcome_refresh", "welcome_refresh"),
+    (False, "welcome_refresh", ""),
     (False, "task_notification", ""),
     (True, "unknown", ""),
 ])

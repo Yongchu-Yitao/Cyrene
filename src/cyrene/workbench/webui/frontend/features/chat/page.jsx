@@ -1,3 +1,4 @@
+import { PinnedAssistantCard } from "./pinned-assistant-cards.jsx"
 import { restoreConversationPaneLayout } from "./pane-layout-transforms.jsx"
 import { acceptsAssistantScope } from "./assistant-scope.mjs"
 import { graphActivationListener } from "./context-graph-activation.jsx";
@@ -63,7 +64,7 @@ function wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer) {
   return Promise.resolve();
 }
 
-function WorkbenchChatPage({ active, project, modelOverride, railOverride, isolated, requestedChatId, requestedChatRevision, renderConversation, hideConversationPanel, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
+function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, project, modelOverride, railOverride, isolated, requestedChatId, requestedChatRevision, renderConversation, hideConversationPanel, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
   workbenchServices.i18n().use();
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
@@ -2038,7 +2039,7 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
     activeChatId, sideVisible && !floatingConversationPanelOpen && !compactContextLayout
   );
   var paneCardCount = panePresentation.paneCardCount;
-  var paneHasTwoColumns = panePresentation.paneHasTwoColumns;
+  var paneHasTwoColumns = panePresentation.paneHasTwoColumns || pinnedCards.length > 0;
   var paneAxisDropAvailable = panePresentation.paneAxisDropAvailable;
   var paneOnlyCard = panePresentation.paneOnlyCard;
   var singlePaneDropUsesContextTracks = panePresentation.singlePaneDropUsesContextTracks;
@@ -2691,6 +2692,11 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
   }
 
   function renderPaneColumn(side, cards) {
+    if (side === "right" && pinnedCards.length) return <section key={side} className="wbc-pane-column right wbc-pinned-card-column" aria-label="已固定卡片">
+      {cards.map(function (card, index) { return <div className="wbc-pinned-ordinary-pane" key={card.id}>{renderPaneCard(card, side, cards.length, side + ":" + index)}</div>; })}
+      {pinnedCardsError && <p role="status" className="wbc-card-error">{pinnedCardsError}</p>}
+      {pinnedCards.map(card => <PinnedAssistantCard key={card.card_id} card={card} />)}
+    </section>;
     if (!cards.length) return null;
     var ratio = side === "left" ? paneLayout.leftRatio : paneLayout.rightRatio;
     return (
@@ -2964,7 +2970,7 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
           : <React.Fragment>
               {renderPaneColumn("left", paneLayout.left)}
               {renderPaneColumn("right", paneLayout.right)}
-              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} onResize={resizePaneColumn} onClose={closePaneColumn} /> : null}
+              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} onResize={resizePaneColumn} onClose={pinnedCards.length ? null : closePaneColumn} /> : null}
             </React.Fragment>}
       </div>
       <WbcChatPageContextMenu

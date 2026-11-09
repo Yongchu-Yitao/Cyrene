@@ -1463,7 +1463,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
         </div>
       ) : null}
       <div className="workbench-top-actions">
-        {chatSideHidden && (
+        {activePage !== "cyrene" && chatSideHidden && (
           <button
             type="button"
             className="workbench-icon-btn"

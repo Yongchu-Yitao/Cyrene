@@ -203,7 +203,7 @@ function wbcRuntimeToolEvent(event, eventAt) {
       progressCurrent: toolProgress ? Math.max(0, Number(event.current) || 0) : undefined,
       progressTotal: toolProgress ? Math.max(0, Number(event.total) || 0) : undefined,
       startedAt: eventAt, output: failed && error ? error : undefined,
-      presentation: failed && error ? { kind: "error" } : undefined,
+      presentation: failed && error ? { kind: "error" } : event.presentation,
     },
   };
 }
@@ -229,6 +229,24 @@ function wbcHandleRuntimeAck(event, context) {
   context.fire("onUserMessageConfirmed", context.chatId, {
     optimisticId: optimisticId,
     userMessage: event.userMessage,
+  });
+}
+
+var wbcSavedRunSubscribers = new Map();
+
+function wbcSubscribeSavedRun(chatId, fn) {
+  if (!wbcSavedRunSubscribers.has(chatId)) wbcSavedRunSubscribers.set(chatId, new Set());
+  var listeners = wbcSavedRunSubscribers.get(chatId);
+  listeners.add(fn);
+  return function () {
+    listeners.delete(fn);
+    if (!listeners.size) wbcSavedRunSubscribers.delete(chatId);
+  };
+}
+
+function wbcNotifySavedRun(chatId, messages, event, runtime) {
+  wbcSavedRunSubscribers.get(chatId)?.forEach(function (fn) {
+    try { fn(messages, event, runtime); } catch (e) {}
   });
 }
 
@@ -1128,9 +1146,9 @@ var WorkbenchChatRuntimes = (function () {
         var savedMessages = Array.isArray(event.assistantMessages) && event.assistantMessages.length
           ? event.assistantMessages
           : (event.assistantMessage ? [event.assistantMessage] : []);
-        // Even a terminal event without a returned message must settle the
-        // rail; message persistence and status convergence are independent.
+        // Settle the rail even when the saved event carries no messages.
         fire("onAssistantSaved", chatId, savedMessages, event);
+        wbcNotifySavedRun(chatId, savedMessages, event, get(chatId));
         publishLifecycle(chatId, "completed", event);
         clear(chatId);
         fire("onSettled", chatId);
@@ -1630,7 +1648,7 @@ var WorkbenchChatRuntimes = (function () {
   workbenchServices.events().subscribe(onSseEvent);
 
   return {
-    subscribe: subscribe, subscribeSummary: subscribeSummary, snapshot: snapshot, get: get, isRunning: isRunning,
+    subscribe: subscribe, subscribeSaved: wbcSubscribeSavedRun, subscribeSummary: subscribeSummary, snapshot: snapshot, get: get, isRunning: isRunning,
     update: update, recordUserMessage: recordUserMessage, clear: clear, abort: abort, interrupt: interrupt,
     start: start, reconnect: reconnect, deferSend: deferSend, closeTimeline: closeTimeline, setHooks: setHooks,
     publishLifecycle: publishLifecycle, getFailure: getFailure, clearFailure: clearFailure,

@@ -462,7 +462,7 @@
     "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx": {
-    "module_lines": 2589
+    "module_lines": 2592
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::useWbcConversationProjection": {
     "decisions": 31
@@ -616,7 +616,7 @@
     "decisions": 21
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx": {
-    "module_lines": 1852
+    "module_lines": 1861
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcActivityGroup": {
     "decisions": 44
@@ -625,8 +625,8 @@
     "decisions": 30
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessage": {
-    "lines": 136,
-    "decisions": 66
+    "lines": 137,
+    "decisions": 67
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessageFooter": {
     "decisions": 33
@@ -681,11 +681,11 @@
     "decisions": 40
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx": {
-    "module_lines": 3108
+    "module_lines": 3114
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage": {
-    "lines": 3037,
-    "decisions": 215,
+    "lines": 3042,
+    "decisions": 219,
     "hooks": 131
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#43": {
@@ -1437,10 +1437,10 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4340
+    "module_lines": 4351
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4340
+    "module_lines": 4351
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
     "module_lines": 1234
@@ -1692,7 +1692,7 @@
     "hooks": 42
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::wbcGroupConsecutiveActivityMessages.<anonymous>": {
-    "decisions": 24
+    "decisions": 26
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>#29": {
     "decisions": 25
@@ -1714,13 +1714,13 @@
   },
   "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat": {
     "lines": 122,
-    "decisions": 48
+    "decisions": 59
   },
   "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat.<anonymous>.refresh": {
     "decisions": 23
   },
   "src/cyrene/workbench/webui/frontend/features/shell/assistant-page.jsx::PersonalAssistantPage": {
-    "lines": 121
+    "lines": 124
   },
   "src/cyrene/workbench/webui/frontend/features/shell/cyrene-activity.mjs::cyreneActivityState": {
     "decisions": 30

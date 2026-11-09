@@ -1,0 +1,167 @@
+{
+  "base_commit": "6f4de15e",
+  "scope": "Explicit review of additive feature growth only; global thresholds and enforcement unchanged. These scoped allowances record retained technical debt, not reduced complexity.",
+  "extractions": [
+    "Card schema validation split by block type, with original validation order and error text.",
+    "Card command mutation separated from transaction and replay handling.",
+    "Card hydration, event lifecycle and stateless presentation separated, preserving retry snapshots and hooks.",
+    "Task switching separated from context editing and fork replay.",
+    "Animation attention, poses and integration separated without changing arithmetic or random draw order."
+  ],
+  "allowances": [
+    {
+      "scope": "src/cyrene/model/protocol_adapters.py",
+      "metric": "module_lines",
+      "previous_limit": 1460,
+      "reviewed_limit": 1464,
+      "reason": "Retain official GPT-6 routing and Responses assistant-history handling."
+    },
+    {
+      "scope": "src/cyrene/model/protocol_adapters.py::_responses_input",
+      "metric": "decisions",
+      "previous_limit": 23,
+      "reviewed_limit": 26,
+      "reason": "Retain official GPT-6 routing and Responses assistant-history handling."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_model/_shared.py",
+      "metric": "module_lines",
+      "previous_limit": 1279,
+      "reviewed_limit": 1299,
+      "reason": "Keep canonical tool-name restoration before wire aliasing; transfer the existing complete_model allowance to its renamed implementation."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_schedule/application.py::setup_application",
+      "metric": "lines",
+      "previous_limit": 145,
+      "reviewed_limit": 149,
+      "reason": "Deduplicate assistant-owned schedules while preserving normal project schedules."
+    },
+    {
+      "scope": "src/cyrene/plugins/builtin/cyrene_schedule/application.py::setup_application.search",
+      "metric": "decisions",
+      "previous_limit": 37,
+      "reviewed_limit": 38,
+      "reason": "Deduplicate assistant-owned schedules while preserving normal project schedules."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py",
+      "metric": "module_lines",
+      "previous_limit": 1071,
+      "reviewed_limit": 1094,
+      "reason": "Validate isolated home maintenance ownership, scoped tools and draft card service; distinguish card admission from agent messages."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime",
+      "metric": "methods",
+      "previous_limit": 25,
+      "reviewed_limit": 26,
+      "reason": "Validate isolated home maintenance ownership, scoped tools and draft card service; distinguish card admission from agent messages."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge",
+      "metric": "lines",
+      "previous_limit": 127,
+      "reviewed_limit": 145,
+      "reason": "Validate isolated home maintenance ownership, scoped tools and draft card service; distinguish card admission from agent messages."
+    },
+    {
+      "scope": "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge",
+      "metric": "decisions",
+      "previous_limit": 33,
+      "reviewed_limit": 44,
+      "reason": "Validate isolated home maintenance ownership, scoped tools and draft card service; distinguish card admission from agent messages."
+    },
+    {
+      "scope": "src/cyrene/workbench/http/workbench/chat_routes/send_input.py::append_user_message",
+      "metric": "decisions",
+      "previous_limit": 25,
+      "reviewed_limit": 26,
+      "reason": "Preserve idempotent card-submission admission and origin conflict checks."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx",
+      "metric": "module_lines",
+      "previous_limit": 2589,
+      "reviewed_limit": 2592,
+      "reason": "Carry pinned cards into the existing conversation surface."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx",
+      "metric": "module_lines",
+      "previous_limit": 1852,
+      "reviewed_limit": 1861,
+      "reason": "Keep generated cards visible outside collapsed activity groups."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::wbcGroupConsecutiveActivityMessages.<anonymous>",
+      "metric": "decisions",
+      "previous_limit": 24,
+      "reviewed_limit": 26,
+      "reason": "Keep generated cards visible outside collapsed activity groups."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessage",
+      "metric": "lines",
+      "previous_limit": 136,
+      "reviewed_limit": 137,
+      "reason": "Keep generated cards visible outside collapsed activity groups."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessage",
+      "metric": "decisions",
+      "previous_limit": 66,
+      "reviewed_limit": 67,
+      "reason": "Keep generated cards visible outside collapsed activity groups."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx",
+      "metric": "module_lines",
+      "previous_limit": 3108,
+      "reviewed_limit": 3114,
+      "reason": "Pass pinned-card state through the existing chat page."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage",
+      "metric": "lines",
+      "previous_limit": 3037,
+      "reviewed_limit": 3042,
+      "reason": "Pass pinned-card state through the existing chat page."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage",
+      "metric": "decisions",
+      "previous_limit": 215,
+      "reviewed_limit": 219,
+      "reason": "Pass pinned-card state through the existing chat page."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/assistant-chat.jsx::AssistantChat",
+      "metric": "decisions",
+      "previous_limit": 48,
+      "reviewed_limit": 59,
+      "reason": "Retain home transcript, scroll-to-bottom affordance and connection notice alongside existing chat controls."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/features/shell/assistant-page.jsx::PersonalAssistantPage",
+      "metric": "lines",
+      "previous_limit": 121,
+      "reviewed_limit": 124,
+      "reason": "Propagate personal-assistant identity to its composer and home surface."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx",
+      "metric": "module_lines",
+      "previous_limit": 4340,
+      "reviewed_limit": 4351,
+      "reason": "Add user-facing pin and context tool translations."
+    },
+    {
+      "scope": "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx",
+      "metric": "module_lines",
+      "previous_limit": 4340,
+      "reviewed_limit": 4351,
+      "reason": "Add user-facing pin and context tool translations."
+    }
+  ]
+}

@@ -1,54 +1,81 @@
+import { AssistantHomeTranscript } from "../chat/assistant-home-transcript.jsx"
 import { WbcErrorNotice } from "../chat/messages.jsx"
-import { useWbcComposerReserveHeight } from "../chat/conversation.jsx"
+import { WbcScrollToBottomButton, useWbcComposerReserveHeight, wbcScrollThreadToBottom, wbcShouldStickToConversationBottom } from "../chat/conversation.jsx"
+import { wbcMergeChatSummary } from "../chat/runtime-page-hooks.jsx"
+import { wbcMergeSavedAssistantMessages, wbcReconcileLiveUserMessages, wbcTruncateMessagesAfterUser } from "../chat/runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 
-// A conversation surface, not a pane workspace. The shared engine owns streams
-// across navigation; subscribing here must never replace its global hooks.
-function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = [], active = true, personalAssistant = false, cache }) {
-  var chatService = workbenchServices.chat();
-  var model = chatService.Model;
-  var engine = chatService.Runtimes;
+const EMPTY_PERMISSION_REQUESTS = [];
+
+function assistantSavedChat(chat, sessionId, messages, event, runtime) {
+  var current = wbcMergeChatSummary(chat || { id: sessionId }, event.chatSummary, "completed");
+  var history = current.messages || [];
+  if (event.retry) history = wbcTruncateMessagesAfterUser(history, event.truncateAfterMessageId);
+  var users = (runtime?.userMessages || []).filter(message => !message.optimistic);
+  if (event.userMessage) users.push(event.userMessage);
+  history = wbcReconcileLiveUserMessages(history, users);
+  var saved = messages.filter(message => message && message.id);
+  // Some saved events omit message details. The terminal timeline is already
+  // available in that case, until the next detail request supplies the history.
+  var records = saved.length ? saved : runtime?.timeline?.messages;
+  return wbcMergeSavedAssistantMessages({
+    ...current, messages: history, pendingQuestion: null, runStatus: "completed",
+  }, records);
+}
+
+function useAssistantChatSync({ sessionId, model, engine, active, cache, answeredIds, stick }) {
   var [chat, setChat] = React.useState(function () { return cache && cache.details[sessionId] || null; });
   var [runtime, setRuntime] = React.useState(function () { return engine.get(sessionId); });
-  var [error, setError] = React.useState("");
-  var [answering, setAnswering] = React.useState(false);
-  var [sending, setSending] = React.useState(false);
-  var answeredIds = React.useRef(new Set());
-  var answerInFlight = React.useRef(false);
-  var mainRef = React.useRef(null);
-  var scrollRef = React.useRef(null);
-  useWbcComposerReserveHeight(mainRef, chat && chat.id, true);
-  var stick = React.useRef(true);
+  var [refreshError, setRefreshError] = React.useState("");
   var refreshRef = React.useRef(function () {});
   var live = React.useRef(true);
   React.useEffect(function () {
-    var cancelled = false, timer, inFlight = false, dirty = false;
+    var cancelled = false, timer, inFlight = false, dirty = false, savedRevision = 0;
     live.current = true;
+    function applyRefresh(next) {
+      if (next?.pendingQuestion && answeredIds.current.has(next.pendingQuestion.id)) {
+        next = { ...next, pendingQuestion: null };
+      }
+      if (cache) cache.details[sessionId] = next;
+      setChat(next);
+      setRefreshError("");
+      if (next?.status === "running" && !next.pendingQuestion && !engine.get(sessionId)) {
+        engine.reconnect(sessionId, model);
+      }
+    }
     async function refresh() {
       if (cancelled) return;
       if (inFlight) { dirty = true; return; }
       inFlight = true;
       clearTimeout(timer);
+      var requestRevision = savedRevision;
       try {
         var next = await model.getChat(sessionId);
-        if (!cancelled) {
-          if (next && next.pendingQuestion && answeredIds.current.has(next.pendingQuestion.id)) {
-            next = { ...next, pendingQuestion: null };
-          }
-          if (cache) cache.details[sessionId] = next;
-          setChat(next);
-          if (next && next.status === "running" && !next.pendingQuestion && !engine.get(sessionId)) {
-            engine.reconnect(sessionId, model);
-          }
+        if (!cancelled && requestRevision === savedRevision) applyRefresh(next);
+      } catch (err) {
+        if (!cancelled && requestRevision === savedRevision) {
+          setRefreshError("连接中断，正在尝试重新连接。已显示的内容仍然保留。");
         }
-      } catch (err) { if (!cancelled) setError(err.message); }
+      }
       finally {
         inFlight = false;
         if (!cancelled && active) { timer = setTimeout(refresh, dirty ? 0 : 2000); dirty = false; }
       }
     }
     refreshRef.current = refresh;
+    function cardSubmitted(event) {
+      if (event.detail?.session_id === sessionId && active) { stick.current = true; refresh(); }
+    }
+    window.addEventListener('cyrene:card-submitted', cardSubmitted);
     if (active) refresh();
+    var unsubscribeSaved = engine.subscribeSaved(sessionId, function (messages, event, runtime) {
+      // This runs before the engine removes the live transcript. A poll that
+      // started before this write can still report the run as active.
+      savedRevision++;
+      function merge(current) { return assistantSavedChat(current, sessionId, messages, event, runtime); }
+      if (cache) cache.details[sessionId] = merge(cache.details[sessionId]);
+      setChat(merge);
+    });
     var previous = engine.get(sessionId);
     var unsubscribe = engine.subscribe(function (snapshot) {
       var next = snapshot[sessionId] || null;
@@ -58,16 +85,67 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
         previous = next;
       }
     });
-    return function () { cancelled = true; live.current = false; clearTimeout(timer); unsubscribe(); };
-  }, [sessionId, model, engine, active, cache]);
+    return function () {
+      cancelled = true; live.current = false; clearTimeout(timer);
+      unsubscribeSaved(); unsubscribe();
+      window.removeEventListener('cyrene:card-submitted', cardSubmitted);
+    };
+  }, [sessionId, model, engine, active, cache, answeredIds, stick]);
+  return { chat, setChat, runtime, refreshError, refreshRef, live };
+}
+
+// A conversation surface, not a pane workspace. The shared engine owns streams
+// across navigation; subscribing here must never replace its global hooks.
+function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = EMPTY_PERMISSION_REQUESTS, active = true, personalAssistant = false, cache }) {
+  var chatService = workbenchServices.chat();
+  var model = chatService.Model;
+  var engine = chatService.Runtimes;
+  var [error, setError] = React.useState("");
+  var [answering, setAnswering] = React.useState(false);
+  var [sending, setSending] = React.useState(false);
+  var [showScrollToBottom, setShowScrollToBottom] = React.useState(false);
+  var answeredIds = React.useRef(new Set());
+  var answerInFlight = React.useRef(false);
+  var mainRef = React.useRef(null);
+  var scrollRef = React.useRef(null);
+  var stick = React.useRef(true);
+  var lastScrollTop = React.useRef(null);
+  var { chat, setChat, runtime, refreshError, refreshRef, live } = useAssistantChatSync({
+    sessionId, model, engine, active, cache, answeredIds, stick,
+  });
+  useWbcComposerReserveHeight(mainRef, chat?.id, true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var candidate = runtime && runtime.pendingQuestion || chat && chat.pendingQuestion;
   var pending = candidate && !answeredIds.current.has(candidate.id) ? candidate : null;
   var running = !pending && (answering || sending || !!runtime || !!(chat && chat.status === "running"));
   var visible = messages;
   React.useEffect(function () {
-    if (stick.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    var thread = scrollRef.current;
+    if (stick.current && thread) {
+      thread.scrollTop = thread.scrollHeight;
+      lastScrollTop.current = thread.scrollTop;
+      setShowScrollToBottom(false);
+    }
   }, [chat, runtime, pending, permissionRequests]);
+
+  function onScroll(event) {
+    var thread = event.currentTarget;
+    stick.current = wbcShouldStickToConversationBottom(
+      stick.current, lastScrollTop.current, thread.scrollTop, thread.scrollHeight, thread.clientHeight
+    );
+    lastScrollTop.current = thread.scrollTop;
+    setShowScrollToBottom(!stick.current);
+  }
+
+  function scrollToBottom() {
+    var thread = scrollRef.current;
+    if (!thread) return;
+    stick.current = true;
+    lastScrollTop.current = thread.scrollTop;
+    setShowScrollToBottom(false);
+    wbcScrollThreadToBottom(thread);
+  }
+
   function fail(err) { if (live.current) setError(err && err.message || "操作失败，请重试。"); }
   async function send(input) {
     if (running || !chat) return;
@@ -112,18 +190,26 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
   var failure = engine.getFailure && engine.getFailure(sessionId);
   var displayError = error || (failure && failure.message) || "";
   return <section ref={mainRef} className="wbc-main assistant-chat" data-cyrene-personal-composer={personalAssistant && active ? "true" : undefined} aria-label={title || "Cyrene 个人助理"}>
+    {refreshError && <p className="wbc-card-notice" role="status">{refreshError}</p>}
     {displayError && <WbcErrorNotice message={displayError} kind={chat ? "message" : "load"} />}
     <div className="wbc-thread-stage">
-      <div className={"wbc-thread" + (visible.length || runtime ? " wbc-thread-messages" : "")} ref={scrollRef} onScroll={function (event) { var el = event.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
+      <div className={"wbc-thread" + (visible.length || runtime ? " wbc-thread-messages" : "")} ref={scrollRef} onScroll={onScroll}>
         {!chat ? <p role="status">正在加载对话…</p> : !visible.length && !runtime ? <section className="assistant-chat-welcome"><span className="assistant-chat-wordmark">Cyrene</span><h1>今天，有什么需要我帮忙？</h1><p>一起理清想法、推进任务，也可以从一个简单的问题开始。</p></section> : null}
-        {React.createElement(chatService.Transcript, { messages: visible, runtime: runtime, chatId: sessionId, onOpenFile: onOpenFile })}
+        {personalAssistant && chat
+          ? <AssistantHomeTranscript key={sessionId} Transcript={chatService.Transcript} messages={visible} runtime={runtime} sessionId={sessionId} active={active} onOpenFile={onOpenFile} />
+          : React.createElement(chatService.Transcript, { messages: visible, runtime: runtime, chatId: sessionId, onOpenFile: onOpenFile })}
         {permissionRequests.map(function (task) {
           return <AssistantTaskPermission key={task.session_id + ":" + task.pending_question.id} task={task} />;
         })}
         {pending && React.createElement(chatService.QuestionPrompt, { pending: pending, onAnswer: answer, busy: answering })}
       </div>
     </div>
-    {chat && React.createElement(chatService.Composer, { chat: { ...chat, pendingQuestion: pending }, project: project, runtime: runtime, running: running, onSend: send, onAnswer: answer, onGuidance: guidance, onInterrupt: interrupt, draftNamespace: "personal-assistant:", hideToolsButton: true, error: displayError, errorKind: "message" })}
+    {chat && React.createElement(chatService.Composer, {
+      chat: { ...chat, pendingQuestion: pending }, project, runtime, running,
+      onSend: send, onAnswer: answer, onGuidance: guidance, onInterrupt: interrupt,
+      draftNamespace: "personal-assistant:", hideToolsButton: true, error: displayError, errorKind: "message",
+      topOverlay: showScrollToBottom ? <WbcScrollToBottomButton onClick={scrollToBottom} /> : null,
+    })}
   </section>;
 }
 // A human answers the original task request. Never route this through the Agent's

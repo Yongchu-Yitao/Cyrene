@@ -21,7 +21,19 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
-def test_model_router_preserves_provider_stream_diagnostics(monkeypatch):
+@pytest.mark.parametrize("call_kind", ["agent", "auxiliary"])
+@pytest.mark.parametrize("live", [False, True])
+def test_model_router_preserves_provider_stream_diagnostics(monkeypatch, call_kind, live):
+    status_events = []
+    persisted_statuses = []
+
+    async def capture_event(event):
+        status_events.append(event)
+
+    async def capture_persisted(*args, **kwargs):
+        persisted_statuses.append(kwargs)
+
+    monkeypatch.setattr("cyrene.model.status.persist_model_status", capture_persisted)
     diagnostics = {
         "adapter": "anthropic",
         "http_status": 200,
@@ -75,13 +87,29 @@ def test_model_router_preserves_provider_stream_diagnostics(monkeypatch):
         PluginRuntime(registry).call(
             model_router.MODEL_ROUTER_PLUGIN,
             {"messages": [{"role": "user", "content": "write"}]},
-            PluginContext(data={"session_id": "chat-invalid"}),
+            PluginContext(
+                data={
+                    "session_id": "chat-invalid",
+                    "run_id": "run-invalid",
+                    "model_call_kind": call_kind,
+                },
+                services={"runtime_events": capture_event} if live else {},
+            ),
         )
     )
 
     assert result.success is False
     assert result.error_details["retry_scope"] == "different_arguments"
     assert result.error_details["stream_diagnostics"] == diagnostics
+    if call_kind == "agent":
+        assert status_events == []
+        assert persisted_statuses == []
+    elif live:
+        assert status_events[0]["message"]["modelStatus"]["status"] == "failed"
+        assert persisted_statuses == []
+    else:
+        assert status_events == []
+        assert persisted_statuses[0]["status"] == "failed"
 
 
 def test_model_router_forwards_session_messages_and_normalizes_tools(monkeypatch):

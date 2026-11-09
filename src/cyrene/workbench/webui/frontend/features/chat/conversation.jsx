@@ -1322,7 +1322,21 @@ function WbcThreadItem({ children, navigation, className }) {
   );
 }
 
-function wbcShouldStickToConversationBottom(wasSticking, previousScrollTop, scrollTop, scrollHeight, clientHeight) {
+export function WbcScrollToBottomButton({ onClick }) {
+  var label = wbcT("workbenchChat.navigation.backToBottom", "Back to latest message");
+  return (
+    <button type="button" className="wbc-scroll-to-bottom" onClick={onClick} title={label} aria-label={label}>
+      <span aria-hidden="true">{WBC_ICONS.chevronsRight}</span>
+    </button>
+  );
+}
+
+export function wbcScrollThreadToBottom(thread) {
+  var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  thread.scrollTo({ top: thread.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+}
+
+export function wbcShouldStickToConversationBottom(wasSticking, previousScrollTop, scrollTop, scrollHeight, clientHeight) {
   var currentTop = Number(scrollTop) || 0;
   var previousTop = Number(previousScrollTop);
   var hasPreviousTop = previousScrollTop !== null
@@ -2247,9 +2261,8 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
     if (!el) return;
     stickRef.current = true;
     setShowScrollToBottom(false);
-    var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     lastObservedScrollTopRef.current = el.scrollTop;
-    el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+    wbcScrollThreadToBottom(el);
     scheduleStickyViewportRestore();
   }
 
@@ -2406,15 +2419,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtimeEngine, error, er
         error={error}
         errorKind={errorKind}
         topOverlay={showScrollToBottom ? (
-          <button
-            type="button"
-            className="wbc-scroll-to-bottom"
-            onClick={scrollToConversationBottom}
-            title={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
-            aria-label={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
-          >
-            <span aria-hidden="true">{WBC_ICONS.chevronsRight}</span>
-          </button>
+          <WbcScrollToBottomButton onClick={scrollToConversationBottom} />
         ) : null}
         onSend={onSend}
         onAnswer={onAnswer}

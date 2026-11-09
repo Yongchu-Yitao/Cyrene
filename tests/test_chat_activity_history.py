@@ -136,3 +136,20 @@ def test_chat_detail_endpoint_reconciles_after_context_reconstruction():
             assert response.json()["chat"]["messages"] == canonical
             assert response.json()["chat"]["messageCount"] == len(canonical)
     repository.write.assert_not_called()
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_card_reference_survives_context_history_reconstruction(wrapped):
+    presentation = {"kind": "assistant_card", "card_id": "card_" + "a" * 32, "revision": 1, "operation": "card.create"}
+    output = {"ok": True, "presentation": presentation}
+    if wrapped:
+        output = {"result": output}
+    nodes = [
+        {"id": "create-card", "value": {"role": "assistant", "run_id": "r", "tool_calls": [{"id": "c", "name": "card.create", "arguments": {}}]}},
+        {"id": "result", "value": {"role": "tool_results", "run_id": "r", "results": [{"call_id": "c", "success": True, "value": output}]}}
+    ]
+    result = project_tool_activity_messages({"nodes": nodes}, "r")
+    assert result[0]["trace"][0]["presentation"] == presentation
+    timeline = RunTimeline("r")
+    timeline.apply({"type": "tool.completed", "toolCallId": "c", "name": "card.create", "status": "completed", "presentation": presentation})
+    assert timeline.messages()[0]["trace"][0]["presentation"] == presentation

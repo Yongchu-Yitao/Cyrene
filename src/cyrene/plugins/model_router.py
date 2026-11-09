@@ -482,6 +482,10 @@ async def _persist_fallback_result(
     *,
     status: str,
 ) -> None:
+    # AgentSession owns recovery and the final run error. A failed provider
+    # attempt can still recover, so it must not leave a failure card in chat.
+    if status == "failed" and context.data.get("model_call_kind") == "agent":
+        return
     await publish_context_model_status(
         context,
         status=status,

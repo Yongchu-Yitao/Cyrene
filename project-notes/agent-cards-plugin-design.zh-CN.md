@@ -1,8 +1,10 @@
 # Agent 卡片工具包设计 V1
 
-日期：2026-11-08。状态：待审核的实现设计，尚未注册工具、接入生产界面或连接真实 Agent。
+日期：2026-11-08。状态：六工具、六类对话卡片与用户提交后主动投递已实现；右侧常驻仍待接入。
 
-目标：Agent 用同一套工具创建组合卡片、读取用户选择、更新任务结果、固定卡片；用户操作通过持久事件回到来源任务。19 类场景是内容模板，不是 19 套工具。自定义 HTML 使用同一个卡片外壳和事件协议。
+实现进度：`cyrene_cards` 已按现有 `PluginPack` 接入助理 profile，提供模板、持久化、版本控制、用户事件保存及模型边界的上下文挂载。只有个人助理可以调用，普通聊天和委派任务不能调用。当前已接入六类卡片的对话正文渲染、隔离 iframe 与受限输入消息桥；仅在对话展示，右侧常驻与托管 artifact 引用尚未接入。submit/confirm 已通过正常用户消息入口投递，空闲时启动、运行时追加；change 仅保存草稿。事件 accepted 代表保存，delivery.sent 代表接纳，均不代表执行完成。准确的当前工具 schema 和边界以 `src/cyrene/plugins/builtin/cyrene_cards/README.md` 与 `definitions.py` 为准；下文为完整目标设计，不将待接入能力视为已实现。
+
+目标：Agent 用同一套工具创建组合卡片、读取用户选择、更新任务结果、固定卡片；用户操作通过持久事件回到来源任务。模板已收敛为内容、集合、数据、交互、地图、自定义六类；预算、采购、健康等业务场景由 Agent 组合区块表达。自定义 HTML 使用同一个卡片外壳和事件协议。
 
 ## 1. 与当前架构对齐
 
@@ -35,9 +37,9 @@ V1 提供六个工具。`card.create`、`card.update` 和 `card.pin` 是主路�
 
 `card.create` 不接受 `card_id`，宿主分配稳定 ID。工具重试使用执行层调用身份保存幂等回执，不能因重试创建第二张卡。`card.update` 必须同时提供已存在的精确 ID 和 `expected_revision`；未知 ID 返回 `card_not_found`，不隐式新建。
 
-创建时，`template` 从第 4 节的 19 类预定义模板及 `custom`（新建 iframe）中选择。宿主将模板默认结构与 Agent 填写的 `spec` 合成为完整描述，校验通过后，将卡片和初始固定设置原子保存。`pinned=true` 无需再调用 `card.pin`；失败时不留下半张卡片。记录实际解析的模板版本，模板升级不会自动重写已经创建的卡片。
+创建时，`template` 从第 4 节的五类原生模板及 `custom`（新建 iframe）中选择。宿主将模板默认结构与 Agent 填写的 `spec` 合成为完整描述，校验通过后，将卡片和初始固定设置原子保存。`pinned=true` 无需再调用 `card.pin`；失败时不留下半张卡片。记录实际解析的模板版本，模板升级不会自动重写已经创建的卡片。
 
-修改时，`changes` 只接受需要变更的描述字段：`title`、`subtitle`、`density`、`blocks`、`input_schema`、`actions`、`interaction`。省略字段保持原值；提供的数组或对象整体替换，不做隐式深合并或 JSON Patch。服务层合成完整描述后统一校验。不能通过 `changes` 改来源、模板身份、用户输入、固定位置或归档状态；这些仍由各自的状态入口负责。自定义 iframe 通过更新 `blocks` 中的 artifact 引用修改内容。
+修改时，`changes` 只接受需要变更的描述字段：`title`、`subtitle`、`density`、`layout`、`blocks`、`input_schema`、`actions`、`interaction`。省略字段保持原值；提供的数组或对象整体替换，不做隐式深合并或 JSON Patch。服务层合成完整描述后统一校验。不能通过 `changes` 改来源、模板身份、用户输入、固定位置或归档状态；这些仍由各自的状态入口负责。自定义 iframe 通过更新 `blocks` 中的 artifact 引用修改内容。
 
 `card.get/list` 可以并行；写工具 `allow_parallel=False`，同时在存储层做版本检查，不能只依靠模型串行调用。工具返回短回执，完整内容按需读取。
 
@@ -64,11 +66,11 @@ V1 提供六个工具。`card.create`、`card.update` 和 `card.pin` 是主路�
 
 ## 4. 卡片描述示例
 
-以下是提议的 `card.create` 参数：选择对比模板、填写采购内容，并在创建时固定到右侧。模板提供默认结构与场景标签，实际渲染由合成后的 `blocks` 决定。默认值不记录成用户选择。
+以下是提议的 `card.create` 参数：选择通用数据模板、填写采购内容，并在创建时固定到右侧。模板提供默认结构与场景标签，实际渲染由合成后的 `blocks` 决定。默认值不记录成用户选择。
 
 ```json
 {
-  "template": "comparison",
+  "template": "data",
   "pinned": true,
   "spec": {
     "schema_version": 1,
@@ -125,19 +127,29 @@ V1 提供六个工具。`card.create`、`card.update` 和 `card.pin` 是主路�
 
 输入 schema 是值校验的权威定义；表单字段声明用于展示，发布时检查字段引用、类型、选项与 schema 一致。金额、供应商名称、报价来源等权威事实从卡片当前版本解析，不信任浏览器额外上传的显示文本。
 
-基础区块建议：`text`、`metrics`、`fields`、`list`、`table`、`form`、`timeline`、`files`、`chart`、`map`、`embed`。19 个场景只保存默认组合与示例。V1 可先落地前八种；图表、地图、embed 以宿主能力声明控制，不能接受描述后渲染空白。
+基础区块建议：`text`、`metrics`、`fields`、`list`、`table`、`form`、`timeline`、`files`、`chart`、`map`、`embed`。业务场景只作为使用示例，不单独定义模板。V1 可先落地前八种；图表、地图、embed 以宿主能力声明控制，不能接受描述后渲染空白。
 
-`template` 使用以下稳定英文枚举，标题和显示标签支持中文/英文；`custom` 表示新建 iframe 卡片：
+`template` 使用六个枚举，模板仅提供默认起点，不限制业务场景或原生区块组合：
 
-| 方向 | 场景枚举 |
-| --- | --- |
-| 理解与整理 | `summary` 摘要与结论、`recommendations` 搜索与推荐、`artifacts` 文件与成果 |
-| 推进工作 | `checklist` 任务与清单、`schedule` 日程与排期、`activity` 执行与动态 |
-| 数据与决策 | `comparison` 表格与对比、`metrics` 指标与预算、`trends` 趋势与图表、`approval` 审批与确认 |
-| 信息与沟通 | `preferences` 表单与偏好、`message` 邮件与消息、`entity` 联系人与实体 |
-| 地点与环境 | `places` 地图与地点、`context` 上下文与连接 |
-| 健康管理 | `health_overview` 健康概况、`habit` 习惯与打卡、`medication` 用药提醒、`health_report` 检查与报告 |
-| 自由扩展 | `custom`，使用 `embed` 区块 |
+| 模板 | 默认起点 | 适用方向 |
+| --- | --- | --- |
+| `content` 内容卡 | `text` | 摘要、结论、消息、实体说明、报告 |
+| `collection` 集合卡 | `list` | 清单、推荐、日程、文件、地点、执行过程 |
+| `data` 数据卡 | `table` | 对比、指标、预算、图表、健康记录 |
+| `input` 交互卡 | `form` | 收集偏好、方案选择、补充信息、确认 |
+| `map` 地图卡 | 一个 `map` | 地点、备注、路线与空间选择 |
+| `custom` 自定义卡 | 一个 `embed` | 专用 iframe，周围可附加任意原生区块 |
+
+四类原生模板均可混合 text、metrics、fields、list、table、form、timeline、files、chart、map。
+模板不强制要求保留默认区块，也不禁止增加交互。Agent 决定区块数量、顺序、标题与说明；
+`layout=stack|grid` 提供布局提示，密度与操作继续独立配置。例如一张 data 卡可以同时包含
+方案对比、预算、风险说明、偏好表单和确认按钮。
+
+自定义卡保留一个独立 iframe，允许周围添加原生说明、指标、表单和外壳操作；不要求整张卡
+只有 iframe。输入类型、动作引用、来源、版本和用户确认仍由宿主统一校验。
+
+旧场景名称只用于已持久化卡片的内部兼容，不进入新建工具枚举；读取和更新旧卡片不改写
+其 ID、原模板身份、用户值、固定状态与历史快照，也不自动重排其区块。
 
 修改已有卡片示例（`card.update`）：
 
@@ -225,7 +237,7 @@ Session Hook 每轮挂载当前 context 的卡片目录、用户提交摘要和�
 
 对话保留稳定引用，另在事件记录中保存当时的描述/提交快照或可解析版本；历史审计不能把今天的报价冒充过去确认的报价。V1 可以保存整份描述快照，无需内容级 diff。
 
-自定义内容使用 `embed` 区块引用受管理的 HTML artifact：`artifact_id` + 内容版本/hash + 输入/动作 manifest。Agent 可通过已有文件生成能力准备 HTML，再通过 `card.create(template="custom", spec=..., pinned=...)` 新建 iframe 卡片；修改已创建的 iframe 时，使用 `card.update` 更新 artifact 引用与 manifest，保留原 `card_id`。不另造 HTML 生成工具。`custom` 模板要求一个有效 embed 区块，不能只选模板而不提供内容。
+自定义内容使用 `embed` 区块引用受管理的 HTML artifact：`artifact_id` + 内容版本/hash + 输入/动作 manifest。Agent 可通过已有文件生成能力准备 HTML，再通过 `card.create(template="custom", spec=..., pinned=...)` 新建 iframe 卡片；修改已创建的 iframe 时，使用 `card.update` 更新 artifact 引用与 manifest，保留原 `card_id`。不另造 HTML 生成工具。`custom` 模板要求恰好一个有效 embed 区块，可附加原生区块；不能只选模板而不提供内容。
 
 iframe 经宿主消息桥发送 `state.change` / `action.invoke`；壳层绑定卡片和实例身份，检查消息来源、动作白名单、数据 schema 与大小，再复用同一事件服务。不能由 iframe 任意指定接收 Session、伪造 actor 或直接调用宿主工具。没有网络需求时默认隔离网络与宿主资源；外部能力使用明确声明的宿主代理。确认操作由可信外壳展示并记录，不采信 iframe 自称“用户已确认”。这些隔离与桥接是待实现协议，不是当前演示已有能力。
 
@@ -273,7 +285,7 @@ src/cyrene/workbench/webui/frontend/features/cards/
 
 - 经真实 Plugin registry / runtime 发现并调用六个工具；不能以直接调用 Python handler 代替宿主验收。
 - 同一次创建调用重放只生成一张卡；未知 card_id 更新失败；过期 expected_revision 不覆盖新内容。
-- 创建可选择 19 类预定义模板或新建 iframe，并原子保存初始 pinned 设置；模板或内容不合法时不创建卡片。更新省略字段保持原值，不能借修改隐式新建或更改固定位置。
+- 创建可选择五类原生模板或新建 iframe，并原子保存初始 pinned 设置；模板或内容不合法时不创建卡片。更新省略字段保持原值，不能借修改隐式新建或更改固定位置。
 - 单选、勾选、表单与确认都回传明确字段；默认值不产生用户确认；模型无伪造输入接口。
 - 用户草稿不因 Agent 更新、切换任务或取消固定丢失；不兼容 schema 变更给出冲突。
 - 对话和常驻区同步；重启后固定和输入仍保留；用户取消固定后 Agent 不自动重新固定。
@@ -284,3 +296,12 @@ src/cyrene/workbench/webui/frontend/features/cards/
 - 自定义消息无法伪造来源、动作、用户确认或调用宿主工具；插件停用后不能继续投递。
 
 建议实现顺序：先完成六工具、持久状态和原生区块；接上真实交互投递与双位置同步后，再加入 iframe。`custom` 在 iframe 能力可用前明确返回不支持，不能创建空白卡片；完整 V1 必须支持新建与修改 iframe。交互回传属于第一阶段的必要验收，不推迟为后续增强。
+
+### 首页展示与数据保鲜（2026-11-09）
+
+- 展示与更新分开。服务器持久记录本地日期和时段：每天首次打开，以及 12:00、18:00、22:00。重启不重复展示，错过多个时段只展示当前一份。多窗口共享展示记录，同一窗口重试具有幂等性。
+- 已展示的首页保留在当时的对话位置；内容更新不移动它，后续消息排在下方。下个展示时段可将同一份首页移到当前对话位置，不新建卡片，不自动固定。
+- 后台每 30 秒检查任务消息、任务文档和同项目任务状态；用户操作、任务进展与成果交付后，由隔离的后台助理维护原有首页卡片；不占用前台运行、问题或上下文。后台过程无 UI 输出，草稿成功后统一发布，前台并发修改优先。
+- 天气按来源的带时区 `updated_at` 判断，一小时过期；过期后请求当前天气。查询未获得新观测时保留原始时间和数据，十分钟后重试，不用请求时间冒充观测时间。
+- 后台执行成功并发布草稿后才记录已整理状态，失败/中断两分钟后重试。后台不创建前台对话消息，不因维护自身触发下一轮刷新。
+- 前端每 5 秒读取持久卡片；每 30 秒及窗口重新可见时检查展示时段。应用未运行时无法执行维护，恢复运行后补查；展示仍可立即使用已保存内容。

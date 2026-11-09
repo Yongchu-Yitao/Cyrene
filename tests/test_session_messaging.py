@@ -687,3 +687,105 @@ async def test_replay_as_guidance_reuses_previously_persisted_turn(tmp_path, kin
         assert await port.agent_message_admitted("b", "req")
     finally:
         await inbox.close(termination_reason="completed")
+
+
+@pytest.mark.asyncio
+async def test_card_user_dispatch_idle_active_race_and_admission_replay(tmp_path):
+    import json
+    from cyrene.workbench.control.control_services import ControlServiceError
+    port = durable_port(tmp_path)
+    calls, admitted = [], set()
+    active = None
+    port.run_manager.get = lambda _: active
+    async def has_input(chat_id, request_id):
+        return request_id in admitted
+    port.user_message_admitted = has_input
+    async def send(chat_id, body):
+        calls.append(body)
+        admitted.add(body["clientRequestId"])
+        return {"runId": "run"}
+    async def guide(chat_id, body):
+        calls.append(body)
+        admitted.add(body["clientRequestId"])
+        return {"runId": "run"}
+    port.send, port.guide = send, guide
+    version = json.dumps(["b", 0])
+    result = await port.dispatch_user_message("b", "human selection", client_request_id="first", expected_version=version)
+    assert result["status"] == "started"
+    assert calls[0]["conversationSource"] == "card_submission" and not calls[0].get("agentOriginated")
+    assert (await port.dispatch_user_message("b", "human selection", client_request_id="first", expected_version=version))["duplicate"]
+    assert len(calls) == 1
+    active = SimpleNamespace(events=[], run_id="run")
+    assert (await port.dispatch_user_message("b", "next", client_request_id="second", expected_version=version))["status"] == "guided"
+    assert not calls[-1].get("agentOriginated")
+    async def ending(chat_id, body):
+        nonlocal active
+        active = None
+        raise ControlServiceError("finishing", code="chat_not_running", status_code=409)
+    port.guide = ending
+    assert (await port.dispatch_user_message("b", "race", client_request_id="third", expected_version=version))["status"] == "started"
+    with pytest.raises(ControlServiceError) as caught:
+        await port.dispatch_user_message("b", "old", client_request_id="old", expected_version='["b", 1]')
+    assert caught.value.status_code == 410
+
+
+@pytest.mark.asyncio
+async def test_card_human_turn_public_replay_and_durable_guidance(tmp_path):
+    from cyrene.workbench.http.workbench.chat_routes.send_input import append_user_message, SendInput
+    from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin
+    from cyrene.workbench.chat.chat_guidance_service import ChatGuidanceApplicationService, ChatGuidanceDependencies
+    port = durable_port(tmp_path)
+    repository = port.service.repository
+    chat = repository.get("b")
+    source = SendInput("selection", "selection", "", [], [])
+    origin = SendOrigin.parse({"conversationSource": "card_submission", "clientRequestId": "card-req"})
+    for _ in range(2):
+        append_user_message(chat, chat["messages"], source, origin, "now", lambda _: "public-id")
+    assert len(chat["messages"]) == 1 and not chat["messages"][0].get("agentOriginated")
+    repository.write_one(chat)
+    ready = asyncio.Event()
+    ready.set()
+    inbox = WorkbenchAgentInbox("b", repository._database(), run_id="running")
+    async def publish(_):
+        pass
+    run = SimpleNamespace(status="running", ready=ready, inbox=inbox, run_id="running", publish=publish)
+    guidance = ChatGuidanceApplicationService(ChatGuidanceDependencies(
+        run_manager=SimpleNamespace(get=lambda _: run), get_chat=repository.get,
+        mutate_chat=repository.mutate_one, public_message=lambda entry: entry,
+        utc_now_iso=lambda: "later", short_id=lambda _: "wrong-new-id"))
+    try:
+        for _ in range(2):
+            result = await guidance.submit(chat_id="b", message="selection", client_request_id="card-req")
+            assert result.status_code == 200
+        messages = repository.get("b")["messages"]
+        assert len(messages) == 1 and messages[0]["id"] == "public-id" and messages[0]["guidance"]
+        assert not messages[0].get("agentOriginated")
+        assert await port.user_message_admitted("b", "card-req")
+        assert not await port.agent_message_admitted("b", "card-req")
+    finally:
+        await inbox.close(termination_reason="completed")
+
+
+@pytest.mark.asyncio
+async def test_card_dispatch_recognizes_committed_human_input_after_lost_reply(tmp_path):
+    import json
+    from cyrene.core.session import AgentSession
+    port = durable_port(tmp_path)
+    registry = PluginRegistry()
+    async def unused_model(*_):
+        raise AssertionError("Admission replay must not call a model")
+    registry.register_pack(PluginPack("model", "model", (
+        Plugin("MiniMax", "fake", {"type": "object"}, unused_model, kind="model"),
+    )), source="test")
+    session = AgentSession(tmp_path / "agent-state", tmp_path / "work", tmp_path / "plugins",
+                           registry=registry, load_plugins=False, tree_id="b")
+    try:
+        session.submit("submitted selection", run_id="card-run", metadata={
+            "client_request_id": "card-event", "agent_originated": False})
+    finally:
+        session.close()
+    assert await port.user_message_admitted("b", "card-event")
+    assert not await port.agent_message_admitted("b", "card-event")
+    result = await port.dispatch_user_message("b", "submitted selection", client_request_id="card-event",
+                                              expected_version=json.dumps(["b", 0]))
+    assert result["duplicate"] and result["status"] == "admitted"

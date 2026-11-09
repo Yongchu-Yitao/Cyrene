@@ -1181,3 +1181,17 @@ def test_cancelling_workbench_run_cancels_and_persists_agent_state(tmp_path):
     replace_model(registry, next_model)
     assert run(bridge.submit("continue", run_id="next-run")) == "next reply"
     bridge.close()
+
+
+@pytest.mark.parametrize("batch,wrapped", [(False, False), (False, True), (True, True)])
+def test_card_creation_presentation_reaches_live_conversation(batch, wrapped):
+    presentation = {"kind": "assistant_card", "card_id": "card_" + "a" * 32, "revision": 1, "operation": "card.create"}
+    value = {"ok": True, "presentation": presentation}
+    if wrapped:
+        value = {"result": json.dumps(value)}
+    result = {"call_id": "create-1", "name": "card.create", "success": True, "value": value}
+    event = AgentSessionEvent(sequence=1, type="tools.completed" if batch else "tool.completed",
+                              tree_id="assistant_global", run_id="r", node_id="n", time=datetime.now(timezone.utc),
+                              data={"results": [result]} if batch else result)
+    projected = workbench_events(event)
+    assert projected[0]["payload"]["presentation"] == presentation

@@ -1,3 +1,5 @@
+import { homeInsertionIndex } from "./home-timeline.mjs"
+import { WbcAssistantCard } from "./assistant-cards.jsx"
 import { snapshotStaticMessage, equalAssistantProps } from "./message-memo.mjs"
 import { createDisclosureSubscriptions, subscribeDisclosureUpdates } from "./disclosure-subscriptions.mjs"
 import { wbcProjectTranscript } from "./runtime-timeline.jsx"
@@ -739,7 +741,7 @@ function WbcLiveAgentArtifacts({ files, onOpenFile }) {
 var WBC_ACTIVITY_GROUP_MIN_ITEMS = 3;
 
 function wbcIsActivityMessage(message) {
-  if (!message || typeof message !== "object") return false;
+  if (!message || typeof message !== "object" || message.assistantCard) return false;
   if (message.runtimeActivity || message.activityCard) return true;
   if (String(message.content || "").trim()) return false;
   var reasoning = String(message.reasoning || "").trim();
@@ -815,7 +817,7 @@ function wbcGroupConsecutiveActivityMessages(messages, runtime) {
   }
 
   source.forEach(function (message) {
-    if (message.timelineVersion === 1 && !message.activityCard && message.role !== "user"
+    if (message.timelineVersion === 1 && !message.assistantCard && !message.activityCard && message.role !== "user"
       && !message.notificationCard && !message.modelStatusCard && !String(message.content || "").trim()
       && !(message.attachments && message.attachments.length)
       && !(message.referenceAttachments && message.referenceAttachments.length)) return;
@@ -1421,6 +1423,7 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   // timeline renderer. Keep the activity-card compatibility boundary here as
   // well, otherwise a durable reasoning/tool record with empty `content`
   // degrades into a footer-only assistant row on those surfaces.
+  if (msg.assistantCard) return <WbcAssistantCard cardId={msg.assistantCard.card_id} />;
   var activityView = live ? null : wbcActivityMessageView(msg);
   if (activityView) {
     if (!activityView.visible) return null;
@@ -1719,9 +1722,15 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
   return <WbcAssistantMessageBoundary msg={{ role: "assistant" }} liveRuntime={runtime} onOpenFile={onOpenFile} />;
 }
 
-function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion, onAnswer }) {
-  var timeline = wbcGroupConsecutiveActivityMessages(presentConversationMessages(wbcProjectTranscript(messages || [], runtime)), runtime);
+function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion, onAnswer, homeInsertion }) {
+  var projected = wbcProjectTranscript(messages || [], runtime);
+  var group = items => wbcGroupConsecutiveActivityMessages(presentConversationMessages(items), runtime);
+  var boundary = homeInsertion ? homeInsertionIndex(projected, homeInsertion.position) : -1;
+  var timeline = homeInsertion
+    ? [...group(projected.slice(0, boundary)), {id:"assistant-home:" + chatId, homeSurface:true}, ...group(projected.slice(boundary))]
+    : group(projected);
   return <React.Fragment>{timeline.map(function (message) {
+    if (message.homeSurface) return <React.Fragment key={message.id}>{homeInsertion.content}</React.Fragment>;
     if (message.questionPrompt && pendingQuestion && message.questionId === pendingQuestion.id) return <WbcThreadItem key={message.id}><WbcQuestionPrompt pending={pendingQuestion} onAnswer={onAnswer} busy={false} /></WbcThreadItem>;
     if (message.runtimeContinuation) return <WbcContinuationIndicator key={message.id} />;
     if (message.activityGroup) return <WbcThreadItem key={message.id}><WbcActivityGroup group={message} /></WbcThreadItem>;
@@ -1737,12 +1746,13 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
   if (!runtime) return null;
   if (runtime.timeline) return <WbcTranscript runtime={runtime} onOpenFile={onOpenFile} />;
   var timeline = wbcGroupConsecutiveActivityMessages(
-    wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder: true }),
+    presentConversationMessages(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder: true })),
     runtime
   );
   return (
     <React.Fragment>
       {timeline.map(function (item) {
+        if (item.assistantCard) return <WbcThreadItem key={item.id}><WbcAssistantCard cardId={item.assistantCard.card_id} /></WbcThreadItem>;
         if (item.runtimeHeartbeat) {
           return null;
         }

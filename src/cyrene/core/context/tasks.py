@@ -449,32 +449,7 @@ class TaskContexts:
             target = args.get("context_id")
             metadata = {}
             if name == "switch_context":
-                previous = state['active']
-                if target == SHARED_ID:
-                    raise ValueError("shared is always loaded")
-                if target is not None and target not in state['documents']:
-                    raise ValueError("Unknown context_id; use the context catalog")
-                title = context_title(args['title']) if 'title' in args else None
-                if target is None:
-                    if title is None:
-                        raise ValueError("A new context requires a title")
-                    target = "ctx_" + hashlib.sha256(receipt.encode()).hexdigest()[:16]
-                    state['documents'][target] = {"body": "", "summary": "", "messages": [], "covered": []}
-                if previous and previous != target:
-                    path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
-                    pause_document(state, previous, args.get('summary', ''), path)
-                if title is not None:
-                    state['documents'][target]['title'] = title
-                if previous != target:
-                    stamp = activity_time()
-                    for key in {previous, target} - {None}:
-                        state['documents'][key]['last_active_at'] = stamp
-                    from .capacity import check_load
-                    check_load(self, state, target)
-                state['active'] = target
-                metadata = {key: {field: state['documents'][key].get(field, '' if field == 'title' else None)
-                                  for field in ('title', 'last_active_at')}
-                            for key in sorted({previous, target} - {None})}
+                target, metadata = self._switch(state, target, args, receipt)
             elif name == "unload_context":
                 target = state['active']
                 if not target:
@@ -485,39 +460,73 @@ class TaskContexts:
                 metadata = {target: {'last_active_at': state['documents'][target]['last_active_at']}}
                 state['active'] = None
             else:
-                if target == SHARED_ID:
-                    if name != "append_context" and name != "replace_context":
-                        raise ValueError("shared is always loaded; only append_context and replace_context can edit it")
-                    doc = state[SHARED_ID]
-                else:
-                    if target not in state["documents"]:
-                        raise ValueError("Unknown context_id; use the context catalog")
-                    doc = state["documents"][target]
-                if name == "load_context":
-                    if state["active"] and state["active"] != target:
-                        raise ValueError("Unload the active context with a summary first")
-                    # Tool results are intentionally absent from restored tasks;
-                    # their old observation files are not load dependencies.
-                    from .capacity import check_load
-                    check_load(self, state, target)
-                    if state["active"] != target:
-                        doc["last_active_at"] = activity_time()
-                    if "title" in args:
-                        doc["title"] = context_title(args["title"])
-                    metadata = {target: {field: doc.get(field, "" if field == "title" else None) for field in ("title", "last_active_at")}}
-                    state["active"] = target
-                elif name == "append_context":
-                    doc["body"] += ("\n\n" if doc["body"] else "") + args["content"]
-                elif name == "replace_context":
-                    doc["body"] = args["content"]
-                else:
-                    raise ValueError("Unknown context operation")
+                metadata = self._edit_or_load(state, target, name, args)
             result = {"context_id": target, "active_context_id": state["active"], "saved": True}
             if metadata:
                 result["context_metadata"] = metadata
             state["receipts"][receipt] = result
             self.write(state)
             return result
+
+    def _edit_or_load(self, state, target, name, args):
+        metadata = {}
+        if target == SHARED_ID:
+            if name != "append_context" and name != "replace_context":
+                raise ValueError("shared is always loaded; only append_context and replace_context can edit it")
+            doc = state[SHARED_ID]
+        else:
+            if target not in state["documents"]:
+                raise ValueError("Unknown context_id; use the context catalog")
+            doc = state["documents"][target]
+        if name == "load_context":
+            if state["active"] and state["active"] != target:
+                raise ValueError("Unload the active context with a summary first")
+            # Tool results are intentionally absent from restored tasks;
+            # their old observation files are not load dependencies.
+            from .capacity import check_load
+            check_load(self, state, target)
+            if state["active"] != target:
+                doc["last_active_at"] = activity_time()
+            if "title" in args:
+                doc["title"] = context_title(args["title"])
+            metadata = {target: {field: doc.get(field, "" if field == "title" else None) for field in ("title", "last_active_at")}}
+            state["active"] = target
+        elif name == "append_context":
+            doc["body"] += ("\n\n" if doc["body"] else "") + args["content"]
+        elif name == "replace_context":
+            doc["body"] = args["content"]
+        else:
+            raise ValueError("Unknown context operation")
+        return metadata
+
+    def _switch(self, state, target, args, receipt):
+        previous = state['active']
+        if target == SHARED_ID:
+            raise ValueError("shared is always loaded")
+        if target is not None and target not in state['documents']:
+            raise ValueError("Unknown context_id; use the context catalog")
+        title = context_title(args['title']) if 'title' in args else None
+        if target is None:
+            if title is None:
+                raise ValueError("A new context requires a title")
+            target = "ctx_" + hashlib.sha256(receipt.encode()).hexdigest()[:16]
+            state['documents'][target] = {"body": "", "summary": "", "messages": [], "covered": []}
+        if previous and previous != target:
+            path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
+            pause_document(state, previous, args.get('summary', ''), path)
+        if title is not None:
+            state['documents'][target]['title'] = title
+        if previous != target:
+            stamp = activity_time()
+            for key in {previous, target} - {None}:
+                state['documents'][key]['last_active_at'] = stamp
+            from .capacity import check_load
+            check_load(self, state, target)
+        state['active'] = target
+        metadata = {key: {field: state['documents'][key].get(field, '' if field == 'title' else None)
+                          for field in ('title', 'last_active_at')}
+                    for key in sorted({previous, target} - {None})}
+        return target, metadata
 
     def reference(self, result, call):
         """Store exact observations under the tree-owned artifact directory."""
@@ -564,12 +573,7 @@ def fork_task_state(path):
     by_id = {n.id: n for n in path}
     for node in path[1:]:
         value = node.value
-        manual = value.get("context_graph_task_edit")
-        if isinstance(manual, dict):
-            target = manual.get("contextId")
-            doc = state[SHARED_ID] if target == SHARED_ID else state["documents"].get(target)
-            if doc is not None:
-                doc["body"] = str(manual.get("content", ""))
+        replay_manual_context_edit(state, value)
         owner = value.get("task_context_id")
         if owner and owner != SHARED_ID:
             state["documents"].setdefault(owner, {"body": "", "summary": "", "messages": [], "covered": []})
@@ -588,12 +592,7 @@ def fork_task_state(path):
             target = args.get("context_id")
             payload = result.get('value') or {}
             if name == "switch_context":
-                previous = state['active']
-                target = payload['active_context_id']
-                if previous and previous != target:
-                    pause_document(state, previous, args['summary'], path[:path.index(node) + 1])
-                state['documents'].setdefault(target, {"body": "", "summary": "", "messages": [], "covered": []})
-                state['active'] = target
+                replay_context_switch(state, payload, args, path, node)
             elif name == "unload_context":
                 target = owner or state["active"]
                 if target in state["documents"]:
@@ -607,11 +606,37 @@ def fork_task_state(path):
                 if target in state["documents"]:
                     state["active"] = target
             else:
-                doc = state[SHARED_ID] if target == SHARED_ID else state["documents"].get(target)
-                if doc is not None:
-                    content = str(args.get("content", ""))
-                    doc["body"] = ((doc["body"] + "\n\n") if doc["body"] else "") + content if name == "append_context" else content
-            for key, fields in payload.get('context_metadata', {}).items():
-                if key in state['documents']:
-                    state['documents'][key].update(fields)
+                replay_context_body(state, target, name, args)
+            restore_context_metadata(state, payload)
     return state
+
+
+def restore_context_metadata(state, payload):
+    for key, fields in payload.get('context_metadata', {}).items():
+        if key in state['documents']:
+            state['documents'][key].update(fields)
+
+
+def replay_context_switch(state, payload, args, path, node):
+    previous = state['active']
+    target = payload['active_context_id']
+    if previous and previous != target:
+        pause_document(state, previous, args['summary'], path[:path.index(node) + 1])
+    state['documents'].setdefault(target, {"body": "", "summary": "", "messages": [], "covered": []})
+    state['active'] = target
+
+
+def replay_manual_context_edit(state, value):
+    manual = value.get("context_graph_task_edit")
+    if isinstance(manual, dict):
+        target = manual.get("contextId")
+        doc = state[SHARED_ID] if target == SHARED_ID else state["documents"].get(target)
+        if doc is not None:
+            doc["body"] = str(manual.get("content", ""))
+
+
+def replay_context_body(state, target, name, args):
+    doc = state[SHARED_ID] if target == SHARED_ID else state["documents"].get(target)
+    if doc is not None:
+        content = str(args.get("content", ""))
+        doc["body"] = ((doc["body"] + "\n\n") if doc["body"] else "") + content if name == "append_context" else content

@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -197,6 +197,8 @@ class ConversationConfig:
     tool_scope: PluginToolScope | None = None
     guidance_channel: Any = None
     read_only: bool = False
+    assistant_home_owner: str = ""
+    assistant_home_cards: Any = None
 
 
 class ConversationRuntime:
@@ -287,6 +289,9 @@ class ConversationRuntime:
             owner_loop.close()
 
     def has_admitted_agent_message(self, chat_id: str, request_id: str) -> bool:
+        return self.has_admitted_message(chat_id, request_id, agent_originated=True)
+
+    def has_admitted_message(self, chat_id: str, request_id: str, *, agent_originated: bool) -> bool:
         """Only committed ContextTree input proves idle-run admission."""
         with ContextStoreRouter(self._state_root() / "context") as router:
             try:
@@ -298,7 +303,7 @@ class ConversationRuntime:
             value = node.value if isinstance(node.value, Mapping) else {}
             metadata = value.get("metadata") or {}
             if (value.get("role") == "user" and isinstance(metadata, Mapping)
-                    and metadata.get("agent_originated") is True
+                    and bool(metadata.get("agent_originated")) == agent_originated
                     and metadata.get("client_request_id") == request_id):
                 return True
         return False
@@ -526,10 +531,21 @@ class ConversationRuntime:
         personal_assistant = bool(chat and chat.get('kind') == 'personal-assistant')
         if personal_assistant:
             config = personal_assistant_config(config)
+        if config.assistant_home_owner:
+            from cyrene.plugins.builtin.cyrene_cards.home_preparation import HOME_TOOLS, home_tool_scope
+            source = management.host.chat(config.assistant_home_owner) if management else None
+            if not source or source.get("kind") != "personal-assistant" or config.assistant_home_cards is None:
+                raise ValueError("Invalid assistant home maintenance owner")
+            if config.session_id == config.assistant_home_owner:
+                raise ValueError("Home maintenance requires an isolated session")
+            personal_assistant = True
+            config = replace(config, extra_direct_tool_names=HOME_TOOLS)
         plugin_root = Path(
             config.plugin_directory or default_plugin_impl_directory()
         ).expanduser().resolve()
         registry, load_plugins = resolve_plugin_registry(plugin_root)
+        if config.assistant_home_owner:
+            config = replace(config, tool_scope=home_tool_scope(registry))
         if config.tool_scope is not None:
             registry = ScopedPluginRegistry(registry, config.tool_scope)
 
@@ -546,6 +562,8 @@ class ConversationRuntime:
             if application_host is not None
             else {}
         )
+        if config.assistant_home_owner:
+            plugin_services["cards"] = config.assistant_home_cards
         if config.guidance_channel is not None:
             plugin_services["guidance_channel"] = config.guidance_channel
 
@@ -612,6 +630,7 @@ class ConversationRuntime:
             "run_context": run_context,
         }
         plugin_context_data["personal_assistant"] = personal_assistant
+        plugin_context_data["assistant_home_owner"] = config.assistant_home_owner
         plugin_context_data["assistant_owner_session_id"] = (
             str(chat.get("assistantOwnerSessionId") or "")
             if chat and chat.get("kind") == "assistant-task" else ""

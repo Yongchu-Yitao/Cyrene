@@ -188,5 +188,5 @@ plugin_pack = PluginPack(
     ),
     setup=setup,
     application_setup=application_setup,
-    metadata={"i18n": {"en": {"name": "Session Management"}, "zh": {"name": "Session 管理"}}},
+    metadata={"i18n": {"en": {"name": "Task execution"}, "zh": {"name": "任务执行"}}},
 )

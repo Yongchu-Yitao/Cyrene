@@ -147,7 +147,7 @@ test("literal frontend translation calls are backed by the merged catalog", asyn
 
 test("JSX does not expose untranslated English text nodes", () => {
   const allowedTechnicalLabels = new Set([
-    "Cyrene", "ESC", "Git", "SKILL", "SSE", "Streamable HTTP", "URL", "stdio",
+    "Cyrene", "CARTO", "ESC", "Git", "SKILL", "SSE", "Streamable HTTP", "URL", "stdio",
   ])
   const missing = []
   for (const filename of frontendSourceFiles(FRONTEND_ROOT)) {

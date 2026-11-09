@@ -10,6 +10,23 @@ _TRACE_SKIP_TOOLS = {
 }
 
 
+
+def tool_result_presentation(value: Any) -> dict[str, Any]:
+    """Read structured presentation through direct and toolbox-wrapped results."""
+    for _ in range(4):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return {}
+        if not isinstance(value, Mapping) or value.get("ok") is False:
+            return {}
+        presentation = value.get("presentation")
+        if isinstance(presentation, Mapping):
+            return dict(presentation)
+        value = value.get("result")
+    return {}
+
 def _trace_preview(value: Any, *, limit: int = 400) -> str:
     """Return a bounded, display-only summary for one durable tool entry."""
 
@@ -128,6 +145,10 @@ def _tool_trace_entry(item, index, call, results_by_call_id):
     preview = _trace_preview(preview_source)
     if preview:
         entry["preview"] = preview
+    if result is not None and success:
+        presentation = tool_result_presentation(result.get("value"))
+        if presentation:
+            entry["presentation"] = presentation
     if result is None:
         entry["inferredCompletion"] = True
     return entry

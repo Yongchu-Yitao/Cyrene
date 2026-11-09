@@ -64,10 +64,10 @@ class ChatGuidanceApplicationService:
             )
         now = self.dependencies.utc_now_iso()
         previous = next((item for item in chat.get("messages", [])
-                         if agent_originated and client_request_id
+                         if client_request_id
                          and item.get("clientRequestId") == client_request_id), None)
         if previous is not None and (
-            not previous.get("agentOriginated")
+            bool(previous.get("agentOriginated")) != agent_originated
             or previous.get("originSessionId", "") != origin_session_id
             or previous.get("agentMessageKind", "") != agent_message_kind
             or previous.get("content") != message

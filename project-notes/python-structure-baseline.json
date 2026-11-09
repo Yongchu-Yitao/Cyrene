@@ -280,7 +280,7 @@
     "decisions": 39
   },
   "src/cyrene/model/protocol_adapters.py": {
-    "module_lines": 1460
+    "module_lines": 1464
   },
   "src/cyrene/model/protocol_adapters.py::_anthropic_messages": {
     "decisions": 28
@@ -295,7 +295,7 @@
     "decisions": 47
   },
   "src/cyrene/model/protocol_adapters.py::_responses_input": {
-    "decisions": 23
+    "decisions": 26
   },
   "src/cyrene/model/protocol_adapters.py::_stream_payloads": {
     "decisions": 27
@@ -1037,15 +1037,11 @@
     "decisions": 37
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py": {
-    "module_lines": 1279
+    "module_lines": 1299
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::_complete_stream_endpoint": {
     "lines": 142,
     "decisions": 24
-  },
-  "src/cyrene/plugins/builtin/cyrene_model/_shared.py::complete_model": {
-    "lines": 161,
-    "decisions": 33
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::discover_models": {
     "decisions": 25
@@ -1290,10 +1286,10 @@
     "decisions": 24
   },
   "src/cyrene/plugins/builtin/cyrene_schedule/application.py::setup_application": {
-    "lines": 145
+    "lines": 149
   },
   "src/cyrene/plugins/builtin/cyrene_schedule/application.py::setup_application.search": {
-    "decisions": 37
+    "decisions": 38
   },
   "src/cyrene/plugins/builtin/cyrene_schedule/schedule_spec.py::recurrence_label": {
     "decisions": 25
@@ -1650,11 +1646,11 @@
     "decisions": 36
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py": {
-    "module_lines": 1071
+    "module_lines": 1094
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge": {
-    "lines": 127,
-    "decisions": 33
+    "lines": 145,
+    "decisions": 44
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._own_bridge": {
     "decisions": 21,
@@ -1749,7 +1745,7 @@
     "lines": 128
   },
   "src/cyrene/workbench/http/workbench/chat_routes/send_input.py::append_user_message": {
-    "decisions": 25
+    "decisions": 26
   },
   "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository._chat_message_summary": {
     "decisions": 27
@@ -1816,5 +1812,12 @@
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime.send": {
     "lines": 115
+  },
+  "src/cyrene/plugins/builtin/cyrene_model/_shared.py::_complete_model_wire": {
+    "lines": 161,
+    "decisions": 33
+  },
+  "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime": {
+    "methods": 26
   }
 }

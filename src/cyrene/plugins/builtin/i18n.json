@@ -152,36 +152,84 @@
       }
     },
     "cyrene_project_python": {
-      "en": {"name": "Python projects", "description": "Detect Python projects and contribute their workspace actions."},
-      "zh": {"name": "Python 项目", "description": "识别 Python 项目并提供对应的工作区动作。"}
+      "en": {
+        "name": "Python projects",
+        "description": "Detect Python projects and contribute their workspace actions."
+      },
+      "zh": {
+        "name": "Python 项目",
+        "description": "识别 Python 项目并提供对应的工作区动作。"
+      }
     },
     "cyrene_project_javascript": {
-      "en": {"name": "JavaScript projects", "description": "Detect JavaScript and TypeScript projects and contribute their workspace actions."},
-      "zh": {"name": "JavaScript 项目", "description": "识别 JavaScript 与 TypeScript 项目并提供对应的工作区动作。"}
+      "en": {
+        "name": "JavaScript projects",
+        "description": "Detect JavaScript and TypeScript projects and contribute their workspace actions."
+      },
+      "zh": {
+        "name": "JavaScript 项目",
+        "description": "识别 JavaScript 与 TypeScript 项目并提供对应的工作区动作。"
+      }
     },
     "cyrene_project_tex": {
-      "en": {"name": "TeX projects", "description": "Detect TeX projects and contribute document build and preview actions."},
-      "zh": {"name": "TeX 项目", "description": "识别 TeX 项目并提供文档编译与预览动作。"}
+      "en": {
+        "name": "TeX projects",
+        "description": "Detect TeX projects and contribute document build and preview actions."
+      },
+      "zh": {
+        "name": "TeX 项目",
+        "description": "识别 TeX 项目并提供文档编译与预览动作。"
+      }
     },
     "cyrene_project_go": {
-      "en": {"name": "Go projects", "description": "Detect Go modules and contribute their workspace actions."},
-      "zh": {"name": "Go 项目", "description": "识别 Go 模块并提供对应的工作区动作。"}
+      "en": {
+        "name": "Go projects",
+        "description": "Detect Go modules and contribute their workspace actions."
+      },
+      "zh": {
+        "name": "Go 项目",
+        "description": "识别 Go 模块并提供对应的工作区动作。"
+      }
     },
     "cyrene_project_java": {
-      "en": {"name": "Java projects", "description": "Detect Java build systems and contribute their workspace actions."},
-      "zh": {"name": "Java 项目", "description": "识别 Java 构建系统并提供对应的工作区动作。"}
+      "en": {
+        "name": "Java projects",
+        "description": "Detect Java build systems and contribute their workspace actions."
+      },
+      "zh": {
+        "name": "Java 项目",
+        "description": "识别 Java 构建系统并提供对应的工作区动作。"
+      }
     },
     "cyrene_project_rust": {
-      "en": {"name": "Rust projects", "description": "Detect Cargo projects and contribute their workspace actions."},
-      "zh": {"name": "Rust 项目", "description": "识别 Cargo 项目并提供对应的工作区动作。"}
+      "en": {
+        "name": "Rust projects",
+        "description": "Detect Cargo projects and contribute their workspace actions."
+      },
+      "zh": {
+        "name": "Rust 项目",
+        "description": "识别 Cargo 项目并提供对应的工作区动作。"
+      }
     },
     "cyrene_project_github": {
-      "en": {"name": "GitHub projects", "description": "Detect GitHub repositories and contribute repository workspace actions."},
-      "zh": {"name": "GitHub 项目", "description": "识别 GitHub 仓库并提供仓库工作区动作。"}
+      "en": {
+        "name": "GitHub projects",
+        "description": "Detect GitHub repositories and contribute repository workspace actions."
+      },
+      "zh": {
+        "name": "GitHub 项目",
+        "description": "识别 GitHub 仓库并提供仓库工作区动作。"
+      }
     },
     "cyrene_project_make": {
-      "en": {"name": "Make projects", "description": "Detect Makefiles and contribute declared build targets as workspace actions."},
-      "zh": {"name": "Make 项目", "description": "识别 Makefile 并将已声明的构建目标提供为工作区动作。"}
+      "en": {
+        "name": "Make projects",
+        "description": "Detect Makefiles and contribute declared build targets as workspace actions."
+      },
+      "zh": {
+        "name": "Make 项目",
+        "description": "识别 Makefile 并将已声明的构建目标提供为工作区动作。"
+      }
     },
     "cyrene_split_context": {
       "en": {
@@ -431,6 +479,16 @@
       "zh": {
         "name": "任务执行",
         "description": "启动和管理任务执行、检查任务证据并处理问题。"
+      }
+    },
+    "cyrene_cards": {
+      "en": {
+        "name": "Cards",
+        "description": "Assistant-only card templates, user inputs and persistent pinning."
+      },
+      "zh": {
+        "name": "卡片",
+        "description": "助理专用的卡片模板、用户输入和持久固定。"
       }
     }
   },
@@ -2938,11 +2996,11 @@
     "schedule.create": {
       "en": {
         "name": "Schedule task",
-        "description": "Create an exact-message or Agent scheduled task in the current project."
+        "description": "Create an exact-message or Agent scheduled task in the current project or global personal-assistant scope."
       },
       "zh": {
         "name": "创建定时任务",
-        "description": "在当前项目创建精确消息或代理型定时任务。"
+        "description": "在当前项目或全局个人助理范围内创建固定消息或 Agent 定时任务。"
       }
     },
     "schedule.edit": {
@@ -2958,11 +3016,11 @@
     "schedule.list": {
       "en": {
         "name": "List schedules",
-        "description": "List scheduled tasks in the current project."
+        "description": "List scheduled tasks in the current project or global personal-assistant scope."
       },
       "zh": {
         "name": "列出定时任务",
-        "description": "列出当前项目中的定时任务。"
+        "description": "列出当前项目或全局个人助理范围内的定时任务。"
       }
     },
     "schedule.occurrences": {
@@ -3198,21 +3256,21 @@
     "load_context": {
       "en": {
         "name": "Load task context",
-        "description": "Resume a goal or subtask using its exact catalog ID, restoring its messages and truncated historical calls in order without old tool results. Unload a different active context first. Never load shared, an unrelated placeholder or the already active context. Oversized loads fail without changing state: read the returned snapshot in small sections instead. Call alone and wait for success."
+        "description": "Before progress messages or task-specific tools, resume an existing goal or independently resumable workstream using its exact catalog ID, restoring its messages and truncated historical calls in order without old tool results. Unload a different active context first. Never load shared, an unrelated placeholder or the already active context. Oversized loads fail without changing state: read the returned snapshot in small sections instead. Call alone and wait for success."
       },
       "zh": {
         "name": "加载任务上下文",
-        "description": "使用目录中的准确 ID 恢复目标或子任务，并按原顺序还原消息和截断后的历史调用，不带入旧工具结果。先卸载另一个活动上下文；不要加载 shared、无关占位任务或已在活动的上下文。上下文过大时会保持状态不变并返回快照，应分段读取。此工具必须单独调用并等待成功。"
+        "description": "在发送进展或调用任务工具前，使用目录中的准确 ID 恢复已有目标或可独立恢复的工作流，按原顺序恢复消息和截断的历史调用，不带入旧工具结果。先卸载其他活动上下文；不要加载 shared、无关占位任务或已活动的上下文。容量超限时保持原状态，请分段读取返回的快照。此工具必须单独调用并等待成功。"
       }
     },
     "unload_context": {
       "en": {
         "name": "Save and unload task context",
-        "description": "Pause before another workstream, or checkpoint a continuation segment when warned about capacity. Save task messages in order; retain tool names and truncated arguments, discard results from restored context. Do not unload merely to save, finish or wait. Then load an existing context or start work to create one; after a capacity warning, continue in a new segment and read old evidence by path. Call alone and wait for success."
+        "description": "Before progress messages or task-specific tools for an independent goal or workstream, checkpoint and unload the active context, even if its goal is complete. Also use for a continuation segment when warned about capacity. Save task messages in order; retain tool names and truncated arguments, discard results from restored context. Keep related follow-ups, corrections and tightly coupled steps together; delivery or waiting alone does not require unloading. Then load an existing context or start work to create one; after a capacity warning, continue in a new segment and read old evidence by path. Call alone and wait for success."
       },
       "zh": {
         "name": "保存并卸载任务上下文",
-        "description": "切换到其他工作流前暂停当前上下文；收到容量提醒时也可保存续接检查点。任务消息按顺序保存，历史调用只保留工具名和截断参数，不恢复旧结果。不要仅为了保存、完成或等待而卸载。随后加载已有上下文或开始工作以创建新上下文；容量提醒后在新分段继续并按路径读取旧证据。此工具必须单独调用并等待成功。"
+        "description": "处理独立目标或工作流时，在发送进展或调用任务工具前保存检查点并卸载活动上下文，即使原目标已完成。容量提醒时也用于续接分段。按顺序保存消息，保留工具名和截断参数，恢复时不带入旧结果。相关后续请求、修正和紧密关联步骤留在同一上下文；仅交付或等待不需要卸载。随后加载已有上下文或开始新工作；容量提醒后在新分段继续并按路径读取旧证据。此工具必须单独调用并等待成功。"
       }
     },
     "append_context": {
@@ -3258,11 +3316,11 @@
     "task_start": {
       "en": {
         "name": "Start task",
-        "description": "Start NEW work. If a different goal is active in your context catalog, first save its progress and call unload_context in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion."
+        "description": "Start NEW work. If a different goal is active in your context catalog, first call switch_context with context_id=null, a title and a progress checkpoint in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion."
       },
       "zh": {
         "name": "启动任务",
-        "description": "开始新任务。如果上下文目录中有其他活动目标，先保存进展并在单独一轮调用 unload_context。任务拥有已启用的完整执行能力，包括浏览器和桌面工具，以及独立的浏览器状态。重试或跟进已有任务请使用 task_update。受理不代表完成。"
+        "description": "开始新任务。如果上下文目录中有其他活动目标，先在单独一轮调用 switch_context，传入 context_id=null、标题和进展检查点。任务拥有已启用的完整执行能力，包括浏览器和桌面工具，以及独立的浏览器状态。重试或跟进已有任务请使用 task_update。受理不代表完成。"
       }
     },
     "task_list": {
@@ -3323,6 +3381,76 @@
       "zh": {
         "name": "停止任务",
         "description": "停止任务并暂停待处理的更新，保留任务证据和产物。"
+      }
+    },
+    "card.create": {
+      "en": {
+        "name": "Create card",
+        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with html and may include native blocks around it. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
+      },
+      "zh": {
+        "name": "创建卡片",
+        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。"
+      }
+    },
+    "card.update": {
+      "en": {
+        "name": "Update card",
+        "description": "Modify an existing card at expected_revision. Only supplied description fields change; arrays and objects are replaced whole. Preserves user input and pinning. Never creates a missing card or grants user approval."
+      },
+      "zh": {
+        "name": "修改卡片",
+        "description": "按 expected_revision 修改已有卡片，仅更新提供的描述字段，数组和对象整体替换。保留用户输入及固定状态；不会创建缺失卡片，也不代表用户授权。"
+      }
+    },
+    "card.get": {
+      "en": {
+        "name": "Read card",
+        "description": "Read a card's current description, origin, user drafts, submitted snapshot and placement. Optionally read paginated user events; reads do not acknowledge events."
+      },
+      "zh": {
+        "name": "读取卡片",
+        "description": "读取卡片的当前描述、来源、用户草稿、已提交快照和展示位置。可分页读取操作事件；读取不会确认事件已处理。"
+      }
+    },
+    "card.list": {
+      "en": {
+        "name": "List cards",
+        "description": "List current-context, pinned, or home welcome cards. Returns summaries; use card.get for content and user inputs."
+      },
+      "zh": {
+        "name": "列出卡片",
+        "description": "列出当前任务的卡片或此助理已固定的卡片，返回摘要；完整内容和用户输入请使用 card.get 读取。"
+      }
+    },
+    "card.pin": {
+      "en": {
+        "name": "Pin card",
+        "description": "Pin an existing card with pinned=true or unpin with false. Keeps its conversation reference and source context. Respects a user's explicit unpin."
+      },
+      "zh": {
+        "name": "固定卡片",
+        "description": "用 pinned=true 固定已有卡片，或用 false 取消固定。保留对话引用和来源上下文，并尊重用户主动取消固定的选择。"
+      }
+    },
+    "card.archive": {
+      "en": {
+        "name": "Archive card",
+        "description": "Archive an existing card as read-only, preserving final content, inputs and pinning. A completed model turn alone does not end a card."
+      },
+      "zh": {
+        "name": "归档卡片",
+        "description": "将已有卡片归档为只读，保留最终内容、用户输入和固定状态。一次模型回复结束不代表卡片任务结束。"
+      }
+    },
+    "switch_context": {
+      "en": {
+        "name": "Switch task context",
+        "description": "Preferred atomic transition before progress messages or tools for an independent goal or a resumed workstream. Use an exact catalog ID to resume, or null plus title to create a context. Supply a checkpoint when leaving an active context. Failure preserves the original state. Related follow-ups stay in the current context. Call alone and wait for success."
+      },
+      "zh": {
+        "name": "切换任务上下文",
+        "description": "处理独立目标或恢复其他任务时，在发送进展或调用工具前使用此工具完成切换。使用目录中的准确 ID 恢复上下文，或传入 null 和标题创建上下文。离开活动上下文时提供进展检查点；切换失败会保留原状态。相关后续请求留在当前上下文。此工具必须单独调用并等待成功。"
       }
     }
   }

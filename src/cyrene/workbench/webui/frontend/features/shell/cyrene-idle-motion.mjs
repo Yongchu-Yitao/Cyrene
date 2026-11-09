@@ -31,6 +31,29 @@ export function createCyreneIdleMotion({ random = Math.random } = {}) {
       duration = cfg.hold; cooldown = 4.5 + random() * 2.5;
     }
   }
+  function updateAttention(cfg) {
+    if (pendingInput) {
+      pendingInput = false;
+      if (input) { choose('input', cfg); inputCooldown = 5; }
+    }
+    if ((kind === 'input' && !input) || (kind === 'pointer' && !pointer)) choose('away', cfg);
+  }
+  function canPeek(style) {
+    return kind === 'away' && style === 'playful' && returnKind && (returnKind === 'input' ? input : pointer);
+  }
+  function chooseNext(cfg, style) {
+    if (kind === 'input' || kind === 'pointer') {
+      const prior = kind; choose('away', cfg); returnKind = prior;
+    } else if (canPeek(style)) {
+      choose(returnKind, cfg); look = { ...direction() }; kind = 'peek'; duration = .45;
+    } else if (kind === 'peek') {
+      choose('rest', cfg); duration = 1.3;
+    } else if (cooldown <= 0 && (pointer || input)) {
+      choose(pointer && (!input || random() < .55) ? 'pointer' : 'input', cfg);
+    } else {
+      choose(random() < .22 ? 'rest' : 'wander', cfg);
+    }
+  }
   return {
     get attention() { return kind; },
     setTargets(targets) { pointer = targets.pointer || null; input = targets.input || null; },
@@ -40,24 +63,8 @@ export function createCyreneIdleMotion({ random = Math.random } = {}) {
       const cfg = styles[style];
       age += dt; cooldown -= dt; inputCooldown -= dt; blinkAge += dt; nextBlink -= dt;
       if (nextBlink <= 0) { blinkAge = 0; nextBlink = 2.8 + random() * 2.4; }
-      if (pendingInput) {
-        pendingInput = false;
-        if (input) { choose('input', cfg); inputCooldown = 5; }
-      }
-      if ((kind === 'input' && !input) || (kind === 'pointer' && !pointer)) choose('away', cfg);
-      if (age > duration) {
-        if (kind === 'input' || kind === 'pointer') {
-          const prior = kind; choose('away', cfg); returnKind = prior;
-        } else if (kind === 'away' && style === 'playful' && returnKind && (returnKind === 'input' ? input : pointer)) {
-          choose(returnKind, cfg); look = { ...direction() }; kind = 'peek'; duration = .45;
-        } else if (kind === 'peek') {
-          choose('rest', cfg); duration = 1.3;
-        } else if (cooldown <= 0 && (pointer || input)) {
-          choose(pointer && (!input || random() < .55) ? 'pointer' : 'input', cfg);
-        } else {
-          choose(random() < .22 ? 'rest' : 'wander', cfg);
-        }
-      }
+      updateAttention(cfg);
+      if (age > duration) chooseNext(cfg, style);
       const target = direction();
       if (age > cfg.delay) {
         head.x += (target.x - head.x) * (1 - Math.exp(-dt * 7));

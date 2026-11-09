@@ -15,8 +15,14 @@ if(state==='error'){r=12*Math.sin(stateAge*18)*Math.exp(-stateAge*3);x=2.5*Math.
 if(state==='stopped')blink=.5;
 if(state==='reconnecting'){angle+=dt*100*Math.cos(phase*2);r=4*wave;glow=.55+.4*Math.sin(phase*3);}
 
-const decay=Math.exp(-stateAge*2.4),beat=Math.sin(phase*4);
-if(style==='soft'){
+const pose={x,y,r,sx,sy,ex,ey,blink,leftEye,rightEye,glow,angle};
+const finish={soft:softPose,orbit:orbitPose,playful:playfulPose}[style];
+return finish ? finish(pose,state,phase,stateAge,dt) : pose;
+}
+
+function softPose(pose, state, phase, stateAge, dt) {
+let {x,y,r,sx,sy,ex,ey,blink,leftEye,rightEye,glow,angle}=pose;
+const wave=Math.sin(phase*3),decay=Math.exp(-stateAge*2.4),beat=Math.sin(phase*4);
  if(state==='idle'){r=4*wave;y=0;sx=sy=1;blink=phase%4.5>4.1&&phase%4.5<4.25||phase%4.5>4.35?.1:1;}
  if(state==='thinking'){x=0;r=0;y=1.6*Math.sin(phase*4);ey=-1.4*Math.sin(phase*4);ex=0;sx=1+.04*beat;sy=2-sx;}
  if(state==='tool'){angle-=dt*180;y=0;sx=sy=1+.09*Math.sin(phase*7);glow=.65+.3*Math.sin(phase*7);leftEye=rightEye=.75;}
@@ -26,8 +32,12 @@ if(style==='soft'){
  if(state==='error'){x=0;r=0;y=-3*Math.sin(stateAge*5)*decay;sx=sy=1-.18*Math.sin(stateAge*5)*decay;}
  if(state==='stopped'){y=3*Math.sin(stateAge*5)*decay;ey=.4;blink=.7;}
  if(state==='reconnecting'){angle-=dt*100*Math.cos(phase*2);r=0;sx=1+.09*Math.sin(phase*3);sy=2-sx;y=-1.5*Math.sin(phase*3);glow=.7;}
+return {x,y,r,sx,sy,ex,ey,blink,leftEye,rightEye,glow,angle};
 }
-if(style==='orbit'){
+
+function orbitPose(pose, state, phase, stateAge, dt) {
+let {x,y,r,sx,sy,ex,ey,blink,leftEye,rightEye,glow,angle}=pose;
+const wave=Math.sin(phase*3),decay=Math.exp(-stateAge*2.4),beat=Math.sin(phase*4);
  if(state==='idle'){angle+=dt*16*Math.cos(phase*1.2);y=0;sx=sy=1;glow=.25+.2*Math.sin(phase*2);}
  if(state==='thinking'){angle+=dt*65*Math.cos(phase*2.3);r=0;x=0;y=0;ex=1.7*Math.sin(phase*2.3);ey=-1.2*Math.cos(phase*2.3);glow=.6;}
  if(state==='tool'){angle+=dt*60;y=-.7*Math.sin(phase*4);sx=sy=1;glow=.95;}
@@ -37,9 +47,13 @@ if(style==='orbit'){
  if(state==='error'){angle+=dt*160*Math.cos(stateAge*7)*decay;r=0;x=0;y=0;glow=.5*decay;}
  if(state==='stopped'){angle+=dt*80*decay;ey=0;blink=.85;}
  if(state==='reconnecting'){angle-=dt*100*Math.cos(phase*2);angle+=dt*80;r=0;y=0;glow=.85;}
+return {x,y,r,sx,sy,ex,ey,blink,leftEye,rightEye,glow,angle};
 }
-if(style==='playful'){
- if(state==='idle'){r=6*Math.sin(phase*1.7);y=-.6*Math.sin(phase*3.4);leftEye=phase%4>3.7?.1:1;blink=1;}
+
+function playfulPose(pose, state, phase, stateAge, dt) {
+let {x,y,r,sx,sy,ex,ey,blink,leftEye,rightEye,glow,angle}=pose;
+const wave=Math.sin(phase*3),decay=Math.exp(-stateAge*2.4),beat=Math.sin(phase*4);
+ if(state==='idle'){r=6*Math.sin(phase*1.7);y=-.6*Math.sin(phase*3.4);leftEye=playfulIdleEye(phase);blink=1;}
  if(state==='thinking'){r=14*Math.sin(phase*2);x=0;y=-1.1*Math.sin(phase*4);ex=2*Math.sin(phase*2);ey=-1.5*Math.abs(Math.cos(phase*2));leftEye=.8+.25*Math.sin(phase*4);}
  if(state==='tool'){angle-=dt*180;r=8*Math.sin(phase*7);x=1.3*Math.sin(phase*7);y=-1.2*Math.abs(Math.sin(phase*7));leftEye=.6;rightEye=.9;glow=.9;}
  if(state==='replying'){r=9*Math.sin(phase*6);x=1.4*Math.sin(phase*6);y=-2.8*Math.abs(Math.sin(phase*6));leftEye=.7+.5*Math.sin(phase*12);rightEye=.7+.5*Math.cos(phase*12);}
@@ -48,6 +62,7 @@ if(style==='playful'){
  if(state==='error'){x=2*Math.sin(stateAge*24)*decay;r=7*Math.sin(stateAge*24)*decay;blink=stateAge<.5?.15:.7;}
  if(state==='stopped'){r=-9;ey=1.3;y=1;blink=.45;}
  if(state==='reconnecting'){angle-=dt*100*Math.cos(phase*2);r=11*Math.sin(phase*2.8);ex=2.2*Math.sin(phase*2.8);ey=-1;y=-1.6*Math.abs(Math.sin(phase*2.8));glow=.8;}
-}
 return {x,y,r,sx,sy,ex,ey,blink,leftEye,rightEye,glow,angle};
 }
+
+function playfulIdleEye(phase) { return phase%4>3.7?.1:1; }

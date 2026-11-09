@@ -1210,6 +1210,7 @@ def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
     )[0]
     assert 'className="workbench-icon-btn"' in topbar
     assert 'data-cyrene-node-id="open_settings"' not in topbar
+    assert 'activePage !== "cyrene" && chatSideHidden' in topbar
     assert 'data-chat-side-show="true"' in topbar
     assert 'new CustomEvent("workbench:show-chat-side")' in topbar
     assert 'window.addEventListener("workbench:chat-side-visibility"' in topbar
@@ -3568,7 +3569,7 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     assert '<WorkbenchStableSurface active={p.isMemory} enterMotion={true}>' in shell
     assert "workspaceContent: sharedWorkspace" in shell
     assert "WorkbenchBoardModuleSurface" not in shell
-    assert "function WorkbenchChatPage({ active, project" in chat
+    assert "function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = \"\", active, project" in chat
     assert "}, !!(isActive && project));" in chat
     assert "!!(isActive && project)" in chat
     assert "function WorkbenchLibraryPage(props)" in library
@@ -5404,7 +5405,7 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     assert "createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now()" in tool_payload
     assert "appendActivity(closeActivityTimeline(latest), { createdAt: eventAt })" in runtime
     assert "errorMessage" in runtime
-    assert 'presentation: failed && error ? { kind: "error" } : undefined' in runtime
+    assert 'presentation: failed && error ? { kind: "error" } : event.presentation' in runtime
 
 
 def test_workbench_marks_run_finalizing_before_workspace_save():

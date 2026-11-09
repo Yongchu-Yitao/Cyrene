@@ -1,0 +1,186 @@
+.wbc-assistant-card{--card-line:var(--wb-line,var(--line));--card-muted:var(--wb-muted,var(--text-3));width:calc(100% - 24px);min-width:0;max-width:1200px;margin:14px auto;border:1px solid var(--card-line);border-radius:16px;background:var(--wb-card-bg,var(--surface-1));color:var(--wb-text,var(--text));overflow:hidden;font-size:14px;line-height:1.65}
+.wbc-assistant-card>header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:20px 22px 14px}.wbc-assistant-card h3{margin:3px 0 0;font-size:17px;font-weight:600}.wbc-assistant-card header p{margin:5px 0 0;color:var(--card-muted);font-size:13px}.wbc-card-type{font-size:11px;color:var(--card-muted)}.wbc-card-status{font-size:11px;white-space:nowrap;color:var(--card-muted);padding-top:3px}.wbc-card-blocks{display:grid;gap:20px;padding:4px 22px 20px}.wbc-card-blocks.layout-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}.wbc-card-block{min-width:0;overflow-wrap:anywhere}.wbc-card-block h4{font-size:14px;font-weight:600;margin:0 0 8px}.wbc-card-description{font-size:12px;color:var(--card-muted);margin:0 0 10px}.wbc-card-block .markdown{font-size:14px}.wbc-card-block .markdown>:first-child{margin-top:0}.wbc-card-block .markdown>:last-child{margin-bottom:0}
+.wbc-assistant-card footer{padding:13px 22px;border-top:1px solid var(--card-line);display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap}.wbc-assistant-card footer>span{font-size:11px;color:var(--card-muted);overflow-wrap:anywhere}.wbc-assistant-card footer>div{display:flex;flex-wrap:wrap;gap:8px}.wbc-assistant-card button:not(.wb-btn){font:inherit;color:inherit;border:1px solid var(--card-line);border-radius:8px;padding:7px 12px;background:transparent}.wbc-assistant-card button:not(.wb-btn):hover{background:var(--control-bg-hover)}.wbc-assistant-card button:disabled{opacity:.5;cursor:not-allowed}.wbc-assistant-card footer button{color:var(--text);background:var(--accent-faint);border-color:var(--accent-dim);font-size:13px}.wbc-assistant-card input,.wbc-assistant-card select{font:inherit;accent-color:var(--accent);min-width:0}.wbc-assistant-card input[type=checkbox],.wbc-assistant-card input[type=radio]{width:16px;height:16px;flex-shrink:0}
+.wbc-card-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:18px}.wbc-card-metrics>div{display:flex;flex-direction:column}.wbc-card-metrics span,.wbc-card-metrics small{color:var(--card-muted);font-size:12px}.wbc-card-metrics strong{font-size:25px;font-weight:500;font-variant-numeric:tabular-nums}.wbc-card-fields{display:grid;grid-template-columns:minmax(70px,1fr) 2fr;gap:8px;margin:0}.wbc-card-fields dt{color:var(--card-muted)}.wbc-card-fields dd{margin:0}.wbc-card-list{list-style:none;margin:0;padding:0}.wbc-card-list li{padding:10px 0;border-bottom:1px solid var(--card-line)}.wbc-card-list li:last-child{border:0}.wbc-card-list label{display:flex;gap:10px;align-items:flex-start}.wbc-card-list label input{margin-top:4px}.wbc-card-list strong{font-weight:500}.wbc-card-list small{display:block;color:var(--card-muted);font-size:12px}.wbc-card-list label:has(input:checked) strong{text-decoration:line-through;color:var(--card-muted)}
+.wbc-card-table{overflow-x:auto}.wbc-assistant-card table{border-collapse:collapse;width:100%;text-align:left;font-size:13px}.wbc-assistant-card td,.wbc-assistant-card th{padding:9px 10px;border-bottom:1px solid var(--card-line);overflow-wrap:anywhere}.wbc-assistant-card th{font-weight:500;color:var(--card-muted)}.wbc-card-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:15px}.wbc-card-field{display:flex;flex-direction:column;gap:6px;font-size:13px}.wbc-card-field>input:not([type=checkbox]),.wbc-card-field>select{border:1px solid var(--card-line);border-radius:8px;padding:9px 11px;background:var(--control-bg);color:inherit;width:100%}.wbc-card-field.checkbox{flex-direction:row;align-items:center}.wbc-card-field small{color:var(--card-muted)}.wbc-card-timeline{padding-left:22px;margin:0}.wbc-card-timeline li{padding:6px 0}.wbc-card-timeline time{margin-right:12px;color:var(--card-muted);font-size:12px}.wbc-card-timeline strong{font-weight:500}.wbc-card-timeline small{margin-left:10px;color:var(--card-muted)}
+.wbc-card-map-canvas{height:300px;width:100%;border-radius:10px;z-index:0}.wbc-card-map-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:10px 0}.wbc-card-map-toolbar span{font-size:11px;color:var(--card-muted)}.wbc-card-map-toolbar button{font-size:12px}.wbc-card-places{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:8px}.wbc-card-places button{text-align:left}.wbc-card-places button[aria-pressed=true]{border-color:var(--accent);background:var(--accent-faint)}.wbc-card-places strong{font-weight:500}.wbc-card-places span,.wbc-card-route small{display:block;color:var(--card-muted);font-size:12px}.wbc-card-route{margin-top:8px;width:100%;text-align:left}.wbc-card-chart{height:260px;width:100%}.wbc-card-embed iframe{display:block;width:100%;border:1px solid var(--card-line);border-radius:10px;background:#fff;color-scheme:light}.wbc-card-embed>button{margin-top:8px;font-size:12px}.wbc-card-notice,.wbc-card-error{padding:0 22px 14px;margin:0;font-size:12px}.wbc-card-notice{color:var(--card-muted)}.wbc-card-error{color:var(--err)}.wbc-assistant-card.density-compact .wbc-card-blocks{gap:12px}.wbc-assistant-card.density-compact>header{padding-top:14px}.wbc-assistant-card.density-compact .wbc-card-list li{padding:6px 0}
+@media(max-width:520px){.wbc-assistant-card{width:calc(100% - 16px)}.wbc-assistant-card>header,.wbc-card-blocks,.wbc-assistant-card footer{padding-left:14px;padding-right:14px}.wbc-card-map-canvas{height:250px}.wbc-card-status{white-space:normal}}@media(pointer:coarse){.wbc-assistant-card button,.wbc-card-field>input:not([type=checkbox]),.wbc-card-field>select{min-height:44px}.wbc-card-field input,.wbc-card-field select{font-size:16px}.wbc-card-list label{min-height:44px;align-items:center}}
+
+.wbc-card-map-toolbar label{font-size:12px;color:var(--card-muted)}.wbc-card-map-toolbar select{padding:6px;border:1px solid var(--card-line);border-radius:7px;background:var(--control-bg);color:var(--text)}.wbc-card-embed details{margin-top:10px;font-size:12px}.wbc-card-embed dl{display:grid;grid-template-columns:minmax(80px,1fr) 2fr;gap:8px;overflow-wrap:anywhere}.wbc-card-embed dd{margin:0}.wbc-card-embed-proposal{padding-top:12px}.wbc-card-embed-proposal button{margin-right:8px}
+
+.wbc-card-map-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:12px 0;font-size:12px}.wbc-card-map-legend>span{display:inline-flex;align-items:center;gap:7px}.wbc-card-map-legend i{display:inline-block;width:11px;height:11px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 1px #ffffff80}
+.wbc-card-pin>span{display:flex;align-items:center;justify-content:center}.wbc-assistant-card .wbc-card-pin[aria-pressed=true]{color:var(--accent);background:var(--accent-faint)}
+.wbc-pane-column.wbc-pinned-card-column{display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;gap:12px;min-height:0;padding-bottom:12px}.wbc-pinned-card-slot{flex:0 0 auto;min-width:0}.wbc-pinned-card-slot .wbc-assistant-card{width:calc(100% - 16px);max-width:none;margin:8px auto;border:0;background:transparent}.wbc-pinned-card-placeholder{padding:24px;min-height:180px}.wbc-pinned-ordinary-pane{flex:0 0 480px;min-height:320px;position:relative}.wbc-pinned-ordinary-pane>.wbc-pane-card{height:100%}
+
+.wbc-home-cards{min-width:0;padding:4px 0}.wbc-home-cards:empty{display:none}.wbc-card-weather{display:flex;flex-direction:column;gap:4px;padding:4px 0 14px;border-bottom:1px solid var(--card-line)}.wbc-card-weather strong{font-weight:500}.wbc-card-weather span,.wbc-card-weather small{color:var(--card-muted);font-size:12px}.wbc-card-action-list{list-style:none;padding:0;margin:0}.wbc-card-action-list>li{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:14px 0;border-bottom:1px solid var(--card-line)}.wbc-card-action-list>li:last-child{border:0}.wbc-card-action-list>li>div:first-child{flex:1;min-width:min(160px,100%)}.wbc-card-action-list strong{font-weight:500}.wbc-card-action-list small{display:block;color:var(--card-muted);font-size:12px}.wbc-card-row-actions{display:flex;gap:8px;flex-wrap:wrap}.wbc-assistant-card .wbc-card-list-toggle{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;height:auto;min-height:36px;text-align:left}.wbc-card-list-toggle>span{font-variant-numeric:tabular-nums;color:var(--card-muted)}
+
+.wbc-card-list-toggle-end{display:inline-flex;align-items:center;gap:10px;flex-shrink:0;white-space:nowrap}.wbc-card-disclosure-icon{display:flex;align-items:center;justify-content:center;width:18px;height:18px;transition:transform .18s ease}.wbc-card-disclosure-icon svg{display:block;width:16px;height:16px}.wbc-card-list-toggle[aria-expanded=true] .wbc-card-disclosure-icon{transform:rotate(180deg)}
+.wbc-weather-scene{--weather-color:#91a4b8;--weather-cloud:#aebdce;--weather-glow:rgba(145,164,184,.18);position:relative;isolation:isolate;overflow:hidden;padding:22px 24px 14px;border-radius:18px;background:radial-gradient(ellipse at 90% 15%,var(--weather-glow),transparent 68%),var(--control-bg)}.wbc-weather-main{display:flex;align-items:center;justify-content:space-between;gap:12px}.wbc-weather-copy{display:flex;flex-direction:column;min-width:0;gap:2px}.wbc-weather-location{font-size:13px;color:var(--card-muted)}.wbc-weather-copy .wbc-weather-temperature{font-size:40px;font-weight:500;line-height:1.25;letter-spacing:-1.5px}.wbc-weather-copy small{font-size:12px;color:var(--card-muted)}.wbc-weather-art{width:150px;flex:0 1 150px;min-width:90px;color:var(--weather-color);filter:drop-shadow(0 6px 12px var(--weather-glow))}.wbc-weather-art svg{display:block;width:100%;height:auto}.weather-sun-halo{fill:currentColor;opacity:.14;animation:wbc-weather-glow 5s ease-in-out infinite}.weather-sun-disc{fill:currentColor}.weather-rays{transform-origin:78px 48px;animation:wbc-weather-orbit 45s linear infinite}.weather-cloud{fill:var(--weather-cloud);animation:wbc-weather-drift 6s ease-in-out infinite}.weather-cloud-highlight{fill:none;stroke:#f0f6ff;stroke-width:2;opacity:.35}.weather-moon{fill:currentColor;animation:wbc-weather-drift 7s ease-in-out infinite}.weather-drop{animation:wbc-weather-rain 1.6s ease-in infinite}.weather-flake{animation:wbc-weather-rain 3.5s ease-in-out infinite}.drop-1{animation-delay:.5s}.drop-2{animation-delay:1s}.weather-lightning{fill:#ffd05a;stroke:var(--wb-card-bg,var(--surface-1));stroke-width:2}.weather-fog{color:var(--weather-color);opacity:.65;animation:wbc-weather-drift 8s ease-in-out infinite}.wbc-weather-scene .wbc-weather-advice{font-size:13px;margin:12px 0 8px}.wbc-weather-source{display:block;font-size:11px;color:var(--card-muted);overflow-wrap:anywhere}
+@keyframes wbc-weather-orbit{to{transform:rotate(360deg)}}@keyframes wbc-weather-drift{0%,100%{transform:translateX(-3px)}50%{transform:translateX(4px)}}@keyframes wbc-weather-rain{0%{transform:translateY(-3px);opacity:0}25%{opacity:1}100%{transform:translate(-3px,12px);opacity:0}}@keyframes wbc-weather-glow{0%,100%{opacity:.1}50%{opacity:.24}}
+@media(max-width:420px){.wbc-weather-scene{padding:16px}.wbc-weather-art{flex-basis:110px}.wbc-weather-copy .wbc-weather-temperature{font-size:34px}}
+@media(prefers-reduced-motion:reduce){.wbc-weather-art *{animation:none!important}.wbc-card-disclosure-icon{transition:none}}
+
+/* Weather has its own semantic palette; the surrounding UI retains the app theme. */
+.wbc-weather-scene.weather-clear{--weather-color:#f5b942;--weather-glow:rgba(245,185,66,.22)}
+.wbc-weather-scene.weather-partly_cloudy{--weather-color:#f2ba52;--weather-cloud:#becddd;--weather-glow:rgba(114,175,220,.19)}
+.wbc-weather-scene.weather-cloudy{--weather-color:#92a7bf;--weather-cloud:#a6b7ca;--weather-glow:rgba(146,167,191,.2)}
+.wbc-weather-scene.weather-rain{--weather-color:#5ca9ed;--weather-cloud:#93a9c2;--weather-glow:rgba(65,139,207,.22)}
+.wbc-weather-scene.weather-snow{--weather-color:#8cd6f2;--weather-cloud:#c5dfeb;--weather-glow:rgba(117,199,229,.2)}
+.wbc-weather-scene.weather-storm{--weather-color:#739ac9;--weather-cloud:#8291ab;--weather-glow:rgba(102,112,174,.24)}
+.wbc-weather-scene.weather-fog{--weather-color:#a5b4be;--weather-glow:rgba(154,175,187,.18)}
+.wbc-weather-scene.weather-night{--weather-color:#f4dda6;--weather-glow:rgba(84,101,187,.26)}
+
+/* Home is part of the conversation canvas, never a framed or pinnable card. */
+.wbc-home-cards.wbc-assistant-home {
+  --card-line:var(--wb-line,var(--line)); --card-muted:var(--wb-muted,var(--text-3));
+  --home-gutter:clamp(20px,4cqi,40px);
+  color-scheme:dark; container:assistant-home / inline-size;
+  position:relative; isolation:isolate; box-sizing:border-box; overflow:clip;
+  width:calc(100% + 2 * var(--wbc-thread-inset-inline,28px)); max-width:none;
+  margin:0 calc(-1 * var(--wbc-thread-inset-inline,28px)); padding:28px var(--home-gutter) 32px;
+  border:0; border-radius:0; box-shadow:none; background:transparent; color:var(--wb-text,var(--text));
+  --weather-area:light-dark(#b9c9d780,#6a7e934f); --weather-middle:light-dark(#d1dde545,#5264782b); --weather-mist:light-dark(#ffffff90,#c4d5e128);
+  --weather-text:light-dark(#253446,#fafcff); --weather-detail:light-dark(#3b4d60,#e8eff6);
+}
+html[data-theme="light"] .wbc-home-cards.wbc-assistant-home {color-scheme:light}
+/* Cancel only the transcript inset; ordinary messages retain their own spacing. */
+.assistant-chat .wbc-thread>.wbc-assistant-home:first-child {margin-top:calc(-1 * var(--wbc-thread-inset-top,76px));padding-top:calc(var(--wbc-thread-inset-top,76px) + 12px)}
+.wbc-home-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:34px 28px;align-items:start}
+.wbc-assistant-home .wbc-home-section {width:100%;max-width:none;margin:0;padding:0;border:0;border-radius:0;background:transparent;overflow:visible;min-width:0}
+.wbc-home-grid>.home-overview {grid-column:1/-1}
+.wbc-home-grid>.home-resume {grid-column:1}
+.wbc-home-grid>.home-results {grid-column:2;margin-top:0}
+.wbc-home-grid:not(:has(.home-resume))>.home-results,.wbc-home-grid:not(:has(.home-results))>.home-resume {grid-column:1/-1;margin-top:0}
+.wbc-home-section-label,.wbc-home-date {font-size:12px;color:var(--card-muted);margin-bottom:15px}
+.wbc-home-date {margin-bottom:9px}
+.wbc-home-heading {margin-bottom:16px}
+.wbc-home-heading.with-weather {display:grid;grid-template-columns:minmax(0,1fr) 180px;gap:24px;align-items:center}
+.wbc-home-section h3 {font-size:18px;font-weight:500;line-height:1.5;letter-spacing:-.3px;white-space:pre-line;margin:0}
+.wbc-home-section.home-overview h3 {font-size:30px;line-height:1.4;letter-spacing:-.7px}
+.wbc-home-intro>p {font-size:13px;color:var(--card-muted);margin:11px 0 0;max-width:560px}
+.wbc-home-section.home-resume>form {padding:20px;background:var(--control-bg);border:0;border-radius:8px}
+.wbc-home-section.home-results h3 {font-size:15px}
+.wbc-home-content {display:grid;gap:16px;min-width:0}
+.home-overview .wbc-home-content {grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;margin-top:24px;max-width:580px}
+.home-overview .wbc-home-content>.wbc-card-block:not(.type-action_list) {grid-column:1/-1}
+.wbc-home-section .wbc-card-list-toggle {min-height:36px;width:auto;max-width:100%;gap:16px}
+
+.wbc-home-section .wbc-card-list-toggle strong {font-weight:500}
+.wbc-home-section .wbc-card-list-toggle-end {font-size:13px;gap:10px}
+.wbc-home-section .wbc-card-action-list>li {gap:12px;padding:13px 0}
+.wbc-card-action-copy {display:flex;gap:10px;align-items:center;min-width:0}
+.wbc-card-action-copy>div {min-width:0}
+.wbc-home-file-icon {display:flex;align-items:center;justify-content:center;color:var(--card-muted);width:28px;flex-shrink:0}
+.wbc-home-file-icon svg {width:20px;height:20px}
+.home-results .wbc-card-action-list>li {position:relative;isolation:isolate;font-size:13px}
+.home-results .wbc-card-action-list>li:before {content:"";position:absolute;inset:3px -8px;z-index:-1;border-radius:8px;background:var(--control-bg-hover);opacity:0;pointer-events:none;transition:opacity .15s}
+.home-results .wbc-card-action-list>li:hover:before,.home-results .wbc-card-action-list>li:focus-within:before {opacity:1}
+.wbc-home-section .wbc-card-row-actions button {font-size:12px;border:0;background:transparent;border-radius:6px}
+.wbc-home-section .wbc-card-row-actions button:hover {background:var(--control-bg-hover)}
+.wbc-home-section footer {padding:18px 0 0;border:0;justify-content:flex-start}
+.wbc-home-section footer button {font-size:12px;border:0;border-radius:5px;background:var(--control-bg-hover)}
+.wbc-home-section footer button:first-child {background:var(--text);color:var(--surface-1);padding:8px 13px}
+.wbc-home-progress {font-size:12px;color:var(--card-muted)}
+.wbc-home-progress summary {cursor:pointer;padding:8px 0}
+.wbc-home-progress .wbc-card-block {padding:10px 0}
+.wbc-home-section .wbc-card-notice,.wbc-home-section .wbc-card-error {padding:12px 0 0}
+.wbc-home-heading .wbc-weather-scene {padding:0;background:transparent;border-radius:0;overflow:visible;color:var(--weather-text)}
+.wbc-home-heading .wbc-weather-main {flex-direction:row-reverse;gap:8px;align-items:center;justify-content:flex-start}
+.wbc-home-heading .wbc-weather-art {width:76px;min-width:0;flex:0 0 76px;filter:none}
+.wbc-home-heading .wbc-weather-copy {align-items:flex-start;gap:2px}
+.wbc-home-heading .wbc-weather-copy .wbc-weather-temperature {font-size:30px;letter-spacing:-1px;color:var(--weather-text)}
+.wbc-home-heading .wbc-weather-copy>span,.wbc-home-heading .wbc-weather-copy>small,.wbc-home-heading .wbc-weather-advice {font-size:11px;color:var(--weather-detail);font-weight:500;opacity:1}
+.wbc-home-heading .wbc-weather-advice {margin:9px 0 0;text-align:right}
+/* Cloud and precipitation share one moving frame; drops remain centered below it. */
+.weather-cloud-system {animation:wbc-weather-cloud-travel 4.6s ease-in-out infinite alternate}
+.weather-cloud-system .weather-cloud {animation:none}
+.weather-drop {animation:wbc-weather-drop 1.1s linear infinite}
+.weather-drop.drop-1 {animation-delay:-.3s}.weather-drop.drop-2 {animation-delay:-.6s}
+@keyframes wbc-weather-cloud-travel {from{transform:translate(-2px,1px)}to{transform:translate(2px,-2px)}}
+@keyframes wbc-weather-drop {0%{transform:translateY(-2px);opacity:0}20%{opacity:.95}70%{opacity:.8}100%{transform:translateY(12px);opacity:0}}
+:is(.wbc-assistant-home,.wbc-home-atmosphere):is([data-weather=clear],[data-weather=partly_cloudy]) {--weather-area:light-dark(#e8c77980,#ad80344f);--weather-middle:light-dark(#eddbac45,#806a342b);--weather-text:light-dark(#352b19,#fffaf0);--weather-detail:light-dark(#53442c,#f0e6d3)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-weather=rain] {--weather-area:light-dark(#85b7dcaa,#416d959e);--weather-middle:light-dark(#b0cfe46b,#34597766);--weather-mist:light-dark(#e5f2ff8c,#bbd8ee32);--weather-text:light-dark(#152e43,#f8fcff);--weather-detail:light-dark(#304a5e,#e7f2fa)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere):is([data-weather=night],[data-weather=storm]) {--weather-area:light-dark(#a7afd48c,#545e9599);--weather-middle:light-dark(#c2c7e45c,#414b7e55);--weather-mist:light-dark(#e0e3fa80,#b5bfe92b);--weather-text:light-dark(#242b48,#fafaff);--weather-detail:light-dark(#3e4767,#eceefe)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-weather=snow] {--weather-area:light-dark(#a5d3e78c,#43829e70);--weather-middle:light-dark(#cde7f05c,#34687845);--weather-text:light-dark(#183b4b,#f5fdff);--weather-detail:light-dark(#315565,#e5f6fc)}
+.wbc-home-atmosphere {
+  position:absolute;pointer-events:none;z-index:-1;inset:0 0 auto;height:420px;overflow:hidden;
+  /* A single hue fades in eased steps, avoiding a flat blue band between layers. */
+  background:radial-gradient(ellipse 84% 96% at 96% 28%,
+    color-mix(in srgb,var(--weather-area) 82%,transparent) 0%,
+    color-mix(in srgb,var(--weather-area) 68%,transparent) 20%,
+    color-mix(in srgb,var(--weather-area) 42%,transparent) 42%,
+    color-mix(in srgb,var(--weather-area) 18%,transparent) 64%,
+    color-mix(in srgb,var(--weather-area) 4%,transparent) 84%,transparent 100%);
+  mask-image:linear-gradient(to bottom,transparent 0%,#00000030 5%,#00000099 12%,#000000eb 23%,#000 34%,#000000de 53%,#00000080 72%,#00000020 90%,transparent 100%);
+}
+.wbc-home-atmosphere:before {content:"";position:absolute;inset:-25px -25px 0 28%;background:radial-gradient(ellipse at 73% 32%,color-mix(in srgb,var(--weather-mist) 38%,transparent),transparent 74%);filter:blur(18px);animation:wbc-home-air 12s ease-in-out infinite alternate}
+.wbc-home-atmosphere:after {content:"";position:absolute;inset:0;background:radial-gradient(ellipse 48% 72% at 88% 31%,color-mix(in srgb,var(--weather-mist) 28%,transparent),transparent 85%);filter:blur(12px);animation:wbc-home-light 8s ease-in-out infinite alternate}
+.wbc-home-precipitation {display:none;position:absolute;inset:0 0 0 48%;mask-image:radial-gradient(ellipse 85% 80% at 100% 0%,#000 22%,transparent 88%)}
+:is(.wbc-assistant-home,.wbc-home-atmosphere):is([data-weather=rain],[data-weather=storm],[data-weather=snow]) .wbc-home-precipitation {display:block}
+.wbc-home-precipitation b {position:absolute;left:var(--x);top:var(--y);width:1px;height:15px;border-radius:2px;background:light-dark(#417ca880,#b9ddf38c);opacity:0;animation:wbc-home-rain var(--speed) linear var(--delay) infinite}
+:is(.wbc-assistant-home,.wbc-home-atmosphere)[data-weather=snow] .wbc-home-precipitation b {width:3px;height:3px;border-radius:50%;animation-duration:5s;background:light-dark(#6fa3b7,#e0f7ff)}
+@keyframes wbc-home-air {from{transform:translate(10px,-8px) scale(.96);opacity:.6}to{transform:translate(-30px,18px) scale(1.1);opacity:1}}
+@keyframes wbc-home-light {from{opacity:.3}to{opacity:.85}}
+@keyframes wbc-home-rain {0%{transform:translate(10px,-25px);opacity:0}15%{opacity:.65}80%{opacity:.3}100%{transform:translate(-20px,70px);opacity:0}}
+@container assistant-home (max-width:560px) {
+  .wbc-home-grid {grid-template-columns:minmax(0,1fr);gap:25px}
+  .wbc-home-grid>.home-resume,.wbc-home-grid>.home-results {grid-column:1;margin-top:0}
+  .wbc-home-grid>.home-resume,.wbc-home-grid>.home-results {width:100%;margin-left:0}
+  .wbc-home-heading.with-weather {grid-template-columns:minmax(0,1fr) 145px;gap:15px}
+  .wbc-home-section.home-overview h3 {font-size:25px}
+  .wbc-home-heading .wbc-weather-art {width:60px;flex-basis:60px}
+  .home-overview .wbc-home-content {gap:12px}
+}
+@container assistant-home (max-width:360px) {
+  .wbc-home-heading.with-weather {grid-template-columns:minmax(0,1fr)}
+  .wbc-home-heading .wbc-weather-main {justify-content:flex-end}
+  .wbc-home-heading .wbc-weather-advice {text-align:left}
+  .home-overview .wbc-home-content {grid-template-columns:minmax(0,1fr)}
+  .wbc-home-section .wbc-card-list-toggle {width:100%}
+}
+@media(prefers-reduced-motion:reduce) {
+  .weather-cloud-system,.wbc-home-atmosphere:before,.wbc-home-atmosphere:after {animation:none}
+  .wbc-home-precipitation {display:none!important}
+  .home-results .wbc-card-action-list>li:before {transition:none}
+}
+
+
+/* Subsections retain quiet card surfaces inside the edge-to-edge home. */
+.wbc-assistant-home .wbc-home-section:is(.home-resume,.home-results) {
+  padding:20px;border:1px solid var(--card-line);border-radius:12px;
+  background:var(--wb-card-bg,var(--surface-1));box-sizing:border-box;
+}
+.wbc-home-section.home-resume>form {padding:0;background:transparent;border:0;border-radius:0}
+.wbc-home-progress>summary.wb-btn {display:inline-flex;gap:10px;width:fit-content;max-width:100%;height:auto;min-height:36px;padding:6px 12px;list-style:none;color:var(--wb-text,var(--text))}
+.wbc-home-progress>summary::marker {content:""}
+.wbc-home-progress>summary::-webkit-details-marker {display:none}
+.wbc-home-progress-count {color:var(--card-muted);font-size:12px;font-variant-numeric:tabular-nums}
+.wbc-home-progress[open]>summary .wbc-card-disclosure-icon {transform:rotate(180deg)}
+.wbc-home-progress .wbc-card-timeline {list-style:none;padding:0;margin:4px 0 0}
+.wbc-home-progress .wbc-card-timeline>li {display:grid;grid-template-columns:minmax(58px,90px) minmax(0,1fr) auto;gap:12px;align-items:start;padding:12px 0;border-bottom:1px solid var(--card-line);font-size:13px}
+.wbc-home-progress .wbc-card-timeline>li:last-child {border-bottom:0}
+.wbc-home-progress .wbc-card-timeline time {margin:0;font-size:11px;line-height:1.8;overflow-wrap:anywhere}
+.wbc-home-progress .wbc-card-timeline strong {font-weight:500;line-height:1.6}
+.wbc-home-progress .wbc-card-timeline small {margin:0;font-size:11px;line-height:1.8;max-width:90px}
+@container assistant-home (max-width:720px) {
+  .wbc-home-progress .wbc-card-timeline>li {grid-template-columns:minmax(0,1fr) auto;gap:3px 10px}
+  .wbc-home-progress .wbc-card-timeline time {grid-column:1/-1}
+}
+
+.wbc-home-progress .wbc-timeline-status {
+  --status-color:var(--card-muted);color:var(--status-color);
+  background:color-mix(in srgb,var(--status-color) 12%,transparent);
+  border-radius:5px;padding:2px 8px;justify-self:end;text-align:center;font-weight:500;
+}
+.wbc-home-progress .wbc-timeline-status.status-complete {--status-color:var(--wb-green,#58b986)}
+.wbc-home-progress .wbc-timeline-status.status-running {--status-color:var(--wb-blue,var(--info))}
+.wbc-home-progress .wbc-timeline-status.status-pending {--status-color:var(--warn)}
+.wbc-home-progress .wbc-timeline-status.status-error {--status-color:var(--wb-red,var(--err))}
+.wbc-home-progress .wbc-timeline-status.status-paused {--status-color:var(--magenta)}
+.wbc-home-section.home-results .wbc-card-row-actions button {
+  border:1px solid var(--wb-line,var(--card-line));border-radius:7px;
+  background:var(--wb-control-bg,var(--control-bg));padding:7px 12px;
+}
+.wbc-home-section.home-results .wbc-card-row-actions button:hover {
+  border-color:var(--wb-line-2,var(--line-2));background:var(--wb-control-hover-bg,var(--control-bg-hover));
+}

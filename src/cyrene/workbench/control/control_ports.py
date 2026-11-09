@@ -170,6 +170,12 @@ class WorkbenchChatApplicationPort:
         return _domain_result(await self._send(chat_id, body, detached=True))
 
     async def agent_message_admitted(self, chat_id: str, request_id: str) -> bool:
+        return await self._message_admitted(chat_id, request_id, agent_originated=True)
+
+    async def user_message_admitted(self, chat_id: str, request_id: str) -> bool:
+        return await self._message_admitted(chat_id, request_id, agent_originated=False)
+
+    async def _message_admitted(self, chat_id: str, request_id: str, *, agent_originated: bool) -> bool:
         """Read durable receiver evidence, never infer it from the transcript."""
         def read() -> bool:
             import sqlite3
@@ -187,10 +193,75 @@ class WorkbenchChatApplicationPort:
                     if "no such table" not in str(exc).lower():
                         raise
                     rows = []
-            if any(inbox_payload(row[0]).get("agent_originated") is True for row in rows):
+            if any(bool(inbox_payload(row[0]).get("agent_originated")) == agent_originated for row in rows):
                 return True
-            return self.run_manager.conversation_runtime.has_admitted_agent_message(chat_id, request_id)
+            runtime = self.run_manager.conversation_runtime
+            if agent_originated:
+                return runtime.has_admitted_agent_message(chat_id, request_id)
+            return runtime.has_admitted_message(chat_id, request_id, agent_originated=False)
         return await asyncio.to_thread(read)
+
+    async def dispatch_user_message(
+        self, chat_id: str, message: str, *, client_request_id: str, expected_version: str,
+    ) -> dict[str, Any]:
+        """Admit a trusted UI submission as a normal human turn, with stable identity."""
+        import json
+        from cyrene.workbench.sessions.admission import session_admission
+
+        if not message.strip() or not client_request_id:
+            raise ControlServiceError("message and client request ID are required", status_code=422)
+
+        async def wait_for_input():
+            async with asyncio.timeout(20):
+                while not await self.user_message_admitted(chat_id, client_request_id):
+                    if self.run_manager.get(chat_id) is None:
+                        raise ControlServiceError("Run ended before input admission.", status_code=503)
+                    await asyncio.sleep(0.05)
+
+        async def admit():
+            with session_admission(self.service.repository._database(), chat_id):
+                chat = await asyncio.to_thread(self.service.repository.get, chat_id)
+                version = json.dumps([chat.get("createdAt", ""), chat.get("messageGeneration", 0)]) if chat else None
+                if version != expected_version:
+                    raise ControlServiceError("Target session was cleared or deleted.", status_code=410)
+                if await self.user_message_admitted(chat_id, client_request_id):
+                    return {"status": "admitted", "duplicate": True, "session_id": chat_id}
+                # A run may finish between get() and guidance admission. Retry
+                # against the new run state, keeping the same user request ID.
+                for _ in range(3):
+                    active = self.run_manager.get(chat_id)
+                    if active is not None:
+                        if active.events and active.events[0].get("clientRequestId") == client_request_id:
+                            await wait_for_input()
+                            return {"status": "admitted", "session_id": chat_id}
+                        try:
+                            result = await self.guide(chat_id, {"message": message, "clientRequestId": client_request_id})
+                            return {**result, "status": "guided", "session_id": chat_id}
+                        except ControlServiceError as exc:
+                            if exc.code != "chat_not_running":
+                                raise
+                            continue
+                    try:
+                        result = await self.send(chat_id, {
+                            "message": message, "clientRequestId": client_request_id,
+                            "conversationSource": "card_submission", "stream": True,
+                        })
+                    except ControlServiceError as exc:
+                        if exc.code == "chat_run_in_progress":
+                            continue
+                        raise
+                    await wait_for_input()
+                    return {**result, "status": "started", "session_id": chat_id}
+                raise ControlServiceError("Conversation is changing; retry shortly.", status_code=409)
+
+        task = asyncio.create_task(admit())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await task
+            finally:
+                raise
 
     async def dispatch_agent_message(
         self, chat_id: str, message: str, *, origin_session_id: str = "",

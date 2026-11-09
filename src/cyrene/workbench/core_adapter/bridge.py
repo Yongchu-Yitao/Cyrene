@@ -17,7 +17,7 @@ from cyrene.core.plugin import ApplicationPluginScope, PluginRegistry
 from cyrene.core.session import AgentSession, AgentSessionEvent
 from cyrene.model.protocol_trace import create_model_protocol_trace
 
-from .tool_activity_projection import project_tool_activity_messages
+from .tool_activity_projection import project_tool_activity_messages, tool_result_presentation
 from .publication import PublicationQueue
 
 WorkbenchPublisher: TypeAlias = Callable[[dict[str, Any]], Any | Awaitable[Any]]
@@ -542,8 +542,8 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
             if isinstance(data.get("presentation"), Mapping)
             else {}
         )
-        if not presentation and isinstance(decoded_value, Mapping):
-            presentation = dict(decoded_value.get("presentation") or {})
+        if not presentation:
+            presentation = tool_result_presentation(decoded_value)
         return (
             _envelope(
                 event,
@@ -573,8 +573,8 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                 if isinstance(result.get("presentation"), Mapping)
                 else {}
             )
-            if not presentation and isinstance(result_value, Mapping):
-                presentation = dict(result_value.get("presentation") or {})
+            if not presentation:
+                presentation = tool_result_presentation(result_value)
             projected.append(
                 _envelope(
                     event,

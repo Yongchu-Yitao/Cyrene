@@ -8,14 +8,15 @@ function find(element, type) {
   if (element.type===type) return element;
   return find(element.props?.children,type);
 }
-function mount() {
+function mount(shared = {}) {
   const React = {createElement(type,props,...children) {return {type,props:{...props,children}};}};
   const sends=[],answers=[],subscribers=new Set();
   const service={Composer:'composer',Transcript:'transcript',QuestionPrompt:'question',
     Model:{getChat:async()=>({id:'a',messages:[],pendingQuestion:{id:'q'}}), answerChat:async(...args)=>answers.push(args)},
     Runtimes:{get:()=>null,subscribe(fn) {subscribers.add(fn);return ()=>subscribers.delete(fn);},
+      subscribeSaved:()=>()=>{},
       start:async(...args)=>sends.push(args),getFailure:()=>null}};
-  const h=harness('../shell/assistant-chat.jsx',{React,useWbcComposerReserveHeight:()=>{},workbenchServices:{chat:()=>service}});
+  const h=harness('../shell/assistant-chat.jsx',{...shared,React,useWbcComposerReserveHeight:()=>{},workbenchServices:{chat:()=>service}});
   h.context.setTimeout=h.context.window.setTimeout;
   h.context.clearTimeout=h.context.window.clearTimeout;
   h.run((mod,hooks)=>{
@@ -50,6 +51,128 @@ test('unmount during loading cannot schedule polling or reattach a stream',async
   h.unmount();await settle();
   assert.equal(h.timers.size,0);
   assert.equal(subscribers.size,0);
+});
+
+test('saved reply replaces the live transcript before an older assistant poll can reconnect', async () => {
+  const timeline = harness('./runtime-timeline.jsx').run(mod => mod);
+  const pageHooks = harness('./runtime-page-hooks.jsx').run(mod => mod);
+  const runtimeHarness = harness('./file-resources.jsx', {
+    ...timeline, workbenchServices: {events: () => ({subscribe() {}})},
+  });
+  runtimeHarness.context.performance = performance;
+  const engine = runtimeHarness.run(mod => mod.WorkbenchChatRuntimes);
+  const streams = new Map(), requests = [], reconnects = [];
+  const model = {
+    getChat() { return new Promise((resolve, reject) => requests.push({resolve, reject})); },
+    sendMessage(id, _input, handlers) { streams.set(id, handlers); return Promise.resolve(); },
+    reconnectRun(id) { reconnects.push(id); return Promise.resolve(); },
+  };
+  const React = {createElement(type, props, ...children) { return {type, props: {...props, children}}; }};
+  const h = harness('../shell/assistant-chat.jsx', {
+    ...timeline, ...pageHooks, React, useWbcComposerReserveHeight() {},
+    workbenchServices: {chat: () => ({Model: model, Runtimes: engine, Transcript: 'transcript', Composer: 'composer'})},
+  });
+  h.context.setTimeout = h.context.window.setTimeout;
+  h.context.clearTimeout = h.context.window.clearTimeout;
+  const cache = {details: {a: {id: 'a', status: 'running', messages: []}}};
+  h.run((mod, hooks) => {
+    Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useEffect: hooks.useWbcEffect});
+    return mod.AssistantChat({sessionId: 'a', cache});
+  });
+  const user = {id: 'user', role: 'user', content: 'Question', createdAt: new Date().toISOString()};
+  const reply = {id: 'reply', role: 'assistant', content: 'Answer', createdAt: new Date(Date.now() + 1000).toISOString(),
+    timelineVersion: 1, timelineOrder: 0, status: 'completed'};
+  const saved = {...reply, attachments: [{id: 'file'}]};
+  function projected() {
+    const {messages, runtime} = find(h.flush(), 'transcript').props;
+    return Array.from(timeline.wbcProjectTranscript(messages, runtime));
+  }
+  function firePoll() {
+    for (const [id, callback] of [...h.timers]) { h.timers.delete(id); callback(); }
+  }
+  function save(id, messages) {
+    streams.get(id).onSaved({type: 'saved', assistantMessages: messages, chatSummary: {id}});
+  }
+  const otherRun = engine.start('b', {message: 'Other session'}, model);
+  save('b', [{...saved, id: 'other'}]);
+  assert.deepEqual(projected(), []);
+  await otherRun;
+
+  const run = engine.start('a', {message: user.content}, model);
+  streams.get('a').onAck({runId: 'run', userMessage: user});
+  streams.get('a').onTimeline({version: 1, revision: 1, runId: 'run', status: 'completed', messages: [reply]});
+  assert.deepEqual(projected().map(message => message.id), ['user', 'reply']);
+  save('a', [saved]);
+  assert.equal(engine.get('a'), null);
+  assert.equal(find(h.flush(), 'composer').props.running, false);
+  assert.deepEqual(projected().map(message => message.id), ['user', 'reply']);
+  assert.equal(projected()[1].attachments[0].id, 'file');
+  assert.equal(cache.details.a.status, 'idle');
+
+  requests[0].resolve({id: 'a', status: 'running', messages: [user]});
+  await run;
+  await settle();
+  assert.deepEqual(reconnects, []);
+  assert.deepEqual(projected().map(message => message.id), ['user', 'reply']);
+  firePoll();
+  requests[1].reject(new Error('offline'));
+  await settle();
+  assert.deepEqual(projected().map(message => message.id), ['user', 'reply']);
+  firePoll();
+  requests[2].resolve({id: 'a', status: 'idle', messages: [user, saved]});
+  await settle();
+  assert.deepEqual(projected().map(message => message.id), ['user', 'reply']);
+  h.unmount();
+});
+
+test('assistant shows the shared bottom button while reading history and resumes following after a click', async () => {
+  const React = {createElement(type, props) { return {type, props}; }};
+  const shared = harness('./conversation.jsx', {React, WBC_ICONS: {chevronsRight: 'chevrons'}});
+  const {h, subscribers} = mount(shared.run(mod => mod));
+  const stage = h.value.props.children.find(child => child?.props?.className === 'wbc-thread-stage');
+  const transcript = stage.props.children[0].props;
+  const scrolls = [];
+  let scrollTop = 0;
+  const thread = {
+    scrollHeight: 1000, clientHeight: 100,
+    get scrollTop() { return scrollTop; },
+    set scrollTop(value) { scrollTop = Math.min(value, this.scrollHeight - this.clientHeight); },
+    scrollTo(options) { scrolls.push([options.top, options.behavior]); this.scrollTop = options.top; },
+  };
+  transcript.ref.current = thread;
+  const overlay = () => find(h.value, 'composer').props.topOverlay;
+  const scroll = top => {
+    thread.scrollTop = top;
+    transcript.onScroll({currentTarget: thread});
+    h.flush();
+  };
+  const receiveUpdate = height => {
+    thread.scrollHeight = height;
+    for (const subscriber of subscribers) subscriber({a: {}});
+    h.flush();
+  };
+
+  await settle(); h.flush();
+  assert.equal(thread.scrollTop, 900);
+  assert.equal(overlay(), null);
+  scroll(890);
+  assert.equal(overlay().type, shared.value.WbcScrollToBottomButton);
+  scroll(900);
+  assert.equal(overlay(), null);
+  scroll(890);
+  receiveUpdate(1200);
+  assert.equal(thread.scrollTop, 890);
+
+  const button = overlay().type(overlay().props);
+  assert.equal(button.props['aria-label'], 'Back to latest message');
+  button.props.onClick();
+  h.flush();
+  assert.deepEqual(scrolls, [[1200, 'smooth']]);
+  assert.equal(thread.scrollTop, 1100);
+  assert.equal(overlay(), null);
+  receiveUpdate(1300);
+  assert.equal(thread.scrollTop, 1200);
+  h.unmount();
 });
 
 test('composer reserve follows standalone and workspace composers as attachments grow', () => {
@@ -213,7 +336,7 @@ test('assistant page uses one global scope across project changes and forwards t
   const context = {store: {activeProject: null}, assistant: {setSessionId: id => identities.push(id)},
     navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
   const service = {Model: {}, Page: 'page'};
-  const h = harness('../shell/assistant-page.jsx', {React, workbenchServices: {chat: () => service},
+  const h = harness('../shell/assistant-page.jsx', {usePinnedAssistantCards: () => ({cards: [], error: ''}), React, workbenchServices: {chat: () => service},
     WbcRailToolbar: 'rail-toolbar', AssistantChat: 'assistant-chat', assistantFileOwners: () => ({}), wbcChatRailVisualState: () => ({}), wbcFormatTime: () => '', WBC_ICONS: {}});
   h.context.fetch = async (url, options) => {calls.push([url, options.method]); return {ok:true,json:async () => snapshot};};
   h.context.setTimeout = h.context.window.setTimeout;
@@ -277,7 +400,7 @@ test('assistant API errors are reported without trying an old initialization end
   const calls = [];
   const context = {assistant: {setSessionId: () => {}},
     navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
-  const h = harness('../shell/assistant-page.jsx', {React, workbenchServices: {chat: () => ({Model: {}})},
+  const h = harness('../shell/assistant-page.jsx', {usePinnedAssistantCards: () => ({cards: [], error: ''}), React, workbenchServices: {chat: () => ({Model: {}})},
     WbcRailToolbar: 'rail-toolbar', assistantFileOwners: () => ({}), WBC_ICONS: {}});
   h.context.fetch = async (url, options) => {
     calls.push([url, options.method]);
@@ -301,7 +424,7 @@ test('assistant transcript paints the workspace cache before the background requ
   const cache={details:{a:cached}};
   let active=true, finish;
   const service={Composer:'composer',Transcript:'transcript', Model:{getChat:()=>new Promise(resolve=>{finish=resolve;})},
-    Runtimes:{get:()=>null,subscribe:()=>()=>{},getFailure:()=>null}};
+    Runtimes:{get:()=>null,subscribe:()=>()=>{},subscribeSaved:()=>()=>{},getFailure:()=>null}};
   const h=harness('../shell/assistant-chat.jsx',{React,useWbcComposerReserveHeight:()=>{},workbenchServices:{chat:()=>service}});
   h.context.setTimeout=h.context.window.setTimeout;h.context.clearTimeout=h.context.window.clearTimeout;
   h.run((mod,hooks)=>{
@@ -315,5 +438,22 @@ test('assistant transcript paints the workspace cache before the background requ
   active=false;h.flush();
   assert.equal(h.timers.size,0);
   assert.equal(find(h.value,'transcript').props.messages[0].content,'fresh');
+  h.unmount();
+});
+
+test('polling disconnect is not a message failure and clears after reconnection', async () => {
+  const {h, service} = mount();
+  await settle(); h.flush();
+  const original = service.Model.getChat;
+  service.Model.getChat = async () => { throw new Error('Failed to fetch'); };
+  for (const [id, callback] of [...h.timers]) { h.timers.delete(id); callback(); }
+  await settle(); h.flush();
+  assert.equal(find(h.value, 'composer').props.error, '');
+  assert.match(find(h.value, 'p').props.children.join(''), /连接中断/);
+  service.Model.getChat = original;
+  for (const [id, callback] of [...h.timers]) { h.timers.delete(id); callback(); }
+  await settle(); h.flush();
+  assert.equal(find(h.value, 'composer').props.error, '');
+  assert.doesNotMatch(JSON.stringify(h.value), /连接中断/);
   h.unmount();
 });

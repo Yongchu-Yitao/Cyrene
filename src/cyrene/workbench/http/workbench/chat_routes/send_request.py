@@ -29,8 +29,8 @@ class SendOrigin:
             conversation_source=str(body.get("conversationSource") or "").strip(),
             agent_originated=body.get("agentOriginated") is True,
             origin_session_id=str(body.get("sourceSessionId") or "").strip(),
-            agent_message_kind=("task_notification" if body.get("agentOriginated") is True
-                                and body.get("agentMessageKind") == "task_notification" else ""),
+            agent_message_kind=(str(body.get("agentMessageKind")) if body.get("agentOriginated") is True
+                                and body.get("agentMessageKind") in {"task_notification", "welcome_refresh"} else ""),
         )
 
 

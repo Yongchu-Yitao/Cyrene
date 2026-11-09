@@ -79,7 +79,7 @@ def test_assistant_profile_does_not_expand_ordinary_agent_surface():
                 view.resolve(name, agent_id="child")
         assert not view.plugin_accessible("OrdinaryTool")
         core_names = {d["function"]["name"] for d in view.direct_tool_definitions()}
-        assert core_names == {"Bash", "Read", "Write", "load_context", "unload_context", "append_context", "replace_context"}
+        assert core_names == {"Bash", "Read", "Write", "load_context", "unload_context", "append_context", "replace_context", "switch_context"}
         assert not (await PluginRuntime(view).call("toolbox", {"operation": "list"})).success
         assert (await runtime.call("toolbox", {"operation": "list"})).success
         assert registry.tool_definitions() == definitions

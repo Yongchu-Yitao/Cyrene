@@ -2,6 +2,11 @@
 // names. Historical conversations can also retain the old progressive tool
 // group wire names. Normalize both forms only at the presentation boundary.
 var WORKBENCH_TOOL_NAME_ALIASES = {
+  "Session management": "session_management",
+  "Session Management": "session_management",
+  "Switch context": "switch_context",
+  "Switch Context": "switch_context",
+  "switch context": "switch_context",
   "Ask User": "ask_user",
   "AskUser": "ask_user",
   "ask-user": "ask_user",

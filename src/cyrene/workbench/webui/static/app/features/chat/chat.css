@@ -3927,7 +3927,8 @@ html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
   min-height: 0;
 }
 
-.wbc-browser-split-action {
+.wbc-browser-split-action,
+.wbc-assistant-card .wbc-pane-icon-action {
   width: 32px;
   height: 32px;
   flex: 0 0 auto;
@@ -3942,13 +3943,15 @@ html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
 }
 
 .wbc-browser-split-action:hover,
-.wbc-browser-split-action.active {
+.wbc-browser-split-action.active,
+.wbc-assistant-card .wbc-pane-icon-action:hover {
   border-color: transparent;
   background: color-mix(in srgb, var(--wb-control-hover-bg) 18%, transparent);
   color: var(--wb-text);
 }
 
-.wbc-browser-split-action:focus-visible {
+.wbc-browser-split-action:focus-visible,
+.wbc-assistant-card .wbc-pane-icon-action:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--wb-accent) 34%, transparent);
   outline-offset: 1px;
 }

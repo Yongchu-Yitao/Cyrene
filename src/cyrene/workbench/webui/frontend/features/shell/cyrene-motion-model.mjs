@@ -7,6 +7,8 @@ const terminal = new Set(['done', 'error', 'stopped']);
 const neutral = () => ({x:0,y:0,r:0,sx:1,sy:1,ex:0,ey:0,blink:1,leftEye:1,rightEye:1,glow:0,angle:0,
   waiting:0,done:0,error:0,stopped:0,reconnecting:0});
 
+function swapEntries(items, a, b) { const value=items[a]; items[a]=items[b]; items[b]=value; }
+
 export function createCyreneMotion({ random = Math.random, idleRandom = Math.random } = {}) {
   const pose=neutral(), velocity=Object.fromEntries(Object.keys(pose).map(key=>[key,0]));
   const bags=new Map(), previous=new Map();
@@ -18,8 +20,8 @@ export function createCyreneMotion({ random = Math.random, idleRandom = Math.ran
     let bag=bags.get(state);
     if (!bag?.length) {
       bag=Object.keys(CYRENE_STYLES);
-      for(let i=bag.length-1;i>0;i--) { const j=Math.floor(random()*(i+1)); [bag[i],bag[j]]=[bag[j],bag[i]]; }
-      if(bag.at(-1)===previous.get(state)) [bag[0],bag[bag.length-1]]=[bag.at(-1),bag[0]];
+      for(let i=bag.length-1;i>0;i--) { const j=Math.floor(random()*(i+1)); swapEntries(bag,i,j); }
+      if(bag.at(-1)===previous.get(state)) swapEntries(bag,0,bag.length-1);
       bags.set(state,bag);
     }
     style=bag.pop(); previous.set(state,style); age=0; nextStyle=6+random()*4;
@@ -34,6 +36,21 @@ export function createCyreneMotion({ random = Math.random, idleRandom = Math.ran
     if(state==='stopped')pose.blink=.5;
     if(state==='tool'||state==='reconnecting')pose.glow=.75;
     for(const key of Object.keys(velocity))velocity[key]=0;
+  }
+  function applyInteraction(target, cfg) {
+    target.y+=(held?1.4:0)-pulse*cfg.jump-(hover?.35:0);
+    target.r+=style==='playful'?pulse*14:0;
+    target.sx+=(held?cfg.press:0);target.sy-=(held?cfg.press:0);
+    if(held)target.blink=.3;
+  }
+  function advancePose(target, dt, cfg) {
+    for(const mark of marks)target[mark]=state===mark?1:0;
+    const steps=Math.max(1,Math.ceil(dt*120)),h=dt/steps;
+    for(let i=0;i<steps;i++)for(const key of Object.keys(pose)){
+      const eye=state==='idle'&&(key==='ex'||key==='ey');
+      velocity[key]+=((eye?380:cfg.k)*(target[key]-pose[key])-(eye?30:cfg.d)*velocity[key])*h;
+      pose[key]+=velocity[key]*h;
+    }
   }
   return {
     pose, velocity,
@@ -61,17 +78,8 @@ export function createCyreneMotion({ random = Math.random, idleRandom = Math.ran
         const offset=target.angle;target.angle=angle+offset-idleAngle;idleAngle=offset;
       }else target=cyreneTargetPose(state,style,phase,age,angle,dt);
       angle=target.angle;
-      target.y+=(held?1.4:0)-pulse*cfg.jump-(hover?.35:0);
-      target.r+=style==='playful'?pulse*14:0;
-      target.sx+=(held?cfg.press:0);target.sy-=(held?cfg.press:0);
-      if(held)target.blink=.3;
-      for(const mark of marks)target[mark]=state===mark?1:0;
-      const steps=Math.max(1,Math.ceil(dt*120)),h=dt/steps;
-      for(let i=0;i<steps;i++)for(const key of Object.keys(pose)){
-        const eye=state==='idle'&&(key==='ex'||key==='ey');
-        velocity[key]+=((eye?380:cfg.k)*(target[key]-pose[key])-(eye?30:cfg.d)*velocity[key])*h;
-        pose[key]+=velocity[key]*h;
-      }
+      applyInteraction(target, cfg);
+      advancePose(target, dt, cfg);
       return pose;
     },
   };

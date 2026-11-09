@@ -28,7 +28,7 @@
 
 ## 暴露方式
 
-七个工具默认 `model_visible=False`、`main_only=True`。普通 Agent 的直接工具和 Toolbox 都看不到它们。不新增助理身份认证机制；助理入口在创建 `ConversationConfig`（或 `AgentSession`）时，显式传入本包 `TOOL_NAMES` 作为 `extra_direct_tool_names`。需先启用并加载本包及应用服务。不要全局改成可见，也不要把该参数传给普通聊天或任务执行 Session。
+七个工具使用 `model_visible="assistant"`、`main_only=True`。普通 Agent 的直接工具和 Toolbox 都看不到它们，注册表也拒绝普通 audience 执行。不新增助理身份认证机制；助理入口通过 `personal_assistant_config` 配置 assistant audience 和 `extra_direct_tool_names`。需先启用并加载本包及应用服务。不要全局改成可见，也不要把助理配置传给普通聊天或任务执行 Session。
 
 ```python
 from cyrene.plugins.builtin.session_management import TOOL_NAMES
@@ -61,7 +61,7 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 
 ## 个人助理工具配置
 
-入口可调用 `cyrene.workbench.core_adapter.assistant_profile.personal_assistant_config(config)`，每次启动、恢复和通知唤醒时使用返回的配置。该配置提供本包七个工具、`ask_user`、`send_message` 和 `WebSearch`（用户所称 web_search，来自 `cyrene_content`）。核心工具自动保留，其中已包含 `load_context`、`unload_context`、`append_context`、`replace_context`，无需重复添加动态上下文工具包。宿主需加载相应插件和应用服务；普通聊天和助理创建的任务不应用此配置。ConversationRuntime 在每次打开个人助理会话时自动应用此配置，覆盖恢复和通知唤醒。个人助理使用 `cyrene_system_prompt/assistant_prompt.py` 的独立完整的英文 system prompt，不拼接普通 Agent 的提示词，由原有 SessionStart Hook 挂载并计算缓存指纹。普通 Agent 保持原有提示词。
+入口可调用 `cyrene.workbench.core_adapter.assistant_profile.personal_assistant_config(config)`，每次启动、恢复和通知唤醒时使用返回的配置。该配置提供本包七个工具、`ask_user`、`send_message` 和 `WebSearch`（用户所称 web_search，来自 `cyrene_content`）。核心工具自动保留，其中已包含 `switch_context`、`load_context`、`unload_context`、`append_context`、`replace_context`，无需重复添加动态上下文工具包。`switch_context` 是首选的上下文切换工具，可以在一次调用中为当前任务保存检查点，并恢复已有上下文或创建新上下文。宿主需加载相应插件和应用服务；普通聊天和助理创建的任务不应用此配置。ConversationRuntime 在每次打开个人助理会话时自动应用此配置，覆盖恢复和通知唤醒。个人助理使用 `cyrene_system_prompt/assistant_prompt.py` 的独立完整的英文 system prompt，不拼接普通 Agent 的提示词，由原有 SessionStart Hook 挂载并计算缓存指纹。普通 Agent 保持原有提示词。
 
 ## 助理会话工具范围
 
@@ -72,7 +72,15 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 普通会话和委派任务仍使用原注册表；普通 Agent 的工具列表不会新增 session_management。
 通知 Hook 仅安装到已登记的委派任务，普通会话不安装。
 
-助理的 16 个工具均直接暴露；toolbox 在助理会话中既不可见也不可调用。普通 Agent 的 Toolbox 保持原有行为。
+助理白名单内的工具均直接暴露；toolbox 在助理会话中既不可见也不可调用。普通 Agent 的 Toolbox 保持原有行为。
+
+### 助理卡片工具
+
+`cyrene_cards` 按相同的 assistant audience 与 main-only 机制提供 `card.create`、
+`card.update`、`card.get`、`card.list`、`card.pin`、`card.archive`，由助理 profile 直接暴露。
+普通聊天与委派任务不获得这些工具。创建时可选择模板或自定义 HTML，并设置初始固定；
+后续读取、修改及用户输入协议见相邻 `cyrene_cards/README.md`。当前实现为后端数据工具包，
+尚未接入生产前端渲染和用户事件自动唤醒。
 
 
 ### 个人助理定时任务
