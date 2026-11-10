@@ -1527,7 +1527,7 @@ function wbcRenderHistoryMessage(msg, context) {
   );
   if (msg.runtimeHeartbeat) return null;
   if (msg.runtimeContinuation) {
-    return <WbcContinuationIndicator key={renderKey} className={retryClearing ? "retry-clearing" : ""} />;
+    return <WbcContinuationIndicator key={renderKey} immediate={Boolean(msg.runtimeInitial)} className={retryClearing ? "retry-clearing" : ""} />;
   }
   if (msg.modelStatusCard) {
     return <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}><WbcModelStatusMessage msg={msg} /></WbcThreadItem>;

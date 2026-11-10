@@ -26,6 +26,22 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+test("local send feedback preserves history and stays suppressed while waiting or reconnecting", () => {
+  const history = [{ id: "old", role: "assistant", content: "Earlier reply" }]
+  const user = { id: "new", role: "user", content: "Next question", optimistic: true }
+  const runtime = { chatId: "chat", startedAt: 1000, userMessages: [user] }
+  const before = JSON.stringify({ history, runtime })
+  const rows = plain(wbcProjectTranscript(history, runtime))
+  assert.deepEqual(rows.slice(0, 2), [...history, user])
+  assert.equal(rows.at(-1).runtimeInitial, true)
+  for (const state of [{ pendingQuestion: { id: "q" } }, { reconnecting: true }, { finalizing: true },
+    { text: "Reply" }, { activities: [{ id: "tool" }] }, { segments: [{ text: "Earlier update" }] }]) {
+    assert.equal(wbcProjectTranscript(history, { ...runtime, ...state }).some(row => row.runtimeContinuation), false)
+  }
+  assert.deepEqual(plain(wbcProjectTranscript(history, null)), history)
+  assert.equal(JSON.stringify({ history, runtime }), before)
+})
+
 test("runtime activity keeps its server timeline identity", () => {
   const messages = wbcRuntimeTimelineMessages({
     chatId: "chat_1",

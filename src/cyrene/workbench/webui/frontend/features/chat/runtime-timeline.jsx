@@ -471,9 +471,23 @@ function wbcMergeProjectedMessages(messages, additions) {
   return ordered === null ? wbcMergeChronologicalMessages(messages, additions) : ordered;
 }
 
+function wbcShowInitialProcessing(runtime) {
+  return runtime.startedAt && !runtime.finalizing && !runtime.pendingQuestion && !runtime.reconnecting
+    && !runtime.text && !(runtime.activities || []).length && !(runtime.segments || []).length;
+}
+
 function wbcProjectTranscript(messages, runtime) {
   var durable = wbcReconcileLiveUserMessages(messages || [], runtime && runtime.userMessages);
-  if (!runtime || !runtime.timeline) return durable;
+  if (!runtime) return durable;
+  if (!runtime.timeline) {
+    // A local send already owns a run, before the server can acknowledge it.
+    // Show feedback next to the optimistic user message during that wait.
+    if (wbcShowInitialProcessing(runtime)) {
+      durable.push({ id: "runtime_continuation_" + String(runtime.chatId || "chat"),
+        role: "assistant", runtimeContinuation: true, runtimeInitial: true });
+    }
+    return durable;
+  }
   var patch = runtime.timeline;
   var liveIds = new Set(patch.messages.map(function (message) { return message.id; }));
   (patch.removedMessageIds || []).forEach(function (id) { liveIds.add(id); });
@@ -497,7 +511,8 @@ function wbcProjectTranscript(messages, runtime) {
     return message.status === "running" && (message.activityCard || String(message.content || "").trim().length > 0);
   });
   if (patch.status === "running" && !busy && !runtime.pendingQuestion && !runtime.reconnecting) {
-    merged.push({ id: patch.runId + ":continuation", runId: patch.runId, role: "assistant", runtimeContinuation: true });
+    merged.push({ id: patch.runId + ":continuation", runId: patch.runId, role: "assistant",
+      runtimeContinuation: true, runtimeInitial: records.length === 0 });
   }
   return merged;
 }
@@ -574,6 +589,7 @@ function wbcRuntimeTimelineMessages(runtime, options) {
       role: "assistant",
       createdAt: new Date(continuationAt).toISOString(),
       runtimeContinuation: true,
+      runtimeInitial: !runtimeActivities.length && !(runtime.segments || []).length,
     });
   }
   return wbcMergeChronologicalMessages([], items);

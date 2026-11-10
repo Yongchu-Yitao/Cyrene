@@ -11,6 +11,7 @@ import { WbcFileVisual, wbcCanOpenExternally, wbcDownloadLink, wbcStartFileDrag 
 import { wbcFileDragHandlers } from "./file-pointer-drag.jsx"
 import { useWorkbenchI18n } from "../../workbench-i18n.jsx"
 import { wbcClearStreamingFades, wbcFadeInStreamingTail } from "./streaming-fade.mjs"
+import { scheduleContinuationFeedback } from "./continuation-feedback.mjs"
 
 // Workbench chat feature module with explicit ESM dependencies.
 var wbcDisclosureListeners = createDisclosureSubscriptions();
@@ -1205,17 +1206,13 @@ function WbcTraceCard({ trace, live, running, label, reasoning, disclosureId }) 
   );
 }
 
-function WbcContinuationIndicator({ className }) {
+function WbcContinuationIndicator({ className, immediate = false }) {
   useWorkbenchI18n();
   var [visible, setVisible] = useWbcState(false);
   useWbcEffect(function () {
-    // A short tool/reasoning handoff should never paint a transient row. The
-    // parent unmounts immediately when real activity resumes, cancelling this
-    // timer; there is deliberately no minimum hold that could show both.
-    var timer = window.setTimeout(function () { setVisible(true); }, 400);
-    return function () { window.clearTimeout(timer); };
-  }, []);
-  if (!visible) return null;
+    return scheduleContinuationFeedback(immediate, visible, setVisible, window);
+  }, [immediate, visible]);
+  if (!immediate && !visible) return null;
   return (
     <WbcThreadItem className={className}>
       <WbcTraceCard
@@ -1732,7 +1729,7 @@ function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion,
   return <React.Fragment>{timeline.map(function (message) {
     if (message.homeSurface) return <React.Fragment key={message.id}>{homeInsertion.content}</React.Fragment>;
     if (message.questionPrompt && pendingQuestion && message.questionId === pendingQuestion.id) return <WbcThreadItem key={message.id}><WbcQuestionPrompt pending={pendingQuestion} onAnswer={onAnswer} busy={false} /></WbcThreadItem>;
-    if (message.runtimeContinuation) return <WbcContinuationIndicator key={message.id} />;
+    if (message.runtimeContinuation) return <WbcContinuationIndicator key={message.id} immediate={!!message.runtimeInitial} />;
     if (message.activityGroup) return <WbcThreadItem key={message.id}><WbcActivityGroup group={message} /></WbcThreadItem>;
     if (message.notificationCard) return <WbcThreadItem key={message.id}><WbcAgentNotification notice={message.notification} /></WbcThreadItem>;
     if (message.modelStatusCard) return <WbcThreadItem key={message.id}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
@@ -1774,7 +1771,7 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
         ? <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>
         : null}
       {timeline.filter(function (item) { return item.runtimeContinuation; }).map(function (item) {
-        return <WbcContinuationIndicator key={item.id} />;
+        return <WbcContinuationIndicator key={item.id} immediate={!!item.runtimeInitial} />;
       })}
     </React.Fragment>
   );
