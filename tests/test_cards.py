@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
@@ -42,7 +43,7 @@ def rig(tmp_path):
     config = personal_assistant_config(ConversationConfig(session_id="assistant", workspace_dir=str(tmp_path), db_path=""))
     runtime = PluginRuntime(ScopedPluginRegistry(registry, config.tool_scope))
     task = {"active": "purchase"}
-    context = PluginContext(tree_id="assistant", node_id="node", data={"personal_assistant": True},
+    context = PluginContext(workspace=tmp_path, tree_id="assistant", node_id="node", data={"personal_assistant": True},
                             services={"cards": service, "task_contexts": SimpleNamespace(read=lambda: task)})
     return SimpleNamespace(service=service, registry=registry, runtime=runtime, context=context, task=task)
 
@@ -263,6 +264,131 @@ async def test_invalid_embed_reports_missing_html_through_runtime(rig):
     assert not result.success
     assert "缺少必填参数：spec.blocks[0].html。" in result.error
     assert not (await call(rig, "card.list", {}))["cards"]
+
+
+@pytest.mark.asyncio
+async def test_html_file_snapshot_update_and_replay_without_source(rig, tmp_path):
+    source = tmp_path / "地图.html"
+    html = "<!doctype html><p>深圳</p><script>const s = `a\\nb`;</script>" + "<!--地图-->" * 40000
+    source.write_text(html, encoding="utf-8")
+    args = {"template": "custom", "spec": {"title": "Map", "blocks": [
+        {"block_id": "intro", "type": "text", "text": "说明"},
+        {"block_id": "map", "html_path": source.name},
+    ]}}
+    created = await call(rig, "card.create", args, "file-create")
+    assert created["ok"], created
+    source.unlink()
+    assert await call(rig, "card.create", args, "file-create") == created
+    card_id = created["card_id"]
+    read = await call(rig, "card.get", {"card_id": card_id})
+    assert read["spec"]["blocks"][1] == {"block_id": "map", "type": "embed", "html": html}
+    assert "html_path" in args["spec"]["blocks"][1]  # Caller arguments remain intact.
+
+    source.write_text("<p>更新后的地图</p>", encoding="utf-8")
+    update = {"card_id": card_id, "expected_revision": 1, "changes": {"blocks": [
+        {"block_id": "map", "type": "embed", "html_path": str(source)},
+    ]}}
+    updated = await call(rig, "card.update", update, "file-update")
+    assert updated["revision"] == 2
+    source.unlink()
+    assert await call(rig, "card.update", update, "file-update") == updated
+    await call(rig, "card.update", {"card_id": card_id, "expected_revision": 2,
+                                   "changes": {"title": "Renamed"}}, "file-rename")
+    reopened = CardService(tmp_path / "cards")
+    stored = await reopened.command("assistant", "purchase", "card.get", {"card_id": card_id})
+    assert stored["spec"]["blocks"] == [{"block_id": "map", "type": "embed", "html": "<p>更新后的地图</p>"}]
+
+
+@pytest.mark.asyncio
+async def test_large_inline_html_and_submission_snapshot_preserve_input_limit(rig):
+    html = "<p>" + "文" * 300000 + "</p>"
+    spec = form_spec()
+    spec["blocks"].append({"block_id": "app", "html": html})
+    created = await create(rig, template="custom", spec=spec)
+    receipt = await rig.service.user_event("assistant", created["card_id"], event(
+        "submit-large-card", kind="submit", action="prepare", values={"supplier": "a", "budget": 1}))
+    assert receipt["spec_snapshot"]["blocks"][-1]["html"] == html
+    stored = await call(rig, "card.get", {"card_id": created["card_id"], "include_events": True})
+    assert stored["events"][0]["spec_snapshot"]["blocks"][-1]["html"] == html
+    with pytest.raises(CardError, match="Card input exceeds"):
+        await rig.service.user_event("assistant", created["card_id"], event(
+            "oversized-input", input_revision=1, values={"supplier": "x" * 300000}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block", [
+    {"block_id": "app", "html": "<p>inline</p>", "html_path": "map.html"},
+    {"block_id": "app", "html_path": ""},
+    {"block_id": "app", "html_path": None},
+    {"block_id": "app", "type": "text", "html_path": "map.html", "text": "text"},
+])
+async def test_html_sources_are_exclusive_on_create_and_update(rig, block):
+    args = {"template": "custom", "spec": {"title": "Invalid", "blocks": [block]}}
+    assert not (await rig.runtime.call("card.create", args, rig.context)).success
+    created = await create(rig, template="custom", spec={"title": "Existing", "blocks": [
+        {"block_id": "app", "html": "<p>existing</p>"}]})
+    result = await rig.runtime.call("card.update", {"card_id": created["card_id"], "expected_revision": 1,
+                                   "changes": {"blocks": [block]}}, rig.context)
+    assert not result.success
+    assert (await call(rig, "card.get", {"card_id": created["card_id"]}))["revision"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_kind", ["missing", "directory", "invalid_utf8", "empty", "outside", "symlink"])
+async def test_invalid_html_files_do_not_create_or_update_cards(rig, tmp_path, source_kind):
+    source = tmp_path / "bad.html"
+    if source_kind == "directory":
+        source.mkdir()
+    elif source_kind == "invalid_utf8":
+        source.write_bytes(b"\xff\xfe")
+    elif source_kind == "empty":
+        source.write_bytes(b"")
+    elif source_kind in {"outside", "symlink"}:
+        outside = tmp_path.parent / f"{tmp_path.name}-outside.html"
+        outside.write_text("<p>outside</p>", encoding="utf-8")
+        if source_kind == "symlink":
+            source.symlink_to(outside)
+        else:
+            source = outside
+    block = {"block_id": "app", "html_path": str(source)}
+    failed = await call(rig, "card.create", {"template": "custom", "spec": {"title": "Invalid", "blocks": [block]}})
+    assert not failed["ok"]
+    assert not (await call(rig, "card.list", {}))["cards"]
+    created = await create(rig, template="custom", spec={"title": "Existing", "blocks": [
+        {"block_id": "app", "html": "<p>existing</p>"}]})
+    failed = await call(rig, "card.update", {"card_id": created["card_id"], "expected_revision": 1,
+                        "changes": {"blocks": [block]}})
+    assert not failed["ok"]
+    stored = await call(rig, "card.get", {"card_id": created["card_id"]})
+    assert stored["revision"] == 1 and stored["spec"]["blocks"][0]["html"] == "<p>existing</p>"
+
+
+@pytest.mark.asyncio
+async def test_html_file_access_in_owned_task_workspace(rig, tmp_path):
+    from test_session_management import Host, create as create_task, service_at
+
+    workspace = tmp_path / "assistant-workspace"
+    workspace.mkdir()
+    rig.context = replace(rig.context, workspace=workspace)
+    task_workspace = tmp_path / "task-workspace"
+    task_workspace.mkdir()
+    source = task_workspace / "map.html"
+    source.write_text("<p>task result</p>", encoding="utf-8")
+    host = Host(tmp_path)
+    host.chats["assistant"] = {"id": "assistant", "kind": "personal-assistant", "createdAt": "assistant"}
+    service = await service_at(tmp_path, host)
+    rig.context.services["session_management"] = service
+    try:
+        await create_task(service, owner="assistant", workspace_path=str(task_workspace))
+        args = {"template": "custom", "spec": {"title": "Map", "blocks": [
+            {"block_id": "map", "html_path": str(source)}]}}
+        created = await call(rig, "card.create", args, "owned-file")
+        assert created["ok"], created
+        rig.context.data["session_id"] = "other-assistant"
+        denied = await call(rig, "card.create", args, "other-file")
+        assert denied["error"]["code"] == "html_file_unavailable"
+    finally:
+        await service.stop()
 
 
 @pytest.mark.asyncio

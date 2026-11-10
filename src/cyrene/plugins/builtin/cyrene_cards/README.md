@@ -65,7 +65,11 @@ assistant audience 限制；handler 另外验证宿主 `personal_assistant=True`
 
 自定义卡片包含一个 embed 区块，可在前后增加原生区块，共用标题、来源、输入协议和操作：
 
-创建和更新时，区块省略 `type` 默认按 `embed` 处理，仍须提供 `html`；原生区块必须显式填写 `type`。保存后的区块始终包含明确的 `type`。
+创建和更新时，区块省略 `type` 默认按 `embed` 处理，必须且只能提供 `html` 或 `html_path` 之一；原生区块必须显式填写 `type`。已有 HTML 文件直接传 `html_path`，无需读回正文或手动转义。
+
+`html_path` 读取 UTF-8 文件，相对路径基于助理工作区；助理所属执行任务的产物可使用绝对路径，权限边界与 `send_file` 一致。宿主保存读取时的 HTML 快照，持久化区块只包含 `html` 和明确的 `type`，不保留文件依赖。更新时重新提供路径才会重新读取；同一调用的重放返回原结果，不重复读取文件。读取失败不会创建卡片或修改已有版本。
+
+HTML 不设字符数上限，卡片文档也不再受 256 KiB 总大小限制。用户输入事件及输入值仍保留 256 KiB 限制，其他字段的结构校验保持不变。
 
 ```json
 {
@@ -74,7 +78,7 @@ assistant audience 限制；handler 另外验证宿主 `personal_assistant=True`
     "title": "费用计算器",
     "blocks": [
       {"block_id": "intro", "type": "text", "title": "计算说明", "text": "调整人数后，再确认分摊方案。"},
-      {"block_id": "calculator", "type": "embed", "html": "<main><h2>费用计算器</h2></main>"}
+      {"block_id": "calculator", "type": "embed", "html_path": "dist/calculator.html"}
     ]
   },
   "pinned": false

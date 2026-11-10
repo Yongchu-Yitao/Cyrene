@@ -17,13 +17,13 @@ class CardError(ValueError):
         self.code = code
 
 
-def encoded(value):
+def encoded(value, *, max_bytes=None):
     try:
         result = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (ValueError, TypeError) as exc:
         raise CardError("invalid_card", "Card values must be finite JSON data") from exc
-    if len(result.encode()) > MAX_BYTES:
-        raise CardError("card_too_large", "Card data exceeds 256 KiB")
+    if max_bytes is not None and len(result.encode()) > max_bytes:
+        raise CardError("card_too_large", f"Card input exceeds {max_bytes} bytes")
     return result
 
 
@@ -167,7 +167,7 @@ def _validate_blocks(spec, fields, bindings):
             raise CardError("invalid_card", "Chart labels and values must have equal lengths")
 
 
-def normalize(template, supplied):
+def normalize(template, supplied, *, read_html=None):
     # Stored legacy cards keep their IDs, template identity and authored blocks.
     # New creation is restricted to the six public names by the tool schema.
     template = LEGACY_TEMPLATES.get(template, template)
@@ -181,6 +181,12 @@ def normalize(template, supplied):
         spec["blocks"] = [default_block(template)]
     for block in spec["blocks"]:
         block.setdefault("type", "embed")
+        if "html_path" in block:
+            if read_html is None:
+                raise CardError("html_file_unavailable", "HTML file access requires a workspace resolver")
+            block["html"] = read_html(block.pop("html_path"))
+    # Validate resolved content too (in particular, reject empty files).
+    validate(SPEC, spec)
     if not spec["title"].strip():
         raise CardError("invalid_card", "Card title must not be blank")
     input_schema(spec["input_schema"])
@@ -203,7 +209,7 @@ def normalize(template, supplied):
 
 
 def validate_values(spec, values, *, complete=False):
-    encoded(values)
+    encoded(values, max_bytes=MAX_BYTES)
     schema = deepcopy(spec["input_schema"])
     if not complete:
         schema.pop("required", None)

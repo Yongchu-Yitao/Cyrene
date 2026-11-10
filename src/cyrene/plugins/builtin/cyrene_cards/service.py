@@ -61,12 +61,12 @@ class CardService:
         if card[key] != expected:
             raise CardError("revision_conflict", f"Expected current {key}={card[key]}; read the card again")
 
-    async def command(self, owner, context_id, operation, args, *, effect=None, origin=None):
+    async def command(self, owner, context_id, operation, args, *, effect=None, origin=None, read_html=None):
         validate(DEFINITIONS[operation][1], args)
         encoded(args)
-        return await asyncio.to_thread(self._command, owner, context_id, operation, deepcopy(args), effect, origin)
+        return await asyncio.to_thread(self._command, owner, context_id, operation, deepcopy(args), effect, origin, read_html)
 
-    def _command(self, owner, context_id, operation, args, effect, origin):
+    def _command(self, owner, context_id, operation, args, effect, origin, read_html):
         writing = operation not in {"card.get", "card.list"}
         if writing and not effect:
             raise CardError("missing_execution", "Card mutations require a runtime call identity")
@@ -81,7 +81,7 @@ class CardService:
             if operation == "card.list":
                 return self._list(db, owner, context_id, args)
             if operation == "card.create":
-                spec = normalize(args["template"], args["spec"])
+                spec = normalize(args["template"], args["spec"], read_html=read_html)
                 if spec.get("home_kind"):
                     existing = db.execute("SELECT id FROM cards WHERE owner=? AND status='active' AND json_extract(document,'$.spec.home_kind')=?",
                                           (owner, spec["home_kind"])).fetchone()
@@ -106,7 +106,7 @@ class CardService:
                 if operation == "card.pin":
                     self._pin(card, args["pinned"], args["expected_placement_revision"], user=False)
                 else:
-                    self._modify(db, owner, context_id, operation, card, args)
+                    self._modify(db, owner, context_id, operation, card, args, read_html)
                 card["updated_at"] = now()
                 self._save(db, card, version=operation != "card.pin")
             result = summary(card)
@@ -114,23 +114,23 @@ class CardService:
             db.execute("INSERT INTO effects VALUES (?,?,?,?)", (owner, effect, digest, encoded(result)))
             return result
 
-    def _modify(self, db, owner, context_id, operation, card, args):
+    def _modify(self, db, owner, context_id, operation, card, args, read_html):
         self._active(card)
         self._revision(card, "revision", args["expected_revision"])
         if not card["spec"].get("home_kind") and card["origin"]["context_id"] != context_id:
             raise CardError("source_context_mismatch", "Resume the card's source context before modifying it")
         if operation == "card.update":
-            self._update(db, owner, card, args)
+            self._update(db, owner, card, args, read_html)
         elif operation == "card.archive":
             if card["spec"].get("home_kind"):
                 raise CardError("invalid_card", "Keep home slot IDs stable; use home_visible=false instead of archiving")
             card.update(status="archived", archive_reason=args.get("reason", ""))
         card["revision"] += 1
 
-    def _update(self, db, owner, card, args):
+    def _update(self, db, owner, card, args, read_html):
         if "home_kind" in args["changes"] and args["changes"]["home_kind"] != card["spec"].get("home_kind"):
             raise CardError("invalid_card", "home_kind is assigned at creation and cannot be changed")
-        spec = normalize(card["template"], {**card["spec"], **args["changes"]})
+        spec = normalize(card["template"], {**card["spec"], **args["changes"]}, read_html=read_html)
         old_fields = card["spec"]["input_schema"].get("properties", {})
         new_fields = spec["input_schema"].get("properties", {})
         draft = card["input_state"]["draft"]
@@ -217,7 +217,7 @@ class CardService:
 
     async def user_event(self, owner, card_id, event, *, delivery_version=None):
         validate(EVENT_SCHEMA, event)
-        encoded(event)
+        encoded(event, max_bytes=MAX_BYTES)
         return await asyncio.to_thread(self._user_event, owner, card_id, deepcopy(event), delivery_version)
 
     def _user_event(self, owner, card_id, event, delivery_version=None):

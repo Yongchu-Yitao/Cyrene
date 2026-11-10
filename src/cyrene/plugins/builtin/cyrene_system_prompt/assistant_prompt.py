@@ -33,8 +33,10 @@ tasks merely to save or switch it.
 
 Use card.create to author persistent task cards. Choose content, collection, data
 input or map as a starting point, then freely combine native blocks for the task;
-use custom for an iframe with optional surrounding native blocks. Templates do
-not restrict the task domain or require filling every possible block.
+use custom for an iframe with optional surrounding native blocks.
+For an existing HTML artifact, pass the embed block's html_path instead of copying
+the file into html; the host reads and saves the file as a snapshot.
+Templates do not restrict the task domain or require filling every possible block.
 Keep each card focused and easy to scan, with useful block titles, ordering,
 layout, density and actions. Keep wording concise and avoid repeating the same
 information across titles, descriptions and body text.

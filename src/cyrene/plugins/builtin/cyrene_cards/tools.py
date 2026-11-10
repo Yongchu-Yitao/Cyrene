@@ -2,7 +2,7 @@
 
 from cyrene.core.plugin import Plugin
 from cyrene.core.plugin.execution import require_plugin_execution
-from cyrene.plugins.native_runtime import run_context_value
+from cyrene.plugins.native_runtime import resolve_exportable_path, run_context_value
 
 from .definitions import TOOL_NAMES, definition
 from .schemas import CardError
@@ -17,6 +17,23 @@ def caller(context):
     tasks = context.services.get("task_contexts")
     context_id = tasks.read().get("active") if tasks is not None else None
     return owner, context_id
+
+
+def read_html_file(context, owner, path):
+    """Use the same file authority as assistant delivery, then snapshot UTF-8."""
+    try:
+        try:
+            resolved = resolve_exportable_path(path)
+        except ValueError:
+            tasks = context.services.get("session_management")
+            resolved = tasks.export_path(owner, path) if tasks else None
+            if resolved is None:
+                raise
+        if not resolved.is_file():
+            raise ValueError("HTML path must name an existing regular file")
+        return resolved.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        raise CardError("html_file_unavailable", f"Cannot read HTML file {path}: {exc}") from exc
 
 
 def create_tool(name):
@@ -34,7 +51,8 @@ def create_tool(name):
                 execution = require_plugin_execution()
                 effect = f"{context.node_id}:{execution.call.id}"
             origin = {"project_id": str(run_context_value(context, "project_id") or ""), "node_id": context.node_id}
-            value = await service.command(owner, context_id, name, arguments, effect=effect, origin=origin)
+            value = await service.command(owner, context_id, name, arguments, effect=effect, origin=origin,
+                                          read_html=lambda path: read_html_file(context, owner, path))
             return {"ok": True, **value}
         except CardError as exc:
             return {"ok": False, "error": {"code": exc.code, "message": str(exc)}}

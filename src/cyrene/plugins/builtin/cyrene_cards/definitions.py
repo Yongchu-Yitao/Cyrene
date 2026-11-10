@@ -91,10 +91,14 @@ BLOCK_PROPERTIES = {
                                 ["route_id", "from_place_id", "to_place_id"])),
             "groups": array(obj({"group_id": ID, "label": TEXT}, ["group_id", "label"]), 8),
             "selection": obj({"mode": {"enum": ["single", "multiple"]}, "field_id": ID}, ["mode", "field_id"])},
-    "embed": {"html": {"type": "string", "minLength": 1, "maxLength": 150000}},
+    "embed": {"html": {"type": "string", "minLength": 1},
+              "html_path": {"type": "string", "minLength": 1,
+                            "description": "UTF-8 HTML file to snapshot; use instead of html for an existing artifact. Relative to the assistant workspace, or an absolute path in an owned task workspace. No HTML character limit."}},
 }
-BLOCK = {"oneOf": [obj({"block_id": ID, "type": {"const": kind, **({"default": "embed", "description": "Omitted block type defaults to embed; html is required."} if kind == "embed" else {})}, "title": TEXT, "description": TEXT, **properties},
-                       ["block_id", *([] if kind == "embed" else ["type"]), *[key for key in properties if key not in {"selection", "routes", "groups", "collapsed", "icon"}]])
+BLOCK = {"oneOf": [{**obj({"block_id": ID, "type": {"const": kind, **({"default": "embed", "description": "Omitted block type defaults to embed; provide exactly one of html or html_path."} if kind == "embed" else {})}, "title": TEXT, "description": TEXT, **properties},
+                       ["block_id", *([] if kind == "embed" else ["type"]), *[key for key in properties if key not in {"selection", "routes", "groups", "collapsed", "icon", "html", "html_path"}]]),
+                    **({"if": {"required": ["html_path"]}, "then": {"not": {"required": ["html"]}},
+                        "else": {"required": ["html"]}} if kind == "embed" else {})}
                    for kind, properties in BLOCK_PROPERTIES.items()]}
 ACTION = obj({"action_id": ID, "label": TEXT, "kind": {"enum": ["submit", "confirm"]}, "fields": array(ID, 64), "intent": TEXT, "target_context_id": ID, "task_id": ID},
              ["action_id", "label", "kind", "fields", "intent"])
@@ -115,8 +119,9 @@ DEFINITIONS = {
                     "Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. "
                     "All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. "
                     "Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. "
-                    "Custom requires exactly one embed block with html and may include native blocks around it. "
-                    "Omitted block type defaults to embed and requires html; native blocks must specify type. "
+                    "Custom requires exactly one embed block with either html or html_path, never both, and may include native blocks around it. "
+                    "For an existing HTML file, pass html_path directly; the host reads and saves a snapshot, with no HTML character or card byte limit. "
+                    "Omitted block type defaults to embed; native blocks must specify type. "
                     "Place input_schema and actions inside spec, never at the tool argument root. "
                     "Action fields and data-card-field bindings must name properties in spec.input_schema. "
                     "Generate the requested card directly from this contract; do not create disposable probe cards. "
@@ -127,7 +132,8 @@ DEFINITIONS = {
                     obj({"template": {"enum": list(TEMPLATES), "description": "content: explanations and results; collection: items and progress; data: comparison and metrics; input: preferences and decisions; map: places, routes and spatial selection; custom: iframe plus optional native blocks."},
                          "spec": SPEC, "pinned": {"type": "boolean", "default": False}}, ["template", "spec"])),
     "card.update": ("Modify an existing card at expected_revision. Only supplied description fields change; arrays and objects are replaced whole. "
-                    "Omitted block type defaults to embed and requires html; native blocks must specify type. "
+                    "Embed blocks require exactly one of html or html_path; use html_path to snapshot an existing UTF-8 file without copying its contents. No HTML character or card byte limit. "
+                    "Omitted block type defaults to embed; native blocks must specify type. "
                     "Preserves user input and pinning. Never creates a missing card or grants user approval.",
                     obj({"card_id": ID, "expected_revision": REVISION, "changes": CHANGES, "in_response_to_event_id": ID}, ["card_id", "expected_revision", "changes"])),
     "card.get": ("Read a card's current description, origin, user drafts, submitted snapshot and placement. Optionally read paginated user events; reads do not acknowledge events.",
