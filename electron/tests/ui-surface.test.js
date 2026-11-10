@@ -36,7 +36,7 @@ function loadSurface(search = '') {
   return window.CyreneUI.require('uiSurface');
 }
 
-function loadSurfaceWithDocument() {
+function loadSurfaceWithDocument(now = Date.now) {
   class FakeElement {
     constructor(tagName, attrs = {}) {
       this.tagName = String(tagName).toUpperCase();
@@ -172,6 +172,7 @@ function loadSurfaceWithDocument() {
   window.window = window;
   const context = vm.createContext({
     window, console, Map, Math, Number, Promise, String, URLSearchParams, WeakMap,
+    Date: class extends Date { static now() { return now(); } },
   });
   for (const relative of [
     '../src/cyrene/workbench/webui/frontend/platform/runtime.jsx',
@@ -547,7 +548,9 @@ test('inspect, click, type, scroll, and drag render the private agent cursor at 
 });
 
 test('agent cursor keeps animated movement but still schedules stale-position fade while running', () => {
-  const { surface, document, cursorTimers } = loadSurfaceWithDocument();
+  // Fake timers run synchronously; keep their clock fixed so layout work cannot
+  // shorten the expected idle delay by a real millisecond under load.
+  const { surface, document, cursorTimers } = loadSurfaceWithDocument(() => 1000);
   surface.setAgentRunning(true);
   let tree = surface.snapshot({ max_depth: 12 });
   const run = findTreeNode(tree.root, (node) => node.name === 'Run action');

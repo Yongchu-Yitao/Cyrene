@@ -1,3 +1,4 @@
+import { protectMarkdownResize } from "./transcript-resize.mjs"
 import { wbcWgs84ToGcj02, wbcMapProvider, wbcTileConfig } from "./map-provider.mjs"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { PluginFrontendService } from "../../platform/plugins.jsx"
@@ -658,6 +659,17 @@ function wbcUpdateProjectFileDraft(draftKey, content, baseContent, version, dirt
   };
 }
 
+function useMarkdownResizeProtection(kind, editUrl, text, textLoading, failed, url) {
+  var markdownRef = useWbcRef(null);
+  useWbcEffect(function () {
+    var container = markdownRef.current;
+    if (kind !== "markdown" || editUrl || textLoading || failed || !container) return;
+    var page = container.closest(".wbc-page");
+    if (page) return protectMarkdownResize(container, page);
+  }, [kind, editUrl, text, textLoading, failed, url]);
+  return markdownRef;
+}
+
 function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode, onHtmlModeChange, markdownMode: controlledMarkdownMode, onMarkdownModeChange, onDirtyChange }) {
   var kind = wbcFileViewKind(file);
   var [pluginSnapshot, setPluginSnapshot] = useWbcState(function () { return PluginFrontendService.snapshot(); });
@@ -696,11 +708,11 @@ function WbcViewerTab({ file, onViewed, hideHeader, htmlMode: controlledHtmlMode
   var imagePinchRef = useWbcRef({ distance: 0, zoom: 100 });
   var imageSurfaceRef = useWbcRef(null);
   var codeRef = useWbcRef(null);
-  var markdownRef = useWbcRef(null);
   var viewedRef = useWbcRef("");
   var url = file && file.url;
   var editUrl = wbcCanEditProjectTextFile(file) ? wbcProjectFileEditUrl(file) : "";
   var draftKey = wbcProjectFileDraftKey(file);
+  var markdownRef = useMarkdownResizeProtection(kind, editUrl, text, textLoading, failed, url);
   function confirmViewed() {
     var key = String(url || "") + "::" + String(file && file.name || "");
     if (!key || viewedRef.current === key) return;

@@ -2,12 +2,12 @@ const pendingLayouts = new WeakMap();
 
 // One owner for frozen rows, frame restoration and paired subscriptions.
 class TranscriptResizeProtection {
-  constructor(thread, page, isSticking, onRestored, conversationId) {
+  constructor(thread, page, isSticking, onRestored, conversationId, rowSelector = ":scope > [data-wbc-thread-item]") {
     this.thread = thread;
     this.page = page;
     this.isSticking = isSticking;
     this.onRestored = onRestored;
-    this.conversationId = conversationId;
+    this.options = { conversationId, rowSelector };
 
     this.doc = this.thread.ownerDocument;
     this.win = this.doc.defaultView;
@@ -22,10 +22,10 @@ class TranscriptResizeProtection {
     // Closing a pane may replace WbcChatSplit with WbcMain. Adopt measured
     // offscreen heights before the new owner's first layout effects measure it.
     const layouts = pendingLayouts.get(this.page);
-    const snapshot = this.conversationId && layouts?.get(this.conversationId);
+    const snapshot = this.options.conversationId && layouts?.get(this.options.conversationId);
     if (snapshot) {
-      layouts.delete(this.conversationId);
-      const rows = this.thread.querySelectorAll(':scope > [data-wbc-thread-item]');
+      layouts.delete(this.options.conversationId);
+      const rows = this.thread.querySelectorAll(this.options.rowSelector);
       if (rows.length === snapshot.count) {
         rows.forEach((row, index) => {
           const height = snapshot.heights[index];
@@ -155,7 +155,7 @@ class TranscriptResizeProtection {
     // Keep selection, editors and rows currently yielding space to a PiP live.
     const selection = this.win.getSelection();
     if (selection && !selection.isCollapsed) return;
-    const rows = this.thread.querySelectorAll(':scope > [data-wbc-thread-item]');
+    const rows = this.thread.querySelectorAll(this.options.rowSelector);
     const viewport = this.thread.getBoundingClientRect();
     const buffer = Math.max(viewport.height, 600);
     // Read all geometry before any style writes. Keep a full viewport on each
@@ -225,8 +225,8 @@ class TranscriptResizeProtection {
 
   prepareHandoff() {
     this.prepare();
-    if (!this.conversationId || !this.frozen.length) return;
-    const rows = Array.from(this.thread.querySelectorAll(':scope > [data-wbc-thread-item]'));
+    if (!this.options.conversationId || !this.frozen.length) return;
+    const rows = Array.from(this.thread.querySelectorAll(this.options.rowSelector));
     let layouts = pendingLayouts.get(this.page);
     if (!layouts) pendingLayouts.set(this.page, layouts = new Map());
     const snapshot = {
@@ -234,9 +234,9 @@ class TranscriptResizeProtection {
       heights: rows.map(row => row.hasAttribute('data-wbc-resize-frozen')
         ? row.style.getPropertyValue('--wbc-resize-row-height') : null),
     };
-    layouts.set(this.conversationId, snapshot);
+    layouts.set(this.options.conversationId, snapshot);
     this.win.setTimeout(() => {
-      if (layouts.get(this.conversationId) === snapshot) layouts.delete(this.conversationId);
+      if (layouts.get(this.options.conversationId) === snapshot) layouts.delete(this.options.conversationId);
     }, 1000);
   }
 
@@ -262,5 +262,14 @@ class TranscriptResizeProtection {
 
 export function protectTranscriptResize(thread, page, isSticking, onRestored = () => {}, conversationId = "") {
   const owner = new TranscriptResizeProtection(thread, page, isSticking, onRestored, conversationId);
+  return () => owner.dispose();
+}
+
+// Read-only document viewers share the same scroll anchoring and drag lifetime
+// as transcripts. Leave lists/quotes live: containment changes child margin
+// collapse. Editors are deliberately excluded by the viewer's caller.
+export function protectMarkdownResize(container, page) {
+  const owner = new TranscriptResizeProtection(container, page, () => false, () => {}, "",
+    ":scope > :is(p, pre, table)");
   return () => owner.dispose();
 }

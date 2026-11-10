@@ -3309,6 +3309,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "workbenchChat.cardUnpin": "Unpin card",
     "toolName.cyrene_cards": "Cards",
     "toolName.session_management": "Task execution",
+    "toolName.search_context": "Search task contexts",
     "toolName.edit_context_catalog": "Edit task context catalog",
     "toolName.switch_context": "Switch task context",
     "toolName.card.create": "Create card",

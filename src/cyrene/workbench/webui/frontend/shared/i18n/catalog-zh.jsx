@@ -3317,6 +3317,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "workbenchChat.cardUnpin": "取消固定",
     "toolName.cyrene_cards": "卡片",
     "toolName.session_management": "任务执行",
+    "toolName.search_context": "搜索任务上下文",
     "toolName.edit_context_catalog": "编辑任务上下文目录",
     "toolName.switch_context": "切换任务上下文",
     "toolName.card.create": "创建卡片",

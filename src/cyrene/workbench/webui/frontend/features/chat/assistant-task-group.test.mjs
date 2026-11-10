@@ -11,7 +11,7 @@ test('task group opens its conversation only on expansion, preserves collapse an
   const storage = new Map();
   const React = {createElement(type,props,...children){return {type,props:{...props,children}};}};
   const WbcRailGroupToggle = 'group-toggle';
-  const h=harness('../shell/assistant-task-group.jsx',{React,createPortal:node=>node,trackTaskGroupClip:()=>()=>{},WbcChatMenuActions:'menu-actions',wbcChatRailVisualState,WbcRailGroupToggle,WbcRailGroupContent:'group-content',TaskConversationIcon:'task-icon',localStorage:{
+  const h=harness('../shell/assistant-task-group.jsx',{React,createPortal:node=>node,readTopbarPortalTheme:()=>({}),trackTaskGroupClip:()=>()=>{},WbcChatMenuActions:'menu-actions',wbcChatRailVisualState,WbcRailGroupToggle,WbcRailGroupContent:'group-content',TaskConversationIcon:'task-icon',localStorage:{
     getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),
   }});
   let query='', opens=0, hasChildren=true, status='running';

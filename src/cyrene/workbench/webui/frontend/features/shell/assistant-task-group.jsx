@@ -3,6 +3,7 @@ import { createPortal } from "react-dom"
 import { WbcChatMenuActions } from "../chat/chat-menu-actions.jsx"
 import { wbcChatRailVisualState } from "../chat/rail-status.mjs"
 import { TaskConversationIcon } from "./task-conversation-icon.jsx"
+import { readTopbarPortalTheme } from "./topbar-presentation.jsx"
 import { WbcRailGroupToggle, WbcRailGroupContent } from "../chat/rail-group.jsx"
 
 export function AssistantTaskGroup({ task, chat, menuActions, query, matches, hasChildren = false, onOpen, onDragStart, children }) {
@@ -15,7 +16,8 @@ export function AssistantTaskGroup({ task, chat, menuActions, query, matches, ha
     event.stopPropagation();
     var rect = event.currentTarget.getBoundingClientRect();
     setMenu({ left: Math.max(8, Math.min(event.clientX || rect.left, window.innerWidth - 240)),
-      top: Math.max(8, Math.min(event.clientY || rect.bottom, window.innerHeight - 160)) });
+      top: Math.max(8, Math.min(event.clientY || rect.bottom, window.innerHeight - 160)),
+      portalTheme: readTopbarPortalTheme() });
   }
   React.useEffect(function () {
     if (!menu) return;
@@ -56,9 +58,9 @@ export function AssistantTaskGroup({ task, chat, menuActions, query, matches, ha
           try { localStorage.setItem(key, next ? "collapsed" : "expanded"); } catch (_) {}
         }} />
     </header>
-    {menu && createPortal(<div className="wb-item-context-layer wbc-page-context-layer">
+    {menu && createPortal(<div className="wb-item-context-layer wbc-page-context-layer" style={menu.portalTheme}>
       <div className="wb-item-context-scrim" onPointerDown={closeMenu} />
-      <div className="wb-item-context-menu wbc-page-context-menu" role="menu" style={menu}
+      <div className="wb-item-context-menu wbc-page-context-menu" role="menu" style={{ left: menu.left, top: menu.top }}
         onContextMenu={function (event) { event.preventDefault(); }}>
         <WbcChatMenuActions chat={chat} isPinned={(menuActions.pinnedChatIds || []).includes(chat.id)}
           onClose={closeMenu} onTogglePinned={menuActions.togglePinned}

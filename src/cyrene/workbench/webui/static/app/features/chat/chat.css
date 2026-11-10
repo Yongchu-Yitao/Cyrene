@@ -1945,19 +1945,24 @@ span.wbc-chat-group-toggle {
   transition: grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1);
 }
 
+/* Width belongs to the grid, not its (potentially huge) transcript subtree.
+   Registering it as non-inherited avoids restyling every Markdown descendant
+   on each pointer frame. Keep derived track values local to the declaration. */
+@property --wbc-pane-right-width {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 520px;
+}
+
 .wbc-pane-layout.split {
   padding-right: var(--wbc-card-gutter);
   grid-column: 2 / 5;
   --wbc-pane-column-floor: min(380px, calc((100% - 12px) / 2));
-  --wbc-pane-right-used: clamp(
-    var(--wbc-pane-column-floor),
-    var(--wbc-pane-right-width, 520px),
-    calc(100% - 12px - var(--wbc-pane-column-floor))
-  );
   grid-template-columns:
     minmax(var(--wbc-pane-column-floor), 1fr)
     12px
-    var(--wbc-pane-right-used);
+    clamp(var(--wbc-pane-column-floor), var(--wbc-pane-right-width, 520px),
+      calc(100% - 12px - var(--wbc-pane-column-floor)));
   gap: 0;
 }
 

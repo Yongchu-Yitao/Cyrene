@@ -483,7 +483,10 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide, onClose }) {
     var startWidth = Number(width) || 520;
     var page = event.currentTarget.closest(".wbc-page");
     var nextWidth = startWidth;
+    // These bounds depend on the page, not the moving split track. Read them
+    // once before painting; a pointermove must not force the last frame's layout.
     var minimum = clampWidth(-Infinity, page);
+    var maximum = clampWidth(Infinity, page);
     var resizeCollapseEdge = createResizeCollapseGuard();
     startPointerResize(event, {
       bodyClass: "wbc-resizing-side-agent",
@@ -492,7 +495,7 @@ function WbcSideAgentSplitResizer({ width, onResize, splitSide, onClose }) {
       start: function () { window.dispatchEvent(new CustomEvent("workbench:split-resize-start")); },
       update: function (moveEvent) {
         var delta = splitSide === "left" ? moveEvent.clientX - startX : startX - moveEvent.clientX;
-        nextWidth = clampWidth(startWidth + delta, page);
+        nextWidth = Math.round(Math.max(minimum, Math.min(maximum, startWidth + delta)));
         return resizeCollapseEdge(startWidth + delta, minimum);
       },
       paint: function () { if (page) page.style.setProperty("--wbc-side-track-width", nextWidth + "px"); },

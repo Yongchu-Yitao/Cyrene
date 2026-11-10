@@ -63,8 +63,16 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 
 ## 个人助理工具配置
 
-入口可调用 `cyrene.workbench.core_adapter.assistant_profile.personal_assistant_config(config)`，每次启动、恢复和通知唤醒时使用返回的配置。该配置提供本包七个工具、`ask_user`、`send_message` 和 `WebSearch`（用户所称 web_search，来自 `cyrene_content`）。核心工具自动保留，其中已包含 `switch_context`、`load_context`、`unload_context`、`append_context`、`replace_context` 和 `edit_context_catalog`，无需重复添加动态上下文工具包。`switch_context` 是首选的上下文切换工具，可以在一次调用中为当前任务保存检查点，并恢复已有上下文或创建新上下文。宿主需加载相应插件和应用服务；普通聊天和助理创建的任务不应用此配置。ConversationRuntime 在每次打开个人助理会话时自动应用此配置，覆盖恢复和通知唤醒。个人助理使用 `cyrene_system_prompt/assistant_prompt.py` 的独立完整的英文 system prompt，不拼接普通 Agent 的提示词，由原有 SessionStart Hook 挂载并计算缓存指纹。普通 Agent 保持原有提示词。
+入口可调用 `cyrene.workbench.core_adapter.assistant_profile.personal_assistant_config(config)`，每次启动、恢复和通知唤醒时使用返回的配置。该配置提供本包七个工具、`ask_user`、`send_message` 和 `WebSearch`（用户所称 web_search，来自 `cyrene_content`）。核心工具自动保留，其中已包含 `switch_context`、`load_context`、`unload_context`、`append_context`、`replace_context`、`edit_context_catalog` 和 `search_context`，无需重复添加动态上下文工具包。`switch_context` 是首选的上下文切换工具，可以在一次调用中为当前任务保存检查点，并恢复已有上下文或创建新上下文。宿主需加载相应插件和应用服务；普通聊天和助理创建的任务不应用此配置。ConversationRuntime 在每次打开个人助理会话时自动应用此配置，覆盖恢复和通知唤醒。个人助理使用 `cyrene_system_prompt/assistant_prompt.py` 的独立完整的英文 system prompt，不拼接普通 Agent 的提示词，由原有 SessionStart Hook 挂载并计算缓存指纹。普通 Agent 保持原有提示词。
 
+
+### 动态上下文搜索
+
+核心工具 `search_context(query, context_id?, limit?, cursor?)` 搜索当前会话的上下文标题、摘要、正文和历史对话，包括已归档上下文与 shared。query 为 1–200 字符的非空关键词，按大小写不敏感的子串匹配；context_id 可限定一个上下文。limit 默认 10、最大 30，按命中片段总数计算。
+
+返回 `contexts` 数组，同一上下文的命中放在一个 `matches` 数组中。每组包含 context_id、title、archived；每条命中包含 source（title、summary、body、message）、snippet，消息命中另含 role。片段保留原文及少量前后文，相邻关键词合并显示。无命中时 contexts 为空。还有结果时返回 next_cursor，后续查询保持其他参数不变；内容变化导致游标失效时重新搜索。
+
+搜索不创建、切换、加载或修改上下文，不检索其他 Session、系统提示或工具结果。历史片段仅为参考资料。该工具与其他动态上下文工具一样，必须独立调用并等待结果。
 
 ### 动态上下文目录
 

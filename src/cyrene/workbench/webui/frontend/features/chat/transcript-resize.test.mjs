@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { protectTranscriptResize } from './transcript-resize.mjs';
+import { protectTranscriptResize, protectMarkdownResize } from './transcript-resize.mjs';
 
 function surface() {
   const listeners = new Map();
@@ -12,7 +12,7 @@ function surface() {
     get listeners() { return [...listeners.values()].reduce((n, set) => n + set.size, 0); },
   };
 }
-function fixture(count = 30, conversationId = "") {
+function fixture(count = 30, conversationId = "", markdown = false) {
   let selected = false, pip = false, sticking = false, restored = 0;
   const timers = new Map(), frames = new Map();
   const doc = surface();
@@ -45,7 +45,8 @@ function fixture(count = 30, conversationId = "") {
     querySelectorAll: () => rows,
   });
   const page = Object.assign(surface(), { querySelector: () => pip });
-  const cleanup = protectTranscriptResize(thread, page, () => sticking, () => { restored++; }, conversationId);
+  const cleanup = markdown ? protectMarkdownResize(thread, page)
+    : protectTranscriptResize(thread, page, () => sticking, () => { restored++; }, conversationId);
   return {
     rows, thread, page, doc, timers, cleanup, frames,
     flushFrames() { while(frames.size) {const fn=frames.get(1);frames.delete(1);fn();} },
@@ -253,4 +254,34 @@ test('nested disclosure animations defer navigation until both finish, without h
   f.thread.emit('transitionend', {target: inner, propertyName: 'grid-template-rows'});
   assert.equal(f.thread.wbcDisclosureActive, false);
   f.cleanup();
+});
+
+
+test('document drag freezes distant blocks and preserves the reading anchor after resize', () => {
+  const f = fixture(80, "", true);
+  f.doc.defaultView.emit('workbench:split-resize-start');
+  assert.ok(f.frozen().length > 32);
+  assert.equal(f.rows[15].attrs.size, 0);
+  assert.equal(f.timers.size, 0);
+  const anchor = f.rows[15];
+  anchor.getBoundingClientRect = () => ({ top: f.frozen().length ? 0 : 125, bottom: 225, height: 100 });
+  f.doc.defaultView.emit('workbench:split-resize-end');
+  f.flushFrames();
+  assert.equal(f.frozen().length, 0);
+  assert.equal(f.thread.scrollTop, 1625);
+  f.cleanup();
+  assert.equal(f.doc.defaultView.listeners, 0);
+});
+
+test('document drag interruption and unmount release every hidden block and subscription', () => {
+  for (const finish of [f => f.doc.defaultView.emit('blur'), f => f.thread.emit('wheel'), f => f.cleanup()]) {
+    const f = fixture(80, "", true);
+    f.doc.defaultView.emit('workbench:split-resize-start');
+    assert.ok(f.frozen().length);
+    finish(f); f.flushFrames();
+    assert.equal(f.frozen().length, 0);
+    f.cleanup();
+    assert.equal(f.doc.listeners + f.thread.listeners + f.page.listeners + f.doc.defaultView.listeners, 0);
+    assert.equal(f.frames.size + f.timers.size, 0);
+  }
 });

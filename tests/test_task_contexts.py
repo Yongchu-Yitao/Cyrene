@@ -16,12 +16,13 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_session(tmp_path, model=None, **kwargs):
+def make_session(tmp_path, model=None, *, tool_plugins=(), **kwargs):
     async def default(arguments, context):
         return {"content": "answer", "tool_calls": []}
     registry = PluginRegistry()
     registry.register_pack(PluginPack("model", "model", (
         Plugin("MiniMax", "fake", {"type": "object"}, model or default, kind="model"),
+        *tool_plugins,
     )), source="test")
     (tmp_path / "plugins").mkdir(exist_ok=True)
     session = AgentSession(tmp_path / "data", tmp_path, tmp_path / "plugins", registry=registry, **kwargs)
@@ -671,5 +672,143 @@ def test_switch_model_handshake_cache_and_fork(tmp_path):
         assert context_catalog(replayed) == context_catalog(state)
         # Projection and ordinary execution never refresh timestamp-bearing mounts.
         assert s._messages(s.snapshot()['leaf_id']) == s._messages(s.snapshot()['leaf_id'])
+    finally:
+        s.close()
+
+
+@pytest.mark.parametrize('question_count', [1, 2])
+def test_answered_questions_survive_one_switch_without_changing_owner(tmp_path, monkeypatch, question_count):
+    from cyrene.core.context.clarifications import HANDOFF_KEY
+    from cyrene.core.context.tasks import fork_task_state, project_tasks, task_messages
+    from cyrene.core.context import capacity
+    from cyrene.core.hook import TURN_START
+
+    inputs = []
+    answers = [f'USER_CORRECTION_{i}: 33⅓ + Ø300 出一版' for i in range(question_count)]
+
+    async def turn_context(event):
+        return {'context': 'Workbench turn context'}
+
+    def mount_workbench_context(session):
+        # Match Workbench: a durable context child, not the original user node,
+        # triggers generation when clarification authorization updates that user.
+        if any(h.id == 'clarification-test-context' for h in session.hooks.list()):
+            session.hooks.bind_plugin('clarification-test-context', turn_context, replace=True)
+        else:
+            session.hooks.register(TURN_START, turn_context, plugin_id='clarification-test-context',
+                                   hook_id='clarification-test-context', root_only=True)
+
+    async def ask(arguments, context):
+        return {'status': 'awaiting_user', 'kind': 'clarification',
+                'text': '一半还是一版？', 'options': [{'label': '一版'}]}
+
+    async def model(arguments, context):
+        inputs.append(deepcopy(arguments['messages']))
+        index = len(inputs)
+        if index <= question_count:
+            return {'content': '', 'tool_calls': [{'id': f'question-{index}', 'name': 'clarify_test', 'arguments': {}}]}
+        if index == question_count + 1:
+            return {'content': '', 'tool_calls': [{'id': 'switch-after-answer', 'name': 'switch_context',
+                    'arguments': {'context_id': None, 'title': '制作唱片', 'summary': '查证完成'}}]}
+        return {'content': '继续处理', 'tool_calls': []}
+
+    s = make_session(tmp_path, model, tool_plugins=(Plugin('clarify_test', 'ask', {'type': 'object'}, ask),))
+    mount_workbench_context(s)
+    try:
+        s.submit('你先出一半吧。', run_id='clarification-run')
+        run(s.drain())
+        source = s.task_contexts.read()['active']
+        for answer in answers:
+            pending = s.pending_output()
+            assert pending is not None
+            s.answer(pending['id'], answer)
+            run(s.drain())
+        state = s.task_contexts.read()
+        destination = state['active']
+        assert source != destination
+        handoff = state[HANDOFF_KEY]
+        assert handoff['source'] == source and handoff['target'] == destination
+        assert len(handoff['nodes']) == question_count
+        for answer in answers:
+            assert json.dumps(inputs[-1], ensure_ascii=False).count(answer) == 1
+        for node_id in handoff['nodes']:
+            assert s.store.get_node(s.tree.id, node_id).value['task_context_id'] == source
+        path = s.store.get_path(s.tree.id, s.snapshot()['leaf_id'])
+        replayed = fork_task_state(path)
+        assert replayed[HANDOFF_KEY] == handoff
+        assert answers[0] in json.dumps(project_tasks(path, replayed), ensure_ascii=False)
+        # Compaction/export may retain answers only in their owning task.
+        assert answers[0] in json.dumps(task_messages(path, state, source), ensure_ascii=False)
+        assert answers[0] not in json.dumps(task_messages(path, state, destination), ensure_ascii=False)
+
+        # Retry, no-op activation, and failed switches do not consume the handoff.
+        command(s, 'switch_context', {'context_id': destination}, 'same-context')
+        saved = s.task_contexts.read()
+        command(s, 'switch_context', {'context_id': destination}, 'same-context')
+        assert s.task_contexts.read() == saved
+        def reject(*args):
+            raise ValueError('capacity rejected')
+        monkeypatch.setattr(capacity, 'check_load', reject)
+        with pytest.raises(ValueError, match='capacity rejected'):
+            command(s, 'switch_context', {'context_id': None, 'title': '第三项', 'summary': '暂停'}, 'failed-switch')
+        assert s.task_contexts.read() == saved
+        monkeypatch.undo()
+    finally:
+        s.close()
+
+    s = make_session(tmp_path)
+    mount_workbench_context(s)
+    try:
+        assert s.task_contexts.read()[HANDOFF_KEY] == handoff
+        assert answers[0] in json.dumps(s._messages(s.snapshot()['leaf_id']), ensure_ascii=False)
+        # A new user turn alone is not another context switch.
+        s.submit('继续制作', run_id='follow-up')
+        run(s.drain())
+        assert answers[0] in json.dumps(s._messages(s.snapshot()['leaf_id']), ensure_ascii=False)
+        result = command(s, 'switch_context', {'context_id': None, 'title': '第三项', 'summary': '制作暂停'}, 'third')
+        assert HANDOFF_KEY not in s.task_contexts.read()
+        assert answers[0] not in json.dumps(s._messages(s.snapshot()['leaf_id']), ensure_ascii=False)
+        command(s, 'switch_context', {'context_id': source, 'summary': '第三项暂停'}, 'return-source')
+        messages = json.dumps(s._messages(s.snapshot()['leaf_id']), ensure_ascii=False)
+        assert all(messages.count(answer) == 1 for answer in answers)
+        # Leaving the original context again does not grant a second handoff.
+        command(s, 'switch_context', {'context_id': result['context_id'], 'summary': '查证暂停'}, 'leave-again')
+        assert answers[0] not in json.dumps(s._messages(s.snapshot()['leaf_id']), ensure_ascii=False)
+    finally:
+        s.close()
+
+
+def test_clarification_unload_load_and_mixed_results(tmp_path):
+    from cyrene.core.context.clarifications import HANDOFF_KEY
+
+    s = make_session(tmp_path)
+    try:
+        s.submit('request', run_id='r')
+        run(s.drain())
+        source = s.task_contexts.read()['active']
+        assistant = s.store.mount(s.tree.id, s.snapshot()['leaf_id'], {
+            'role': 'assistant', 'task_context_id': source, 'run_id': 'r', 'tool_calls': [
+                {'id': 'ask', 'name': 'ask_user', 'arguments': {'text': 'Which version?'}},
+                {'id': 'read', 'name': 'Read', 'arguments': {'path': 'private.txt'}}]})
+        answer = s.store.mount(s.tree.id, assistant.id, {
+            'role': 'tool_results', 'task_context_id': source, 'run_id': 'r',
+            'results': [{'call_id': 'ask', 'name': 'ask_user', 'success': True, 'value': {'answer': 'VERSION_TWO'}},
+                        {'call_id': 'read', 'name': 'Read', 'success': True, 'value': 'PRIVATE_TOOL_RESULT'}],
+            'pending_question': {'id': 'q', 'call_id': 'ask', 'status': 'answered', 'kind': 'clarification',
+                                 'text': 'Which version?', 'options': [{'label': 'version two'}], 'answer': 'VERSION_TWO'}})
+        s._leaf_id = answer.id
+        command(s, 'unload_context', {'summary': 'pause source'}, 'unload')
+        assert s.task_contexts.read()[HANDOFF_KEY]['target'] is None
+        target = s.task_contexts.ensure('destination')
+        messages = json.dumps(s._messages(answer.id), ensure_ascii=False)
+        assert messages.count('VERSION_TWO') == 1
+        assert 'Which version?' in messages and 'version two' in messages
+        assert 'PRIVATE_TOOL_RESULT' not in messages
+        command(s, 'unload_context', {'summary': 'pause destination'}, 'unload-destination')
+        command(s, 'load_context', {'context_id': source}, 'load-source')
+        assert 'VERSION_TWO' in json.dumps(s._messages(answer.id), ensure_ascii=False)
+        command(s, 'unload_context', {'summary': 'pause source again'}, 'unload-source-again')
+        command(s, 'load_context', {'context_id': target}, 'load-destination')
+        assert 'VERSION_TWO' not in json.dumps(s._messages(answer.id), ensure_ascii=False)
     finally:
         s.close()
