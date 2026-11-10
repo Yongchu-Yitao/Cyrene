@@ -2,6 +2,23 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.1.3] - 2026-11-10
+
+### Features and interface updates
+
+- Let the assistant organize the context catalog for different work: revise names and progress summaries, archive completed or explicitly shelved work, and find or restore earlier work by name, summary or identifier. Archiving preserves background, history and progress; continuing the original work restores it automatically. Active work must first be checkpointed and left to prevent accidental archival. Archived work remains available after reopening the app without crowding the everyday catalog.
+- Improve organization and continuity in long conversations. As conversation material grows, the assistant reviews outdated summaries and finished work and tidies the catalog when appropriate. It saves progress before changing goals, keeps related follow-ups with the original work, and continues retrieved tasks, reducing duplicate tasks and lost background.
+- Adjust automatic task-group organization by temporarily suspending assistant-driven renaming, ordering, group archival, resource hiding and delivered-file association. Existing organization and resource records remain available. Sidebar expansion, collapse, search, resource opening and context-menu actions for pinning, renaming and deleting conversations remain usable.
+- Refine background preparation of the assistant home. A dedicated background assistant updates welcome cards from actual task progress, pending confirmations and delivered results separately from foreground work. Existing cards and user inputs are retained, relevant sections appear only when useful, and outdated items are removed. Home actions continue their original task. Weather still uses a known location and actual lookup results, retaining the original observation time if a lookup fails.
+- Synchronize the assistant status icon more reliably with actual execution. Completed, stopped or failed work no longer keeps thinking, replying or tool animations alive because of old running records, delayed refreshes or closing connections. Failures and cancellations do not play success feedback. New work and questions update the state promptly, and background completion feedback returns to idle afterward.
+- Improve reconnection in assistant and ordinary conversations by checking actual run status before resuming a reply stream. This reduces repeated reconnections and busy composers after work has ended while preserving normal connection and display for replies still in progress.
+- Show a spinner on running assistant task groups so ongoing work is easier to identify. Other states retain their existing task icons and colors.
+- Refine the top Cyrene icon with a translucent backdrop matching the composer and bottom navigation, fading softly at its edges. Improve centering and the animation pivot while keeping the artwork, expressions and interaction symbols crisp, with coordinated materials in light and dark themes.
+- Simplify custom-card headers by removing the redundant custom-type label and refining title, subtitle, spacing and pin-button layout. Long titles wrap naturally, archived cards retain a clear read-only label, and pinning and unpinning remain available.
+- Allow custom cards to play audio and video embedded in the card, making generated multimedia viewable directly. Improve recognition of embedded content during card creation and updates, reducing failures caused by an omitted type marker. Existing text, forms, charts, maps and other native card content retain their usual presentation.
+- Improve card and tool argument errors with the affected block, missing content, unsupported fields, available choices or text-length requirements. Nested card errors identify the specific location, and Chinese messages retain the relevant reason so the assistant can correct the request and continue.
+- Check that one-time schedules still specify a future time when creating, editing or reactivating them. Elapsed times or missing valid future times produce a clear request to choose another time while preserving the existing task content and state. Selecting a future time allows the task to be enabled normally.
+
 ## [0.9.1.2] - 2026-11-10
 
 ### Features and interface updates
