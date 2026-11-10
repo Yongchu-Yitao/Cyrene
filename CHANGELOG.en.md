@@ -2,6 +2,17 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.1.4] - 2026-11-10
+
+### Features and interface updates
+
+- Refine assistant replies, progress updates and cards to focus on the task, its progress, results and necessary questions, referring to work by name or purpose. Reduce unsolicited internal identifiers and background execution details; provide relevant explanations when the user explicitly asks for them.
+- Let running assistant tasks receive additional or corrected requirements promptly and adjust work that has not yet been completed, without waiting for the entire current reply to finish. Updates can contain text, files or both. Tasks that are still running continue their existing execution while retaining completed actions and artifacts.
+- Improve immediate communication between built-in Cyrene conversations. Messages to ready, running conversations are delivered during the sending operation so the recipient can use new information without waiting for its entire turn to end. Messages retain their source and recipients can reply to the original conversation. Incoming messages remain queued while a human answer or permission decision is pending and do not substitute for that answer or authorization.
+- Improve the display and continuity of files supplied during execution. Files sent with additional requirements remain available in conversation history and subsequent task context, including their names and accessible attachment information after recovery. Tasks use the copy saved when the file was sent, so later edits to the original do not silently change previously supplied material. Repairing conversation history after a restart or interruption also restores attachment information.
+- Change how task completion, failure, stopping and attention notifications reach the main assistant. While it is thinking or replying, notifications are retained until a subsequent normal processing point, reducing repeated interruptions from progress reports. Retries and application restarts preserve this behavior. Explicit task updates and conversation messages still take effect promptly, and later status notifications do not cancel an already received update.
+- Improve message continuity while tasks start, await answers or finish a turn. Updates retain their original order while a task is not ready or is waiting for the user, then continue delivery when possible. If the original turn ends just as an update arrives, the update remains available for subsequent processing. Delayed send results, repeated send attempts and reopening the app are less likely to produce duplicate messages or processing, with attachments still referring to the content originally sent.
+
 ## [0.9.1.3] - 2026-11-10
 
 ### Features and interface updates
