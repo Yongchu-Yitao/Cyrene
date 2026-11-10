@@ -152,6 +152,13 @@ class SessionManagementService:
             result = organize_task(self.store, self.host, owner, target, args)
         elif operation == "session_send_message":
             result = await self._enqueue(owner, target, args, key, workspace)
+            if self.host.status(target) == "running":
+                # Admit updates to ready running tasks during this tool call.
+                # Durable ordering/retries still cover blocked targets and crashes.
+                for row in self.store.pending(target=target):
+                    if row["id"] == result["message_id"]:
+                        await self._deliver_message(row)
+                result["status"] = self.store.message(result["message_id"])["status"]
         elif operation == "session_answer_question":
             result = await self.host.answer(owner, target, args["question_id"], args["answer"], "managed_answer_" + digest(key)[:24])
         elif operation == "session_stop":
@@ -313,25 +320,26 @@ class SessionManagementService:
             async with self.lock:
                 if self.store.message(row["id"]) is None:
                     continue
-                try:
-                    record, _chat = self._owned(row["owner"], row["target"])
-                    if record["paused"]:
-                        continue
-                    payload = json.loads(row["payload"])
-                    accepted = await self.host.deliver(row["owner"], row["target"], row["id"], payload)
-                    if accepted:
-                        self.store.update(row["id"], "delivered")
-                    else:
-                        # Busy targets must not monopolize the bounded batch.
-                        self.store.defer(row["id"])
-                except ValueError as exc:
-                    self.store.update(row["id"], "failed", str(exc))
-                    self.delivery_failed(row, str(exc))
-                except Exception as exc:
-                    self.store.update(row["id"], "failed" if row["attempts"] >= 11 else "queued", str(exc))
-                    if row["attempts"] >= 11:
-                        self.delivery_failed(row, str(exc))
+                await self._deliver_message(row)
         await self.notify_tasks()
+
+    async def _deliver_message(self, row):
+        try:
+            record, _chat = self._owned(row["owner"], row["target"])
+            if record["paused"]:
+                return
+            accepted = await self.host.deliver(row["owner"], row["target"], row["id"], json.loads(row["payload"]))
+            if accepted:
+                self.store.update(row["id"], "delivered")
+            else:
+                self.store.defer(row["id"])
+        except ValueError as exc:
+            self.store.update(row["id"], "failed", str(exc))
+            self.delivery_failed(row, str(exc))
+        except Exception as exc:
+            self.store.update(row["id"], "failed" if row["attempts"] >= 11 else "queued", str(exc))
+            if row["attempts"] >= 11:
+                self.delivery_failed(row, str(exc))
 
     async def _worker(self):
         while True:

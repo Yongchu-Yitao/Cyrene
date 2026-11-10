@@ -84,8 +84,11 @@ async def test_two_tools_discovery_send_idle_wake_and_reply(tmp_path):
         assert '"session_id": "a"' in text
         assert provenance["origin_session_id"] == "a"
         context.data["session_id"] = "b"
-        await send_session_message({"target_session_id": "a", "content": "answer"}, context)
+        reply = await send_session_message({"target_session_id": "a", "content": "answer"}, context)
+        assert reply["status"] == "delivered"
+        assert port.deliveries[1][0] == "a"
         await service.tick()
+        assert len(port.deliveries) == 2
         assert port.deliveries[1][0] == "a"
         assert port.deliveries[1][2]["origin_session_id"] == "b"
     finally:
@@ -210,17 +213,16 @@ async def test_transient_delivery_failure_retries_same_message_id(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_peer_input_is_pending_without_interrupting_user_guidance_still_interrupts(tmp_path):
+async def test_peer_input_steers_like_user_guidance_without_granting_authorization(tmp_path):
     inbox = WorkbenchAgentInbox("b", run_id="run-b", db_path=str(tmp_path / "inbox.sqlite"))
     channel = WorkbenchGuidanceChannel(inbox)
     channel.bind_owner_loop()
     waiter = asyncio.create_task(channel.wait())
     try:
         await inbox.put_guidance("peer", client_request_id="peer", agent_originated=True, origin_session_id="a")
-        await asyncio.sleep(0)
+        assert await asyncio.wait_for(waiter, 1)
         assert channel.has_pending
-        assert not waiter.done()
-        assert not inbox._guidance_signal.is_set()
+        assert inbox._guidance_signal.is_set()
         await inbox.put_guidance("human", client_request_id="human")
         assert await asyncio.wait_for(waiter, 1)
         events = await channel.collect()
@@ -231,6 +233,75 @@ async def test_peer_input_is_pending_without_interrupting_user_guidance_still_in
         assert value["metadata"]["raw_guidance"] == "human"
         assert value["metadata"]["contains_agent_messages"]
         assert "peer" in value["content"]
+        await channel.acknowledge(events)
+        assert not channel.has_pending
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        channel.close()
+        await inbox.close(termination_reason="completed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["", "task_notification"])
+async def test_recovered_agent_guidance_preserves_notification_queueing(tmp_path, kind):
+    path = str(tmp_path / "inbox.sqlite")
+    original = WorkbenchAgentInbox("b", run_id="before-restart", db_path=path)
+    recovered = None
+    channel = None
+    try:
+        await original.put_guidance("updated input", client_request_id="update",
+                                    agent_originated=True, origin_session_id="a",
+                                    agent_message_kind=kind)
+        # Reopen durable pending rows as a new run, before acknowledging them.
+        recovered = WorkbenchAgentInbox("b", run_id="after-restart", db_path=path)
+        channel = WorkbenchGuidanceChannel(recovered)
+        channel.bind_owner_loop()
+        assert channel.has_pending
+        assert recovered._guidance_signal.is_set() == (kind != "task_notification")
+        assert channel._interrupt_pending == (kind != "task_notification")
+        if kind != "task_notification":
+            assert await asyncio.wait_for(channel.wait(), 1)
+        events = await channel.collect()
+        assert len(events) == 1 and events[0]["payload"]["agent_message_kind"] == kind
+        await channel.acknowledge(events)
+    finally:
+        if channel:
+            channel.close()
+        if recovered:
+            await recovered.close(termination_reason="completed")
+        await original.close(termination_reason="completed")
+
+
+@pytest.mark.asyncio
+async def test_task_notifications_queue_without_masking_later_steering(tmp_path):
+    inbox = WorkbenchAgentInbox("b", run_id="run-b", db_path=str(tmp_path / "inbox.sqlite"))
+    channel = WorkbenchGuidanceChannel(inbox)
+    channel.bind_owner_loop()
+    waiter = asyncio.create_task(channel.wait())
+    try:
+        await inbox.put_guidance("task completed", client_request_id="notification",
+            agent_originated=True, origin_session_id="task", agent_message_kind="task_notification")
+        await asyncio.sleep(0)
+        assert channel.has_pending and not waiter.done()
+        assert not inbox._guidance_signal.is_set()
+        notifications = await channel.collect()
+        channel.requeue(notifications)
+        await asyncio.sleep(0)
+        assert channel.has_pending and not waiter.done()
+        assert not channel._interrupt_pending
+
+        await inbox.put_guidance("change the goal", client_request_id="update",
+            agent_originated=True, origin_session_id="owner")
+        assert await asyncio.wait_for(waiter, 1)
+        assert inbox._guidance_signal.is_set()
+        # A later notification must not clear an already-pending steer signal.
+        await inbox.put_guidance("another task completed", client_request_id="notification-2",
+            agent_originated=True, origin_session_id="task-2", agent_message_kind="task_notification")
+        assert await asyncio.wait_for(channel.wait(), 1)
+        events = await channel.collect()
+        assert [event["payload"]["text"] for event in events] == [
+            "task completed", "change the goal", "another task completed"]
         await channel.acknowledge(events)
         assert not channel.has_pending
     finally:
@@ -311,21 +382,25 @@ def test_peer_input_never_becomes_authorization_after_restore(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_peer_message_reaches_real_agent_at_model_boundary_without_cancellation(tmp_path):
+@pytest.mark.parametrize("kind", ["", "task_notification"])
+async def test_real_agent_steers_for_messages_but_queues_task_notifications(tmp_path, kind):
     import threading
     from cyrene.core.session import AgentSession
     from cyrene.plugins.builtin.cyrene_guidance import plugin_pack as guidance_pack
 
-    started, release = threading.Event(), threading.Event()
-    calls, completed = [], []
+    started, cancelled, release = threading.Event(), threading.Event(), threading.Event()
+    calls = []
 
     async def model(arguments, _context):
         calls.append(arguments["messages"])
         if len(calls) == 1:
             started.set()
-            while not release.is_set():
-                await asyncio.sleep(0.001)
-            completed.append(True)
+            try:
+                while not release.is_set():
+                    await asyncio.sleep(0.001)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
         return {"content": "answer", "tool_calls": [], "model": "fake"}
 
     registry = PluginRegistry()
@@ -342,10 +417,14 @@ async def test_peer_message_reaches_real_agent_at_model_boundary_without_cancell
         session.submit("human task", run_id="run-b")
         drain = asyncio.create_task(session.drain())
         assert await asyncio.wait_for(asyncio.to_thread(started.wait), 2)
-        await inbox.put_guidance("peer finding", agent_originated=True, origin_session_id="a")
-        release.set()
+        await inbox.put_guidance("peer finding", agent_originated=True, origin_session_id="a",
+                                 agent_message_kind=kind)
+        if kind == "task_notification":
+            await asyncio.sleep(0.01)
+            assert not cancelled.is_set() and len(calls) == 1
+            release.set()
         await asyncio.wait_for(drain, 5)
-        assert completed == [True]
+        assert cancelled.is_set() == (kind != "task_notification")
         assert len(calls) == 2
         assert "peer finding" in str(calls[-1])
         assert session.permission_user_request == "human task"

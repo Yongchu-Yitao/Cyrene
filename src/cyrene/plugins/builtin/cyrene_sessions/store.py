@@ -70,14 +70,15 @@ class MessageStore:
                 (message_id, key, fingerprint, sender, recipient, payload, time.time()))
             return dict(db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone())
 
-    def pending(self) -> list[dict]:
+    def pending(self, recipient: str | None = None) -> list[dict]:
         with self.connect() as db:
             # One oldest message per recipient: a blocked session cannot starve others.
             return [dict(row) for row in db.execute("""SELECT * FROM messages m
-                WHERE status='queued' AND next_attempt<=? AND lease_until<=? AND NOT EXISTS (
+                WHERE status='queued' AND next_attempt<=? AND lease_until<=?
+                AND (? IS NULL OR recipient=?) AND NOT EXISTS (
                     SELECT 1 FROM messages older WHERE older.recipient=m.recipient
                     AND older.status='queued' AND older.sequence<m.sequence)
-                ORDER BY next_attempt, sequence LIMIT 32""", (time.time(), time.time()))]
+                ORDER BY next_attempt, sequence LIMIT 32""", (time.time(), time.time(), recipient, recipient))]
 
     def claim(self, message_id: str) -> bool:
         with self.connect() as db:

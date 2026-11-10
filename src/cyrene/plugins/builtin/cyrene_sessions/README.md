@@ -11,7 +11,7 @@
 
 ## 运行行为
 
-- 运行中的普通消息在模型/运行结束检查边界消费，不主动打断模型或取消已启动工具。用户指导仍保留原有打断行为。
+- 目标运行且准备就绪、没有更早的待投递消息时，在发送工具调用内直接接纳到现有 guidance / steer 通道，与用户运行中发送消息一样唤醒模型等待并在工具边界处理；不等待整轮结束。保留 Agent 来源与授权边界，不回滚已执行的操作。
 - 等待用户回答或权限批准、有未完成的 checkpoint、运行尚未准备好时，保持排队；绝不把 Agent 来信当作用户回答。失败或取消的旧运行已结束，允许来信启动新的运行。
 - 消息正文包含可用于回信的来源 ID，聊天记录另外保存 `agentOriginated` 和 `originSessionId`。来信不能提供用户授权或作为用户记忆证据，也不会自动转发为子 Agent 的用户指导。
 - 队列位于应用数据目录的 `plugin_data/cyrene_sessions/messages.sqlite3`。单收件人按顺序投递，独立收件人并行；阻塞的收件人轮转到后面，不占满每批投递名额；进程重启后继续扫描，数据库租约防止多个投递器同时发送同一条消息。
@@ -26,4 +26,4 @@
 
 This editable Plugin exposes only `list_sessions()` and `send_session_message(target_session_id, content)`. Listing includes other running built-in Cyrene conversations; known idle recipients may be awakened. Replies use the same send tool. External Agent backends are not advertised as messaging-capable.
 
-Messages are durably queued with automatic sender provenance, replay deduplication, recipient ordering, bounded retries and expiry. Peer input is consumed at a model/terminal boundary without preempting generation. Pending human questions are preserved. Disabling the Plugin stops delivery without deleting queued messages. Delivery acknowledgement is not task completion.
+Messages retain durable sender provenance, replay deduplication, recipient ordering, bounded retries and expiry. Ready running recipients admit the next message during the sending tool call through the same guidance/steer path as mid-run user input, including preempting model waits. Agent provenance and pending human questions are preserved. Disabling the Plugin stops delivery without deleting queued messages. Delivery acknowledgement is not task completion.

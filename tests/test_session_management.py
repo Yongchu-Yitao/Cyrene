@@ -171,6 +171,157 @@ async def test_cancel_delivery_waits_for_input_admission(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("input_kind", ["text", "files", "both"])
+async def test_task_update_steers_running_task_with_durable_snapshots(tmp_path, input_kind):
+    from test_session_messaging import durable_port
+    from cyrene.workbench.application.inbox import WorkbenchAgentInbox, WorkbenchGuidanceChannel
+    from cyrene.workbench.chat.chat_guidance_service import ChatGuidanceApplicationService, ChatGuidanceDependencies
+    from cyrene.plugins.builtin.cyrene_guidance.service import GuidanceService
+
+    port = durable_port(tmp_path)
+    repository = port.service.repository
+    repository.mutate_one("b", lambda chat: chat.update(kind=KIND, assistantOwnerSessionId="a"))
+    ready = asyncio.Event()
+    ready.set()
+    inbox = WorkbenchAgentInbox("b", repository._database(), run_id="running-task")
+    channel = WorkbenchGuidanceChannel(inbox)
+    channel.bind_owner_loop()
+    published = []
+
+    async def publish(event):
+        published.append(event)
+
+    run = SimpleNamespace(status="running", ready=ready, inbox=inbox,
+                          run_id="running-task", events=[], publish=publish)
+    port.run_manager.get = lambda _: run
+    port._guidance = ChatGuidanceApplicationService(ChatGuidanceDependencies(
+        run_manager=port.run_manager, get_chat=repository.get,
+        mutate_chat=repository.mutate_one, public_message=lambda entry: entry,
+        utc_now_iso=lambda: "2026-11-10T09:00:00+00:00", short_id=lambda _: f"guided-input-{len(published)}",
+    ))
+
+    async def unexpected_send(*args, **kwargs):
+        raise AssertionError("A running task must be steered, not restarted")
+
+    port.send = unexpected_send
+    host = WorkbenchHost(lambda: port)
+    host.attachment = Host(tmp_path).attachment
+    service = await service_at(tmp_path, host)
+    service.store.register("b", "a")
+    source = tmp_path / "input.txt"
+    source.write_text("original evidence")
+    args = {"session_id": "b"}
+    if input_kind != "files":
+        args["message"] = "Stop the report; produce STL"
+    if input_kind != "text":
+        args["files"] = [str(source)]
+    try:
+        ready.clear()
+        sent = await service.command("a", "session_send_message", args, "update", tmp_path)
+        source.write_text("changed source")
+        # Startup and unanswered questions must not admit steering prematurely.
+        await service.tick()
+        assert not published
+        ready.set()
+        repository.mutate_one("b", lambda chat: chat.update(pendingQuestion={"id": "q"}))
+        service.store.update(sent["message_id"], "queued")
+        await service.tick()
+        assert not published
+        repository.mutate_one("b", lambda chat: chat.pop("pendingQuestion"))
+        service.store.update(sent["message_id"], "queued")
+        await service.tick()
+        assert service.store.message(sent["message_id"])["status"] == "delivered"
+        assert run.status == "running"
+        assert await asyncio.wait_for(channel.wait(), 1)
+        events = await channel.collect()
+        assert len(events) == 1
+        payload = events[0]["payload"]
+        assert payload["agent_originated"] and payload["origin_session_id"] == "a"
+        value = GuidanceService(None).node_value(events, run_id=run.run_id)
+        assert value["authorization_request"] == ""
+        assert value["metadata"]["authorization_text"] == ""
+        if input_kind != "text":
+            snapshot = payload["attachments"][0]
+            assert Path(snapshot["path"]).read_text() == "original evidence"
+            assert snapshot["path"] in value["content"]
+            assert repository.get("b")["messages"][0]["attachments"][0]["name"] == "input.txt"
+            assert value["metadata"]["public_attachments"][0]["name"] == "input.txt"
+            # Repair the inbox/transcript crash window including attachment metadata.
+            repository.mutate_one("b", lambda chat: chat.update(messages=[]))
+            assert port.run_manager._reconcile_inbox_guidance_messages() == 1
+            assert repository.get("b")["messages"][0]["attachments"][0]["name"] == "input.txt"
+        # Retry after a lost sender acknowledgement uses durable receiver evidence.
+        service.store.update(sent["message_id"], "queued")
+        await service.stop()
+        service = await service_at(tmp_path, host)
+        await service.tick()
+        assert len(published) == 1
+        assert service.store.message(sent["message_id"])["status"] == "delivered"
+        channel.requeue(events)
+        assert await asyncio.wait_for(channel.wait(), 1)
+        await channel.acknowledge(await channel.collect())
+        # A ready running task is steered before task_update returns, without
+        # needing a background worker tick or waiting for the run to finish.
+        follow_up = await service.command("a", "session_send_message",
+            {"session_id": "b", "message": "Use the new dimensions"}, "follow-up", tmp_path)
+        assert follow_up["status"] == "delivered"
+        assert run.status == "running" and len(published) == 2
+        assert await asyncio.wait_for(channel.wait(), 1)
+        await channel.acknowledge(await channel.collect())
+    finally:
+        await service.stop()
+        channel.close()
+        await inbox.close(termination_reason="completed")
+
+
+@pytest.mark.asyncio
+async def test_task_steer_finishing_run_retries_without_delivery_error(tmp_path):
+    from cyrene.workbench.control.control_services import ControlServiceError
+
+    chat = {"kind": KIND, OWNER: "a", "createdAt": "now"}
+    ready = asyncio.Event()
+    ready.set()
+    run = SimpleNamespace(status="running", ready=ready)
+    admitted = False
+    calls = []
+
+    async def has_admission(*args):
+        return admitted
+
+    async def finishing(*args, **kwargs):
+        raise ControlServiceError("sealed", code="chat_not_running", status_code=409)
+
+    async def send(target, body):
+        nonlocal admitted
+        calls.append(body)
+        admitted = True
+
+    async def wait_admitted(*args):
+        assert admitted
+
+    manager = SimpleNamespace(get=lambda _: run, conversation_runtime=SimpleNamespace(context_checkpoint=lambda _: None))
+    port = SimpleNamespace(service=SimpleNamespace(repository=SimpleNamespace(
+        get=lambda _: chat, _database=lambda: str(tmp_path / "app.db"))),
+        run_manager=manager, agent_message_admitted=has_admission,
+        _dispatch_agent_message=finishing, send=send, _wait_agent_message_admission=wait_admitted)
+    host = WorkbenchHost(lambda: port)
+    service = await service_at(tmp_path, host)
+    service.store.register("b", "a")
+    try:
+        sent = await service.command("a", "session_send_message", {"session_id": "b", "message": "new goal"}, "update", tmp_path)
+        await service.tick()
+        row = service.store.message(sent["message_id"])
+        assert row["status"] == "queued" and not row["error"] and row["attempts"] == 0
+        manager.get = lambda _: None
+        service.store.update(sent["message_id"], "queued")
+        await service.tick()
+        assert service.store.message(sent["message_id"])["status"] == "delivered"
+        assert calls[0]["clientRequestId"] == sent["message_id"]
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_file_snapshot_stop_resume_replay_and_restart(tmp_path):
     host = Host(tmp_path)
     service = await service_at(tmp_path, host)

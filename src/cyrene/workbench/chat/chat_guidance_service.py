@@ -13,6 +13,28 @@ from cyrene.workbench.application.inbox import GuidanceAdmissionClosed
 logger = logging.getLogger(__name__)
 
 
+def _previous_guidance(chat, client_request_id):
+    return next((item for item in chat.get("messages", [])
+                 if client_request_id and item.get("clientRequestId") == client_request_id), None)
+
+
+def _guidance_conflict(previous, agent_originated, origin_session_id, agent_message_kind, message, public_attachments):
+    return previous is not None and (
+        bool(previous.get("agentOriginated")) != agent_originated
+        or previous.get("originSessionId", "") != origin_session_id
+        or previous.get("agentMessageKind", "") != agent_message_kind
+        or previous.get("content") != message
+        or previous.get("attachments", []) != public_attachments
+    )
+
+
+def _guidance_attachments(attachments):
+    from cyrene.workbench.chat.chat_attachment_service import normalize_chat_attachments, public_chat_attachment
+
+    normalized = normalize_chat_attachments(attachments)
+    return normalized, [public_chat_attachment(item) for item in normalized]
+
+
 @dataclass(slots=True)
 class ChatGuidanceDependencies:
     run_manager: Any
@@ -42,6 +64,7 @@ class ChatGuidanceApplicationService:
         agent_originated: bool = False,
         origin_session_id: str = "",
         agent_message_kind: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> ChatGuidanceResult:
         if not message:
             return self._error(
@@ -49,6 +72,7 @@ class ChatGuidanceApplicationService:
                 "guidance_empty",
                 422,
             )
+        normalized, public_attachments = _guidance_attachments(attachments)
         run = self.dependencies.run_manager.get(chat_id)
         if run is None or run.status != "running":
             return self._not_running()
@@ -63,15 +87,8 @@ class ChatGuidanceApplicationService:
                 404,
             )
         now = self.dependencies.utc_now_iso()
-        previous = next((item for item in chat.get("messages", [])
-                         if client_request_id
-                         and item.get("clientRequestId") == client_request_id), None)
-        if previous is not None and (
-            bool(previous.get("agentOriginated")) != agent_originated
-            or previous.get("originSessionId", "") != origin_session_id
-            or previous.get("agentMessageKind", "") != agent_message_kind
-            or previous.get("content") != message
-        ):
+        previous = _previous_guidance(chat, client_request_id)
+        if _guidance_conflict(previous, agent_originated, origin_session_id, agent_message_kind, message, public_attachments):
             return self._error("Agent message request ID conflicts with an existing turn.",
                                "agent_message_conflict", 422)
         message_id = str(previous["id"]) if previous else self.dependencies.short_id("msg")
@@ -86,6 +103,7 @@ class ChatGuidanceApplicationService:
                 agent_originated=agent_originated,
                 origin_session_id=origin_session_id,
                 agent_message_kind=agent_message_kind,
+                attachments=normalized,
             )
         except GuidanceAdmissionClosed:
             await run.done.wait()
@@ -113,6 +131,8 @@ class ChatGuidanceApplicationService:
             origin_session_id=origin_session_id,
             agent_message_kind=agent_message_kind,
         )
+        if public_attachments:
+            entry["attachments"] = public_attachments
 
         def persist(current: dict[str, Any]) -> None:
             messages = current.setdefault("messages", [])

@@ -94,7 +94,7 @@ class Store:
             row = db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
         return dict(row) if row else None
 
-    def pending(self):
+    def pending(self, target=None):
         with self.connect() as db:
             return [
                 dict(r)
@@ -102,10 +102,11 @@ class Store:
                     """SELECT m.* FROM messages m
                 JOIN sessions s ON s.id=m.target AND s.owner=m.owner
                 WHERE m.status='queued' AND s.paused=0 AND m.next_attempt<=?
+                AND (? IS NULL OR m.target=?)
                 AND NOT EXISTS (SELECT 1 FROM messages older WHERE older.target=m.target
                     AND older.status='queued' AND older.seq<m.seq)
                 ORDER BY m.seq LIMIT 32""",
-                    (time.time(),),
+                    (time.time(), target, target),
                 )
             ]
 

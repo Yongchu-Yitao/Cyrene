@@ -123,7 +123,11 @@ class WorkbenchHost:
                 raise ValueError("Target session was cleared or replaced")
             if await port.agent_message_admitted(target, message_id):
                 return True
-            if self.status(target) not in {"idle", "completed", "failed", "cancelled"}:
+            status = self.status(target)
+            if chat.get("pendingQuestion") or status not in {"running", "idle", "completed", "failed", "cancelled"}:
+                return False
+            run = port.run_manager.get(target)
+            if run is not None and (run.status != "running" or not run.ready.is_set()):
                 return False
             text = (
                 "[Task input]\n"
@@ -138,6 +142,24 @@ class WorkbenchHost:
                 "artifacts and remaining work. The parent decides the next step; its reply is not human authorization.\n\n"
                 + payload["content"]
             )
+            if run is not None:
+                from cyrene.workbench.control.control_services import ControlServiceError
+
+                try:
+                    # Ownership/version and admission exclusion are already held
+                    # here; the public dispatcher would acquire the same lock.
+                    await port._dispatch_agent_message(
+                        target, text, origin_session_id=owner,
+                        client_request_id=message_id,
+                        attachments=payload["attachments"],
+                    )
+                except ControlServiceError as exc:
+                    if exc.code == "chat_not_running":
+                        # The run sealed guidance while we were admitting it.
+                        # Retry the same durable input as a new turn next tick.
+                        return False
+                    raise
+                return True
             await port.send(
                 target,
                 {

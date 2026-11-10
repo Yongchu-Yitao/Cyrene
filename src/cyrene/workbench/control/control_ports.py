@@ -305,6 +305,7 @@ class WorkbenchChatApplicationPort:
         origin_session_id: str = "",
         client_request_id: str = "",
         agent_message_kind: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Send one cross-session Agent message through the normal Chat kernel."""
 
@@ -326,6 +327,7 @@ class WorkbenchChatApplicationPort:
                 agent_originated=True,
                 origin_session_id=origin,
                 agent_message_kind=agent_message_kind,
+                attachments=attachments,
             )
             if result.status_code >= 400:
                 raise ControlServiceError(
@@ -359,6 +361,7 @@ class WorkbenchChatApplicationPort:
                     "agentOriginated": True,
                     "sourceSessionId": origin,
                     "agentMessageKind": agent_message_kind,
+                    "attachments": attachments or [],
                     "stream": True,
                 },
             )

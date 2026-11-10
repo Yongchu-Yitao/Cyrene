@@ -1487,6 +1487,7 @@ class ChatRunManager:
         if not self._db_path:
             return 0
         from cyrene.workbench.application.inbox import read_workbench_guidance_records
+        from cyrene.workbench.application.guidance_payloads import guidance_message_provenance
 
         records = read_workbench_guidance_records(self._db_path)
         if not records:
@@ -1508,10 +1509,7 @@ class ChatRunManager:
             existing = next((item for item in messages if isinstance(item, dict)
                              and (str(item.get("id") or "") == message_id
                                   or (event_id and item.get("guidanceEventId") == event_id))), None)
-            provenance = ({"agentOriginated": True,
-                           "originSessionId": str(record.get("originSessionId") or ""),
-                           "agentMessageKind": str(record.get("agentMessageKind") or "")}
-                          if record.get("agentOriginated") else {})
+            provenance = guidance_message_provenance(record)
             if existing is not None:
                 if any(existing.get(key) != value for key, value in provenance.items()):
                     existing.update(provenance)

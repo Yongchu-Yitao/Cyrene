@@ -29,6 +29,7 @@ from uuid import uuid4
 from cyrene.observability.trace import trace_span
 from cyrene.localization import localized
 from cyrene.workbench.persistence.schema import ensure_schema
+from .guidance_payloads import inbox_payload, interrupting_guidance as _interrupting_guidance, guidance_interrupt
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +285,7 @@ class WorkbenchAgentInbox:
 
         self._guidance_listener = listener
         if listener is not None and self._guidance_pending_count:
-            listener({"type": "guidance_recovered"})
+            listener({"type": "guidance_recovered", "interrupt": self._guidance_signal.is_set()})
 
     def _start_db_writer(self) -> None:
         if self.db_path and self._db_writer is None:
@@ -628,9 +629,10 @@ class WorkbenchAgentInbox:
                 if dedupe_key:
                     self._live_dedupe_events[dedupe_key] = event
                 self._enqueue_nowait(event)
+                if _interrupting_guidance(event["payload"]):
+                    self._guidance_signal.set()
             if rows:
                 self._guidance_pending_count += len(rows)
-                self._guidance_signal.set()
         except Exception:
             logger.exception("Failed to recover Workbench inbox for %s", self.session_id)
 
@@ -864,7 +866,7 @@ class WorkbenchAgentInbox:
             self._live_dedupe_events[dedupe_key] = event
         if event_type == "guidance":
             self._guidance_pending_count += 1
-            if not event["payload"].get("agent_originated"):
+            if _interrupting_guidance(event["payload"]):
                 self._guidance_signal.set()
         await self._queue.put(self._queue_item(event))
         return event
@@ -879,6 +881,7 @@ class WorkbenchAgentInbox:
         agent_originated: bool = False,
         origin_session_id: str = "",
         agent_message_kind: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         dedupe_key = f"guidance:{client_request_id}" if client_request_id else ""
         async with self._guidance_admission_lock:
@@ -903,6 +906,7 @@ class WorkbenchAgentInbox:
                     "agent_originated": bool(agent_originated),
                     "origin_session_id": str(origin_session_id),
                     "agent_message_kind": str(agent_message_kind),
+                    "attachments": attachments or [],
                 },
                 priority=100,
                 dedupe_key=dedupe_key,
@@ -1530,8 +1534,7 @@ class WorkbenchGuidanceChannel:
             loop.call_soon_threadsafe(self._resolve_waiter, future, value)
 
     def notify(self, _event: dict[str, Any] | None = None) -> None:
-        payload = (_event or {}).get("payload") or {}
-        interrupt = not payload.get("agent_originated")
+        interrupt = guidance_interrupt(_event)
         with self._lock:
             if self._closed:
                 return
@@ -1636,7 +1639,7 @@ class WorkbenchGuidanceChannel:
             self._requeued = self._dedupe([*events, *self._requeued])
             self._revision += 1
             self._notified = True
-            interrupt = any(not (event.get("payload") or {}).get("agent_originated") for event in events)
+            interrupt = any(_interrupting_guidance(event.get("payload") or {}) for event in events)
             self._interrupt_pending = self._interrupt_pending or interrupt
         if interrupt:
             self._wake(True)
@@ -1650,14 +1653,6 @@ class WorkbenchGuidanceChannel:
             self._closed = True
             self._notified = False
         self._wake(False)
-
-
-def inbox_payload(raw: Any) -> dict[str, Any]:
-    try:
-        value = json.loads(str(raw) or "{}")
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
 
 
 def _preview(value: Any, limit: int = 600) -> str:
@@ -1832,6 +1827,8 @@ def read_workbench_inbox_snapshot(
 
 def read_workbench_guidance_records(db_path: str) -> list[dict[str, Any]]:
     """Return guidance rows carrying enough metadata to repair the transcript."""
+    from cyrene.workbench.chat.chat_attachment_service import public_chat_attachment
+
     if not db_path:
         return []
     path = Path(db_path).expanduser().resolve()
@@ -1866,6 +1863,9 @@ def read_workbench_guidance_records(db_path: str) -> list[dict[str, Any]]:
                 "agentOriginated": payload.get("agent_originated") is True,
                 "originSessionId": str(payload.get("origin_session_id") or ""),
                 "agentMessageKind": str(payload.get("agent_message_kind") or ""),
+                "attachments": [
+                    public_chat_attachment(item) for item in payload.get("attachments", [])
+                ],
                 "createdAt": str(payload.get("public_created_at") or created_at or ""),
             })
         return records

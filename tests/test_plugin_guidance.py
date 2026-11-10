@@ -96,7 +96,8 @@ class _ScriptedChannel:
 
 
 @pytest.mark.parametrize("output_channel", ["reasoning", "reply"])
-def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path, output_channel):
+@pytest.mark.parametrize("agent_originated", [False, True])
+def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path, output_channel, agent_originated):
     async def scenario() -> None:
         started = threading.Event()
         cancelled = threading.Event()
@@ -128,12 +129,20 @@ def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path, out
             accepted = await inbox.put_guidance(
                 "use the corrected requirement",
                 client_request_id="guidance-1",
+                agent_originated=agent_originated,
+                origin_session_id="owner" if agent_originated else "",
             )
             await asyncio.wait_for(draining, timeout=5)
 
             assert cancelled.is_set()
             assert len(captured) == 2
             assert "use the corrected requirement" in captured[-1][-1]["content"]
+            if agent_originated:
+                from cyrene.plugins.builtin.cyrene_guidance.service import GuidanceService
+
+                value = GuidanceService(None).node_value([accepted], run_id="run-guidance")
+                assert value["authorization_request"] == ""
+                assert value["metadata"]["agent_originated"] is True
             assert session.final_output("run-guidance")["content"] == "revised answer"
             assert any(event.type == "guidance.applied" for event in session.events())
             from cyrene.workbench.chat.run_timeline import RunTimeline

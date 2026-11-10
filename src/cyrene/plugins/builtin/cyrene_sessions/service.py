@@ -84,7 +84,16 @@ class SessionMessagingService:
                 self.store.accept, sender, target, content, str(source.get("title") or sender),
                 effect, self.version(recipient),
             )
-            # Delivery is detached: never retain A's tool call waiting for B's ready/run lock.
+            run = port.run_manager.get(target)
+            if run is not None and run.status == "running" and run.ready.is_set():
+                # Ready running receivers use the same guidance admission as
+                # an in-flight user message. Never wait for their task to finish.
+                async with self.lock:
+                    pending = await asyncio.to_thread(self.store.pending, target)
+                    for candidate in pending:
+                        if candidate["id"] == row["id"]:
+                            await self._claimed_delivery(candidate)
+                    row = await asyncio.to_thread(self.store.get, row["id"])
             return {"message_id": row["id"], "status": row["status"],
                     "target_session_id": target, "error": row["error"]}
         return await self._on_owner(perform)
