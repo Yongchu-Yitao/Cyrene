@@ -10,7 +10,9 @@ import { CyreneIcon } from "./cyrene-icon.jsx"
 const EMPTY_PERMISSION_REQUESTS = [];
 
 function assistantSavedChat(chat, sessionId, messages, event, runtime) {
-  var current = wbcMergeChatSummary(chat || { id: sessionId }, event.chatSummary, "completed");
+  var pending = event.type === "awaiting_user" ? event.pendingQuestion || event.pending_question : null;
+  var runStatus = pending ? "awaiting_user" : "completed";
+  var current = wbcMergeChatSummary(chat || { id: sessionId }, event.chatSummary, runStatus);
   var history = current.messages || [];
   if (event.retry) history = wbcTruncateMessagesAfterUser(history, event.truncateAfterMessageId);
   var users = (runtime?.userMessages || []).filter(message => !message.optimistic);
@@ -21,7 +23,7 @@ function assistantSavedChat(chat, sessionId, messages, event, runtime) {
   // available in that case, until the next detail request supplies the history.
   var records = saved.length ? saved : runtime?.timeline?.messages;
   return wbcMergeSavedAssistantMessages({
-    ...current, messages: history, pendingQuestion: null, runStatus: "completed",
+    ...current, messages: history, pendingQuestion: pending || null, status: "idle", runStatus,
   }, records);
 }
 
@@ -71,8 +73,8 @@ function useAssistantChatSync({ sessionId, model, engine, active, cache, answere
     window.addEventListener('cyrene:card-submitted', cardSubmitted);
     if (active) refresh();
     var unsubscribeSaved = engine.subscribeSaved(sessionId, function (messages, event, runtime) {
-      // This runs before the engine removes the live transcript. A poll that
-      // started before this write can still report the run as active.
+      // Persisted replies and questions arrive before the live transcript is
+      // removed. Reject polls started before either authoritative transition.
       savedRevision++;
       function merge(current) { return assistantSavedChat(current, sessionId, messages, event, runtime); }
       if (cache) cache.details[sessionId] = merge(cache.details[sessionId]);

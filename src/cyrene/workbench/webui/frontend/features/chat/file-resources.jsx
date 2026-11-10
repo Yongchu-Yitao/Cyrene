@@ -244,6 +244,13 @@ function wbcSubscribeSavedRun(chatId, fn) {
   };
 }
 
+function wbcAwaitingQuestion(event) {
+  var payload = event && event.payload || {};
+  return event.pending_question || event.pendingQuestion
+    || payload.pending_question || payload.pendingQuestion
+    || (event && event.kind ? event : null);
+}
+
 function wbcNotifySavedRun(chatId, messages, event, runtime) {
   wbcSavedRunSubscribers.get(chatId)?.forEach(function (fn) {
     try { fn(messages, event, runtime); } catch (e) {}
@@ -1155,10 +1162,7 @@ var WorkbenchChatRuntimes = (function () {
       },
       onAwaitingUser: function (event) {
         // The run paused for a permission / clarification answer.
-        var payload = event && event.payload || {};
-        var pending = event.pending_question || event.pendingQuestion
-          || payload.pending_question || payload.pendingQuestion
-          || (event && event.kind ? event : null);
+        var pending = wbcAwaitingQuestion(event);
         if (!pending || !pending.id) return;
         // The core notification precedes the persisted Workbench outcome.
         // Retain the stream until that outcome supplies the transcript and
@@ -1187,6 +1191,9 @@ var WorkbenchChatRuntimes = (function () {
         if (pending && ["permission.requested", "elicitation.requested"].indexOf(String(pending.kind || "")) >= 0) {
           return;
         }
+        // Independent conversation surfaces must adopt the persisted question
+        // and invalidate older polls before its live runtime disappears.
+        wbcNotifySavedRun(chatId, awaitingMessages, { ...event, type: "awaiting_user", pendingQuestion: pending }, get(chatId));
         clear(chatId);
         fire("onSettled", chatId);
       },
