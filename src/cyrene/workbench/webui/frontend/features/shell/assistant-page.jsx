@@ -35,6 +35,12 @@ function useTaskFiles() {
   return [filesByTask, receiveFiles];
 }
 
+function compareAssistantTasks(a, b) {
+  var position = ((a.presentation || {}).position ?? 2147483647) - ((b.presentation || {}).position ?? 2147483647);
+  if (position) return position;
+  return (Date.parse(b.created_at || b.updated_at) || 0) - (Date.parse(a.created_at || a.updated_at) || 0);
+}
+
 function PersonalAssistantPage({ context, active = true }) {
   var pinnedCards = usePinnedAssistantCards(active);
   var [snapshot, setSnapshot] = React.useState(null);
@@ -102,9 +108,7 @@ function PersonalAssistantPage({ context, active = true }) {
       <div className={"wbc-chat-list workbench-integrated-rail-body" + (empty ? " is-empty" : "")}>
         {error && <div role="alert" className="assistant-error"><p>{error}</p><button onClick={function () { setError(""); setAttempt(function (value) { return value + 1; }); }}>重新加载</button></div>}
         <div className="wbc-chat-list-primary">{empty ? <div className="assistant-muted wbc-rail-empty">暂无任务</div> : <div className="wbc-rail-section-items">
-          {tasks.filter(function (task) { return showArchived || !(task.presentation || {}).archived; }).slice().sort(function (a, b) {
-            return ((a.presentation || {}).position ?? 2147483647) - ((b.presentation || {}).position ?? 2147483647);
-          }).map(function (task) {
+          {tasks.filter(function (task) { return showArchived || !(task.presentation || {}).archived; }).sort(compareAssistantTasks).map(function (task) {
             var groupMatches = !search || String((task.presentation || {}).title || task.title || "").toLocaleLowerCase().includes(search);
             return <AssistantTaskGroup key={task.session_id} task={task} query={search} matches={groupMatches} hasChildren={resourceCounts[task.session_id] > 0}
               chat={snapshot.chats.find(function (chat) { return chat.id === task.session_id; })}

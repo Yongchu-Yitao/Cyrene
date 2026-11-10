@@ -90,7 +90,11 @@ async def test_create_list_and_backend_ownership(tmp_path):
         result = await create(service)
         assert await create(service) == result
         target = result["session_id"]
+        host.chats[target].update(createdAt="2026-11-10T10:00:00+08:00", updatedAt="2026-11-10T11:00:00+08:00")
         assert [s["session_id"] for s in (await service.list("a"))["sessions"]] == [target]
+        listed = (await service.list("a"))["sessions"][0]
+        assert listed["created_at"] == "2026-11-10T10:00:00+08:00"
+        assert listed["updated_at"] == "2026-11-10T11:00:00+08:00"
         assert (await service.list("b"))["sessions"] == []
         with pytest.raises(ValueError, match="conflict"):
             await create(service, title="changed")

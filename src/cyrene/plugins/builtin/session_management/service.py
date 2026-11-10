@@ -211,6 +211,7 @@ class SessionManagementService:
                             "pending_messages": self.store.pending_count(record["id"]),
                             "delivery_error": self.store.delivery_error(record["id"]),
                             "pending_question": chat.get("pendingQuestion"),
+                            "created_at": chat.get("createdAt", ""),
                             "updated_at": chat.get("updatedAt", ""),
                         }
                     )

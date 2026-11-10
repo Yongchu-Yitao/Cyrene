@@ -6,6 +6,7 @@
 
 ### Features and interface updates
 
+- Order assistant sidebar task groups from newest to oldest by creation time by default, placing newly created tasks at the top. Later progress updates to older tasks do not disturb this order, and existing explicit group ordering is preserved. Search and archived-task views use the same ordering.
 - Let the assistant organize the context catalog for different work: revise names and progress summaries, archive completed or explicitly shelved work, and find or restore earlier work by name, summary or identifier. Archiving preserves background, history and progress; continuing the original work restores it automatically. Active work must first be checkpointed and left to prevent accidental archival. Archived work remains available after reopening the app without crowding the everyday catalog.
 - Improve organization and continuity in long conversations. As conversation material grows, the assistant reviews outdated summaries and finished work and tidies the catalog when appropriate. It saves progress before changing goals, keeps related follow-ups with the original work, and continues retrieved tasks, reducing duplicate tasks and lost background.
 - Adjust automatic task-group organization by temporarily suspending assistant-driven renaming, ordering, group archival, resource hiding and delivered-file association. Existing organization and resource records remain available. Sidebar expansion, collapse, search, resource opening and context-menu actions for pinning, renaming and deleting conversations remain usable.

@@ -345,9 +345,18 @@ test('assistant page uses one global scope across project changes and forwards t
   const React = {createElement(type,props,...children) {return {type,props:{...props,children}};}};
   const calls = [], identities = [];
   let active = true;
-  const permission = {session_id: 'managed_one', title: 'Task', pending_question: {id: 'q', kind: 'permission'}};
+  const permission = {session_id: 'managed_one', title: 'Task', pending_question: {id: 'q', kind: 'permission'},
+    created_at: '2026-11-08T00:00:00Z', updated_at: '2026-11-12T00:00:00Z'};
+  const tasks = [permission,
+    {session_id: 'newest', title: 'Newest', created_at: '2026-11-10T10:00:00+08:00'},
+    {session_id: 'middle', title: 'Middle', created_at: '2026-11-10T01:00:00Z'},
+    {session_id: 'legacy', title: 'Legacy', updated_at: '2026-11-07T00:00:00Z'},
+    {session_id: 'undated', title: 'Undated'},
+    {session_id: 'archived', title: 'Archived', created_at: '2026-11-11T00:00:00Z', presentation: {archived: true}},
+    {session_id: 'ordered', title: 'Ordered', created_at: '2026-11-06T00:00:00Z', presentation: {position: 0}},
+  ];
   const snapshot = {assistant_id: 'assistant_global', scope: {id: '__personal_assistant__'},
-    sessions: [permission], chats: [{id: 'assistant_global'}]};
+    sessions: tasks, chats: [{id: 'assistant_global'}]};
   const context = {store: {activeProject: null}, assistant: {setSessionId: id => identities.push(id)},
     navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
   const service = {Model: {}, Page: 'page'};
@@ -385,6 +394,17 @@ test('assistant page uses one global scope across project changes and forwards t
   h.listeners.get('cyrene:assistant-home')(); h.flush();
   assert.equal(h.value.props.requestedChatRevision, 2);
   const rail = h.value.props.railOverride({openResource: () => {}});
+  function taskOrder(element) {
+    if (Array.isArray(element)) return element.flatMap(taskOrder);
+    if (!element) return [];
+    return element.type === 'task-group' ? [element.props.task.session_id] : taskOrder(element.props?.children);
+  }
+  const defaultOrder = ['ordered', 'newest', 'middle', 'managed_one', 'legacy', 'undated'];
+  assert.deepEqual(taskOrder(rail), defaultOrder);
+  assert.equal(snapshot.sessions[0], permission, 'rendering does not reorder the cached snapshot');
+  find(rail, 'button').props.onClick(); h.flush();
+  assert.deepEqual(taskOrder(h.value.props.railOverride({})), ['ordered', 'archived', ...defaultOrder.slice(1)]);
+  find(h.value.props.railOverride({}), 'button').props.onClick(); h.flush();
   const railText = JSON.stringify(rail);
   assert.equal(railText.includes('助理上下文'), false);
   assert.equal(railText.includes('Cyrene · 个人助理'), false);
@@ -393,6 +413,7 @@ test('assistant page uses one global scope across project changes and forwards t
   assert.equal(railText.includes('assistant_global'), false);
   const toolbar = find(rail, 'rail-toolbar');
   toolbar.props.onQueryChange('not-found'); h.flush();
+  assert.deepEqual(taskOrder(h.value.props.railOverride({})), defaultOrder);
   assert.equal(JSON.stringify(h.value.props.railOverride({})).includes('aria-label\":\"Task'), false);
   toolbar.props.onAction(); h.flush();
   assert.equal(h.value.props.requestedChatId, 'assistant_global');
