@@ -16,6 +16,18 @@ function fixture() {
   return {panes,sender,source,events};
 }
 
+test('personal assistant cannot begin a native drag or open a detached window', async () => {
+  const {panes, sender} = fixture();
+  const descriptor = {kind: 'chat', payload: 'assistant_global'};
+  const result = panes.beginDetachedPaneDrag(sender, {descriptor});
+  assert.equal(result.ok, false);
+  assert.match(result.error, /must remain in the main window/);
+  assert.equal(panes.detachedPaneDragSessions.size, 0);
+  await assert.rejects(panes.createDetachedPaneWindow(descriptor), /must remain in the main window/);
+  assert.equal(panes.detachedPaneWindows.size, 0);
+  assert.equal(panes.normalizeDetachedPaneDescriptor({kind: 'chat', payload: 'managed_task'}).payload, 'managed_task');
+});
+
 test('drag cancellation clears its timer and transports draft without sharing mutable objects',()=>{
   const {panes,sender,events}=fixture();
   const descriptor={kind:'chat',payload:'c',draft:{text:'keep'}};

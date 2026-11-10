@@ -2,16 +2,22 @@ import { wbcBuildRailCardDragPreview, wbcCaptureConversationViewport, wbcClonePa
 import { WBC_PROJECT_FILE_DRAFTS, wbcMapItemLabel, wbcProjectFileDraftKey } from "./split-pane.jsx"
 import { wbcBrowserStateForChat } from "./composer.jsx"
 
-function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
-  var location = wbcPaneCardLocation(context.paneLayoutFor(), cardId);
-  var pane = paneOverride || (location && location.card);
-  if (!pane) return null;
-  var descriptor = {
+function wbcPaneCardDetachBaseDescriptor(context, pane) {
+  return {
     kind: pane.kind, payload: pane.payload,
     meta: pane.meta && typeof pane.meta === "object" ? pane.meta : null,
     ownerChatId: pane.ownerChatId || context.activeChatIdRef.current || "",
     project: context.project || null, title: "", items: [], agent: null, agents: [], draft: null,
   };
+}
+
+function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
+  var location = wbcPaneCardLocation(context.paneLayoutFor(), cardId);
+  var pane = paneOverride || (location && location.card);
+  if (!pane) return null;
+  // Detaching removes the source pane; protected assistant panes stay docked.
+  if (context.canClosePaneCard && !context.canClosePaneCard(pane)) return null;
+  var descriptor = wbcPaneCardDetachBaseDescriptor(context, pane);
   if (pane.kind === "chat") {
     var detachedChatId = String(pane.payload || "");
     if (!detachedChatId) return null;
@@ -258,6 +264,17 @@ function wbcPaneDragPointIn(element, clientX, clientY) {
     && clientY >= rect.top && clientY <= rect.bottom);
 }
 
+function wbcUpdateNativePaneDrag(session, event, clientX, clientY) {
+  var bridge = window.cyrene && window.cyrene.detachedPane;
+  if (session.context.paneCardDetachRef.current && bridge && typeof bridge.updateDrag === "function") {
+    bridge.updateDrag({
+      clientX: clientX, clientY: clientY,
+      screenX: Number(event && event.screenX), screenY: Number(event && event.screenY),
+      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+    });
+  }
+}
+
 function wbcMovePaneCardGhost(session, event) {
   var clientX = Number(event && event.clientX);
   var clientY = Number(event && event.clientY);
@@ -266,14 +283,7 @@ function wbcMovePaneCardGhost(session, event) {
     clientX: clientX, clientY: clientY,
     screenX: Number(event && event.screenX), screenY: Number(event && event.screenY),
   };
-  var bridge = window.cyrene && window.cyrene.detachedPane;
-  if (bridge && typeof bridge.updateDrag === "function") {
-    bridge.updateDrag({
-      clientX: clientX, clientY: clientY,
-      screenX: Number(event && event.screenX), screenY: Number(event && event.screenY),
-      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
-    });
-  }
+  wbcUpdateNativePaneDrag(session, event, clientX, clientY);
   var overRail = !!(session.railPreview && session.railElement
     && wbcPaneDragPointIn(session.railElement, clientX, clientY));
   var overMatchingCard = wbcPaneDragPointIn(session.railCard, clientX, clientY);
@@ -361,8 +371,8 @@ function wbcStartPaneCardDrag(context, event, cardId, paneOverride) {
     ? event.currentTarget.closest(".wbc-pane-card") : null;
   var dragHandle = event.currentTarget;
   if (!card || !dragHandle) return;
-  var pendingDetach = wbcPreparePaneCardDetach(context, event, cardId, paneOverride);
-  if (!pendingDetach) return;
+  // In-window rearrangement does not require permission to detach.
+  wbcPreparePaneCardDetach(context, event, cardId, paneOverride);
   context.setPaneCardDragId(String(cardId));
   if (context.paneCardDragImageCleanupRef.current) context.paneCardDragImageCleanupRef.current();
   var session = wbcCreatePaneDragSession(context, event, cardId, card, dragHandle);

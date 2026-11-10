@@ -2,6 +2,12 @@
 const path = require('path');
 const crypto = require('crypto');
 
+function assertDetachablePane(kind, payload) {
+  if (kind === 'chat' && String(payload || '') === 'assistant_global') {
+    throw new Error('The personal assistant pane must remain in the main window.');
+  }
+}
+
 class DetachedPanes {
   constructor({ getMainWindow, BrowserWindow, screen, waitForPort, normalizeBrowserSessionId, browserSessions, installLocalNavigationGuards, AUTH_TOKEN }) {
     this.detachedPaneWindows = new Map();
@@ -49,6 +55,7 @@ class DetachedPanes {
     // plugin cards share the same structured-clone boundary; the renderer owns
     // whether a registered card kind has UI for this window.
     if (!/^[a-z][a-z0-9._-]{0,79}$/i.test(kind)) throw new Error('Invalid detached pane kind.');
+    assertDetachablePane(kind, source.payload);
     const serialized = JSON.stringify({
       kind,
       payload: source.payload == null ? null : source.payload,

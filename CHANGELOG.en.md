@@ -6,6 +6,7 @@
 
 ### Features and interface updates
 
+- Improve drag protection for the main assistant conversation. It remains in the main window and cannot be moved out through dragging or detached-window actions, while still allowing rearrangement between split panes and vertical positions within the main window. Ordinary conversations retain detached-window dragging, and panes that cannot detach no longer lose their ability to move within the window.
 - Refine assistant replies, progress updates and cards to focus on the task, its progress, results and necessary questions, referring to work by name or purpose. Reduce unsolicited internal identifiers and background execution details; provide relevant explanations when the user explicitly asks for them.
 - Let running assistant tasks receive additional or corrected requirements promptly and adjust work that has not yet been completed, without waiting for the entire current reply to finish. Updates can contain text, files or both. Tasks that are still running continue their existing execution while retaining completed actions and artifacts.
 - Improve immediate communication between built-in Cyrene conversations. Messages to ready, running conversations are delivered during the sending operation so the recipient can use new information without waiting for its entire turn to end. Messages retain their source and recipients can reply to the original conversation. Incoming messages remain queued while a human answer or permission decision is pending and do not substitute for that answer or authorization.

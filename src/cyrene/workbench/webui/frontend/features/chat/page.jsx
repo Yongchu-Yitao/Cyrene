@@ -1481,6 +1481,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
 
   function paneCardDragContext() {
     return {
+      canClosePaneCard: canClosePaneCard,
       project: project, chatCache: chatCache, activeChat: activeChat,
       artifactItems: artifactItems, terminals: terminals, sideAgents: sideAgents,
       activeChatIdRef: activeChatIdRef, paneCardDetachRef: paneCardDetachRef,
