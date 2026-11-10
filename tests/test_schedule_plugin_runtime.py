@@ -1,7 +1,9 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime
+import pytest
+
+from cyrene.core.plugin import PluginContext, PluginExecutionError, PluginRegistry, PluginRuntime
 from cyrene.plugins.native_tools import seed_builtin_plugin_directory
 from cyrene.platform.database import init_db
 from cyrene.plugins.builtin.cyrene_schedule.service import ScheduleRuntimeService
@@ -172,5 +174,67 @@ def test_hidden_tick_executes_message_and_records_terminal_run(tmp_path):
         )
         assert runs[0]["status"] == "success"
         assert runs[0]["run_id"] == delivered[0][2]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("value", ["", "2026-01-01T00:00:00Z", "2026-11-10T12:00:00Z", "2026-11-10T20:00:00+08:00"])
+def test_once_request_requires_strictly_future_time(monkeypatch, value):
+    from cyrene.plugins.builtin.cyrene_schedule import tools
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 10, 12, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(tools, "datetime", Clock)
+    context = PluginContext(data={"language": "zh"})
+    with pytest.raises(PluginExecutionError) as raised:
+        tools._next_requested_run(context, "once", value, timezone_name="UTC")
+    assert raised.value.failure.error_code == "schedule_time_not_future"
+    assert "未来时间" in raised.value.failure.message
+    assert tools._next_requested_run(context, "once", "2026-11-10T20:00:01+08:00", timezone_name="UTC") == "2026-11-10T12:00:01+00:00"
+
+
+def test_past_once_requests_do_not_create_edit_or_resume_tasks(tmp_path):
+    runtime, service, context = _runtime(tmp_path)
+    context.data["language"] = "zh"
+
+    async def rejected(name, args):
+        result = await runtime.call(name, args, context)
+        assert not result.success
+        assert result.failure.error_code == "schedule_time_not_future"
+        assert result.failure.retry_scope == "different_arguments"
+        assert "schedule_value" in result.error and "未来时间" in result.error
+
+    async def scenario():
+        past = "2000-01-01T00:00:00+00:00"
+        for value in (past, ""):
+            await rejected("schedule.create", {"prompt": "x", "schedule_type": "once", "schedule_value": value})
+        assert await service.repository.list("project_a") == []
+
+        future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        created = await runtime.call("schedule.create", {
+            "prompt": "Keep this", "schedule_type": "once", "schedule_value": future,
+        }, context)
+        assert created.success
+        task_id = created.value["id"]
+        before = (await service.repository.get(task_id, "project_a")).to_dict()
+        await rejected("schedule.edit", {"task_id": task_id, "prompt": "Must not save", "schedule_value": past})
+        assert (await service.repository.get(task_id, "project_a")).to_dict() == before
+
+        # Seed an older paused task whose original time has now elapsed.
+        await service.repository.edit(task_id, {"schedule_value": past, "next_run": past, "status": "paused"}, "project_a")
+        before = (await service.repository.get(task_id, "project_a")).to_dict()
+        await rejected("schedule.resume", {"task_id": task_id})
+        await rejected("schedule.edit", {"task_id": task_id, "status": "active"})
+        assert (await service.repository.get(task_id, "project_a")).to_dict() == before
+
+        corrected = await runtime.call("schedule.edit", {
+            "task_id": task_id, "schedule_value": future, "status": "active",
+        }, context)
+        assert corrected.success
+        task = await service.repository.get(task_id, "project_a")
+        assert task.status == "active" and task.next_run == future
 
     asyncio.run(scenario())

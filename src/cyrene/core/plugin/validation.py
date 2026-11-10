@@ -71,7 +71,7 @@ class PluginInputValidationError(ValueError):
         self.instance = instance
 
     def localized_message(self, language: str) -> str:
-        """Return a user-facing validation message without mixed locales."""
+        """Localize common errors without dropping paths or validation details."""
 
         if language != "zh":
             return str(self)
@@ -79,6 +79,8 @@ class PluginInputValidationError(ValueError):
         if self.validator == "required":
             match = re.match(r"^'([^']+)' is a required property$", self.reason)
             field = match.group(1) if match else self.reason
+            if path != "arguments":
+                field = f"{path}.{field}"
             return f"缺少必填参数：{field}。"
         if self.validator == "enum":
             choices = self.validator_value if isinstance(self.validator_value, list) else []
@@ -87,10 +89,15 @@ class PluginInputValidationError(ValueError):
         if self.validator == "additionalProperties":
             match = re.search(r"\((.+?) (?:was|were) unexpected\)", self.reason)
             fields = match.group(1) if match else self.reason
-            return f"包含不支持的参数：{fields}。"
+            return f"参数 {path} 包含不支持的字段：{fields}。"
         if self.validator == "type":
             return f"参数 {path} 的类型无效，应为 {self.validator_value}。"
-        return f"参数 {path} 无效。"
+        if self.validator == "const":
+            return f"参数 {path} 必须为 {self.validator_value!r}。"
+        if self.validator in {"minLength", "maxLength"}:
+            bound = "至少需要" if self.validator == "minLength" else "最多允许"
+            return f"参数 {path} {bound} {self.validator_value} 个字符。"
+        return f"参数 {path} 无效：{self.reason}。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,6 +607,36 @@ def normalize_plugin_arguments(
     return PluginArgumentNormalization(dict(normalized), tuple(repairs))
 
 
+def _default_tagged_branches(branches, tags):
+    return [i for i, tag in enumerate(tags)
+            if tag.get("default") == tag["const"] and "type" not in branches[i].get("required", [])]
+
+
+def _specific_validation_error(error: exceptions.ValidationError) -> exceptions.ValidationError:
+    """Explain a tagged oneOf using its explicit type or declared default."""
+    if error.validator != "oneOf" or not error.context or not isinstance(error.instance, Mapping):
+        return error
+    branches = error.validator_value
+    tags = [branch.get("properties", {}).get("type", {}) if isinstance(branch, Mapping) else {} for branch in branches]
+    if not all(isinstance(tag, Mapping) and isinstance(tag.get("const"), str) for tag in tags):
+        return error
+    if "type" in error.instance:
+        selected = [i for i, tag in enumerate(tags) if tag["const"] == error.instance["type"]]
+        if not selected:
+            choices = list(dict.fromkeys(tag["const"] for tag in tags))
+            return exceptions.ValidationError(
+                f"{error.instance['type']!r} is not one of {choices!r}",
+                validator="enum", validator_value=choices, instance=error.instance["type"],
+                path=[*error.absolute_path, "type"],
+            )
+    else:
+        selected = _default_tagged_branches(branches, tags)
+    if len(selected) != 1:
+        return error
+    children = [child for child in error.context if child.schema_path[0] == selected[0]]
+    return exceptions.best_match(_specific_validation_error(child) for child in children) or error
+
+
 def validate_plugin_arguments(
     plugin_name: str,
     arguments: Mapping[str, Any],
@@ -617,7 +654,8 @@ def validate_plugin_arguments(
         ) from exc
 
     error = exceptions.best_match(
-        validator_type(normalized_schema).iter_errors(dict(arguments))
+        _specific_validation_error(item)
+        for item in validator_type(normalized_schema).iter_errors(dict(arguments))
     )
     if error is None:
         return

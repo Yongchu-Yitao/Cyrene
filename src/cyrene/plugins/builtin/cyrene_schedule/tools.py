@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from cyrene.core.plugin import Plugin, PluginContext
+from cyrene.core.plugin import Plugin, PluginContext, PluginExecutionError, PluginFailure
 from cyrene.plugins.native_runtime import plugin_language, plugin_localized
 
 from .schedule_spec import next_run, occurrence_window, task_events
@@ -62,6 +62,25 @@ def _permission(
     return value
 
 
+def _next_requested_run(
+    context: PluginContext, kind: str, value: str, *, timezone_name: str,
+) -> str:
+    now = datetime.now(timezone.utc)
+    fire_at = next_run(kind, value, timezone_name=timezone_name, now=now)
+    if kind == "once" and datetime.fromisoformat(fire_at) <= now:
+        raise PluginExecutionError(PluginFailure(
+            error_code="schedule_time_not_future",
+            message=plugin_localized(
+                context,
+                "schedule_value must specify a future time for a once schedule. Choose a new time.",
+                "单次定时任务的 schedule_value 必须指定未来时间，请重新选择时间。",
+            ),
+            retryable=True,
+            retry_scope="different_arguments",
+        ))
+    return fire_at
+
+
 async def create_schedule(
     arguments: dict[str, Any], context: PluginContext
 ) -> dict[str, Any]:
@@ -72,7 +91,7 @@ async def create_schedule(
     kind = str(arguments.get("schedule_type") or "").strip().lower()
     value = str(arguments.get("schedule_value") or "").strip()
     timezone_name = str(arguments.get("schedule_timezone") or "UTC").strip() or "UTC"
-    fire_at = next_run(kind, value, timezone_name=timezone_name)
+    fire_at = _next_requested_run(context, kind, value, timezone_name=timezone_name)
     if kind == "once":
         value = fire_at
     action = str(arguments.get("action_type") or "agent_task").strip().lower()
@@ -181,7 +200,7 @@ async def edit_schedule(
         zone = str(
             arguments.get("schedule_timezone", task.schedule_timezone or "UTC")
         ).strip() or "UTC"
-        fire_at = next_run(kind, value, timezone_name=zone)
+        fire_at = _next_requested_run(context, kind, value, timezone_name=zone)
         if kind == "once":
             value = fire_at
         updates.update(
@@ -193,7 +212,8 @@ async def edit_schedule(
             }
         )
     elif updates.get("status") == "active" and task.status != "active":
-        updates["next_run"] = next_run(
+        updates["next_run"] = _next_requested_run(
+            context,
             task.schedule_type,
             task.schedule_value,
             timezone_name=task.schedule_timezone,
@@ -242,7 +262,8 @@ async def resume_schedule(
     task = await service.repository.get(task_id, scope.project_id)
     if task is None:
         raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
-    fire_at = next_run(
+    fire_at = _next_requested_run(
+        context,
         task.schedule_type,
         task.schedule_value,
         timezone_name=task.schedule_timezone,

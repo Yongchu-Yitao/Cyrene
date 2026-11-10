@@ -53,6 +53,21 @@ test('unmount during loading cannot schedule polling or reattach a stream',async
   assert.equal(subscribers.size,0);
 });
 
+test('assistant polling reconnects only an active run, not a stale conversation status', async () => {
+  for (const runStatus of ['idle', 'completed', 'failed', 'cancelled', 'running']) {
+    const {h, service} = mount();
+    await settle(); h.flush();
+    const reconnects = [];
+    service.Runtimes.reconnect = id => reconnects.push(id);
+    service.Model.getChat = async () => ({id:'a', messages:[], status:'running', runStatus});
+    for (const [id, callback] of [...h.timers]) { h.timers.delete(id); callback(); }
+    await settle(); h.flush();
+    assert.deepEqual(reconnects, runStatus === 'running' ? ['a'] : []);
+    assert.equal(find(h.value, 'composer').props.running, runStatus === 'running');
+    h.unmount();
+  }
+});
+
 test('saved reply replaces the live transcript before an older assistant poll can reconnect', async () => {
   const timeline = harness('./runtime-timeline.jsx').run(mod => mod);
   const pageHooks = harness('./runtime-page-hooks.jsx').run(mod => mod);

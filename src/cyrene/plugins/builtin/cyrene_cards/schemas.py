@@ -179,6 +179,8 @@ def normalize(template, supplied):
             "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}, **deepcopy(supplied)}
     if "blocks" not in spec:
         spec["blocks"] = [default_block(template)]
+    for block in spec["blocks"]:
+        block.setdefault("type", "embed")
     if not spec["title"].strip():
         raise CardError("invalid_card", "Card title must not be blank")
     input_schema(spec["input_schema"])

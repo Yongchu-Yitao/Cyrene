@@ -48,8 +48,8 @@ def test_warning_once_and_stable_prefix_when_task_continues(tmp_path):
         initial = s._prepare_model_input(s.store.get_node(s.tree.id, s._leaf_id))
         s._configured_compaction_limit = lambda: int(initial.compaction_tokens / .55)
         first = prepare(s)
-        assert 'Context capacity:' in first.messages[-1]['content']
-        assert first.messages[:-1] == initial.messages
+        assert 'Context capacity:' in str(first.messages)
+        assert first.messages[:len(initial.messages)] == initial.messages
         state = s.task_contexts.read()
         assert len(warnings(s)) == 1
         assert s.hooks.list(MODEL_START)
@@ -146,6 +146,7 @@ def test_model_receives_warning_and_continues_in_new_segment(tmp_path):
         seen.append(deepcopy(arguments['messages']))
         if len(seen) == 1:
             assert 'Context capacity:' in str(arguments['messages'])
+            assert '50% threshold reached' in str(arguments['messages'])
             return {'content': '', 'tool_calls': [{'id': 'pause', 'name': 'unload_context',
                     'arguments': {'summary': 'Implementation unfinished; continue from saved task evidence.'}}]}
         return {'content': 'continuing the implementation', 'tool_calls': []}
@@ -188,7 +189,7 @@ def test_capacity_mount_survives_compacted_anchor_and_switches(tmp_path):
         s._leaf_id = result.id
         initial = s._prepare_model_input(result)
         s._configured_compaction_limit = lambda: int(initial.compaction_tokens / .55)
-        assert prepare(s).messages[:-1] == initial.messages
+        assert prepare(s).messages[:len(initial.messages)] == initial.messages
         class Gateway:
             async def complete(self, messages, **kwargs):
                 return {'content': 'compacted task evidence'}
@@ -200,6 +201,7 @@ def test_capacity_mount_survives_compacted_anchor_and_switches(tmp_path):
         s._leaf_id = node.id
         assert call.id in s.task_contexts.read()['documents'][active]['covered']
         assert 'Context capacity:' in str(prepare(s).messages)
+        assert '50% threshold reached' in str(prepare(s).messages)
         assert len(warnings(s)) == 1
         command(s, 'unload_context', {'summary': 'continue in new segment'}, 'pause')
         s.task_contexts.ensure('next')
@@ -258,3 +260,73 @@ def test_shared_snapshot_repairs_without_capacity_pressure(tmp_path, damage):
         assert str(path) in str(prepared.messages)
     finally:
         s.close()
+
+
+def test_catalog_reminders_at_30_and_50_percent_once_per_task_and_branch(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    s = make_session(tmp_path)
+    try:
+        user(s, 'continue', 'r')
+        active = s.task_contexts.ensure('a')
+        original_prepare = s._prepare_model_input
+        tokens = 299999
+        monkeypatch.setattr(s, '_prepare_model_input',
+                            lambda node: replace(original_prepare(node), compaction_tokens=tokens))
+        s._configured_compaction_limit = lambda: 1000000
+        boundary = s._leaf_id
+        assert 'Task catalog capacity:' not in str(prepare(s).messages)
+        tokens = 300000
+        first = prepare(s)
+        assert '30% threshold reached' in str(first.messages)
+        assert prepare(s).messages == first.messages
+        tokens = 499999
+        assert prepare(s).messages == first.messages
+        tokens = 500000
+        second = prepare(s)
+        assert '50% threshold reached' in str(second.messages)
+        assert second.messages[:len(first.messages)] == first.messages
+        assert prepare(s).messages == second.messages
+        # A marker on an abandoned branch cannot suppress this branch's reminder.
+        s._leaf_id = boundary
+        assert '50% threshold reached' in str(prepare(s).messages)
+        kinds = [node.value.get('context_kind') for node in s.store.get_path(s.tree.id, s._leaf_id)]
+        assert f'task_catalog_capacity.{active}.30' not in kinds
+        assert kinds.count(f'task_catalog_capacity.{active}.50') == 1
+        # Switching filters old reminders and gives the new task its own threshold.
+        command(s, 'switch_context', {'context_id': None, 'title': 'B', 'summary': 'A paused'}, 'b')
+        tokens = 0
+        assert 'Task catalog capacity:' not in str(prepare(s).messages)
+        tokens = 300000
+        assert '30% threshold reached' in str(prepare(s).messages)
+    finally:
+        s.close()
+
+
+def test_catalog_reminder_survives_reopen_without_duplicate(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    s = make_session(tmp_path)
+    try:
+        user(s, 'keep task', 'r')
+        s.task_contexts.ensure('a')
+        original_prepare = s._prepare_model_input
+        monkeypatch.setattr(s, '_prepare_model_input',
+                            lambda node: replace(original_prepare(node), compaction_tokens=500000))
+        s._configured_compaction_limit = lambda: 1000000
+        prepare(s)
+        leaf = s._leaf_id
+    finally:
+        s.close()
+    reopened = make_session(tmp_path)
+    try:
+        reopened._leaf_id = leaf
+        original_prepare = reopened._prepare_model_input
+        monkeypatch.setattr(reopened, '_prepare_model_input',
+                            lambda node: replace(original_prepare(node), compaction_tokens=500000))
+        reopened._configured_compaction_limit = lambda: 1000000
+        before = len(reopened.store.get_path(reopened.tree.id, leaf))
+        assert '50% threshold reached' in str(prepare(reopened).messages)
+        assert len(reopened.store.get_path(reopened.tree.id, reopened._leaf_id)) == before
+    finally:
+        reopened.close()

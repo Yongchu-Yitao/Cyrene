@@ -102,3 +102,102 @@ test('server reconciliation recovers from transport errors and completes backgro
   value={status:'idle'};f.tick(3000);await settle();assert.equal(f.states.at(-1),'done');
   f.tick(2400);assert.equal(f.states.at(-1),'idle');f.stop();
 });
+
+test('durable run status overrides stale persisted running status', async () => {
+  for (const [runStatus, expected] of [['idle','idle'], ['completed','idle'], ['failed','error'], ['cancelled','stopped']]) {
+    const chat = {status:'running', runStatus};
+    assert.equal(state({chat}), expected);
+    const f = fixture(async () => chat);
+    await settle();
+    assert.equal(f.states.at(-1), expected);
+    assert(!f.states.includes('thinking'));
+    f.stop();
+  }
+  assert.equal(state({chat:{status:'idle',runStatus:'running'}}), 'thinking');
+  assert.equal(state({runtime:{},chat:{status:'idle',runStatus:'completed'}}), 'thinking');
+});
+
+test('a settled timeline cannot animate stale reply or tool activity during stream cleanup', () => {
+  for (const [status, expected] of [['idle','idle'], ['completed','idle'], ['failed','error'], ['cancelled','stopped'], ['waiting','waiting']]) {
+    assert.equal(state({runtime:{reconnecting:true,replying:true,
+      timeline:{status,messages:[{role:'assistant',status:'running',trace:[{kind:'tool',status:'running'}]}]}},
+      chat:{status:'running'}}), expected);
+  }
+});
+
+test('idle polling never restarts work or celebrates a run that is already idle', async () => {
+  let chat = {status:'idle',runStatus:'idle'};
+  const f = fixture(async () => chat); await settle();
+  chat = {status:'running',runStatus:'idle'};
+  f.tick(15000); await settle();
+  chat = {status:'idle',runStatus:'idle'};
+  f.tick(15000); await settle();
+  assert.deepEqual(f.states, ['idle']);
+  f.stop();
+});
+
+test('terminal timeline stays settled when the runtime disappears before its saved event', async () => {
+  const requests = [];
+  const f = fixture(() => new Promise(resolve => requests.push(resolve)));
+  requests[0]({status:'idle',runStatus:'idle'}); await settle();
+  f.update({streamGeneration:'one',timeline:{status:'running',messages:[]}});
+  f.tick(15000);
+  f.update({streamGeneration:'one',timeline:{status:'completed',messages:[]}});
+  const settledCount = f.states.length;
+  assert.equal(f.states.at(-1), 'idle');
+  f.update(null);
+  requests[1]({status:'running',runStatus:'running'}); await settle();
+  assert.equal(f.states.length, settledCount);
+  f.stop();
+});
+
+test('background failure and cancellation do not play a completion animation', async () => {
+  for (const [runStatus, expected] of [['failed','error'], ['cancelled','stopped'], ['idle','idle'], ['completed','done']]) {
+    let chat = {status:'running',runStatus:'running'};
+    const f = fixture(async () => chat); await settle();
+    chat = {status:'idle',runStatus};
+    f.tick(3000); await settle();
+    assert.equal(f.states.at(-1), expected);
+    if (runStatus !== 'completed') assert(!f.states.includes('done'));
+    f.stop();
+  }
+});
+
+test('fresh polling replaces the previous terminal outcome with a new background approval', async () => {
+  let chat = {status:'idle',runStatus:'completed'};
+  const f = fixture(async () => chat); await settle();
+  f.update({streamGeneration:'one',runId:'run1'});
+  f.event('completed'); f.update(null); f.tick(2400);
+  chat = {status:'idle',runStatus:'awaiting_user',pendingQuestion:{id:'new-approval'}};
+  f.tick(15000); await settle();
+  assert.equal(f.states.at(-1), 'waiting');
+  f.stop();
+});
+
+test('a new live run clears the previous durable outcome and completes only once', async () => {
+  const f = fixture(async () => ({status:'idle',runStatus:'failed'})); await settle();
+  f.update({streamGeneration:'new'});
+  assert.equal(f.states.at(-1), 'thinking');
+  f.event('completed');
+  assert.equal(f.states.at(-1), 'done');
+  f.update(null); f.tick(2400);
+  assert.equal(f.states.at(-1), 'idle');
+  assert.equal(f.states.filter(value => value === 'done').length, 1);
+  f.stop();
+});
+
+test('stream cleanup refreshes immediately and rejects an older in-flight running response', async () => {
+  const requests = [];
+  const f = fixture(() => new Promise(resolve => requests.push(resolve)));
+  requests[0]({status:'idle',runStatus:'idle'}); await settle();
+  f.update({streamGeneration:'reconnect',reconnecting:true});
+  f.tick(15000);
+  f.update(null); f.event('refresh');
+  requests[1]({status:'running',runStatus:'running'}); await settle();
+  f.tick(0);
+  assert.equal(requests.length, 3);
+  requests[2]({status:'running',runStatus:'idle'}); await settle();
+  assert.equal(f.states.at(-1), 'idle');
+  assert(!f.states.includes('done'));
+  f.stop(); assert.equal(f.timers.size, 0);
+});

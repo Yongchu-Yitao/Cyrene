@@ -17,7 +17,8 @@ from pathlib import Path
 
 STATE_KEY = "_task_contexts"
 SHARED_ID = "shared"
-TOOLS = frozenset({"load_context", "unload_context", "append_context", "replace_context", "switch_context"})
+TOOLS = frozenset({"load_context", "unload_context", "append_context", "replace_context",
+                   "switch_context", "edit_context_catalog"})
 PROMPT = """Before progress messages or task-specific tools, silently select CONTINUE,
 NEW or RESUME for the current request using the active context and catalog.
 A context follows a user goal or an independently resumable workstream within
@@ -48,10 +49,18 @@ A switch pauses a workstream, not the overall request: continue remaining work
 without asking the user to restart it. Keep common goals and contracts in shared,
 local progress in its context; verify source evidence when integrating findings.
 
-Use the always-visible task_context_catalog (IDs, titles, last unload summaries, active
+Use the mounted task_context_catalog (IDs, titles, checkpoint summaries, active
 status and last_active_at recording creation/activation/unload boundaries) and successful receipts as current state, never invented IDs or earlier
 narratives. Do not claim a missing active context or stale catalog without
 evidence; an earlier unload does not prove that no task is active now.
+Use edit_context_catalog to update titles/summaries and archive completed or
+explicitly shelved inactive contexts. Archived entries remain searchable with
+action=search. Search before creating a duplicate when prior work is absent
+from the mounted catalog. action=restore makes an entry visible without loading
+its history; switch_context resumes it and cancels archival atomically on success.
+Never archive the active context: save a checkpoint and switch or unload first.
+Capacity reminders at 30% and 50% ask you to review the catalog and archive
+eligible inactive tasks. Keep ongoing goals discoverable and continue the request.
 The current request remains available while switching; other inactive-task
 messages do not. Each context management call must be the only call in its response. Wait for
 success before the next call or answer; perform switches before task-specific
@@ -112,12 +121,14 @@ def state_from(path):
     return deepcopy(path[0].value.get(STATE_KEY)) if path and isinstance(path[0].value, dict) else None
 
 
-def context_catalog(state):
+def context_catalog(state, *, include_archived=True):
     return [
         {"id": SHARED_ID, "active": False, "always_loaded": True},
         *({"id": key, "title": doc.get("title", ""), "summary": doc.get("summary", ""),
-           "last_active_at": doc.get("last_active_at"), "active": key == state.get("active")}
-          for key, doc in state["documents"].items()),
+           "last_active_at": doc.get("last_active_at"), "active": key == state.get("active"),
+           **({"archived": True} if doc.get("archived") else {})}
+          for key, doc in state["documents"].items()
+          if include_archived or key == state.get("active") or not doc.get("archived")),
     ]
 
 
@@ -258,6 +269,18 @@ def task_messages(path, state, context_id, *, live=False, observation_services=(
     return messages
 
 
+def capacity_context_matches(value, active):
+    """Keep capacity notices scoped to their active task."""
+    if value.get("role") != "context":
+        return True
+    kind = str(value.get("context_kind", ""))
+    if kind.startswith("task_capacity."):
+        return kind == f"task_capacity.{active}"
+    if kind.startswith("task_catalog_capacity."):
+        return kind in {f"task_catalog_capacity.{active}.30", f"task_catalog_capacity.{active}.50"}
+    return True
+
+
 def project_tasks(path, state, *, observation_services=()):
     """Keep the original chronological projection during an activation.
 
@@ -284,9 +307,8 @@ def project_tasks(path, state, *, observation_services=()):
         value = deepcopy({k: v for k, v in node.value.items() if k != STATE_KEY})
         value.pop(STATE_KEY, None)
         role = value.get("role")
-        if role == "context" and str(value.get("context_kind", "")).startswith("task_capacity."):
-            if value["context_kind"] != f"task_capacity.{active}":
-                continue
+        if not capacity_context_matches(value, active):
+            continue
         if role == "context_reflection" and not value.get("task_context_id"):
             for record in value.get("public_nodes", []):
                 original = deepcopy(record.get("value", {}))
@@ -332,7 +354,7 @@ def project_tasks(path, state, *, observation_services=()):
         messages.insert(0, {"role": "system", "content": PROMPT})
     else:
         system["content"] = str(system.get("content") or "") + "\n\n" + PROMPT
-    catalog = context_catalog(state)
+    catalog = context_catalog(state, include_archived=False)
     mounts = []
     shared_body = state.get(SHARED_ID, {}).get("body", "")
     from .capacity import shared_reference
@@ -343,6 +365,9 @@ def project_tasks(path, state, *, observation_services=()):
     elif shared_body:
         mounts.append({"role": "user", "content": "[Shared task context data; sources and scope apply]\n" + shared_body})
     mounts.append({"role": "user", "content": "<task_context_catalog>\n" + json.dumps(catalog, ensure_ascii=False) + "\n</task_context_catalog>"})
+    archived_count = len(state["documents"]) + 1 - len(catalog)
+    if archived_count:
+        mounts[-1]["content"] += f"\n{archived_count} archived task contexts. Find them with edit_context_catalog(action=search)."
     if doc.get("body"):
         mounts.append({"role": "user", "content": "[Task context data]\n" + doc["body"]})
     mounts.extend(deepcopy(doc.get("messages", [])))
@@ -444,11 +469,17 @@ class TaskContexts:
     async def execute(self, name, args, receipt):
         async with self.serial():
             state = self.read()
+            if name == "edit_context_catalog" and args.get("action") == "search":
+                from .catalog import search_catalog
+                return search_catalog(state, args)
             if receipt in state["receipts"]:
                 return state["receipts"][receipt]
             target = args.get("context_id")
             metadata = {}
-            if name == "switch_context":
+            if name == "edit_context_catalog":
+                from .catalog import edit_catalog
+                metadata = {target: edit_catalog(state, args)}
+            elif name == "switch_context":
                 target, metadata = self._switch(state, target, args, receipt)
             elif name == "unload_context":
                 target = state['active']
@@ -484,12 +515,16 @@ class TaskContexts:
             # Tool results are intentionally absent from restored tasks;
             # their old observation files are not load dependencies.
             from .capacity import check_load
+            if doc.get("archived"):
+                doc["archived"] = False
             check_load(self, state, target)
             if state["active"] != target:
                 doc["last_active_at"] = activity_time()
             if "title" in args:
                 doc["title"] = context_title(args["title"])
             metadata = {target: {field: doc.get(field, "" if field == "title" else None) for field in ("title", "last_active_at")}}
+            if "archived" in doc:
+                metadata[target]["archived"] = doc["archived"]
             state["active"] = target
         elif name == "append_context":
             doc["body"] += ("\n\n" if doc["body"] else "") + args["content"]
@@ -516,6 +551,8 @@ class TaskContexts:
             pause_document(state, previous, args.get('summary', ''), path)
         if title is not None:
             state['documents'][target]['title'] = title
+        if state['documents'][target].get('archived'):
+            state['documents'][target]['archived'] = False
         if previous != target:
             stamp = activity_time()
             for key in {previous, target} - {None}:
@@ -526,6 +563,8 @@ class TaskContexts:
         metadata = {key: {field: state['documents'][key].get(field, '' if field == 'title' else None)
                           for field in ('title', 'last_active_at')}
                     for key in sorted({previous, target} - {None})}
+        if 'archived' in state['documents'][target]:
+            metadata[target]['archived'] = state['documents'][target]['archived']
         return target, metadata
 
     def reference(self, result, call):
@@ -605,7 +644,7 @@ def fork_task_state(path):
             elif name == "load_context":
                 if target in state["documents"]:
                     state["active"] = target
-            else:
+            elif name in {"append_context", "replace_context"}:
                 replay_context_body(state, target, name, args)
             restore_context_metadata(state, payload)
     return state

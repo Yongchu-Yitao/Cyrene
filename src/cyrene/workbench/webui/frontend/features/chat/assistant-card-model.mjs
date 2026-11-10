@@ -70,6 +70,6 @@ export function customCardDocument(html, fieldIds = []) {
   const bridge = `(${installCardBridge.toString()})(${JSON.stringify(fieldIds).replace(/</g, "\\u003c")});`;
   // The first CSP cannot be relaxed by later markup. No same-origin, forms,
   // popups, external scripts or host APIs are granted to generated content.
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font:14px/1.6 system-ui,sans-serif;margin:16px;overflow-wrap:anywhere}button,input,select,textarea{font:inherit;max-width:100%}img{max-width:100%}</style><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font:14px/1.6 system-ui,sans-serif;margin:16px;overflow-wrap:anywhere}button,input,select,textarea{font:inherit;max-width:100%}img{max-width:100%}</style><script>
   ${bridge}<\/script></head><body>${html}</body></html>`;
 }

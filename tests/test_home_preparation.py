@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeDraft, prepare_home, HOME_TOOLS, home_tool_scope
+from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeDraft, prepare_home, HOME_TOOLS, HOME_CONTEXT_PROJECTION, home_tool_scope
+from cyrene.plugins.builtin.cyrene_system_prompt.home_prompt import HOME_SYSTEM_PROMPT
 from cyrene.plugins.builtin.cyrene_cards.service import CardService
 from cyrene.plugins.builtin.cyrene_cards.schemas import CardError
 
@@ -65,6 +66,7 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
             assert config.model_identity['candidateId'] == 'selected'
             assert config.model_identity['model'] == 'deepseek-flash'
             assert config.memory_write_enabled is False
+            assert config.system_extra == ""
             await kwargs['publish']({'type': 'tool.started'})
             await config.assistant_home_cards.command('assistant', None, 'card.update', {
                 'card_id': card['card_id'], 'expected_revision': 1, 'changes': {'title': 'Ready'}}, effect='tool')
@@ -128,6 +130,7 @@ def test_runtime_scopes_background_assistant_and_redirects_cards_only(tmp_path, 
     assert host.active_services['cards'] == 'live'
     assert opened['plugin_context_data']['personal_assistant'] is True
     assert opened['plugin_context_data']['assistant_home_owner'] == 'assistant'
+    assert opened['plugin_context_data']['context_projection'] == HOME_CONTEXT_PROJECTION
     assert opened['extra_direct_tool_names'] == HOME_TOOLS
     view = opened['registry']
     assert view.resolve('card.update').name == 'card.update'
@@ -143,12 +146,19 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
     from cyrene.core.plugin.tool_scope import ScopedPluginRegistry
     from cyrene.plugins import ensure_model_router, model_router
     from cyrene.plugins.builtin.cyrene_cards import plugin_pack
+    from cyrene.plugins.builtin.cyrene_system_prompt import plugin_pack as system_prompt_pack
     live = CardService(tmp_path / 'live')
     draft = HomeDraft(live, 'assistant', tmp_path / 'draft')
     calls = []
     async def provider(args, context):
         calls.append(args)
         assert context.data['session_id'] == 'isolated'
+        system = [m['content'] for m in args['messages'] if m['role'] == 'system']
+        assert system == [HOME_SYSTEM_PROMPT.strip()]
+        serialized = json.dumps(args['messages'])
+        assert 'UNRELATED_PLUGIN_INSTRUCTIONS' not in serialized
+        assert 'task_context_catalog' not in serialized
+        assert 'Prepare overview' in serialized
         if len(calls) == 1:
             names = {tool['function']['name'] for tool in args['tools']}
             assert 'card.create' in names
@@ -160,6 +170,7 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
         return {'content': 'done', 'tool_calls': []}
     registry = PluginRegistry()
     registry.register_pack(plugin_pack, source='test')
+    registry.register_pack(system_prompt_pack, source='test')
     registry.register_plugin(Plugin('TestProvider', 'test', {'type': 'object'}, provider, kind='model',
         metadata={'provider': {'id': 'test', 'name': 'test'}}), source='test')
     ensure_model_router(registry)
@@ -170,12 +181,23 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
     session = AgentSession(tmp_path / 'agent', tmp_path, tmp_path / 'plugins', tree_id='isolated',
         registry=ScopedPluginRegistry(registry, home_tool_scope(registry)), load_plugins=False, model_plugin=model_router.MODEL_ROUTER_PLUGIN,
         extra_direct_tool_names=HOME_TOOLS[:4], plugin_services={'cards': draft},
-        plugin_context_data={'session_id': 'isolated', 'personal_assistant': True, 'assistant_home_owner': 'assistant'})
+        plugin_context_data={'session_id': 'isolated', 'personal_assistant': True, 'assistant_home_owner': 'assistant',
+                             'context_projection': HOME_CONTEXT_PROJECTION})
     session._configured_compaction_limit = lambda: 0
+    from cyrene.core.hook import SESSION_START, TURN_START
+    async def unrelated(_event):
+        return {'context': 'UNRELATED_PLUGIN_INSTRUCTIONS', 'context_kind': 'unrelated', 'context_source': 'test'}
+    session.hooks.register(SESSION_START, unrelated, hook_id='unrelated-session', plugin_id='test.session')
+    session.hooks.register(TURN_START, unrelated, hook_id='unrelated-turn', plugin_id='test.turn')
     try:
         session.submit('Prepare overview', run_id='background')
         await asyncio.wait_for(session.drain(), 10)
         assert session.final_output('background')['content'] == 'done'
+        from cyrene.core.context.projection import project_model_messages
+        path = session.store.get_path(session.tree.id, session._leaf_id)
+        replay = project_model_messages(path)
+        assert [m['content'] for m in replay if m['role'] == 'system'] == [HOME_SYSTEM_PROMPT.strip()]
+        assert 'UNRELATED_PLUGIN_INSTRUCTIONS' not in json.dumps(replay)
         assert (await live.command('assistant', None, 'card.list', {'scope': 'home'}))['cards'] == []
         draft.publish()
         assert len((await live.command('assistant', None, 'card.list', {'scope': 'home'}))['cards']) == 1

@@ -11,6 +11,7 @@ from cyrene.core.plugin import PluginSetupContext
 
 from .system_prompt import SYSTEM_PROMPT
 from .assistant_prompt import ASSISTANT_SYSTEM_PROMPT
+from .home_prompt import HOME_SYSTEM_PROMPT
 
 _HOOK_ID = "cyrene-system-prompt-session-start"
 _PLUGIN_ID = "cyrene_system_prompt.mount"
@@ -21,7 +22,9 @@ def setup_system_prompt(context: PluginSetupContext) -> None:
 
     def rendered_prompt() -> str:
         selected = (
-            ASSISTANT_SYSTEM_PROMPT
+            HOME_SYSTEM_PROMPT
+            if context.data.get("assistant_home_owner")
+            else ASSISTANT_SYSTEM_PROMPT
             if context.data.get("personal_assistant") is True
             else SYSTEM_PROMPT
         )

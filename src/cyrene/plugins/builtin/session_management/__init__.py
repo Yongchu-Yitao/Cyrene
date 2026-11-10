@@ -20,7 +20,9 @@ TASK_OPERATIONS = {
     "task_stop": "session_stop",
     "task_answer_question": "session_answer_question",
 }
-TOOL_NAMES = tuple(TASK_OPERATIONS)
+# Temporarily unregistered; retain the implementation and durable operation mapping.
+_DISABLED_TOOL_NAMES = frozenset({"task_organize"})
+TOOL_NAMES = tuple(name for name in TASK_OPERATIONS if name not in _DISABLED_TOOL_NAMES)
 
 ID = {"type": "string", "minLength": 1, "maxLength": 160}
 FILES = {
@@ -148,7 +150,7 @@ def application_setup(context):
 plugin_pack = PluginPack(
     id="session_management",
     description="Start and manage task execution, inspect evidence and handle questions.",
-    plugins=(
+    plugins=tuple(tool for tool in (
         _tool(
             "session_create",
             "Start NEW work. If a different goal is active in your context catalog, first call switch_context with context_id=null, a title and a progress checkpoint in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion.",
@@ -191,7 +193,7 @@ plugin_pack = PluginPack(
               {"session_id": ID, "question_id": ID, "answer": {"type": "string", "minLength": 1, "maxLength": 20000}},
               ["session_id", "question_id", "answer"]),
         _tool("session_stop", "Stop a task and pause pending updates; preserve its evidence and artifacts.", {"session_id": ID}, ["session_id"]),
-    ),
+    ) if tool.name not in _DISABLED_TOOL_NAMES),
     setup=setup,
     application_setup=application_setup,
     metadata={"i18n": {"en": {"name": "Task execution"}, "zh": {"name": "任务执行"}}},

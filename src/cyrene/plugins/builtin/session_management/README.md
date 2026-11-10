@@ -61,7 +61,21 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 
 ## 个人助理工具配置
 
-入口可调用 `cyrene.workbench.core_adapter.assistant_profile.personal_assistant_config(config)`，每次启动、恢复和通知唤醒时使用返回的配置。该配置提供本包七个工具、`ask_user`、`send_message` 和 `WebSearch`（用户所称 web_search，来自 `cyrene_content`）。核心工具自动保留，其中已包含 `switch_context`、`load_context`、`unload_context`、`append_context`、`replace_context`，无需重复添加动态上下文工具包。`switch_context` 是首选的上下文切换工具，可以在一次调用中为当前任务保存检查点，并恢复已有上下文或创建新上下文。宿主需加载相应插件和应用服务；普通聊天和助理创建的任务不应用此配置。ConversationRuntime 在每次打开个人助理会话时自动应用此配置，覆盖恢复和通知唤醒。个人助理使用 `cyrene_system_prompt/assistant_prompt.py` 的独立完整的英文 system prompt，不拼接普通 Agent 的提示词，由原有 SessionStart Hook 挂载并计算缓存指纹。普通 Agent 保持原有提示词。
+入口可调用 `cyrene.workbench.core_adapter.assistant_profile.personal_assistant_config(config)`，每次启动、恢复和通知唤醒时使用返回的配置。该配置提供本包七个工具、`ask_user`、`send_message` 和 `WebSearch`（用户所称 web_search，来自 `cyrene_content`）。核心工具自动保留，其中已包含 `switch_context`、`load_context`、`unload_context`、`append_context`、`replace_context` 和 `edit_context_catalog`，无需重复添加动态上下文工具包。`switch_context` 是首选的上下文切换工具，可以在一次调用中为当前任务保存检查点，并恢复已有上下文或创建新上下文。宿主需加载相应插件和应用服务；普通聊天和助理创建的任务不应用此配置。ConversationRuntime 在每次打开个人助理会话时自动应用此配置，覆盖恢复和通知唤醒。个人助理使用 `cyrene_system_prompt/assistant_prompt.py` 的独立完整的英文 system prompt，不拼接普通 Agent 的提示词，由原有 SessionStart Hook 挂载并计算缓存指纹。普通 Agent 保持原有提示词。
+
+
+### 动态上下文目录
+
+核心工具 `edit_context_catalog` 独立于侧栏的 `task_organize`，提供四种 action。
+
+- `update` 按 context_id 修改 title（最多 40 字符）或 summary（最多 200 字符）；后续卸载检查点会更新摘要。
+- `archive` 将非活跃上下文移出模型每轮收到的目录，保留原 ID、正文和历史。活跃上下文需先保存检查点并切走或卸载。
+- `restore` 恢复目录显示。继续执行可使用 `switch_context` 或 `load_context`，成功激活时自动取消归档，失败时保持原状态。
+- `search` 按 query 匹配 ID、标题或摘要，status 可选 all、archived、unarchived。每页 10 条，使用返回的 next_cursor 继续查询。搜索仅返回目录信息。
+
+归档状态存储在现有上下文树的任务文档中，兼容已有会话，并随成功工具事件进行分支重放。`shared` 始终常驻。模型目录仅列出未归档条目及归档总数，查找旧任务后可按原 ID 恢复。
+
+现有 ModelStart Hook 在估算输入达到模型配置上下文容量的 30% 和 50% 时，向上下文树挂载目录整理提醒。估算包括消息及工具定义。同一任务在当前分支上的每一级提醒只挂载一次；首次检查已超过 50% 时直接给出较高级提醒。原有容量告警、共享资料快照和自动压缩继续按既有规则运行。
 
 ## 助理会话工具范围
 
@@ -92,4 +106,4 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 ### 助理侧栏任务组
 
 每个已有执行 task 在左侧显示为普通对话组样式的可折叠分组，包含任务对话、交付文件、终端和所属浏览器标签。折叠偏好保存在客户端；搜索会临时展开。
-`task_organize` 可更新组标题、position（较小值靠前）、archived、hidden_resources（kind:key）及 attachment_ids。附件 ID 必须来自主助理已交付的附件；数组参数替换原选择，省略的字段保留。`task_list` 返回 presentation 和已关联 files，供助理保留旧选择。展示设置持久化在同一插件数据库的 task_presentation 表，操作仍检查任务归属并复用工具回执。归档不停止执行，可通过“显示已归档任务”找回。组操作不切换动态上下文、不创建会话、不改变资源所有者。
+`task_organize` 暂停注册，不向任何模型或工具发现入口提供；实现与历史数据保留。恢复注册后可更新组标题、position（较小值靠前）、archived、hidden_resources（kind:key）及 attachment_ids。附件 ID 必须来自主助理已交付的附件；数组参数替换原选择，省略的字段保留。`task_list` 返回 presentation 和已关联 files，供助理保留旧选择。展示设置持久化在同一插件数据库的 task_presentation 表，操作仍检查任务归属并复用工具回执。归档不停止执行，可通过“显示已归档任务”找回。组操作不切换动态上下文、不创建会话、不改变资源所有者。

@@ -10,6 +10,12 @@
 
 .wbc-card-map-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:12px 0;font-size:12px}.wbc-card-map-legend>span{display:inline-flex;align-items:center;gap:7px}.wbc-card-map-legend i{display:inline-block;width:11px;height:11px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 1px #ffffff80}
 .wbc-assistant-card button.wbc-card-pin{padding:0}
+.wbc-assistant-card>header.wbc-card-header-custom{padding-block:16px 12px;gap:16px}
+.wbc-card-header-custom .wbc-card-heading{min-width:0;flex:1;overflow-wrap:anywhere}
+.wbc-card-header-custom .wbc-card-heading h3{display:flex;align-items:center;min-height:32px;margin:0;line-height:1.5}
+.wbc-card-header-custom .wbc-card-heading p{margin:6px 0 0;line-height:1.65;font-weight:400}
+.wbc-card-header-custom .wbc-card-type{display:block;margin-bottom:4px}
+.wbc-assistant-card .wbc-card-header-custom .wbc-card-pin{border-color:transparent;color:var(--card-muted)}
 .wbc-card-pin>span{display:flex;align-items:center;justify-content:center}.wbc-assistant-card .wbc-card-pin[aria-pressed=true]{color:var(--accent);background:var(--accent-faint)}
 .wbc-pane-column.wbc-pinned-card-column{display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;gap:12px;min-height:0;padding-bottom:12px}.wbc-pinned-card-slot{flex:0 0 auto;min-width:0}.wbc-pinned-card-slot .wbc-assistant-card{width:calc(100% - 16px);max-width:none;margin:8px auto;border:0;background:transparent}.wbc-pinned-card-placeholder{padding:24px;min-height:180px}.wbc-pinned-ordinary-pane{flex:0 0 480px;min-height:320px;position:relative}.wbc-pinned-ordinary-pane>.wbc-pane-card{height:100%}
 

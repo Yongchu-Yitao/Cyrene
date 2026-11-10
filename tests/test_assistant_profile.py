@@ -30,14 +30,14 @@ def test_assistant_profile_preserves_ordinary_config_and_resolves_real_tools():
     assert not set(CARD_TOOL_NAMES) & core_names
 
 
-async def _mounted_prompt(personal):
+async def _mounted_prompt(personal, *, home=False):
     from types import SimpleNamespace
     from pathlib import Path
     from cyrene.plugins.builtin.cyrene_system_prompt.service import setup_system_prompt
 
     handlers = []
     hooks = SimpleNamespace(list=lambda: [], register=lambda event, handler, **kwargs: handlers.append(handler))
-    setup_system_prompt(SimpleNamespace(data={"personal_assistant": personal}, workspace=Path("/workspace"), hooks=hooks))
+    setup_system_prompt(SimpleNamespace(data={"personal_assistant": personal, "assistant_home_owner": "owner" if home else ""}, workspace=Path("/workspace"), hooks=hooks))
     handler = handlers[0]
     mounted = await handler(None)
     assert mounted["context_position"] == "system"
@@ -58,6 +58,20 @@ def test_personal_prompt_uses_existing_hook_and_changes_fingerprint():
     assert "update_plan_progress" not in assistant
     assert asyncio.run(_mounted_prompt(False)) == ordinary
     assert ordinary != assistant
+
+
+def test_home_prompt_is_separate_from_foreground_and_ordinary_agents():
+    import asyncio
+    from cyrene.plugins.builtin.cyrene_system_prompt.home_prompt import HOME_SYSTEM_PROMPT
+
+    home = asyncio.run(_mounted_prompt(True, home=True))
+    assistant = asyncio.run(_mounted_prompt(True))
+    assert home == HOME_SYSTEM_PROMPT.strip()
+    assert 'CONTINUE / NEW / RESUME' not in home
+    assert 'task router and coordinator' not in home
+    assert 'spec.home_kind' in home and 'spec.home_kind' not in assistant
+    assert 'dedicated background assistant' in assistant
+    assert 'actually continue the original work' in assistant
 
 
 def test_assistant_two_turns_parse_and_execute_session_creation(tmp_path, monkeypatch):

@@ -38,6 +38,14 @@ from cyrene.platform.task_lifecycle import cancel_and_wait
 logger = logging.getLogger(__name__)
 
 
+def _assistant_context_data(config, personal_assistant):
+    data = {"personal_assistant": personal_assistant, "assistant_home_owner": config.assistant_home_owner}
+    if config.assistant_home_owner:
+        from cyrene.plugins.builtin.cyrene_cards.home_preparation import HOME_CONTEXT_PROJECTION
+        data["context_projection"] = deepcopy(HOME_CONTEXT_PROJECTION)
+    return data
+
+
 def _accounting_publisher(session_id: str) -> WorkbenchPublisher:
     async def publish(event: dict[str, Any]) -> None:
         from cyrene.workbench.application.usage_events import publish_usage_event
@@ -565,8 +573,7 @@ class ConversationRuntime:
             "owner_call": self._owner_caller(owner_loop),
             "run_context": run_context,
         }
-        plugin_context_data["personal_assistant"] = personal_assistant
-        plugin_context_data["assistant_home_owner"] = config.assistant_home_owner
+        plugin_context_data.update(_assistant_context_data(config, personal_assistant))
         plugin_context_data["assistant_owner_session_id"] = (
             str(chat.get("assistantOwnerSessionId") or "")
             if chat and chat.get("kind") == "assistant-task" else ""

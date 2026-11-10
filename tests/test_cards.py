@@ -214,6 +214,66 @@ async def test_templates_and_inert_iframe_content(rig, template):
         assert result["revision"] == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via_runtime", [True, False])
+async def test_omitted_block_type_defaults_to_embed_on_create_and_update(rig, tmp_path, via_runtime):
+    async def invoke(name, args, effect):
+        if via_runtime:
+            return await call(rig, name, args, effect)
+        return await rig.service.command("assistant", "purchase", name, args, effect=effect)
+
+    blocks = [{"block_id": "intro", "type": "text", "text": "Video"},
+              {"block_id": "player", "html": "<video controls></video>"}]
+    original = deepcopy(blocks)
+    created = await invoke("card.create", {"template": "custom", "spec": {"title": "Video", "blocks": blocks}}, "create-default")
+    card_id = created["card_id"]
+    read = await call(rig, "card.get", {"card_id": card_id})
+    assert read["spec"]["blocks"] == [original[0], {**original[1], "type": "embed"}]
+    assert blocks == original
+
+    updated_blocks = [{"block_id": "player", "html": "<p>Updated player</p>"}, original[0]]
+    updated = await invoke("card.update", {"card_id": card_id, "expected_revision": 1,
+                                          "changes": {"blocks": updated_blocks}}, "update-default")
+    assert updated["revision"] == 2
+    reopened = CardService(tmp_path / "cards")
+    read = await reopened.command("assistant", "purchase", "card.get", {"card_id": card_id})
+    assert read["spec"]["blocks"] == [{**updated_blocks[0], "type": "embed"}, original[0]]
+    assert "type" not in updated_blocks[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block", [
+    {"block_id": "app"},
+    {"block_id": "app", "text": "Not implicitly text"},
+    {"block_id": "app", "type": None, "html": "<p>Invalid</p>"},
+    {"block_id": "app", "type": "unknown", "html": "<p>Invalid</p>"},
+    {"block_id": "app", "type": "text", "html": "<p>Invalid</p>"},
+])
+async def test_embed_default_does_not_accept_missing_html_or_override_explicit_type(rig, block):
+    result = await rig.runtime.call("card.create", {"template": "custom", "spec": {"title": "Invalid", "blocks": [block]}}, rig.context)
+    assert not result.success
+    assert not (await call(rig, "card.list", {}))["cards"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_embed_reports_missing_html_through_runtime(rig):
+    rig.context.data["language"] = "zh"
+    args = {"template": "custom", "spec": {"title": "Invalid", "blocks": [{"block_id": "app"}]}}
+    result = await rig.runtime.call("card.create", args, rig.context)
+    assert not result.success
+    assert "缺少必填参数：spec.blocks[0].html。" in result.error
+    assert not (await call(rig, "card.list", {}))["cards"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template,count", [("content", 1), ("custom", 2)])
+async def test_omitted_type_preserves_custom_template_constraints(rig, template, count):
+    blocks = [{"block_id": f"app{i}", "html": "<p>Embed</p>"} for i in range(count)]
+    result = await call(rig, "card.create", {"template": template, "spec": {"title": "Invalid", "blocks": blocks}})
+    assert result["error"]["code"] == "invalid_card"
+    assert not (await call(rig, "card.list", {}))["cards"]
+
+
 def test_creation_exposes_only_six_general_templates():
     description, schema = definition("card.create")
     assert set(schema["properties"]["template"]["enum"]) == {"content", "collection", "data", "input", "map", "custom"}

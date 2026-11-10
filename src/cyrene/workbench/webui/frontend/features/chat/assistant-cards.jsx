@@ -8,7 +8,7 @@ import { wbcRenderMarkdown } from './runtime-timeline.jsx';
 import { CardChart, CardEmbed, CardMap } from './assistant-card-visuals.jsx';
 import { cardDeliveryNotice, cardEvent, initialCardValues, timelineStatusTone, toggleCardSelection } from './assistant-card-model.mjs';
 
-const templateLabels = { content: '内容', collection: '集合', data: '数据', input: '交互', map: '地图', custom: '自定义' };
+const templateLabels = { content: '内容', collection: '集合', data: '数据', input: '交互', map: '地图' };
 const asText = value => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 
 export async function requestCard(url, options) {
@@ -234,7 +234,16 @@ export function WbcAssistantCard({ cardId, initialCard = null, displayTime = new
 }
 
 function renderCardHeader(card, busy, togglePin, t) {
-  return <header><div><span className="wbc-card-type">{templateLabels[card.template] || '卡片'}{card.status === 'archived' ? ' · 只读' : ''}</span><h3>{card.spec.title}</h3>{card.spec.subtitle && <p>{card.spec.subtitle}</p>}</div><button className={'wbc-pane-icon-action wbc-card-pin' + (card.placement === 'pinned' ? ' active' : '')} type="button" disabled={busy} aria-pressed={card.placement === 'pinned'} aria-label={t(card.placement === 'pinned' ? 'workbenchChat.cardUnpin' : 'workbenchChat.cardPin')} title={t(card.placement === 'pinned' ? 'workbenchChat.cardUnpin' : 'workbenchChat.cardPin')} onClick={togglePin}><span aria-hidden="true">{WBC_ICONS.pin}</span></button></header>;
+  const isCustom = card.template === 'custom';
+  const label = [!isCustom && (templateLabels[card.template] || '卡片'), card.status === 'archived' && '只读'].filter(Boolean).join(' · ');
+  return <header className={isCustom ? 'wbc-card-header-custom' : undefined}>
+    <div className="wbc-card-heading">
+      {label && <span className="wbc-card-type">{label}</span>}
+      <h3>{card.spec.title}</h3>
+      {card.spec.subtitle && <p>{card.spec.subtitle}</p>}
+    </div>
+    <button className={'wbc-pane-icon-action wbc-card-pin' + (card.placement === 'pinned' ? ' active' : '')} type="button" disabled={busy} aria-pressed={card.placement === 'pinned'} aria-label={t(card.placement === 'pinned' ? 'workbenchChat.cardUnpin' : 'workbenchChat.cardPin')} title={t(card.placement === 'pinned' ? 'workbenchChat.cardUnpin' : 'workbenchChat.cardPin')} onClick={togglePin}><span aria-hidden="true">{WBC_ICONS.pin}</span></button>
+  </header>;
 }
 
 function renderCardNotices({ error, delivery, pendingEvent, busy, send, retryDelivery }) {

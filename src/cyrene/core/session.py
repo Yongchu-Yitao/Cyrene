@@ -88,6 +88,14 @@ _MODEL_RESPONSE_RETRY_STATE_KEY = "_model_response_retry"
 _MODEL_TOOL_CALL_CORRECTION_TYPE = "cyrene.tool_call_correction"
 
 
+def _projection_root(store, tree, projection):
+    root = store.get_node(tree.id, tree.root_id)
+    if projection is not None:
+        store.update_node(tree.id, tree.root_id, dict(root.value, context_projection=deepcopy(projection)))
+        root = store.get_node(tree.id, tree.root_id)
+    return root
+
+
 def _l(en: str, zh: str, **values: Any) -> str:
     return localized(en, zh, **values)
 
@@ -455,7 +463,7 @@ class AgentSession:
             self.tree.id, self.events, AgentSessionEvent, logger, event_listener,
         )
         self._transitions.tree_id = self.tree.id
-        root_node = self.store.get_node(self.tree.id, self.tree.root_id)
+        root_node = _projection_root(self.store, self.tree, context_values.get("context_projection"))
         self._initial_root_value = deepcopy(root_node.value)
         if isinstance(self._initial_root_value, dict):
             self._initial_root_value.pop(TASK_STATE_KEY, None)

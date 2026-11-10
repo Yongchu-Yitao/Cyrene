@@ -74,6 +74,10 @@ async def test_task_changes_weather_expiry_and_restart(home_rig):
     r = home_rig
     await add_overview(r)
     assert (await r.home.refresh('assistant', {}))['status'] == 'updated'
+    request = r.calls[-1][4]
+    assert '[Welcome cards refresh]' in request and 'Refresh reasons:' in request
+    assert 'Local time:' in request and 'Existing slots:' in request
+    assert 'Prepare relevant welcome cards' not in request
     assert (await r.home.refresh('assistant', {}))['status'] == 'current'
     r.home = HomeCards(r.service, lambda: r.port, r.prepare)
     assert (await r.home.refresh('assistant', {}))['status'] == 'current'

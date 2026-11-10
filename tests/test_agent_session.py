@@ -854,8 +854,8 @@ def test_context_updates_drive_model_tool_model_without_agent_loop(tmp_path):
     assert snapshot["nodes"][-1]["value"]["usage"] == {"prompt_tokens": 16}
     assert assistant_change_seen is True
     assert agent_tool_sets == [
-        {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context"},
-        {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context"},
+        {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context", "edit_context_catalog"},
+        {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context", "edit_context_catalog"},
     ]
     assert snapshot["status"] == "idle"
     assert snapshot["leaf_id"] == snapshot["nodes"][-1]["id"]

@@ -915,7 +915,7 @@ def test_workbench_chat_search_and_custom_background_composer_stay_distinct():
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
     shell_css = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
-    composer_material = styles.rsplit("\n.wbc-composer,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
+    composer_material = styles.rsplit("\n.wbc-composer,\n.workbench-sidebar-dock-nav,\n.wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {", 1)[1].split("}", 1)[0]
     composer_css = (styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
         + styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0])
     assert "border: 1px solid" in search_css
@@ -2300,7 +2300,7 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
 
     shell = styles.split("\n.workbench-shell {", 1)[1].split("}", 1)[0]
     base = styles.split("\n.wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
-    light = styles.split('html[data-theme="light"] .wbc-composer-box,\nhtml[data-theme="light"] .workbench-sidebar-dock-nav {', 1)[1].split(
+    light = styles.split('html[data-theme="light"] .wbc-composer-box,\nhtml[data-theme="light"] .workbench-sidebar-dock-nav,\nhtml[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {', 1)[1].split(
         "}", 1
     )[0]
     dark = styles.split(
@@ -8347,7 +8347,7 @@ def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message
     assert '"?cursor=" + encodeURIComponent(eventCursor)' in source
     assert 'function reconnect(chatId, model, preserveRuntime)' in source
     assert 'runtimeEngine.reconnect(activeChat.id, model)' in source
-    assert 'activeChat.status === "running"' in source
+    assert '(activeChat.runStatus || activeChat.status) === "running"' in source
 
 
 def test_workbench_chat_reconnect_keeps_live_timeline_and_resumes_from_cursor():

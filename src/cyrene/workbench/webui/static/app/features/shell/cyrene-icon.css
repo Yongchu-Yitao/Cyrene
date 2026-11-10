@@ -20,11 +20,33 @@ html[data-performance-mode="on"] .workbench-sidebar-dock [data-tour="rail_cyrene
 
 /* Pointer events stay on the original grip so its drag and menu still work. */
 .wbc-pane-card .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
-  width:36px;height:36px;border-radius:0;background:transparent;opacity:1;
-  pointer-events:none;box-shadow:none;
+  position:relative;display:grid;place-items:center;box-sizing:border-box;
+  width:52px;height:52px;border-radius:50%;opacity:1;
+  border:0;background:transparent;box-shadow:none;
+  pointer-events:none;
+}
+/* Feather only the glass, keeping the artwork and expression marks crisp.
+   Extra room outside the grip lets the material disappear without a rim. */
+.wbc-pane-card .wbc-side-split-grip-bar-visual:has(> .cyrene-motion)::before {
+  /* Smoothstep falloff: no solid plateau or abrupt slope at either end. */
+  --cyrene-grip-fade:radial-gradient(circle closest-side,
+    #000 0%,rgb(0 0 0 / .972) 10%,rgb(0 0 0 / .896) 20%,
+    rgb(0 0 0 / .784) 30%,rgb(0 0 0 / .648) 40%,rgb(0 0 0 / .5) 50%,
+    rgb(0 0 0 / .352) 60%,rgb(0 0 0 / .216) 70%,rgb(0 0 0 / .104) 80%,
+    rgb(0 0 0 / .028) 90%,transparent 100%);
+  content:"";position:absolute;inset:-22px;z-index:0;
+  background:var(--wbc-composer-glass-background);
+  -webkit-backdrop-filter:var(--wbc-composer-glass-filter);
+  backdrop-filter:var(--wbc-composer-glass-filter);
+  -webkit-mask-image:var(--cyrene-grip-fade);
+  mask-image:var(--cyrene-grip-fade);
+  pointer-events:none;
 }
 .wbc-side-split-grip-bar-visual > .cyrene-motion,
 .wbc-side-split-grip-bar-visual .cyrene-icon-logo {width:36px;height:36px;pointer-events:none}
+/* The backing shares the ring's 16,16 axis. The unbacked logo's
+   optical offset would move both the face and its animation pivot right. */
+.wbc-side-split-grip-bar-visual .cyrene-icon-alignment {transform:none}
 
 .wbc-pane-card-grip:has(.wbc-side-split-grip-bar-visual > .cyrene-motion) {top:4px;height:52px}
 @media(prefers-reduced-motion:reduce){.wbc-side-split-grip-bar-visual > .cyrene-motion {transition:none}}
@@ -39,7 +61,7 @@ html[data-performance-mode="on"] .wbc-side-split-grip-bar-visual > .cyrene-motio
 
 .cyrene-icon-angry-eyes {opacity:0;transition:opacity .18s ease}
 .cyrene-drag-symbols {display:none}
-.wbc-side-split-grip-bar-visual > .cyrene-motion {position:relative}
+.wbc-side-split-grip-bar-visual > .cyrene-motion {position:relative;z-index:1}
 .wbc-side-split-grip-bar-visual .cyrene-drag-symbols {display:block;position:absolute;left:27px;top:1px;width:13px;height:13px;pointer-events:none}
 .cyrene-drag-symbol {position:absolute;inset:0;width:100%;height:100%;opacity:0;transform:translateY(1px) scale(.94);transition:opacity .3s ease,transform .3s ease}
 .cyrene-drag-symbol.curious {color:light-dark(#6879ac,#b6c4f1)}

@@ -66,6 +66,8 @@ def test_editable_plugin_copy_loads_only_task_facade(tmp_path):
     assert not registry.load_directory(root)
     names = {item.plugin.name for item in registry.list_plugins()}
     assert set(TOOL_NAMES) <= names
+    assert "task_organize" not in names
+    assert "task_organize" not in TOOL_NAMES
     assert not any(name.startswith("session_") for name in names)
     view = ScopedPluginRegistry(registry, PluginToolScope(
         tool_names=frozenset(TOOL_NAMES), model_audience="assistant"))
@@ -238,12 +240,14 @@ async def test_task_group_organization_is_durable_owned_and_does_not_execute(tmp
             {'role': 'assistant', 'attachments': [{'id': 'final', 'name': 'report.pdf', 'url': '/attachment/final'}]},
             {'role': 'user', 'attachments': [{'id': 'input'}]},
         ]
-        args = {'task_id': task, 'title': 'Report', 'position': 2, 'archived': True,
+        args = {'session_id': task, 'title': 'Report', 'position': 2, 'archived': True,
                 'attachment_ids': ['final'], 'hidden_resources': ['browser:tab1']}
-        changed = await runtime.call('task_organize', args, context, call_id='organize')
-        assert changed.success, changed
-        repeated = await runtime.call('task_organize', args, context, call_id='organize')
-        assert repeated.value == changed.value
+        # The model-facing tool is disabled; its internal implementation remains usable.
+        disabled = await runtime.call('task_organize', {'task_id': task}, context)
+        assert not disabled.success
+        changed = await service.command('a', 'session_organize', args, 'organize', tmp_path)
+        repeated = await service.command('a', 'session_organize', args, 'organize', tmp_path)
+        assert repeated == changed
         listed = await runtime.call('task_list', {}, context)
         presentation = listed.value['tasks'][0]['presentation']
         assert presentation['title'] == 'Report'
@@ -252,10 +256,10 @@ async def test_task_group_organization_is_durable_owned_and_does_not_execute(tmp
         assert not host.deliveries
         from cyrene.plugins.builtin.session_management.store import Store
         assert Store(service.store.path).presentation(task) == presentation
-        forbidden = await runtime.call('task_organize', {'task_id': task, 'attachment_ids': ['input']}, context)
-        assert not forbidden.success
-        other = PluginContext(workspace=tmp_path, tree_id='b', services={'session_management': service})
-        assert not (await runtime.call('task_organize', {'task_id': task, 'title': 'Other'}, other)).success
+        with pytest.raises(ValueError, match='Select attachments'):
+            await service.command('a', 'session_organize', {'session_id': task, 'attachment_ids': ['input']}, 'invalid', tmp_path)
+        with pytest.raises(ValueError):
+            await service.command('b', 'session_organize', {'session_id': task, 'title': 'Other'}, 'other', tmp_path)
         assert service.store.presentation(task) == presentation
     finally:
         await service.stop()

@@ -34,6 +34,15 @@ test('custom document installs restrictive policy and explicit input bridge befo
   assert.match(doc, /event.source\s*!==\s*parent/);
 });
 
+test('custom cards allow embedded media without permitting network media sources', () => {
+  const doc = customCardDocument('<video controls></video><audio controls></audio>');
+  const policy = doc.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1];
+  const directives = Object.fromEntries(policy.split(';').map(value => value.trim().split(/\s+/)).map(([name, ...sources]) => [name, sources]));
+  assert.deepEqual(directives['media-src'], ['data:', 'blob:']);
+  assert.deepEqual(directives['default-src'], ["'none'"]);
+  assert.deepEqual(directives['connect-src'], ["'none'"]);
+});
+
 test('conversation grouping keeps generated card outside collapsed tool groups', async () => {
   const { readFileSync } = await import('node:fs');
   const vm = await import('node:vm');

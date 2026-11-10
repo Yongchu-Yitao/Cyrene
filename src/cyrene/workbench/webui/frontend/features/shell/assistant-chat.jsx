@@ -41,7 +41,7 @@ function useAssistantChatSync({ sessionId, model, engine, active, cache, answere
       if (cache) cache.details[sessionId] = next;
       setChat(next);
       setRefreshError("");
-      if (next?.status === "running" && !next.pendingQuestion && !engine.get(sessionId)) {
+      if ((next?.runStatus || next?.status) === "running" && !next.pendingQuestion && !engine.get(sessionId)) {
         engine.reconnect(sessionId, model);
       }
     }
@@ -137,7 +137,7 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var candidate = runtime && runtime.pendingQuestion || chat && chat.pendingQuestion;
   var pending = candidate && !answeredIds.current.has(candidate.id) ? candidate : null;
-  var running = !pending && (answering || sending || !!runtime || !!(chat && chat.status === "running"));
+  var running = !pending && (answering || sending || !!runtime || !!(chat && (chat.runStatus || chat.status) === "running"));
   var visible = messages;
   React.useEffect(function () {
     var thread = scrollRef.current;

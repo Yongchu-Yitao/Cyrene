@@ -13,7 +13,7 @@ export function CyreneIcon({ state = "idle", animated = true }) {
   React.useEffect(() => { controllerRef.current?.setState(state); }, [state, animated]);
   return <span className="cyrene-motion"><svg ref={svgRef} className="cyrene-icon-logo" viewBox="0 0 32 32" fill="none" aria-hidden="true" data-state={state}>
       <defs><linearGradient id={gradientId} x1="4" y1="27" x2="25" y2="6" gradientUnits="userSpaceOnUse"><stop stopColor="#0879ff"/><stop offset=".5" stopColor="#00b9ec"/><stop offset="1" stopColor="#00dfaf"/></linearGradient></defs>
-      <g transform="translate(1.25 0)"><g className="cyrene-icon-body">
+      <g className="cyrene-icon-alignment" transform="translate(1.25 0)"><g className="cyrene-icon-body">
         <g className="cyrene-icon-ring">
         <path d="M23.6 8.4a10.75 10.75 0 1 0 0 15.2" stroke={"url(#" + gradientId + ")"} strokeWidth="4.8" strokeLinecap="round"/>
         <path className="cyrene-icon-glint" d="M23.6 8.4a10.75 10.75 0 1 0 0 15.2" pathLength="100" stroke="#c1fff0" strokeWidth="2.8" strokeLinecap="round"/>

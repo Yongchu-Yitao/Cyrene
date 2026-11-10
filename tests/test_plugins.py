@@ -1167,7 +1167,7 @@ plugin_pack = PluginPack(
             definition["function"]["name"]
             for definition in registry.direct_tool_definitions()
         }
-        assert direct_names == {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context"}
+        assert direct_names == {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context", "edit_context_catalog"}
 
         listing = await runtime.call("toolbox", {"operation": "list"})
         assert listing.success is True
@@ -1788,7 +1788,7 @@ def test_read_only_context_filters_and_enforces_tool_execution(tmp_path):
         assert {
             definition["function"]["name"]
             for definition in registry.direct_tool_definitions(read_only=True)
-        } == {"Read", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context"}
+        } == {"Read", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context", "edit_context_catalog"}
         read = await runtime.call("Read", {"path": "existing.txt"}, context)
         write = await runtime.call(
             "Write",
@@ -1825,7 +1825,7 @@ def test_filesystem_plugins_follow_toolbox_list_describe_invoke_chain(tmp_path):
         assert {
             definition["function"]["name"]
             for definition in registry.direct_tool_definitions()
-        } == {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context"}
+        } == {"Bash", "Read", "Write", "toolbox", "load_context", "unload_context", "append_context", "replace_context", "switch_context", "edit_context_catalog"}
         runtime = PluginRuntime(registry)
         context = PluginContext(workspace=workspace)
 

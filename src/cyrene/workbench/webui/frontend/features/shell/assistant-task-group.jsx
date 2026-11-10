@@ -42,7 +42,8 @@ export function AssistantTaskGroup({ task, chat, menuActions, query, matches, ha
   var title = (task.presentation || {}).title || task.title;
   return <section ref={groupRef} className={"wbc-chat-group assistant-task-group" + status.tone + (!matches ? " search-resources-only" : "") + " " + (expanded ? "expanded" : "collapsed")} aria-label={title}>
     <header className="wbc-chat-group-head">
-      <WbcRailGroupToggle title={title} expanded={expanded} expandable={hasChildren} icon={<TaskConversationIcon />}
+      <WbcRailGroupToggle title={title} expanded={expanded} expandable={hasChildren}
+        icon={status.running ? <span className="wb-spinner wbc-chat-running-spinner" aria-hidden="true" /> : <TaskConversationIcon />}
         draggable="true" onDragStart={onDragStart} onContextMenu={openMenu}
         onKeyDown={function (event) {
           if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openMenu(event);

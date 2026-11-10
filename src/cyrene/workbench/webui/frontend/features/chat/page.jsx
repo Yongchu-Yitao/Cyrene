@@ -1336,12 +1336,12 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
     if (
       activeChat
       && activeChat.id
-      && activeChat.status === "running"
+      && (activeChat.runStatus || activeChat.status) === "running"
       && !runtimeEngine.isRunning(activeChat.id)
     ) {
       runtimeEngine.reconnect(activeChat.id, model);
     }
-  }, [activeChat && activeChat.id, activeChat && activeChat.status]);
+  }, [activeChat && activeChat.id, activeChat && activeChat.status, activeChat?.runStatus]);
 
   function handleSend(input) {
     WbcVoice.stop();

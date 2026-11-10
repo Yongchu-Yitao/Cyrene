@@ -91,19 +91,25 @@ def project_context_message(
     )
 
 
-def project_model_messages(
-    path: Sequence[Any],
-    *,
-    observation_services: Sequence[Any] = (),
-) -> list[dict[str, Any]]:
-    """Project the effective model history, honoring every context replacement.
+def apply_context_projection(path):
+    """Restrict model-visible context while retaining the execution ledger."""
+    from dataclasses import replace
+    from .tasks import STATE_KEY
 
-    Optional services materialize transient observations for the live model call;
-    durable consumers share the same projection without storing binary content.
-    """
+    policy = path[0].value.get("context_projection", {}) if path and isinstance(path[0].value, Mapping) else {}
+    if not policy:
+        return path
+    sources = policy.get("sources")
+    if sources is not None:
+        path = [node for node in path if not isinstance(node.value, Mapping) or node.value.get("role") != "context"
+                or node.value.get("context_source") in sources]
+    if policy.get("task_context") is False:
+        root = path[0]
+        path = [replace(root, value={k: v for k, v in root.value.items() if k != STATE_KEY}), *path[1:]]
+    return path
 
-    path = settle_interrupted_tool_calls(path)
 
+def _apply_graph_overrides(path):
     # Branch-scoped overrides are applied after providers materialize their
     # snapshots and before either task or ordinary message projection.
     from dataclasses import replace
@@ -133,7 +139,28 @@ def project_model_messages(
                 adjusted.append(replace(template, id=template.id + "-graph-override-" + current_run, value=value))
         path = adjusted
 
+    return path
+
+
+def project_model_messages(
+    path: Sequence[Any],
+    *,
+    observation_services: Sequence[Any] = (),
+) -> list[dict[str, Any]]:
+    """Project the effective model history, honoring every context replacement.
+
+    Optional services materialize transient observations for the live model call;
+    durable consumers share the same projection without storing binary content.
+    """
+
+    path = settle_interrupted_tool_calls(path)
+
+    path = _apply_graph_overrides(path)
+
     from .tasks import state_from, project_tasks
+    # A bounded worker can restrict model-visible context without disabling the
+    # internal execution ledger. Persisted policy also applies on replay.
+    path = apply_context_projection(path)
     task_state = state_from(path)
     if task_state is not None:
         return project_tasks(path, task_state, observation_services=observation_services)

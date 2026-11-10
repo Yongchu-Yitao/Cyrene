@@ -3386,21 +3386,21 @@
     "card.create": {
       "en": {
         "name": "Create card",
-        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with html and may include native blocks around it. Place input_schema and actions inside spec, never at the tool argument root. Action fields and data-card-field bindings must name properties in spec.input_schema. Generate the requested card directly from this contract; do not create disposable probe cards. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
+        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with html and may include native blocks around it. Omitted block type defaults to embed and requires html; native blocks must specify type. Place input_schema and actions inside spec, never at the tool argument root. Action fields and data-card-field bindings must name properties in spec.input_schema. Generate the requested card directly from this contract; do not create disposable probe cards. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
       },
       "zh": {
         "name": "创建卡片",
-        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。 输入定义和操作必须放在卡片规格内，字段绑定须对应已声明的输入字段；直接创建所需卡片，不创建试探用的临时卡片。"
+        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。区块省略 type 时默认为 embed，仍须提供 html；原生区块必须显式填写 type。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。 输入定义和操作必须放在卡片规格内，字段绑定须对应已声明的输入字段；直接创建所需卡片，不创建试探用的临时卡片。"
       }
     },
     "card.update": {
       "en": {
         "name": "Update card",
-        "description": "Modify an existing card at expected_revision. Only supplied description fields change; arrays and objects are replaced whole. Preserves user input and pinning. Never creates a missing card or grants user approval."
+        "description": "Modify an existing card at expected_revision. Only supplied description fields change; arrays and objects are replaced whole. Omitted block type defaults to embed and requires html; native blocks must specify type. Preserves user input and pinning. Never creates a missing card or grants user approval."
       },
       "zh": {
         "name": "修改卡片",
-        "description": "按 expected_revision 修改已有卡片，仅更新提供的描述字段，数组和对象整体替换。保留用户输入及固定状态；不会创建缺失卡片，也不代表用户授权。"
+        "description": "按 expected_revision 修改已有卡片，仅更新提供的描述字段，数组和对象整体替换。保留用户输入及固定状态；不会创建缺失卡片，也不代表用户授权。 区块省略 type 时默认为 embed，仍须提供 html；原生区块必须显式填写 type。"
       }
     },
     "card.get": {
@@ -3441,6 +3441,16 @@
       "zh": {
         "name": "归档卡片",
         "description": "将已有卡片归档为只读，保留最终内容、用户输入和固定状态。一次模型回复结束不代表卡片任务结束。 归档卡片仍保留在对话中，不能用于删除或清理临时卡片。"
+      }
+    },
+    "edit_context_catalog": {
+      "en": {
+        "name": "Edit task context catalog",
+        "description": "Manage the current session's task context catalog. update edits a title or summary. archive hides an inactive task from the mounted catalog; checkpoint and switch or unload first if active. restore shows it without loading history. search finds IDs, titles and summaries, including archived tasks, with 10 entries per page. Search before creating duplicates. switch_context or load_context also cancels archival on successful activation. Call alone and wait for success."
+      },
+      "zh": {
+        "name": "编辑任务上下文目录",
+        "description": "管理当前会话的任务上下文目录。update 修改标题或摘要；archive 隐藏非活跃任务，归档前先保存检查点并切走或卸载；restore 恢复目录显示；search 按 ID、标题或摘要查找，每页 10 条并包含归档任务。恢复已有工作前先搜索，避免重复创建。成功加载或切换也会取消归档。请单独调用并等待成功。"
       }
     },
     "switch_context": {

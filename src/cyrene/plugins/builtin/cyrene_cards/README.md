@@ -65,6 +65,8 @@ assistant audience 限制；handler 另外验证宿主 `personal_assistant=True`
 
 自定义卡片包含一个 embed 区块，可在前后增加原生区块，共用标题、来源、输入协议和操作：
 
+创建和更新时，区块省略 `type` 默认按 `embed` 处理，仍须提供 `html`；原生区块必须显式填写 `type`。保存后的区块始终包含明确的 `type`。
+
 ```json
 {
   "template": "custom",
@@ -215,3 +217,10 @@ Agent 编写的问候主标题，spec.subtitle 是配套说明；两者都可通
 继续进行的时间线默认折叠，成果使用紧凑列表。所有 home_kind 均无固定入口，
 服务端同时拒绝 UI 与 Agent 的固定请求。首页槽位不得归档后重建；用 home_visible
 控制显示，正常短时间更新始终使用原 card_id。
+
+维护会话使用 `cyrene_system_prompt/home_prompt.py` 的专用提示词，不再复用前台
+助理的任务协调指令。刷新请求只携带原因、本地时间、已有卡片及任务证据。
+会话的持久化 `context_projection` 策略仅允许 system-prompt 来源的上下文，
+并关闭模型可见的通用任务上下文协议和目录；内部执行记录仍保留，回放遵守同一策略。
+SOUL、记忆、工作区以及其他插件附加指令不进入维护模型请求。工具权限仍独立限制为
+四个卡片读写工具和 WebSearch。前台保留用户显式编辑、卡片提交与继续原任务的行为。

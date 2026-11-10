@@ -9,6 +9,11 @@ from uuid import uuid4
 from .schemas import CardError
 from .service import CardService
 
+HOME_CONTEXT_PROJECTION = {
+    "sources": ["cyrene_system_prompt"],
+    "task_context": False,
+}
+
 HOME_TOOLS = ("card.create", "card.update", "card.get", "card.list", "WebSearch")
 
 
@@ -118,9 +123,6 @@ async def prepare_home(service, port, owner, version, prompt, snapshot):
             memory_write_enabled=False, memory_trigger_enabled=False, memory_archive_enabled=False,
             memory_short_term_enabled=False, memory_project_enabled=False, max_model_calls=12,
             assistant_home_owner=owner, assistant_home_cards=draft,
-            system_extra="Maintain the assistant home silently. Use only the supplied task evidence and home card tools. "
-                         "Never execute tasks, send messages, ask questions or change the foreground context. "
-                         "Only WebSearch may obtain new external data (weather). No user-facing narration.",
         )
         async def silent(_event):
             pass

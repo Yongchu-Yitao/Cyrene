@@ -34,7 +34,7 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
     assert "background: var(--wb-user-bg-dark, #101114);" in index
 
     shell_styles = styles.split(".workbench-shell {", 1)[1].split("}", 1)[0]
-    composer_material = styles.rsplit("\n.wbc-composer,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
+    composer_material = styles.rsplit("\n.wbc-composer,\n.workbench-sidebar-dock-nav,\n.wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {", 1)[1].split("}", 1)[0]
     composer_styles = (styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
         + styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0])
     assert "--wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent)" in composer_material
@@ -44,7 +44,7 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
     assert "backdrop-filter: var(--wbc-composer-glass-filter);" in composer_styles
     assert "border: var(--wbc-composer-glass-border);" in composer_styles
     light_composer_styles = styles.split(
-        'html[data-theme="light"] .wbc-composer-box,\nhtml[data-theme="light"] .workbench-sidebar-dock-nav {', 1
+        'html[data-theme="light"] .wbc-composer-box,\nhtml[data-theme="light"] .workbench-sidebar-dock-nav,\nhtml[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {', 1
     )[1].split("}", 1)[0]
     assert "--wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);" in light_composer_styles
     assert "0 10px 28px rgba(15, 23, 42, .12)" in light_composer_styles
