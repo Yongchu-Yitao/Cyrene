@@ -1762,10 +1762,7 @@ class InteractiveChat:
         return restore
 
     async def _ask_question(self, question: dict[str, Any]) -> str:
-        text = str(question.get("text") or self._config_t(
-            "请确认后继续。",
-            "Please confirm to continue.",
-        ))
+        text = str(question.get("text") or self._config_t("请确认后继续。", "Please confirm to continue."))
         options = question.get("options") if isinstance(question.get("options"), list) else []
         if isinstance(self.renderer, RichRenderer):
             self.renderer.console.print(f"\n[bold yellow]{escape(text)}[/]")
@@ -1783,9 +1780,7 @@ class InteractiveChat:
                 continue
             if answer.isdigit() and 1 <= int(answer) <= len(options):
                 option = options[int(answer) - 1]
-                if isinstance(option, dict) and option.get("decision"):
-                    return str(option["id"])
-                return self._option_label(option)
+                return str(option["id"]) if isinstance(option, dict) and option.get("decision") else self._option_label(option)
             return answer
 
     @staticmethod

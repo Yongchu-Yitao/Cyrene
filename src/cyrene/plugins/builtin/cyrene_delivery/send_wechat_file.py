@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from cyrene.core.plugin.permission_grants import permission_options
 from cyrene.core.plugin import PluginContext
 from .definitions import get_native_tool_def
 from cyrene.plugins.native_runtime import json_result, plugin_localized, publish_runtime_event, resolve_exportable_path, run_context_value
@@ -74,11 +75,7 @@ async def _tool_send_wechat_file(args: dict[str, Any], context: PluginContext) -
             "path_hint": str(path),
             "reason": f"文件：{path}\n名称：{name}\n附言：{text[:200]}",
             "scope_hint": "外部通信/文件外发的 ",
-            "options": [
-                {"id": "allow_once", "label": "允许这次", "decision": "allow", "scope": "once"},
-                {"id": "allow_session", "label": "本次会话内总是允许", "decision": "allow", "scope": "session"},
-                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
-            ],
+            "options": permission_options("允许这次", allow_session=True),
         },
     )
     if permission_result is not None:

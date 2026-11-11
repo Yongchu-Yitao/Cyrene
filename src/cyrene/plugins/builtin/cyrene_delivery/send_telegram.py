@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cyrene.core.plugin.permission_grants import permission_options
 from cyrene.core.plugin import PluginContext
 from cyrene.plugins.native_runtime import json_result, plugin_localized
 
@@ -45,11 +46,7 @@ async def _tool_send_message(args: dict[str, Any], context: PluginContext) -> st
             "operation": "外发 Telegram 消息",
             "reason": f"消息内容：{text[:240]}",
             "scope_hint": "外部通信/文件外发的 ",
-            "options": [
-                {"id": "allow_once", "label": "允许这次", "decision": "allow", "scope": "once"},
-                {"id": "allow_session", "label": "本次会话内总是允许", "decision": "allow", "scope": "session"},
-                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
-            ],
+            "options": permission_options("允许这次", allow_session=True),
         },
     )
     if permission_result is not None:

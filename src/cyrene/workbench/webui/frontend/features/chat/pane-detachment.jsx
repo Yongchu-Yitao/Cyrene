@@ -88,19 +88,32 @@ function wbcCompletePaneCardDetachment(context, pendingDetach) {
   });
 }
 
-function wbcRestoreReturnedDetachedPane(context, info) {
-  var returned = info && typeof info === "object" ? info : {};
-  var descriptor = returned.descriptor && typeof returned.descriptor === "object"
-    ? returned.descriptor
-    : null;
-  var cardId = String(returned.cardId || "");
-  var ownerChatId = String(returned.layoutOwnerChatId || descriptor && descriptor.ownerChatId || "");
-  if (!descriptor || !descriptor.kind || !cardId) return;
+function wbcReturnedPaneProjectId(descriptor, ownerChatId) {
   // Every mounted workspace receives this IPC event, including hidden pages.
   // Restore only into the originating project/assistant scope.
   var personalAssistant = descriptor.kind === "chat" && descriptor.payload === "assistant_global";
-  var sourceProjectId = personalAssistant || ownerChatId === "assistant_global"
+  return personalAssistant || ownerChatId === "assistant_global"
     ? "__personal_assistant__" : String(descriptor.project && descriptor.project.id || "");
+}
+
+function wbcInsertReturnedPane(current, restoredCard, cardId, side, index) {
+  if (wbcPaneCardLocation(current, cardId)) return current;
+  var next = {
+    left: current.left.slice(), right: current.right.slice(),
+    leftRatio: current.leftRatio, rightRatio: current.rightRatio,
+  };
+  if (next[side].length < 2) next[side].splice(Math.min(index, next[side].length), 0, restoredCard);
+  else next[side][index] = restoredCard;
+  return next;
+}
+
+function wbcRestoreReturnedDetachedPane(context, info) {
+  var returned = info && typeof info === "object" ? info : {};
+  var descriptor = returned.descriptor;
+  var cardId = String(returned.cardId || "");
+  if (!descriptor || typeof descriptor !== "object" || !descriptor.kind || !cardId) return;
+  var ownerChatId = String(returned.layoutOwnerChatId || descriptor.ownerChatId || "");
+  var sourceProjectId = wbcReturnedPaneProjectId(descriptor, ownerChatId);
   if (!sourceProjectId || sourceProjectId !== String(context.projectId || "")) return;
   var restoredCard = wbcPaneCard(descriptor.kind, descriptor.payload, {
     id: cardId,
@@ -110,14 +123,7 @@ function wbcRestoreReturnedDetachedPane(context, info) {
   var side = returned.sourceSide === "right" ? "right" : "left";
   var index = Math.max(0, Math.min(1, Number(returned.sourceIndex) || 0));
   context.updatePaneLayout(function (current) {
-    if (wbcPaneCardLocation(current, cardId)) return current;
-    var next = {
-      left: current.left.slice(), right: current.right.slice(),
-      leftRatio: current.leftRatio, rightRatio: current.rightRatio,
-    };
-    if (next[side].length < 2) next[side].splice(Math.min(index, next[side].length), 0, restoredCard);
-    else next[side][index] = restoredCard;
-    return next;
+    return wbcInsertReturnedPane(current, restoredCard, cardId, side, index);
   }, ownerChatId);
   if (descriptor.kind === "chat" && descriptor.payload) {
     context.selectChat(String(descriptor.payload));

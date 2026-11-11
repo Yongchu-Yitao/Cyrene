@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from cyrene.core.plugin.permission_grants import permission_options
 from cyrene.platform.paths import TEMP_DIR
 from cyrene.core.plugin import PluginContext
 from cyrene.plugins.native_runtime import (
@@ -379,10 +380,7 @@ async def _tool_browser_upload_files(
             "requires_human": True,
             "single_use": True,
             "scope_hint": "本地数据外发的 ",
-            "options": [
-                {"id": "allow_once", "label": "允许这次上传", "decision": "allow", "scope": "once"},
-                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
-            ],
+            "options": permission_options("允许这次上传"),
             "target": {
                 "origin": str(target.get("origin") or ""),
                 "top_url": str(target.get("topUrl") or ""),

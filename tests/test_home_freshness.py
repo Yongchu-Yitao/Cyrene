@@ -320,7 +320,10 @@ async def test_due_draft_does_not_overwrite_newer_home_or_cleared_chat(home_rig,
 ])
 async def test_first_start_window_uses_startup_time_not_poll_time(home_rig, started, checked, eligible):
     r = home_rig
-    stamp = lambda value: datetime.fromisoformat(f'2026-11-09T{value}+08:00').timestamp()
+
+    def stamp(value):
+        return datetime.fromisoformat(f'2026-11-09T{value}+08:00').timestamp()
+
     r.clock[0] = stamp(checked)
     await add_overview(r)
     result = await r.home.claim_display('assistant', {

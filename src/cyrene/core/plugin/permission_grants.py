@@ -126,6 +126,14 @@ class PermissionGrants:
 
 
 
+def permission_options(once_label="允许这次", *, allow_session=False):
+    options = [{"id": "allow_once", "label": once_label, "decision": "allow", "scope": "once"}]
+    if allow_session:
+        options.append({"id": "allow_session", "label": "本次会话内总是允许", "decision": "allow", "scope": "session"})
+    options.append({"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"})
+    return options
+
+
 def permission_question(
     request, *, tool_name, operation, kind, requires_human, fingerprint,
     session_fingerprint, round_id, client_request_id,
@@ -135,11 +143,7 @@ def permission_question(
     reason = str(request.get("reason") or "").strip()
     detail = f"\n📂 目标：{path_hint}" if path_hint else ""
     why = f"\n💡 原因：{reason}" if reason else ""
-    options = [
-        {"id": "allow_once", "label": "允许这次", "decision": "allow", "scope": "once"},
-        {"id": "allow_session", "label": "本次会话内总是允许", "decision": "allow", "scope": "session"},
-        {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
-    ]
+    options = permission_options(allow_session=True)
     authored_options = request.get("options")
     if isinstance(authored_options, list) and authored_options:
         # Custom labels are display-only. Old untyped choices cannot grant access.

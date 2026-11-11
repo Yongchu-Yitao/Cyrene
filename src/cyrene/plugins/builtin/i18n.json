@@ -616,11 +616,11 @@
     "Bash": {
       "en": {
         "name": "Bash",
-        "description": "Run a shell command in the workspace. Shell file-printing output does not satisfy a request to open or show a named file in the workspace UI."
+        "description": "Run a shell command in the workspace. Shell file-printing output does not satisfy a request to open or show a named file in the workspace UI. For moves or other file changes with known paths, include file_checks to verify source/destination in this call. Command and verification statuses are separate; neither stderr nor a failed check proves a mutation did not occur."
       },
       "zh": {
         "name": "执行命令",
-        "description": "在工作区中运行 Shell 命令。Shell 打印出的文件内容不能替代在工作区界面中打开或显示指定文件。"
+        "description": "在工作区中运行 Shell 命令。Shell 打印出的文件内容不能替代在工作区界面中打开或显示指定文件。移动文件或更改已知路径的文件时，请在同一次调用中提供 file_checks 来核对源路径和目标路径。命令状态和核对状态分别报告，标准错误输出或核对失败都不能证明文件未发生变化。"
       }
     },
     "CodeReview": {
@@ -3106,11 +3106,11 @@
     "send_file": {
       "en": {
         "name": "Send file",
-        "description": "Main agent only. Deliver a file you actually created as a downloadable artifact. The file must exist; never guess paths or merely print one in chat. If the user requests a specific save location, save the file there first, then call this tool, including for authorized paths outside the workspace. This tool does not save or move files."
+        "description": "Main agent only. Deliver a file you actually created as a downloadable artifact. The file must exist; never guess paths or merely print one in chat. If the user requests a specific save location, save the file there first, then call this tool, including for authorized paths outside the workspace. This tool does not save or move files. For multiple ready, independent files, emit one call per file together in the same response."
       },
       "zh": {
         "name": "发送文件",
-        "description": "将实际创建且存在的文件作为可下载附件交付给用户。"
+        "description": "将实际创建且存在的文件作为可下载附件交付给用户。多个已就绪且相互独立的文件应在同一轮回复中分别发送。"
       }
     },
     "send_message": {
@@ -3336,11 +3336,11 @@
     "task_inspect": {
       "en": {
         "name": "Inspect task",
-        "description": "Inspect task evidence; pass block_ids from the directory to read paginated contents without loading them."
+        "description": "Inspect task evidence without loading it. Use view=latest_result for the final reply without a directory lookup; pin node_id from a notification or result when paging. For execution records select block_ids, and use anchor=end to read the tail without guessing offsets. Empty blocks and out-of-range offsets are explicit; use expected_revision to detect changed evidence."
       },
       "zh": {
         "name": "检查任务",
-        "description": "检查任务证据；传入目录中的 block_ids 可分页读取内容，而不加载到上下文。"
+        "description": "检查任务证据，不加载到上下文。使用 view=latest_result 直接读取最终答复，续读时使用通知或结果中的 node_id 固定本次执行。检查执行记录时选择 block_ids，可用 anchor=end 读取末尾。结果明确标识空白内容和越界位置，使用 expected_revision 可识别记录变更。"
       }
     },
     "task_load_context": {
@@ -3386,21 +3386,21 @@
     "card.create": {
       "en": {
         "name": "Create card",
-        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with html and may include native blocks around it. Omitted block type defaults to embed and requires html; native blocks must specify type. Place input_schema and actions inside spec, never at the tool argument root. Action fields and data-card-field bindings must name properties in spec.input_schema. Generate the requested card directly from this contract; do not create disposable probe cards. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
+        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with either html or html_path, never both, and may include native blocks around it. For an existing HTML file, pass html_path directly; the host reads and saves a snapshot, with no HTML character or card byte limit. Omitted block type defaults to embed; native blocks must specify type. Place input_schema and actions inside spec, never at the tool argument root. Action fields and data-card-field bindings must name properties in spec.input_schema. Generate the requested card directly from this contract; do not create disposable probe cards. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
       },
       "zh": {
         "name": "创建卡片",
-        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。区块省略 type 时默认为 embed，仍须提供 html；原生区块必须显式填写 type。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。 输入定义和操作必须放在卡片规格内，字段绑定须对应已声明的输入字段；直接创建所需卡片，不创建试探用的临时卡片。"
+        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。区块省略 type 时默认为 embed，必须且只能提供 html 或 html_path 之一；原生区块必须显式填写 type。可直接提供已有 UTF-8 HTML 文件的路径，卡片会保存读取时的页面快照。HTML 字符数和卡片内容总大小不设上限。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。 输入定义和操作必须放在卡片规格内，字段绑定须对应已声明的输入字段；直接创建所需卡片，不创建试探用的临时卡片。"
       }
     },
     "card.update": {
       "en": {
         "name": "Update card",
-        "description": "Modify an existing card at expected_revision. Only supplied description fields change; arrays and objects are replaced whole. Omitted block type defaults to embed and requires html; native blocks must specify type. Preserves user input and pinning. Never creates a missing card or grants user approval."
+        "description": "Modify an existing card at expected_revision. Only supplied description fields change; arrays and objects are replaced whole. Embed blocks require exactly one of html or html_path; use html_path to snapshot an existing UTF-8 file without copying its contents. No HTML character or card byte limit. Omitted block type defaults to embed; native blocks must specify type. Preserves user input and pinning. Never creates a missing card or grants user approval."
       },
       "zh": {
         "name": "修改卡片",
-        "description": "按 expected_revision 修改已有卡片，仅更新提供的描述字段，数组和对象整体替换。保留用户输入及固定状态；不会创建缺失卡片，也不代表用户授权。 区块省略 type 时默认为 embed，仍须提供 html；原生区块必须显式填写 type。"
+        "description": "按 expected_revision 修改已有卡片，仅更新提供的描述字段，数组和对象整体替换。保留用户输入及固定状态；不会创建缺失卡片，也不代表用户授权。 区块省略 type 时默认为 embed，必须且只能提供 html 或 html_path 之一；原生区块必须显式填写 type。可直接提供已有 UTF-8 HTML 文件的路径，卡片会保存读取时的页面快照。HTML 字符数和卡片内容总大小不设上限。"
       }
     },
     "card.get": {

@@ -19,6 +19,17 @@ MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_LOAD_CHARS = 60000
 
 
+def _select_task_blocks(blocks, ids):
+    # Only task evidence is exposed, never executor system prompts.
+    task_blocks = [block for block in blocks if block.get("kind") == "task"]
+    if not ids:
+        return task_blocks
+    by_id = {block["block_id"]: block for block in task_blocks}
+    if any(block_id not in by_id for block_id in ids):
+        raise ValueError("Unknown context block ID; refresh the block directory")
+    return [by_id[block_id] for block_id in dict.fromkeys(ids)]
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
@@ -227,6 +238,23 @@ class SessionManagementService:
 
         return await self._on_owner(perform)
 
+    async def _inspect_latest_result(self, target, chat, args):
+        snapshot = await asyncio.to_thread(self.host.latest_result, target, args.get("node_id"))
+        status = snapshot["status"]
+        result = {"session_id": target, "title": chat.get("title", ""),
+                  "captured_at": datetime.now(timezone.utc).isoformat(),
+                  **{k: v for k, v in snapshot.items() if k != "content"},
+                  "execution_status": status}
+        expected = args.get("expected_revision")
+        if expected is not None and expected != snapshot["revision"]:
+            return {**result, "status": "stale_revision"}
+        if status != "completed":
+            return result
+        if not snapshot.get("final_reply_node_id"):
+            return {**result, "status": "no_final_reply"}
+        result.update(content_page(snapshot["content"], args))
+        return result
+
     async def blocks(self, owner, args, *, load=False):
         view = None if load else inspection_view(args)
 
@@ -235,31 +263,14 @@ class SessionManagementService:
                 target = args["session_id"]
                 _, chat = self._owned(owner, target)
                 if view == "latest_result":
-                    snapshot = await asyncio.to_thread(self.host.latest_result, target, args.get("node_id"))
-                    result = {"session_id": target, "title": chat.get("title", ""),
-                              "captured_at": datetime.now(timezone.utc).isoformat(),
-                              **{k: v for k, v in snapshot.items() if k != "content"},
-                              "execution_status": snapshot["status"]}
-                    expected = args.get("expected_revision")
-                    if expected is not None and expected != snapshot["revision"]:
-                        return {**result, "status": "stale_revision"}
-                    if snapshot["status"] != "completed" or not snapshot.get("final_reply_node_id"):
-                        return {**result, "status": snapshot["status"] if snapshot["status"] != "completed" else "no_final_reply"}
-                    result.update(content_page(snapshot["content"], args))
-                    return result
+                    return await self._inspect_latest_result(target, chat, args)
                 snapshot = await asyncio.to_thread(self.host.blocks, target)
                 result = {"session_id": target, "title": chat.get("title", ""), "revision": snapshot["revision"], "captured_at": datetime.now(timezone.utc).isoformat()}
                 expected = args.get("expected_revision")
                 if not load and expected is not None and expected != snapshot["revision"]:
                     return {**result, "status": "stale_revision"}
                 ids = args.get("block_ids", [])
-                # Only task evidence is exposed, never executor system prompts.
-                blocks = [block for block in snapshot["blocks"] if block.get("kind") == "task"]
-                if ids:
-                    by_id = {b["block_id"]: b for b in blocks}
-                    if any(i not in by_id for i in ids):
-                        raise ValueError("Unknown context block ID; refresh the block directory")
-                    blocks = [by_id[i] for i in dict.fromkeys(ids)]
+                blocks = _select_task_blocks(snapshot["blocks"], ids)
                 if load and not ids:
                     raise ValueError("Select explicit block_ids to load")
                 if load:
