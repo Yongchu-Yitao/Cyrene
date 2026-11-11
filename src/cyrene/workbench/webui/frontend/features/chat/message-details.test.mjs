@@ -77,7 +77,7 @@ test('Bash renders the full command and failure state while other tools keep the
   const html = renderToStaticMarkup(card.render({trace}));
 
   assert.match(html, /class="failed presentation-generic"/);
-  assert.ok(html.includes("<code>python3 - &lt;&lt;&#x27;PY&#x27;\n    print({})\nPY\n# " + 'x'.repeat(450) + '</code>'));
-  assert.doesNotMatch(html, /exit_code|Traceback/);
+  assert.ok(html.includes("</span> <small>python3 - &lt;&lt;&#x27;PY&#x27;\n    print({})\nPY\n# " + 'x'.repeat(450) + '</small>'));
+  assert.doesNotMatch(html, /<pre\b|<code\b|exit_code|Traceback/);
   assert.match(html, /\(read result\)/);
 });

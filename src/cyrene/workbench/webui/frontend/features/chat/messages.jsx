@@ -1162,7 +1162,7 @@ function wbcTraceToolContent(entry, bashCommand, isRunning, presentation) {
     <span className="wbc-trace-text">
       <span className="wbc-trace-label">{wbcTraceToolLabel(entry)}</span>
       {previewText ? <small>{wbcParenthesize(previewText)}</small> : null}
-      {bashCommand ? <pre className="wbc-tool-presentation-body"><code>{bashCommand}</code></pre> : null}
+      {bashCommand ? <>{" "}<small>{bashCommand}</small></> : null}
       {presentationKind !== "generic" ? <em className="wbc-tool-presentation-kind">{wbcT("workbenchChat.toolPresentation." + presentationKind, presentationKind)}</em> : null}
       {wbcTraceTransferProgress(entry, isRunning)}
       {presentationText ? <pre className={"wbc-tool-presentation-body " + presentationKind} role={presentationKind === "error" ? "alert" : undefined}>{presentationText}</pre> : null}

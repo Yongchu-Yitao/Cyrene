@@ -6935,7 +6935,7 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert 'if (bashCommand !== null) return { kind: "generic", text: "", preview: "" };' in source
     assert 'preview: wbcToolPreviewText(entry.preview)' in source
     assert "{previewText ? <small>{wbcParenthesize(previewText)}</small> : null}" in source
-    assert '<code>{bashCommand}</code>' in source
+    assert '<small>{bashCommand}</small>' in source
     assert ".wbc-trace-details .wbc-trace-mark" not in styles
     assert 'className="wbc-trace-mark"' in source
     assert "编辑了文件" in workbench_i18n_source()
