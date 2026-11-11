@@ -27,74 +27,119 @@ function assistantSavedChat(chat, sessionId, messages, event, runtime) {
   }, records);
 }
 
+function reconnectAssistantChat(next, sessionId, engine, model) {
+  if ((next?.runStatus || next?.status) === "running" && !next.pendingQuestion && !engine.get(sessionId)) {
+    engine.reconnect(sessionId, model);
+  }
+}
+
+function observeAssistantChatSync({
+  sessionId, model, engine, active, cache, answeredIds, stick,
+  live, refreshRef, setChat, setRuntime, setRefreshError,
+}) {
+  var cancelled = false, timer, inFlight = false, dirty = false, savedRevision = 0;
+  var revision = "", lastRefreshed = null;
+  live.current = true;
+  function applyRefresh(next) {
+    if (next?.pendingQuestion && answeredIds.current.has(next.pendingQuestion.id)) {
+      next = { ...next, pendingQuestion: null };
+    }
+    if (cache) cache.details[sessionId] = next;
+    lastRefreshed = next;
+    setChat(function (current) {
+      return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+    });
+    setRefreshError("");
+    reconnectAssistantChat(next, sessionId, engine, model);
+  }
+  function visible() { return active && !document.hidden; }
+  function isCurrent(requestRevision) { return !cancelled && requestRevision === savedRevision; }
+  function applyResponse(result) {
+    revision = result.revision || "";
+    if (result.unchanged) {
+      setRefreshError("");
+      reconnectAssistantChat(lastRefreshed, sessionId, engine, model);
+    } else applyRefresh(result.chat);
+  }
+  function finishRefresh() {
+    inFlight = false;
+    if (!cancelled && visible()) {
+      var forceNext = dirty;
+      timer = setTimeout(function () { refresh(forceNext); }, dirty ? 0 : 2000);
+    }
+    dirty = false;
+  }
+  async function refresh(force = true) {
+    if (cancelled) return;
+    if (!force && !visible()) return;
+    if (force) revision = "";
+    if (inFlight) { dirty = true; return; }
+    inFlight = true;
+    clearTimeout(timer);
+    var requestRevision = savedRevision;
+    try {
+      var result = model.syncChat
+        ? await model.syncChat(sessionId, force ? "" : revision)
+        : { chat: await model.getChat(sessionId) };
+      if (isCurrent(requestRevision)) applyResponse(result);
+    } catch (err) {
+      if (isCurrent(requestRevision)) {
+        revision = "";
+        setRefreshError("连接中断，正在尝试重新连接。已显示的内容仍然保留。");
+      }
+    } finally {
+      finishRefresh();
+    }
+  }
+  refreshRef.current = refresh;
+  function cardSubmitted(event) {
+    if (event.detail?.session_id === sessionId && active) { stick.current = true; refresh(); }
+  }
+  window.addEventListener('cyrene:card-submitted', cardSubmitted);
+  function visibilityChanged() {
+    clearTimeout(timer);
+    if (active && !document.hidden) refresh();
+  }
+  document.addEventListener('visibilitychange', visibilityChanged);
+  window.addEventListener('online', visibilityChanged);
+  if (active && !document.hidden) refresh();
+  var unsubscribeSaved = engine.subscribeSaved(sessionId, function (messages, event, runtime) {
+    // Persisted replies and questions arrive before the live transcript is
+    // removed. Reject polls started before either authoritative transition.
+    savedRevision++;
+    revision = "";
+    function merge(current) { return assistantSavedChat(current, sessionId, messages, event, runtime); }
+    if (cache) cache.details[sessionId] = merge(cache.details[sessionId]);
+    setChat(merge);
+  });
+  var previous = engine.get(sessionId);
+  var unsubscribe = engine.subscribe(function (snapshot) {
+    var next = snapshot[sessionId] || null;
+    if (!cancelled) {
+      setRuntime(next);
+      if (previous && !next) refresh();
+      previous = next;
+    }
+  });
+  return function () {
+    cancelled = true; live.current = false; clearTimeout(timer);
+    unsubscribeSaved(); unsubscribe();
+    window.removeEventListener('cyrene:card-submitted', cardSubmitted);
+    document.removeEventListener('visibilitychange', visibilityChanged);
+    window.removeEventListener('online', visibilityChanged);
+  };
+}
+
 function useAssistantChatSync({ sessionId, model, engine, active, cache, answeredIds, stick }) {
   var [chat, setChat] = React.useState(function () { return cache && cache.details[sessionId] || null; });
   var [runtime, setRuntime] = React.useState(function () { return engine.get(sessionId); });
   var [refreshError, setRefreshError] = React.useState("");
   var refreshRef = React.useRef(function () {});
   var live = React.useRef(true);
-  React.useEffect(function () {
-    var cancelled = false, timer, inFlight = false, dirty = false, savedRevision = 0;
-    live.current = true;
-    function applyRefresh(next) {
-      if (next?.pendingQuestion && answeredIds.current.has(next.pendingQuestion.id)) {
-        next = { ...next, pendingQuestion: null };
-      }
-      if (cache) cache.details[sessionId] = next;
-      setChat(next);
-      setRefreshError("");
-      if ((next?.runStatus || next?.status) === "running" && !next.pendingQuestion && !engine.get(sessionId)) {
-        engine.reconnect(sessionId, model);
-      }
-    }
-    async function refresh() {
-      if (cancelled) return;
-      if (inFlight) { dirty = true; return; }
-      inFlight = true;
-      clearTimeout(timer);
-      var requestRevision = savedRevision;
-      try {
-        var next = await model.getChat(sessionId);
-        if (!cancelled && requestRevision === savedRevision) applyRefresh(next);
-      } catch (err) {
-        if (!cancelled && requestRevision === savedRevision) {
-          setRefreshError("连接中断，正在尝试重新连接。已显示的内容仍然保留。");
-        }
-      }
-      finally {
-        inFlight = false;
-        if (!cancelled && active) { timer = setTimeout(refresh, dirty ? 0 : 2000); dirty = false; }
-      }
-    }
-    refreshRef.current = refresh;
-    function cardSubmitted(event) {
-      if (event.detail?.session_id === sessionId && active) { stick.current = true; refresh(); }
-    }
-    window.addEventListener('cyrene:card-submitted', cardSubmitted);
-    if (active) refresh();
-    var unsubscribeSaved = engine.subscribeSaved(sessionId, function (messages, event, runtime) {
-      // Persisted replies and questions arrive before the live transcript is
-      // removed. Reject polls started before either authoritative transition.
-      savedRevision++;
-      function merge(current) { return assistantSavedChat(current, sessionId, messages, event, runtime); }
-      if (cache) cache.details[sessionId] = merge(cache.details[sessionId]);
-      setChat(merge);
-    });
-    var previous = engine.get(sessionId);
-    var unsubscribe = engine.subscribe(function (snapshot) {
-      var next = snapshot[sessionId] || null;
-      if (!cancelled) {
-        setRuntime(next);
-        if (previous && !next) refresh();
-        previous = next;
-      }
-    });
-    return function () {
-      cancelled = true; live.current = false; clearTimeout(timer);
-      unsubscribeSaved(); unsubscribe();
-      window.removeEventListener('cyrene:card-submitted', cardSubmitted);
-    };
-  }, [sessionId, model, engine, active, cache, answeredIds, stick]);
+  React.useEffect(() => observeAssistantChatSync({
+    sessionId, model, engine, active, cache, answeredIds, stick,
+    live, refreshRef, setChat, setRuntime, setRefreshError,
+  }), [sessionId, model, engine, active, cache, answeredIds, stick]);
   return { chat, setChat, runtime, refreshError, refreshRef, live };
 }
 

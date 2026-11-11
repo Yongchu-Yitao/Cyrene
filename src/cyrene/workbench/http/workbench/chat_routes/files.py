@@ -8,6 +8,10 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
+from cyrene.workbench.chat.chat_application import (
+    is_hidden_protocol_record,
+    messages_in_chronological_order,
+)
 from cyrene.workbench.workspaces.workspace_changes import (
     get_chat_file_change,
     list_chat_change_sets,
@@ -18,15 +22,39 @@ from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
 logger = logging.getLogger(__name__)
 
 
+def _register_resource_index(router, service):
+    @router.get("/api/workbench/chats/{chat_id}/resources")
+    async def api_workbench_chat_resources(chat_id: str):
+        """Small file index for sidebars, without context projection or prewarming."""
+        chat = await asyncio.to_thread(service.repository.get_resources, chat_id)
+        if chat is not None and "generatedFiles" not in chat:
+            # Older chats need the same one-time index migration as the detail API.
+            await asyncio.to_thread(service.sync_chat_generated_files, chat_id)
+            chat = await asyncio.to_thread(service.repository.get_resources, chat_id)
+        if chat is None:
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
+        return {"chat": {
+            "id": chat_id,
+            "messages": [
+                {"role": message.get("role"), "attachments": message["attachments"]}
+                for message in messages_in_chronological_order(chat["messages"])
+                if not is_hidden_protocol_record(message)
+            ],
+            "files": [item for item in chat.get("generatedFiles") or []
+                      if isinstance(item, dict) and str(item.get("path") or "").strip()],
+        }}
+
+
 def register_file_routes(router: APIRouter, context: ChatRouteContext) -> None:
     service = context.service
     _routes = context.runtime
-    _project_data_key = context.project_data_key
-    _resolve_library_file_payload = context.resolve_library_file_payload
-    _public_pinned_resource = context.public_pinned_resource
     _find_chat = service.repository.find
     _read_chats_store = service.repository.read
     _resolve_chat_workspace_dir = service.resolve_chat_workspace_dir
+
+    _register_resource_index(router, service)
 
     @router.get("/api/workbench/chats/{chat_id}/changes")
     async def api_workbench_chat_changes(chat_id: str):

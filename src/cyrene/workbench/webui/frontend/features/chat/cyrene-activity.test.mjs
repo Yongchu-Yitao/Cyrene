@@ -201,3 +201,26 @@ test('stream cleanup refreshes immediately and rejects an older in-flight runnin
   assert(!f.states.includes('done'));
   f.stop(); assert.equal(f.timers.size, 0);
 });
+
+test('dock and grip share lightweight status reads and suspend hidden polling', async () => {
+  const target = new EventTarget(), doc = new EventTarget(), timers = new Map();
+  let id = 0, reads = 0, subscriptions = 0, runtime = null;
+  doc.hidden = false; target.document = doc;
+  target.setTimeout = (fn, delay) => { timers.set(++id, {fn,delay}); return id; };
+  target.clearTimeout = id => timers.delete(id);
+  const engine = {get:()=>runtime,subscribe:()=>{subscriptions++;return()=>subscriptions--;}};
+  const model = {getChat(){throw Error('History must not be read');}, async getChatStatus(){reads++;return {runStatus:'idle'};}};
+  const first = [], second = [];
+  const options = {sessionId:'assistant', engine, model, target};
+  const stopFirst = observeCyreneActivity({...options,onState:s=>first.push(s)});
+  const stopSecond = observeCyreneActivity({...options,onState:s=>second.push(s)});
+  await settle();
+  assert.equal(reads,1); assert.equal(subscriptions,1); assert.equal(timers.size,1);
+  assert.deepEqual(first,second);
+  doc.hidden = true; doc.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(timers.size,0);
+  stopFirst(); assert.equal(subscriptions,1);
+  doc.hidden = false; doc.dispatchEvent(new Event('visibilitychange')); await settle();
+  assert.equal(reads,2);
+  stopSecond(); assert.equal(subscriptions,0); assert.equal(timers.size,0);
+});

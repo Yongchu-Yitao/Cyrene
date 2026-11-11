@@ -240,3 +240,11 @@ html[data-theme="light"] .wbc-home-cards.wbc-assistant-home {color-scheme:light}
 .weather-storm .weather-cloud-back {fill:color-mix(in srgb,var(--weather-cloud) 62%,#322541);animation-duration:5s}
 .weather-snow .weather-cloud-back {fill:color-mix(in srgb,var(--weather-cloud) 80%,#629dba)}
 @keyframes wbc-weather-back-cloud {from{transform:translate(-3px,1px)}to{transform:translate(4px,-2px)}}
+
+/* Offscreen cards retain their animation phase without continuous painting. */
+[data-animations-paused],
+[data-animations-paused]::before,
+[data-animations-paused]::after,
+[data-animations-paused] *,
+[data-animations-paused] *::before,
+[data-animations-paused] *::after { animation-play-state: paused !important; }

@@ -1,3 +1,4 @@
+import { observeCardVisibility } from './card-background-work.mjs';
 import { AssistantHomeLayout, homeDisplayTitle } from './assistant-home-layout.jsx';
 import { CardWeather } from './card-weather.jsx';
 import { WBC_ICONS } from './icons.jsx';
@@ -139,6 +140,7 @@ function createCardActions({ cardId, url, current, pendingEvent, form, draftTime
       const submitted = current.current.input_state.submitted;
       const delivery = await requestCard(url + '/events/' + encodeURIComponent(submitted.event_id) + '/retry', { method: 'POST' });
       accept({ ...current.current, input_state: { ...current.current.input_state, submitted: { ...submitted, delivery } } });
+      window.dispatchEvent(new CustomEvent('cyrene:card-updated', { detail: { card_id: cardId } }));
       window.dispatchEvent(new CustomEvent('cyrene:card-submitted', { detail: { session_id: current.current.origin.session_id } }));
     } catch (e) { if (mounted.current) setError(e.message); }
     finally { lock.current = false; if (mounted.current) setBusy(false); }
@@ -146,7 +148,30 @@ function createCardActions({ cardId, url, current, pendingEvent, form, draftTime
   return { send, togglePin, retryDelivery };
 }
 
-function useAssistantCard(cardId, initialCard) {
+function useAssistantCardRefresh({ initialCard, managedRefresh, cardId, busy, mounted, draftTimer, refresh, accept }) {
+  const externalCard = useRef(initialCard);
+  useEffect(() => {
+    mounted.current = true;
+    let timer;
+    const update = event => { if (!managedRefresh && event.detail?.card_id === cardId) refresh(); };
+    const visibility = () => {
+      clearInterval(timer);
+      if (!managedRefresh && !document.hidden) { refresh(true); timer = setInterval(() => refresh(), 3000); }
+    };
+    visibility();
+    window.addEventListener('cyrene:card-updated', update);
+    document.addEventListener('visibilitychange', visibility);
+    return () => { mounted.current = false; clearInterval(timer); clearTimeout(draftTimer.current); window.removeEventListener('cyrene:card-updated', update); document.removeEventListener('visibilitychange', visibility); };
+  }, [cardId, managedRefresh]);
+  useEffect(() => {
+    if (managedRefresh && initialCard && !busy && externalCard.current !== initialCard) {
+      externalCard.current = initialCard;
+      accept(initialCard);
+    }
+  }, [initialCard, managedRefresh, busy]);
+}
+
+export function useAssistantCard(cardId, initialCard, managedRefresh = false) {
   const [card, setCard] = useState(initialCard);
   const [values, setValues] = useState(() => initialCard ? initialCardValues(initialCard) : {});
   const [busy, setBusy] = useState(false);
@@ -180,14 +205,7 @@ function useAssistantCard(cardId, initialCard) {
     catch (e) { if (mounted.current && (showError || !current.current)) setError(e.message); }
     finally { loading.current = false; }
   }
-  useEffect(() => {
-    mounted.current = true;
-    refresh(true);
-    const timer = setInterval(() => { if (!document.hidden) refresh(); }, 3000);
-    const update = event => { if (event.detail?.card_id === cardId) refresh(); };
-    window.addEventListener('cyrene:card-updated', update);
-    return () => { mounted.current = false; clearInterval(timer); clearTimeout(draftTimer.current); window.removeEventListener('cyrene:card-updated', update); };
-  }, [cardId]);
+  useAssistantCardRefresh({ initialCard, managedRefresh, cardId, busy, mounted, draftTimer, refresh, accept });
   function edit(key, value) {
     dirty.current = { ...dirty.current, [key]: value };
     local.current = { ...local.current, [key]: value }; setValues(local.current);
@@ -212,9 +230,17 @@ function useAssistantCard(cardId, initialCard) {
   return { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery };
 }
 
-export function WbcAssistantCard({ cardId, initialCard = null, displayTime = new Date() }) {
+export function useCardAnimations(ref, enabled) {
+  useEffect(() => {
+    if (enabled && ref.current) return observeCardVisibility(ref.current);
+  }, [ref, enabled]);
+}
+
+export function WbcAssistantCard({ cardId, initialCard = null, displayTime = new Date(), managedRefresh = false }) {
   const { t } = useWorkbenchI18n();
-  const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard);
+  const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard, managedRefresh);
+  const cardElement = useRef(null);
+  useCardAnimations(cardElement, !!card);
   if (!card) return renderCardLoading(error, refresh);
   const { disabled, delivery, awaitingDelivery, footerActions, isHome, displayCard } = cardPresentation(card, busy, pendingEvent);
   const renderBlock = block => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
@@ -222,7 +248,7 @@ export function WbcAssistantCard({ cardId, initialCard = null, displayTime = new
     {block.description && <p className="wbc-card-description">{block.description}</p>}
     <CardBlock block={block} card={card} values={values} disabled={disabled || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => send(kind, kind === 'change' ? next : { ...local.current, ...next }, action)} />
   </section>;
-  return <article className={'wbc-assistant-card density-' + card.spec.density + (isHome ? ' wbc-home-section home-' + card.spec.home_kind : '')} data-card-id={cardId} aria-label={isHome ? homeDisplayTitle(displayCard.spec) : card.spec.title} aria-busy={busy}>
+  return <article ref={cardElement} className={'wbc-assistant-card density-' + card.spec.density + (isHome ? ' wbc-home-section home-' + card.spec.home_kind : '')} data-card-id={cardId} aria-label={isHome ? homeDisplayTitle(displayCard.spec) : card.spec.title} aria-busy={busy}>
     {!isHome && renderCardHeader(card, busy, togglePin, t)}
     <form ref={form} onSubmit={event => event.preventDefault()}>
       {isHome ? <AssistantHomeLayout card={displayCard} now={displayTime} renderBlock={renderBlock} /> : <div className={'wbc-card-blocks layout-' + card.spec.layout}>{card.spec.blocks.map(renderBlock)}</div>}

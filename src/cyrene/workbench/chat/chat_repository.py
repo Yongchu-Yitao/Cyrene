@@ -16,6 +16,7 @@ from cyrene.workbench.persistence.store import (
     mutate_chat_metadata,
     read_chat,
     read_chat_metadata,
+    read_chat_resources,
     read_chat_summaries,
     read_document,
     write_chat,
@@ -105,6 +106,31 @@ class ChatRepository:
 
     def has_messages(self, chat_id: str) -> bool:
         return chat_has_messages(self._database(), chat_id)
+
+    def sync_state(self, chat_id: str) -> tuple[dict[str, Any], str, bool] | None:
+        """Read the durable revision and metadata in one snapshot, without history."""
+        conn = connect(self._database())
+        try:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT payload_json, summary_json, updated_at FROM workbench_chats WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            metadata = json.loads(row[0])
+            metadata["id"] = chat_id
+            metadata["_messageProjection"] = json.loads(row[1])
+            parent = str(metadata.get("forkedFromChatId") or "")
+            parent_exists = not parent or conn.execute(
+                "SELECT 1 FROM workbench_chats WHERE chat_id = ?", (parent,),
+            ).fetchone() is not None
+            return metadata, str(row[2]), parent_exists
+        finally:
+            conn.close()
+
+    def get_resources(self, chat_id: str) -> dict[str, Any] | None:
+        return read_chat_resources(self._database(), chat_id)
 
     def mutate_metadata(
         self, chat_id: str, mutation: Callable[[dict[str, Any]], Any],

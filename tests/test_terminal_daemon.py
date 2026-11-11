@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from cyrene.plugins.builtin.cyrene_code.terminal.wakes import wait_and_claim_wake
 from cyrene.plugins.builtin.cyrene_code.terminal.client import (
     LIFECYCLE_VERSION,
     TerminalDaemonClient,
@@ -494,3 +495,80 @@ def test_agent_terminal_show_uses_split_and_replaces_one_existing_pane() -> None
     assert "next[targetSide] = [card]" in source
     assert "next[replaceSide][replaceIndex] = card" in source
     assert 'mode: "split"' in source
+
+
+@pytest.mark.asyncio
+async def test_wake_long_poll_waits_without_queries_and_cancels_on_disconnect(tmp_path, monkeypatch):
+    daemon = TerminalDaemon(tmp_path / 'daemon')
+    await daemon.start()
+    original = daemon.manager.claim_wake
+    calls = []
+    def claim(*args):
+        calls.append(args)
+        return original(*args)
+    monkeypatch.setattr(daemon.manager, 'claim_wake', claim)
+    port = daemon.server.sockets[0].getsockname()[1]
+    reader, writer = await asyncio.open_connection('127.0.0.1', port)
+    from cyrene.plugins.builtin.cyrene_code.terminal.client import PROTOCOL_VERSION
+    writer.write(json.dumps({'version': PROTOCOL_VERSION, 'token': daemon.token, 'action': 'claimWake', 'waitSeconds': 30}).encode() + b'\n')
+    await writer.drain()
+    try:
+        await asyncio.sleep(.1)
+        assert len(calls) == 1
+        await asyncio.sleep(1)
+        assert len(calls) == 1
+        writer.close()
+        await writer.wait_closed()
+        for _ in range(50):
+            if not daemon.connections:
+                break
+            await asyncio.sleep(.01)
+        assert not daemon.connections
+    finally:
+        writer.close()
+        await daemon.stop()
+
+
+@pytest.mark.asyncio
+async def test_wake_long_poll_reclaims_expired_lease_without_new_write(tmp_path):
+    import time
+    daemon = TerminalDaemon(tmp_path / 'daemon')
+    db = daemon.manager._db
+    # A durable lease left behind by an earlier consumer, with no exit event.
+    db.execute("""INSERT INTO terminal_wakes
+        (wake_id,terminal_id,project_id,chat_id,status,created_at,lease_token,lease_until)
+        VALUES ('w','t','p','c','claimed','now','old',?)""", (time.time() + .15,))
+    db.commit()
+    try:
+        wake = await asyncio.wait_for(wait_and_claim_wake(daemon.manager, 'new', 30, 1), 1)
+        assert wake['wake_id'] == 'w'
+        assert wake['lease_token'].startswith('new:')
+        daemon.manager.settle_wake('w', wake['lease_token'], 'release')
+        wake = await wait_and_claim_wake(daemon.manager, 'next', 30, 1)
+        assert wake['lease_token'].startswith('next:')
+    finally:
+        daemon.manager.close_store()
+
+
+@pytest.mark.asyncio
+async def test_terminal_exit_wakes_waiter_immediately(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    daemon = TerminalDaemon(tmp_path / 'daemon')
+    manager = daemon.manager
+    manager._db.execute("""INSERT INTO terminal_wakes
+        (wake_id,terminal_id,project_id,chat_id,status,created_at)
+        VALUES ('w','t','p','c','watching','now')""")
+    manager._db.commit()
+    monkeypatch.setattr(manager, 'screen_snapshot', lambda _: {'screenText': 'done'})
+    waiting = asyncio.create_task(wait_and_claim_wake(manager, 'web', 45, 30))
+    try:
+        await asyncio.sleep(.02)
+        assert not waiting.done()
+        manager._ready_wake(SimpleNamespace(id='t', wake_id='w', title='test', cwd=str(tmp_path)), exit_code=0)
+        wake = await asyncio.wait_for(waiting, .5)
+        assert wake['exit_status'] == 'done'
+        assert wake['lease_token'].startswith('web:')
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        manager.close_store()

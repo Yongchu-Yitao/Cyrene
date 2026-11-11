@@ -11,6 +11,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def _apply_bash_tool_details(record, entry, kind, payload):
+    if entry["text"] != "Bash":
+        return
+    if kind == "tool.started" and (assistant_id := payload.get("assistantNodeId")):
+        record.setdefault("sourceId", assistant_id)
+    if type(exit_code := payload.get("exitCode")) is int:
+        entry["exitCode"] = exit_code
+
+
 class RunTimeline:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
@@ -144,6 +153,7 @@ class RunTimeline:
                          preview=str(payload.get("outputSummary") or payload.get("inputSummary") or entry.get("preview") or ""))
             if payload.get("detailKey"):
                 entry["detailKey"] = str(payload["detailKey"])
+            _apply_bash_tool_details(record, entry, kind, payload)
             for key, candidates in {"input": ("input", "args"), "output": ("output", "result"), "presentation": ("presentation",)}.items():
                 for candidate in candidates:
                     if candidate in payload:

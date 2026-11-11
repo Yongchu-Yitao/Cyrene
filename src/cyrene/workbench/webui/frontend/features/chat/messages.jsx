@@ -1,3 +1,4 @@
+import { wbcTraceTimelineItems } from "./trace-timeline.mjs"
 import { homeInsertionIndex } from "./home-timeline.mjs"
 import { WbcAssistantCard } from "./assistant-cards.jsx"
 import { snapshotStaticMessage, equalAssistantProps } from "./message-memo.mjs"
@@ -982,6 +983,18 @@ function wbcIsToolTraceEntry(entry) {
   return !!(entry && (entry.kind === "tool" || entry.tool));
 }
 
+function wbcBashTraceCommand(entry) {
+  if (!wbcIsToolTraceEntry(entry)
+      || (wbcTraceNormalizeName(entry.tool) !== "bash" && wbcTraceNormalizeName(entry.text) !== "bash")) return null;
+  var command = typeof entry.input?.command === "string" ? entry.input.command : entry.command;
+  return typeof command === "string" ? command.trim() : "";
+}
+
+function wbcTraceEntryFailed(entry, status, bashCommand) {
+  return !!entry?.failed || ["failed", "error", "failure", "expired", "cancelled"].includes(status)
+    || (bashCommand !== null && Number.isInteger(entry?.exitCode) && entry.exitCode !== 0);
+}
+
 function wbcActivityGroupRunningSummary(messages) {
   var steps = [];
   var thinkingCount = 0;
@@ -1049,50 +1062,6 @@ function wbcTraceCollapsedSummary(entries, fallback) {
   };
 }
 
-function wbcNormalizeReasoningText(text) {
-  return String(text || "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map(function (line) { return line.trimEnd(); })
-    .filter(function (line) { return !!line.trim(); })
-    .join("\n")
-    .trim();
-}
-
-function wbcTraceTimelineItems(entries, reasoning) {
-  var traceEntries = Array.isArray(entries) ? entries : [];
-  var rawReasoning = String(reasoning || "");
-  var anchored = [];
-  var trailing = [];
-  traceEntries.forEach(function (entry, index) {
-    // The phase-one row only summarizes the reasoning text and repeats that
-    // same content in its preview. Keep it for the collapsed status, but omit
-    // it from the expanded timeline where the full reasoning is already shown.
-    if (entry && entry.kind === "phase1") return;
-    var offset = Number(entry && entry.reasoningOffset);
-    if (Number.isFinite(offset) && offset >= 0) anchored.push({ entry: entry, index: index, offset: offset });
-    else trailing.push({ entry: entry, index: index });
-  });
-  anchored.sort(function (left, right) {
-    return left.offset === right.offset ? left.index - right.index : left.offset - right.offset;
-  });
-  var items = [];
-  var cursor = 0;
-  anchored.forEach(function (anchor) {
-    var offset = Math.max(cursor, Math.min(rawReasoning.length, anchor.offset));
-    var reasoningText = wbcNormalizeReasoningText(rawReasoning.slice(cursor, offset));
-    if (reasoningText) items.push({ kind: "reasoning", text: reasoningText });
-    items.push({ kind: "trace", entry: anchor.entry, index: anchor.index });
-    cursor = offset;
-  });
-  var remainingReasoning = wbcNormalizeReasoningText(rawReasoning.slice(cursor));
-  if (remainingReasoning) items.push({ kind: "reasoning", text: remainingReasoning });
-  trailing.forEach(function (item) {
-    items.push({ kind: "trace", entry: item.entry, index: item.index });
-  });
-  return items;
-}
-
 function wbcTraceDedupeKeyForDisclosure(trace) {
   return (trace || []).map(function (entry) { return entry.toolCallId || entry.text; }).join(":");
 }
@@ -1154,48 +1123,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning, disclosureId }) 
             <div className="wbc-trace-view">
           {timelineItems.length > 0 && (
             <ul className="wbc-trace-list wbc-trace-timeline" aria-live="polite">
-              {timelineItems.map(function (item, timelineIndex) {
-                if (item.kind === "reasoning") return (
-                  <li className="wbc-thinking-detail wbc-trace-timeline-reasoning" key={"reasoning:" + timelineIndex}>
-                    <span className="wbc-trace-entry-icon" aria-hidden="true">{WBC_ICONS.brain}</span>
-                    <span className="wbc-thinking-detail-text">{item.text}</span>
-                  </li>
-                );
-                var entry = item.entry || {};
-                var i = item.index;
-                var entryStatus = String(entry.status || "").trim().toLowerCase();
-                var isRunning = live && entryStatus === "running";
-                var failed = !!entry.failed || ["failed", "error", "failure", "expired", "cancelled"].indexOf(entryStatus) >= 0;
-                var presentationKind = wbcToolPresentationKind(entry);
-                var presentationText = wbcToolPresentationText(entry, presentationKind);
-                var previewText = wbcToolPreviewText(entry.preview);
-                return (
-                  <li key={(entry.toolCallId || "trace") + ":" + i} className={(failed ? "failed" : (isRunning ? "active" : "done")) + " presentation-" + presentationKind}>
-                    <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? wbcTraceActionIcon(entry) : WBC_ICONS.check)}</span>
-                    {failed ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}
-                    <span className="wbc-trace-text">
-                      <span className="wbc-trace-label">
-                        {(function () {
-                          var toolKey = entry.text || entry.tool || "";
-                          var isToolEntry = entry.kind === "tool" || !!entry.tool;
-                          if (isToolEntry) return wbcLocalizedToolName(toolKey);
-                          if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
-                          return toolKey;
-                        })()}
-                      </span>
-                      {previewText ? <small>{wbcParenthesize(previewText)}</small> : null}
-                      {presentationKind !== "generic" ? <em className="wbc-tool-presentation-kind">{wbcT("workbenchChat.toolPresentation." + presentationKind, presentationKind)}</em> : null}
-                      {isRunning && Number(entry.progressTotal) > 0 ? (
-                        <span className="wbc-transfer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(Number(entry.progress || 0) * 100)}>
-                          <span style={{ width: Math.round(Number(entry.progress || 0) * 100) + "%" }} />
-                          <small>{Math.round(Number(entry.progress || 0) * 100)}%</small>
-                        </span>
-                      ) : null}
-                      {presentationText ? <pre className={"wbc-tool-presentation-body " + presentationKind} role={presentationKind === "error" ? "alert" : undefined}>{presentationText}</pre> : null}
-                    </span>
-                  </li>
-                );
-              })}
+              {timelineItems.map((item, index) => wbcTraceRow(item, index, live))}
             </ul>
           )}
             </div>
@@ -1203,6 +1131,65 @@ function WbcTraceCard({ trace, live, running, label, reasoning, disclosureId }) 
         </div>
       </div>
     </div>
+  );
+}
+
+function wbcTraceToolLabel(entry) {
+  var toolKey = entry.text || entry.tool || "";
+  if (wbcIsToolTraceEntry(entry)) return wbcLocalizedToolName(toolKey);
+  if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
+  return toolKey;
+}
+
+function wbcTraceToolPresentation(entry, bashCommand) {
+  if (bashCommand !== null) return { kind: "generic", text: "", preview: "" };
+  var kind = wbcToolPresentationKind(entry);
+  return { kind, text: wbcToolPresentationText(entry, kind), preview: wbcToolPreviewText(entry.preview) };
+}
+
+function wbcTraceTransferProgress(entry, isRunning) {
+  if (!isRunning || !(Number(entry.progressTotal) > 0)) return null;
+  var percent = Math.round(Number(entry.progress || 0) * 100);
+  return <span className="wbc-transfer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={percent}>
+    <span style={{ width: percent + "%" }} />
+    <small>{percent}%</small>
+  </span>;
+}
+
+function wbcTraceToolContent(entry, bashCommand, isRunning, presentation) {
+  var { kind: presentationKind, text: presentationText, preview: previewText } = presentation;
+  return (
+    <span className="wbc-trace-text">
+      <span className="wbc-trace-label">{wbcTraceToolLabel(entry)}</span>
+      {previewText ? <small>{wbcParenthesize(previewText)}</small> : null}
+      {bashCommand ? <pre className="wbc-tool-presentation-body"><code>{bashCommand}</code></pre> : null}
+      {presentationKind !== "generic" ? <em className="wbc-tool-presentation-kind">{wbcT("workbenchChat.toolPresentation." + presentationKind, presentationKind)}</em> : null}
+      {wbcTraceTransferProgress(entry, isRunning)}
+      {presentationText ? <pre className={"wbc-tool-presentation-body " + presentationKind} role={presentationKind === "error" ? "alert" : undefined}>{presentationText}</pre> : null}
+    </span>
+  );
+}
+
+function wbcTraceRow(item, timelineIndex, live) {
+  if (item.kind === "reasoning") return (
+    <li className="wbc-thinking-detail wbc-trace-timeline-reasoning" key={"reasoning:" + timelineIndex}>
+      <span className="wbc-trace-entry-icon" aria-hidden="true">{WBC_ICONS.brain}</span>
+      <span className="wbc-thinking-detail-text">{item.text}</span>
+    </li>
+  );
+  var entry = item.entry || {};
+  var i = item.index;
+  var entryStatus = String(entry.status || "").trim().toLowerCase();
+  var isRunning = live && entryStatus === "running";
+  var bashCommand = wbcBashTraceCommand(entry);
+  var failed = wbcTraceEntryFailed(entry, entryStatus, bashCommand);
+  var presentation = wbcTraceToolPresentation(entry, bashCommand);
+  return (
+    <li key={(entry.toolCallId || "trace") + ":" + i} className={(failed ? "failed" : (isRunning ? "active" : "done")) + " presentation-" + presentation.kind}>
+      <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? wbcTraceActionIcon(entry) : WBC_ICONS.check)}</span>
+      {failed ? <span className="wbc-trace-entry-icon" aria-hidden="true">{wbcTraceActionIcon(entry)}</span> : null}
+      {wbcTraceToolContent(entry, bashCommand, isRunning, presentation)}
+    </li>
   );
 }
 
@@ -1541,11 +1528,12 @@ function wbcPhase1ProgressDetail(entries) {
     } else if (entry && (entry.kind === "tool" || entry.tool)) {
       text = wbcLocalizedToolName(text);
     }
+    var bashCommand = wbcBashTraceCommand(entry);
     var preview = String(entry && entry.preview || "").trim();
     var status = String(entry && entry.status || "").trim().toLowerCase();
-    var failed = !!(entry && entry.failed) || ["failed", "error", "failure", "expired", "cancelled"].indexOf(status) >= 0;
+    var failed = wbcTraceEntryFailed(entry, status, bashCommand);
     var mark = failed ? "×" : (status === "running" ? "◌" : "✓");
-    return [mark, text, preview ? wbcParenthesize(wbcToolPreviewText(preview)) : ""]
+    return [mark, text, bashCommand ?? wbcParenthesize(wbcToolPreviewText(preview))]
       .filter(Boolean)
       .join(" ");
   }).filter(Boolean).join("\n");

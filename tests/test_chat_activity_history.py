@@ -1,5 +1,6 @@
 """History must reconcile the live timeline with ContextTree reconstruction."""
 from copy import deepcopy
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -7,9 +8,20 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from cyrene.workbench.chat.chat_application import deduplicate_projected_messages
+from cyrene.core.context import ContextStoreRouter
+from cyrene.core.session import AgentSessionEvent
+from cyrene.workbench.chat.chat_application import (
+    deduplicate_projected_messages,
+    merge_chat_messages_chronologically,
+    sanitize_durable_traces,
+)
+from cyrene.workbench.chat.conversation_context_service import AgentContextRepository
 from cyrene.workbench.chat.run_timeline import RunTimeline
+from cyrene.workbench.core_adapter.bridge import workbench_events
+from cyrene.workbench.core_adapter.chat_runtime import workbench_agent_data_directory
+from cyrene.workbench.core_adapter.conversation_runtime import ConversationRuntime
 from cyrene.workbench.core_adapter.tool_activity_projection import project_tool_activity_messages
+from cyrene.workbench.http.workbench.chat_routes import agent_config_routes
 from cyrene.workbench.http.workbench.chat_routes.detail_routes import (
     _merge_context_activity_messages,
     _register_get_route,
@@ -84,6 +96,87 @@ def test_context_history_still_supplies_missing_calls():
     assert result["messageCount"] == 8
 
 
+@pytest.mark.parametrize("same_card_id", [False, True])
+def test_history_recovers_full_bash_command_from_context(same_card_id):
+    command = "echo '" + "x" * 450 + "'\nprintf '%s\\n' '{literal}'"
+    args = {"command": command}
+    output = {"exit_code": 1, "stderr": "Traceback"}
+    timeline = RunTimeline("run-bash")
+    timeline.apply({"type": "tool.started", "toolCallId": "bash", "name": "Bash", "args": args})
+    assert timeline.messages()[0]["trace"][0]["input"] == args
+    timeline.apply({"type": "tool.completed", "toolCallId": "bash", "name": "Bash", "outputSummary": output, "exitCode": 1})
+    saved = timeline.messages()[0]
+    assert saved["trace"][0].pop("input") == args
+    assert saved["trace"][0].pop("exitCode") == 1
+
+    nodes = [
+        {"id": "assistant-bash", "value": {"role": "assistant", "run_id": "run-bash",
+         "tool_calls": [{"id": "bash", "name": "Bash", "arguments": args}]}},
+        {"id": "result-bash", "value": {"role": "tool_results", "run_id": "run-bash",
+         "results": [{"call_id": "bash", "success": True, "value": output}]}},
+    ]
+    reconstructed = project_tool_activity_messages({"nodes": nodes}, "run-bash")
+    assert reconstructed[0]["trace"][0]["command"] == command
+    assert "Traceback" in reconstructed[0]["trace"][0]["preview"]
+    assert reconstructed[0]["trace"][0]["exitCode"] == 1
+    if same_card_id:
+        reconstructed[0]["id"] = saved["id"]
+
+    result = _merge_context_activity_messages({"messages": [saved]}, list(reconstructed))
+
+    assert result["messageCount"] == 1
+    assert result["messages"][0]["id"] == saved["id"]
+    assert result["messages"][0]["trace"][0]["command"] == command
+    assert result["messages"][0]["trace"][0]["exitCode"] == 1
+    assert result["messages"][0]["trace"][0]["failed"] is False
+    assert "input" not in saved["trace"][0]
+    assert "exitCode" not in saved["trace"][0]
+
+
+def test_trace_upload_preserves_server_bash_details(monkeypatch):
+    args = {"command": "printf '%s' '" + "x" * 450 + "'\nexit 1"}
+    saved_trace = [
+        {"kind": "tool", "text": "Bash", "toolCallId": "bash", "input": {**args, "timeout_ms": 30000}, "exitCode": 1},
+        {"kind": "tool", "text": "Read", "toolCallId": "read", "input": {"path": "file"}},
+    ]
+    chat = {"id": "chat", "messages": [{"id": "activity", "activityCard": True, "trace": saved_trace}]}
+    repository = SimpleNamespace(get=lambda _: deepcopy(chat), write_one=Mock())
+    service = SimpleNamespace(
+        repository=repository, sanitize_durable_traces=sanitize_durable_traces, utc_now_iso=lambda: "now",
+    )
+    monkeypatch.setattr(agent_config_routes, "publish_chat_changed", AsyncMock())
+    router = APIRouter()
+    agent_config_routes._register_trace_route(router, SimpleNamespace(service=service))
+    app = FastAPI()
+    app.include_router(router)
+    uploaded_trace = [
+        {"kind": "tool", "text": "Bash", "toolCallId": "bash", "status": "completed"},
+        {"kind": "tool", "text": "Read", "toolCallId": "read", "status": "completed"},
+    ]
+
+    with TestClient(app) as client:
+        response = client.patch("/api/workbench/chats/chat/trace", json={
+            "messageIds": ["activity"], "traces": [uploaded_trace],
+        })
+
+    assert response.json() == {"ok": True, "updated": 1}
+    written = repository.write_one.call_args.args[0]["messages"][0]["trace"]
+    assert written == [
+        {**uploaded_trace[0], "command": args["command"], "exitCode": 1},
+        uploaded_trace[1],
+    ]
+
+
+def test_checkpoint_save_retains_recovered_bash_details_for_the_same_activity():
+    entry = {"kind": "tool", "tool": "Bash", "toolCallId": "bash", "status": "completed"}
+    activity = {"id": "saved", "role": "assistant", "activityCard": True}
+    chat = {"messages": [{**activity, "trace": [{**entry, "command": "exit 2", "exitCode": 2}]}]}
+
+    merge_chat_messages_chronologically(chat, [{**activity, "trace": [entry]}])
+
+    assert chat["messages"][0]["trace"] == [{**entry, "command": "exit 2", "exitCode": 2}]
+
+
 def test_same_call_ids_in_separate_user_turns_remain_separate():
     canonical, reconstructed = dual_projection(count=1)
     first = [canonical[0], reconstructed[0]]
@@ -94,6 +187,91 @@ def test_same_call_ids_in_separate_user_turns_remain_separate():
     user = {"id": "user-next", "role": "user", "content": "Read again",
             "createdAt": "2030-01-02T00:00:00+00:00"}
     assert deduplicate_projected_messages([*first, user, *second]) == [first[0], user, second[0]]
+
+
+def test_history_bash_exit_status_matches_its_own_run_when_call_ids_repeat():
+    nodes = []
+    for run_id, exit_code in [("first", 1), ("second", 0)]:
+        nodes.extend([
+            {"id": run_id, "value": {"role": "assistant", "run_id": run_id,
+             "tool_calls": [{"id": "same-id", "name": "Bash", "arguments": {"command": f"exit {exit_code}"}}]}},
+            {"id": f"{run_id}-result", "value": {"role": "tool_results", "run_id": run_id,
+             "results": [{"call_id": "same-id", "success": True, "value": {"exit_code": exit_code}}]}},
+            {"id": f"{run_id}-end", "value": {"role": "assistant", "run_id": run_id, "answer_complete": True}},
+        ])
+
+    first, second = project_tool_activity_messages({"nodes": nodes})
+
+    assert first["trace"][0]["exitCode"] == 1
+    assert second["trace"][0]["exitCode"] == 0
+
+
+def test_history_keeps_repeated_bash_calls_in_one_run():
+    nodes = []
+    args = {"command": "printf 'repeat'"}
+    for assistant_id, exit_code in [("first", 1), ("second", 0)]:
+        nodes.extend([
+            {"id": assistant_id, "value": {"role": "assistant", "run_id": "run",
+             "tool_calls": [{"id": "same-id", "name": "Bash", "arguments": args}]}},
+            {"id": f"{assistant_id}-result", "parent_id": assistant_id,
+             "value": {"role": "tool_results", "run_id": "run",
+             "results": [{"call_id": "same-id", "success": True, "value": {"exit_code": exit_code}}]}},
+        ])
+    first, second = project_tool_activity_messages({"nodes": nodes}, "run")
+    timeline = RunTimeline("run")
+    event = AgentSessionEvent(
+        sequence=1, type="assistant.tool_calls", tree_id="tree", run_id="run", node_id="first",
+        time=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        data={**nodes[0]["value"], "stream_source_id": "stream-1"},
+    )
+    for projected in workbench_events(event):
+        timeline.apply(projected)
+    saved = timeline.messages()[0]
+    saved["trace"][0].pop("input")
+
+    result = _merge_context_activity_messages({"messages": [saved]}, [first, second])
+
+    assert [message["id"] for message in result["messages"]] == [saved["id"], second["id"]]
+    assert [message["trace"][0]["exitCode"] for message in result["messages"]] == [1, 0]
+
+
+def test_history_fork_and_retry_only_recover_commands_from_the_visible_branch(tmp_path):
+    db_path = str(tmp_path / "chat.db")
+    context_path = workbench_agent_data_directory(db_path) / "context"
+
+    def add_turn(router, parent, run_id, command, *, retry=False):
+        user = router.mount("source", parent, {"role": "user", "run_id": run_id, "metadata": {"retry": retry}})
+        call = router.mount("source", user.id, {
+            "role": "assistant", "run_id": run_id,
+            "tool_calls": [{"id": "reused", "name": "Bash", "arguments": {"command": command}}],
+        })
+        result = router.mount("source", call.id, {
+            "role": "tool_results", "run_id": run_id,
+            "results": [{"call_id": "reused", "success": True, "value": {"exit_code": 0}}],
+        })
+        return router.mount("source", result.id, {"role": "assistant", "run_id": run_id, "answer_complete": True})
+
+    def commands(chat_id):
+        return [
+            item["trace"][0]["command"]
+            for item in AgentContextRepository(context_path).read(chat_id)["activityMessages"]
+        ]
+
+    with ContextStoreRouter(context_path) as router:
+        tree = router.create_tree({"role": "system", "content": "instructions"}, tree_id="source")
+        prefix = add_turn(router, tree.root_id, "prefix", "echo prefix")
+        original = add_turn(router, prefix.id, "original", "echo original")
+        router.commit_state(tree.id, original.id, "original")
+
+    ConversationRuntime(db_path).fork_context("source", "fork", user_ordinal=2)
+    assert commands("fork") == ["echo prefix"]
+    assert commands("source") == ["echo prefix", "echo original"]
+
+    with ContextStoreRouter(context_path) as router:
+        retry = add_turn(router, prefix.id, "retry", "echo retry", retry=True)
+        router.commit_state("source", retry.id, "retry")
+    assert commands("source") == ["echo prefix", "echo retry"]
+    assert commands("fork") == ["echo prefix"]
 
 
 def test_distinct_permission_only_activities_are_not_discarded():

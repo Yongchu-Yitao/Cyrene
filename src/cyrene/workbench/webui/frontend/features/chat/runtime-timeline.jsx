@@ -335,20 +335,45 @@ function wbcActivityDedupeKeys(message) {
     : (Array.isArray(activity.trace) ? activity.trace : (Array.isArray(message.trace) ? message.trace : []));
   entries.forEach(function (entry) {
     var toolCallId = String(entry && (entry.toolCallId || entry.tool_call_id) || "");
-    if (toolCallId) keys.add("tool:" + toolCallId);
+    var bash = entry && (entry.tool === "Bash" || entry.text === "Bash");
+    if (toolCallId) keys.add((bash ? "bash:" : "tool:") + toolCallId);
   });
   return Array.from(keys);
 }
 
+function wbcLiveActivityIndex(messages) {
+  var index = new Map();
+  messages.forEach(function (message) {
+    wbcActivityDedupeKeys(message).forEach(function (key) {
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(message);
+    });
+  });
+  return index;
+}
+
+function wbcActivityOverlapsLive(message, liveIndex) {
+  if (!liveIndex.size) return false;
+  return wbcActivityDedupeKeys(message).some(function (key) {
+    var matches = liveIndex.get(key);
+    if (!matches) return false;
+    if (!key.startsWith("bash:")) return true;
+    var saved = message.runtimeActivity || message;
+    return matches.some(function (match) {
+      var live = match.runtimeActivity || match;
+      if (saved.sourceId && live.sourceId) return saved.sourceId === live.sourceId;
+      var savedRun = saved.runId || message.runId;
+      var liveRun = live.runId || match.runId;
+      return !savedRun || !liveRun || savedRun === liveRun;
+    });
+  });
+}
+
 function wbcProjectRuntimeTranscript(messages, additions) {
   var runtimeMessages = Array.isArray(additions) ? additions.filter(Boolean) : [];
-  var liveActivityKeys = new Set();
-  runtimeMessages.forEach(function (message) {
-    wbcActivityDedupeKeys(message).forEach(function (key) { liveActivityKeys.add(key); });
-  });
+  var liveActivityIndex = wbcLiveActivityIndex(runtimeMessages);
   var durable = (Array.isArray(messages) ? messages : []).filter(function (message) {
-    if (!liveActivityKeys.size) return true;
-    return !wbcActivityDedupeKeys(message).some(function (key) { return liveActivityKeys.has(key); });
+    return !wbcActivityOverlapsLive(message, liveActivityIndex);
   });
   // Run status is a trailing UI row, not a chronological transcript record.
   // A later checkpoint/segment must never place it between activity cards.
@@ -491,10 +516,7 @@ function wbcProjectTranscript(messages, runtime) {
   var patch = runtime.timeline;
   var liveIds = new Set(patch.messages.map(function (message) { return message.id; }));
   (patch.removedMessageIds || []).forEach(function (id) { liveIds.add(id); });
-  var liveActivityKeys = new Set();
-  patch.messages.forEach(function (message) {
-    wbcActivityDedupeKeys(message).forEach(function (key) { liveActivityKeys.add(key); });
-  });
+  var liveActivityIndex = wbcLiveActivityIndex(patch.messages);
   var saved = new Map(durable.map(function (message) { return [message.id, message]; }));
   var records = patch.messages.map(function (message) {
     var historical = saved.get(message.id);
@@ -502,7 +524,7 @@ function wbcProjectTranscript(messages, runtime) {
   });
   var merged = wbcMergeProjectedMessages(durable.filter(function (message) {
     if (liveIds.has(message.id)) return false;
-    return !wbcActivityDedupeKeys(message).some(function (key) { return liveActivityKeys.has(key); });
+    return !wbcActivityOverlapsLive(message, liveActivityIndex);
   }), records);
   // Use the reconciled records that are actually rendered, including a newer
   // checkpoint. A visible live activity or streaming reply already signals
@@ -555,6 +577,7 @@ function wbcRuntimeTimelineMessages(runtime, options) {
       // live -> checkpointed transition. A UI-only prefix creates a second
       // identity and causes the same card to be rendered twice after hydration.
       id: String(activity.id || ("runtime_activity_" + index)),
+      runId: activity.runId || runtime.runId,
       role: "assistant",
       createdAt: new Date(Number(activity.createdAt || startedAt + index + 2)).toISOString(),
       runtimeActivity: activity,
@@ -634,6 +657,36 @@ function wbcCreateDetachedRuntime(startedAt) {
   };
 }
 
+function wbcToolExitCodeFields(tool) {
+  return Number.isInteger(tool.exitCode) ? { exitCode: tool.exitCode } : {};
+}
+
+function wbcDetachedToolDetails(tool) {
+  return {
+    preview: String(tool.outputSummary || tool.inputSummary || ""),
+    ...wbcToolExitCodeFields(tool),
+    input: tool.input,
+    output: tool.output,
+    presentation: tool.presentation && typeof tool.presentation === "object" ? tool.presentation : {},
+  };
+}
+
+function wbcDetachedToolEntry(value) {
+  var tool = value && typeof value === "object" ? value : {};
+  var toolCallId = String(tool.toolCallId || tool.tool_call_id || "");
+  var status = String(tool.status || "running").toLowerCase();
+  var terminal = status === "completed" || status === "failed" || tool.terminal === true;
+  var entry = {
+    kind: "tool",
+    toolCallId: toolCallId,
+    text: String(tool.name || tool.tool || tool.title || "tool"),
+    status: terminal ? "completed" : "running",
+    failed: !!tool.failed || status === "failed",
+    ...wbcDetachedToolDetails(tool),
+  };
+  return { entry, terminal };
+}
+
 function wbcReduceDetachedRuntime(runtime, action, value, sourceEvent) {
   var current = runtime || wbcCreateDetachedRuntime();
   if (action === "timeline") return wbcApplyTimeline(current, value);
@@ -663,21 +716,7 @@ function wbcReduceDetachedRuntime(runtime, action, value, sourceEvent) {
     return { ...activity, reasoning: String(value || activity.reasoning || ""), reasoningActive: false };
   });
   if (action === "tool") {
-    var tool = value && typeof value === "object" ? value : {};
-    var toolCallId = String(tool.toolCallId || tool.tool_call_id || "");
-    var status = String(tool.status || "running").toLowerCase();
-    var terminal = status === "completed" || status === "failed" || tool.terminal === true;
-    var entry = {
-      kind: "tool",
-      toolCallId: toolCallId,
-      text: String(tool.name || tool.tool || tool.title || "tool"),
-      preview: String(tool.outputSummary || tool.inputSummary || ""),
-      status: terminal ? "completed" : "running",
-      failed: !!tool.failed || status === "failed",
-      input: tool.input,
-      output: tool.output,
-      presentation: tool.presentation && typeof tool.presentation === "object" ? tool.presentation : {},
-    };
+    var { entry, terminal } = wbcDetachedToolEntry(value);
     return withActivity(function (activity) {
       var progress = Array.isArray(activity.progress) ? activity.progress.slice() : [];
       var merged = wbcMergeToolOccurrence(progress, entry, terminal);
@@ -723,11 +762,19 @@ function wbcReduceDetachedRuntime(runtime, action, value, sourceEvent) {
   return current;
 }
 
+function wbcPreserveBashInput(current, incoming) {
+  return current.text === "Bash"
+    && typeof current.input?.command === "string"
+    && typeof incoming.input?.command !== "string";
+}
+
 function wbcMergeToolLifecycleEntry(current, incoming, terminalOnly) {
+  var keepBashInput = wbcPreserveBashInput(current, incoming);
   if (!terminalOnly) return {
     ...current,
     ...incoming,
     text: incoming.text || current.text,
+    ...(keepBashInput ? { input: current.input } : {}),
   };
   // The concrete executor may already have replaced a progressive package name
   // with the resolved capability. A gateway terminal event owns lifecycle only;
@@ -736,8 +783,9 @@ function wbcMergeToolLifecycleEntry(current, incoming, terminalOnly) {
     ...current,
     status: incoming.status,
     failed: incoming.failed,
+    ...wbcToolExitCodeFields(incoming),
     preview: current.preview || incoming.preview,
-    input: incoming.input != null ? incoming.input : current.input,
+    input: keepBashInput || incoming.input == null ? current.input : incoming.input,
     output: incoming.output != null ? incoming.output : current.output,
     presentation: incoming.presentation && Object.keys(incoming.presentation).length ? incoming.presentation : current.presentation,
   };

@@ -17,7 +17,10 @@ from cyrene.core.plugin import ApplicationPluginScope, PluginRegistry
 from cyrene.core.session import AgentSession, AgentSessionEvent
 from cyrene.model.protocol_trace import create_model_protocol_trace
 
-from .tool_activity_projection import project_tool_activity_messages, tool_result_presentation
+from .tool_activity_projection import (
+    project_tool_activity_messages,
+    tool_completed_payload,
+)
 from .publication import PublicationQueue
 
 WorkbenchPublisher: TypeAlias = Callable[[dict[str, Any]], Any | Awaitable[Any]]
@@ -495,6 +498,7 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
             if not isinstance(call, Mapping):
                 continue
             call_id = str(call.get("id") or "")
+            name = str(call.get("name") or "")
             projected.append(
                 _envelope(
                     event,
@@ -502,9 +506,10 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                     f"agent:{event.tree_id}:{event.run_id}:tool:{call_id}:started",
                     {
                         "toolCallId": call_id,
-                        "name": str(call.get("name") or ""),
+                        "name": name,
                         "status": "running",
                         "args": dict(call.get("arguments") or {}),
+                        **({"assistantNodeId": str(event.node_id)} if name == "Bash" and event.node_id else {}),
                         "presentation": (
                             dict(call.get("presentation") or {})
                             if isinstance(call.get("presentation"), Mapping)
@@ -524,7 +529,6 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
             ),
         )
     if event.type == "tool.completed":
-        call_id = str(data.get("call_id") or "")
         success = bool(data.get("success"))
         decoded_value = data.get("value")
         if isinstance(decoded_value, str):
@@ -537,60 +541,25 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
             and isinstance(decoded_value, Mapping)
             and str(decoded_value.get("status") or "") == "awaiting_user"
         )
-        presentation = (
-            dict(data.get("presentation") or {})
-            if isinstance(data.get("presentation"), Mapping)
-            else {}
-        )
-        if not presentation:
-            presentation = tool_result_presentation(decoded_value)
-        return (
-            _envelope(
-                event,
-                "tool.completed",
-                f"agent:{event.tree_id}:{event.run_id}:tool:{call_id}:completed",
-                {
-                    "toolCallId": call_id,
-                    "name": str(data.get("name") or ""),
-                    "status": "awaiting_user" if awaiting else "completed" if success else "failed",
-                    "failed": not success,
-                    "outputSummary": data.get("value"),
-                    "error": str(data.get("error") or ""),
-                    "presentation": presentation,
-                },
-            ),
-        )
+        status = "awaiting_user" if awaiting else "completed" if success else "failed"
+        payload = tool_completed_payload(data, decoded_value, status)
+        return (_envelope(
+            event, "tool.completed",
+            f"agent:{event.tree_id}:{event.run_id}:tool:{payload['toolCallId']}:completed",
+            payload,
+        ),)
     if event.type == "tools.completed":
         projected = []
         for result in data.get("results") or ():
             if not isinstance(result, Mapping):
                 continue
-            call_id = str(result.get("call_id") or "")
-            success = bool(result.get("success"))
-            result_value = result.get("value")
-            presentation = (
-                dict(result.get("presentation") or {})
-                if isinstance(result.get("presentation"), Mapping)
-                else {}
-            )
-            if not presentation:
-                presentation = tool_result_presentation(result_value)
-            projected.append(
-                _envelope(
-                    event,
-                    "tool.completed",
-                    f"agent:{event.tree_id}:{event.run_id}:tool:{call_id}:completed",
-                    {
-                        "toolCallId": call_id,
-                        "name": str(result.get("name") or ""),
-                        "status": "completed" if success else "failed",
-                        "failed": not success,
-                        "outputSummary": result.get("value"),
-                        "error": str(result.get("error") or ""),
-                        "presentation": presentation,
-                    },
-                )
-            )
+            status = "completed" if result.get("success") else "failed"
+            payload = tool_completed_payload(result, result.get("value"), status)
+            projected.append(_envelope(
+                event, "tool.completed",
+                f"agent:{event.tree_id}:{event.run_id}:tool:{payload['toolCallId']}:completed",
+                payload,
+            ))
         pending = data.get("pending_question")
         if isinstance(pending, Mapping):
             question = WorkbenchPendingQuestion.from_mapping(pending)

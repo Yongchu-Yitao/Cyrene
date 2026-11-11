@@ -42,6 +42,7 @@ from .agent_status import (
     normalize_agent_event,
 )
 from .history import IncrementalPlainTextParser, osc133_commands, plain_terminal_text
+from .wakes import terminal_wake_prompt
 from .remote import build_managed_ssh_launch
 from .shell_integration import OscMetadataParser, prepare_shell_integration
 
@@ -1317,6 +1318,7 @@ class TerminalManager:
         self.started_at = _now_iso()
         self.state_dir = Path(state_dir).resolve() if state_dir else None
         self._db: sqlite3.Connection | None = None
+        self._wake_changed = asyncio.Event()
         self._persistence_writer: _TerminalPersistenceWriter | None = None
         self._dirty_sessions: set[str] = set()
         self._pending_output_bytes = 0
@@ -1890,6 +1892,7 @@ class TerminalManager:
         if self._db is not None:
             self._db.close()
             self._db = None
+        self._wake_changed.set()
 
     def _persist_session(self, session: TerminalSession) -> None:
         if self._db is None:
@@ -2872,7 +2875,7 @@ class TerminalManager:
             return
         screen = self.screen_snapshot(session.id)["screenText"]
         status = "interrupted" if interrupted else ("done" if exit_code == 0 else "err")
-        prompt = self._wake_prompt(
+        prompt = terminal_wake_prompt(
             session=session,
             status=status,
             exit_code=exit_code,
@@ -2885,29 +2888,7 @@ class TerminalManager:
             (status, exit_code, screen, prompt, _now_iso(), session.wake_id),
         )
         self._db.commit()
-
-    @staticmethod
-    def _wake_prompt(
-        *, session: TerminalSession, status: str, exit_code: int | None,
-        note: str,
-    ) -> str:
-        blocks = [
-            "[Terminal exited — automatic wake]",
-            f"terminal_id: {session.id}",
-            f"status: {status}",
-            f"exit_code: {exit_code if exit_code is not None else 'unknown'}",
-            f"title: {session.title}",
-            f"cwd: {session.cwd}",
-        ]
-        if note.strip():
-            blocks.append(f"wake_note: {note.strip()}")
-        blocks.extend([
-            "",
-            "This is an internal wake notification, not a user message. "
-            "Use code.shell.read with the terminal_id above to inspect the terminal, "
-            "then continue the prior work. Do not wait for this process again.",
-        ])
-        return "\n".join(blocks)
+        self._wake_changed.set()
 
     async def _spawn_posix(self, session: TerminalSession) -> None:
         import fcntl
@@ -4074,6 +4055,7 @@ class TerminalManager:
                 (wake_id,),
             )
         self._db.commit()
+        self._wake_changed.set()
         settled = self._db.execute(
             "SELECT * FROM terminal_wakes WHERE wake_id = ?", (wake_id,)
         ).fetchone()

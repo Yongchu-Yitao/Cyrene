@@ -14,7 +14,10 @@ from cyrene.plugins.builtin.cyrene_control.state import (
     write_plan_file,
 )
 from cyrene.workbench.chat.chat_events import publish_chat_changed
-from cyrene.workbench.chat.chat_application import deduplicate_projected_messages
+from cyrene.workbench.chat.chat_application import (
+    deduplicate_projected_messages,
+    restore_bash_trace_details,
+)
 from cyrene.workbench.http import schemas as api_models
 from cyrene.workbench.http.errors import localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
@@ -166,17 +169,20 @@ def _merge_context_activity_messages(
         for message in chat.get("messages") or []
         if isinstance(message, dict)
     ]
-    known_ids = {
-        str(message.get("id") or "")
+    messages_by_id = {
+        str(message["id"]): message
         for message in messages
-        if str(message.get("id") or "")
+        if message.get("id")
     }
     for activity in activity_messages:
         activity_id = str(activity.get("id") or "")
-        if not activity_id or activity_id in known_ids:
+        if not activity_id:
             continue
-        known_ids.add(activity_id)
-        messages.append(dict(activity))
+        if activity_id in messages_by_id:
+            restore_bash_trace_details(messages_by_id[activity_id], activity)
+            continue
+        messages_by_id[activity_id] = dict(activity)
+        messages.append(messages_by_id[activity_id])
     messages.sort(
         key=lambda message: (
             not bool(str(message.get("createdAt") or "")),
@@ -190,19 +196,17 @@ def _merge_context_activity_messages(
     return result
 
 
-def _register_get_route(router: APIRouter, context: ChatRouteContext):
-    service = context.service
-    _routes = context.runtime
-    _prewarm_workspace_changes = service.prewarm_workspace_changes
-    _prune_orphaned_fork_metadata = service.prune_orphaned_fork_metadata
-    _public_chat_full = service.public_chat_full
-    _read_chats_store = service.repository.read
-    _read_chat_summaries_store = service.repository.read_summaries
-    _get_workbench_chat = service.repository.get
-    _resolve_chat_workspace_dir = service.resolve_chat_workspace_dir
-    _sync_chat_generated_files = service.sync_chat_generated_files
-    _write_chats_store = service.repository.write
+def _register_chat_status_route(router, service):
+    @router.get("/api/workbench/chats/{chat_id}/status")
+    async def api_workbench_chat_status(chat_id: str):
+        state = await asyncio.to_thread(service.repository.sync_state, chat_id)
+        if state is None:
+            return localized_error_response("Chat not found", "对话不存在", status_code=404, code="chat_not_found")
+        chat = await asyncio.to_thread(service.public_chat_light, state[0])
+        return {"chat": {key: chat.get(key) for key in ("id", "status", "runStatus", "pendingQuestion")}}
 
+
+def _register_chat_plan_route(router, service, _routes):
     async def latest_file_plan(chat_id: str, chat: dict[str, Any]) -> dict[str, Any] | None:
         project = await asyncio.to_thread(
             _routes().find_project_lightweight,
@@ -229,9 +233,49 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
             logger.warning("Ignoring invalid conversation plan file for %s", chat.get("id"))
             return None
 
+    @router.get("/api/workbench/chats/{chat_id}/plan")
+    async def api_workbench_get_chat_plan(chat_id: str):
+        chat = await asyncio.to_thread(service.repository.get_metadata, chat_id)
+        if not chat:
+            return localized_error_response(
+                "Chat not found.", "未找到对话。", 404, "chat_not_found"
+            )
+        plan = await latest_file_plan(chat_id, chat)
+        if plan is None and isinstance(chat.get("activePlan"), dict):
+            plan = copy.deepcopy(chat["activePlan"])
+        return {"plan": plan}
+
+
+def _register_get_route(router: APIRouter, context: ChatRouteContext):
+    service = context.service
+    _routes = context.runtime
+    _prewarm_workspace_changes = service.prewarm_workspace_changes
+    _prune_orphaned_fork_metadata = service.prune_orphaned_fork_metadata
+    _public_chat_full = service.public_chat_full
+    _read_chats_store = service.repository.read
+    _read_chat_summaries_store = service.repository.read_summaries
+    _get_workbench_chat = service.repository.get
+    _resolve_chat_workspace_dir = service.resolve_chat_workspace_dir
+    _sync_chat_generated_files = service.sync_chat_generated_files
+    _write_chats_store = service.repository.write
+
+    _register_chat_status_route(router, service)
+    _register_chat_plan_route(router, service, _routes)
+
     @router.get("/api/workbench/chats/{chat_id}")
-    async def api_workbench_get_chat(chat_id: str):
+    async def api_workbench_get_chat(chat_id: str, sync_revision: str | None = None):
         started = time.monotonic()
+        revision = ""
+        if sync_revision is not None:
+            from cyrene.workbench.chat.chat_sync import chat_sync_revision
+
+            try:
+                revision = await asyncio.to_thread(chat_sync_revision, context, chat_id)
+            except Exception:
+                # A failed cheap check must not prevent the original full read.
+                logger.debug("Chat revision check skipped for %s", chat_id, exc_info=True)
+            if revision and revision == sync_revision:
+                return {"unchanged": True, "revision": revision}
         summary_payload = await asyncio.to_thread(_read_chat_summaries_store)
         if _prune_orphaned_fork_metadata(summary_payload):
             full_payload = await asyncio.to_thread(_read_chats_store)
@@ -272,6 +316,7 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
                 chat_id
             )
         except Exception:
+            revision = ""  # Retry a transient activity-projection failure next poll.
             logger.debug(
                 "ContextTree activity-history projection skipped for %s",
                 chat_id,
@@ -285,19 +330,11 @@ def _register_get_route(router: APIRouter, context: ChatRouteContext):
         elapsed_ms = (time.monotonic() - started) * 1000
         if elapsed_ms >= 1000:
             logger.warning("Slow Workbench chat detail load [chat_id=%s duration_ms=%.1f]", chat_id, elapsed_ms)
+        # This token precedes hydration. A commit during the full read will be
+        # observed on the next poll, never acknowledged without its messages.
+        if sync_revision is not None:
+            return {"chat": public_chat, "revision": revision}
         return {"chat": public_chat}
-
-    @router.get("/api/workbench/chats/{chat_id}/plan")
-    async def api_workbench_get_chat_plan(chat_id: str):
-        chat = await asyncio.to_thread(service.repository.get_metadata, chat_id)
-        if not chat:
-            return localized_error_response(
-                "Chat not found.", "未找到对话。", 404, "chat_not_found"
-            )
-        plan = await latest_file_plan(chat_id, chat)
-        if plan is None and isinstance(chat.get("activePlan"), dict):
-            plan = copy.deepcopy(chat["activePlan"])
-        return {"plan": plan}
 
     return api_workbench_get_chat
 

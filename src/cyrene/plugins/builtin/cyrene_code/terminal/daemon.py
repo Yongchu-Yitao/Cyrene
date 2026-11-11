@@ -28,6 +28,7 @@ if __package__ in {None, ""}:  # direct subprocess launch from an editable pack
         terminal_state_dir,
     )
     from terminal.manager import TerminalInputBusyError, TerminalManager
+    from terminal.wakes import wait_and_claim_wake
 else:
     from .client import (
         LIFECYCLE_VERSION,
@@ -36,6 +37,7 @@ else:
         terminal_state_dir,
     )
     from .manager import TerminalInputBusyError, TerminalManager
+    from .wakes import wait_and_claim_wake
 
 
 class AlreadyRunning(RuntimeError):
@@ -152,7 +154,20 @@ class TerminalDaemon:
             if request.get("action") == "subscribe":
                 await self._subscribe(reader, writer, request)
                 return
-            await self._dispatch(writer, request)
+            if request.get("action") == "claimWake" and request.get("waitSeconds"):
+                # Release the waiter promptly when the web backend disconnects.
+                dispatch = asyncio.create_task(self._dispatch(writer, request))
+                disconnected = asyncio.create_task(reader.read(1))
+                try:
+                    await asyncio.wait((dispatch, disconnected), return_when=asyncio.FIRST_COMPLETED)
+                    if dispatch.done():
+                        await dispatch
+                finally:
+                    dispatch.cancel()
+                    disconnected.cancel()
+                    await asyncio.gather(dispatch, disconnected, return_exceptions=True)
+            else:
+                await self._dispatch(writer, request)
         except (ConnectionError, asyncio.IncompleteReadError, BrokenPipeError):
             pass
         except (ValueError, TypeError, json.JSONDecodeError):
@@ -289,11 +304,6 @@ class TerminalDaemon:
                 )}
         if action == "wakeInfo":
             return {"wake": self.manager.wake_info(str(request.get("terminalId") or ""))}
-        if action == "claimWake":
-                return {"wake": self.manager.claim_wake(
-                    str(request.get("consumerId") or "web"),
-                    float(request.get("leaseSeconds") or 30),
-                )}
         if action == "settleWake":
                 return {"wake": self.manager.settle_wake(
                     str(request.get("wakeId") or ""),
@@ -305,6 +315,13 @@ class TerminalDaemon:
     async def _dispatch_action(self, action: str, request: dict[str, Any]) -> dict[str, Any]:
         if action in {"ping", "list", "screen", "scrollback", "historySearch", "commands", "commandOutput", "inputHistory"}:
             return await self._dispatch_query_action(action, request)
+        if action == "claimWake":
+            return {"wake": await wait_and_claim_wake(
+                self.manager,
+                str(request.get("consumerId") or "web"),
+                float(request.get("leaseSeconds") or 30),
+                float(request.get("waitSeconds") or 0),
+            ), "waitSupported": True}
         return await self._dispatch_mutation_action(action, request)
 
     async def _dispatch(self, writer: asyncio.StreamWriter, request: dict[str, Any]) -> None:

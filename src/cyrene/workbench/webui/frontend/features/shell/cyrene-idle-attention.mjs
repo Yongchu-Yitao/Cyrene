@@ -6,7 +6,7 @@ export function attachCyreneIdleAttention(svg, motion) {
   const anchor = svg.parentElement;
   let pointer = null, pointerAt = -Infinity, sampledAt = -Infinity, destroyed = false;
   const removers = [];
-  const active = () => !destroyed && motion.state === 'idle' && !motion.resting && !doc.hidden;
+  const active = () => !destroyed && motion.state === 'idle' && !motion.sleeping && !motion.resting && !doc.hidden;
   function listen(target, event, fn) {
     target.addEventListener(event, fn, { passive: true });
     removers.push(() => target.removeEventListener(event, fn));

@@ -4,6 +4,8 @@ from contextlib import contextmanager
 import json
 from pathlib import Path
 import sqlite3
+
+from cyrene.platform.database_notifications import notify_database_commit
 import time
 
 
@@ -37,6 +39,8 @@ class Store:
         try:
             with db:
                 yield db
+            if db.total_changes:
+                notify_database_commit(self.path)
         finally:
             db.close()
 
@@ -93,6 +97,12 @@ class Store:
         with self.connect() as db:
             row = db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
         return dict(row) if row else None
+
+    def has_pending(self):
+        with self.connect() as db:
+            return db.execute("""SELECT 1 FROM messages m JOIN sessions s
+                ON s.id=m.target AND s.owner=m.owner WHERE m.status='queued' AND s.paused=0
+                UNION ALL SELECT 1 FROM notifications WHERE delivered=0 LIMIT 1""").fetchone() is not None
 
     def pending(self, target=None):
         with self.connect() as db:

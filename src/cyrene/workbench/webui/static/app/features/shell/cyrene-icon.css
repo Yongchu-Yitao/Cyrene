@@ -5,6 +5,7 @@
 .cyrene-motion .cyrene-icon-eye {transform-box:fill-box;transform-origin:center}
 .cyrene-motion .cyrene-icon-gaze {transform-origin:16px 15px}
 .cyrene-motion .cyrene-icon-glint {opacity:0;stroke-dasharray:24 76;stroke-dashoffset:24}
+.cyrene-motion .cyrene-icon-sleep {opacity:0;color:var(--wb-text-muted,currentColor)}
 .cyrene-motion .cyrene-icon-badge {opacity:0;transform-origin:26.3px 25.6px}
 .cyrene-motion .cyrene-icon-badge circle {fill:var(--wb-card-bg);stroke-width:1.2}
 .cyrene-motion .cyrene-icon-badge path {fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}

@@ -5,7 +5,7 @@ import {attachCyreneIdleAttention} from '../shell/cyrene-idle-attention.mjs';
 function fixture() {
   const target=()=>{const listeners=new Map();return {listeners,addEventListener:(k,f)=>{const set=listeners.get(k)||new Set();set.add(f);listeners.set(k,set);},removeEventListener:(k,f)=>listeners.get(k)?.delete(f),emit(k,e={}){for(const f of listeners.get(k)||[])f(e);}};};
   const media=Object.assign(target(),{matches:false});let time=1000,cancelled=0;const animations=[];
-  const win=Object.assign(target(),{matchMedia:()=>media,performance:{now:()=>time},requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{},MutationObserver:class {observe(){}disconnect(){}},innerWidth:1200,innerHeight:800,getComputedStyle:()=>({visibility:'visible',display:'block'})});
+  const win=Object.assign(target(),{matchMedia:()=>media,performance:{now:()=>time},setTimeout:()=>1,clearTimeout:()=>{},requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{},MutationObserver:class {observe(){}disconnect(){}},innerWidth:1200,innerHeight:800,getComputedStyle:()=>({visibility:'visible',display:'block'})});
   const doc=Object.assign(target(),{defaultView:win,documentElement:{dataset:{}},hidden:false,querySelectorAll:()=>[]});
   const button=Object.assign(target(),{tagName:'DIV',dataset:{},setPointerCapture:()=>{throw Error('grip owns capture');}});
   const anchor={isConnected:true,closest:s=>s.includes('aria-hidden')?{}:null,getBoundingClientRect:()=>({x:300,y:20,width:36,height:36,top:20,left:300,bottom:56,right:336}),animate:(frames,options)=>{animations.push({frames,options});return {cancel:()=>cancelled++};}};

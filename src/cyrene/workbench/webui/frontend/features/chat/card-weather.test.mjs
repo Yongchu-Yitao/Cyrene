@@ -14,10 +14,12 @@ test('weather artwork follows actual conditions and explicit night choice', () =
 test('opening welcome cards only reads saved content and passes complete snapshots', async () => {
   const {readFileSync} = await import('node:fs');
   const source = readFileSync(new URL('./assistant-home-cards.jsx',import.meta.url),'utf8');
-  assert.ok(source.includes("'/api/assistant/cards/home'"));
+  const observer = readFileSync(new URL('./card-background-work.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes('observeHomeCards({ request: requestCard'));
+  assert.ok(observer.includes("request('/api/assistant/cards/home'"));
   assert.ok(source.includes('initialCard={card}'));
-  assert.ok(!source.includes('/refresh'));
-  assert.ok(!source.includes("method: 'POST'"));
+  assert.ok(!(source + observer).includes('/refresh'));
+  assert.ok(!(source + observer).includes("method: 'POST'"));
   assert.ok(!source.includes('busy.current'));
 });
 

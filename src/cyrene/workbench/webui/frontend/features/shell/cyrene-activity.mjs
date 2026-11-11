@@ -39,10 +39,32 @@ export function cyreneActivityState({ runtime, chat, failure, completion = false
   return completion ? 'done' : 'idle';
 }
 
-// One observer belongs to the persistent dock, never to the transcript hooks.
-// Derive a small semantic state before notifying React; token deltas do not
-// rerender the shell or restart CSS animations.
-export function observeCyreneActivity({ sessionId, engine, model, onState, target = window }) {
+// Dock and grip share one server reconciliation and runtime subscription.
+const activityObservers = new WeakMap();
+export function observeCyreneActivity(options) {
+  const { sessionId, engine, model, onState, target = window } = options;
+  let entries = activityObservers.get(target);
+  if (!entries) { entries = new Set(); activityObservers.set(target, entries); }
+  let entry = [...entries].find(item => item.sessionId === sessionId && item.engine === engine && item.model === model);
+  if (!entry) {
+    entry = { sessionId, engine, model, listeners: new Set(), state: null };
+    entries.add(entry);
+    entry.stop = createActivityObserver({ ...options, target, onState: state => {
+      entry.state = state;
+      entry.listeners.forEach(listener => listener(state));
+    } });
+  }
+  // A subscription is independent even when callers reuse the same callback.
+  const listener = state => onState(state);
+  entry.listeners.add(listener);
+  if (entry.state !== null) onState(entry.state);
+  return () => {
+    entry.listeners.delete(listener);
+    if (!entry.listeners.size) { entry.stop(); entries.delete(entry); }
+  };
+}
+
+function createActivityObserver({ sessionId, engine, model, onState, target }) {
   let disposed = false, chat = null, terminal = '', completion = false;
   let lastState = '', generation = '', revision = 0, pending = false, refreshAgain = false;
   let pollTimer, completionTimer;
@@ -83,13 +105,22 @@ export function observeCyreneActivity({ sessionId, engine, model, onState, targe
     if (wasRunning && !getRuntime() && completed && !next.pendingQuestion) complete();
     render();
   }
+  function scheduleNextRefresh() {
+    pending = false;
+    if (!disposed && !target.document?.hidden) {
+      target.clearTimeout(pollTimer);
+      const quiet = getRuntime() || terminal || ['idle', 'completed'].includes(runStatus(chat));
+      pollTimer = target.setTimeout(refresh, refreshAgain ? 0 : quiet ? 15000 : 3000);
+      refreshAgain = false;
+    }
+  }
   async function refresh() {
-    if (disposed) return;
+    if (disposed || target.document?.hidden) return;
     if (pending) { refreshAgain = true; return; }
     pending = true;
     const requestRevision = revision;
     try {
-      const next = await model.getChat(sessionId);
+      const next = await (model.getChatStatus || model.getChat).call(model, sessionId);
       if (!disposed && requestRevision === revision) {
         // Revision guards reject requests started before a lifecycle event.
         acceptChat(next);
@@ -97,14 +128,7 @@ export function observeCyreneActivity({ sessionId, engine, model, onState, targe
     } catch (_) {
       if (!disposed && !getRuntime() && !terminal && requestRevision === revision) emit('reconnecting');
     } finally {
-      pending = false;
-      if (!disposed) {
-        target.clearTimeout(pollTimer);
-        // Reconcile server-side approvals and runs while the transcript is hidden.
-        const quiet = getRuntime() || terminal || ['idle', 'completed'].includes(runStatus(chat));
-        pollTimer = target.setTimeout(refresh, refreshAgain ? 0 : quiet ? 15000 : 3000);
-        refreshAgain = false;
-      }
+      scheduleNextRefresh();
     }
   }
   function onLifecycle(event) {
@@ -123,6 +147,11 @@ export function observeCyreneActivity({ sessionId, engine, model, onState, targe
     render();
   }
   if (!sessionId) { emit('idle'); return () => { disposed = true; }; }
+  function visibilityChanged() {
+    target.clearTimeout(pollTimer);
+    if (!target.document.hidden) refresh();
+  }
+  target.document?.addEventListener('visibilitychange', visibilityChanged);
   const unsubscribe = engine.subscribe(render);
   target.addEventListener('cyrene:wbc-chat-lifecycle', onLifecycle);
   render();
@@ -131,5 +160,6 @@ export function observeCyreneActivity({ sessionId, engine, model, onState, targe
     disposed = true; unsubscribe();
     target.clearTimeout(pollTimer); target.clearTimeout(completionTimer);
     target.removeEventListener('cyrene:wbc-chat-lifecycle', onLifecycle);
+    target.document?.removeEventListener('visibilitychange', visibilityChanged);
   };
 }

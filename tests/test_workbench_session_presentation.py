@@ -254,6 +254,38 @@ def test_export_merges_context_tree_activity_and_clear_removes_context(tmp_path)
             router.get_tree("chat_one")
 
 
+def test_export_preserves_original_trace_and_omits_bash_display_details(tmp_path, monkeypatch):
+    db_path = tmp_path / "cyrene.sqlite3"
+    _seed_chat(db_path)
+    stored = store.read_chat(db_path, "chat_one", _empty_store)
+    stored_entry = {"tool": "Bash", "preview": "result", "input": {"command": "echo stored"}}
+    stored["messages"].append({
+        "id": "run_old:activity:1", "role": "assistant", "activityCard": True,
+        "runId": "run_old", "sourceId": "stored-source", "trace": [{**stored_entry, "exitCode": 1}],
+    })
+    store.write_chat_bundle(db_path, {"chats": [stored]}, _empty_store)
+    reconstructed_entry = {"tool": "Bash", "preview": "old result"}
+    reconstructed = {
+        "id": "activity_context-source", "role": "assistant", "activityCard": True,
+        "runId": "run_old", "sourceId": "context-source",
+        "trace": [{**reconstructed_entry, "command": "echo recovered", "exitCode": 1}],
+    }
+    presentation = WorkbenchSessionPresentation(db_path)
+    monkeypatch.setattr(presentation, "_agent_state", lambda _: {"activityMessages": [reconstructed]})
+
+    payload = json.loads(presentation.export("chat_one", "json").content)
+    messages = {message["id"]: message for message in payload["chat"]["messages"]}
+    assert messages["run_old:activity:1"]["trace"] == [stored_entry]
+    assert messages["run_old:activity:1"]["runId"] == "run_old"
+    assert "sourceId" not in messages["run_old:activity:1"]
+    assert messages["activity_context-source"]["trace"] == [reconstructed_entry]
+    assert "runId" not in messages["activity_context-source"]
+    assert "sourceId" not in messages["activity_context-source"]
+    markdown = presentation.export("chat_one", "markdown").content.decode()
+    assert "Tools: Bash" in markdown
+    assert "echo recovered" not in markdown
+
+
 def test_workbench_session_routes_use_explicit_repository_endpoints(tmp_path):
     db_path = tmp_path / "cyrene.sqlite3"
     _seed_chat(db_path)

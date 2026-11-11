@@ -1,11 +1,13 @@
 import { createCyreneMotion } from './cyrene-motion-model.mjs';
 import { attachCyreneIdleAttention } from './cyrene-idle-attention.mjs';
+import { observeCyreneWindowActivity } from './cyrene-window-activity.mjs';
 
 export function attachCyreneMotion(svg) {
   const motion=createCyreneMotion(), doc=svg.ownerDocument, win=doc.defaultView;
   const button=svg.closest('button, [role="button"]');
   const find=name=>svg.querySelector('.cyrene-icon-'+name);
   const body=find('body'),ring=find('ring'),gaze=find('gaze'),left=find('eye'),right=find('eye-right'),glint=find('glint');
+  const sleepMark=find('sleep');
   const badges={waiting:find('wait'),done:find('done'),error:find('error'),stopped:find('pause'),reconnecting:find('reconnect')};
   const media=win.matchMedia('(prefers-reduced-motion: reduce)');
   const attention=attachCyreneIdleAttention(svg,motion);
@@ -15,8 +17,11 @@ export function attachCyreneMotion(svg) {
   function paint(){
     const p=motion.pose;
     svg.dataset.motionStyle=motion.style;
+    svg.dataset.sleeping=String(motion.sleeping);
     if(motion.attention)svg.dataset.idleAttention=motion.attention;else delete svg.dataset.idleAttention;
     body.style.transform=`translate(${p.x}px,${p.y}px) rotate(${p.r}deg) scale(${p.sx},${p.sy})`;
+    body.style.opacity=1-.2*p.sleep;
+    if(sleepMark)sleepMark.style.opacity=p.sleep;
     ring.style.transform=`rotate(${p.angle}deg)`;
     gaze.style.transform=`translate(${p.ex}px,${p.ey}px) scaleY(${Math.max(.08,p.blink)})`;
     left.style.transform=`scaleY(${Math.max(.08,p.leftEye)})`;
@@ -29,7 +34,7 @@ export function attachCyreneMotion(svg) {
     }
   }
   function clickFeedback(){
-    if(reduced)return;
+    if(reduced||motion.sleeping)return;
     clickAnimation?.cancel();
     clickAnimation=svg.parentElement.animate?.([
       {transform:'scale(1)'},{transform:'scale(.82) rotate(-12deg)',offset:.25},
@@ -42,7 +47,7 @@ export function attachCyreneMotion(svg) {
     motion.step(last===null?0:(time-last)/1000);last=time;paint();
     if(!motion.resting)frame=win.requestAnimationFrame(tick);else last=null;
   }
-  function wake(){if(!disposed&&!doc.hidden&&!reduced&&frame===null)frame=win.requestAnimationFrame(tick);}
+  function wake(){if(!disposed&&!doc.hidden&&!motion.resting&&frame===null)frame=win.requestAnimationFrame(tick);}
   function preferences(){
     reduced=media.matches||doc.documentElement.dataset.performanceMode==='on';
     motion.setReduced(reduced);
@@ -52,7 +57,7 @@ export function attachCyreneMotion(svg) {
   listen(win,'cyrene:performance-mode',preferences);
   const observer=new win.MutationObserver(preferences);
   observer.observe(doc.documentElement,{attributes:true,attributeFilter:['data-performance-mode']});
-  listen(doc,'visibilitychange',()=>{motion.cancelPress();if(doc.hidden)stop();else wake();});
+  listen(doc,'visibilitychange',()=>{motion.cancelPress();if(doc.hidden)stop();});
   listen(button,'pointerdown',event=>{if(event.button!==0)return;if(button.tagName==='BUTTON')button.setPointerCapture?.(event.pointerId);motion.press();wake();});
   listen(button,'pointerup',()=>{motion.release();wake();});
   listen(button,'pointercancel',()=>{motion.cancelPress();wake();});
@@ -68,9 +73,14 @@ export function attachCyreneMotion(svg) {
     if(event.detail===0){motion.press();motion.release();wake();}
     clickFeedback();
   });
-  preferences();paint();wake();
+  preferences();
+  const unobserveActivity=observeCyreneWindowActivity(doc,(sleeping,immediate)=>{
+    clickAnimation?.cancel();attention.clear();stop();
+    motion.setSleeping(sleeping,immediate);
+    paint();wake();
+  });
   return {
-    setState(state){if(state!==motion.state)attention.clear();motion.setState(state);if(reduced)paint();else wake();},
-    destroy(){disposed=true;clickAnimation?.cancel();stop();attention.destroy();observer.disconnect();removers.forEach(remove=>remove());},
+    setState(state){if(state!==motion.state)attention.clear();motion.setState(state);if(motion.sleeping)return;if(reduced)paint();else wake();},
+    destroy(){disposed=true;unobserveActivity();clickAnimation?.cancel();stop();attention.destroy();observer.disconnect();removers.forEach(remove=>remove());},
   };
 }

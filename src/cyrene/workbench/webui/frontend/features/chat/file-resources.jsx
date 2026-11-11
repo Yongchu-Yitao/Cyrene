@@ -197,15 +197,38 @@ function wbcRuntimeToolEvent(event, eventAt) {
     terminal: event.type === "tool_call_finished",
     entry: {
       kind: "tool", toolCallId: String(event.tool_call_id || ""), text: toolName || undefined,
-      preview: toolProgress ? String(event.label || "") : (failed && errorMessage ? errorMessage.slice(0, 240) : wbcToolArgsPreview(event.args || {})),
+      preview: wbcLegacyToolPreview(event, toolProgress, failed, errorMessage),
       status: (toolStarted || toolProgress) ? "running" : "completed", failed: failed,
       progress: toolProgress ? Math.max(0, Math.min(1, Number(event.progress) || 0)) : undefined,
       progressCurrent: toolProgress ? Math.max(0, Number(event.current) || 0) : undefined,
       progressTotal: toolProgress ? Math.max(0, Number(event.total) || 0) : undefined,
-      startedAt: eventAt, output: failed && error ? error : undefined,
+      startedAt: eventAt, ...(toolName === "Bash" ? { input: event.args } : {}),
+      output: failed && error ? error : undefined,
       presentation: failed && error ? { kind: "error" } : event.presentation,
     },
   };
+}
+
+function wbcLegacyToolPreview(event, progress, failed, errorMessage) {
+  if (progress) return String(event.label || "");
+  if (failed && errorMessage) return errorMessage.slice(0, 240);
+  return wbcToolArgsPreview(event.args || {});
+}
+
+function wbcPublishStreamToolActivity(chatId, event, status, terminal) {
+  var dynamicSurfaces = window.CyreneUI && window.CyreneUI.dynamicSurfaces;
+  if (dynamicSurfaces && typeof dynamicSurfaces.requestActivity === "function") {
+    dynamicSurfaces.requestActivity({
+      type: terminal ? "tool.completed" : "tool.started",
+      eventId: String(event.eventId || ""),
+      chatId: chatId,
+      runId: String(event.runId || ""),
+      payload: Object.assign({}, event, {
+        status: terminal ? "completed" : status,
+        presentation: event.presentation && typeof event.presentation === "object" ? event.presentation : {},
+      }),
+    });
+  }
 }
 
 function wbcHandleRuntimeAck(event, context) {
@@ -691,19 +714,7 @@ var WorkbenchChatRuntimes = (function () {
     var eventAt = Number(event.createdAt || event.startedAt);
     if (!Number.isFinite(eventAt)) eventAt = Date.now();
     var terminal = status === "completed" || status === "failed" || event.terminal === true;
-    var dynamicSurfaces = window.CyreneUI && window.CyreneUI.dynamicSurfaces;
-    if (dynamicSurfaces && typeof dynamicSurfaces.requestActivity === "function") {
-      dynamicSurfaces.requestActivity({
-        type: terminal ? "tool.completed" : "tool.started",
-        eventId: String(event.eventId || ""),
-        chatId: chatId,
-        runId: String(event.runId || ""),
-        payload: Object.assign({}, event, {
-          status: terminal ? "completed" : status,
-          presentation: event.presentation && typeof event.presentation === "object" ? event.presentation : {},
-        }),
-      });
-    }
+    wbcPublishStreamToolActivity(chatId, event, status, terminal);
     var progress = event.progress && typeof event.progress === "object" ? event.progress : null;
     var entry = {
       kind: event.activityKind === "steering" ? "steering" : "tool",
@@ -715,6 +726,7 @@ var WorkbenchChatRuntimes = (function () {
         : String(progress && progress.label || event.inputSummary || event.title || ""),
       status: terminal ? "completed" : "running",
       failed: !!event.failed || status === "failed",
+      ...(Number.isInteger(event.exitCode) ? { exitCode: event.exitCode } : {}),
       progress: !terminal && progress && Number(progress.total) > 0
         ? Math.max(0, Math.min(1, Number(progress.current) / Number(progress.total)))
         : undefined,

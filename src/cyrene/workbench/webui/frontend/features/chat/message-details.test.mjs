@@ -12,13 +12,20 @@ function mount(name, initialExpanded = false) {
   let expanded = initialExpanded, ref, count = 0;
   const deps = {
     createDisclosureSubscriptions,
+    wbcTraceTimelineItems(entries) {
+      count++;
+      return entries.map(entry => entry.kind === 'tool' ? {kind:'trace',entry} : {kind:'reasoning',text:entry.text});
+    },
     useWorkbenchI18n(){}, useWbcRef(initial){return ref ||= {current:initial}},
     WBC_ICONS:{}, wbcT:(_key,fallback)=>fallback,
+    workbenchServices:{i18n:()=>({getLang:()=>'en'})},
+    wbcToolPresentationKind:()=> 'generic',
+    wbcToolPresentationText:()=> '',
+    wbcToolPreviewText:preview=>preview,
   };
   const injected = `
     wbcUseDisclosure = () => [readExpanded(), () => {}];
     wbcTraceCollapsedSummary = () => ({label:'summary'});
-    wbcTraceTimelineItems = entries => { countDetails(); return entries.map(entry => ({kind:'reasoning',text:entry.text})); };
     wbcActivityMessageView = () => { countDetails(); return {visible:true,activity:{}}; };
     export { WbcTraceCard };
   `;
@@ -57,4 +64,20 @@ test('live summary remains active while closed and first disclosure uses the lat
   assert.match(renderToStaticMarkup(completed),/completed/);
   card.setExpanded(true);
   assert.match(renderToStaticMarkup(card.render({trace:[{text:'completed'}]})),/completed/);
+});
+
+test('Bash renders the full command and failure state while other tools keep their preview', () => {
+  const card = mount('WbcTraceCard', true);
+  const command = "python3 - <<'PY'\n    print({})\nPY\n# " + 'x'.repeat(450);
+  const trace = [
+    {kind:'tool', toolCallId:'bash', tool:'Bash', text:'执行命令', status:'completed', failed:false, exitCode:1,
+      command, preview:'exit_code: 1, stderr: Traceback'},
+    {kind:'tool', toolCallId:'read', text:'Read', status:'completed', preview:'read result'},
+  ];
+  const html = renderToStaticMarkup(card.render({trace}));
+
+  assert.match(html, /class="failed presentation-generic"/);
+  assert.ok(html.includes("<code>python3 - &lt;&lt;&#x27;PY&#x27;\n    print({})\nPY\n# " + 'x'.repeat(450) + '</code>'));
+  assert.doesNotMatch(html, /exit_code|Traceback/);
+  assert.match(html, /\(read result\)/);
 });

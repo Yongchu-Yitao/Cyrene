@@ -273,6 +273,36 @@ class ChatRepository:
         finally:
             conn.close()
 
+    def read_chat_resources(self, db_path: str | Path, chat_id: str) -> dict[str, Any] | None:
+        """Project only file metadata; never hydrate transcript bodies or traces."""
+        conn = _connect(db_path)
+        try:
+            conn.execute('BEGIN')
+            row = conn.execute(
+                "SELECT json_extract(payload_json, '$.generatedFiles') "
+                "FROM workbench_chats WHERE chat_id = ?", (chat_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            messages = conn.execute(
+                "SELECT json_object('role', json_extract(payload_json, '$.role'), "
+                "'createdAt', json_extract(payload_json, '$.createdAt'), "
+                "'created_at', json_extract(payload_json, '$.created_at'), "
+                "'hidden_from_ui', json_extract(payload_json, '$.hidden_from_ui'), "
+                "'record_kind', json_extract(payload_json, '$.record_kind'), "
+                "'attachments', json_extract(payload_json, '$.attachments')) "
+                "FROM workbench_chat_messages WHERE chat_id = ? "
+                "AND json_type(payload_json, '$.attachments') = 'array' "
+                "AND json_array_length(payload_json, '$.attachments') > 0 ORDER BY ordinal",
+                (chat_id,),
+            ).fetchall()
+            result = {'id': chat_id, 'messages': [json.loads(item[0]) for item in messages]}
+            if row[0] is not None:
+                result['generatedFiles'] = json.loads(row[0])
+            return result
+        finally:
+            conn.close()
+
     def chat_has_messages(self, db_path: str | Path, chat_id: str) -> bool:
         """Check binding eligibility using one indexed existence lookup."""
         conn = _connect(db_path)

@@ -379,6 +379,23 @@ def test_resource_presentation_projects_through_tool_activity_events():
     assert projected_completed[0]["payload"]["presentation"] == completed_presentation
 
 
+@pytest.mark.parametrize("event_type", ["tool.completed", "tools.completed"])
+@pytest.mark.parametrize("name, exit_code", [("Bash", 1), ("Bash", 0), ("Other", 1)])
+def test_shell_exit_status_is_projected_without_changing_tool_completion(event_type, name, exit_code):
+    result = {"call_id": "call", "name": name, "success": True, "value": {"exit_code": exit_code}}
+    event = AgentSessionEvent(
+        sequence=1, type=event_type, tree_id="tree", run_id="run", node_id="assistant",
+        time=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        data=result if event_type == "tool.completed" else {"results": [result]},
+    )
+
+    [projected] = workbench_events(event)
+    assert projected["payload"]["status"] == "completed"
+    assert projected["payload"]["failed"] is False
+    assert projected["payload"].get("exitCode") == (exit_code if name == "Bash" else None)
+    assert projected["payload"]["outputSummary"] == result["value"]
+
+
 def model_registry(handler) -> PluginRegistry:
     registry = PluginRegistry()
     registry.register_pack(

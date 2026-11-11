@@ -25,6 +25,7 @@ class TerminalWakeBridge:
     def __init__(self) -> None:
         self._dispatcher: Dispatcher | None = None
         self._is_busy: BusyChecker | None = None
+        self._configured = asyncio.Event()
         self._daemon_poll_task: asyncio.Task[Any] | None = None
         self._consumer_id = f"web-{os.getpid()}-{uuid4().hex[:8]}"
 
@@ -36,6 +37,7 @@ class TerminalWakeBridge:
     ) -> None:
         if dispatcher is not None:
             self._dispatcher = dispatcher
+            self._configured.set()
         if is_busy is not None:
             self._is_busy = is_busy
 
@@ -48,6 +50,7 @@ class TerminalWakeBridge:
 
     def reset_for_tests(self) -> None:
         self._dispatcher = None
+        self._configured.clear()
         self._is_busy = None
 
     async def start_daemon_bridge(self) -> None:
@@ -69,12 +72,11 @@ class TerminalWakeBridge:
         while True:
             try:
                 if self._dispatcher is None:
-                    await asyncio.sleep(0.5)
+                    await self._configured.wait()
                     continue
-                response = await client.claim_wake(self._consumer_id, lease_seconds=45)
+                response = await client.claim_wake(self._consumer_id, lease_seconds=45, wait_seconds=30)
                 wake = response.get("wake")
-                if not isinstance(wake, dict) or not wake:
-                    await asyncio.sleep(0.8)
+                if not await _wake_ready(response, wake):
                     continue
                 payload = {
                     "wake_id": str(wake.get("wake_id") or ""),
@@ -105,6 +107,15 @@ class TerminalWakeBridge:
             except Exception:
                 logger.exception("terminal wake bridge iteration failed")
                 await asyncio.sleep(1.5)
+
+
+async def _wake_ready(response, wake) -> bool:
+    if isinstance(wake, dict) and wake:
+        return True
+    # Older daemons ignore waitSeconds until their next restart.
+    if not response.get("waitSupported"):
+        await asyncio.sleep(0.8)
+    return False
 
 
 _SERVICE = TerminalWakeBridge()

@@ -575,10 +575,12 @@ class TerminalDaemonClient:
         return await self._request("wakeInfo", terminalId=terminal_id)
 
     async def claim_wake(
-        self, consumer_id: str, *, lease_seconds: float = 30.0,
+        self, consumer_id: str, *, lease_seconds: float = 30.0, wait_seconds: float = 0,
     ) -> dict[str, Any]:
+        wait_seconds = max(0, min(float(wait_seconds), 30))
         return await self._request(
             "claimWake", consumerId=consumer_id, leaseSeconds=lease_seconds,
+            waitSeconds=wait_seconds, request_timeout=wait_seconds + 12,
         )
 
     async def settle_wake(

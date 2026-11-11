@@ -27,6 +27,58 @@ def tool_result_presentation(value: Any) -> dict[str, Any]:
         value = value.get("result")
     return {}
 
+
+def bash_exit_code(name: str, value: Any) -> int | None:
+    """Read the process exit code separately from tool delivery status."""
+    if name != "Bash":
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    code = value.get("exit_code") if isinstance(value, Mapping) else None
+    return code if type(code) is int else None
+
+
+def tool_completed_payload(data, value, status):
+    name = str(data.get("name") or "")
+    presentation = data.get("presentation")
+    presentation = dict(presentation) if isinstance(presentation, Mapping) else {}
+    payload = {
+        "toolCallId": str(data.get("call_id") or ""),
+        "name": name,
+        "status": status,
+        "failed": not bool(data.get("success")),
+        "outputSummary": data.get("value"),
+        "error": str(data.get("error") or ""),
+        "presentation": presentation or tool_result_presentation(value),
+    }
+    if (exit_code := bash_exit_code(name, value)) is not None:
+        payload["exitCode"] = exit_code
+    return payload
+
+
+def _bash_activity_identity(trace, node_id, value):
+    if node_id and any(entry.get("tool") == "Bash" for entry in trace):
+        return {"sourceId": node_id, "runId": str(value.get("run_id") or "")}
+    return {}
+
+
+def _tool_result_for_call(item, call_id, results):
+    run_id = str(item["value"].get("run_id") or "")
+    result = results.get((run_id, str(item.get("id") or ""), call_id))
+    return results.get((run_id, "", call_id)) if result is None else result
+
+
+def _apply_bash_result(entry, arguments, result):
+    command = arguments.get("command") if isinstance(arguments, Mapping) else None
+    if isinstance(command, str):
+        entry["command"] = command
+    if result is not None and (exit_code := bash_exit_code("Bash", result.get("value"))) is not None:
+        entry["exitCode"] = exit_code
+
+
 def _trace_preview(value: Any, *, limit: int = 400) -> str:
     """Return a bounded, display-only summary for one durable tool entry."""
 
@@ -106,6 +158,7 @@ def project_tool_activity_messages(
             "reasoning": reasoning,
             "trace": trace,
             "intermediate": True,
+            **_bash_activity_identity(trace, node_id, value),
         }
         model = str(value.get("model") or "").strip()
         if model:
@@ -125,7 +178,7 @@ def _tool_trace_entry(item, index, call, results_by_call_id):
     call_id = str(call.get("id") or "").strip()
     if not call_id:
         call_id = f"{str(item.get('id') or 'assistant')}:{index}"
-    result = results_by_call_id.get(call_id)
+    result = _tool_result_for_call(item, call_id, results_by_call_id)
     success = bool(result.get("success")) if result is not None else True
     preview_source: Any = arguments
     if result is not None:
@@ -145,6 +198,8 @@ def _tool_trace_entry(item, index, call, results_by_call_id):
     preview = _trace_preview(preview_source)
     if preview:
         entry["preview"] = preview
+    if raw_name == "Bash":
+        _apply_bash_result(entry, arguments, result)
     if result is not None and success:
         presentation = tool_result_presentation(result.get("value"))
         if presentation:
@@ -188,18 +243,22 @@ def _permission_trace_entry(item, review_index, review):
 
 
 def _tool_results_by_call(nodes, requested_run_id, terminal_run_ids):
-    results_by_call_id: dict[str, Mapping[str, Any]] = {}
+    results_by_call_id: dict[tuple[str, str, str], Mapping[str, Any] | None] = {}
     for item in nodes:
         value = _eligible_value(item, "tool_results", requested_run_id, terminal_run_ids)
         if value is None:
             continue
+        run_id = str(value.get("run_id") or "")
+        parent_id = str(item.get("parent_id") or "")
         results = value.get("results")
         for result in results if isinstance(results, list) else ():
             if not isinstance(result, Mapping):
                 continue
-            call_id = str(result.get("call_id") or "")
+            call_id = str(result.get("call_id") or "").strip()
             if call_id:
-                results_by_call_id[call_id] = result
+                key = (run_id, parent_id, call_id)
+                # A legacy result without an owner is usable only if unique.
+                results_by_call_id[key] = None if not parent_id and key in results_by_call_id else result
 
     return results_by_call_id
 

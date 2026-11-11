@@ -80,6 +80,16 @@ import { wbcErrorText } from "./errors.jsx"
       .then(function (payload) { return payload.chat; });
   }
 
+  function getChatStatus(chatId) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/status", { cache: "no-store" })
+      .then(function (payload) { return payload.chat; });
+  }
+
+  function syncChat(chatId, revision) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId)
+      + "?sync_revision=" + encodeURIComponent(revision || ""), { cache: "no-store" });
+  }
+
   function getSubagents(chatId, roundId, options) {
     if (!chatId) {
       return Promise.resolve({ rounds: [], activeRoundId: "", agents: [], messages: [] });
@@ -519,6 +529,8 @@ import { wbcErrorText } from "./errors.jsx"
     listSideAgents: listSideAgents,
     createSideAgent: createSideAgent,
     getChat: getChat,
+    getChatStatus: getChatStatus,
+    syncChat: syncChat,
     getSubagents: getSubagents,
     getChanges: getChanges,
     getChangeDiff: getChangeDiff,

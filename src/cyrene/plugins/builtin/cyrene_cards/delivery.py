@@ -1,6 +1,8 @@
 """Durable UI submissions delivered through the host's normal human-message port."""
 
 import asyncio
+
+from cyrene.platform.database_notifications import database_changes, wait_for_database_change
 import hashlib
 import json
 import logging
@@ -94,6 +96,10 @@ class CardDelivery:
             await asyncio.to_thread(self._save, owner, event_id, status, detail)
             return {**detail, "status": status}
 
+    def has_pending(self):
+        with self.service.store.connect() as db:
+            return db.execute("SELECT 1 FROM deliveries WHERE state='pending' LIMIT 1").fetchone() is not None
+
     async def tick(self):
         def pending():
             with self.service.store.connect() as db:
@@ -104,9 +110,18 @@ class CardDelivery:
             await self.deliver(row["owner"], row["card_id"], row["event_id"])
 
     async def _work(self):
-        while True:
-            try:
-                await self.tick()
-            except Exception:
-                logger.exception("Card delivery recovery failed")
-            await asyncio.sleep(2)
+        # Subscribe before replaying durable state: no enqueue can fall between
+        # the empty check and sleep. Keep the original retry cadence when busy.
+        with database_changes(self.service.store.path) as changed:
+            while True:
+                changed.clear()
+                pending = True
+                try:
+                    await self.tick()
+                    pending = await asyncio.to_thread(self.has_pending)
+                except Exception:
+                    logger.exception("Card delivery recovery failed")
+                if pending:
+                    await asyncio.sleep(2)
+                else:
+                    await wait_for_database_change(changed)

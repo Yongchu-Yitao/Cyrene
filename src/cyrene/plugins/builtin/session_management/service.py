@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+
+from cyrene.platform.database_notifications import database_changes, wait_for_database_change
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -369,9 +371,18 @@ class SessionManagementService:
                 self.delivery_failed(row, str(exc))
 
     async def _worker(self):
-        while True:
-            try:
-                await self.tick()
-            except Exception:
-                logger.exception("Managed session queue failed")
-            await asyncio.sleep(1)
+        # Subscribe before replaying durable state: no enqueue can fall between
+        # the empty check and sleep. Keep the original retry cadence when busy.
+        with database_changes(self.store.path) as changed:
+            while True:
+                changed.clear()
+                pending = True
+                try:
+                    await self.tick()
+                    pending = await asyncio.to_thread(self.store.has_pending)
+                except Exception:
+                    logger.exception("Managed session queue failed")
+                if pending:
+                    await asyncio.sleep(1)
+                else:
+                    await wait_for_database_change(changed)

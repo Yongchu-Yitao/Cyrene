@@ -52,17 +52,20 @@ function wbcAgentToolDisplayName(name, input) {
   return ["toolbox", operation].filter(Boolean).join(".") || raw;
 }
 
-function wbcAgentToolPayload(event) {
-  var payload = wbcAgentEventPayload(event);
-  var timestamp = String(event && event.timestamp || payload.timestamp || payload.createdAt || payload.created_at || "");
-  var parsedAt = timestamp ? Date.parse(timestamp) : NaN;
-  var progress = payload.progress && typeof payload.progress === "object"
+function wbcAgentToolProgress(payload) {
+  return payload.progress && typeof payload.progress === "object"
     ? {
         current: Number(payload.progress.current) || 0,
         total: Number(payload.progress.total) || 0,
         label: String(payload.progress.label || ""),
     }
     : null;
+}
+
+function wbcAgentToolPayload(event) {
+  var payload = wbcAgentEventPayload(event);
+  var timestamp = String(event && event.timestamp || payload.timestamp || payload.createdAt || payload.created_at || "");
+  var parsedAt = timestamp ? Date.parse(timestamp) : NaN;
   var input = payload.inputSummary != null
     ? payload.inputSummary
     : (payload.input_summary != null ? payload.input_summary : payload.args);
@@ -78,14 +81,13 @@ function wbcAgentToolPayload(event) {
     title: toolName,
     status: String(payload.status || "running"),
     failed: !!payload.failed,
+    ...(toolName === "Bash" && Number.isInteger(payload.exitCode) ? { exitCode: payload.exitCode } : {}),
     createdAt: Number.isFinite(parsedAt) ? parsedAt : Date.now(),
-    inputSummary: wbcStructuredEventSummary(payload.inputSummary != null
-      ? payload.inputSummary
-      : (payload.input_summary != null ? payload.input_summary : payload.args)),
+    inputSummary: wbcStructuredEventSummary(input),
     outputSummary: wbcStructuredEventSummary(payload.outputSummary != null ? payload.outputSummary : payload.output_summary),
-    input: input,
+    input: toolName === "Bash" ? (payload.args ?? payload.input ?? input) : input,
     output: payload.outputSummary != null ? payload.outputSummary : payload.output_summary,
-    progress: progress,
+    progress: wbcAgentToolProgress(payload),
     presentation: payload.presentation && typeof payload.presentation === "object" ? payload.presentation : {},
   };
 }

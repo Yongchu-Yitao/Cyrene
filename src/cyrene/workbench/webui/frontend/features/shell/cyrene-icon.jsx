@@ -20,6 +20,9 @@ export function CyreneIcon({ state = "idle", animated = true }) {
         </g>
         <g className="cyrene-icon-gaze" fill="currentColor"><rect className="cyrene-icon-eye" x="12.15" y="13.1" width="2.2" height="4.5" rx="1.1"/><rect className="cyrene-icon-eye cyrene-icon-eye-right" x="17.2" y="13.1" width="2.2" height="4.5" rx="1.1"/><g className="cyrene-icon-angry-eyes" fill="none" stroke="#e24d32" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.3934 14.5907 Q13.0942 15.4668 14.1066 16.1093"/><path d="M19.1566 14.5907 Q18.4558 15.4668 17.4434 16.1093"/></g></g>
       </g></g>
+      <g className="cyrene-icon-sleep" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M23 4h3l-3 3h3m2-7h3.5L28 3.5h3.5"/>
+      </g>
       <g className="cyrene-icon-badge cyrene-icon-done"><circle cx="26.3" cy="25.6" r="4.2"/><path d="m24.3 25.6 1.3 1.4 2.5-2.7"/></g>
       <g className="cyrene-icon-badge cyrene-icon-error"><circle cx="26.3" cy="25.6" r="4.2"/><path d="M26.3 23.4v2.2m0 1.7v.1"/></g>
       <g className="cyrene-icon-badge cyrene-icon-wait"><circle cx="26.3" cy="25.6" r="4.2"/><path d="M25.1 24.2a1.2 1.2 0 1 1 1.8 1.1q-.6.3-.6 1m0 1.1v.1"/></g>

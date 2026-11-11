@@ -4,6 +4,9 @@ import {harness as baseHarness} from './hook-harness.test.mjs';
 const shared = baseHarness('./resource-splits.jsx');
 const sharedFiles = shared.run(mod => mod.wbcChatArtifactFiles);
 function harness(file, extras = {}) {
+  if (extras.workbenchServices) extras.workbenchServices = {
+    events: () => ({ subscribe: () => () => {} }), ...extras.workbenchServices,
+  };
   return baseHarness(file, {wbcChatArtifactFiles: sharedFiles, ...extras});
 }
 const settle = async () => {for (let i=0; i<15; i++) await Promise.resolve();};
@@ -36,7 +39,9 @@ test('resource rows open files, owned terminals and every browser tab in the ori
   const h = harness('../shell/assistant-task-resources.jsx', {React,WBC_ICONS:{},wbcFormatTime:()=>'',wbcSetResourceDrag:(_e,p)=>opened.push(['drag',p]),wbcFileDragPayload:(file,ownerSessionId)=>({kind:'file',file,ownerSessionId}),
     workbenchServices:{chat:()=>({Model:{getChat:async()=>({id:'a',files:[],
         messages:[{role:'assistant',attachments:[{path:'result.md'}]}]})}}),
-      api:()=>({json:async url=>{requests.push(url);return {terminals:[{id:'t',ownerChatId:'a'},{id:'other',ownerChatId:'b'}]};}})}});
+      api:()=>({json:async url=>{requests.push(url);
+        if (url.endsWith('/resources')) return {chat:{id:'a',messages:[{role:'assistant',attachments:[{path:'result.md'}]}]}};
+        return {terminals:[{id:'t',ownerChatId:'a'},{id:'other',ownerChatId:'b'}]};}})}});
   h.context.setTimeout=h.context.window.setTimeout;h.context.clearTimeout=h.context.window.clearTimeout;
   h.context.window.cyrene={browser:{getState:async id=>({tabs:[{id:'tab1',title:'One',favicon:'https://example.com/favicon.ico'},{id:'tab2',title:'Two'}]})}};
   h.run((mod,hooks)=>{
@@ -52,7 +57,7 @@ test('resource rows open files, owned terminals and every browser tab in the ori
   rows.forEach(row=>row.props.onClick());
   assert.deepEqual(opened.map(x=>x.slice(0,2)),[['a','file'],['a','terminal'],['a','browser'],['a','browser']]);
   assert.equal(opened[1][2],'t'); assert.equal(opened[3][2],'tab2');
-  assert.equal(requests[0],'/api/terminals?ownerChatId=a');
+  assert.deepEqual(requests, ['/api/workbench/chats/a/resources', '/api/terminals?ownerChatId=a']);
   rows[3].props.onDragStart({});
   assert.equal(opened[4][1].kind,'browser');
   assert.equal(opened[4][1].ownerSessionId,'a');
@@ -139,4 +144,134 @@ test('main assistant deliveries keep their attachment URL and hidden resources s
   assert.equal(rows.length,1);rows[0].props.onClick();
   assert.equal(opened[0][2].url,'/api/attachments/final');
   h.unmount();
+});
+
+function resourceObserverFixture({ hidden = false, request } = {}) {
+  const requests = [], delays = new Map();
+  let listener, browserListener, browserUnsubscribed = false, eventUnsubscribed = false;
+  let resources = { files: [], terminals: [], tabs: [] }, error = '', updates = 0;
+  const h = harness('../shell/assistant-task-resources.jsx', {
+    workbenchServices: {
+      chat: () => ({ Model: { getChat: () => assert.fail('Must not fetch full conversations') } }),
+      api: () => ({ json: (url, options) => {
+        requests.push({ url, options });
+        return request ? request(url, options) : Promise.resolve(url.endsWith('/resources')
+          ? { chat: { id: 'task', files: [{ path: 'report.md', source: 'agent' }] } }
+          : { terminals: [{ id: 'term', ownerChatId: 'task', title: 'Shell', cwd: '/work', outputBytes: requests.length }] });
+      } }),
+      events: () => ({ subscribe: fn => { listener = fn; return () => { eventUnsubscribed = true; }; } }),
+    },
+  });
+  const setTimer = h.context.window.setTimeout;
+  h.context.window.setTimeout = (fn, delay) => { const id = setTimer(fn); delays.set(id, delay); return id; };
+  h.context.document.hidden = hidden;
+  h.context.document.visibilityState = hidden ? 'hidden' : 'visible';
+  h.context.window.cyrene = { browser: {
+    getState: async () => ({ tabs: [] }),
+    onManagerState: fn => { browserListener = fn; return () => { browserUnsubscribed = true; }; },
+  } };
+  let dispose;
+  h.run(mod => { dispose = mod.observeAssistantResources({ session_id: 'task', project_id: 'project' }, update => {
+    const next = update(resources); if (next !== resources) updates++; resources = next;
+  }, value => { error = value; }); });
+  return {
+    h, requests, event: event => listener(event), browser: state => browserListener(state),
+    get resources() { return resources; }, get error() { return error; }, get updates() { return updates; },
+    hide(value) { h.context.document.hidden = value; h.context.document.visibilityState = value ? 'hidden' : 'visible'; h.listeners.get('visibilitychange')(); },
+    fireTimer() { assert.equal(h.timers.size, 1); const [id, fn] = [...h.timers][0]; h.timers.delete(id); fn(); },
+    get delay() { return delays.get([...h.timers.keys()][0]); },
+    dispose() { dispose(); assert.equal(h.timers.size, 0); assert.equal(eventUnsubscribed, true); assert.equal(browserUnsubscribed, true); assert.equal(h.listeners.size, 0); },
+  };
+}
+
+test('hidden resources do no work; visibility restores immediately and reconciles once per minute', async () => {
+  const f = resourceObserverFixture({ hidden: true });
+  assert.equal(f.requests.length, 0);
+  f.event({ type: 'workbench_chat_changed', chat_id: 'task' });
+  assert.equal(f.h.timers.size, 0);
+  f.hide(false); await settle();
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.delay, 60000);
+  const first = f.resources;
+  f.fireTimer(); await settle();
+  assert.equal(f.requests.length, 4);
+  assert.equal(f.resources, first, 'unchanged data including volatile terminal statistics must not rerender');
+  assert.equal(f.updates, 1);
+  f.hide(true);
+  assert.equal(f.h.timers.size, 0);
+  assert.equal(f.requests.at(-1).options.signal.aborted, true);
+  f.hide(false); await settle();
+  assert.equal(f.requests.length, 6);
+  f.dispose();
+});
+
+test('resource events are scoped and bursts coalesce; browser pushes never refetch conversation files', async () => {
+  const f = resourceObserverFixture(); await settle();
+  f.event({ type: 'workbench_chat_changed', chat_id: 'other' });
+  f.event({ type: 'terminal_list_changed', project_id: 'other-project' });
+  f.event({ type: 'tool_call', chat_id: 'task' });
+  assert.equal(f.delay, 60000);
+  f.event({ type: 'workspace_changes', chatId: 'task' });
+  f.event({ type: 'workbench_chat_changed', chat_id: 'task' });
+  assert.equal(f.h.timers.size, 1); assert.equal(f.delay, 200);
+  f.fireTimer(); await settle(); assert.equal(f.requests.length, 4);
+  const files = f.resources.files;
+  f.browser({ pages: [{ id: 'tab', sessionId: 'task', title: 'New page', url: '/page' }, { id: 'other', sessionId: 'other' }] });
+  assert.equal(f.resources.tabs.length, 1);
+  assert.equal(f.resources.tabs[0].title, 'New page');
+  assert.equal(f.resources.files, files);
+  assert.equal(f.requests.length, 4);
+  f.browser({ pages: [] }); assert.equal(f.resources.tabs.length, 0, 'closed tabs disappear');
+  f.event({ type: 'terminal_list_changed', project_id: 'project' });
+  assert.equal(f.delay, 200);
+  f.dispose();
+});
+
+test('an in-flight refresh coalesces events and cannot overwrite newer browser state', async () => {
+  let resolveFiles;
+  const f = resourceObserverFixture({ request: url => url.endsWith('/resources')
+    ? new Promise(resolve => { resolveFiles = resolve; }) : Promise.resolve({ terminals: [] }) });
+  f.event({ type: 'workspace_changes', chatId: 'task' });
+  f.event({ type: 'workbench_chat_changed', chat_id: 'task' });
+  assert.equal(f.requests.length, 2); assert.equal(f.h.timers.size, 0);
+  f.browser({ pages: [{ id: 'new', sessionId: 'task', title: 'New' }] });
+  resolveFiles({ chat: { files: [{ path: 'new.md' }] } }); await settle();
+  assert.equal(f.resources.files[0].path, 'new.md');
+  assert.equal(f.resources.tabs[0].id, 'new');
+  assert.equal(f.delay, 200);
+  f.fireTimer(); assert.equal(f.requests.length, 4);
+  f.dispose();
+  resolveFiles({ chat: { files: [{ path: 'stale.md' }] } }); await settle();
+  assert.equal(f.resources.files[0].path, 'new.md');
+  assert.equal(f.h.timers.size, 0);
+});
+
+test('hide and restore during a request rejects the stale result and schedules one fresh snapshot', async () => {
+  let resolveFiles;
+  const f = resourceObserverFixture({ request: url => url.endsWith('/resources')
+    ? new Promise(resolve => { resolveFiles = resolve; }) : Promise.resolve({ terminals: [] }) });
+  f.hide(true); assert.equal(f.requests[0].options.signal.aborted, true);
+  f.hide(false); assert.equal(f.requests.length, 2);
+  resolveFiles({ chat: { files: [{ path: 'stale.md' }] } }); await settle();
+  assert.equal(f.resources.files.length, 0);
+  assert.equal(f.delay, 200);
+  f.fireTimer(); resolveFiles({ chat: { files: [{ path: 'fresh.md' }] } }); await settle();
+  assert.equal(f.resources.files[0].path, 'fresh.md');
+  assert.equal(f.delay, 60000);
+  f.dispose();
+});
+
+test('a failed resource source retains its last good data and later reconciliation clears the error', async () => {
+  let fail = false;
+  const f = resourceObserverFixture({ request: url => {
+    if (url.endsWith('/resources')) return fail ? Promise.reject(Error('offline')) : Promise.resolve({ chat: { files: [{ path: 'saved.md' }] } });
+    return Promise.resolve({ terminals: [{ id: fail ? 'new-terminal' : 'old-terminal', ownerChatId: 'task' }] });
+  } });
+  await settle(); const files = f.resources.files;
+  fail = true; f.fireTimer(); await settle();
+  assert.equal(f.resources.files, files);
+  assert.equal(f.resources.terminals[0].id, 'new-terminal');
+  assert.notEqual(f.error, '');
+  fail = false; f.fireTimer(); await settle();
+  assert.equal(f.error, ''); f.dispose();
 });

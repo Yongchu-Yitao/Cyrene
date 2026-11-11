@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Request
 
+from cyrene.workbench.chat.chat_application import restore_bash_trace_details
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.http.errors import localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
@@ -75,7 +76,9 @@ def _register_trace_route(router: APIRouter, context: ChatRouteContext) -> None:
             target = by_id.get(str(message_id or ""))
             if not isinstance(target, dict) or not target.get("activityCard"):
                 continue
+            previous_trace = target.get("trace")
             target["trace"] = trace
+            restore_bash_trace_details(target, {"trace": previous_trace})
             updated += 1
         if updated:
             chat["updatedAt"] = _utc_now_iso()

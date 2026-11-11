@@ -41,7 +41,8 @@ def test_external_agent_frontend_consumes_unified_dynamic_events_and_viewers():
     assert '"workbenchChat.traceAction.steering": "引导中"' in i18n
     assert "wbcToolPresentationKind" in source
     assert "progress.slice(-40)" in source
-    assert 'var failed = !!entry.failed || ["failed", "error", "failure", "expired", "cancelled"].indexOf(entryStatus) >= 0;' in source
+    assert 'var failed = wbcTraceEntryFailed(entry, entryStatus, bashCommand);' in source
+    assert '["failed", "error", "failure", "expired", "cancelled"].includes(status)' in source
     assert 'entry["preview"] = str(summary)' in route_source
     assert "matching = [" in route_source
     assert "open_indices = [" in route_source
@@ -6887,8 +6888,9 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert 'entry && entry.kind === "phase1"' in source
     assert "if (phase1Entry) return" in source
     assert 'wbcT("workbenchChat.phase1Understood", "Understood the request")' in source
-    assert "function wbcNormalizeReasoningText(text)" in source
-    assert "function wbcTraceTimelineItems(entries, reasoning)" in source
+    trace_timeline = frontend_module_source("features/chat/trace-timeline.mjs")
+    assert "function wbcNormalizeReasoningText(text)" in trace_timeline
+    assert "function wbcTraceTimelineItems(entries, reasoning)" in trace_timeline
     assert 'wbcT("workbenchChat.thinkingProcess", "Thinking process")' in source
     assert "reasoningOffset: String(activity.reasoning || \"\").length" in source
     assert source.count("&& !(Array.isArray(last.progress) && last.progress.length)") == 2
@@ -6930,8 +6932,10 @@ def test_workbench_execution_card_uses_collapsible_activity_summary():
     assert "background: transparent;" in detail_rule
     assert 'className="wbc-trace-summary-preview"' not in source
     assert "wbc-trace-summary-preview" not in styles
-    assert "var previewText = wbcToolPreviewText(entry.preview);" in source
+    assert 'if (bashCommand !== null) return { kind: "generic", text: "", preview: "" };' in source
+    assert 'preview: wbcToolPreviewText(entry.preview)' in source
     assert "{previewText ? <small>{wbcParenthesize(previewText)}</small> : null}" in source
+    assert '<code>{bashCommand}</code>' in source
     assert ".wbc-trace-details .wbc-trace-mark" not in styles
     assert 'className="wbc-trace-mark"' in source
     assert "编辑了文件" in workbench_i18n_source()
@@ -6947,7 +6951,7 @@ def test_workbench_trace_summary_counts_tools_instead_of_concatenating_names():
     source = workbench_chat_source()
     helpers = "function wbcTraceNormalizeName(" + source.split(
         "function wbcTraceNormalizeName(", 1
-    )[1].split("function wbcNormalizeReasoningText", 1)[0]
+    )[1].split("function wbcTraceDedupeKeyForDisclosure", 1)[0]
     script = f"""
 const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
 const messages = {{
@@ -6988,7 +6992,7 @@ def test_workbench_trace_summary_labels_guidance_as_steering():
     source = workbench_chat_source()
     helpers = "function wbcTraceNormalizeName(" + source.split(
         "function wbcTraceNormalizeName(", 1
-    )[1].split("function wbcNormalizeReasoningText", 1)[0]
+    )[1].split("function wbcTraceDedupeKeyForDisclosure", 1)[0]
     script = f"""
 const WBC_ICONS = new Proxy({{}}, {{ get: (_target, name) => String(name) }});
 function wbcT(key, fallback) {{
@@ -7008,10 +7012,8 @@ process.stdout.write(wbcTraceCollapsedSummary([
 
 
 def test_workbench_trace_timeline_removes_blank_lines_and_interleaves_tools():
-    source = workbench_chat_source()
-    timeline_source = "function wbcNormalizeReasoningText(" + source.split(
-        "function wbcNormalizeReasoningText(", 1
-    )[1].split("function WbcTraceCard", 1)[0]
+    source = frontend_module_source("features/chat/trace-timeline.mjs")
+    timeline_source = source.split("export {", 1)[0]
     script = f"""
 eval({json.dumps(timeline_source)});
 const reasoning = "before\\n\\nmiddle\\n\\nafter";
@@ -7736,7 +7738,7 @@ def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     # translation table as the surrounding labels instead of leaking raw IDs.
     assert 'var key = "workbenchChat.ctxBlock." + id;' in chat
     assert "if (label && label !== key) return label;" in chat
-    assert "if (isToolEntry) return wbcLocalizedToolName(toolKey);" in chat
+    assert "if (wbcIsToolTraceEntry(entry)) return wbcLocalizedToolName(toolKey);" in chat
     assert "function wbcLocalizedToolName(toolName)" in chat
     assert '"workbenchChat.ctxBlock.system.root": "Agent instructions"' in i18n
     assert '"workbenchChat.ctxBlock.context.plugin_session": "插件会话上下文"' in i18n

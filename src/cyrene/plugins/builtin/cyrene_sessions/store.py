@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+
+from cyrene.platform.database_notifications import notify_database_commit
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,6 +34,8 @@ class MessageStore:
         try:
             with db:
                 yield db
+            if db.total_changes:
+                notify_database_commit(self.path)
         finally:
             db.close()
 
@@ -69,6 +73,11 @@ class MessageStore:
                 VALUES (?,?,?,?,?,?,?)""",
                 (message_id, key, fingerprint, sender, recipient, payload, time.time()))
             return dict(db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone())
+
+    def has_pending(self) -> bool:
+        # Include future retries and leases, not only currently eligible rows.
+        with self.connect() as db:
+            return db.execute("SELECT 1 FROM messages WHERE status='queued' LIMIT 1").fetchone() is not None
 
     def pending(self, recipient: str | None = None) -> list[dict]:
         with self.connect() as db:

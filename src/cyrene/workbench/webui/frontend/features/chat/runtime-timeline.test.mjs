@@ -130,6 +130,30 @@ test("unified timeline suppresses a legacy checkpoint with a different activity 
   assert.equal(projected[0].id, "run_3:activity:20")
 })
 
+test("live Bash activity replaces its own checkpoint and keeps earlier calls with the same ID", () => {
+  const trace = [{ kind: "tool", tool: "Bash", toolCallId: "reused", status: "completed" }]
+  const saved = (id, runId, sourceId) => ({
+    id, runId, sourceId, role: "assistant", activityCard: true, trace,
+    createdAt: "2026-09-06T09:18:00Z",
+  })
+  const history = [
+    saved("older-turn", "run_1"),
+    saved("earlier-call", "run_2", "earlier"),
+    saved("checkpoint", "run_2", "current"),
+  ]
+  const live = saved("live", "run_2", "current")
+  const timeline = { runId: "run_2", messages: [live] }
+  const legacy = { id: "live", role: "assistant", createdAt: live.createdAt,
+    runtimeActivity: { ...live, progress: trace } }
+
+  for (const messages of [
+    wbcProjectTranscript(history, { timeline }),
+    wbcProjectRuntimeTranscript(history, [legacy]),
+  ]) {
+    assert.deepEqual(Array.from(messages, message => message.id), ["older-turn", "earlier-call", "live"])
+  }
+})
+
 const { wbcApplyTimeline } = context.module.exports
 
 test("run fallback only fills quiet gaps without changing reasoning, tools or prose", () => {

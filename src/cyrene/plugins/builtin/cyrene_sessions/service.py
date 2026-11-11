@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+
+from cyrene.platform.database_notifications import database_changes, wait_for_database_change
 import json
 import logging
 import time
@@ -183,9 +185,18 @@ class SessionMessagingService:
             await asyncio.to_thread(self.store.release, row["id"])
 
     async def _worker(self) -> None:
-        while True:
-            try:
-                await self.tick()
-            except Exception:
-                logger.exception("Session message queue unavailable")
-            await asyncio.sleep(1)
+        # Subscribe before replaying durable state: no enqueue can fall between
+        # the empty check and sleep. Keep the original retry cadence when busy.
+        with database_changes(self.store.path) as changed:
+            while True:
+                changed.clear()
+                pending = True
+                try:
+                    await self.tick()
+                    pending = await asyncio.to_thread(self.store.has_pending)
+                except Exception:
+                    logger.exception("Session message queue unavailable")
+                if pending:
+                    await asyncio.sleep(1)
+                else:
+                    await wait_for_database_change(changed)

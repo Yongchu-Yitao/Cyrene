@@ -178,6 +178,7 @@ def test_split_chat_route_contract_is_stable():
         ("get", "/api/workbench/chats/{chat_id}/side-agents", "api_workbench_list_side_agents"),
         ("post", "/api/workbench/chats/{chat_id}/side-agents", "api_workbench_create_side_agent"),
         ("get", "/api/workbench/chats/{chat_id}", "api_workbench_get_chat"),
+        ("get", "/api/workbench/chats/{chat_id}/status", "api_workbench_chat_status"),
         ("patch", "/api/workbench/chats/{chat_id}", "api_workbench_update_chat"),
         ("patch", "/api/workbench/chats/{chat_id}/trace", "api_workbench_patch_chat_trace"),
         ("get", "/api/workbench/chats/{chat_id}/plan", "api_workbench_get_chat_plan"),

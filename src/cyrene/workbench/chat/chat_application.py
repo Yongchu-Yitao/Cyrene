@@ -1,22 +1,19 @@
 """Agent-independent Workbench Chat domain and projection helpers.
 
 This module deliberately owns only persisted chat documents, public DTO
-projection, ContextTree transcript reads, and workspace-change bookkeeping.
+projection and ContextTree transcript reads.
 It must stay importable without loading the retired ``cyrene.workbench.chat``
 composition module or the legacy Agent runtime.
 """
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 import logging
-import mimetypes
 import re
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,20 +22,14 @@ import httpx
 
 from cyrene.localization import app_language, localized
 from cyrene.model.constants import NETWORK_RETRY_LIMIT
-from cyrene.workbench.chat.chat_repository import ChatRepository
 from cyrene.workbench.chat.chat_usage import (
     USAGE_KEYS as _USAGE_KEYS,
     latest_request_usage,
     normalized_usage,
     runtime_usage_message_fields,
 )
-from cyrene.workbench.workspaces.workspace_changes import (
-    WorkspaceSnapshot,
-    WorkspaceSnapshotIndex,
-    build_change_set,
-    list_chat_change_sets,
-    save_change_set,
-)
+from .workspace_change_service import WorkspaceChangeService, WorkspaceChangesBaseline
+
 
 logger = logging.getLogger(__name__)
 
@@ -500,6 +491,79 @@ def _canonical_timeline_rank(message: Mapping[str, Any]) -> int:
     ))
 
 
+def _bash_trace_id(entry: Any) -> str:
+    if isinstance(entry, Mapping) and "Bash" in (entry.get("tool"), entry.get("text")):
+        call_id = entry.get("toolCallId") or entry.get("tool_call_id")
+        if isinstance(call_id, str):
+            return call_id
+    return ""
+
+
+def _bash_trace_entries(message: Mapping[str, Any]) -> dict[str, Mapping[str, Any] | None]:
+    trace = message.get("trace")
+    entries: dict[str, Mapping[str, Any] | None] = {}
+    for entry in trace if isinstance(trace, list) else ():
+        if call_id := _bash_trace_id(entry):
+            entries[call_id] = None if call_id in entries else entry
+    return entries
+
+
+def _bash_trace_command(entry: Mapping[str, Any] | None) -> str | None:
+    if entry is None:
+        return None
+    args = entry.get("input")
+    command = args.get("command") if isinstance(args, Mapping) else None
+    if not isinstance(command, str):
+        command = entry.get("command")
+    return command if isinstance(command, str) else None
+
+
+def _distinct_bash_activities(current: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+    current_entries = _bash_trace_entries(current)
+    candidate_entries = _bash_trace_entries(candidate)
+    shared_calls = current_entries.keys() & candidate_entries.keys()
+    if not shared_calls:
+        return False
+    current_source, candidate_source = current.get("sourceId"), candidate.get("sourceId")
+    if current_source and candidate_source:
+        return current_source != candidate_source
+    current_run, candidate_run = current.get("runId"), candidate.get("runId")
+    if current_run and candidate_run and current_run != candidate_run:
+        return True
+    for call_id in shared_calls:
+        first = _bash_trace_command(current_entries[call_id])
+        second = _bash_trace_command(candidate_entries[call_id])
+        if first is not None and second is not None and first != second:
+            return True
+    return False
+
+
+def restore_bash_trace_details(message: dict[str, Any], fallback: Mapping[str, Any]) -> None:
+    """Recover command text and exit code from equivalent Bash activity."""
+    trace = message.get("trace")
+    if not isinstance(trace, list):
+        return
+    details = _bash_trace_entries(fallback)
+    if not details:
+        return
+    current = _bash_trace_entries(message)
+    merged = list(trace)
+    for index, entry in enumerate(trace):
+        call_id = _bash_trace_id(entry)
+        if not call_id or current.get(call_id) is None or (detail := details.get(call_id)) is None:
+            continue
+        updated = dict(entry)
+        command, fallback_command = _bash_trace_command(entry), _bash_trace_command(detail)
+        if command is not None and fallback_command is not None and command != fallback_command:
+            continue
+        if command is None and fallback_command is not None:
+            updated["command"] = fallback_command
+        if type(entry.get("exitCode")) is not int and type(exit_code := detail.get("exitCode")) is int:
+            updated["exitCode"] = exit_code
+        merged[index] = updated
+    message["trace"] = merged
+
+
 def _merge_equivalent_projection(
     current: Mapping[str, Any],
     candidate: Mapping[str, Any],
@@ -510,7 +574,9 @@ def _merge_equivalent_projection(
         secondary, primary = current, candidate
     else:
         secondary, primary = candidate, current
-    return {**dict(secondary), **dict(primary)}
+    merged = {**secondary, **primary}
+    restore_bash_trace_details(merged, secondary)
+    return merged
 
 
 def deduplicate_projected_messages(messages: list[Any]) -> list[Any]:
@@ -526,7 +592,7 @@ def deduplicate_projected_messages(messages: list[Any]) -> list[Any]:
     """
 
     result: list[Any] = []
-    activity_indices: dict[tuple[str, ...], int] = {}
+    activity_indices: dict[tuple[str, ...], list[int]] = {}
     reply_indices: dict[str, int] = {}
     for raw in messages_in_chronological_order(messages):
         if not isinstance(raw, Mapping):
@@ -540,14 +606,18 @@ def deduplicate_projected_messages(messages: list[Any]) -> list[Any]:
             continue
         activity_key = _activity_tool_call_key(message)
         if activity_key:
-            existing_index = activity_indices.get(activity_key)
+            matching_indices = activity_indices.setdefault(activity_key, [])
+            existing_index = next(
+                (index for index in matching_indices if not _distinct_bash_activities(result[index], message)),
+                None,
+            )
             if existing_index is not None:
                 result[existing_index] = _merge_equivalent_projection(
                     result[existing_index],
                     message,
                 )
                 continue
-            activity_indices[activity_key] = len(result)
+            matching_indices.append(len(result))
             result.append(message)
             continue
         content = str(message.get("content") or "")
@@ -605,6 +675,7 @@ def merge_chat_messages_chronologically(
         )
         if existing_index >= 0:
             merged = {**messages[existing_index], **item}
+            restore_bash_trace_details(merged, messages[existing_index])
             messages[existing_index] = merged
             causal_floor = max(causal_floor, existing_index + 1)
             continue
@@ -1306,190 +1377,6 @@ def last_exchange_model(
         if model:
             return model
     return ""
-
-
-@dataclass(slots=True)
-class WorkspaceChangesBaseline:
-    snapshot: WorkspaceSnapshot | None
-    workspace_key: str = ""
-    run_id: str = ""
-    overlapping_run_ids: set[str] = field(default_factory=set)
-    released: bool = False
-
-
-class WorkspaceChangeService:
-    """Small run-scoped workspace snapshot service used by Chat routes."""
-
-    def __init__(self, db_path: str, repository: ChatRepository) -> None:
-        self.db_path = str(db_path or "")
-        self.repository = repository
-        self._lock = asyncio.Lock()
-        self._active: dict[str, dict[str, WorkspaceChangesBaseline]] = {}
-        self._indexes: dict[str, WorkspaceSnapshotIndex] = {}
-
-    def _index(self, workspace_key: str) -> WorkspaceSnapshotIndex:
-        index = self._indexes.get(workspace_key)
-        if index is None:
-            index = WorkspaceSnapshotIndex(workspace_key)
-            self._indexes[workspace_key] = index
-        return index
-
-    def prewarm(self, workspace_dir: str | Path | None) -> None:
-        if not workspace_dir:
-            return
-        try:
-            key = str(Path(workspace_dir).expanduser().resolve())
-            asyncio.get_running_loop()
-        except (OSError, RuntimeError):
-            return
-        self._index(key).start()
-
-    async def capture(
-        self,
-        workspace_dir: str | Path | None,
-        run_id: str = "",
-    ) -> WorkspaceChangesBaseline:
-        if not workspace_dir:
-            return WorkspaceChangesBaseline(None)
-        try:
-            key = str(Path(workspace_dir).expanduser().resolve())
-        except OSError:
-            return WorkspaceChangesBaseline(None)
-        normalized_run_id = str(run_id or f"snapshot_{uuid.uuid4().hex}")
-        snapshot = await self._index(key).snapshot()
-        baseline = WorkspaceChangesBaseline(snapshot, key, normalized_run_id)
-        if snapshot is None:
-            return baseline
-        async with self._lock:
-            active = self._active.setdefault(key, {})
-            for other_id, other in active.items():
-                baseline.overlapping_run_ids.add(other_id)
-                other.overlapping_run_ids.add(normalized_run_id)
-            active[normalized_run_id] = baseline
-        return baseline
-
-    async def finalize(
-        self,
-        *,
-        chat_id: str,
-        run_id: str,
-        workspace_dir: str | Path | None,
-        before: WorkspaceChangesBaseline | None,
-        status: str,
-        run: Any = None,
-    ) -> dict[str, Any] | None:
-        if before is None or before.snapshot is None or before.released:
-            return None
-        try:
-            after = await self._index(before.workspace_key).snapshot()
-            overlaps = sorted(before.overlapping_run_ids)
-            change_set = await asyncio.to_thread(
-                build_change_set,
-                chat_id=chat_id,
-                run_id=run_id,
-                before=before.snapshot,
-                after=after,
-                status=status,
-                attribution="overlapping" if overlaps else "exclusive",
-                overlapping_run_ids=overlaps,
-            )
-            if change_set.get("fileCount"):
-                await asyncio.to_thread(save_change_set, self.db_path, change_set)
-                await asyncio.to_thread(self.sync_generated_files, chat_id, change_set)
-            event = {
-                "type": "workspace_changes",
-                "chatId": chat_id,
-                "runId": run_id,
-                "changeSetId": change_set.get("id"),
-                "status": status,
-                "fileCount": int(change_set.get("fileCount") or 0),
-                "additions": int(change_set.get("additions") or 0),
-                "deletions": int(change_set.get("deletions") or 0),
-                "attribution": str(change_set.get("attribution") or "exclusive"),
-                "overlappingRunIds": list(change_set.get("overlappingRunIds") or []),
-            }
-            if run is not None:
-                await run.publish(event)
-            try:
-                from cyrene.observability import debug
-
-                await debug.publish_event(event, session_id=chat_id)
-            except Exception:
-                logger.debug("Workspace event publication failed", exc_info=True)
-            return change_set
-        except Exception:
-            logger.exception("Failed to finalize workspace changes for chat %s", chat_id)
-            return None
-        finally:
-            before.released = True
-            async with self._lock:
-                active = self._active.get(before.workspace_key)
-                if active is not None:
-                    active.pop(before.run_id, None)
-                    if not active:
-                        self._active.pop(before.workspace_key, None)
-
-    def sync_generated_files(
-        self,
-        chat_id: str,
-        change_set: dict[str, Any] | None = None,
-    ) -> None:
-        historical: list[dict[str, Any]] = []
-        current = self.repository.get(chat_id)
-        if current is not None and "generatedFiles" not in current:
-            historical = list(
-                reversed(list_chat_change_sets(self.db_path, chat_id))
-            )
-
-        def update(chat: dict[str, Any]) -> None:
-            existing = {
-                str(item.get("path") or ""): dict(item)
-                for item in chat.get("generatedFiles") or ()
-                if isinstance(item, Mapping) and str(item.get("path") or "")
-            }
-            changes = [*historical]
-            if change_set is not None:
-                changes.append(change_set)
-            order: list[str] = []
-            for item in changes:
-                for change in item.get("files") or ():
-                    if not isinstance(change, Mapping):
-                        continue
-                    path = str(change.get("path") or "").strip().replace("\\", "/")
-                    if not path:
-                        continue
-                    if path in order:
-                        order.remove(path)
-                    order.append(path)
-                    if str(change.get("changeType") or "") == "deleted":
-                        existing.pop(path, None)
-                        continue
-                    name = Path(path).name or path
-                    existing[path] = {
-                        "id": str(change.get("id") or f"workspace_{uuid.uuid4().hex[:12]}"),
-                        "name": name,
-                        "path": path,
-                        "content_type": mimetypes.guess_type(name)[0]
-                        or "application/octet-stream",
-                        "size": int(change.get("afterSize") or 0),
-                        "kind": "file",
-                        "source": "agent",
-                    }
-            ordered = [existing[path] for path in order if path in existing]
-            ordered.extend(
-                item for path, item in existing.items() if path not in order
-            )
-            chat["generatedFiles"] = ordered[:200]
-
-        self.repository.mutate_one(chat_id, update)
-
-    async def shutdown(self) -> None:
-        indexes = list(self._indexes.values())
-        self._indexes.clear()
-        await asyncio.gather(
-            *(index.close() for index in indexes),
-            return_exceptions=True,
-        )
 
 
 _BUTTON_BLOCK_RE = re.compile(

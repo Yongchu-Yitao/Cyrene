@@ -194,6 +194,10 @@ def read_chat_metadata(db_path: str | Path, chat_id: str) -> dict[str, Any] | No
     return _chat_repository().read_chat_metadata(db_path, chat_id)
 
 
+def read_chat_resources(db_path: str | Path, chat_id: str) -> dict[str, Any] | None:
+    return _chat_repository().read_chat_resources(db_path, chat_id)
+
+
 def chat_has_messages(db_path: str | Path, chat_id: str) -> bool:
     return _chat_repository().chat_has_messages(db_path, chat_id)
 

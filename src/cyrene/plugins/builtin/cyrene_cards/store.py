@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 
+from cyrene.platform.database_notifications import notify_database_commit
+
 
 class Store:
     def __init__(self, directory):
@@ -41,5 +43,7 @@ class Store:
                 if write:
                     db.execute("BEGIN IMMEDIATE")
                 yield db
+            if db.total_changes:
+                notify_database_commit(self.path)
         finally:
             db.close()

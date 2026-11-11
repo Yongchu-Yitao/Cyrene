@@ -21,7 +21,7 @@ class FileChangeFeed:
     async def _watch(self) -> None:
         async for _ in awatch(
             *{str(Path(path).parent) for path in self.paths},
-            recursive=False, debounce=20, step=5,
+            recursive=False, debounce=50, step=50,
             watch_filter=lambda _, path: str(Path(path).resolve()) in self.paths,
         ):
             for listener in self._listeners:

@@ -28,6 +28,7 @@ from .contracts import (
     SnapshotRegion,
 )
 from .electron_bridge import electron_desktop_rpc
+from .maintenance import run_cleanup_loop
 from .providers import ProviderManager
 from .store import RemoteDesktopStore, utc_iso
 
@@ -159,6 +160,7 @@ class RemoteDesktopService:
         # Host-side sessions are intentionally in-memory. A process restart
         # closes media and credentials instead of reviving a stale controller.
         self._host_sessions: dict[str, dict[str, Any]] = {}
+        self._host_sessions_changed = asyncio.Event()
         self._forced_disconnect_cooldowns: dict[str, float] = {}
 
     def _peer_transport(self) -> Any | None:
@@ -215,15 +217,7 @@ class RemoteDesktopService:
                     logger.debug("Remote desktop shutdown disconnect failed", exc_info=True)
 
     async def _cleanup_loop(self) -> None:
-        last_file_cleanup = 0.0
-        while True:
-            await asyncio.sleep(0.75)
-            await self._consume_forced_disconnects()
-            now = time.monotonic()
-            if now - last_file_cleanup >= 60:
-                last_file_cleanup = now
-                self._cleanup_snapshot_directory()
-                self._cleanup_clipboard_directory()
+        await run_cleanup_loop(self)
 
     async def _consume_forced_disconnects(self) -> None:
         result = await electron_desktop_rpc(
@@ -1790,6 +1784,7 @@ class RemoteDesktopService:
             return error
         remote_session_id = "rdh_" + uuid4().hex
         self._host_sessions[remote_session_id] = {"provider_id": "", "peer_device_id": str(peer_device_id), "pending": True}
+        self._host_sessions_changed.set()
         try:
             selector = getattr(self.providers, "select_with_descriptor", None)
             if callable(selector):

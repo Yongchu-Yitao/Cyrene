@@ -216,11 +216,33 @@ def _context_chips(state: Mapping[str, Any]) -> list[dict[str, str]]:
     return chips
 
 
+def _export_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep display-only Bash details out of session exports."""
+    item = dict(message)
+    trace = item.get("trace")
+    if not isinstance(trace, list):
+        return item
+    source = item.get("sourceId")
+    reconstructed = bool(source and item.get("id") == f"activity_{source}")
+    exported_trace = []
+    for entry in trace:
+        if isinstance(entry, Mapping) and "Bash" in (entry.get("text"), entry.get("tool")):
+            entry = dict(entry)
+            entry.pop("command", None)
+            entry.pop("exitCode", None)
+            item.pop("sourceId", None)
+            if reconstructed:
+                item.pop("runId", None)
+        exported_trace.append(entry)
+    item["trace"] = exported_trace
+    return item
+
+
 def _merge_activity_messages(
     messages: list[dict[str, Any]],
     state: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    merged = [dict(item) for item in messages if isinstance(item, Mapping)]
+    merged = [_export_message(item) for item in messages if isinstance(item, Mapping)]
     known = {
         str(item.get("id") or item.get("messageId") or "")
         for item in merged
@@ -230,7 +252,7 @@ def _merge_activity_messages(
     for raw in activities if isinstance(activities, list) else ():
         if not isinstance(raw, Mapping):
             continue
-        item = dict(raw)
+        item = _export_message(raw)
         item_id = str(item.get("id") or "")
         if item_id and item_id in known:
             continue
