@@ -12,7 +12,8 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                               'merely print one in chat. If the user requests a specific save '
                               'location, save the file there first, then call this tool, including '
                               'for authorized paths outside the workspace. This tool does not save '
-                              'or move files.',
+                              'or move files. For multiple ready, independent files, emit one call per '
+                              'file together in the same response.',
                'parameters': {'type': 'object',
                               'properties': {'path': {'type': 'string',
                                                       'description': 'Real workspace-relative or '

@@ -34,7 +34,6 @@ def _short_term_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "first_seen": entry.get("first_seen", ""),
         "last_mentioned": entry.get("last_mentioned", ""),
         "mention_count": int(entry.get("mention_count") or 1),
-        "emotional_valence": entry.get("emotional_valence", 0),
     }
     if content_truncated:
         memory["content_truncated"] = True
@@ -55,7 +54,6 @@ def _project_payload(entry: dict[str, Any]) -> dict[str, Any]:
         "first_seen": entry.get("created_at", ""),
         "last_mentioned": entry.get("updated_at", ""),
         "mention_count": int(entry.get("citation_count") or 1),
-        "emotional_valence": entry.get("emotional_valence", 0),
         "source": entry.get("source", ""),
         "confidence": entry.get("confidence", ""),
         "tags": entry.get("tags", []),

@@ -415,6 +415,28 @@ def bash_boundary(
     arguments: dict[str, Any],
     context: PluginContext,
 ) -> dict[str, Any] | None:
+    from .bash_checks import prepare_file_checks
+
+    checks = prepare_file_checks(arguments, context)
+    request = _shell_boundary(arguments, context)
+    workspace = Path(context.workspace).expanduser().resolve() if context.workspace is not None else None
+    # lstat inspects the final directory entry, not a symlink's target.
+    outside = [str(path) for path, _ in checks
+               if workspace is None or not _within(path.parent.resolve() / path.name, workspace)]
+    if not outside:
+        return request
+    if request is None:
+        return {"kind": "read_elevation", "operation": "检查 workspace 之外的文件或目录",
+                "path_hint": ", ".join(outside), "reason": "Explicit file postconditions inspect these exact paths.",
+                "requires_human": False}
+    return {**request, "verification_paths": outside,
+            "reason": str(request.get("reason") or "") + "\nFile checks: " + ", ".join(outside)}
+
+
+def _shell_boundary(
+    arguments: dict[str, Any],
+    context: PluginContext,
+) -> dict[str, Any] | None:
     command = str(arguments.get("command") or "").strip()
     if _dangerous_subshell(command):
         return {

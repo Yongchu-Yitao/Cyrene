@@ -1,4 +1,3 @@
-import { presentHomeSpec } from './home-greeting.mjs';
 import { AssistantHomeLayout, homeDisplayTitle } from './assistant-home-layout.jsx';
 import { CardWeather } from './card-weather.jsx';
 import { WBC_ICONS } from './icons.jsx';
@@ -217,7 +216,7 @@ export function WbcAssistantCard({ cardId, initialCard = null, displayTime = new
   const { t } = useWorkbenchI18n();
   const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard);
   if (!card) return renderCardLoading(error, refresh);
-  const { disabled, delivery, awaitingDelivery, footerActions, isHome, displayCard } = cardPresentation(card, busy, pendingEvent, displayTime);
+  const { disabled, delivery, awaitingDelivery, footerActions, isHome, displayCard } = cardPresentation(card, busy, pendingEvent);
   const renderBlock = block => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
     {block.title && !(block.type === 'action_list' && block.collapsed) && !(isHome && block.type === 'timeline') && <h4>{block.title}</h4>}
     {block.description && <p className="wbc-card-description">{block.description}</p>}
@@ -263,13 +262,13 @@ function renderCardFooter(card, footerActions, disabled, send, local) {
   return card.template !== 'custom' && footerActions.length > 0 && <footer><div>{footerActions.map(action => <button key={action.action_id} type="button" disabled={disabled} onClick={() => send(action.kind, local.current, action)}>{action.label}</button>)}</div></footer>;
 }
 
-function cardPresentation(card, busy, pendingEvent, displayTime) {
+function cardPresentation(card, busy, pendingEvent) {
   const disabled = busy || !!pendingEvent || card.status !== 'active';
   const delivery = card.input_state.submitted?.delivery;
   const awaitingDelivery = delivery?.status === 'pending' || delivery?.status === 'failed';
   const rowActions = new Set(card.spec.blocks.flatMap(block => block.type === 'action_list' ? block.items.flatMap(item => item.action_ids) : []));
   const footerActions = card.spec.actions.filter(action => !rowActions.has(action.action_id));
   const isHome = !!card.spec.home_kind;
-  const displayCard = isHome ? { ...card, spec: presentHomeSpec(card.spec, displayTime) } : card;
+  const displayCard = card;
   return { disabled, delivery, awaitingDelivery, footerActions, isHome, displayCard };
 }

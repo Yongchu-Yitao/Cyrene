@@ -42,7 +42,8 @@ async def test_staging_is_invisible_until_publish_and_conflicts_preserve_foregro
 
 
 @pytest.mark.asyncio
-async def test_silent_runner_has_separate_session_no_foreground_mutation_and_atomic_publish(tmp_path, monkeypatch):
+@pytest.mark.parametrize("deferred", [False, True])
+async def test_silent_runner_has_separate_session_no_foreground_mutation_and_atomic_publish(tmp_path, monkeypatch, deferred):
     from contextlib import nullcontext
     import cyrene.workbench.core_adapter as adapter
     live = CardService(tmp_path / 'live')
@@ -75,11 +76,16 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
         async def shutdown(self, **kwargs): observed['shutdown'] = True
     monkeypatch.setattr(adapter, 'ConversationRuntime', Runtime)
     monkeypatch.setattr('cyrene.workbench.sessions.admission.session_admission', lambda *args: nullcontext())
-    await prepare_home(live, port, 'assistant', json.dumps(['birth', 0]), 'maintain', {'evidence': 'data'})
+    await prepare_home(live, port, 'assistant', json.dumps(['birth', 0]), 'maintain', {'evidence': 'data'},
+                       publish_at=4102444800 if deferred else None)
     assert observed['shutdown']
     assert not observed['config'].data_directory.parent.exists()
     assert chat == before
-    assert (await live.command('assistant', None, 'card.get', {'card_id': card['card_id']}))['spec']['title'] == 'Ready'
+    assert (await live.command('assistant', None, 'card.get', {'card_id': card['card_id']}))['spec']['title'] == ('Before' if deferred else 'Ready')
+    if deferred:
+        with live.store.connect() as db:
+            payload = json.loads(db.execute('SELECT document FROM home_prepared').fetchone()[0])
+        assert payload['prepared'][card['card_id']]['spec']['title'] == 'Ready'
 
 
 @pytest.mark.asyncio

@@ -33,10 +33,6 @@ def infer_risk_level(
         else "none"
     )
 
-CORRECTION_TERMS = (
-    "不对", "不行", "错", "重来", "改一下", "重新", "fix", "wrong", "retry", "instead",
-)
-
 SKILL_TYPE_ORDER = {
     "draft": 0,
     "workflow": 1,
@@ -452,7 +448,7 @@ class LifecycleService:
         run_id = self.ports.new_id('skill_run')
         turn_id = self.ports.current_turn_id.get()
         async with self.ports.connect() as conn:
-            await conn.execute("\n            INSERT INTO learned_skill_runs\n            (run_id, skill_id, version, turn_id, match_score, parameter_status, execution_status, failure_reason,\n             fallback_used, user_feedback, dry_run, consistency_score, permission_snapshot, created_at)\n            VALUES (?, ?, ?, ?, 1.0, 'manual', ?, '', 0, '', 0, ?, ?, ?)\n            ", (run_id, skill_id, version, turn_id or '', execution_status, round(consistency_score, 4), _get_perm_mode(), self.ports.now_iso()))
+            await conn.execute("\n            INSERT INTO learned_skill_runs\n            (run_id, skill_id, version, turn_id, match_score, parameter_status, execution_status, failure_reason,\n             fallback_used, dry_run, consistency_score, permission_snapshot, created_at)\n            VALUES (?, ?, ?, ?, 1.0, 'manual', ?, '', 0, 0, ?, ?, ?)\n            ", (run_id, skill_id, version, turn_id or '', execution_status, round(consistency_score, 4), _get_perm_mode(), self.ports.now_iso()))
             await conn.commit()
         await self._update_skill_run_stats(skill_id, execution_status=execution_status, consistency_score=consistency_score)
 

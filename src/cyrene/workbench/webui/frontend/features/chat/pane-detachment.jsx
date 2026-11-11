@@ -96,6 +96,12 @@ function wbcRestoreReturnedDetachedPane(context, info) {
   var cardId = String(returned.cardId || "");
   var ownerChatId = String(returned.layoutOwnerChatId || descriptor && descriptor.ownerChatId || "");
   if (!descriptor || !descriptor.kind || !cardId) return;
+  // Every mounted workspace receives this IPC event, including hidden pages.
+  // Restore only into the originating project/assistant scope.
+  var personalAssistant = descriptor.kind === "chat" && descriptor.payload === "assistant_global";
+  var sourceProjectId = personalAssistant || ownerChatId === "assistant_global"
+    ? "__personal_assistant__" : String(descriptor.project && descriptor.project.id || "");
+  if (!sourceProjectId || sourceProjectId !== String(context.projectId || "")) return;
   var restoredCard = wbcPaneCard(descriptor.kind, descriptor.payload, {
     id: cardId,
     ownerChatId: descriptor.ownerChatId || ownerChatId,

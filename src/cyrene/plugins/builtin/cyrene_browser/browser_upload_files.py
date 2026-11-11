@@ -379,7 +379,10 @@ async def _tool_browser_upload_files(
             "requires_human": True,
             "single_use": True,
             "scope_hint": "本地数据外发的 ",
-            "options": ["允许这次上传", "拒绝"],
+            "options": [
+                {"id": "allow_once", "label": "允许这次上传", "decision": "allow", "scope": "once"},
+                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+            ],
             "target": {
                 "origin": str(target.get("origin") or ""),
                 "top_url": str(target.get("topUrl") or ""),

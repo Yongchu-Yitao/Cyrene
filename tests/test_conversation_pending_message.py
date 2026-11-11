@@ -82,7 +82,7 @@ async def test_new_message_denies_pending_write_and_reaches_model(tmp_path, monk
                     if isinstance(node.get("value"), dict) and node["value"].get("pending_question")]
         assert any(p["id"] == question["id"] and p["answer"] == "deny" for p in answered)
         with pytest.raises((RuntimeError, ValueError)):
-            session.answer(question["id"], "同意一次")
+            session.answer(question["id"], "allow_once")
         assert not outside.exists()
     finally:
         session.close()

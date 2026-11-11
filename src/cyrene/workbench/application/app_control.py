@@ -451,7 +451,10 @@ async def authorize(
                         if spec.risk == "R2"
                         else "破坏性/不可逆的 "
                     ),
-                    "options": ["允许这一次", "拒绝"],
+                    "options": [
+                        {"id": "allow_once", "label": "允许这一次", "decision": "allow", "scope": "once"},
+                        {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+                    ],
                 },
             )
             if permission_result is not None:

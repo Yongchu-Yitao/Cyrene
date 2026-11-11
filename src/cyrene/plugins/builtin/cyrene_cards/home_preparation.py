@@ -2,12 +2,14 @@
 import asyncio
 from copy import deepcopy
 import json
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from .schemas import CardError
 from .service import CardService
+from .home_publication import documents, ensure_pending_table, publish_documents
 
 HOME_CONTEXT_PROJECTION = {
     "sources": ["cyrene_system_prompt"],
@@ -70,18 +72,19 @@ class HomeDraft:
             args["scope"] = "home"
         return await self.staged.command(owner, None, operation, args, **kwargs)
 
-    def publish(self):
+    def publish(self, *, publish_at=None, version=None):
         prepared = home_documents(self.staged, self.owner)
         with self.live.store.connect(write=True) as db:
-            current = {row["id"]: json.loads(row["document"]) for row in db.execute(
-                "SELECT id,document FROM cards WHERE owner=? AND status='active' "
-                "AND json_extract(document,'$.spec.home_kind') IS NOT NULL", (self.owner,))}
-            # A foreground update or user submission wins. Retry from its new snapshot.
-            if current != self.baseline:
+            ensure_pending_table(db)
+            if documents(db, self.owner) != self.baseline:
                 raise CardError("revision_conflict", "Home changed during preparation; retry with current data")
-            for card_id, card in prepared.items():
-                if card != self.baseline.get(card_id):
-                    self.live._save(db, card, version=True)
+            if publish_at is not None and publish_at > time.time():
+                payload = {"version": version, "baseline": self.baseline, "prepared": prepared}
+                db.execute("INSERT OR REPLACE INTO home_prepared VALUES (?,?,?)",
+                           (self.owner, publish_at, json.dumps(payload)))
+            else:
+                publish_documents(self.live, db, self.owner, self.baseline, prepared)
+                db.execute("DELETE FROM home_prepared WHERE owner=?", (self.owner,))
 
 
 def source_snapshot(chat, siblings, contexts):
@@ -97,7 +100,7 @@ def source_snapshot(chat, siblings, contexts):
                       and item.get("projectId") == chat.get("projectId")]}
 
 
-async def prepare_home(service, port, owner, version, prompt, snapshot):
+async def prepare_home(service, port, owner, version, prompt, snapshot, *, publish_at=None):
     from cyrene.config import WORKSPACE_DIR
     from cyrene.workbench.core_adapter import ConversationConfig, ConversationRuntime
     from cyrene.workbench.sessions.admission import session_admission
@@ -139,7 +142,7 @@ async def prepare_home(service, port, owner, version, prompt, snapshot):
                     current_version = json.dumps([latest.get("createdAt", ""), latest.get("messageGeneration", 0)]) if latest else None
                     if current_version != version:
                         raise ValueError("Assistant was cleared during home preparation")
-                    draft.publish()
+                    draft.publish(publish_at=publish_at, version=version)
             await asyncio.to_thread(publish)
         finally:
             await runtime.shutdown(grace_seconds=0)

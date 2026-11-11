@@ -1,10 +1,11 @@
 """Stable evidence and weather expiry for saved home sections."""
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 WEATHER_TTL = 60 * 60
 RETRY_SECONDS = 120
+DISPLAY_HOURS = (8, 12, 18, 22)
 
 
 def digest(value):
@@ -46,7 +47,18 @@ def weather_expired(cards, now):
 
 
 def display_slot(now):
-    return f"{now.date().isoformat()}:{max(hour for hour in (0, 12, 18, 22) if hour <= now.hour):02}"
+    if now.hour < DISPLAY_HOURS[0]:
+        return None
+    return f"{now.date().isoformat()}:{max(hour for hour in DISPLAY_HOURS if hour <= now.hour):02}"
+
+
+def preparation_target(now):
+    """Latest display period due for preparation, including missed periods on startup."""
+    ahead = now + timedelta(minutes=30)
+    if ahead.hour < DISPLAY_HOURS[0]:
+        return (ahead - timedelta(days=1)).replace(hour=DISPLAY_HOURS[-1], minute=0, second=0, microsecond=0)
+    hour = max(hour for hour in DISPLAY_HOURS if hour <= ahead.hour)
+    return ahead.replace(hour=hour, minute=0, second=0, microsecond=0)
 
 
 def task_documents(port, owner):

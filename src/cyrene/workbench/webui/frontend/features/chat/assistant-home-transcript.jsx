@@ -4,6 +4,8 @@ import { requestCard } from './assistant-cards.jsx';
 import { wbcProjectTranscript } from './runtime-timeline.jsx';
 import { captureHomePosition } from './home-timeline.mjs';
 
+const homeClientStartedAt = Date.now() / 1000;
+
 // Only a claimed daily/time-slot display moves the home. Data updates never move it.
 export function AssistantHomeTranscript({ Transcript, messages, runtime, sessionId, active, onOpenFile }) {
   const [position, setPosition] = useState(null);
@@ -21,7 +23,7 @@ export function AssistantHomeTranscript({ Transcript, messages, runtime, session
       pending = true;
       try {
         const result = await requestCard('/api/assistant/cards/home/display', {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: clientId, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}),
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: clientId, started_at: homeClientStartedAt, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}),
         });
         if (!cancelled && result.slot && result.slot !== shownSlot.current) {
           shownSlot.current = result.slot;

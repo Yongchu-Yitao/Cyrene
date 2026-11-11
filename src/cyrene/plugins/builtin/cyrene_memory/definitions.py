@@ -24,7 +24,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                                              'type': {'type': 'string',
                                                       'description': 'Optional memory type filter, '
                                                                      'such as fact, preference, '
-                                                                     'event, or emotion.'},
+                                                                     'or event.'},
                                              'status': {'type': 'string',
                                                         'enum': ['active', 'retired', 'all'],
                                                         'description': 'Lifecycle status to '
@@ -111,7 +111,7 @@ _TOOL_DEFS: tuple[dict[str, Any], ...] = ({'type': 'function',
                                              'type': {'type': 'string',
                                                       'description': 'Optional memory type filter, '
                                                                      'such as fact, preference, '
-                                                                     'event, or emotion.'},
+                                                                     'or event.'},
                                              'limit': {'type': 'integer',
                                                        'description': 'Maximum number of recent '
                                                                       'memories to return (1-20, '

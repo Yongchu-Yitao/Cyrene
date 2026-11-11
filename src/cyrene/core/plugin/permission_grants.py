@@ -87,15 +87,22 @@ class PermissionGrants:
         """Grant only an offered affirmative choice, under the state lock."""
         permission = pending["permission"]
         fingerprint = str(permission.get("fingerprint") or "").strip()
-        labels = {
-            str(item.get("label") or "").strip()
-            for item in pending.get("options") or () if isinstance(item, Mapping)
-        }
-        negative = answer.strip().lower() in {"拒绝", "否", "不允许", "no", "n", "deny", "cancel"}
-        if not fingerprint or answer not in labels or negative:
+        choices = [
+            item for item in pending.get("options") or ()
+            if isinstance(item, Mapping) and item.get("id") == answer
+        ]
+        if not fingerprint or len(choices) != 1:
+            return
+        choice = choices[0]
+        if choice.get("decision") != "allow":
+            return
+        scope = choice.get("scope")
+        if scope not in {"once", "session"}:
+            return
+        if scope == "session" and permission.get("single_use"):
             return
         with self.lock:
-            if "本次会话" in answer or "始终" in answer:
+            if scope == "session":
                 grant = self.session_fingerprint(str(permission.get("tool_name") or ""), permission) or fingerprint
                 self.session.add(grant)
                 self.persist(grant, store, tree)
@@ -128,21 +135,25 @@ def permission_question(
     reason = str(request.get("reason") or "").strip()
     detail = f"\n📂 目标：{path_hint}" if path_hint else ""
     why = f"\n💡 原因：{reason}" if reason else ""
+    options = [
+        {"id": "allow_once", "label": "允许这次", "decision": "allow", "scope": "once"},
+        {"id": "allow_session", "label": "本次会话内总是允许", "decision": "allow", "scope": "session"},
+        {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+    ]
     authored_options = request.get("options")
-    if requires_human:
-        options = (
-            [str(item) for item in authored_options if str(item).strip()]
-            if isinstance(authored_options, list) and authored_options
-            else ["允许这次", "拒绝"]
-            if bool(request.get("single_use"))
-            else ["允许这次", "本次会话内总是允许", "拒绝"]
-        )
-    else:
-        options = (
-            [str(item) for item in authored_options if str(item).strip()]
-            if isinstance(authored_options, list) and authored_options
-            else ["在本次会话同意", "同意一次", "拒绝"]
-        )
+    if isinstance(authored_options, list) and authored_options:
+        # Custom labels are display-only. Old untyped choices cannot grant access.
+        options = [
+            dict(item) for item in authored_options
+            if isinstance(item, Mapping)
+            and item.get("id")
+            and ((item.get("decision") == "allow" and item.get("scope") in {"once", "session"})
+                 or (item.get("decision") == "deny" and item.get("scope") == "none"))
+        ]
+        if not options:
+            options = [{"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"}]
+    if request.get("single_use"):
+        options = [item for item in options if item["scope"] != "session"]
     scope_hint = str(request.get("scope_hint") or "").strip()
     session_hint = (
         "\n选择本次会话允许后，同一工具的同类操作无需再次确认；远程授权仅适用于同一设备和项目。"

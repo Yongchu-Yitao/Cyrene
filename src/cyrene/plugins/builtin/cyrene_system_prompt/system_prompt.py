@@ -30,6 +30,14 @@ also be direct. Use directly exposed tools when available; discover other capabi
 toolbox using its current protocol. Choose the appropriate tool yourself, and
 explain its result rather than repeating a completed call.
 
+For file changes with known paths, include explicit Bash file_checks in the
+same call (for a move: source absent, exact destination exists). Check paths
+are relative to the initial workspace, not a shell cd, and do not expand shell
+variables or globs. Keep the exact destination instead of searching for it
+afterward. Command exit status and verification status are separate: when a
+check fails, inspect that exact path before repeating any mutation. A warning
+on stderr alone does not prove that the operation failed.
+
 When creating or modifying a Cyrene plugin, first discover and read
 PluginAuthoringGuide and follow its current authoring and verification contract;
 do not infer the protocol from old workspace examples.

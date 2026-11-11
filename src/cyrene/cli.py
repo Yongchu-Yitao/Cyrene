@@ -627,20 +627,17 @@ def cmd_memory_short_term(args: argparse.Namespace) -> None:
         f"{_t('Type', '类型'):<12} "
         f"{_t('Content', '内容'):<48} "
         f"{_t('Count', '次数'):<6} "
-        f"{_t('Valence', '情感值'):<8} "
         f"{_t('First', '首次'):<10} "
         f"{_t('Last', '最近'):<10}"
     )
-    print(f"{'-'*12} {'-'*48} {'-'*6} {'-'*8} {'-'*10} {'-'*10}")
+    print(f"{'-'*12} {'-'*48} {'-'*6} {'-'*10} {'-'*10}")
     for e in entries:
         etype = e.get("type", "?")
         content = (e.get("content", "") or "")[:48]
         count = e.get("mention_count", 0)
-        valence = e.get("emotional_valence", 0)
-        valence_str = f"+{valence}" if valence > 0 else str(valence)
         first = (e.get("first_seen") or "—")
         last = (e.get("last_mentioned") or "—")
-        print(f"{etype:<12} {content:<48} {count:<6} {valence_str:<8} {first:<10} {last:<10}")
+        print(f"{etype:<12} {content:<48} {count:<6} {first:<10} {last:<10}")
 
 
 def cmd_memory_context(args: argparse.Namespace) -> None:

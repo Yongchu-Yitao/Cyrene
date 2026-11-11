@@ -118,7 +118,7 @@ def _ensure_day_row_sync(db: sqlite3.Connection, day: str) -> None:
     db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
 
 
-def record_memory_touch_sync(db_path: str, *, day: str | None = None, emotional_valence: float = 0, is_new: bool = False) -> None:
+def record_memory_touch_sync(db_path: str, *, day: str | None = None, is_new: bool = False) -> None:
     target_day = _normalize_day(day=day)
     with sqlite3.connect(db_path) as db:
         _ensure_day_row_sync(db, target_day)
@@ -126,12 +126,10 @@ def record_memory_touch_sync(db_path: str, *, day: str | None = None, emotional_
             """
             UPDATE daily_stats
             SET memory_mentions = memory_mentions + 1,
-                memory_new = memory_new + ?,
-                emotion_sum = emotion_sum + ?,
-                emotion_count = emotion_count + 1
+                memory_new = memory_new + ?
             WHERE day = ?
             """,
-            (1 if is_new else 0, float(emotional_valence or 0), target_day),
+            (1 if is_new else 0, target_day),
         )
         db.commit()
 

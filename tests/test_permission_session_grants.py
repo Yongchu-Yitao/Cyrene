@@ -57,10 +57,10 @@ def test_sequential_deletions_respect_once_or_session_and_restore(tmp_path, answ
             with patch.object(session, "_permission_fingerprint", side_effect=AssertionError(
                 "Session-approved deletions must not serialize or hash the full invocation"
             )):
-                session.answer(pending["id"], answer)
+                session.answer(pending["id"], {"允许这次": "allow_once", "本次会话内总是允许": "allow_session", "拒绝": "deny"}[answer])
                 asyncio.run(session.drain())
         else:
-            session.answer(pending["id"], answer)
+            session.answer(pending["id"], {"允许这次": "allow_once", "本次会话内总是允许": "allow_session", "拒绝": "deny"}[answer])
             asyncio.run(session.drain())
         if answer == "拒绝":
             assert (workspace / "first.txt").exists()
@@ -299,3 +299,43 @@ def test_task_denial_preserves_auto_review_and_parent_confirmation(tmp_path, tas
         assert result.action == expected
     finally:
         session.close()
+
+
+@pytest.mark.parametrize('answer', ['不同意', '始终拒绝', 'allow_once', 'deny'])
+def test_untyped_legacy_options_cannot_grant(answer):
+    grants = PermissionGrants(threading.RLock())
+    grants.record_answer({'permission': {'fingerprint': 'call'},
+                          'options': [{'id': 'allow_once', 'label': answer}]}, answer, None, None)
+    assert not grants.consume('call')
+
+
+def test_explicit_decision_survives_codec_and_does_not_infer_scope_from_label():
+    from cyrene.core.plugin.result_codec import question_options
+    grants = PermissionGrants(threading.RLock())
+    pending = {'permission': {'fingerprint': 'call'}, 'options': question_options([
+        {'id': 'once', 'label': '本次会话 始终', 'decision': 'allow', 'scope': 'once'},
+        {'id': 'deny', 'label': '不同意', 'decision': 'deny', 'scope': 'none'},
+    ])}
+    for answer in ('不同意', 'deny', '本次会话 始终', 'unknown'):
+        grants.record_answer(pending, answer, None, None)
+        assert not grants.consume('call')
+    grants.record_answer(pending, 'once', None, None)
+    assert grants.consume('call')
+    assert not grants.consume('call')
+    assert not grants.session
+
+
+def test_single_use_rejects_session_choice_even_if_stored_pending_is_malformed():
+    grants = PermissionGrants(threading.RLock())
+    grants.record_answer({'permission': {'fingerprint': 'call', 'single_use': True},
+                          'options': [{'id': 'session', 'label': 'approve', 'decision': 'allow', 'scope': 'session'}]},
+                         'session', None, None)
+    assert not grants.consume('call')
+
+
+def test_question_builder_rejects_untyped_custom_options():
+    from cyrene.core.plugin.permission_grants import permission_question
+    question = permission_question({'options': ['不同意']}, tool_name='Bash', operation='delete',
+        kind='destructive_confirmation', requires_human=True, fingerprint='call',
+        session_fingerprint='', round_id='', client_request_id='')
+    assert question['options'] == [{'id': 'deny', 'label': '拒绝', 'decision': 'deny', 'scope': 'none'}]

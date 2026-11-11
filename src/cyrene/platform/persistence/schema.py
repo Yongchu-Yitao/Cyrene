@@ -68,8 +68,6 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     archive_entries INTEGER NOT NULL DEFAULT 0,
     memory_new INTEGER NOT NULL DEFAULT 0,
     memory_mentions INTEGER NOT NULL DEFAULT 0,
-    emotion_sum REAL NOT NULL DEFAULT 0,
-    emotion_count INTEGER NOT NULL DEFAULT 0,
     activity_00_04 INTEGER NOT NULL DEFAULT 0,
     activity_04_08 INTEGER NOT NULL DEFAULT 0,
     activity_08_12 INTEGER NOT NULL DEFAULT 0,

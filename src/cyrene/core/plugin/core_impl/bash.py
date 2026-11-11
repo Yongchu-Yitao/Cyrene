@@ -13,6 +13,7 @@ from cyrene.platform.subprocess_environment import external_process_environment
 from ..context import plugin_localized
 from ..plugin import Plugin, PluginContext, PluginExecutionError, PluginFailure
 from .permission_boundaries import bash_boundary
+from .bash_checks import FILE_CHECKS_SCHEMA, inspect_file_checks, prepare_file_checks
 
 
 async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
@@ -40,6 +41,7 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
     timeout_ms = int(arguments.get("timeout_ms", 120_000))
     if timeout_ms <= 0:
         raise ValueError("timeout_ms must be greater than zero")
+    file_checks = prepare_file_checks(arguments, context)
     workspace = (
         Path(context.workspace).expanduser().resolve()
         if context.workspace is not None
@@ -71,6 +73,10 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
         )
     except asyncio.TimeoutError:
         await _kill_process_tree(process)
+        details = {"timeout_ms": timeout_ms}
+        if file_checks:
+            details.update(await asyncio.to_thread(inspect_file_checks, file_checks))
+            details.update(command_status="timed_out", recovery_action="inspect_state_before_retry")
         seconds = timeout_ms / 1000
         message = plugin_localized(
             context,
@@ -85,28 +91,38 @@ async def bash(arguments: dict[str, Any], context: PluginContext) -> dict[str, A
             retry_scope="different_arguments",
             # A command deadline does not make the shell executor unavailable.
             circuit_scope="none",
-            details={"timeout_ms": timeout_ms},
+            details=details,
         )) from None
     except asyncio.CancelledError:
         await asyncio.shield(_kill_process_tree(process))
         raise
-    return {
+    result = {
         "exit_code": int(process.returncode or 0),
         "stdout": stdout.decode("utf-8", errors="replace"),
         "stderr": stderr.decode("utf-8", errors="replace"),
     }
+    if file_checks:
+        result.update(await asyncio.to_thread(inspect_file_checks, file_checks))
+        result["command_status"] = "completed" if process.returncode == 0 else "failed"
+        if process.returncode != 0 or result["verification_status"] != "passed":
+            result["recovery_action"] = "inspect_state_before_retry"
+    return result
 
 
 BASH_PLUGIN = Plugin(
     name="Bash",
     description=(
         "Run a shell command in the workspace. Shell file-printing output does "
-        "not satisfy a request to open or show a named file in the workspace UI."
+        "not satisfy a request to open or show a named file in the workspace UI. "
+        "For moves or other file changes with known paths, include file_checks "
+        "to verify source/destination in this call. Command and verification "
+        "statuses are separate; neither stderr nor a failed check proves a mutation did not occur."
     ),
     input_schema={
         "type": "object",
         "properties": {
             "command": {"type": "string"},
+            "file_checks": FILE_CHECKS_SCHEMA,
             "timeout_ms": {"type": "integer", "minimum": 1, "description": "Command timeout in milliseconds; defaults to 120000. Longer explicit timeouts are honored."},
         },
         "required": ["command"],

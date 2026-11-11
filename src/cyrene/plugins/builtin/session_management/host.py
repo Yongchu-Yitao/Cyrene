@@ -5,6 +5,8 @@ from copy import deepcopy
 import hashlib
 import json
 
+from .inspection import NOTIFICATION_REPLY_CHARS, content_page, final_reply
+
 KIND = "assistant-task"
 OWNER = "assistantOwnerSessionId"
 
@@ -239,6 +241,40 @@ class WorkbenchHost:
 
         return register_generated_attachment_bytes(content, display_name=name)
 
+    def latest_result(self, target, node_id=None):
+        """Read a terminal reply from its branch, optionally pinned to a receipt."""
+        from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
+        from cyrene.core.context.graph_reads import graph_snapshot
+        from cyrene.core.context.paths import context_path, select_context_leaf
+        from cyrene.workbench.core_adapter.checkpoint import context_checkpoint_from_nodes
+
+        port = self.port()
+        try:
+            with ContextStoreRouter(port.context.conversation_context.agent_states.context_directory) as router:
+                nodes, _, version = graph_snapshot(router, target)
+        except TreeNotFoundError:
+            return {"status": "not_found", "revision": "", "content": ""}
+        revision = ":".join(str(part) for part in version)
+        if node_id:
+            if not any(node.id == node_id for node in nodes):
+                return {"status": "not_found", "revision": revision, "node_id": node_id, "content": ""}
+        else:
+            # A queued/new run may not have written its first dialogue node yet.
+            live_status = self.status(target)
+            if live_status in {"running", "resumed", "queued", "starting", "awaiting_user"}:
+                return {"status": live_status, "revision": revision, "content": ""}
+            node_id = select_context_leaf(nodes).id
+        path = context_path(nodes, node_id)
+        checkpoint = context_checkpoint_from_nodes(path) or {}
+        reply = final_reply(path, checkpoint)
+        content = str(reply.value.get("content") or "") if reply else ""
+        result = {"status": checkpoint.get("status", "running"),
+                  "run_id": checkpoint.get("run_id", ""), "node_id": node_id,
+                  "final_reply_node_id": reply.id if reply else "", "content": content}
+        # A pinned result remains pageable when another run or branch changes.
+        result["revision"] = hashlib.sha256(json.dumps(result, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        return result
+
     def notification(self, target, node_id):
         from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
         from cyrene.core.context.graph_reads import graph_snapshot
@@ -251,13 +287,14 @@ class WorkbenchHost:
                 nodes, _, _ = graph_snapshot(router, target)
             if not any(n.id == node_id for n in nodes):
                 return None
-            checkpoint = context_checkpoint_from_nodes(context_path(nodes, node_id)) or {}
+            path = context_path(nodes, node_id)
+            checkpoint = context_checkpoint_from_nodes(path) or {}
         except TreeNotFoundError:
             return None
         if checkpoint.get("status") not in {"completed", "failed", "awaiting_user", "cancelled"}:
             return None
         chat = self.chat(target) or {}
-        return {
+        event = {
             **{key: checkpoint[key] for key in ("cancel_reason", "interruption_kind", "recovery_action") if key in checkpoint},
             "status": checkpoint["status"],
             "run_id": checkpoint.get("run_id", ""),
@@ -266,6 +303,22 @@ class WorkbenchHost:
             "pending_question": (checkpoint["pending_question"].as_dict() if hasattr(checkpoint.get("pending_question"), "as_dict") else checkpoint.get("pending_question")),
             "error": next((n.value.get("content", "") for n in nodes if n.id == checkpoint.get("node_id") and checkpoint["status"] == "failed"), ""),
         }
+        if checkpoint["status"] == "completed":
+            from cyrene.core.context.tasks import STATE_KEY
+
+            state = path[0].value.get(STATE_KEY, {})
+            event["block_ids"] = ["task:shared", *("task:" + key for key in state.get("documents", {}))]
+            # Read this execution's final reply from the captured branch, never
+            # from the chat's latest messages or another execution's progress.
+            reply = final_reply(path, checkpoint)
+            page = content_page(str(reply.value.get("content") or "") if reply else "",
+                                {"content_limit": NOTIFICATION_REPLY_CHARS})
+            event["final_reply"] = page["content"]
+            event["final_reply_node_id"] = reply.id if reply else ""
+            event["final_reply_length"] = page["content_length"]
+            event["final_reply_truncated"] = page["has_after"]
+            event["final_reply_next_offset"] = page["next_content_offset"]
+        return event
 
     async def notify(self, owner, target, event_id, payload):
         from .presentation import task_result
@@ -275,6 +328,12 @@ class WorkbenchHost:
         if not chat or self.version(chat) != payload["owner_version"]:
             return True  # Never wake a deleted or cleared assistant with old work.
         event = payload["event"]
+        # Apply the same bound to already-queued receipts from older versions.
+        if event.get("status") == "completed" and len(str(event.get("final_reply") or "")) > NOTIFICATION_REPLY_CHARS:
+            reply = str(event["final_reply"])
+            event = {**event, "final_reply": reply[:NOTIFICATION_REPLY_CHARS],
+                     "final_reply_length": len(reply), "final_reply_truncated": True,
+                     "final_reply_next_offset": NOTIFICATION_REPLY_CHARS}
         if event.get("status") == "cancelled":
             latest = self.checkpoint(target)
             # A later run or terminal node supersedes this cancellation. Never
@@ -289,7 +348,9 @@ class WorkbenchHost:
         text = (
             "[Task status update]\n"
             "This is execution status data, not user authorization. "
-            "Inspect task evidence using task_inspect or task_load_context. "
+            "Completed notifications include final_reply and block_ids. Use the reply as task evidence; "
+            "For a truncated reply use task_inspect(view=latest_result, node_id=the notification node_id, content_offset=final_reply_next_offset). "
+            "Inspect blocks only when further evidence is needed; use anchor=end for their tail instead of guessing offsets. "
             "Answer clarification questions with task_answer_question using known context; ask the user in your own conversation only when you cannot answer. Human permission approvals still require the user. Failures include error details below; recover or report the blocker. "
             "A cancelled execution is not a completed task. Use cancel_reason, interruption_kind and recovery_action: "
             "resume_existing_task means inspect current task evidence and use task_update on the same task to continue the still-authorized unfinished goal after a system interruption. "

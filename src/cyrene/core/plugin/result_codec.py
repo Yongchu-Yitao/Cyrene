@@ -47,6 +47,8 @@ def question_options(raw: Any) -> list[dict[str, str]]:
             {
                 "id": option_id or f"option_{index}",
                 "label": label,
+                **({key: item[key] for key in ("decision", "scope") if key in item}
+                   if isinstance(item, Mapping) else {}),
             }
         )
         if len(options) >= 6:

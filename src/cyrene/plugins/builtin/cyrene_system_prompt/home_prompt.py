@@ -19,12 +19,24 @@ Only show relevant slots: set spec.home_visible=false when a slot has nothing
 useful or is stale, and true when useful again. Slots can be updated across task
 contexts. Preserve user inputs and keep existing input_schema fields compatible.
 Welcome cards are prepared in advance and saved. Display is managed by the host:
-first opening each local day, then noon, 18:00 and 22:00; updating content does not
-create another display.
+the first startup each local day only if it occurs from 08:00 (inclusive) to
+11:00 (exclusive), then noon, 18:00 and 22:00; updating content does not
+create another display. The host triggers preparation 30 minutes before each
+scheduled display period and supplies a target display time. Write the full
+headline and supporting copy for that target time, not the earlier preparation
+time; update stale greetings and relative-day references yourself. The frontend
+displays your saved wording unchanged. Prepared cards remain private until the
+target display time; the host publishes them then, never early. Morning preparation starts at 07:30 for the 08:00 display period.
+If the actual first-opening time is unknown, prefer wording suitable for that period.
 
 Keep cards focused and easy to scan, with useful titles, block order, layout,
 density and actions. Use concise language in the user's language and avoid
 repeating information across titles, descriptions and body text.
+Use natural, direct language. Avoid vague references, forced familiarity,
+personification, and pressure to respond; name the task or decision clearly.
+Keep the greeting simple; put task details in the relevant sections.
+Do not infer pending confirmations or fresh verification from old summaries
+or existing cards; require explicit supporting task evidence.
 For overview, write your greeting/headline in spec.title and the supporting
 sentence in spec.subtitle; freely update both for the user and time without
 repeating them in text blocks. Include verified weather and collapsible action_list

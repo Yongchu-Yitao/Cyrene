@@ -754,3 +754,65 @@ async def test_assistant_send_file_delivers_owned_task_output(tmp_path, monkeypa
             await send_file.handler({'path': str(tmp_path / 'unrelated.txt')}, context)
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,content', [
+    ('completed', '已完成。\n产物：output/result.stl'),
+    ('completed', ''),
+    ('failed', '执行失败'),
+    ('cancelled', '已取消'),
+])
+async def test_completion_notification_includes_blocks_and_exact_run_reply(tmp_path, status, content):
+    import json
+    from test_task_contexts import make_session
+
+    session = make_session(tmp_path)
+    sent = []
+
+    async def dispatch(owner, text, **kwargs):
+        sent.append((owner, text, kwargs))
+
+    chat = {'createdAt': 'created', 'messageGeneration': 0, 'title': 'Task'}
+    host = WorkbenchHost(lambda: SimpleNamespace(
+        context=SimpleNamespace(conversation_context=SimpleNamespace(
+            agent_states=SimpleNamespace(context_directory=tmp_path / 'data' / 'context'))),
+        service=SimpleNamespace(repository=SimpleNamespace(get=lambda _: chat)),
+        dispatch_agent_message=dispatch,
+    ))
+    host.status = lambda _: 'idle'
+    try:
+        active = session.task_contexts.ensure('task')
+        prior = session.store.mount(session.tree.id, session.tree.root_id, {
+            'role': 'assistant', 'run_id': 'prior', 'content': 'OLD_REPLY',
+            'task_context_id': active, 'answer_complete': True,
+        })
+        terminal = session.store.mount(session.tree.id, prior.id, {
+            'role': 'assistant', 'run_id': 'requested', 'content': content,
+            'task_context_id': active, 'session_end_complete': status == 'completed',
+            'error': status == 'failed', 'cancelled': status == 'cancelled',
+        })
+        session.store.mount(session.tree.id, terminal.id, {
+            'role': 'assistant', 'run_id': 'later', 'content': 'LATER_REPLY',
+            'task_context_id': active, 'answer_complete': True,
+        })
+        event = host.notification(session.tree.id, terminal.id)
+        assert event['status'] == status
+        if status != 'completed':
+            assert 'final_reply' not in event and 'block_ids' not in event
+            return
+        assert event['block_ids'] == ['task:shared', 'task:' + active]
+        assert event['final_reply'] == content
+        assert event['final_reply_node_id'] == terminal.id
+        assert set(event['block_ids']) == {b['block_id'] for b in host.blocks(session.tree.id)['blocks']}
+        assert await host.notify('owner', session.tree.id, 'event', {
+            'event': {**event, 'session_id': session.tree.id},
+            'owner_version': host.version(chat),
+        })
+        delivered = json.loads(sent[0][1].split('\n')[-1])
+        assert delivered['task_id'] == session.tree.id
+        assert delivered['final_reply'] == content
+        assert delivered['block_ids'] == event['block_ids']
+        assert 'OLD_REPLY' not in sent[0][1] and 'LATER_REPLY' not in sent[0][1]
+    finally:
+        session.close()

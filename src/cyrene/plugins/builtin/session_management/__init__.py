@@ -165,9 +165,13 @@ plugin_pack = PluginPack(
         _tool("session_list", "List your tasks, their progress, pending questions and failures.", {}, read_only=True),
         _tool(
             "session_context_blocks",
-            "Inspect task evidence; pass block_ids from the directory to read paginated contents without loading them.",
+            "Inspect task evidence without loading it. Use view=latest_result for the final reply without a directory lookup; pin node_id from a notification or result when paging. For execution records select block_ids, and use anchor=end to read the tail without guessing offsets. Empty blocks and out-of-range offsets are explicit; use expected_revision to detect changed evidence.",
             {
                 "session_id": ID,
+                "view": {"type": "string", "enum": ["directory", "content", "latest_result"]},
+                "anchor": {"type": "string", "enum": ["start", "end"], "description": "end reads the last content_limit characters; cannot be combined with content_offset."},
+                "node_id": ID,
+                "expected_revision": {"type": "string", "maxLength": 200},
                 "block_ids": BLOCKS,
                 "offset": {"type": "integer", "minimum": 0},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},

@@ -53,7 +53,6 @@ from .capture import (
     CaptureService,
 )
 from .lifecycle import (
-    CORRECTION_TERMS,
     clone_json_value as _clone_json_value,
     LifecyclePorts,
     LifecycleService,
@@ -203,13 +202,6 @@ def _history_summary(history: list[dict[str, Any]], limit: int = 6) -> str:
             continue
         snippets.append(f"{role}: {content}")
     return "\n".join(snippets)
-
-
-def _turn_feedback_from_message(message: str) -> str:
-    lowered = str(message or "").lower()
-    if any(term in lowered for term in CORRECTION_TERMS):
-        return "correction"
-    return ""
 
 
 def _default_skill_stats() -> dict[str, Any]:
@@ -370,7 +362,6 @@ def _capture_service() -> CaptureService:
         now_iso=_now_iso,
         project_scope_for_session=_project_scope_for_session,
         truncate_text=_truncate_text,
-        turn_feedback_from_message=_turn_feedback_from_message,
     ))
 
 
@@ -397,10 +388,6 @@ async def open_turn(session_id: str, round_id: str) -> dict[str, str] | None:
 
 async def _upsert_behavior_session(conn: aiosqlite.Connection, *, session_id: str, scope: dict[str, str], now: str, session_title: str, user_message: str) -> None:
     return await _capture_service()._upsert_behavior_session(conn, session_id=session_id, scope=scope, now=now, session_title=session_title, user_message=user_message)
-
-
-async def _mark_previous_turn_corrected(conn: aiosqlite.Connection, session_id: str, now: str) -> None:
-    return await _capture_service()._mark_previous_turn_corrected(conn, session_id, now)
 
 
 async def begin_turn(

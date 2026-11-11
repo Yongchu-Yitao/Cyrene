@@ -102,3 +102,10 @@ test("terminal events synchronously settle the chat-list summary", () => {
     },
   })
 })
+
+test("unknown permission options keep labels regardless of wording and position", () => {
+  assert.equal(permissionOptionLabel({ id: "custom", label: "不同意" }, 0, 3), "不同意")
+  assert.equal(permissionOptionLabel({ id: "custom", label: "始终拒绝" }, 1, 3), "始终拒绝")
+  assert.equal(permissionOptionLabel({}, 0, 2), "")
+  assert.equal(permissionOptionLabel({ id: "opaque", kind: "reject_once", label: "No" }, 0, 2), "Reject")
+})

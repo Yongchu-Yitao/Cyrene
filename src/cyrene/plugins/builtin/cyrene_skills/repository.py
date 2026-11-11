@@ -77,7 +77,6 @@ CREATE TABLE IF NOT EXISTS behavior_turns (
     context_summary TEXT NOT NULL DEFAULT '',
     agent_response TEXT NOT NULL DEFAULT '',
     outcome_status TEXT NOT NULL DEFAULT 'success',
-    user_feedback TEXT NOT NULL DEFAULT '',
     processed_status INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     FOREIGN KEY (session_id) REFERENCES behavior_sessions(session_id)
@@ -160,7 +159,6 @@ CREATE TABLE IF NOT EXISTS learned_skill_runs (
     execution_status TEXT NOT NULL DEFAULT '',
     failure_reason TEXT NOT NULL DEFAULT '',
     fallback_used INTEGER NOT NULL DEFAULT 0,
-    user_feedback TEXT NOT NULL DEFAULT '',
     dry_run INTEGER NOT NULL DEFAULT 0,
     consistency_score REAL NOT NULL DEFAULT 0,
     permission_snapshot TEXT NOT NULL DEFAULT 'workspace_only',

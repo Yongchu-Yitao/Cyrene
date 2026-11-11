@@ -40,7 +40,11 @@ def load_entries() -> list[dict]:
         return []
     if data is None:
         return []
-    return data if isinstance(data, list) else []
+    # Discard the retired score from legacy files without losing other metadata.
+    return [
+        {key: value for key, value in entry.items() if key != "emotional_valence"}
+        for entry in data if isinstance(entry, dict)
+    ] if isinstance(data, list) else []
 
 
 def save_entries(entries: list[dict]) -> None:
@@ -106,7 +110,6 @@ def touch_entry(content_keyword: str, metadata: dict | None = None) -> None:
 
     kw_lower = content_keyword.lower()
     found = False
-    touched_valence = metadata.get("emotional_valence", 0) if metadata else 0
     for entry in entries:
         entry_content = entry.get("content", "").lower()
         # Exact match or one is a near-complete substring of the other
@@ -117,7 +120,6 @@ def touch_entry(content_keyword: str, metadata: dict | None = None) -> None:
         ):
             entry["last_mentioned"] = now
             entry["mention_count"] = entry.get("mention_count", 1) + 1
-            touched_valence = entry.get("emotional_valence", touched_valence)
             found = True
             break
 
@@ -129,7 +131,6 @@ def touch_entry(content_keyword: str, metadata: dict | None = None) -> None:
                 "first_seen": now,
                 "last_mentioned": now,
                 "mention_count": 1,
-                "emotional_valence": metadata.get("emotional_valence", 0),
             }
         )
 
@@ -142,7 +143,6 @@ def touch_entry(content_keyword: str, metadata: dict | None = None) -> None:
         cy_db.record_memory_touch_sync(
             _STATS_DB_PATH,
             day=now,
-            emotional_valence=float(touched_valence or 0),
             is_new=not found and bool(metadata),
         )
     except Exception:
@@ -190,7 +190,7 @@ def get_context(max_chars: int = 5000, header: str | None = None) -> str:
 def clear_old_entries(days: int = 7) -> None:
     """
     清除超过 days 天未提及的一次性闲聊条目。
-    保留高频（mention_count >= 3）、情感极值（|valence| >= 3）、事实类型条目。
+    保留高频（mention_count >= 3）、事实类型条目。
     """
     entries = load_entries()
     now = datetime.now(timezone.utc)
@@ -199,16 +199,15 @@ def clear_old_entries(days: int = 7) -> None:
     for e in entries:
         last_str = e.get("last_mentioned", "")
         mention_count = e.get("mention_count", 1)
-        valence = e.get("emotional_valence", 0)
 
-        # 保留高频/情感/事实
-        if mention_count >= 3 or abs(valence) >= 3 or e.get("type") in ("fact", "preference"):
+        # 保留高频/事实
+        if mention_count >= 3 or e.get("type") in ("fact", "preference"):
             kept.append(e)
             continue
 
         # 检查是否超期
         try:
-            last_dt = datetime.strptime(last_str, "%Y-%m-%d")
+            last_dt = datetime.strptime(last_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             if (now - last_dt).days > days:
                 continue  # 丢弃
         except (ValueError, TypeError):
@@ -250,10 +249,10 @@ async def _extract_compressed_memories(
     if language == "zh":
         prompt = f"""从下方用户消息中提取关键信息，重点关注：
 1. 用户事实（工作、偏好、习惯）
-2. 情绪模式或反复话题
+2. 反复出现的话题
 3. 待办事项或已做决定
 
-每条结果分类为：fact | pattern | preference | emotion
+每条结果分类为：fact | pattern | preference
 
 完整对话上下文（仅供参考）：
 {chr(10).join(context_lines)}
@@ -263,16 +262,15 @@ async def _extract_compressed_memories(
 
 输出格式（每行一条，不要解释）：
 [fact] 用户在一家科技公司工作
-[emotion] 用户因项目截止日期感到沮丧
 [preference] 用户喜欢轻松简短的回复
 """
     else:
         prompt = f"""Extract key information from the USER's messages below. Focus on:
 1. Facts about the user (job, preferences, habits)
-2. Emotional patterns or recurring topics
+2. Recurring topics
 3. Action items or decisions made
 
-For each finding, classify as: fact | pattern | preference | emotion
+For each finding, classify as: fact | pattern | preference
 
 Full conversation context (for reference only):
 {chr(10).join(context_lines)}
@@ -282,7 +280,6 @@ User messages to analyse:
 
 Output format (one per line, no explanations):
 [fact] user works at a tech company
-[emotion] user was frustrated about a project deadline
 [preference] user likes casual short replies
 """
     from cyrene.model.messages import assistant_text
@@ -321,16 +318,13 @@ def _store_compressed_memories(compressed: str) -> None:
             continue
         entry_type = line[1:closing].strip()
         content = line[closing + 1 :].strip()
-        if len(content) <= 3:
+        if entry_type not in {"fact", "pattern", "preference"} or len(content) <= 3:
             continue
-        lowered = content.casefold()
-        valence = -2 if any(term in lowered for term in ("frustrat", "stress", "angry")) else 2 if any(term in lowered for term in ("happy", "love", "excit")) else 0
         touch_entry(
             content,
             {
                 "content": content,
                 "type": entry_type,
-                "emotional_valence": valence,
             },
         )
 

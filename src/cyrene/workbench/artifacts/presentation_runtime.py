@@ -325,7 +325,7 @@ async def _build_dashboard(
     soul = _soul_presentation()
     recent_memories = sorted(st_entries, key=lambda entry: (str(entry.get('last_mentioned', '')), int(entry.get('mention_count', 0))), reverse=True)[:6]
     today_entries = [entry for entry in st_entries if str(entry.get('last_mentioned', '')).strip() == today]
-    learned_today = sorted(today_entries, key=lambda entry: (int(entry.get('mention_count', 0)), abs(int(entry.get('emotional_valence', 0)))), reverse=True)[:4]
+    learned_today = sorted(today_entries, key=lambda entry: int(entry.get('mention_count', 0)), reverse=True)[:4]
     session_summaries = sessions if sessions is not None else await asyncio.to_thread(_build_sessions, db_path)
     session_message_count = sum(
         int(session.get('messageCount') or 0)
@@ -387,18 +387,6 @@ async def _build_dashboard(
             total_spend_cny += cost
             total_spend_usd += cost / CNY_PER_USD
     spend_str = '<¥0.01' if 0 < total_spend_cny < 0.01 else f'¥{total_spend_cny:.2f}'
-    emotion_by_day: dict[str, list[float]] = {}
-    for entry in st_entries:
-        day = str(entry.get('last_mentioned', '')).strip()
-        if day:
-            valence = int(entry.get('emotional_valence', 0) or 0)
-            emotion_by_day.setdefault(day, []).append(valence)
-    emotion_series = []
-    for offset in range(hist_days, -1, -1):
-        day = (now_local - timedelta(days=offset)).strftime('%Y-%m-%d')
-        vals = emotion_by_day.get(day, [])
-        avg = round(sum(vals) / len(vals), 2) if vals else 0.0
-        emotion_series.append({'date': day, 'value': avg, 'count': len(vals)})
     token_timeline: dict[str, dict[str, int]] = {}
     for offset in range(hist_days, -1, -1):
         day = (now_local - timedelta(days=offset)).strftime('%Y-%m-%d')
@@ -412,7 +400,7 @@ async def _build_dashboard(
         column = heatmap_column_map[label]
         heatmap_buckets[label] = [int((stats_by_day.get(day) or {}).get(column) or 0) for day in heatmap_days]
     activity_heatmap = {'days': heatmap_days, 'rows': [{'label': label, 'values': heatmap_buckets[label]} for label, _, _ in heatmap_row_defs]}
-    return {'today': {'learned': learned_today, 'learned_count': len(today_entries), 'memory_count': len(st_entries), 'archive_days': archive_day_count}, 'soul': {'path': str(soul.get('path') or ''), 'updated_at': str(soul.get('updated_at') or ''), 'recent_items': list(soul.get('recent_items') or ()), 'section_count': int(soul.get('section_count') or 0)}, 'topic_cloud': topic_rows, 'emotion': emotion_series, 'usage': {'requests': historical_requests, 'tokens': session_metrics.format_tokens({'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total}), 'spend': spend_str, 'spend_cny': round(total_spend_cny, 6), 'spend_usd': round(total_spend_usd, 6), 'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total, 'cache_hit_tokens': historical_cache_hit, 'cache_miss_tokens': historical_cache_miss, 'total_messages': session_message_count, 'active_days': sum((1 for row in stats_by_day.values() if int(row.get('llm_requests') or 0) > 0)), 'current_streak': _calc_current_streak(stats_by_day, today), 'longest_streak': _calc_longest_streak(stats_by_day), 'peak_hour': _calc_peak_hour(stats_by_day), 'execution_time': execution_time, 'top_tools': tool_rows, 'timeline': [{'date': day, 'prompt': values['prompt'], 'completion': values['completion'], 'requests': values['requests']} for day, values in token_timeline.items()]}, 'reminders': reminder_items, 'recent_memories': recent_memories, 'recent_archive': archive_snippets, 'activity_heatmap': activity_heatmap, 'model_stats': model_stats_rows}
+    return {'today': {'learned': learned_today, 'learned_count': len(today_entries), 'memory_count': len(st_entries), 'archive_days': archive_day_count}, 'soul': {'path': str(soul.get('path') or ''), 'updated_at': str(soul.get('updated_at') or ''), 'recent_items': list(soul.get('recent_items') or ()), 'section_count': int(soul.get('section_count') or 0)}, 'topic_cloud': topic_rows, 'usage': {'requests': historical_requests, 'tokens': session_metrics.format_tokens({'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total}), 'spend': spend_str, 'spend_cny': round(total_spend_cny, 6), 'spend_usd': round(total_spend_usd, 6), 'prompt_tokens': historical_prompt, 'completion_tokens': historical_completion, 'total_tokens': historical_total, 'cache_hit_tokens': historical_cache_hit, 'cache_miss_tokens': historical_cache_miss, 'total_messages': session_message_count, 'active_days': sum((1 for row in stats_by_day.values() if int(row.get('llm_requests') or 0) > 0)), 'current_streak': _calc_current_streak(stats_by_day, today), 'longest_streak': _calc_longest_streak(stats_by_day), 'peak_hour': _calc_peak_hour(stats_by_day), 'execution_time': execution_time, 'top_tools': tool_rows, 'timeline': [{'date': day, 'prompt': values['prompt'], 'completion': values['completion'], 'requests': values['requests']} for day, values in token_timeline.items()]}, 'reminders': reminder_items, 'recent_memories': recent_memories, 'recent_archive': archive_snippets, 'activity_heatmap': activity_heatmap, 'model_stats': model_stats_rows}
 
 def _extract_topic_terms(text: str, limit: int=12) -> list[str]:
     """Extract simple high-signal topic terms from mixed Chinese/English text."""

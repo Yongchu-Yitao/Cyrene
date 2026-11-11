@@ -79,7 +79,6 @@ async def _tool_recall_memory(args: dict[str, Any], context: PluginContext) -> s
             "first_seen": item.get("first_seen", ""),
             "last_mentioned": item.get("last_mentioned", ""),
             "mention_count": int(item.get("mention_count") or 1),
-            "emotional_valence": item.get("emotional_valence", 0),
         }
         if was_truncated:
             memory["content_truncated"] = True

@@ -88,7 +88,10 @@ def remote_permission_request(
                 else "在远程 Cyrene 创建对话并启动 Agent"
             ),
             "scope_hint": "远程设备上的 ",
-            "options": ["允许执行这一次", "拒绝"],
+            "options": [
+                {"id": "allow_once", "label": "允许执行这一次", "decision": "allow", "scope": "once"},
+                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+            ],
         }, False)
     if tool_name == "RemoteCyreneJobs":
         if operation not in {"start", "interrupt", "cancel"}:
@@ -98,7 +101,10 @@ def remote_permission_request(
             "kind": "remote_job_control",
             "operation": f"远程作业 {operation}",
             "scope_hint": "远程设备上的 ",
-            "options": ["允许执行这一次", "拒绝"],
+            "options": [
+                {"id": "allow_once", "label": "允许执行这一次", "decision": "allow", "scope": "once"},
+                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+            ],
         }, False)
     if tool_name == "RemoteCyreneFiles":
         payload = args.get("payload")
@@ -144,7 +150,11 @@ def remote_permission_request(
                 "requires_human": True,
                 "session_scope": _file_session_scope(device_id, project_id, operation),
                 "scope_hint": "破坏性/不可逆的 ",
-                "options": ["允许这次", "本次会话内总是允许", "拒绝"],
+                "options": [
+                    {"id": "allow_once", "label": "允许这次", "decision": "allow", "scope": "once"},
+                    {"id": "allow_session", "label": "本次会话内总是允许", "decision": "allow", "scope": "session"},
+                    {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+                ],
             }, True)
         if operation in _READ_FILE_OPERATIONS and not remote_outside:
             return None, False
@@ -164,7 +174,10 @@ def remote_permission_request(
             ),
             "path_hint": path_hint,
             "scope_hint": "远程项目中的 ",
-            "options": ["允许执行这一次", "拒绝"],
+            "options": [
+                {"id": "allow_once", "label": "允许执行这一次", "decision": "allow", "scope": "once"},
+                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+            ],
         }, False)
     if tool_name == "RemoteHarness":
         if operation != "invoke":
@@ -204,14 +217,21 @@ def remote_permission_request(
                 "requires_human": True,
                 "session_scope": _harness_session_scope(device_id, project_id, capability_id, destructive, invoke_arguments),
                 "scope_hint": "破坏性/不可逆的 ",
-                "options": ["允许这次", "本次会话内总是允许", "拒绝"],
+                "options": [
+                    {"id": "allow_once", "label": "允许这次", "decision": "allow", "scope": "once"},
+                    {"id": "allow_session", "label": "本次会话内总是允许", "decision": "allow", "scope": "session"},
+                    {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+                ],
             }, True)
         return ({
             **common,
             "kind": "remote_harness_invoke",
             "operation": f"在远程设备直接调用 {capability_id}",
             "scope_hint": "远程工具调用的 ",
-            "options": ["允许执行这一次", "拒绝"],
+            "options": [
+                {"id": "allow_once", "label": "允许执行这一次", "decision": "allow", "scope": "once"},
+                {"id": "deny", "label": "拒绝", "decision": "deny", "scope": "none"},
+            ],
         }, False)
     return None, False
 

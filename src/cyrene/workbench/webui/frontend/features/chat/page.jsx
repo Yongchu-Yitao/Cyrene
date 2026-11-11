@@ -433,6 +433,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
   function closeDeletedChatSplits(chatId) { return wbcCloseDeletedChatSplits(paneLayoutContext(), chatId); }
   function paneDetachmentContext() {
     return {
+      projectId: projectId,
       activeChatIdRef: activeChatIdRef,
       chatsRef: chatsRef,
       paneCardDetachRef: paneCardDetachRef,

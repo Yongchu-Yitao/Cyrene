@@ -1,6 +1,7 @@
 """Schedule saved-home maintenance independently from foreground conversations."""
 
 import asyncio
+from contextlib import nullcontext
 from datetime import datetime
 import json
 import logging
@@ -10,10 +11,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .definitions import ID, obj
 from .schemas import validate
 
+from .home_publication import ensure_pending_table, publish_due
 from .home_preparation import HomeModelUnavailable, prepare_home, source_snapshot
-from .home_freshness import RETRY_SECONDS, evidence, weather_expired, display_slot, task_documents
+from .home_freshness import RETRY_SECONDS, evidence, weather_expired, display_slot, preparation_target, task_documents
 logger = logging.getLogger(__name__)
-HOME_CHECK_INTERVAL_SECONDS = 2 * 60 * 60
+HOME_CHECK_INTERVAL_SECONDS = 60
 
 
 class HomeCards:
@@ -22,11 +24,14 @@ class HomeCards:
         self.lock = asyncio.Lock()
         self.worker = None
         with service.store.connect() as db:
+            ensure_pending_table(db)
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS home_maintenance (
                     owner TEXT PRIMARY KEY, document TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS home_display_receipts (
                     owner TEXT PRIMARY KEY, slot TEXT NOT NULL, client TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS home_first_start (
+                    owner TEXT PRIMARY KEY, day TEXT NOT NULL, client TEXT NOT NULL, eligible INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS home_preferences (
                     owner TEXT PRIMARY KEY, timezone TEXT NOT NULL);
             """)
@@ -51,7 +56,23 @@ class HomeCards:
                 logger.exception("Welcome card preparation failed; keeping saved cards")
             await asyncio.sleep(HOME_CHECK_INTERVAL_SECONDS)
 
+    async def _publish_due(self, owner):
+        def publish():
+            with self.service.store.connect() as db:
+                if not db.execute("SELECT 1 FROM home_prepared WHERE owner=? AND publish_at<=?",
+                                  (owner, time.time())).fetchone():
+                    return
+            repository = self.port().service.repository
+            from cyrene.workbench.sessions.admission import session_admission
+            admission = session_admission(repository._database(), owner) if hasattr(repository, '_database') else nullcontext()
+            with admission:
+                chat = repository.get(owner)
+                version = json.dumps([chat.get("createdAt", ""), chat.get("messageGeneration", 0)]) if chat else None
+                publish_due(self.service, owner, version, time.time())
+        await asyncio.to_thread(publish)
+
     async def saved(self, owner):
+        await self._publish_due(owner)
         def read():
             with self.service.store.connect() as db:
                 rows = db.execute("SELECT document FROM cards WHERE owner=? AND status='active' "
@@ -72,9 +93,25 @@ class HomeCards:
             return ZoneInfo("UTC")
 
     async def claim_display(self, owner, body):
-        validate(obj({"timezone": {"type": "string", "maxLength": 100}, "client_id": ID}, ["client_id"]), body)
+        validate(obj({"timezone": {"type": "string", "maxLength": 100}, "client_id": ID, "started_at": {"type": "number"}}, ["client_id"]), body)
         zone = self.zone(body)
-        slot = display_slot(datetime.fromtimestamp(time.time(), zone))
+        local = datetime.fromtimestamp(time.time(), zone)
+        slot = display_slot(local)
+        started = datetime.fromtimestamp(body.get("started_at", time.time()), zone)
+        # Remember the client timezone even before the first display is eligible,
+        # so morning preparation runs at 07:30 in that timezone.
+        with self.service.store.connect(write=True) as db:
+            db.execute("INSERT OR REPLACE INTO home_preferences VALUES (?,?)", (owner, body.get("timezone", str(zone))))
+            first = db.execute("SELECT day,client,eligible FROM home_first_start WHERE owner=?", (owner,)).fetchone()
+            if started.date() == local.date() and (first is None or first['day'] != local.date().isoformat()):
+                db.execute("INSERT OR REPLACE INTO home_first_start VALUES (?,?,?,?)",
+                           (owner, local.date().isoformat(), body['client_id'], int(8 <= started.hour < 11)))
+                first = db.execute("SELECT day,client,eligible FROM home_first_start WHERE owner=?", (owner,)).fetchone()
+            if local.hour < 12 and not (8 <= local.hour < 11 and first is not None
+                    and first['day'] == local.date().isoformat() and first['client'] == body['client_id'] and first['eligible']):
+                slot = None
+        if slot is None:
+            return {"slot": None}
         if not (await self.saved(owner))["cards"]:
             return {"slot": None}
         with self.service.store.connect(write=True) as db:
@@ -83,7 +120,6 @@ class HomeCards:
             show = previous is None or previous["slot"] < slot
             if show:
                 db.execute("INSERT OR REPLACE INTO home_display_receipts VALUES (?,?,?)", (owner, slot, body["client_id"]))
-            db.execute("INSERT OR REPLACE INTO home_preferences VALUES (?,?)", (owner, body.get("timezone", str(zone))))
         return {"slot": slot if show or (previous["slot"] == slot and previous["client"] == body["client_id"]) else None}
 
     @staticmethod
@@ -93,6 +129,7 @@ class HomeCards:
     async def refresh(self, owner, body):
         validate(obj({"entry_id": ID, "timezone": {"type": "string", "maxLength": 100}}), body)
         async with self.lock:
+            await self._publish_due(owner)
             port = self.port()
             chat = await asyncio.to_thread(port.service.repository.get, owner)
             if not chat or chat.get("kind", "personal-assistant") != "personal-assistant":
@@ -116,7 +153,12 @@ class HomeCards:
             siblings = (await asyncio.to_thread(repository.read_summaries))["chats"] if hasattr(repository, "read_summaries") else []
             contexts = await asyncio.to_thread(task_documents, port, owner)
             source = evidence(chat, siblings, contexts)
+            target = preparation_target(local)
+            target_key = target.isoformat()
+            scheduled_due = state.get("prepared_slot") != target_key
             reasons = []
+            if scheduled_due:
+                reasons.append("display period due: prepare the full headline and supporting copy for the target time")
             if source != state.get("source"):
                 reasons.append("task evidence changed: reconcile confirmations, progress and delivered artifacts")
             if local.date().isoformat() != state.get("day"):
@@ -131,10 +173,15 @@ class HomeCards:
             prompt = (
                 "[Welcome cards refresh]\n"
                 f"Refresh reasons: {'; '.join(reasons)}\n"
-                f"Local time: {local.isoformat()}\nExisting slots: {json.dumps(cards, ensure_ascii=False)}"
+                f"Local time: {local.isoformat()}\n"
+                f"Target display time: {max(local, target).isoformat()}\n"
+                "Write time-sensitive copy for the target display time, not the preparation time. "
+                "Refresh outdated salutations and relative-day wording throughout the cards.\n"
+                f"Existing slots: {json.dumps(cards, ensure_ascii=False)}"
             )
             try:
-                await self.prepare(self.service, port, owner, version, prompt, source_snapshot(chat, siblings, contexts))
+                await self.prepare(self.service, port, owner, version, prompt, source_snapshot(chat, siblings, contexts),
+                                   publish_at=target.timestamp())
             except asyncio.CancelledError:
                 raise
             except HomeModelUnavailable:
@@ -151,7 +198,8 @@ class HomeCards:
                     self._save_state(db, owner, state)
                 logger.exception("Background home preparation failed; retaining published cards")
                 return {"status": "retry_pending"}
-            state.update(source=source, day=local.date().isoformat(), checked=time.time(), retry_after=0)
+            state.update(source=source, day=local.date().isoformat(), prepared_slot=target_key,
+                         checked=time.time(), retry_after=0)
             if weather_due:
                 state["weather_checked"] = time.time()
             with self.service.store.connect(write=True) as db:

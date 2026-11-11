@@ -18,7 +18,7 @@ def home_rig(tmp_path, monkeypatch):
     chat = {'id': 'assistant', 'projectId': 'personal', 'createdAt': 'birth', 'status': 'idle', 'messages': []}
     siblings, calls = [], []
     checkpoint = {'status': 'completed'}
-    async def prepare(*args):
+    async def prepare(*args, **kwargs):
         calls.append(args)
         if checkpoint['status'] != 'completed':
             raise RuntimeError('Background provider failed')
@@ -45,8 +45,8 @@ async def test_daily_display_slots_restart_and_no_backlog(home_rig):
     body = {'timezone': 'Asia/Shanghai', 'client_id': 'window-1'}
     assert (await r.home.claim_display('assistant', body))['slot'] is None  # no empty display consumes a slot
     await add_overview(r)
-    assert (await r.home.claim_display('assistant', body))['slot'] == '2026-11-09:00'
-    assert (await r.home.claim_display('assistant', body))['slot'] == '2026-11-09:00'  # response retry
+    assert (await r.home.claim_display('assistant', body))['slot'] == '2026-11-09:08'
+    assert (await r.home.claim_display('assistant', body))['slot'] == '2026-11-09:08'  # response retry
     r.home = HomeCards(r.service, lambda: r.port, r.prepare)
     body['client_id'] = 'reopened'
     assert (await r.home.claim_display('assistant', body))['slot'] is None
@@ -141,7 +141,7 @@ async def test_missing_model_preserves_cards_and_recovers_without_backoff(home_r
     r = home_rig
     await add_overview(r)
     before = await r.home.saved('assistant')
-    async def unavailable(*args):
+    async def unavailable(*args, **kwargs):
         raise HomeModelUnavailable('No configured model')
     r.home.prepare = unavailable
     for _ in range(3):
@@ -151,3 +151,182 @@ async def test_missing_model_preserves_cards_and_recovers_without_backoff(home_r
     assert 'Background home preparation failed' not in caplog.text
     r.home.prepare = r.prepare
     assert (await r.home.refresh('assistant', {}))['status'] == 'updated'
+
+
+@pytest.mark.parametrize(('stamp', 'expected'), [
+    ('2026-11-09T07:29:59+08:00', '2026-11-08T22:00:00+08:00'),
+    ('2026-11-09T07:30:00+08:00', '2026-11-09T08:00:00+08:00'),
+    ('2026-11-09T11:29:59+08:00', '2026-11-09T08:00:00+08:00'),
+    ('2026-11-09T11:30:00+08:00', '2026-11-09T12:00:00+08:00'),
+    ('2026-11-09T17:30:00+08:00', '2026-11-09T18:00:00+08:00'),
+    ('2026-11-09T21:30:00+08:00', '2026-11-09T22:00:00+08:00'),
+    ('2026-11-09T23:30:00+08:00', '2026-11-09T22:00:00+08:00'),
+    ('2026-11-10T00:10:00+08:00', '2026-11-09T22:00:00+08:00'),
+])
+def test_preparation_starts_half_an_hour_before_display(stamp, expected):
+    from cyrene.plugins.builtin.cyrene_cards.home_freshness import preparation_target
+    assert preparation_target(datetime.fromisoformat(stamp)).isoformat() == expected
+
+
+@pytest.mark.asyncio
+async def test_scheduled_copy_refresh_without_evidence_or_weather_change(home_rig):
+    r = home_rig
+    body = {'timezone': 'Asia/Shanghai'}
+    r.clock[0] = datetime.fromisoformat('2026-11-09T11:29:00+08:00').timestamp()
+    await add_overview(r)
+    await r.home.refresh('assistant', body)
+    count = len(r.calls)
+    r.clock[0] += 60
+    result = await r.home.refresh('assistant', body)
+    assert result['status'] == 'updated'
+    assert len(result['reasons']) == 1 and 'display period due' in result['reasons'][0]
+    assert len(r.calls) == count + 1
+    assert 'Target display time: 2026-11-09T12:00:00+08:00' in r.calls[-1][4]
+    # A restart and the actual display boundary must not duplicate preparation.
+    r.home = HomeCards(r.service, lambda: r.port, r.prepare)
+    assert (await r.home.refresh('assistant', body))['status'] == 'current'
+    r.clock[0] += 30 * 60
+    assert (await r.home.refresh('assistant', body))['status'] == 'current'
+
+
+@pytest.mark.asyncio
+async def test_scheduled_failure_retries_and_missed_periods_are_not_replayed(home_rig):
+    r = home_rig
+    body = {'timezone': 'Asia/Shanghai'}
+    r.clock[0] = datetime.fromisoformat('2026-11-09T11:29:00+08:00').timestamp()
+    await add_overview(r)
+    await r.home.refresh('assistant', body)
+    r.clock[0] += 60
+    r.checkpoint['status'] = 'failed'
+    assert (await r.home.refresh('assistant', body))['status'] == 'retry_pending'
+    r.clock[0] += 120
+    r.checkpoint['status'] = 'completed'
+    assert (await r.home.refresh('assistant', body))['status'] == 'updated'
+    assert 'Target display time: 2026-11-09T12:00:00+08:00' in r.calls[-1][4]
+    count = len(r.calls)
+    r.clock[0] = datetime.fromisoformat('2026-11-10T19:00:00+08:00').timestamp()
+    assert (await r.home.refresh('assistant', body))['status'] == 'updated'
+    assert len(r.calls) == count + 1
+    assert 'Target display time: 2026-11-10T19:00:00+08:00' in r.calls[-1][4]
+
+
+@pytest.mark.asyncio
+async def test_early_start_does_not_claim_morning_display_when_clock_reaches_eight(home_rig):
+    r = home_rig
+    body = {'timezone': 'Asia/Shanghai', 'client_id': 'morning-window'}
+    await add_overview(r)
+    for stamp in ('2026-11-09T00:00:00+08:00', '2026-11-09T07:59:59+08:00'):
+        r.clock[0] = datetime.fromisoformat(stamp).timestamp()
+        assert (await r.home.claim_display('assistant', body))['slot'] is None
+    with r.service.store.connect() as db:
+        assert db.execute('SELECT * FROM home_display_receipts').fetchone() is None
+        assert db.execute('SELECT timezone FROM home_preferences').fetchone()[0] == 'Asia/Shanghai'
+    r.clock[0] += 1
+    assert (await r.home.claim_display('assistant', body))['slot'] is None
+    r.home = HomeCards(r.service, lambda: r.port, r.prepare)
+    body['client_id'] = 'reopened'
+    assert (await r.home.claim_display('assistant', body))['slot'] is None
+    r.clock[0] = datetime.fromisoformat('2026-11-10T07:59:59+08:00').timestamp()
+    assert (await r.home.claim_display('assistant', body))['slot'] is None
+    r.clock[0] += 1
+    assert (await r.home.claim_display('assistant', body))['slot'] is None
+
+    r.clock[0] += 4 * 3600
+    assert (await r.home.claim_display('assistant', body))['slot'] == '2026-11-10:12'
+
+
+@pytest.mark.asyncio
+async def test_morning_preparation_uses_timezone_saved_before_eight(home_rig):
+    r = home_rig
+    r.clock[0] = datetime.fromisoformat('2026-11-09T07:29:00+08:00').timestamp()
+    await add_overview(r)
+    await r.home.claim_display('assistant', {'timezone': 'Asia/Shanghai', 'client_id': 'early'})
+    await r.home.refresh('assistant', {})
+    r.clock[0] += 60
+    result = await r.home.refresh('assistant', {})
+    assert result['status'] == 'updated'
+    assert len(result['reasons']) == 1 and 'display period due' in result['reasons'][0]
+    assert 'Target display time: 2026-11-09T08:00:00+08:00' in r.calls[-1][4]
+
+
+@pytest.mark.asyncio
+async def test_prepared_copy_waits_for_display_time_and_survives_restart(home_rig, tmp_path):
+    from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeDraft
+    r = home_rig
+    body = {'timezone': 'Asia/Shanghai'}
+    r.clock[0] = datetime.fromisoformat('2026-11-09T11:29:00+08:00').timestamp()
+    await add_overview(r)
+    await r.home.refresh('assistant', body)
+    before = (await r.home.saved('assistant'))['cards'][0]
+    prepared = []
+
+    async def prepare(service, port, owner, version, prompt, snapshot, *, publish_at):
+        draft = HomeDraft(service, owner, tmp_path / f'draft-{len(prepared)}')
+        await draft.command(owner, None, 'card.update', {
+            'card_id': before['card_id'], 'expected_revision': before['revision'],
+            'changes': {'title': '中午的新文案'}}, effect='scheduled')
+        draft.publish(publish_at=publish_at, version=version)
+        prepared.append(publish_at)
+
+    r.home.prepare = prepare
+    r.clock[0] += 60
+    assert (await r.home.refresh('assistant', body))['status'] == 'updated'
+    assert (await r.home.saved('assistant'))['cards'][0]['spec']['title'] == before['spec']['title']
+    r.home = HomeCards(r.service, lambda: r.port, prepare)
+    r.clock[0] += 30 * 60 - 1
+    assert (await r.home.saved('assistant'))['cards'][0]['spec']['title'] == before['spec']['title']
+    r.clock[0] += 1
+    assert (await r.home.saved('assistant'))['cards'][0]['spec']['title'] == '中午的新文案'
+    assert (await r.home.refresh('assistant', body))['status'] == 'current'
+    assert len(prepared) == 1
+    assert (await r.home.saved('assistant'))['cards'][0]['revision'] == before['revision'] + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['foreground', 'cleared'])
+async def test_due_draft_does_not_overwrite_newer_home_or_cleared_chat(home_rig, tmp_path, change):
+    import json
+    from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeDraft
+    r = home_rig
+    await add_overview(r)
+    await r.home.refresh('assistant', {'timezone': 'Asia/Shanghai'})
+    before = (await r.home.saved('assistant'))['cards'][0]
+    draft = HomeDraft(r.service, 'assistant', tmp_path / 'private')
+    args = {'card_id': before['card_id'], 'expected_revision': before['revision'],
+            'changes': {'title': 'Future'}}
+    await draft.command('assistant', None, 'card.update', args, effect='scheduled')
+    draft.publish(publish_at=r.clock[0] + 1800, version=json.dumps(['birth', 0]))
+    if change == 'foreground':
+        await r.service.command('assistant', None, 'card.update', {
+            **args, 'changes': {'title': 'User edit'}}, effect='foreground')
+    else:
+        r.chat['messageGeneration'] = 1
+    r.clock[0] += 1800
+    title = (await r.home.saved('assistant'))['cards'][0]['spec']['title']
+    assert title == ('User edit' if change == 'foreground' else before['spec']['title'])
+    with r.service.store.connect() as db:
+        assert db.execute('SELECT 1 FROM home_prepared').fetchone() is None
+        state = json.loads(db.execute('SELECT document FROM home_maintenance').fetchone()[0])
+        assert 'prepared_slot' not in state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('started', 'checked', 'eligible'), [
+    ('07:59:00', '08:01:00', False),
+    ('08:00:00', '08:00:00', True),
+    ('10:59:00', '10:59:00', True),
+    ('11:00:00', '11:00:00', False),
+    ('10:59:00', '11:00:00', False),
+])
+async def test_first_start_window_uses_startup_time_not_poll_time(home_rig, started, checked, eligible):
+    r = home_rig
+    stamp = lambda value: datetime.fromisoformat(f'2026-11-09T{value}+08:00').timestamp()
+    r.clock[0] = stamp(checked)
+    await add_overview(r)
+    result = await r.home.claim_display('assistant', {
+        'timezone': 'Asia/Shanghai', 'client_id': 'first', 'started_at': stamp(started)})
+    assert bool(result['slot']) is eligible
+    # A later restart never becomes that day's first startup.
+    result = await r.home.claim_display('assistant', {
+        'timezone': 'Asia/Shanghai', 'client_id': 'second', 'started_at': r.clock[0]})
+    assert result['slot'] is None

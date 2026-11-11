@@ -20,7 +20,7 @@ function wbcPaneCardDetachDescriptor(context, cardId, paneOverride) {
   var descriptor = wbcPaneCardDetachBaseDescriptor(context, pane);
   if (pane.kind === "chat") {
     var detachedChatId = String(pane.payload || "");
-    if (!detachedChatId) return null;
+    if (!detachedChatId || detachedChatId === "assistant_global") return null;
     var detachedChat = context.chatCache.details[detachedChatId]
       || (context.activeChat && String(context.activeChat.id || "") === detachedChatId ? context.activeChat : null);
     descriptor.title = detachedChat && detachedChat.title || wbcT("workbenchChat.chatSplitLabel", "Chat");

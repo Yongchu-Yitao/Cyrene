@@ -20,6 +20,28 @@
 仅注册新的 `task_*` 模型工具，不保留旧工具名兼容入口。
 接口字段转换只作用于已知元数据层，不修改问题参数或证据对象。
 新建任务在产生持久化副作用前拒绝纯空白的任务要求。
+
+### 有界证据读取
+
+`task_inspect` 省略 `view` 时保持兼容：无 `block_ids` 返回目录，有 ID 返回正文。
+目录含 `content_length` 和 `is_empty`；读取不加载上下文、不执行历史工具。
+
+- `view="latest_result"` 直接读取最新执行的最终答复，不必先查块目录。
+  运行中、等待输入、失败和取消均返回真实执行状态，不回退到上一轮成功答复。
+  可传通知的 `node_id` 固定原执行分支；分页时继续传该 ID 和返回的 `revision`
+  作为 `expected_revision`，避免后续执行改变读取对象。
+- `view="content", block_ids=[...], anchor="end", content_limit=8000`
+  读取块末尾；`anchor="end"` 与 `content_offset` 互斥。偏移及长度按 Python
+  Unicode 字符计算，不是 UTF-8 字节或 UTF-16 单元。
+- 正文页包含实际范围、`next_content_offset`、`has_before` 和 `has_after`。
+  `status` 区分 `ok`、`empty`、`end_of_content`、`out_of_range`；越界不静默改写
+  读取位置，返回 `suggested_tail_offset`。`truncated` 保持原语义：后方还有正文。
+- `expected_revision` 不匹配时返回 `stale_revision`，不混入新版正文。
+  `latest_result` 的 `execution_status` 与分页 `status` 分开；已完成但无最终答复
+  返回 `no_final_reply`，不以进度内容冒充结果。
+
+完成通知附带最多 6000 字符的原始 `final_reply`、总长度、截断标志和继续偏移。
+超长回复用 `latest_result` 按通知节点继续读取；不额外调用模型生成摘要。
 以下章节描述后台实现接口，不是模型工具清单。
 
 # Session Management

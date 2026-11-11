@@ -236,7 +236,7 @@ class ChannelChatService:
             if 0 <= index < len(options):
                 item = options[index]
                 answer = str(
-                    item.get("label", item) if isinstance(item, Mapping) else item
+                    (item.get("id") if item.get("decision") else item.get("label", item)) if isinstance(item, Mapping) else item
                 ).strip()
         return answer
 

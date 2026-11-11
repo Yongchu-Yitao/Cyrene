@@ -65,3 +65,13 @@ test("ordinary conversation still starts and finishes native detachment", () => 
   assert.ok(h.calls.includes("begin"))
   assert.ok(h.calls.includes("finish"))
 })
+
+test("assistant identity blocks detachment even outside the protected assistant page", () => {
+  const h = harness(false)
+  h.pane.payload = "assistant_global"
+  h.sandbox.wbcStartPaneCardDrag(h.context, h.event, h.pane.id)
+  h.listeners.get("pointerup")({ clientX: 1200, clientY: 20 })
+  assert.equal(h.context.paneCardDetachRef.current, null)
+  assert.equal(h.calls.includes("begin"), false)
+  assert.equal(h.calls.includes("finish"), false)
+})

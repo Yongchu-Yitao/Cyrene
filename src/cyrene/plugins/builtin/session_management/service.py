@@ -12,6 +12,7 @@ from pathlib import Path
 from .host import KIND, OWNER
 from .store import Store
 from .organization import organize_task
+from .inspection import content_page, inspection_view
 
 logger = logging.getLogger(__name__)
 MAX_FILE_BYTES = 20 * 1024 * 1024
@@ -227,11 +228,30 @@ class SessionManagementService:
         return await self._on_owner(perform)
 
     async def blocks(self, owner, args, *, load=False):
+        view = None if load else inspection_view(args)
+
         async def perform():
             async with self.lock:
                 target = args["session_id"]
                 _, chat = self._owned(owner, target)
+                if view == "latest_result":
+                    snapshot = await asyncio.to_thread(self.host.latest_result, target, args.get("node_id"))
+                    result = {"session_id": target, "title": chat.get("title", ""),
+                              "captured_at": datetime.now(timezone.utc).isoformat(),
+                              **{k: v for k, v in snapshot.items() if k != "content"},
+                              "execution_status": snapshot["status"]}
+                    expected = args.get("expected_revision")
+                    if expected is not None and expected != snapshot["revision"]:
+                        return {**result, "status": "stale_revision"}
+                    if snapshot["status"] != "completed" or not snapshot.get("final_reply_node_id"):
+                        return {**result, "status": snapshot["status"] if snapshot["status"] != "completed" else "no_final_reply"}
+                    result.update(content_page(snapshot["content"], args))
+                    return result
                 snapshot = await asyncio.to_thread(self.host.blocks, target)
+                result = {"session_id": target, "title": chat.get("title", ""), "revision": snapshot["revision"], "captured_at": datetime.now(timezone.utc).isoformat()}
+                expected = args.get("expected_revision")
+                if not load and expected is not None and expected != snapshot["revision"]:
+                    return {**result, "status": "stale_revision"}
                 ids = args.get("block_ids", [])
                 # Only task evidence is exposed, never executor system prompts.
                 blocks = [block for block in snapshot["blocks"] if block.get("kind") == "task"]
@@ -242,7 +262,6 @@ class SessionManagementService:
                     blocks = [by_id[i] for i in dict.fromkeys(ids)]
                 if load and not ids:
                     raise ValueError("Select explicit block_ids to load")
-                result = {"session_id": target, "title": chat.get("title", ""), "revision": snapshot["revision"], "captured_at": datetime.now(timezone.utc).isoformat()}
                 if load:
                     if sum(len(b["content"]) for b in blocks) > MAX_LOAD_CHARS:
                         raise ValueError("Selected blocks exceed 60000 characters; inspect smaller blocks first")
@@ -252,13 +271,10 @@ class SessionManagementService:
                     page = blocks[offset : offset + limit]
                     result["blocks"] = [
                         {k: v for k, v in b.items() if k != "content"}
+                        | {"content_length": len(b["content"]), "is_empty": not b["content"]}
                         | (
-                            {
-                                "content": b["content"][args.get("content_offset", 0) : args.get("content_offset", 0) + args.get("content_limit", 4000)],
-                                "content_offset": args.get("content_offset", 0),
-                                "truncated": len(b["content"]) > args.get("content_offset", 0) + args.get("content_limit", 4000),
-                            }
-                            if ids
+                            content_page(b["content"], args)
+                            if view == "content"
                             else {"preview": b["content"][:200]}
                         )
                         for b in page

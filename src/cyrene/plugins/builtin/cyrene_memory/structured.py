@@ -52,7 +52,6 @@ _TYPE_TO_CATEGORY: dict[str, str] = {
     "conversation": "conversation",
     "chat": "conversation",
     "event": "conversation",
-    "emotion": "conversation",
     "reflection": "reflection",
 }
 
@@ -453,7 +452,6 @@ def _serialize(entry: dict) -> dict:
         "updated_at": str(entry.get("last_mentioned") or entry.get("first_seen") or ""),
         "citations": _entry_citations(entry),
         "history": history,
-        "emotional_valence": entry.get("emotional_valence", 0),
         "stale": bool(entry.get("stale")),
     }
 
@@ -636,7 +634,6 @@ class MemoryApplicationService:
             "first_seen": today,
             "last_mentioned": today,
             "mention_count": 1,
-            "emotional_valence": 0,
         }
         confidence = str(dto.confidence or "").strip().lower()
         if confidence in _CONFIDENCE_LABELS:
@@ -1257,7 +1254,6 @@ def _new_conversation_memory(
         "first_seen": today,
         "last_mentioned": today,
         "mention_count": 1,
-        "emotional_valence": 0,
     }
     if confidence in _CONFIDENCE_LABELS:
         entry["confidence"] = confidence
@@ -1375,7 +1371,6 @@ def add_agent_memory(
         "first_seen": today,
         "last_mentioned": today,
         "mention_count": 1,
-        "emotional_valence": 0,
     }
     conf = str(confidence or "").strip().lower()
     if conf in _CONFIDENCE_LABELS:
@@ -1646,7 +1641,6 @@ async def add_agent_memory_checked(
         "first_seen": today,
         "last_mentioned": today,
         "mention_count": 1,
-        "emotional_valence": 0,
     }
     conf = str(confidence or "").strip().lower()
     if conf in _CONFIDENCE_LABELS:

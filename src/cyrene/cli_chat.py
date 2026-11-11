@@ -1782,7 +1782,10 @@ class InteractiveChat:
             if not answer:
                 continue
             if answer.isdigit() and 1 <= int(answer) <= len(options):
-                return self._option_label(options[int(answer) - 1])
+                option = options[int(answer) - 1]
+                if isinstance(option, dict) and option.get("decision"):
+                    return str(option["id"])
+                return self._option_label(option)
             return answer
 
     @staticmethod

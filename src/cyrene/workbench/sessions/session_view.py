@@ -30,6 +30,8 @@ def build_pending_question(raw_pending: Any) -> dict[str, Any] | None:
                 {
                     "id": option_id or f"option_{len(options_out) + 1}",
                     "label": label,
+                    **({key: item[key] for key in ("decision", "scope") if key in item}
+                       if isinstance(item, dict) else {}),
                 }
             )
     meta = raw_pending.get("meta") if isinstance(raw_pending.get("meta"), dict) else {}

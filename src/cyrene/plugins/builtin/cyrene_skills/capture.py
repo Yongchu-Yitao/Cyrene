@@ -338,7 +338,6 @@ class CapturePorts:
     now_iso: Any
     project_scope_for_session: Any
     truncate_text: Any
-    turn_feedback_from_message: Any
 
 
 class CaptureService:
@@ -426,15 +425,6 @@ class CaptureService:
             return
         await conn.execute("\n        UPDATE behavior_sessions\n        SET project_id = ?, project_key = ?, session_kind = ?, updated_at = ?,\n            session_summary = COALESCE(NULLIF(?, ''), session_summary)\n        WHERE session_id = ?\n        ", (scope['project_id'], scope['project_key'], scope['session_kind'], now, self.ports.truncate_text(session_title, 240), session_id))
 
-    async def _mark_previous_turn_corrected(self, conn: aiosqlite.Connection, session_id: str, now: str) -> None:
-        cursor = await conn.execute('\n        SELECT turn_id, metadata_json FROM behavior_turns\n        WHERE session_id = ? ORDER BY created_at DESC LIMIT 1\n        ', (session_id,))
-        latest_turn = await cursor.fetchone()
-        if latest_turn is None:
-            return
-        metadata = self.ports.json_loads(latest_turn['metadata_json'], {})
-        metadata['correction_feedback'] = True
-        await conn.execute('\n        UPDATE behavior_turns\n        SET user_feedback = ?, metadata_json = ?, updated_at = ?\n        WHERE turn_id = ?\n        ', ('correction', self.ports.json_dumps(metadata), now, latest_turn['turn_id']))
-
     async def begin_turn(
         self,
         *,
@@ -469,9 +459,8 @@ class CaptureService:
                 }
         scope = self.ports.project_scope_for_session(normalized_session_id)
         turn_id = self.ports.new_id('turn')
-        feedback = self.ports.turn_feedback_from_message(user_message)
         context_summary = self.ports.history_summary(history)
-        metadata = {'round_id': normalized_round_id, 'session_title': str(session_title or '').strip(), 'correction_feedback': False, 'round_title': '', 'system_initiated': bool(system_initiated)}
+        metadata = {'round_id': normalized_round_id, 'session_title': str(session_title or '').strip(), 'round_title': '', 'system_initiated': bool(system_initiated)}
         async with self.ports.connect() as conn:
             await self._upsert_behavior_session(conn, session_id=normalized_session_id, scope=scope, now=now, session_title=session_title, user_message=user_message)
             if defer_processing:
@@ -487,9 +476,7 @@ class CaptureService:
                     ''',
                     (now, normalized_session_id),
                 )
-            if feedback:
-                await self._mark_previous_turn_corrected(conn, normalized_session_id, now)
-            await conn.execute("\n            INSERT INTO behavior_turns\n            (turn_id, session_id, project_id, project_key, session_kind, round_id, created_at, updated_at, user_message, context_summary,\n             agent_response, outcome_status, user_feedback, processed_status, metadata_json)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'success', '', ?, ?)\n            ", (turn_id, normalized_session_id, scope['project_id'], scope['project_key'], scope['session_kind'], normalized_round_id, now, now, str(user_message or ''), context_summary, -1 if defer_processing else 0, self.ports.json_dumps({**metadata, **scope})))
+            await conn.execute("\n            INSERT INTO behavior_turns\n            (turn_id, session_id, project_id, project_key, session_kind, round_id, created_at, updated_at, user_message, context_summary,\n             agent_response, outcome_status, processed_status, metadata_json)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'success', ?, ?)\n            ", (turn_id, normalized_session_id, scope['project_id'], scope['project_key'], scope['session_kind'], normalized_round_id, now, now, str(user_message or ''), context_summary, -1 if defer_processing else 0, self.ports.json_dumps({**metadata, **scope})))
             await conn.commit()
         session_token = self.ports.current_session_id.set(normalized_session_id)
         turn_token = self.ports.current_turn_id.set(turn_id)

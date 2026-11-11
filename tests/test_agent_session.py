@@ -487,7 +487,7 @@ def test_default_permission_confirmation_grants_exact_retry(tmp_path):
     assert pending["kind"] == "write_permission_request"
     assert not outside_path.exists()
 
-    session.answer(str(pending["id"]), "同意一次")
+    session.answer(str(pending["id"]), "allow_once")
     run(session.drain())
 
     assert session.final_output("confirm-run")["content"] == "done"
