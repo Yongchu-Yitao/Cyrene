@@ -8,7 +8,7 @@ const { buildRelease } = require('./build-release');
 const { readPackageJson } = require('app-builder-lib/out/util/packageMetadata');
 const { AppInfo } = require('app-builder-lib/out/appInfo');
 
-for (const publicVersion of ['0.9.1.0', '0.9.1.1', '0.9.1.2', '0.9.1.3', '0.9.1.4', '0.9.1.5']) test(`four-part release ${publicVersion} preserves public and Windows versions through the real builder metadata reader`, async () => {
+for (const publicVersion of ['0.9.1.0', '0.9.1.1', '0.9.1.2', '0.9.1.3', '0.9.1.4', '0.9.1.5', '0.9.1.6']) test(`four-part release ${publicVersion} preserves public and Windows versions through the real builder metadata reader`, async () => {
   const buildNumber = publicVersion.split('.').at(-1);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cyrene-version-'));
   const manifestPath = path.join(dir, 'package.json');

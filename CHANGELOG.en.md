@@ -2,6 +2,13 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.1.6] - 2026-11-12
+
+### Features and interface updates
+
+- Expanded Bash activity records now show the full command inline after the tool name. Long and multiline commands remain available when viewing or copying the activity, and failed commands remain marked.
+- Fix an issue that could prevent the assistant from creating or updating welcome cards during background preparation. New cards and updates to existing cards are saved as drafts and appear at the scheduled time, so preparation leaves the visible home cards intact.
+
 ## [0.9.1.5] - 2026-11-11
 
 ### Features and interface updates
