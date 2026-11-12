@@ -72,6 +72,8 @@ class ModelCallError(RuntimeError):
 _PUBLIC_STREAM_FIELDS = frozenset({
     "adapter",
     "provider_error_code",
+    "provider_error_param",
+    "provider_error_reason",
     "data_chunk_count",
     "event_count",
     "finish_reason",

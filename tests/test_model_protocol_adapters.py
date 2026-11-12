@@ -577,7 +577,7 @@ def test_openai_responses_strict_schema_preserves_optional_plugin_fields() -> No
     }
 
 
-def test_openai_responses_omits_strict_for_freeform_object_schemas() -> None:
+def test_openai_responses_disables_strict_for_freeform_object_schemas() -> None:
     tools = [{
         "type": "function",
         "function": {
@@ -603,8 +603,31 @@ def test_openai_responses_omits_strict_for_freeform_object_schemas() -> None:
     )
 
     function = request.payload["tools"][0]
-    assert "strict" not in function
+    assert function["strict"] is False
     assert function["parameters"] == tools[0]["function"]["parameters"]
+
+
+@pytest.mark.parametrize("name", ["task_inspect", "task_load_context"])
+def test_assistant_task_tools_keep_unique_blocks_without_openai_strict(name):
+    from cyrene.plugins.builtin.session_management import plugin_pack
+
+    plugin = next(item for item in plugin_pack.plugins if item.name == name)
+    tool = plugin.tool_definition(allow_resource_reveal=True)
+    request = prepare_request(
+        "openai_responses", api_key="test", model="gpt-6-luna",
+        messages=[{"role": "user", "content": "inspect"}], tools=[tool],
+        max_tokens=None, stream=True, response_format=None,
+    )
+    function = request.payload["tools"][0]
+    assert function["strict"] is False
+    assert function["parameters"] == tool["function"]["parameters"]
+    assert function["parameters"]["properties"]["block_ids"]["uniqueItems"] is True
+
+    from jsonschema import ValidationError, validate
+
+    with pytest.raises(ValidationError, match="non-unique"):
+        validate({"task_id": "task", "block_ids": ["block", "block"]},
+                 tool["function"]["parameters"])
 
 
 def test_prepare_gemini_request_converts_roles_images_tools_and_schema() -> None:

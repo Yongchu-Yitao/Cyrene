@@ -434,6 +434,7 @@ _OPENAI_STRICT_UNSUPPORTED_KEYWORDS = frozenset({
     "propertyNames",
     "then",
     "unevaluatedProperties",
+    "uniqueItems",
 })
 
 
@@ -531,6 +532,8 @@ def _openai_response_tool(item: Mapping[str, Any]) -> dict[str, Any]:
     if _supports_openai_strict_schema(schema):
         result["parameters"] = _openai_strict_schema(schema)
         result["strict"] = True
+    else:
+        result["strict"] = False
     return result
 
 
@@ -1333,7 +1336,9 @@ async def handle_stream(
         stream_diagnostics["http_status"] = int(response.status_code)
         if timing is not None:
             timing["response_headers_ms"] = (time.monotonic() - request_started) * 1000
-        response.raise_for_status()
+        from .http_errors import raise_for_model_status
+
+        await raise_for_model_status(response, adapter)
         if protocol_trace is not None:
             try:
                 await protocol_trace({
