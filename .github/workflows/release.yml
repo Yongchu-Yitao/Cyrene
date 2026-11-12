@@ -682,8 +682,24 @@ jobs:
           CYRENE_CACHE_DIR: ${{ runner.temp }}/cyrene-deb-smoke/cache
           CYRENE_TEMP_DIR: ${{ runner.temp }}/cyrene-deb-smoke/tmp
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ./dist-electron/Cyrene-*-x64.deb
+          . /etc/os-release
+          for candidate in https://mirror.math.princeton.edu/pub/ubuntu https://mirrors.mit.edu/ubuntu https://archive.ubuntu.com/ubuntu; do
+            if curl --fail --silent --show-error --max-time 12 -o /dev/null "$candidate/dists/$VERSION_CODENAME-security/InRelease"; then
+              mirror="$candidate"
+              break
+            fi
+          done
+          test -n "${mirror:-}"
+          source_file="$RUNNER_TEMP/ubuntu-release-test.list"
+          for suite in "$VERSION_CODENAME" "$VERSION_CODENAME-updates" "$VERSION_CODENAME-security"; do
+            printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] %s %s main universe restricted multiverse\n' "$mirror" "$suite"
+          done > "$source_file"
+          apt_options=(
+            -o "Dir::Etc::sourcelist=$source_file" -o "Dir::Etc::sourceparts=-"
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20
+          )
+          sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
+          sudo apt-get "${apt_options[@]}" install -y ./dist-electron/Cyrene-*-x64.deb
           test "$(stat -c '%u:%a' /opt/Cyrene/chrome-sandbox)" = "0:4755"
           mkdir -p "$CYRENE_USER_DATA_DIR/data"
           printf '%s' 'unreadable-config-without-local-key' \

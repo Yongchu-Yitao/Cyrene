@@ -146,14 +146,19 @@ def test_runtime_scopes_background_assistant_and_redirects_cards_only(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
+@pytest.mark.parametrize('with_application_host', [False, True])
+@pytest.mark.parametrize('operation', ['create', 'update'])
+async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, with_application_host, operation):
+    from dataclasses import replace
+    from fastapi import APIRouter, FastAPI
     from cyrene.core import AgentSession
     from cyrene.core.plugin import Plugin, PluginRegistry
     from cyrene.core.plugin.tool_scope import ScopedPluginRegistry
-    from cyrene.plugins import ensure_model_router, model_router
+    from cyrene.plugins import PluginApplicationHost, ensure_model_router, model_router
     from cyrene.plugins.builtin.cyrene_cards import plugin_pack
     from cyrene.plugins.builtin.cyrene_system_prompt import plugin_pack as system_prompt_pack
     live = CardService(tmp_path / 'live')
+    card = await create(live) if operation == 'update' else None
     draft = HomeDraft(live, 'assistant', tmp_path / 'draft')
     calls = []
     async def provider(args, context):
@@ -169,13 +174,17 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
             names = {tool['function']['name'] for tool in args['tools']}
             assert 'card.create' in names
             assert not names & {'send_message', 'task_start', 'card.pin', 'switch_context'}
-            return {'content': '', 'tool_calls': [{'id': 'create', 'function': {'name': 'card.create',
-                'arguments': json.dumps({'template': 'content', 'spec': {'title': 'Prepared', 'home_kind': 'overview'}})}}]}
+            arguments = ({'card_id': card['card_id'], 'expected_revision': 1, 'changes': {'title': 'Prepared'}}
+                         if card else {'template': 'content', 'spec': {'title': 'Prepared', 'home_kind': 'overview'}})
+            return {'content': '', 'tool_calls': [{'id': operation, 'function': {'name': f'card.{operation}',
+                'arguments': json.dumps(arguments)}}]}
         tool = next(message for message in reversed(args['messages']) if message['role'] == 'tool')
         assert json.loads(tool['content']).get('success') is True, tool['content']
         return {'content': 'done', 'tool_calls': []}
     registry = PluginRegistry()
-    registry.register_pack(plugin_pack, source='test')
+    # Use the real application host and session reconciliation, but omit the
+    # production scheduler/routes: the host owns live cards, the Agent gets a draft.
+    registry.register_pack(replace(plugin_pack, application_setup=lambda context: context.provide('cards', live)), source='test')
     registry.register_pack(system_prompt_pack, source='test')
     registry.register_plugin(Plugin('TestProvider', 'test', {'type': 'object'}, provider, kind='model',
         metadata={'provider': {'id': 'test', 'name': 'test'}}), source='test')
@@ -184,9 +193,17 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
         {'id': 'test', 'model': 'test', 'provider': 'test', 'adapter': 'openai'}])
     async def ignore(*args, **kwargs): pass
     monkeypatch.setattr(model_router, '_publish_llm_event', ignore)
+    host = None
+    if with_application_host:
+        host = PluginApplicationHost(app=FastAPI(), registry=registry, bot=None,
+            db_path=str(tmp_path / 'app.db'), data_directory=tmp_path / 'host',
+            plugin_directory=tmp_path / 'plugins')
+        host.attach(APIRouter())
+        assert host.active_services['cards'] is live
     session = AgentSession(tmp_path / 'agent', tmp_path, tmp_path / 'plugins', tree_id='isolated',
         registry=ScopedPluginRegistry(registry, home_tool_scope(registry)), load_plugins=False, model_plugin=model_router.MODEL_ROUTER_PLUGIN,
         extra_direct_tool_names=HOME_TOOLS[:4], plugin_services={'cards': draft},
+        application_scope=host, inherit_application_scope=False,
         plugin_context_data={'session_id': 'isolated', 'personal_assistant': True, 'assistant_home_owner': 'assistant',
                              'context_projection': HOME_CONTEXT_PROJECTION})
     session._configured_compaction_limit = lambda: 0
@@ -196,6 +213,7 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
     session.hooks.register(SESSION_START, unrelated, hook_id='unrelated-session', plugin_id='test.session')
     session.hooks.register(TURN_START, unrelated, hook_id='unrelated-turn', plugin_id='test.turn')
     try:
+        session.reconcile_plugins(force=True)
         session.submit('Prepare overview', run_id='background')
         await asyncio.wait_for(session.drain(), 10)
         assert session.final_output('background')['content'] == 'done'
@@ -204,9 +222,18 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch):
         replay = project_model_messages(path)
         assert [m['content'] for m in replay if m['role'] == 'system'] == [HOME_SYSTEM_PROMPT.strip()]
         assert 'UNRELATED_PLUGIN_INSTRUCTIONS' not in json.dumps(replay)
-        assert (await live.command('assistant', None, 'card.list', {'scope': 'home'}))['cards'] == []
+        session.reconcile_plugins(force=True)
+        assert session._plugin_services()['cards'] is draft
+        if card:
+            current = await live.command('assistant', None, 'card.get', {'card_id': card['card_id']})
+            assert current['spec']['title'] == 'Before'
+            assert current['revision'] == 1
+        else:
+            assert (await live.command('assistant', None, 'card.list', {'scope': 'home'}))['cards'] == []
         draft.publish()
-        assert len((await live.command('assistant', None, 'card.list', {'scope': 'home'}))['cards']) == 1
+        published = (await live.command('assistant', None, 'card.list', {'scope': 'home'}))['cards']
+        assert len(published) == 1
+        assert published[0]['title'] == 'Prepared'
         assert (await live.command('isolated', None, 'card.list', {'scope': 'home'}))['cards'] == []
     finally:
         session.close()

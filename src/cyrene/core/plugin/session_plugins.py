@@ -37,6 +37,9 @@ class SessionPlugins:
         self.driver: Any = None
         self.owns_driver = False
         self._capture_application_host_services()
+        # Explicit session services (for example a home-card draft) must survive
+        # host reconciliation. Only identical inherited instances are host-owned.
+        self.session_service_names = set(self.services) - self.host_service_names
 
     def _application_host(self) -> Any | None:
         host = self.application_scope
@@ -67,8 +70,8 @@ class SessionPlugins:
             for attachment in self.attachments.values()
             for name in attachment.provided_services
         }
-        names = self.host_service_names | set(active)
-        self.host_service_names.update(active)
+        names = (self.host_service_names | set(active)) - self.session_service_names
+        self.host_service_names.update(set(active) - self.session_service_names)
         for name in names:
             if name in owned:
                 continue

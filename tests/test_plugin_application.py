@@ -56,6 +56,48 @@ def test_agent_registry_reuses_matching_application_host(tmp_path):
     assert load_plugins is False
 
 
+def test_session_service_overrides_survive_host_replacement_and_removal(tmp_path):
+    from cyrene.core.plugin.session_plugins import SessionPlugins
+
+    registry = PluginRegistry()
+    host = _host(tmp_path, registry)
+    live, draft, inherited, local = object(), object(), object(), object()
+    host.services.update(cards=live, inherited=inherited)
+    services = {'cards': draft, 'inherited': inherited, 'session_only': local}
+    plugins = SessionPlugins(
+        registry=registry, plugin_directory=host.plugin_directory.resolve(),
+        services=services, application_scope=host, failures=(),
+        setup_context=lambda _: None, get_hooks=lambda: None,
+        tree_id=lambda: 'isolated', is_closed=lambda: False, worker_alive=lambda: False,
+    )
+
+    plugins._sync_application_host_services(host)
+    assert services['cards'] is draft
+    assert services['inherited'] is inherited
+
+    replacement, added = object(), object()
+    host.services.update(cards=object(), inherited=replacement,
+                         session_only=object(), added=added)
+    plugins._sync_application_host_services(host)
+    assert services['cards'] is draft
+    assert services['session_only'] is local
+    assert services['inherited'] is replacement
+    assert services['added'] is added
+
+    for name in ('cards', 'inherited', 'session_only', 'added'):
+        del host.services[name]
+    plugins._sync_application_host_services(host)
+    assert services['cards'] is draft
+    assert services['session_only'] is local
+    assert 'inherited' not in services
+    assert 'added' not in services
+
+    host.services.update(cards=live, inherited=inherited)
+    plugins._sync_application_host_services(host)
+    assert services['cards'] is draft
+    assert services['inherited'] is inherited
+
+
 def test_background_interval_provider_is_lazy() -> None:
     calls = 0
 
