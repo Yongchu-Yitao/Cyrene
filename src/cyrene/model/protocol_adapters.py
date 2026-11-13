@@ -1,8 +1,6 @@
 """Wire-protocol adapters for remote model providers.
 
-Cyrene's internal message contract is OpenAI-shaped because it is convenient
-for tool loops, but a configured adapter must speak its provider's native
-protocol.  This module performs that boundary conversion for Anthropic
+Convert OpenAI-shaped tool-loop messages to native protocols for Anthropic
 Messages, OpenAI Responses, Gemini generateContent, and OpenAI-compatible
 Chat Completions for the editable model Provider Plugins.
 """
@@ -22,6 +20,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+from .http_errors import raise_for_model_status
 from .stream_encoding import ModelStreamError, strict_utf8_lines
 from .stream_buffer import append_argument
 from .stream_diagnostics import enrich_stream_errors, new_stream_diagnostics
@@ -521,19 +520,17 @@ def _openai_strict_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _openai_response_tool(item: Mapping[str, Any]) -> dict[str, Any]:
-    schema = item.get("parameters")
-    schema = schema if isinstance(schema, Mapping) else {}
+    parameters = item.get("parameters")
+    schema = parameters if isinstance(parameters, Mapping) else {}
     result = {
         "type": "function",
         "name": str(item.get("name") or ""),
         "description": str(item.get("description") or ""),
         "parameters": deepcopy(schema),
     }
-    if _supports_openai_strict_schema(schema):
+    result["strict"] = _supports_openai_strict_schema(schema)
+    if result["strict"]:
         result["parameters"] = _openai_strict_schema(schema)
-        result["strict"] = True
-    else:
-        result["strict"] = False
     return result
 
 
@@ -1336,8 +1333,6 @@ async def handle_stream(
         stream_diagnostics["http_status"] = int(response.status_code)
         if timing is not None:
             timing["response_headers_ms"] = (time.monotonic() - request_started) * 1000
-        from .http_errors import raise_for_model_status
-
         await raise_for_model_status(response, adapter)
         if protocol_trace is not None:
             try:

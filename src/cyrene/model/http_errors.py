@@ -7,6 +7,26 @@ import re
 import httpx
 
 
+def _record_provider_diagnostics(payload, diagnostics):
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        code = error.get("code")
+        if code in {
+            "invalid_function_parameters", "invalid_request_error",
+            "context_length_exceeded", "model_not_found",
+            "invalid_api_key", "insufficient_quota", "rate_limit_exceeded",
+        }:
+            diagnostics["provider_error_code"] = code
+        param = error.get("param")
+        if isinstance(param, str) and re.fullmatch(
+            r"tools\[\d{1,5}\]\.(?:parameters|name|strict)", param
+        ):
+            diagnostics["provider_error_param"] = param
+        message = error.get("message")
+        if isinstance(message, str) and "'uniqueItems' is not permitted" in message:
+            diagnostics["provider_error_reason"] = "unsupported_schema_keyword:uniqueItems"
+
+
 async def raise_for_model_status(response: httpx.Response, adapter: str) -> None:
     try:
         response.raise_for_status()
@@ -27,24 +47,7 @@ async def raise_for_model_status(response: httpx.Response, adapter: str) -> None
                         break
                     body.extend(chunk)
                 else:
-                    payload = json.loads(body)
-                    error = payload.get("error") if isinstance(payload, dict) else None
-                    if isinstance(error, dict):
-                        code = error.get("code")
-                        if code in {
-                            "invalid_function_parameters", "invalid_request_error",
-                            "context_length_exceeded", "model_not_found",
-                            "invalid_api_key", "insufficient_quota", "rate_limit_exceeded",
-                        }:
-                            diagnostics["provider_error_code"] = code
-                        param = error.get("param")
-                        if isinstance(param, str) and re.fullmatch(
-                            r"tools\[\d{1,5}\]\.(?:parameters|name|strict)", param
-                        ):
-                            diagnostics["provider_error_param"] = param
-                        message = error.get("message")
-                        if isinstance(message, str) and "'uniqueItems' is not permitted" in message:
-                            diagnostics["provider_error_reason"] = "unsupported_schema_keyword:uniqueItems"
+                    _record_provider_diagnostics(json.loads(body), diagnostics)
         except Exception:
             # Malformed, oversized, slow or broken bodies must not hide the
             # original HTTP failure or alter provider retry behavior.

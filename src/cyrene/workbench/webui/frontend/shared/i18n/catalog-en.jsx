@@ -3340,6 +3340,7 @@ export const WORKBENCH_TRANSLATIONS_EN = {
     "toolName.Grep": "Search",
     "toolName.WebFetch": "Fetch URL",
     "toolName.WebSearch": "Web search",
+    "workbenchChat.imageModelRequired": "Select a vision-capable model before sending images.",
     "toolName.AnalyzeAttachment": "Analyze attachment",
     "toolName.GenerateImage": "Generate image",
     "toolName.StartMediaGeneration": "Generate media",

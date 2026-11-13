@@ -85,6 +85,9 @@ def project_context_message(
         else:
             messages.append(message)
         return
+    if isinstance(target.get("content"), list):
+        target["content"].append({"type": "text", "text": content})
+        return
     current = str(target.get("content") or "").strip()
     target["content"] = "\n\n".join(
         part for part in (current, content) if part
@@ -162,6 +165,8 @@ def project_model_messages(
     # internal execution ledger. Persisted policy also applies on replay.
     path = apply_context_projection(path)
     task_state = state_from(path)
+    from .images import retire_historical_images
+    path = retire_historical_images(path, (task_state or {}).get("retired_image_nodes", ()))
     if task_state is not None:
         return project_tasks(path, task_state, observation_services=observation_services)
     messages: list[dict[str, Any]] = []
@@ -191,7 +196,8 @@ def project_model_messages(
             if isinstance(compacted, list) and all(
                 isinstance(message, Mapping) for message in compacted
             ):
-                messages = [deepcopy(dict(message)) for message in compacted]
+                from .images import image_references
+                messages = [image_references(dict(message)) for message in compacted]
                 if str(value.get("run_id") or "") != current_run_id:
                     system = next(
                         (
@@ -214,7 +220,8 @@ def project_model_messages(
                         system["content"] = base_system_content
             continue
         if role in {"system", "user"}:
-            content = str(value.get("content") or "")
+            from .images import user_content
+            content = user_content(value) if role == "user" else str(value.get("content") or "")
             messages.append({"role": role, "content": content})
         elif role == "context":
             if node.id not in active_context_ids:

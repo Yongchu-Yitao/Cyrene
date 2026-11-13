@@ -1,3 +1,4 @@
+import { attachmentSubmissionBlocked, composerSendDisabled, requiresVisionModel } from "./composer-vision.mjs"
 import { prepareComposerSubmission, wbcAvailableContextIds, wbcParseSlashCommandText } from "./composer-submission.jsx"
 import { handleComposerKey } from "./composer-keyboard.jsx"
 import { useWbcComposerSettings, resolveComposerSettings, wbcNormalizeContextActivations } from "./composer-settings.jsx"
@@ -8,7 +9,7 @@ import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
 import { WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
 import { WbcFileVisual, wbcCommandMeta } from "./file-resources.jsx"
-import { useWbcComposerAttachments } from "./composer-attachments.jsx"
+import { WbcVisionModelNotice, useWbcComposerAttachments } from "./composer-attachments.jsx"
 import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
 import { useWbcComposerAgentCatalog, useWbcComposerAgentConfig, useWbcComposerConfiguredModels } from "./composer-model-state.jsx"
 import { useWbcComposerVoice } from "./composer-voice.jsx"
@@ -439,7 +440,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
       });
       return;
     }
-    var payload = prepareComposerSubmission(text, { command, slashPool, attachments, contextActivationsRef, mcpAvailable, skillsAvailable, pluginPacksAvailable, contextCatalog, mode, agentManagedModels, selectedModelId, reasoningEffort, soulAvailable, personaOn, workspaceAvailable, workspaceOverride, workspaceOn, memoryAvailable, shortTermMemoryOn, projectMemoryOn, composerContextAvailable, remoteAvailable, remoteDeviceIdsRef }, function (activations) {
+    var payload = prepareComposerSubmission(text, { command, slashPool, attachments, attachmentBlocked, contextActivationsRef, mcpAvailable, skillsAvailable, pluginPacksAvailable, contextCatalog, mode, agentManagedModels, selectedModelId, reasoningEffort, soulAvailable, personaOn, workspaceAvailable, workspaceOverride, workspaceOn, memoryAvailable, shortTermMemoryOn, projectMemoryOn, composerContextAvailable, remoteAvailable, remoteDeviceIdsRef }, function (activations) {
       contextActivationsRef.current = activations;
       setContextActivations(activations);
     });
@@ -559,6 +560,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
   var selectedModel = configuredModels.find(function (item) {
     return String(item.id || item.model || "") === String(selectedModelId || "");
   });
+  var imageModelBlocked = requiresVisionModel(attachments, selectedModel, builtinContextCapabilities);
+  var attachmentBlocked = attachmentSubmissionBlocked(imageModelBlocked, uploading);
   var agentModelConfig = agentConfigOptions.find(function (option) {
     return String(option.category || "") === "model";
   }) || agentConfigOptions.find(function (option) {
@@ -761,6 +764,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
   var sendDisabled = awaitingAnswer ? (!canAnswerInComposer || !draft.trim()) : (running
     ? waitingForAgent
     : (!draft.trim() && attachments.length === 0 && !command) || (!!draft.trim() && !capText));
+  sendDisabled = composerSendDisabled(sendDisabled, awaitingAnswer, showStopButton, attachmentBlocked);
   // Self-management may prepare text in the current visible composer. Submit
   // is an explicit stable R2 action, so it is never inherited from the generic
   // DOM projection and always passes exact local-user delegation review.
@@ -895,6 +899,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
         className={"wbc-composer-box" + (agentFlow ? (" agent-flow agent-flow-" + agentFlow) : "")}
         data-agent-flow={agentFlow || undefined}
       >
+        <WbcVisionModelNotice blocked={imageModelBlocked} />
         <WbcComposerAttachmentView attachments={attachments} failedImagePreviews={failedImagePreviews} setFailedImagePreviews={setFailedImagePreviews} setAttachments={setAttachments} awaitingAnswer={awaitingAnswer} />
         <textarea
           ref={taRef}

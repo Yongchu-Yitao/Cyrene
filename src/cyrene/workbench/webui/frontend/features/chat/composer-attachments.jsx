@@ -9,6 +9,10 @@ import {
 import { wbcLoadAttachments, wbcSaveAttachments } from "./messages.jsx"
 import { wbcHasFileResourceDrag, wbcReadResourceDrag } from "./drag-layout.jsx"
 
+export function WbcVisionModelNotice({ blocked }) {
+  return blocked ? <div role="status" className="wbc-tools-empty">{wbcT("workbenchChat.imageModelRequired", "Select a vision-capable model before sending images.")}</div> : null;
+}
+
 function wbcComposerAtFileDrop(event) {
   var target = event.target
   if (!target || !target.closest) return null

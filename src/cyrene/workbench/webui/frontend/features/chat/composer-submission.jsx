@@ -17,6 +17,7 @@ export function wbcParseSlashCommandText(text, commands) {
 }
 
 export function prepareComposerSubmission(text, options, activateContext) {
+    if (options.attachmentBlocked) return null;
     var { command, slashPool, attachments } = options;
     var parsedSlash = !command ? wbcParseSlashCommandText(text, slashPool) : null;
     var submittedCommand = command || (parsedSlash && parsedSlash.command.id) || "";

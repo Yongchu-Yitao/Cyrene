@@ -229,6 +229,8 @@ def historical_assistant(value):
 
 
 def saved_messages(messages):
+    from .images import image_references
+    messages = [image_references(message) for message in messages]
     return [historical_assistant(m) if m.get('role') == 'assistant' else deepcopy(m)
             for m in messages if m.get('role') != 'tool']
 
@@ -261,6 +263,8 @@ def task_messages(path, state, context_id, *, live=False, observation_services=(
     # Retain interruption evidence before task filtering removes terminal nodes.
     path = settle_interrupted_tool_calls(path)
     doc = state['documents'][context_id]
+    from .images import retire_historical_images
+    path = retire_historical_images(path, state.get("retired_image_nodes", ()))
     nodes = task_nodes(path, state, context_id)
     archived = archived_calls(path, doc)
     selected = []
@@ -297,6 +301,14 @@ def capacity_context_matches(value, active):
     if kind.startswith("task_catalog_capacity."):
         return kind in {f"task_catalog_capacity.{active}.30", f"task_catalog_capacity.{active}.50"}
     return True
+
+
+def _restore_reflected_image_references(original):
+    if original.get("role") == "user" and original.get("metadata", {}).get("input_images"):
+        from .images import image_references, user_content
+        original["content"] = "\n".join(block["text"] for block in image_references(
+            {"content": user_content(original)})["content"])
+        original["metadata"].pop("input_images", None)
 
 
 def project_tasks(path, state, *, observation_services=()):
@@ -336,6 +348,7 @@ def project_tasks(path, state, *, observation_services=()):
                 if original.get("role") in {"user", "assistant"}:
                     original.pop("tool_calls", None)
                     original["content"] = original.get("metadata", {}).get("public_user_message", original.get("content", ""))
+                    _restore_reflected_image_references(original)
                     selected.append(replace(node, id=record.get("id", node.id), value=original))
             continue
         if role in {"context_compaction", "context_reflection"}:
@@ -517,6 +530,9 @@ class TaskContexts:
                 state['active'] = None
             else:
                 metadata = self._edit_or_load(state, target, name, args)
+            if name in {"switch_context", "load_context", "unload_context"}:
+                from .images import retire_task_images
+                retire_task_images(state, self.session.store.get_path(self.session.tree.id, self.session._leaf_id))
             result = {"context_id": target, "active_context_id": state["active"], "saved": True}
             if metadata:
                 result["context_metadata"] = metadata
@@ -661,6 +677,9 @@ def fork_task_state(path):
             args = call.get("arguments", {})
             target = args.get("context_id")
             payload = result.get('value') or {}
+            if name in {"switch_context", "load_context", "unload_context"}:
+                from .images import retire_task_images
+                retire_task_images(state, path[:path.index(node) + 1])
             if name == "switch_context":
                 replay_context_switch(state, payload, args, path, node)
             elif name == "unload_context":

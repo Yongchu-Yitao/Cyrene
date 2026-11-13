@@ -113,6 +113,7 @@ class ConversationConfig:
     public_user_message: str = ""
     model_identity: Mapping[str, Any] = field(default_factory=dict)
     attachment_paths: Mapping[str, str] = field(default_factory=dict)
+    input_images: tuple[Mapping[str, Any], ...] = ()
     remote_device_ids: Sequence[str] = ()
     soul_enabled: bool | None = None
     workspace_enabled: bool | None = None
@@ -143,6 +144,14 @@ class ConversationConfig:
     read_only: bool = False
     assistant_home_owner: str = ""
     assistant_home_cards: Any = None
+
+
+def _apply_turn_context(turn_metadata, config):
+    # Runtime context is a per-turn durable input mounted exclusively
+    # by the cyrene_context TurnStart Hook.
+    turn_metadata["ephemeral_context"] = str(config.system_extra or "")
+    if config.input_images:
+        turn_metadata["input_images"] = [dict(image) for image in config.input_images]
 
 
 class ConversationRuntime:
@@ -806,9 +815,7 @@ class ConversationRuntime:
                         ),
                     }
                 )
-            # Runtime context is a per-turn durable input mounted exclusively
-            # by the cyrene_context TurnStart Hook.
-            turn_metadata["ephemeral_context"] = str(config.system_extra or "")
+            _apply_turn_context(turn_metadata, config)
             return await bridge.submit_result(
                 str(text or "").strip(),
                 run_id=normalized_run_id,

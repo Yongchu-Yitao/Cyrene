@@ -11,6 +11,12 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from cyrene.workbench.chat.chat_attachment_service import (
+    attachment_model_prompt,
+    attachment_path_map,
+    image_inputs,
+    validate_attachment_model,
+)
 from cyrene.localization import localized
 from cyrene.workbench.chat import chat_groups
 from cyrene.workbench.chat.chat_events import publish_chat_changed
@@ -185,6 +191,12 @@ class _SendOperation:
         if error is not None:
             return error
         self.turn = turn
+        if self.turn.input.normalized and not self.is_external_agent:
+            error = validate_attachment_model(
+                self.turn.input.normalized, environment.model.candidate, self.chat_id, self.options.lang,
+            )
+            if error is not None:
+                return error
         error = await self._persist_user_turn()
         if error is not None:
             return error
@@ -688,28 +700,10 @@ class _SendOperation:
                 or localized(
                     "[Attachment upload]", "[附件上传]", language=self.options.lang
                 )
-            ) + self.routes.attachment_prompt_block(
-                self.turn.input.normalized,
-                language=self.options.lang,
             )
-
-    def _attachment_path_map(self) -> dict[str, str]:
-        from pathlib import Path
-
-        paths: dict[str, str] = {}
-        for item in self.turn.input.normalized:
-            full_path = str(item.get("path") or "").strip()
-            if not full_path:
-                continue
-            uuid_name = Path(full_path).name
-            paths[uuid_name] = full_path
-            parts = uuid_name.split("_", 1)
-            if len(parts) == 2:
-                paths[parts[1]] = full_path
-            attachment_id = str(item.get("id") or "").strip()
-            if attachment_id:
-                paths[attachment_id] = full_path
-        return paths
+            self.agent_message += attachment_model_prompt(
+                self.turn.input.normalized, self.is_external_agent, self.routes.attachment_prompt_block, self.options.lang,
+            )
 
     async def _capture_state_ids(self) -> None:
         self.state_ids_before: set[str] = set()
@@ -748,7 +742,8 @@ class _SendOperation:
             # the configured fallback route intact; auxiliary callers may
             # still pass an exact identity through ConversationConfig.
             model_identity={},
-            attachment_paths=self._attachment_path_map(),
+            attachment_paths=attachment_path_map(self.turn.input.normalized),
+            input_images=image_inputs(self.turn.input.normalized),
             remote_device_ids=tuple(
                 str(item or "").strip()
                 for item in (self.chat.get("remoteDeviceIds") or ())

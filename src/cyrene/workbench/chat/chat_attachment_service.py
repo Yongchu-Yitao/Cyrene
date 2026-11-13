@@ -239,11 +239,68 @@ def referenced_chat_attachment_target(
     raise FileNotFoundError("referenced attachment file is unavailable")
 
 
+def image_inputs(items: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    """Select uploaded images for native multimodal input."""
+    return tuple({key: item[key] for key in ("path", "width", "height") if key in item}
+                 for item in items
+                 if attachment_kind_from_meta(item.get("content_type", ""), item.get("path", "")) == "image")
+
+
+def validate_attachment_model(items, candidate, chat_id, lang):
+    from cyrene.workbench.http.errors import localized_error_response
+
+    if image_inputs(items):
+        from cyrene.plugins.model_catalog import configured_model_candidates
+
+        effective = candidate
+        if effective is None:
+            candidates = configured_model_candidates(chat_id, route="primary")
+            effective = candidates[0] if candidates else None
+        if not effective or "vision" not in (effective.get("capabilities") or []):
+            return localized_error_response(
+                "Select a vision-capable model before sending images.",
+                "当前模型不支持图片识别，请切换到支持视觉的模型后再发送。",
+                400, "model_vision_required", language=lang,
+            )
+
+
+def attachment_model_prompt(items, is_external_agent, attachment_prompt_block, lang):
+    images = () if is_external_agent else image_inputs(items)
+    image_paths = {image["path"] for image in images}
+    prompt = attachment_prompt_block(
+        [item for item in items if item["path"] not in image_paths],
+        language=lang,
+    )
+    if images:
+        prompt += "\n\n[Uploaded images]\n" + "\n".join(
+            image["path"] for image in images
+        )
+    return prompt
+
+
+def attachment_path_map(items):
+    paths: dict[str, str] = {}
+    for item in items:
+        full_path = str(item.get("path") or "").strip()
+        if not full_path:
+            continue
+        uuid_name = Path(full_path).name
+        paths[uuid_name] = full_path
+        parts = uuid_name.split("_", 1)
+        if len(parts) == 2:
+            paths[parts[1]] = full_path
+        attachment_id = str(item.get("id") or "").strip()
+        if attachment_id:
+            paths[attachment_id] = full_path
+    return paths
+
+
 __all__ = [
     "ChatAttachmentError",
     "ChatAttachmentService",
     "UploadSource",
     "attachment_prompt_block",
+    "image_inputs",
     "normalize_chat_attachments",
     "public_chat_attachment",
     "referenced_chat_attachment_target",

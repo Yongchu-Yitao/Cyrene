@@ -12,6 +12,14 @@ COMPACT_BLOCK_PREFIX = "[Compacted earlier context]"
 
 
 def message_token_estimate(message: dict[str, Any]) -> int:
+    from .image_tokens import estimate_image_tokens
+    visual_tokens = 0
+    content = message.get("content")
+    if isinstance(content, list):
+        images = [block for block in content if isinstance(block, dict)
+                  and block.get("type") in {"cyrene_local_image", "image_url", "input_image"}]
+        visual_tokens = sum(estimate_image_tokens(block) for block in images)
+        message = {**message, "content": [block for block in content if block not in images]}
     encoded = json.dumps(
         message,
         ensure_ascii=False,
@@ -19,7 +27,7 @@ def message_token_estimate(message: dict[str, Any]) -> int:
         separators=(",", ":"),
         default=str,
     ).encode("utf-8")
-    return max(1, (len(encoded) + 3) // 4)
+    return visual_tokens + max(1, (len(encoded) + 3) // 4)
 
 
 def messages_token_estimate(messages: list[dict[str, Any]]) -> int:
@@ -27,7 +35,10 @@ def messages_token_estimate(messages: list[dict[str, Any]]) -> int:
 
 
 def _compacted_text(message: dict[str, Any]) -> str:
-    content = str(message.get("content") or "").strip()
+    content = message.get("content") or ""
+    if isinstance(content, list):
+        content = "\n".join(str(block.get("text") or "") for block in content if isinstance(block, dict))
+    content = str(content).strip()
     if content.startswith(COMPACT_BLOCK_PREFIX):
         return content[len(COMPACT_BLOCK_PREFIX) :].lstrip("\n")
     return content
@@ -129,6 +140,9 @@ def compact_messages(
     ):
         return ContextCompaction(tuple(original), before, before, limit, False, False)
 
+    from .images import image_references
+    original = [image_references(message) for message in original]
+
     leading_system: list[dict[str, Any]] = []
     cursor = 0
     while (
@@ -159,7 +173,8 @@ def compact_messages(
     prefix = live[:cut]
     recent = live[cut:]
     if not prefix:
-        return ContextCompaction(tuple(original), before, before, limit, False, False)
+        after = messages_token_estimate(original) + reserved
+        return ContextCompaction(tuple(original), before, after, limit, after < before, False)
 
     summary = _render_prefix(prefix) or "Earlier context contained only tool results and was omitted."
     block = {

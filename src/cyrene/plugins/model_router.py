@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -142,7 +143,7 @@ def request_token_estimate(
             text_blocks = []
             for block in content:
                 if isinstance(block, Mapping) and block.get("type") in {
-                    "image_url", "input_image",
+                    "image_url", "input_image", "cyrene_local_image",
                 }:
                     total += estimate_image_tokens(block, model=model)
                 else:
@@ -571,6 +572,22 @@ def _route_call_inputs(
     return messages, tools, session_id, route, model_messages
 
 
+async def _prepare_image_request(candidates, model_messages):
+    from cyrene.core.context.images import has_local_images, materialize_images
+
+    if has_local_images(model_messages):
+        if not candidates or "vision" not in (candidates[0].get("capabilities") or []):
+            from cyrene.core.plugin.plugin import PluginExecutionError, PluginFailure
+            raise PluginExecutionError(PluginFailure(
+                error_code="model_vision_required",
+                message="The selected model does not support image input; select a vision-capable model.",
+                retry_scope="after_config_change",
+            ))
+        candidates = [candidate for candidate in candidates if "vision" in (candidate.get("capabilities") or [])]
+        model_messages = await asyncio.to_thread(materialize_images, model_messages)
+    return candidates, model_messages
+
+
 async def route_model_call(
     arguments: dict[str, Any],
     context: PluginContext,
@@ -584,8 +601,8 @@ async def route_model_call(
         context.data.get("model_identity"),
     )
 
+    candidates, model_messages = await _prepare_image_request(candidates, model_messages)
     from cyrene.model.transcript_policy import require_single_provider_family
-
     require_single_provider_family(candidates, context=candidate_context)
     try:
         eligible = _eligible_candidates(

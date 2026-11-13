@@ -3348,6 +3348,7 @@ export const WORKBENCH_TRANSLATIONS_ZH = {
     "toolName.Grep": "搜索内容",
     "toolName.WebFetch": "获取网页",
     "toolName.WebSearch": "网络搜索",
+    "workbenchChat.imageModelRequired": "当前模型不支持图片识别，请切换到支持视觉的模型后再发送。",
     "toolName.AnalyzeAttachment": "分析附件",
     "toolName.GenerateImage": "生成图片",
     "toolName.StartMediaGeneration": "生成媒体",
