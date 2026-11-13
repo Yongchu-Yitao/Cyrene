@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.1.7] - 2026-11-13
+
+### Features and interface updates
+
+- The built-in assistant and Workbench conversations now send uploaded images directly to vision-capable models. Send images on their own or with text and other files. The model can see the images without first calling the attachment analysis tool. If the selected model cannot accept images, the composer prompts you to switch models and keeps the images and draft ready to send.
+- Improve continuity in conversations with images. Images in the current request stay available while the assistant decides which task to continue. After switching or reloading tasks, or compacting conversation history, older images remain as file references so the original images are not repeatedly sent to the model.
+- Fix an issue where the assistant could fail to reply when OpenAI Responses rejected task tool parameters. Requests can now use these tools to switch, save and continue tasks.
+
 ## [0.9.1.6] - 2026-11-12
 
 ### Features and interface updates
