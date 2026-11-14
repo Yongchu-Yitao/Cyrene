@@ -1,7 +1,7 @@
 import { CyreneIcon } from './cyrene-icon.jsx';
 import { useCyreneActivity } from './use-cyrene-activity.jsx';
 import { createAssistantGripPointer } from './assistant-grip-pointer.mjs';
-import { assistantMenuBounds, observeAssistantGrip, listenAssistantMenuDismiss } from './assistant-grip-host.mjs';
+import { assistantMenuBounds, assistantGripPresentation, observeAssistantGrip, listenAssistantMenuDismiss } from './assistant-grip-host.mjs';
 import { workbenchServices } from '../../shared/runtime/services.jsx';
 import { AssistantDeviceList } from './assistant-device-list.jsx';
 import { loadAssistantDevices } from './assistant-device-actions.mjs';
@@ -11,9 +11,7 @@ function Icon({ name }) {
   const paths = { edit: <><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></>, memory: <><rect x="6" y="3" width="12" height="18" rx="3"/><path d="M10 8h4M10 12h4M10 16h2"/></>, device: <><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></>, back: <path d="m12 5-7 7 7 7m-7-7h15"/>, close: <path d="m6 6 12 12M6 18 18 6"/>, check: <path d="m5 12 4 4L19 6"/>, more: <><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></> };
   return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
-export function AssistantIdentityMenu({ surfaceRef, sessionId, gripActions, gripActionsRef, loading = false, welcome = false, welcomeRef, hidden = false }) {
-  gripActions = gripActionsRef?.current || gripActions;
-  const activity = useCyreneActivity(sessionId);
+function useAssistantArrival(loading, welcome) {
   const [arriving, setArriving] = React.useState(false);
   const wasUndocked = React.useRef(loading || welcome);
   React.useLayoutEffect(() => {
@@ -24,6 +22,13 @@ export function AssistantIdentityMenu({ surfaceRef, sessionId, gripActions, grip
     const timer = setTimeout(() => setArriving(false), 600);
     return () => clearTimeout(timer);
   }, [loading, welcome]);
+  return arriving;
+}
+
+export function AssistantIdentityMenu({ surfaceRef, sessionId, gripActions, gripActionsRef, loading = false, welcome = false, welcomeRef, hidden = false }) {
+  gripActions = gripActionsRef?.current || gripActions;
+  const activity = useCyreneActivity(sessionId);
+  const arriving = useAssistantArrival(loading, welcome);
   const [anchor, setAnchor] = React.useState(null), [open, setOpen] = React.useState(false), [mounted, setMounted] = React.useState(false), [screen, setScreen] = React.useState('home');
   const [remote, setRemote] = React.useState(null), [tasks, setTasks] = React.useState([]), [error, setError] = React.useState('');
   const button = React.useRef(null), slot = React.useRef(null), panel = React.useRef(null), content = React.useRef(null), destination = React.useRef(null), gripRef = React.useRef(null), portal = React.useRef(null);
@@ -133,10 +138,8 @@ export function AssistantIdentityMenu({ surfaceRef, sessionId, gripActions, grip
   function close() { setOpen(false); button.current?.focus(); }
   function activityClick(task) { close(); window.dispatchEvent(new CustomEvent('cyrene:assistant-open-activity', { detail: { sessionId: task.session_id } })); }
   if (!anchor?.visible || hidden) return null;
-  const position = loading ? { x: (anchor.pane.left + anchor.pane.right) / 2, y: (anchor.pane.top + anchor.pane.bottom) / 2 } : open && logo ? logo : welcome && anchor.welcome ? anchor.welcome : anchor;
-  const welcomeScale = welcome && !open && anchor.welcome ? anchor.welcome.size / 36 : 1;
-  const brand = welcome && anchor.welcome?.brand;
-  return ReactDOM.createPortal(<div className={'aim-root' + (open ? ' is-open' : '') + (mounted ? ' is-travelling' : '') + (loading ? ' is-loading' : '') + (welcome ? ' is-welcome' : '') + (arriving ? ' is-arriving' : '')} ref={portal} style={{ ...anchor.theme, '--aim-welcome-scale': welcomeScale, '--aim-top': top + 'px', '--aim-left': left + 'px', '--aim-width': width + 'px', '--aim-max-height': maxHeight + 'px' }}>
+  const { position, welcomeScale, brand, className } = assistantGripPresentation(anchor, { loading, welcome, open, logo, mounted, arriving });
+  return ReactDOM.createPortal(<div className={className} ref={portal} style={{ ...anchor.theme, '--aim-welcome-scale': welcomeScale, '--aim-top': top + 'px', '--aim-left': left + 'px', '--aim-width': width + 'px', '--aim-max-height': maxHeight + 'px' }}>
     {brand && <span className="aim-welcome-brand" aria-hidden="true" style={{left: brand.left, top: brand.top, font: brand.font, letterSpacing: brand.letterSpacing, color: brand.color}}>{brand.text}</span>}
     <button ref={button} className="aim-logo-button" style={{ transform: `translate(${position.x - 26}px,${position.y - 26}px)`, opacity: paneDragging ? 0 : undefined, visibility: (open && logo && (logo.y - 26 < top || logo.y + 26 > top + (height || maxHeight))) ? 'hidden' : undefined }} disabled={loading} aria-label={loading ? "正在加载助理" : "助理菜单（可拖动）"} aria-expanded={open} aria-haspopup="dialog" onKeyDown={key} onPointerDown={e => pointerController().down(e)} onPointerMove={e => interaction.current?.move(e)} onPointerUp={e => interaction.current?.release(e)} onPointerCancel={e => interaction.current?.release(e)} onLostPointerCapture={e => interaction.current?.release(e)} onClick={e => { if (e.detail === 0 || e.currentTarget.dataset.wbcPointerDragged !== 'true') setOpen(value => !value); }}>
       <span className="wbc-side-split-grip-bar-visual" ref={slot}><CyreneIcon state={loading ? "thinking" : activity} /></span>

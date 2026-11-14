@@ -12,6 +12,23 @@ export function assistantMenuBounds(anchor, viewport) {
   return { left, top, width, maxHeight: Math.max(0, bottom - top) };
 }
 
+function assistantGripPosition(anchor, { loading, welcome, open, logo }) {
+  if (loading) return { x: (anchor.pane.left + anchor.pane.right) / 2, y: (anchor.pane.top + anchor.pane.bottom) / 2 };
+  if (open && logo) return logo;
+  if (welcome && anchor.welcome) return anchor.welcome;
+  return anchor;
+}
+
+export function assistantGripPresentation(anchor, { loading, welcome, open, logo, mounted, arriving }) {
+  const position = assistantGripPosition(anchor, { loading, welcome, open, logo });
+  const slot = welcome ? anchor.welcome : null;
+  const welcomeScale = slot && !open ? slot.size / 36 : 1;
+  const brand = slot?.brand;
+  const states = { open, travelling: mounted, loading, welcome, arriving };
+  const className = 'aim-root' + Object.entries(states).filter(([, active]) => active).map(([name]) => ' is-' + name).join('');
+  return { position, welcomeScale, brand, className };
+}
+
 export function observeAssistantGrip(card, grip, onChange, win = window, welcome = null) {
   const ancestors = [];
   for (let node = card; node; node = node.parentElement) ancestors.push(node);

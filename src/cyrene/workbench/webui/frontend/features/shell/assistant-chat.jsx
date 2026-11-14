@@ -160,6 +160,14 @@ function AssistantWelcome({ personalAssistant, welcomeRef }) {
         </section>;
 }
 
+function assistantConversationState(chat, runtime, answeredIds, answering, sending) {
+  var visible = Array.isArray(chat?.messages) ? chat.messages : [];
+  var candidate = runtime?.pendingQuestion || chat?.pendingQuestion;
+  var pending = candidate && !answeredIds.has(candidate.id) ? candidate : null;
+  var running = !pending && (answering || sending || !!runtime || (chat?.runStatus || chat?.status) === "running");
+  return { visible, pending, running };
+}
+
 function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = EMPTY_PERMISSION_REQUESTS, active = true, personalAssistant = false, cache, gripActions }) {
   var chatService = workbenchServices.chat();
   var model = chatService.Model;
@@ -183,11 +191,7 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
     sessionId, model, engine, active, cache, answeredIds, stick,
   });
   useWbcComposerReserveHeight(mainRef, chat?.id, true);
-  var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
-  var candidate = runtime && runtime.pendingQuestion || chat && chat.pendingQuestion;
-  var pending = candidate && !answeredIds.current.has(candidate.id) ? candidate : null;
-  var running = !pending && (answering || sending || !!runtime || !!(chat && (chat.runStatus || chat.status) === "running"));
-  var visible = messages;
+  var { visible, pending, running } = assistantConversationState(chat, runtime, answeredIds.current, answering, sending);
   React.useEffect(function () {
     var thread = scrollRef.current;
     if (stick.current && thread && !thread.wbcResizeActive) {

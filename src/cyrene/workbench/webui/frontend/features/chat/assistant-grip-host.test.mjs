@@ -1,7 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assistantMenuBounds, observeAssistantGrip, listenAssistantMenuDismiss } from '../shell/assistant-grip-host.mjs';
+import { assistantMenuBounds, assistantGripPresentation, observeAssistantGrip, listenAssistantMenuDismiss } from '../shell/assistant-grip-host.mjs';
 import { createAssistantGripPointer } from '../shell/assistant-grip-pointer.mjs';
+
+test('logo moves from loading centre through welcome to the pane grip', () => {
+  const anchor = { x: 300, y: 60, pane: { left: 100, right: 500, top: 40, bottom: 640 },
+    welcome: { x: 250, y: 220, size: 72, brand: { text: 'Cyrene', left: 290, top: 210 } } };
+  const loading = assistantGripPresentation(anchor, { loading: true });
+  assert.deepEqual(loading.position, { x: 300, y: 340 });
+  assert.equal(loading.className, 'aim-root is-loading');
+  const welcome = assistantGripPresentation(anchor, { welcome: true });
+  assert.equal(welcome.position, anchor.welcome);
+  assert.equal(welcome.welcomeScale, 2);
+  assert.equal(welcome.brand, anchor.welcome.brand);
+  const docked = assistantGripPresentation(anchor, { arriving: true });
+  assert.equal(docked.position, anchor);
+  assert.equal(docked.welcomeScale, 1);
+  assert.ok(!docked.brand);
+  assert.equal(docked.className, 'aim-root is-arriving');
+});
+
+test('open welcome menu uses the menu logo slot and retains the welcome brand', () => {
+  const anchor = { welcome: { x: 250, y: 220, size: 72, brand: { text: 'Cyrene' } } };
+  const logo = { x: 130, y: 80 };
+  const opened = assistantGripPresentation(anchor, { welcome: true, open: true, mounted: true, logo });
+  assert.equal(opened.position, logo);
+  assert.equal(opened.welcomeScale, 1);
+  assert.equal(opened.brand, anchor.welcome.brand);
+  assert.equal(opened.className, 'aim-root is-open is-travelling is-welcome');
+  assert.equal(assistantGripPresentation(anchor, { welcome: true, open: true }).position, anchor.welcome);
+  const unmeasured = { x: 300, y: 60 };
+  const fallback = assistantGripPresentation(unmeasured, { welcome: true });
+  assert.equal(fallback.position, unmeasured);
+  assert.equal(fallback.welcomeScale, 1);
+  assert.ok(!fallback.brand);
+});
 
 test('menu top aligns with the ordinary pane grip and stays inside pane bounds', () => {
   for (const pane of [
