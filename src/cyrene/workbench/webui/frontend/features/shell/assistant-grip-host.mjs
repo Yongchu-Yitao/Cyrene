@@ -12,9 +12,10 @@ export function assistantMenuBounds(anchor, viewport) {
   return { left, top, width, maxHeight: Math.max(0, bottom - top) };
 }
 
-export function observeAssistantGrip(card, grip, onChange, win = window) {
+export function observeAssistantGrip(card, grip, onChange, win = window, welcome = null) {
   const ancestors = [];
   for (let node = card; node; node = node.parentElement) ancestors.push(node);
+  for (let node = welcome?.parentElement; node && node !== card; node = node.parentElement) ancestors.push(node);
   let frame = null, trackingUntil = 0, disposed = false;
   let previous = '';
   let theme = null;
@@ -40,6 +41,16 @@ export function observeAssistantGrip(card, grip, onChange, win = window) {
       && pane.top < win.innerHeight && pane.left < win.innerWidth;
     const next = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, bottom: rect.bottom,
       pane: { left: pane.left, top: pane.top, right: pane.right, bottom: pane.bottom }, theme: readTheme(), visible };
+    if (welcome?.isConnected) {
+      const slot = welcome.getBoundingClientRect();
+      next.welcome = { x: slot.left + slot.width / 2, y: slot.top + slot.height / 2, size: slot.width };
+      const name = welcome.nextElementSibling;
+      if (name) {
+        const rect = name.getBoundingClientRect(), style = win.getComputedStyle(name);
+        next.welcome.brand = { text: name.textContent, left: rect.left, top: rect.top,
+          font: style.font, letterSpacing: style.letterSpacing, color: style.color };
+      }
+    }
     const encoded = JSON.stringify(next);
     if (encoded !== previous) { previous = encoded; onChange(next); }
   }
@@ -59,6 +70,7 @@ export function observeAssistantGrip(card, grip, onChange, win = window) {
   function finishTransition(event) { if (affectsGrip(event)) schedule(); }
   const resize = new win.ResizeObserver(schedule);
   ancestors.forEach(node => resize.observe(node)); resize.observe(grip);
+  if (welcome) resize.observe(welcome);
   // Theme tokens change with ancestor attributes, not with every interpolated
   // pixel of a sidebar transition. Reuse the snapshot while following motion.
   const mutations = new win.MutationObserver(invalidateTheme);

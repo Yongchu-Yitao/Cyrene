@@ -33,10 +33,13 @@ test('portalled grip follows position, visibility and theme changes without idle
     MutationObserver: class { constructor(fn) { mutation = fn; } observe() {} disconnect() { disconnected++; } },
   };
   const flush = time => { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn(time)); };
-  const stop = observeAssistantGrip(card, grip, value => observations.push(value), win);
+  const welcome = {isConnected: true, getBoundingClientRect: () => ({left: left + 30, top: 240, width: 64, height: 64})};
+  const stop = observeAssistantGrip(card, grip, value => observations.push(value), win, welcome);
   assert.equal(observations.at(-1).x, 300); assert.equal(frames.size, 0);
+  assert.deepEqual(observations.at(-1).welcome, {x: 162, y: 272, size: 64});
   left = 500; color = '#17181c'; mutation(); flush(0);
   assert.equal(observations.at(-1).x, 700); assert.equal(observations.at(-1).theme['--wb-card-bg'], color);
+  assert.equal(observations.at(-1).welcome.x, 562, 'welcome logo follows sidebar layout changes');
   const transition = new Event('transitionrun');
   Object.defineProperty(transition, 'target', {value: card});
   events.dispatchEvent(transition); left = 600; flush(100);

@@ -27,6 +27,6 @@ export function AssistantGripLogo({ shared = false, ...props }) {
   gripActionsRef.current = props.gripActions;
   React.useEffect(() => {
     if (shared && register) return register({ ...props, gripActionsRef });
-  }, [shared, register, props.surfaceRef, props.sessionId, props.loading]);
+  }, [shared, register, props.surfaceRef, props.sessionId, props.loading, props.welcome, props.welcomeRef]);
   return shared && register ? null : <AssistantIdentityMenu {...props} />;
 }

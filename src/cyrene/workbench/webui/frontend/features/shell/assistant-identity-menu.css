@@ -73,7 +73,7 @@
 
 .aim-root:not(.is-open) .aim-panel {pointer-events:none}
 
-.aim-root .aim-device-row:is(:hover,:focus-within) {background:var(--aim-soft)}
+.aim-root .aim-device-row:is(:hover,:focus-within,:has(> .aim-device-choice[aria-pressed="true"])) {background:var(--aim-soft)}
 .aim-root .aim-device-row > button:hover {background:transparent}
 .aim-root .aim-device-more {display:grid;place-items:center;width:28px;height:28px;padding:0;flex-shrink:0;border-radius:6px;color:var(--aim-muted)}
 .aim-root .aim-device-menu {position:fixed;right:auto;z-index:4;box-sizing:border-box;width:168px;min-width:0;overflow:auto;pointer-events:auto}
@@ -91,8 +91,14 @@
 .aim-device-light.is-offline {background:#ef6060}
 .aim-device-light.is-checking {background:var(--aim-muted)}
 
-/* One logo travels from the loading centre to the actual pane grip. */
-.aim-root:is(.is-loading,.is-arriving) .aim-logo-button {transition:transform 560ms cubic-bezier(.22,1,.36,1)}
+/* Keep one logo in the welcome area until the first message starts. */
+.aim-root:is(.is-loading,.is-welcome,.is-arriving) .aim-logo-button {transition:transform 560ms cubic-bezier(.22,1,.36,1)}
 .aim-root.is-loading .aim-logo-button {pointer-events:none;opacity:1;cursor:default}
 .aim-root .aim-logo-button .wbc-side-split-grip-bar-visual {transition:scale 560ms cubic-bezier(.22,1,.36,1)}
 .aim-root.is-loading .aim-logo-button .wbc-side-split-grip-bar-visual {scale:1.6}
+.aim-root.is-welcome .aim-logo-button .wbc-side-split-grip-bar-visual {scale:var(--aim-welcome-scale,1)}
+/* The pane isolates stacking, so paint its brand alongside the portalled logo. */
+.assistant-chat-brand-name.is-portalled {opacity:0}
+.aim-welcome-brand {position:absolute;z-index:3;white-space:nowrap;pointer-events:none}
+.aim-root.is-welcome .aim-panel {z-index:4}
+.aim-root.is-welcome.is-open .aim-logo-button {z-index:5}

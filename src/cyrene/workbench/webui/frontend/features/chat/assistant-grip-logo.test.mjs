@@ -48,3 +48,22 @@ test('loading logo survives the bootstrap handoff and hides when its ready surfa
   assert.equal(logo().props.hidden, true);
   h.unmount();
 });
+
+test('shared logo registers welcome changes without replacing its surface', () => {
+  const registrations = [];
+  const register = props => { registrations.push(props); return () => {}; };
+  const React = {createElement, createContext: () => ({}), useContext: () => register};
+  const surfaceRef = {current: {}}, welcomeRef = {current: {}};
+  let welcome = true;
+  const h = harness('../shell/assistant-grip-logo.jsx', {React});
+  h.run((mod, hk) => {
+    hooks(React, hk);
+    return mod.AssistantGripLogo({shared: true, surfaceRef, welcomeRef, welcome, loading: false});
+  });
+  assert.equal(registrations.at(-1).welcome, true);
+  welcome = false; h.flush();
+  assert.equal(registrations.length, 2);
+  assert.equal(registrations.at(-1).welcome, false);
+  assert.equal(registrations.at(-1).surfaceRef, surfaceRef);
+  h.unmount();
+});

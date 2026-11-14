@@ -150,15 +150,11 @@ function assistantGripVisible(personalAssistant, chat) {
   return personalAssistant || !chat;
 }
 
-function assistantWelcome(chat, visible, runtime, personalAssistant) {
-  return chat && !visible.length && !runtime ? <AssistantWelcome personalAssistant={personalAssistant} /> : null;
-}
-
-function AssistantWelcome({ personalAssistant }) {
+function AssistantWelcome({ personalAssistant, welcomeRef }) {
   return <section className="assistant-chat-welcome">
           <div className="assistant-chat-brand">
-            {!personalAssistant && <div className="assistant-chat-avatar"><CyreneIcon /></div>}
-            <span>Cyrene</span>
+            <div ref={welcomeRef} className="assistant-chat-avatar">{!personalAssistant && <CyreneIcon />}</div>
+            <span className={personalAssistant ? "assistant-chat-brand-name is-portalled" : "assistant-chat-brand-name"}>Cyrene</span>
           </div>
           <h1>需要我做什么？</h1>
         </section>;
@@ -175,6 +171,7 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
   var answeredIds = React.useRef(new Set());
   var answerInFlight = React.useRef(false);
   var mainRef = React.useRef(null);
+  var welcomeRef = React.useRef(null);
   var scrollRef = React.useRef(null);
   var stick = React.useRef(true);
   var lastScrollTop = React.useRef(null);
@@ -265,13 +262,14 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
   var failure = engine.getFailure && engine.getFailure(sessionId);
   var displayError = error || (failure && failure.message) || "";
   var showGrip = assistantGripVisible(personalAssistant, chat);
+  var showWelcome = !!chat && !visible.length && !running && !pending;
   return <section ref={mainRef} className="wbc-main assistant-chat" data-cyrene-personal-composer={personalAssistant && active ? "true" : undefined} aria-label={title || "Cyrene 个人助理"} aria-busy={!chat}>
-    {showGrip ? <AssistantGripLogo shared={personalAssistant} loading={!chat} surfaceRef={mainRef} sessionId={sessionId} gripActions={gripActions} /> : null}
+    {showGrip ? <AssistantGripLogo shared={personalAssistant} loading={!chat} welcome={personalAssistant && showWelcome} welcomeRef={welcomeRef} surfaceRef={mainRef} sessionId={sessionId} gripActions={gripActions} /> : null}
     {refreshError && <p className="wbc-card-notice" role="status">{refreshError}</p>}
     {displayError && <WbcErrorNotice message={displayError} kind={chat ? "message" : "load"} />}
     <div className="wbc-thread-stage">
       <div className={"wbc-thread" + (visible.length || runtime ? " wbc-thread-messages" : "")} ref={scrollRef} onScroll={onScroll}>
-        {assistantWelcome(chat, visible, runtime, personalAssistant)}
+        {showWelcome && <AssistantWelcome personalAssistant={personalAssistant} welcomeRef={welcomeRef} />}
         {personalAssistant && chat
           ? <AssistantHomeTranscript key={sessionId} Transcript={chatService.Transcript} messages={visible} runtime={runtime} sessionId={sessionId} active={active} onOpenFile={onOpenFile} />
           : React.createElement(chatService.Transcript, { messages: visible, runtime: runtime, chatId: sessionId, onOpenFile: onOpenFile })}

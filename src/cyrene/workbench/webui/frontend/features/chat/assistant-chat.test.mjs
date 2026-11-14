@@ -543,3 +543,35 @@ test('personal assistant keeps its logo from loading through an empty ready conv
   assert.ok(find(h.value, 'composer'));
   h.unmount();
 });
+
+test('empty assistant keeps its welcome logo until the first send, then returns if sending fails', async () => {
+  const {h, service} = mount({AssistantGripLogo: 'grip-logo'}, {
+    personalAssistant: true, cache: {details: {a: {id: 'a', messages: []}}},
+  });
+  service.Model.getChat = async () => ({id: 'a', messages: []});
+  await settle();
+  for (const [id, callback] of [...h.timers]) { h.timers.delete(id); callback(); }
+  await settle(); h.flush();
+  assert.equal(find(h.value, 'grip-logo').props.welcome, true);
+  let reject;
+  service.Runtimes.start = () => new Promise((_resolve, fail) => { reject = fail; });
+  const send = find(h.value, 'composer').props.onSend({message: 'Hello'});
+  h.flush();
+  assert.equal(find(h.value, 'grip-logo').props.welcome, false, 'dock immediately, before the server responds');
+  reject(new Error('offline')); await send; await settle(); h.flush();
+  assert.equal(find(h.value, 'grip-logo').props.welcome, true);
+  h.unmount();
+});
+
+test('existing messages and live runs keep the personal assistant logo docked', async () => {
+  for (const chat of [
+    {id: 'a', messages: [{id: 'u', role: 'user', content: 'Hello'}]},
+    {id: 'a', messages: [], runStatus: 'running'},
+  ]) {
+    const {h} = mount({AssistantGripLogo: 'grip-logo'}, {
+      personalAssistant: true, cache: {details: {a: chat}},
+    });
+    assert.equal(find(h.value, 'grip-logo').props.welcome, false);
+    h.unmount(); await settle();
+  }
+});
