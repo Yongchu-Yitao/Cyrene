@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeDraft, prepare_home, HOME_TOOLS, HOME_CONTEXT_PROJECTION, home_tool_scope
+from cyrene.plugins.builtin.cyrene_cards.home_preparation import HomeDraft, prepare_home, HOME_CARD_TOOLS, home_tool_scope
 from cyrene.plugins.builtin.cyrene_system_prompt.home_prompt import HOME_SYSTEM_PROMPT
 from cyrene.plugins.builtin.cyrene_cards.service import CardService
 from cyrene.plugins.builtin.cyrene_cards.schemas import CardError
@@ -49,7 +49,7 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
     live = CardService(tmp_path / 'live')
     card = await create(live)
     chat = {'id': 'assistant', 'kind': 'personal-assistant', 'createdAt': 'birth', 'status': 'running',
-            'projectId': 'personal', 'pendingQuestion': {'id': 'q'}, 'messages': [{'role': 'user', 'content': 'work'}]}
+            'projectId': 'personal', 'permissionMode': 'workspace_only', 'pendingQuestion': {'id': 'q'}, 'messages': [{'role': 'user', 'content': 'work'}]}
     before = deepcopy(chat)
     port = SimpleNamespace(service=SimpleNamespace(repository=SimpleNamespace(get=lambda _: chat, _database=lambda: str(tmp_path / 'wb.db'))))
     observed = {}
@@ -66,7 +66,11 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
             assert config.assistant_home_owner == 'assistant'
             assert config.model_identity['candidateId'] == 'selected'
             assert config.model_identity['model'] == 'deepseek-flash'
-            assert config.memory_write_enabled is False
+            assert config.memory_write_enabled is True
+            assert config.memory_project_enabled is True
+            assert config.workspace_enabled is None
+            assert config.soul_enabled is None
+            assert config.permission_mode == "workspace_only"
             assert config.system_extra == ""
             await kwargs['publish']({'type': 'tool.started'})
             await config.assistant_home_cards.command('assistant', None, 'card.update', {
@@ -112,7 +116,7 @@ def test_home_model_uses_current_selection(monkeypatch):
 
 
 def test_runtime_scopes_background_assistant_and_redirects_cards_only(tmp_path, monkeypatch):
-    from cyrene.core.plugin import PluginRegistry, PluginUnavailableError
+    from cyrene.core.plugin import PluginRegistry
     from cyrene.plugins.builtin.cyrene_cards import plugin_pack
     from cyrene.plugins.builtin.session_management import plugin_pack as management_pack
     from cyrene.workbench.core_adapter import conversation_runtime as module
@@ -136,13 +140,16 @@ def test_runtime_scopes_background_assistant_and_redirects_cards_only(tmp_path, 
     assert host.active_services['cards'] == 'live'
     assert opened['plugin_context_data']['personal_assistant'] is True
     assert opened['plugin_context_data']['assistant_home_owner'] == 'assistant'
-    assert opened['plugin_context_data']['context_projection'] == HOME_CONTEXT_PROJECTION
-    assert opened['extra_direct_tool_names'] == HOME_TOOLS
+    assert 'context_projection' not in opened['plugin_context_data']
+    assert opened['extra_direct_tool_names'] == HOME_CARD_TOOLS
     view = opened['registry']
     assert view.resolve('card.update').name == 'card.update'
-    for tool in ('task_start', 'card.pin', 'switch_context'):
-        with pytest.raises(PluginUnavailableError):
-            view.resolve(tool)
+    for tool in ('task_start', 'card.pin'):
+        assert view.resolve(tool).name == tool
+    # The view must include plugins installed after session creation, too.
+    from cyrene.core.plugin import Plugin
+    registry.register_plugin(Plugin('custom.lookup', 'User lookup', {'type': 'object'}, lambda args, ctx: 'ok'), source='user')
+    assert view.resolve('custom.lookup').name == 'custom.lookup'
 
 
 @pytest.mark.asyncio
@@ -165,15 +172,19 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
         calls.append(args)
         assert context.data['session_id'] == 'isolated'
         system = [m['content'] for m in args['messages'] if m['role'] == 'system']
-        assert system == [HOME_SYSTEM_PROMPT.strip()]
+        assert HOME_SYSTEM_PROMPT.replace('{workspace}', str(tmp_path)).strip() in '\n'.join(system)
         serialized = json.dumps(args['messages'])
-        assert 'UNRELATED_PLUGIN_INSTRUCTIONS' not in serialized
-        assert 'task_context_catalog' not in serialized
+        assert 'UNRELATED_PLUGIN_INSTRUCTIONS' in serialized
         assert 'Prepare overview' in serialized
         if len(calls) == 1:
             names = {tool['function']['name'] for tool in args['tools']}
             assert 'card.create' in names
-            assert not names & {'send_message', 'task_start', 'card.pin', 'switch_context'}
+            assert {'Bash', 'Read', 'Write', 'toolbox'} <= names
+            return {'content': '', 'tool_calls': [{'id': 'lookup', 'function': {'name': 'toolbox',
+                'arguments': json.dumps({'operation': 'invoke', 'name': 'custom.lookup', 'arguments': {}})}}]}
+        if len(calls) == 2:
+            tool = next(message for message in reversed(args['messages']) if message['role'] == 'tool')
+            assert 'fresh custom evidence' in tool['content']
             arguments = ({'card_id': card['card_id'], 'expected_revision': 1, 'changes': {'title': 'Prepared'}}
                          if card else {'template': 'content', 'spec': {'title': 'Prepared', 'home_kind': 'overview'}})
             return {'content': '', 'tool_calls': [{'id': operation, 'function': {'name': f'card.{operation}',
@@ -182,6 +193,9 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
         assert json.loads(tool['content']).get('success') is True, tool['content']
         return {'content': 'done', 'tool_calls': []}
     registry = PluginRegistry()
+    async def lookup(args, context):
+        return 'fresh custom evidence'
+    registry.register_plugin(Plugin('custom.lookup', 'User-installed lookup', {'type': 'object'}, lookup), source='user')
     # Use the real application host and session reconciliation, but omit the
     # production scheduler/routes: the host owns live cards, the Agent gets a draft.
     registry.register_pack(replace(plugin_pack, application_setup=lambda context: context.provide('cards', live)), source='test')
@@ -201,11 +215,10 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
         host.attach(APIRouter())
         assert host.active_services['cards'] is live
     session = AgentSession(tmp_path / 'agent', tmp_path, tmp_path / 'plugins', tree_id='isolated',
-        registry=ScopedPluginRegistry(registry, home_tool_scope(registry)), load_plugins=False, model_plugin=model_router.MODEL_ROUTER_PLUGIN,
-        extra_direct_tool_names=HOME_TOOLS[:4], plugin_services={'cards': draft},
+        registry=ScopedPluginRegistry(registry, home_tool_scope()), load_plugins=False, model_plugin=model_router.MODEL_ROUTER_PLUGIN,
+        extra_direct_tool_names=HOME_CARD_TOOLS, plugin_services={'cards': draft},
         application_scope=host, inherit_application_scope=False,
-        plugin_context_data={'session_id': 'isolated', 'personal_assistant': True, 'assistant_home_owner': 'assistant',
-                             'context_projection': HOME_CONTEXT_PROJECTION})
+        plugin_context_data={'session_id': 'isolated', 'personal_assistant': True, 'assistant_home_owner': 'assistant'})
     session._configured_compaction_limit = lambda: 0
     from cyrene.core.hook import SESSION_START, TURN_START
     async def unrelated(_event):
@@ -220,8 +233,9 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
         from cyrene.core.context.projection import project_model_messages
         path = session.store.get_path(session.tree.id, session._leaf_id)
         replay = project_model_messages(path)
-        assert [m['content'] for m in replay if m['role'] == 'system'] == [HOME_SYSTEM_PROMPT.strip()]
-        assert 'UNRELATED_PLUGIN_INSTRUCTIONS' not in json.dumps(replay)
+        assert HOME_SYSTEM_PROMPT.replace('{workspace}', str(tmp_path)).strip() in '\n'.join(
+            m['content'] for m in replay if m['role'] == 'system')
+        assert 'UNRELATED_PLUGIN_INSTRUCTIONS' in json.dumps(replay)
         session.reconcile_plugins(force=True)
         assert session._plugin_services()['cards'] is draft
         if card:

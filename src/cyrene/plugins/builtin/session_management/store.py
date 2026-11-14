@@ -15,6 +15,8 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript("""
+                CREATE TABLE IF NOT EXISTS remote_task_snapshots (
+                    target TEXT NOT NULL, node TEXT NOT NULL, document TEXT NOT NULL, PRIMARY KEY(target,node));
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY, owner TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS task_presentation (
@@ -43,6 +45,28 @@ class Store:
                 notify_database_commit(self.path)
         finally:
             db.close()
+
+    def all_sessions(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM sessions")]
+
+    def remote_snapshot(self, target, node=""):
+        with self.connect() as db:
+            row = db.execute("SELECT document FROM remote_task_snapshots WHERE target=? AND node=?", (target, node)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_remote_snapshot(self, target, value, node=""):
+        encoded = json.dumps(value, ensure_ascii=False)
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO remote_task_snapshots VALUES (?,?,?)", (target, node, encoded))
+            checkpoint_node = value.get("checkpoint", {}).get("node_id")
+            if (not node and checkpoint_node and value.get("notification")
+                    and value.get("status") in {"completed", "failed", "cancelled", "awaiting_user"}):
+                db.execute("INSERT INTO remote_task_snapshots VALUES (?,?,?) ON CONFLICT(target,node) DO UPDATE SET document=excluded.document WHERE coalesce(json_extract(remote_task_snapshots.document, '$.result.status'), '') NOT IN ('completed','failed','cancelled','awaiting_user')", (target, checkpoint_node, encoded))
+
+    def queued_ids(self, target):
+        with self.connect() as db:
+            return [r[0] for r in db.execute("SELECT id FROM messages WHERE target=? AND status='queued' ORDER BY seq", (target,))]
 
     def replay(self, key, fingerprint):
         with self.connect() as db:
@@ -174,6 +198,7 @@ class Store:
         with self.connect() as db:
             for target in targets:
                 db.execute("DELETE FROM task_presentation WHERE task_id=?", (target,))
+                db.execute("DELETE FROM remote_task_snapshots WHERE target=?", (target,))
             db.execute("DELETE FROM messages WHERE owner=?", (owner,))
             db.execute("DELETE FROM notifications WHERE owner=?", (owner,))
             db.execute("DELETE FROM sessions WHERE owner=?", (owner,))

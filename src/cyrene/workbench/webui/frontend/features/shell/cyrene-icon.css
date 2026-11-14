@@ -19,8 +19,8 @@
 @media(prefers-reduced-motion:reduce){.workbench-sidebar-dock [data-tour="rail_cyrene"] .cyrene-motion {transition:none}}
 html[data-performance-mode="on"] .workbench-sidebar-dock [data-tour="rail_cyrene"] .cyrene-motion {transition:none}
 
-/* Pointer events stay on the original grip so its drag and menu still work. */
-.wbc-pane-card .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
+/* Share the grip material with the logo that travels into the assistant menu. */
+:is(.wbc-pane-card, .aim-logo-button) .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
   position:relative;display:grid;place-items:center;box-sizing:border-box;
   width:52px;height:52px;border-radius:50%;opacity:1;
   border:0;background:transparent;box-shadow:none;
@@ -28,7 +28,7 @@ html[data-performance-mode="on"] .workbench-sidebar-dock [data-tour="rail_cyrene
 }
 /* Feather only the glass, keeping the artwork and expression marks crisp.
    Extra room outside the grip lets the material disappear without a rim. */
-.wbc-pane-card .wbc-side-split-grip-bar-visual:has(> .cyrene-motion)::before {
+:is(.wbc-pane-card, .aim-logo-button) .wbc-side-split-grip-bar-visual:has(> .cyrene-motion)::before {
   /* Smoothstep falloff: no solid plateau or abrupt slope at either end. */
   --cyrene-grip-fade:radial-gradient(circle closest-side,
     #000 0%,rgb(0 0 0 / .972) 10%,rgb(0 0 0 / .896) 20%,

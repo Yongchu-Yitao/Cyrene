@@ -164,6 +164,7 @@ test("row dragging previews tracks and separator, then commits once on cancellat
 })
 
 function assertDragFinished(drag) {
+  drag.flush()
   assert.equal(drag.frames.size, 0)
   assert.equal(drag.pendingTimers(), 0)
   assert.equal(drag.listeners.size, 0)
@@ -173,11 +174,10 @@ function assertDragFinished(drag) {
   assert.deepEqual(drag.events.map(event => event.type), ["workbench:split-resize-start", "workbench:split-resize-end"])
 }
 
-test("either column closes only after pausing at minimum width and dragging another 48px", () => {
-  for (const [side, limitX, closeX, committedWidth] of [["right", 840, 888, 380], ["left", 400, 352, 820]]) {
+test("either column closes after 32px overshoot without a pause", () => {
+  for (const [side, limitX, closeX, committedWidth] of [["right", 840, 872, 380], ["left", 400, 368, 820]]) {
     const drag = resizeHarness("column", { closable: true })
     drag.move(limitX, 0)
-    drag.wait()
     drag.move(closeX + (side === "right" ? -1 : 1), 0)
     assert.deepEqual(drag.closes, [])
     drag.move(closeX, 0)
@@ -237,28 +237,20 @@ test("cancel, blur, lost capture and a released mouse end resizing without closi
 })
 
 
-test("fast overshoot stays at minimum, then needs a pause and fresh closing travel", () => {
+test("fast overshoot previews closing immediately and commits only on release", () => {
   const drag = resizeHarness("column", { closable: true })
   drag.move(1000, 0)
-  drag.flush()
   assert.equal(drag.layout.style["--wbc-pane-right-width"], "380px")
-  for (let x = 1010; x <= 1200; x += 10) {
-    drag.wait(16)
-    drag.move(x, 0)
-  }
+  assert.equal(drag.layout.attrs["data-resize-collapsed"], "column-minimum")
   assert.deepEqual(drag.closes, [])
-  drag.wait()
-  drag.move(1247, 0)
-  assert.deepEqual(drag.closes, [])
-  drag.move(1248, 0)
   drag.stop()
   assert.deepEqual(drag.closes, ["right"])
   assertDragFinished(drag)
 })
 
-test("releasing after a pause at minimum keeps the pane open", () => {
+test("releasing at the minimum keeps the pane open regardless of elapsed time", () => {
   const drag = resizeHarness("column", { closable: true })
-  drag.move(1000, 0)
+  drag.move(840, 0)
   drag.wait(1000)
   drag.stop()
   assert.deepEqual(drag.closes, [])
@@ -266,18 +258,6 @@ test("releasing after a pause at minimum keeps the pane open", () => {
   assertDragFinished(drag)
 })
 
-test("blocked event processing does not itself arm closing", () => {
-  const drag = resizeHarness("column", { closable: true })
-  drag.move(840, 0)
-  drag.wait(500, true)
-  drag.move(1000, 0)
-  assert.deepEqual(drag.closes, [])
-  drag.wait()
-  drag.move(1048, 0)
-  drag.stop()
-  assert.deepEqual(drag.closes, ["right"])
-  assertDragFinished(drag)
-})
 
 test("reverse dragging restores either column without releasing or losing content", () => {
   for (const [limit, close, reverse, edge] of [[840, 888, 864, "minimum"], [400, 352, 376, "maximum"]]) {

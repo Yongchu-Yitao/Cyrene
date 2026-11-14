@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+import {transformSync} from 'esbuild';
 import {harness} from './hook-harness.test.mjs';
 const React={createElement:(type,props,...children)=>({type,props:{...props,children}})};
 function find(node,predicate){if(!node)return null;if(Array.isArray(node))return node.map(n=>find(n,predicate)).find(Boolean)||null;if(predicate(node))return node;return find(node.props?.children,predicate);}
@@ -12,6 +15,22 @@ function mount(logo=true, props={}, extras={}){
   find(h.value,n=>n.props?.className==='wbc-split-grip-bar-host').props.ref.current={closest:()=>null,contains:()=>false};
   return {h,grip,button:()=>find(h.value,n=>n.props?.className==='wbc-side-split-grip-bar'),menu:()=>find(h.value,n=>n.props?.role==='menu')};
 }
+test('assistant workspace task split retains its clickable grip menu',()=>{
+  const source=readFileSync(new URL('./page.jsx',import.meta.url),'utf8');
+  const start=source.indexOf('  function renderPaneCard(');
+  const end=source.indexOf('    } else if (card.kind === "chat")',start);
+  const code=transformSync(source.slice(start,end)+'\n    }\n    return grip;\n  }',{loader:'jsx'}).code;
+  const context={React,activeChatId:'assistant',paneCardCount:2,renderConversation:()=>{},
+    canClosePaneCard:()=>false,resourceObservationStates:{},renderActiveConversationCard:()=>null,
+    WbcSplitGripBar:'grip',hideConversationPanel:true,handlePaneCardDragEnd:()=>{}};
+  vm.runInNewContext(code,context);
+  const element=context.renderPaneCard({id:'chat:task',kind:'chat',payload:'task'},'right',1);
+  assert.equal(element.props.menuDisabled,false);
+  const {h,grip,button,menu}=mount(false,element.props);
+  button().props.onClick({currentTarget:grip});h.flush();
+  assert.ok(menu());
+  h.unmount();
+});
 test('logo click toggles the original menu below the stable logo slot; Escape closes it',()=>{
   const {h,grip,button,menu}=mount();
   assert.equal(menu(),null);

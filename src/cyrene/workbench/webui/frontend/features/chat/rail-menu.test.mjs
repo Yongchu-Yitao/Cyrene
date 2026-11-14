@@ -26,11 +26,11 @@ function reveal({ bottom = 140, top = 116, connected = true, popover = true } = 
   return { shown, scrolled, style: menu.style };
 }
 
-test('group menu opens below its anchor without scrolling the conversation list', () => {
+test('rail menu opens below its anchor without scrolling the conversation list', () => {
   assert.deepEqual(reveal(), { shown: 1, scrolled: 0, style: { left: '100px', top: '144px' } });
 });
 
-test('group menu flips above an anchor near the window bottom without scrolling', () => {
+test('rail menu flips above an anchor near the window bottom without scrolling', () => {
   assert.deepEqual(reveal({ top: 350, bottom: 374 }), { shown: 1, scrolled: 0, style: { left: '100px', top: '246px' } });
 });
 
@@ -38,6 +38,13 @@ test('closed or removed menu anchors are ignored', () => {
   assert.deepEqual(reveal({ connected: false }), { shown: 0, scrolled: 0, style: {} });
 });
 
-test('ordinary chat menus retain their existing reveal behavior', () => {
+test('non-popover menus retain their existing reveal behavior', () => {
   assert.deepEqual(reveal({ popover: false }), { shown: 0, scrolled: 1, style: {} });
+});
+
+// Mount-based opening also covers right-click and UI-surface open_menu actions.
+test('chat menus mount in the top layer regardless of the opening action', () => {
+  assert.match(source, /popover="manual" data-cyrene-node-id="chat_context_menu"\s+ref=\{function \(menu\) \{ if \(menu\) revealRailMenu\(menu.parentElement\); \}\}/);
+  const css = readFileSync(new URL('./chat.css', import.meta.url), 'utf8');
+  assert.match(css, /\.wbc-chat-card-actions \.wb-card-menu\[popover\],\s*\.wbc-chat-group-actions \.wb-card-menu\[popover\] \{\s*position: fixed;/);
 });

@@ -184,7 +184,7 @@ export function AssistantTaskResources({ task, onOpen, onFiles, onCount, fileOwn
       <span className="wbc-chat-card-top">
         {item.kind === "file" ? <WbcFileVisual file={item.payload} className="wbc-file-visual assistant-resource-file-icon" /> : item.kind === "browser" ? <span className="wbc-browser-picker-favicon" aria-hidden="true">
           <span className="wbc-browser-picker-favicon-fallback">{item.icon}</span>
-          {item.favicon ? <img key={item.favicon} src={item.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
+          {item.favicon ? <img key={item.favicon} src={item.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.dataset.loaded = "true"; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
         </span> : <span className="wbc-chat-row-icon" aria-hidden="true">{item.icon}</span>}
         <span className="wbc-chat-card-title"><b><WbcHoverMarquee text={item.title} /></b></span>
         <span className="wbc-chat-card-right"><time className="wbc-chat-card-time">{wbcFormatTime(task.updated_at)}</time></span>

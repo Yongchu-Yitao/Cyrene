@@ -473,7 +473,7 @@ def _attachment_summary(item: Any) -> dict[str, Any] | None:
     }
     return result or None
 
-def _store_remote_attachments(value: Any) -> list[dict[str, Any]]:
+def _store_remote_attachments(value: Any, *, max_files=5, max_bytes=8 * 1024 * 1024) -> list[dict[str, Any]]:
     """Persist a bounded, encrypted mobile upload as a regular chat attachment."""
     if not isinstance(value, list):
         return []
@@ -487,7 +487,9 @@ def _store_remote_attachments(value: Any) -> list[dict[str, Any]]:
     uploaded: list[dict[str, Any]] = []
     total_bytes = 0
     try:
-        for index, item in enumerate(value[:5]):
+        if len(value) > max_files:
+            raise ValueError("Too many attachments")
+        for index, item in enumerate(value):
             if not isinstance(item, dict):
                 continue
             raw_name = str(item.get("name") or f"mobile-{index + 1}.bin")
@@ -503,8 +505,8 @@ def _store_remote_attachments(value: Any) -> list[dict[str, Any]]:
             except Exception as exc:
                 raise ValueError(f"invalid attachment encoding: {raw_name}") from exc
             total_bytes += len(content)
-            if total_bytes > 8 * 1024 * 1024:
-                raise ValueError("mobile attachments exceed the 8 MB total limit")
+            if total_bytes > max_bytes:
+                raise ValueError("Attachments exceed the transfer size limit")
             target = UPLOADS_DIR / f"{uuid.uuid4().hex}_{safe_name}"
             target.write_bytes(content)
             uploaded.append(
@@ -1186,18 +1188,30 @@ class RemoteCommandExecutor:
         payload = dict(payload or {})
 
         if command == "capabilities.read":
+            from cyrene.platform.version import get_version
             return {
+                "app_version": get_version(),
                 "ok": True,
                 "protocol_version": REMOTE_PROTOCOL_VERSION,
                 "capabilities": sorted(REMOTE_CAPABILITIES),
                 "remote_plugin_packs": list(remote_plugin_pack_ids()),
                 "features": {
+                    "assistant_tasks_v1": True,
                     "workspace_files_v1": True,
                     "remote_jobs_v1": True,
                     "remote_authorization_v1": True,
                     "remote_desktop_v1": application_plugin_service("remote_desktop") is not None,
                 },
             }
+        if command.startswith("tasks."):
+            from .task_execution import execute
+            from cyrene.workbench.sessions.session_presentation import WorkbenchSessionError
+            try:
+                return await execute(self, peer_device_id, command, payload, project_id)
+            except WorkbenchSessionError as exc:
+                if exc.code in {"conversation_admission_busy", "conversation_running"}:
+                    return {"ok": False, "code": "remote_command_in_progress", "retryable": True, "error": str(exc)}
+                raise
         if command == "projects.list":
             return await self._projects_list(peer_device_id)
         workbench = await self._execute_workbench(command, project_id, payload)

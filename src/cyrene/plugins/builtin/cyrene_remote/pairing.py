@@ -18,7 +18,8 @@ from .control import DIRECT_PAIRING_PORT, RemoteControlStore
 logger = logging.getLogger(__name__)
 
 _MAX_REQUEST_BYTES = 64 * 1024
-_MAX_ENVELOPE_BYTES = 24 * 1024 * 1024
+# A 20 MiB task upload is base64 encoded inside the encrypted envelope.
+_MAX_ENVELOPE_BYTES = 48 * 1024 * 1024
 _TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 _FALLBACK_PORT_FIRST = DIRECT_PAIRING_PORT
 _FALLBACK_PORT_LAST = DIRECT_PAIRING_PORT + 99

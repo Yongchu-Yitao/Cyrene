@@ -224,7 +224,11 @@ class TranscriptResizeProtection {
   prepare() { this.freeze(); this.prepared = this.frozen.length > 0; }
 
   prepareHandoff() {
-    this.prepare();
+    // A drag already measured and froze distant history. Thawing all of it
+    // just to measure/freeze it again at pointerup forces a full-history
+    // layout exactly when the exit animation is handing over to React.
+    if (!this.frozen.length) this.prepare();
+    else this.prepared = true;
     if (!this.options.conversationId || !this.frozen.length) return;
     const rows = Array.from(this.thread.querySelectorAll(this.options.rowSelector));
     let layouts = pendingLayouts.get(this.page);

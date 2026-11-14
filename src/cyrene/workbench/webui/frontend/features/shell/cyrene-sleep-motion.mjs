@@ -24,7 +24,7 @@ export function createCyreneSleepMotion() {
         age = 0;
         start = { ...pose };
         target = { ...pose, x: 0, y: 2, r: -10, sx: 1.03, sy: .94,
-          ex: 0, ey: .8, blink: .08, leftEye: 1, rightEye: 1, glow: 0,
+          ex: 0, ey: .8, blink: .08, leftEye: 1, rightEye: 1, eyeWidth: 1, glow: 0,
           angle: Math.round(pose.angle / 360) * 360, sleep: 1,
           waiting: 0, done: 0, error: 0, stopped: 0, reconnecting: 0 };
       }

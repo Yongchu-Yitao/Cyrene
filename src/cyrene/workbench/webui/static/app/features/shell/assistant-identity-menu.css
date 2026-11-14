@@ -1,0 +1,98 @@
+.aim-original-grip {pointer-events:none!important;height:52px!important}
+.aim-original-grip .wbc-side-split-grip-bar-visual {visibility:hidden}
+.wbc-pane-card-grip:has(.aim-original-grip) {top:4px;height:52px}
+.aim-root {position:fixed;inset:0;z-index:3200;pointer-events:none;color:var(--wb-text);font:13px/1.4 var(--wb-font,var(--sans,system-ui));--aim-muted:var(--wb-muted,#717c88);--aim-soft:color-mix(in srgb,currentColor 5%,transparent);--aim-line:var(--wb-line-2,#d2dae2)}
+.aim-root * {box-sizing:border-box}
+.aim-root button:where(:not(.wbc-chat-menu-action)),.aim-root textarea,.aim-root select {font:inherit;color:inherit}
+.aim-root button:where(:not(.wbc-chat-menu-action)) {cursor:pointer;border:0;background:transparent}
+.aim-root button:where(:not(.wbc-chat-menu-action)):hover {background:var(--aim-soft)}
+.aim-root button:disabled {opacity:.45;cursor:default}
+.aim-root button:focus-visible {outline:2px solid var(--wb-accent,#4d9a78);outline-offset:2px}
+.aim-root p,.aim-root h2,.aim-root h3,.aim-root h4 {margin:0}
+.aim-logo-button {position:absolute;left:0;top:0;width:52px;height:52px;padding:0;display:grid;place-items:center;pointer-events:auto;touch-action:none;user-select:none;z-index:2;-webkit-app-region:no-drag}
+.aim-root .aim-logo-button:hover {background:transparent}
+.aim-logo-button .wbc-side-split-grip-bar-visual {position:relative;display:grid;place-items:center;width:52px;height:52px;border:0;background:none;box-shadow:none;pointer-events:none}
+.aim-logo-button .cyrene-motion,.aim-logo-button .cyrene-icon-logo {width:36px;height:36px}
+.aim-logo-button .cyrene-icon-alignment {transform:none}
+.aim-panel {pointer-events:auto;position:absolute;left:var(--aim-left);top:var(--aim-top);width:var(--aim-width);max-height:var(--aim-max-height);overflow:hidden;background:var(--wb-card-bg,#fff);border:1px solid var(--aim-line);border-radius:18px;box-shadow:0 8px 22px #09111e0e,inset 0 0 0 1px #7884941f;opacity:0;transform:scale(.96);transform-origin:50% 0;transition:height 280ms cubic-bezier(.2,.8,.2,1),transform 220ms,opacity 180ms;overscroll-behavior:contain}
+.aim-panel.is-open {opacity:1;transform:scale(1);animation:aim-open 360ms both}
+@keyframes aim-open {0%{opacity:0;transform:scale(.96)}76%{opacity:1;transform:scale(1.008)}100%{opacity:1;transform:scale(1)}}
+.aim-content {padding:16px;max-height:calc(var(--aim-max-height) - 2px);overflow:auto;overscroll-behavior:contain;overflow-anchor:none}
+.aim-head,.aim-detail-head {display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.aim-logo-slot {display:block;width:44px;height:44px;flex-shrink:0}
+.aim-head h2 {font-size:20px;line-height:1.2;font-weight:600}
+.aim-root small {display:block;color:var(--aim-muted);font-size:11px;margin-top:2px}
+.aim-root .aim-close {margin-left:auto;align-self:flex-start;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;color:var(--aim-muted)}
+.aim-detail-head h3 {font-size:16px;font-weight:600}
+.aim-detail-head button {display:grid;place-items:center;width:32px;height:32px;margin-left:-8px;border-radius:50%}
+.aim-detail-head .aim-logo-slot {margin-left:auto;width:38px;height:38px}
+.aim-actions {display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.aim-actions button {display:flex;align-items:center;justify-content:center;gap:7px;min-height:44px;border-radius:9px;background:var(--aim-soft);font-size:13px;font-weight:520;padding:10px 6px}
+.aim-content section {margin-top:14px}
+.aim-content h4 {font-size:12px;font-weight:400;color:var(--aim-muted);margin-bottom:8px}
+.aim-root .aim-device {display:flex;align-items:center;gap:12px;text-align:left;width:calc(100% + 12px);margin-inline:-6px;min-height:48px;padding:6px 8px;font-weight:520;border-radius:8px}
+.aim-device > svg {flex-shrink:0;color:var(--aim-muted)}
+.aim-device > span {flex:1;min-width:0;overflow-wrap:anywhere}
+.aim-device > svg:last-child {margin-left:auto;width:15px}
+.aim-root .aim-current-device {display:flex;align-items:center;gap:6px}
+.aim-current-device::before {content:"";width:6px;height:6px;flex-shrink:0;border-radius:50%;background:var(--wb-green,#1f9d57)}
+.aim-muted {color:var(--aim-muted);font-size:12px}
+.aim-error {color:var(--wb-red,#cf5757);font-size:12px;overflow-wrap:anywhere;margin-top:12px!important}
+.aim-error button {text-decoration:underline;margin-left:8px}
+.aim-field {display:flex;flex-direction:column;gap:8px;font-size:13px;margin:18px 0}
+.aim-field textarea {width:100%;border:1px solid var(--aim-line);border-radius:9px;background:var(--wb-card-bg);padding:10px 12px}
+.aim-field textarea {height:220px;min-height:160px;resize:vertical}
+.aim-setting {display:flex;justify-content:space-between;align-items:center;gap:14px;min-height:56px}
+.aim-root .wb-toggle {flex-shrink:0;background:rgba(120,134,153,.34);color:inherit}
+.aim-root .wb-toggle.on {background:var(--wb-accent,#4d9a78)}
+.aim-root .wb-toggle.on:hover {background:color-mix(in srgb,var(--wb-accent,#4d9a78) 88%,#000)}
+.aim-root .aim-save {display:block;background:var(--wb-text);color:var(--wb-card-bg);border-radius:10px;padding:11px 14px;width:100%;margin-top:24px}
+.aim-root .aim-save:hover {opacity:.9;background:var(--wb-text)}
+.aim-memory-thread {display:flex;flex-direction:column;gap:16px}
+.aim-agent-message p,.aim-user-message {white-space:pre-wrap;overflow-wrap:anywhere}
+.aim-user-message {align-self:flex-end;max-width:92%;padding:10px 12px;background:var(--aim-soft);border-radius:12px 12px 3px 12px}
+.aim-composer {display:grid;grid-template-columns:minmax(0,1fr) 32px;gap:10px;align-items:end;padding:9px 10px;margin-top:18px;border:1px solid var(--aim-line);border-radius:12px}
+.aim-composer textarea {align-self:center;width:100%;min-height:24px;height:24px;resize:none;overflow:hidden;border:0;background:transparent;padding:0}
+.aim-root .aim-composer button {display:grid;place-items:center;width:32px;height:32px;padding:0;background:color-mix(in srgb,var(--wb-text) 14%,transparent);color:var(--wb-text);border-radius:50%;transition:background 140ms ease,transform 140ms ease}
+.aim-root .aim-composer button:not(:disabled):hover {background:color-mix(in srgb,var(--wb-text) 21%,transparent)}
+.aim-root .aim-composer button:not(:disabled):active {transform:scale(.92)}
+.aim-root .aim-composer button:disabled {background:color-mix(in srgb,var(--wb-text) 7%,transparent);color:var(--aim-muted);opacity:1}
+.aim-composer button svg {display:block;pointer-events:none}
+.aim-root .aim-apply {margin-top:12px;padding:8px 12px;border-radius:8px;background:var(--aim-soft);font-size:12px}
+
+@media(prefers-reduced-motion:reduce){.aim-root *{animation:none!important;transition:none!important}}
+
+
+
+
+.aim-root .aim-logo-button {cursor:grab}
+.aim-root .aim-logo-button:active {cursor:grabbing}
+.aim-root.is-travelling .aim-logo-button {transition:transform 360ms cubic-bezier(.2,1.16,.35,1)}
+.aim-item-title {display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.wbc-pane-card-drag-ghost .aim-original-grip .wbc-side-split-grip-bar-visual {visibility:visible}
+
+.aim-root:not(.is-open) .aim-panel {pointer-events:none}
+
+.aim-root .aim-device-row:is(:hover,:focus-within) {background:var(--aim-soft)}
+.aim-root .aim-device-row > button:hover {background:transparent}
+.aim-root .aim-device-more {display:grid;place-items:center;width:28px;height:28px;padding:0;flex-shrink:0;border-radius:6px;color:var(--aim-muted)}
+.aim-root .aim-device-menu {position:fixed;right:auto;z-index:4;box-sizing:border-box;width:168px;min-width:0;overflow:auto;pointer-events:auto}
+.aim-root:not(.is-open) .aim-device-menu {display:none}
+.aim-root .aim-device-menu button svg {flex-shrink:0}
+.aim-root .aim-device-menu button:disabled:hover {background:transparent}
+
+.aim-root .aim-device-choice {display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left;padding:0;background:transparent}
+.aim-device-choice > span {flex:1;min-width:0;overflow-wrap:anywhere}
+.aim-device-choice > svg {flex-shrink:0;color:var(--aim-muted)}
+.aim-root .aim-device-choice:disabled {cursor:not-allowed;opacity:1;color:var(--aim-muted)}
+.aim-device-choice:disabled > span,.aim-device-choice:disabled > svg {opacity:.55}
+.aim-device-choice.is-offline {color:var(--aim-muted)}
+.aim-device-light {display:block;flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#2fc98f}
+.aim-device-light.is-offline {background:#ef6060}
+.aim-device-light.is-checking {background:var(--aim-muted)}
+
+/* One logo travels from the loading centre to the actual pane grip. */
+.aim-root:is(.is-loading,.is-arriving) .aim-logo-button {transition:transform 560ms cubic-bezier(.22,1,.36,1)}
+.aim-root.is-loading .aim-logo-button {pointer-events:none;opacity:1;cursor:default}
+.aim-root .aim-logo-button .wbc-side-split-grip-bar-visual {transition:scale 560ms cubic-bezier(.22,1,.36,1)}
+.aim-root.is-loading .aim-logo-button .wbc-side-split-grip-bar-visual {scale:1.6}

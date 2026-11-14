@@ -11,12 +11,7 @@ from .schemas import CardError
 from .service import CardService
 from .home_publication import documents, ensure_pending_table, publish_documents
 
-HOME_CONTEXT_PROJECTION = {
-    "sources": ["cyrene_system_prompt"],
-    "task_context": False,
-}
-
-HOME_TOOLS = ("card.create", "card.update", "card.get", "card.list", "WebSearch")
+HOME_CARD_TOOLS = ("card.create", "card.update", "card.get", "card.list")
 
 
 class HomeModelUnavailable(RuntimeError):
@@ -32,14 +27,11 @@ def home_model_identity(owner):
     return candidate_identity(candidate)
 
 
-def home_tool_scope(registry):
+def home_tool_scope():
     from cyrene.core.plugin.tool_scope import PluginToolScope
-    # Provider parsers are hidden protocol dependencies, not model-callable tools.
-    parsers = {item.plugin.name for item in registry.list_plugins()
-               if item.plugin.metadata.get("tool_call_parser") is True
-               and item.plugin.metadata.get("model_visible") is False}
-    return PluginToolScope(model_audience="assistant", include_core=False,
-                           tool_names=frozenset(HOME_TOOLS) | parsers)
+    # Use the normal live tool catalog, including user-installed plugins and
+    # core toolbox discovery. Assistant audience additionally exposes card tools.
+    return PluginToolScope(model_audience="assistant", include_all_tools=True)
 
 
 def home_documents(service, owner):
@@ -63,7 +55,7 @@ class HomeDraft:
         return await self.staged.context_snapshot(self.owner, None)
 
     async def command(self, owner, context_id, operation, args, **kwargs):
-        if owner != self.owner or operation not in HOME_TOOLS:
+        if owner != self.owner or operation not in HOME_CARD_TOOLS:
             raise CardError("assistant_only", "Maintenance can only prepare its owner's home sections")
         args = deepcopy(args)
         if operation == "card.create" and args.get("spec", {}).get("home_kind") not in {"overview", "resume", "results"}:
@@ -114,7 +106,7 @@ async def prepare_home(service, port, owner, version, prompt, snapshot, *, publi
     database = port.service.repository._database()
     runtime = ConversationRuntime(database)
     # No ChatRepository record, UI publisher, foreground run manager or shared context.
-    # Scratch trees and tool effects disappear after this bounded maintenance turn.
+    # Scratch conversation trees are temporary; ordinary tools retain their normal effects.
     with TemporaryDirectory(prefix="home-preparation-", dir=service.store.path.parent) as directory:
         draft = HomeDraft(service, owner, Path(directory) / "cards")
         config = ConversationConfig(
@@ -122,9 +114,7 @@ async def prepare_home(service, port, owner, version, prompt, snapshot, *, publi
             data_directory=Path(directory) / "agent", workspace_dir=chat.get("workspaceOverride") or str(WORKSPACE_DIR),
             project_id=chat.get("projectId", ""), model_identity=model_identity,
             command="home-maintenance", conversation_source="home-maintenance",
-            workspace_enabled=False, soul_enabled=False, permission_mode="auto",
-            memory_write_enabled=False, memory_trigger_enabled=False, memory_archive_enabled=False,
-            memory_short_term_enabled=False, memory_project_enabled=False, max_model_calls=12,
+            permission_mode=chat.get("permissionMode") or "default",
             assistant_home_owner=owner, assistant_home_cards=draft,
         )
         async def silent(_event):

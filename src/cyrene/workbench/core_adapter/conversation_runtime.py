@@ -40,9 +40,6 @@ logger = logging.getLogger(__name__)
 
 def _assistant_context_data(config, personal_assistant):
     data = {"personal_assistant": personal_assistant, "assistant_home_owner": config.assistant_home_owner}
-    if config.assistant_home_owner:
-        from cyrene.plugins.builtin.cyrene_cards.home_preparation import HOME_CONTEXT_PROJECTION
-        data["context_projection"] = deepcopy(HOME_CONTEXT_PROJECTION)
     return data
 
 
@@ -480,25 +477,28 @@ class ConversationRuntime:
         from .assistant_profile import personal_assistant_config
         host = application_plugin_scope()
         management = host.active_services.get("session_management") if host else None
-        chat = management.host.chat(str(config.session_id)) if management else None
+        from cyrene.workbench.chat.chat_repository import ChatRepository
+        chat = management.host.chat(str(config.session_id)) if management else ChatRepository(config.db_path).get(str(config.session_id))
+        if chat and chat.get('kind') == 'assistant-task' and chat.get('workDevice'):
+            raise ValueError('This task runs on its selected device; continue it through the assistant.')
         personal_assistant = bool(chat and chat.get('kind') == 'personal-assistant')
         if personal_assistant:
             config = personal_assistant_config(config)
         if config.assistant_home_owner:
-            from cyrene.plugins.builtin.cyrene_cards.home_preparation import HOME_TOOLS, home_tool_scope
+            from cyrene.plugins.builtin.cyrene_cards.home_preparation import HOME_CARD_TOOLS, home_tool_scope
             source = management.host.chat(config.assistant_home_owner) if management else None
             if not source or source.get("kind") != "personal-assistant" or config.assistant_home_cards is None:
                 raise ValueError("Invalid assistant home maintenance owner")
             if config.session_id == config.assistant_home_owner:
                 raise ValueError("Home maintenance requires an isolated session")
             personal_assistant = True
-            config = replace(config, extra_direct_tool_names=HOME_TOOLS)
+            config = replace(config, extra_direct_tool_names=tuple(dict.fromkeys((*config.extra_direct_tool_names, *HOME_CARD_TOOLS))))
         plugin_root = Path(
             config.plugin_directory or default_plugin_impl_directory()
         ).expanduser().resolve()
         registry, load_plugins = resolve_plugin_registry(plugin_root)
         if config.assistant_home_owner:
-            config = replace(config, tool_scope=home_tool_scope(registry))
+            config = replace(config, tool_scope=home_tool_scope())
         if config.tool_scope is not None:
             registry = ScopedPluginRegistry(registry, config.tool_scope)
 
@@ -515,6 +515,10 @@ class ConversationRuntime:
             if application_host is not None
             else {}
         )
+        if chat and chat.get("remoteControllerDeviceId"):
+            from cyrene.plugins.builtin.cyrene_remote.task_execution import model_delegate
+            plugin_services["model_delegate"] = model_delegate(chat, owner_loop, ChatRepository(config.db_path))
+            plugin_services["model_context_limit"] = lambda *a, **kw: int(chat.get("remoteModelContextLimit") or 32768)
         if config.assistant_home_owner:
             plugin_services["cards"] = config.assistant_home_cards
         if config.guidance_channel is not None:

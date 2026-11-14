@@ -102,6 +102,7 @@ async def handler(
 async def _download_remote_file(
     args: dict[str, Any],
     context: PluginContext,
+    *, request_command=None,
 ) -> dict[str, Any]:
     """Assemble an unlimited remote file without exposing chunks to the LLM."""
     payload = dict(args.get("payload") or {})
@@ -120,7 +121,7 @@ async def _download_remote_file(
     try:
         with partial.open("wb") as handle:
             while True:
-                result = await request_remote_command(
+                result = await (request_command or request_remote_command)(
                     {
                         **args,
                         "payload": {
@@ -146,11 +147,8 @@ async def _download_remote_file(
                 total = int(result.get("size") or 0)
                 filename = str(result.get("filename") or filename or "file")
                 media_type = str(result.get("media_type") or media_type)
-                await publish_tool_progress(
-                    current=offset,
-                    total=total,
-                    label=filename,
-                )
+                if request_command is None:
+                    await publish_tool_progress(current=offset, total=total, label=filename)
                 if bool(result.get("eof")):
                     break
                 next_offset = int(result.get("next_offset") or offset)

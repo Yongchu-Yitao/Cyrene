@@ -808,8 +808,7 @@ def test_main_chat_composer_uses_a_solid_canvas_and_readable_input_card():
     dock_css = styles.split("\n.wbc-main > .wbc-composer {", 1)[1].split("}", 1)[0]
     page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
     topbar_css = styles.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
-    input_css = (styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
-        + styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0])
+    input_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     scroll_css = styles.split(".wbc-scroll-to-bottom {", 1)[1].split("}", 1)[0]
     scroll_hover_css = styles.split(".wbc-scroll-to-bottom:hover {", 1)[1].split(
         "}", 1
@@ -1981,7 +1980,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.9.1.7">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.0">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/cyrene/workbench/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -2127,8 +2126,8 @@ def test_workbench_chat_composer_themes_share_one_optimized_glass_pipeline():
     styles = workbench_style_source()
 
     shell = styles.split("\n.workbench-shell {", 1)[1].split("}", 1)[0]
-    base = styles.split("\n.wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
-    light = styles.split('html[data-theme="light"] .wbc-composer-box,\nhtml[data-theme="light"] .workbench-sidebar-dock-nav,\nhtml[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {', 1)[1].split(
+    base = styles.split("\n.wbc-composer-box {", 1)[1].split("}", 1)[0]
+    light = styles.split('html[data-theme="light"] .wbc-composer-box,\nhtml[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {', 1)[1].split(
         "}", 1
     )[0]
     dark = styles.split(
@@ -5120,7 +5119,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.9.1.7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -6484,7 +6483,6 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "wb-mem-rail-scroll workbench-integrated-rail-body" in memory
     dock_css = styles.split(".workbench-sidebar-dock {", 1)[1].split("}", 1)[0]
     dock_nav_css = frontend_module_source("features/chat/shell.css").split(".workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
-    dock_material = styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0]
     dock_button_css = styles.split(".workbench-sidebar-dock-nav button {", 1)[1].split("}", 1)[0]
     dock_hover_css = styles.split(
         ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button:hover {",
@@ -6500,10 +6498,13 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "margin: auto var(--wb-rail-content-padding) 12px;" in dock_css
     assert "height: 56px;" in dock_nav_css
     assert "grid-row: 1;" in dock_nav_css
-    assert "--wb-dock-nav-bg: var(--wbc-composer-glass-background);" in dock_nav_css
-    assert "border: var(--wbc-composer-glass-border);" in dock_material
+    assert "--wb-dock-nav-bg: var(--wb-floating-rail-bg);" in dock_nav_css
+    assert "border: var(--wb-floating-rail-border);" in dock_nav_css
     assert "border-radius: 15px;" in dock_nav_css
-    assert "background: var(--wbc-composer-glass-background);" in dock_material
+    assert "background: var(--wb-dock-nav-bg);" in dock_nav_css
+    assert "box-shadow: var(--wb-floating-rail-shadow);" in dock_nav_css
+    assert "-webkit-backdrop-filter: none;" in dock_nav_css
+    assert "backdrop-filter: none;" in dock_nav_css
     assert "height: 48px;" in dock_button_css
     assert ".workbench-grid.integrated-sidebars .workbench-sidebar-dock-nav button {" in styles
     assert "color: var(--wb-faint);" in dock_button_css
@@ -8339,7 +8340,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.9.1.7" in index
+    assert "workbench.css?v=0.9.2.0" in index
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
@@ -8359,7 +8360,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.1.7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
 
 
 def test_desktop_uses_cross_platform_native_directory_picker():
@@ -8803,7 +8804,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.1.7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
 
 
 def test_workbench_api_json_times_out_when_body_stalls_after_headers():
@@ -8860,7 +8861,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert 'requestJson("/api/settings/model-config")' in source
     assert "store.setConfig(snapshot);" in source
-    assert '<script type="module" src="compiled/app.js?v=0.9.1.7"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -9154,8 +9155,7 @@ def test_pending_question_routes_text_to_answer_and_keeps_attachment_controls_di
 def test_workbench_model_picker_compacts_without_overlapping_send_button():
     styles = workbench_style_source()
 
-    composer_rule = (styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
-        + styles.split(".wbc-composer-box,\n.workbench-sidebar-dock-nav {", 1)[1].split("}", 1)[0])
+    composer_rule = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
     anchor_rule = styles.split(".wbc-model-anchor {", 1)[1].split("}", 1)[0]
     button_rule = styles.split(".wbc-model-button {", 1)[1].split("}", 1)[0]
     compact_rule = styles.split(
@@ -10721,7 +10721,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.9.1.7">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.0">' in index_html
     entry_html = (root / "src/cyrene/workbench/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html

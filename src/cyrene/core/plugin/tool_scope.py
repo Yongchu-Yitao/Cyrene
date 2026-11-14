@@ -16,12 +16,14 @@ class PluginToolScope:
     include_core: bool = True
     excluded_tool_names: frozenset[str] = frozenset()
     model_audience: str = "default"
+    include_all_tools: bool = False
 
     def allows(self, registered) -> bool:
         if registered.plugin.kind == "tool" and registered.plugin.name in self.excluded_tool_names:
             return False
         return (
-            registered.plugin.kind != "tool"
+            self.include_all_tools
+            or registered.plugin.kind != "tool"
             or (self.include_core and registered.source == "core")
             or registered.plugin.name in self.tool_names
             or registered.pack_id in self.pack_ids

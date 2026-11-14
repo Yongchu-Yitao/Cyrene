@@ -859,6 +859,8 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
   .select { min-width: 0; min-height: 38px; display: flex; flex: 1 1 auto; align-items: center; gap: 10px; padding: 5px 8px; text-align: left; }
   .select b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
   .favicon { position: relative; width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; border-radius: 6px; background: var(--hover, rgba(23,25,29,.06)); color: var(--faint, #9297a1); overflow: hidden; }
+  .favicon:has(> img[data-loaded="true"]) > svg { visibility: hidden; }
+  .favicon img:not([data-loaded="true"]) { display: none; }
   .favicon img { position: absolute; inset: 3px; width: 16px; height: 16px; object-fit: contain; }
   .actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
   .actions button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border-radius: 8px; color: var(--faint, #9297a1); }
@@ -920,6 +922,7 @@ const BROWSER_TAB_PICKER_HTML = `<!doctype html>
       favicon.innerHTML = icons.tab;
       if (tab.favicon) {
         const image = document.createElement('img');
+        image.addEventListener('load', () => { image.dataset.loaded = 'true'; });
         image.src = String(tab.favicon);
         image.alt = '';
         image.addEventListener('error', () => image.remove());

@@ -295,7 +295,7 @@ def test_all_chat_action_menu_items_have_icons():
     rail = chat.split("function WbcRail(", 1)[1].split(
         "// Conversation main", 1
     )[0]
-    card_menu = rail.split('className="wb-card-menu" role="menu"', 1)[1].split(
+    card_menu = rail.split('className="wb-card-menu wbc-chat-context-menu" role="menu"', 1)[1].split(
         "</div>", 1
     )[0]
     assert "<WbcChatMenuActions" in card_menu

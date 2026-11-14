@@ -106,12 +106,13 @@ test("single-pane closes retain the existing restore behavior", async () => {
   assert.equal(drag.layout().leftRatio, 0.4)
 })
 
-test("plugin session cleanup is attempted before closing and a cleanup failure still permits closing", async () => {
+test("plugin cleanup starts but neither a slow response nor failure delays visual closing", async () => {
   const plugin = { id: "plugin", kind: "plugin-view", payload: { packId: "pack", state: { closeMethod: "close", session_id: "session" } } }
   let finish
   const drag = closeHarness({ left: [card("main")], right: [plugin] }, { pluginClose: () => new Promise((_resolve, reject) => { finish = reject }) })
   const closing = drag.close([plugin])
-  assert.deepEqual(drag.closes, [])
+  assert.deepEqual(drag.closes, ["plugin"])
+  assert.equal((await closing).closed, true)
   assert.deepEqual(plain(drag.calls), [["pack", "close", { session_id: "session" }, "project"]])
   finish(new Error("already closed"))
   assert.equal((await closing).closed, true)

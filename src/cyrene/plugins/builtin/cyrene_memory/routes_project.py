@@ -29,6 +29,18 @@ class ProjectMemoryPromptRestoreBody(_Body):
     baseModifiedAt: str = Field(default="", max_length=100)
 
 
+class MemoryEditorMessage(_Body):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=16000)
+
+
+class MemoryEditorBody(_Body):
+    instruction: str = Field(default="", max_length=4000)
+    changes: list[dict] = Field(default_factory=list, max_length=500)
+    history: list[MemoryEditorMessage] = Field(default_factory=list, max_length=24)
+    version: str = Field(default="", max_length=64)
+
+
 class MemoryLearningBody(_Body):
     lang: Literal["en", "zh"]
 
@@ -51,6 +63,25 @@ def register_project_memory_routes(
     async def get_project_memory_prompt(project_id: str, include_memories: bool = True):
         try:
             return await application_service.get(project_id, include_memories=include_memories)
+        except ProjectMemoryApplicationError as exc:
+            return _project_memory_error(exc)
+
+    @router.post("/api/projects/{project_id}/memory-editor")
+    async def edit_memory_with_agent(project_id: str, body: MemoryEditorBody):
+        from .memory_editor import draft_memory
+        try:
+            return await draft_memory(application_service, project_id,
+                                      instruction=body.instruction, changes=body.changes, version=body.version,
+                                      history=[item.model_dump() for item in body.history])
+        except ProjectMemoryApplicationError as exc:
+            return _project_memory_error(exc)
+
+    @router.post("/api/projects/{project_id}/memory-editor/apply")
+    async def apply_memory_editor(project_id: str, body: MemoryEditorBody):
+        from .memory_editor import apply_memory
+        try:
+            return await apply_memory(application_service, project_id,
+                                      changes=body.changes, version=body.version)
         except ProjectMemoryApplicationError as exc:
             return _project_memory_error(exc)
 

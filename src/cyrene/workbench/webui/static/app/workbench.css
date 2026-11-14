@@ -1987,10 +1987,10 @@ html.wbc-tab-center-external-drag .workbench-session-overflow-menu {
 
 .workbench-resource-shelf {
   width: auto;
-  min-width: 26px;
+  min-width: 32px;
   max-width: 28vw;
-  height: 40px;
-  padding: 0;
+  height: auto;
+  padding: 2px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -2607,6 +2607,7 @@ html.wbc-tab-center-external-drag .workbench-session-overflow-menu {
 .workbench-resource-shelf-empty {
   width: 26px;
   height: 26px;
+  flex: 0 0 26px;
   margin-left: 0;
   display: inline-flex;
   align-items: center;
@@ -5444,4 +5445,17 @@ html[data-theme="dark"] .wb-doctor-panel { --doctor-accent: #f19cbd; --doctor-ti
   .wb-doctor-dialog .wb-doctor-panel { padding: 14px; }
   .wb-doctor-head { gap: 10px; }
   .wb-doctor-actions .wb-btn { flex: 1 1 calc(50% - 8px); min-height: 44px; }
+}
+
+/* Transparent site icons must not reveal the fallback underneath. */
+.workbench-browser-manager-preview-icon:has(> img[data-loaded="true"]:not([hidden])) > .workbench-asset-icon,
+.workbench-browser-manager-favicon:has(> img[data-loaded="true"]:not([hidden])) > .workbench-asset-icon {
+  visibility: hidden;
+}
+
+.workbench-browser-manager-preview-icon > img:not([data-loaded="true"]),
+.workbench-browser-manager-preview-icon > img[hidden],
+.workbench-browser-manager-favicon > img:not([data-loaded="true"]),
+.workbench-browser-manager-favicon > img[hidden] {
+  display: none;
 }

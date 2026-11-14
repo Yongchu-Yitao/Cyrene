@@ -15,7 +15,12 @@
   "src/cyrene/plugins/builtin/cyrene_proactive/service.py::cyrene.plugins.builtin.cyrene_entity.proactive::proactive_work_signature",
   "src/cyrene/plugins/builtin/cyrene_proactive/service.py::cyrene.plugins.builtin.cyrene_entity.proactive::render_proactive_entities",
   "src/cyrene/plugins/builtin/cyrene_proactive/service.py::cyrene.plugins.builtin.cyrene_entity.proactive::select_proactive_entities",
+  "src/cyrene/plugins/builtin/cyrene_remote/task_execution.py::cyrene.plugins.builtin.session_management.host::KIND",
+  "src/cyrene/plugins/builtin/cyrene_remote/task_execution.py::cyrene.plugins.builtin.session_management.host::OWNER",
+  "src/cyrene/plugins/builtin/cyrene_remote/task_execution.py::cyrene.plugins.builtin.session_management.host::WorkbenchHost",
   "src/cyrene/plugins/builtin/cyrene_skills/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_plugin_center::register_plugin_center_routes",
   "src/cyrene/plugins/builtin/cyrene_skills/application.py::cyrene.plugins.builtin.cyrene_extensions.extension_service::application_extension_service",
+  "src/cyrene/plugins/builtin/session_management/remote_host.py::cyrene.plugins.builtin.cyrene_remote.status::_download_remote_file",
+  "src/cyrene/plugins/builtin/session_management/remote_host.py::cyrene.plugins.builtin.cyrene_remote.task_execution::retry_task_request",
   "src/cyrene/workbench/chat/chat_runs.py::cyrene.workbench.application.inbox::_workbench_agent_inbox"
 ]

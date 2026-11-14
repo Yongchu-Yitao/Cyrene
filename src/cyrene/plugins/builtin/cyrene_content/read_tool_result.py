@@ -57,7 +57,7 @@ async def _tool_read_tool_result(
         context.data.get("session_id")
         or context.data.get("chat_id")
         or nested_session_id
-        or ""
+        or context.tree_id
     )
     service = context.services.get("tool_results")
     reader = getattr(service, "read", None)

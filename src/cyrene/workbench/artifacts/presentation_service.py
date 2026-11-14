@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import platform
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,10 @@ class PresentationQueryService:
             self._db_path,
         )
         payload["pluginModules"] = list(self._current_frontend_modules())
+        remote = getattr(self._plugin_host, "active_services", {}).get("remote")
+        store = getattr(remote, "store", None)
+        settings = await asyncio.to_thread(store.get_settings) if store is not None else {}
+        payload["localDeviceName"] = settings.get("device_name") or platform.node()
         return payload
 
     async def status(self) -> dict[str, Any]:

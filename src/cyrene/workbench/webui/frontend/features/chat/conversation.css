@@ -3615,9 +3615,10 @@ button.wbc-attach-file:focus-visible {
 .wbc-composer {
   /* Main conversations, split conversations and detached chat windows share
      one composer geometry. The three visible card edges must stay optically
-     equal even when a narrower window activates container queries. */
+     equal even when a narrower window activates container queries. Match
+     the sidebar navigation inset so both cards share the same edge spacing. */
   --wbc-composer-top-inset: 10px;
-  --wbc-composer-edge-inset: 14px;
+  --wbc-composer-edge-inset: var(--wb-rail-content-padding, 10px);
   flex: 0 0 auto;
   padding: 10px 22px 8px;
 }
@@ -3689,9 +3690,8 @@ html[data-theme="dark"] .wbc-command-chip {
   padding: 0;
 }
 
-/* The module Dock and assistant grip use the exact input material, including theme overrides. */
+/* The assistant grip shares the input material, including theme overrides. */
 .wbc-composer,
-.workbench-sidebar-dock-nav,
 .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
   --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   --wbc-composer-glass-background: color-mix(in srgb, var(--wb-card-bg) 72%, transparent);
@@ -3711,8 +3711,7 @@ html[data-theme="dark"] .wbc-command-chip {
   z-index: 21;
 }
 
-.wbc-composer-box,
-.workbench-sidebar-dock-nav {
+.wbc-composer-box {
   --wbc-composer-glass-shadow:
     var(--wbc-composer-glass-drop-shadow),
     inset 0 1px 0 var(--wbc-composer-glass-top-highlight),
@@ -3722,9 +3721,6 @@ html[data-theme="dark"] .wbc-command-chip {
   box-shadow: var(--wbc-composer-glass-shadow);
   -webkit-backdrop-filter: var(--wbc-composer-glass-filter);
   backdrop-filter: var(--wbc-composer-glass-filter);
-}
-
-.wbc-composer-box {
   position: relative;
   container-name: wbc-composer;
   container-type: inline-size;
@@ -3737,7 +3733,6 @@ html[data-theme="dark"] .wbc-command-chip {
    instead of falling back to the nearly flat shared control shadow. */
 html[data-theme="light"] .wbc-composer,
 html[data-theme="light"] .wbc-composer-box,
-html[data-theme="light"] .workbench-sidebar-dock-nav,
 html[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
   --wbc-composer-glass-background: color-mix(in srgb, #fff 76%, transparent);
   --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(15, 23, 42, .12);
@@ -3751,7 +3746,6 @@ html[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
    weight. Only material colours change here: both themes retain the base
    three-layer shadow and the exact same compositor filter. */
 html[data-theme="dark"] .wbc-composer,
-html[data-theme="dark"] .workbench-sidebar-dock-nav,
 html[data-theme="dark"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
   --wbc-composer-glass-background: var(--wb-composer-surface);
   --wbc-composer-glass-drop-shadow: 0 10px 28px rgba(0, 0, 0, .42);
@@ -3768,7 +3762,7 @@ html[data-theme="dark"] :is(.wbc-composer-box, .wbc-side-card) {
   box-shadow: var(--wbc-composer-glass-shadow);
 }
 
-/* Match the message input's tint to the neutral dock component while keeping
+/* Keep the message input's neutral tint while preserving
    the original translucent glass layer and its backdrop blur visible. */
 html[data-theme="dark"] .wbc-composer-box {
   --wbc-composer-glass-background: var(--wb-composer-surface);

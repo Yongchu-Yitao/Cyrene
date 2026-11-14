@@ -239,6 +239,11 @@ def chat_short_term_memory_active(chat: Mapping[str, Any]) -> bool:
 
 
 def chat_project_memory_active(chat: Mapping[str, Any]) -> bool:
+    from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID
+
+    if (chat.get("projectId") == ASSISTANT_SCOPE_ID
+            and chat.get("kind") in {"personal-assistant", "assistant-task"}):
+        return True
     value = chat.get("projectMemoryActive")
     return bool(value) if isinstance(value, bool) else True
 
@@ -889,6 +894,8 @@ def public_chat_light(
         "contextActivations": composer.normalize(
             chat.get("contextActivations")
         ),
+        "workDevice": chat.get("workDevice"),
+        "workDeviceError": chat.get("workDeviceError", ""),
         "remoteDeviceIds": [
             str(item)
             for item in chat.get("remoteDeviceIds") or ()

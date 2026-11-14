@@ -662,7 +662,7 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
         if (!actions.isConnected) return;
         var menu = actions.querySelector(".wb-card-menu");
         if (menu && menu.hasAttribute("popover")) {
-          // Keep the group's scroll container and scroll offset intact. The
+          // Keep the rail's scroll containers and scroll offsets intact. The
           // top layer lets this menu escape clipping without moving the list.
           menu.showPopover();
           var anchor = actions.getBoundingClientRect();
@@ -1275,16 +1275,14 @@ function WbcRail({ codeAvailable, projectId, projectName, chats, terminals, term
                 title={wbcT("common.moreActions", "More actions")}
                 onClick={function (e) {
                   e.stopPropagation();
-                  var actions = e.currentTarget.parentElement;
-                  var opening = !isMenuOpen;
                   setMenuId(isMenuOpen ? "" : chat.id);
-                  if (opening) revealRailMenu(actions);
                 }}
               >
                 {WBC_ICONS.dots}
               </button>
               {isMenuOpen && (
-                <div className="wb-card-menu" role="menu" data-cyrene-node-id="chat_context_menu">
+                <div className="wb-card-menu wbc-chat-context-menu" role="menu" popover="manual" data-cyrene-node-id="chat_context_menu"
+                  ref={function (menu) { if (menu) revealRailMenu(menu.parentElement); }}>
                   <WbcChatMenuActions chat={chat} isPinned={isPinned} onClose={function () { setMenuId(""); }}
                     onTogglePinned={onTogglePinned} onRename={setRenameChat} onDelete={onDelete} />
                 </div>

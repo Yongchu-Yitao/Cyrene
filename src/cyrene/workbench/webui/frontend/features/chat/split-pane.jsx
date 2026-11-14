@@ -712,7 +712,7 @@ function WbcPaneRowResizer({ active, side, ratio, onResize, onClose, canClose })
         onResize(nextRatio);
         window.dispatchEvent(new CustomEvent("workbench:split-resize-end", { detail: { ratio: nextRatio, side: side } }));
       },
-      close: onClose && function (edge) { onClose(edge === "minimum" ? 0 : 1); },
+      close: onClose && function (edge) { return onClose(edge === "minimum" ? 0 : 1); },
     });
   }
   function keyboardResize(event) {
@@ -805,7 +805,7 @@ function WbcPaneColumnResizer({ active, width, onResize, onClose, canClose }) {
         onResize(nextWidth);
         window.dispatchEvent(new CustomEvent("workbench:split-resize-end", { detail: { width: nextWidth } }));
       },
-      close: onClose && function (edge) { onClose(edge === "minimum" ? "right" : "left"); },
+      close: onClose && function (edge) { return onClose(edge === "minimum" ? "right" : "left"); },
     });
   }
   function keyboardResize(event) {

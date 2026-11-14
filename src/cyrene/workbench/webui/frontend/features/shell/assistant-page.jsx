@@ -3,6 +3,7 @@ import { WbcRailToolbar } from "../chat/rail-toolbar.jsx"
 import { AssistantTaskResources, assistantFileOwners } from "./assistant-task-resources.jsx"
 import { WBC_ICONS, wbcSetChatDrag } from "../../workbench-chat.jsx"
 import { AssistantTaskGroup } from "./assistant-task-group.jsx"
+import { AssistantGripLogo, AssistantLogoProvider } from "./assistant-grip-logo.jsx"
 import { AssistantChat } from "./assistant-chat.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WbcPaneCardFrame } from "../chat/split-pane.jsx"
@@ -42,6 +43,7 @@ function compareAssistantTasks(a, b) {
 }
 
 function PersonalAssistantPage({ context, active = true }) {
+  var loadingRef = React.useRef(null);
   var pinnedCards = usePinnedAssistantCards(active);
   var [snapshot, setSnapshot] = React.useState(null);
   var snapshotRef = React.useRef(null);
@@ -125,12 +127,14 @@ function PersonalAssistantPage({ context, active = true }) {
     </aside>;
     return rail;
   }
-  if (!snapshot) return <div className={"wbc-page assistant-workspace wbc-side-hidden" + (context.navigation.railCollapsed ? " wbc-nav-collapsed" : "")}>{renderRail(null)}<main className="assistant-chat-card-slot" aria-label="个人助理">
+  var content = !snapshot ? <div className={"wbc-page assistant-workspace wbc-side-hidden" + (context.navigation.railCollapsed ? " wbc-nav-collapsed" : "")}>{renderRail(null)}<main className="assistant-chat-card-slot" aria-label="个人助理">
     <WbcPaneCardFrame card={{ id: "assistant-loading", kind: "assistant" }}>
-      <div className="workbench-empty assistant-chat-card-state" role="status">{error ? "助理暂时无法加载" : "正在加载 Cyrene…"}</div>
+      <div ref={loadingRef} className="workbench-empty assistant-chat-card-state" role="status" aria-label={error ? undefined : "正在加载助理"} aria-busy={!error}>
+        <AssistantGripLogo shared surfaceRef={loadingRef} loading />
+        {error ? "助理暂时无法加载" : null}
+      </div>
     </WbcPaneCardFrame>
-  </main></div>;
-  return React.createElement(workbenchServices.chat().Page, {
+  </main></div> : React.createElement(workbenchServices.chat().Page, {
     pinnedCards: pinnedCards.cards, pinnedCardsError: pinnedCards.error,
     active: active, project: project, isolated: true, modelOverride: managedModel,
     protectedChatId: personalAssistantId,
@@ -142,12 +146,13 @@ function PersonalAssistantPage({ context, active = true }) {
       var task = tasks.find(function (item) { return item.session_id === surface.sessionId; });
       return <AssistantChat key={surface.sessionId} sessionId={surface.sessionId} active={active} cache={surface.chatCache}
         personalAssistant={surface.sessionId === personalAssistantId}
+        gripActions={surface.gripActions}
         project={project} title={task ? task.title : "Cyrene"} onOpenFile={surface.onOpenFile}
         permissionRequests={surface.sessionId === personalAssistantId ? snapshot.sessions.filter(function (item) {
           return item.pending_question && item.pending_question.kind && item.pending_question.kind !== "clarification";
         }) : []} />;
     },
   });
-
+  return <AssistantLogoProvider>{content}</AssistantLogoProvider>;
 }
 export { PersonalAssistantPage }

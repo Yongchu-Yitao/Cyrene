@@ -1606,6 +1606,16 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
       else openPaneContent("chat", droppedChatId, { side: "right" });
     }
   }
+  useWbcEffect(function subscribeToAssistantActivity() {
+    if (!protectedChatId) return;
+    function openAssistantActivity(event) {
+      var id = String(event.detail && event.detail.sessionId || "");
+      if (id && id !== activeChatIdRef.current) openChatSplit(id);
+    }
+    window.addEventListener("cyrene:assistant-open-activity", openAssistantActivity);
+    return function () { window.removeEventListener("cyrene:assistant-open-activity", openAssistantActivity); };
+  }, [protectedChatId]);
+
   function openTaskChat(chatId) {
     var targetId = String(chatId || "");
     if (!targetId) return;
@@ -2219,10 +2229,11 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
     });
   }
 
-  function renderActiveConversationCard(card) {
-    if (renderConversation && activeChatId) return renderConversation({
-      sessionId: String(card.payload || activeChatId),
+  function renderActiveConversationCard(card, gripActions) {
+    if (renderConversation && (activeChatId || requestedChatId)) return renderConversation({
+      sessionId: String(card.payload || activeChatId || requestedChatId),
       chatCache: chatCache,
+      gripActions: gripActions,
       onOpenFile: function (file) { openPaneContent("file", file, { sourceCardId: card.id }); },
     });
     return (
@@ -2406,7 +2417,10 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
         "resource:" + String(cardPayloadState.resource_kind || "") + ":" + String(cardPayloadState.resource_id || cardPayloadState.session_id || "")
       ] || null;
     if ((isActiveConversation && singlePane) || (renderConversation && card.kind === "chat")) {
-      content = renderActiveConversationCard(card);
+      content = renderActiveConversationCard(card, {
+        singlePane: singlePane, onDragStart: dragStart,
+        onDragEnd: handlePaneCardDragEnd, onMove: move,
+      });
       grip = <WbcSplitGripBar
         dragSource={card.id}
         logoOnlyDrag={singlePane}

@@ -37,7 +37,7 @@ function mount() {
   };
   const React = {createElement: (type, props, ...children) => ({type, props: {...props, children}})};
   const h = harness('../shell/assistant-chat.jsx', {
-    ...timeline, ...pageHooks, React, useWbcComposerReserveHeight() {},
+    ...timeline, ...pageHooks, React, useWbcComposerReserveHeight() {}, useMainTranscriptResize: () => ({current: null}),
     workbenchServices: {chat: () => ({Model: model, Runtimes: engine,
       Transcript: 'transcript', Composer: 'composer', QuestionPrompt: 'question'})},
   });

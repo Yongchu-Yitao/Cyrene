@@ -410,6 +410,12 @@ class _SendOperation:
         return None
 
     async def _load_project_and_model(self):
+        if self.chat.get("kind") == "assistant-task" and self.chat.get("workDevice"):
+            return None, localized_error_response(
+                "Continue this remote task through the assistant.",
+                "此任务在所选工作设备运行，请通过助理继续或更新任务。",
+                409, "remote_task_execution", language=self.options.lang,
+            )
         project_store = await asyncio.to_thread(self.routes.read_store)
         project = self.routes.find_project(project_store, self.project_id)
         if not project:

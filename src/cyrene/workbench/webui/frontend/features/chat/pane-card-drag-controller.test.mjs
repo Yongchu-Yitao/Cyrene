@@ -75,3 +75,13 @@ test("assistant identity blocks detachment even outside the protected assistant 
   assert.equal(h.calls.includes("begin"), false)
   assert.equal(h.calls.includes("finish"), false)
 })
+
+test("losing the portalled logo capture cancels without moving the pane", () => {
+  const h = harness(true)
+  const button = {}
+  h.sandbox.wbcStartPaneCardDrag(h.context, { ...h.event, pointerCaptureTarget: button }, h.pane.id)
+  h.listeners.get("lostpointercapture")({ target: {}, type: "lostpointercapture" })
+  assert.deepEqual(h.calls, [["drag", h.pane.id]])
+  h.listeners.get("lostpointercapture")({ target: button, type: "lostpointercapture" })
+  assert.deepEqual(h.calls, [["drag", h.pane.id], ["drag", ""]])
+})

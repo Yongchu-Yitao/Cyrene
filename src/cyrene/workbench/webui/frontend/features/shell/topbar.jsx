@@ -1010,7 +1010,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
                         <div className="workbench-browser-manager-page-main">
                           <button type="button" className="workbench-browser-manager-page-select" disabled={!!page.closed} onClick={function () { openManagedBrowserPage(page); }}>
                             <span className="workbench-browser-manager-favicon" aria-hidden="true">
-                              {page.favicon ? <img src={page.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
+                              {page.favicon ? <img key={page.favicon} src={page.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.dataset.loaded = "true"; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
                               <WorkbenchAssetIcon name="browser" />
                             </span>
                             <span className="workbench-browser-manager-page-copy">
@@ -1450,7 +1450,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
               {browserManagerPreviewPages.length ? browserManagerPreviewPages.map(function (page) {
                 return (
                   <span className="workbench-browser-manager-preview-icon" key={page.key || page.sessionId + ":" + page.tabId}>
-                    {page.favicon ? <img src={page.favicon} alt="" draggable="false" onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
+                    {page.favicon ? <img key={page.favicon} src={page.favicon} alt="" draggable="false" onLoad={function (event) { event.currentTarget.dataset.loaded = "true"; }} onError={function (event) { event.currentTarget.hidden = true; }} /> : null}
                     <WorkbenchAssetIcon name="browser" />
                   </span>
                 );

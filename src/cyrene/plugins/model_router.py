@@ -594,6 +594,9 @@ async def route_model_call(
 ) -> dict[str, Any]:
     """Try configured candidates by invoking their actual Provider Plugins."""
 
+    delegate = context.services.get("model_delegate")
+    if delegate is not None:
+        return await delegate(arguments, context)
     _messages, tools, session_id, route, model_messages = _route_call_inputs(arguments, context)
     candidates, candidate_context = _routed_candidates(
         session_id,

@@ -60,7 +60,7 @@ export function AssistantTaskGroup({ task, chat, menuActions, query, matches, ha
     </header>
     {menu && createPortal(<div className="wb-item-context-layer wbc-page-context-layer" style={menu.portalTheme}>
       <div className="wb-item-context-scrim" onPointerDown={closeMenu} />
-      <div className="wb-item-context-menu wbc-page-context-menu" role="menu" style={{ left: menu.left, top: menu.top }}
+      <div className="wb-card-menu wbc-chat-context-menu" role="menu" style={{ left: menu.left, top: menu.top }}
         onContextMenu={function (event) { event.preventDefault(); }}>
         <WbcChatMenuActions chat={chat} isPinned={(menuActions.pinnedChatIds || []).includes(chat.id)}
           onClose={closeMenu} onTogglePinned={menuActions.togglePinned}

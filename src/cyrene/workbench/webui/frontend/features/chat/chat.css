@@ -1,3 +1,4 @@
+@import url("../shell/assistant-identity-menu.css");
 /* ===================================================================
    对话页面 (workbench-chat.jsx) — wbc- prefix
    =================================================================== */
@@ -854,11 +855,11 @@ body.wb-col-resizing .wbc-page {
   gap: 8px;
 }
 
-.wbc-chat-card .wb-card-menu {
+.wbc-chat-context-menu {
   min-width: 168px;
 }
 
-.wbc-chat-card .wb-card-menu button span:last-child {
+.wbc-chat-context-menu button span:last-child {
   white-space: nowrap;
 }
 
@@ -978,6 +979,8 @@ span.wbc-chat-group-toggle {
   min-width: 160px;
 }
 
+.wbc-page-context-layer .wbc-chat-context-menu,
+.wbc-chat-card-actions .wb-card-menu[popover],
 .wbc-chat-group-actions .wb-card-menu[popover] {
   position: fixed;
   inset: auto;
@@ -988,6 +991,11 @@ span.wbc-chat-group-toggle {
   max-height: calc(100vh - 16px);
   overflow: auto;
   pointer-events: auto;
+}
+
+.wbc-page-context-layer .wbc-chat-context-menu {
+  z-index: 10151;
+  width: max-content;
 }
 
 .wbc-chat-group-actions .wb-card-menu button {
@@ -1976,6 +1984,7 @@ span.wbc-chat-group-toggle {
      the new column in one continuous layout pass. */
   grid-template-columns: minmax(0, 1fr) 0px 0px;
   gap: 0;
+  transition-duration: 240ms;
 }
 
 /* A single pane column can still contain a top/bottom split. Once that card
@@ -3502,8 +3511,8 @@ html[data-theme="dark"] .wbc-panel-accordion-surface.wbc-side-split-grip-menu {
      The narrower gutter also gives the controls enough horizontal room. */
   padding:
     var(--wbc-composer-top-inset, 10px)
-    var(--wbc-composer-edge-inset, 14px)
-    var(--wbc-composer-edge-inset, 14px);
+    var(--wbc-composer-edge-inset, 10px)
+    var(--wbc-composer-edge-inset, 10px);
 }
 .wbc-chat-split-state {
   display: flex;
@@ -4402,30 +4411,41 @@ html[data-platform="darwin"] .wbc-browser-split.maximized .wbc-side-agent-split-
 
 /* Drag-close is reversible until pointerup. Keep content and the captured
    separator mounted while collapsing its track; restore on reverse travel. */
+/* The exit preview already animated to the final rectangle. Keep both grid
+   levels still until React commits removal, including asynchronous confirms. */
+[data-resize-closing],
+[data-resize-closing] .wbc-page,
+[data-resize-closing] .wbc-side-agent-split-motion,
+[data-resize-closing] .wbc-side,
+[data-resize-closing] .workbench-right-panel,
+.wbc-page:has([data-resize-closing]) {
+  transition: none !important;
+}
+
 .wbc-pane-layout.split[data-resize-collapsed="column-minimum"] {
   grid-template-columns: minmax(0, 1fr) 0px 0px;
 }
 .wbc-pane-layout.split[data-resize-collapsed="column-maximum"] {
   grid-template-columns: 0px 0px minmax(0, 1fr);
 }
-.wbc-pane-layout[data-resize-collapsed="column-minimum"] > .right,
-.wbc-pane-layout[data-resize-collapsed="column-maximum"] > .left {
+.wbc-pane-layout.split[data-resize-collapsed="column-minimum"] > .right,
+.wbc-pane-layout.split[data-resize-collapsed="column-maximum"] > .left {
   opacity: 0;
   visibility: hidden;
   transition: opacity 240ms ease, visibility 0s linear 240ms;
   pointer-events: none;
   overflow: hidden;
 }
-.wbc-pane-column[data-resize-collapsed="row-minimum"] {
+.wbc-pane-column.vertical[data-resize-collapsed="row-minimum"] {
   grid-template-rows: 0px minmax(0, 1fr);
   gap: 0;
 }
-.wbc-pane-column[data-resize-collapsed="row-maximum"] {
+.wbc-pane-column.vertical[data-resize-collapsed="row-maximum"] {
   grid-template-rows: minmax(0, 1fr) 0px;
   gap: 0;
 }
-.wbc-pane-column[data-resize-collapsed="row-minimum"] > .wbc-pane-card:first-child,
-.wbc-pane-column[data-resize-collapsed="row-maximum"] > .wbc-pane-card:nth-child(2) {
+.wbc-pane-column.vertical[data-resize-collapsed="row-minimum"] > .wbc-pane-card:first-child,
+.wbc-pane-column.vertical[data-resize-collapsed="row-maximum"] > .wbc-pane-card:nth-child(2) {
   opacity: 0;
   visibility: hidden;
   transition: opacity 240ms ease, visibility 0s linear 240ms;
@@ -4460,3 +4480,13 @@ html[data-platform="darwin"] .wbc-browser-split.maximized .wbc-side-agent-split-
 /* Groups without a count retain the same header spacing and title treatment. */
 .wbc-rail .wbc-chat-group-toggle:not(:has(.wbc-chat-group-count, .wbc-chat-row-icon)) { grid-template-columns: 14px minmax(0, 1fr); }
 .wbc-chat-group-toggle:not([draggable="true"]) { cursor: pointer; }
+
+/* Transparent site icons must not reveal the fallback underneath. */
+.wbc-browser-picker-favicon:has(> img[data-loaded="true"]:not([hidden])) > .wbc-browser-picker-favicon-fallback {
+  visibility: hidden;
+}
+
+.wbc-browser-picker-favicon > img:not([data-loaded="true"]),
+.wbc-browser-picker-favicon > img[hidden] {
+  display: none;
+}

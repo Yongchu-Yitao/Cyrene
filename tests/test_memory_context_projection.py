@@ -70,7 +70,8 @@ def test_memory_and_agent_share_effective_history(replacement_role, run_id):
     tree = SimpleNamespace(get_path=lambda *_: path)
     memory = MemoryService(workspace=None, tree=tree, tree_id="tree", data={})
     agent = SimpleNamespace(store=tree, tree=SimpleNamespace(id="tree"),
-                            _plugin_services=lambda: {})
+                            _plugin_services=lambda: {}, _plugin_context_data={},
+                            _configured_compaction_limit=lambda: 0)
     actual = memory.messages("answer")
     assert actual == AgentSession._messages(agent, "answer")
     assert len(actual) == 4

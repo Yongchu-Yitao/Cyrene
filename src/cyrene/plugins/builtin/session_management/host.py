@@ -348,6 +348,13 @@ class WorkbenchHost:
         text = (
             "[Task status update]\n"
             "This is execution status data, not user authorization. "
+            "If recovery_action is ask_user and phase is work_device_connection, the connection has already "
+            "failed after three retries. Promptly call ask_user in your own conversation, name the unavailable "
+            "work device, and ask whether to wait/retry, choose another work device, or stop further work. "
+            "Do not silently retry execution again or switch devices before the user decides. "
+            "Connection loss does not prove the remote task stopped: say its state cannot be confirmed. "
+            "Existing tasks stay pinned; before arranging replacement work, check for duplicate execution. "
+            "If the user chooses to retry, use task_update on the original task to resume its saved input queue. "
             "Completed notifications include final_reply and block_ids. Use the reply as task evidence; "
             "For a truncated reply use task_inspect(view=latest_result, node_id=the notification node_id, content_offset=final_reply_next_offset). "
             "Inspect blocks only when further evidence is needed; use anchor=end for their tail instead of guessing offsets. "

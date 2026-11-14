@@ -12,12 +12,39 @@ test('static logo never attaches motion and disabling animation disposes it',()=
   state='waiting';h.flush();assert.equal(states.at(-1),'waiting');
   animated=false;h.flush();assert.equal(destroyed,1);h.unmount();assert.equal(destroyed,1);
 });
-test('grip logo stays in its own pane and follows live activity',()=>{
-  const React={createElement};const target={id:'own-grip'};let state='thinking';
-  const surfaceRef={current:{closest:s=>{assert.equal(s,'.wbc-pane-card');return {querySelector:s=>{assert.equal(s,'.wbc-side-split-grip-bar-visual');return target;}};}}};
-  const h=harness('../shell/assistant-grip-logo.jsx',{React,CyreneIcon:'icon',useCyreneActivity:id=>{assert.equal(id,'assistant');return state;}});
-  h.context.ReactDOM={createPortal:(child,host)=>({child,host})};
+test('grip delegates to a persistent identity menu with its conversation anchor',()=>{
+  const React={createElement,createContext:()=>({}),useContext:()=>null};const surfaceRef={current:{}};
+  const h=harness('../shell/assistant-grip-logo.jsx',{React,AssistantIdentityMenu:'identity-menu'});
   h.run((mod,hk)=>{hooks(React,hk);return mod.AssistantGripLogo({surfaceRef,sessionId:'assistant'});});
-  assert.equal(h.value.host,target);assert.equal(h.value.child.props.state,'thinking');
-  state='waiting';h.flush();assert.equal(h.value.child.props.state,'waiting');h.unmount();
+  assert.equal(h.value.type,'identity-menu');assert.equal(h.value.props.surfaceRef,surfaceRef);
+  assert.equal(h.value.props.sessionId,'assistant');h.unmount();
+});
+
+test('loading logo survives the bootstrap handoff and hides when its ready surface unmounts', () => {
+  const React = {createElement, createContext: () => ({Provider: 'provider'})};
+  const h = harness('../shell/assistant-grip-logo.jsx', {React, AssistantIdentityMenu: 'identity-menu'});
+  h.run((mod, hk) => {
+    hooks(React, hk); React.useCallback = hk.useWbcCallback;
+    return mod.AssistantLogoProvider({children: 'workspace'});
+  });
+  const logo = () => h.value.props.children[1];
+  const register = h.value.props.value;
+  const bootstrap = {surfaceRef: {current: {}}, loading: true};
+  const chat = {surfaceRef: {current: {}}, loading: true, sessionId: 'assistant'};
+  const stopBootstrap = register(bootstrap); h.flush();
+  assert.equal(logo().props.surfaceRef, bootstrap.surfaceRef);
+  stopBootstrap(); h.flush();
+  assert.equal(logo().props.loading, true);
+  assert.equal(logo().props.hidden, false, 'keep the logo visible between page mounts');
+  const stopChat = register(chat); h.flush();
+  assert.equal(logo().props.surfaceRef, chat.surfaceRef);
+  assert.equal(logo().props.loading, true);
+  stopChat(); const stopReady = register({...chat, loading: false}); h.flush();
+  assert.equal(logo().props.loading, false);
+  assert.equal(logo().props.surfaceRef, chat.surfaceRef);
+  stopBootstrap(); h.flush();
+  assert.equal(logo().props.hidden, false, 'stale cleanup cannot remove the current surface');
+  stopReady(); h.flush();
+  assert.equal(logo().props.hidden, true);
+  h.unmount();
 });

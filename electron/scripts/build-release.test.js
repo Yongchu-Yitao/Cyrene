@@ -8,8 +8,9 @@ const { buildRelease } = require('./build-release');
 const { readPackageJson } = require('app-builder-lib/out/util/packageMetadata');
 const { AppInfo } = require('app-builder-lib/out/appInfo');
 
-for (const publicVersion of ['0.9.1.0', '0.9.1.1', '0.9.1.2', '0.9.1.3', '0.9.1.4', '0.9.1.5', '0.9.1.6', '0.9.1.7']) test(`four-part release ${publicVersion} preserves public and Windows versions through the real builder metadata reader`, async () => {
-  const buildNumber = publicVersion.split('.').at(-1);
+for (const publicVersion of ['0.9.1.0', '0.9.1.1', '0.9.1.2', '0.9.1.3', '0.9.1.4', '0.9.1.5', '0.9.1.6', '0.9.1.7', '0.9.2.0']) test(`four-part release ${publicVersion} preserves public and Windows versions through the real builder metadata reader`, async () => {
+  const [major, minor, patch, buildNumber] = publicVersion.split('.');
+  const stagedVersion = [major, minor, patch].join('.');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cyrene-version-'));
   const manifestPath = path.join(dir, 'package.json');
   const original = JSON.stringify({ name: 'cyrene', version: publicVersion, description: 'Cyrene' });
@@ -18,7 +19,7 @@ for (const publicVersion of ['0.9.1.0', '0.9.1.1', '0.9.1.2', '0.9.1.3', '0.9.1.
   try {
     assert.equal(buildRelease(['--win'], { directory: dir, run: (_command, args) => {
       const staged = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      assert.equal(staged.version, '0.9.1');
+      assert.equal(staged.version, stagedVersion);
       assert.ok(args.includes(`--config.extraMetadata.version=${publicVersion}`));
       assert.ok(args.includes(`--config.buildVersion=${publicVersion}`));
       assert.ok(args.includes(`--config.buildNumber=${buildNumber}`));

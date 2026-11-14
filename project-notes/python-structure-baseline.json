@@ -984,8 +984,11 @@
   "src/cyrene/plugins/builtin/cyrene_memory/list_memories.py::_tool_list_memories": {
     "decisions": 25
   },
+  "src/cyrene/plugins/builtin/cyrene_memory/memory_editor.py::_draft_memory": {
+    "decisions": 27
+  },
   "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py": {
-    "module_lines": 1769
+    "module_lines": 1772
   },
   "src/cyrene/plugins/builtin/cyrene_memory/project_memory.py::_learn_prompt": {
     "lines": 101
@@ -1162,7 +1165,7 @@
     "decisions": 44
   },
   "src/cyrene/plugins/builtin/cyrene_remote/commands.py": {
-    "module_lines": 2897
+    "module_lines": 2907
   },
   "src/cyrene/plugins/builtin/cyrene_remote/commands.py::RemoteCommandExecutor": {
     "methods": 41
@@ -1187,10 +1190,10 @@
     "decisions": 21
   },
   "src/cyrene/plugins/builtin/cyrene_remote/control.py": {
-    "module_lines": 2689
+    "module_lines": 2705
   },
   "src/cyrene/plugins/builtin/cyrene_remote/control.py::RemoteControlStore": {
-    "methods": 38
+    "methods": 39
   },
   "src/cyrene/plugins/builtin/cyrene_remote/control.py::RemoteControlStore._initialize": {
     "lines": 128
@@ -1233,6 +1236,15 @@
   "src/cyrene/plugins/builtin/cyrene_remote/run.py::handler": {
     "lines": 101,
     "decisions": 23
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/status.py::_download_remote_file": {
+    "decisions": 21
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/task_execution.py::execute": {
+    "decisions": 52
+  },
+  "src/cyrene/plugins/builtin/cyrene_remote/task_execution.py::release_cache": {
+    "decisions": 22
   },
   "src/cyrene/plugins/builtin/cyrene_remote/workspace.py::RemoteJobManager._start": {
     "decisions": 26
@@ -1402,6 +1414,12 @@
     "lines": 104,
     "decisions": 29
   },
+  "src/cyrene/plugins/builtin/session_management/remote_host.py::RemoteAwareHost.refresh_task": {
+    "decisions": 25
+  },
+  "src/cyrene/plugins/builtin/session_management/store.py::Store": {
+    "methods": 28
+  },
   "src/cyrene/plugins/contributions.py::_validate_project_tools": {
     "decisions": 36
   },
@@ -1422,8 +1440,8 @@
     "decisions": 24
   },
   "src/cyrene/plugins/model_router.py::route_model_call": {
-    "lines": 204,
-    "decisions": 33
+    "lines": 207,
+    "decisions": 34
   },
   "src/cyrene/plugins/native_runtime.py::guard_shell_command_workspace_write": {
     "decisions": 24
@@ -1503,7 +1521,7 @@
     "decisions": 45
   },
   "src/cyrene/workbench/chat/chat_application.py::public_chat_light": {
-    "lines": 114,
+    "lines": 116,
     "decisions": 53,
     "nesting": 6
   },
@@ -1649,8 +1667,8 @@
     "module_lines": 1094
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge": {
-    "lines": 145,
-    "decisions": 44
+    "lines": 151,
+    "decisions": 49
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._own_bridge": {
     "decisions": 21,
@@ -1722,7 +1740,7 @@
     "fields": 31
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
-    "module_lines": 1616
+    "module_lines": 1617
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
     "methods": 36,
@@ -1734,6 +1752,9 @@
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_chat": {
     "lines": 106,
     "decisions": 34
+  },
+  "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_project_and_model": {
+    "lines": 103
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._run_builtin": {
     "lines": 112

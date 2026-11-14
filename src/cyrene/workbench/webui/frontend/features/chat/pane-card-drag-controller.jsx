@@ -340,6 +340,12 @@ function wbcClearPaneCardGhost(session) {
 }
 
 function wbcFinishPaneCardGhost(session, event) {
+  if (session.ghostCleared) return;
+  if (event && (event.type === "pointercancel" || event.type === "lostpointercapture")) {
+    wbcClearPaneCardGhost(session);
+    session.context.handlePaneCardDragEnd(event, { cancel: true });
+    return;
+  }
   var clientX = Number(event && event.clientX);
   var clientY = Number(event && event.clientY);
   if (!Number.isFinite(clientX)) clientX = session.lastPointer.clientX;
@@ -385,7 +391,7 @@ function wbcStartPaneCardDrag(context, event, cardId, paneOverride) {
   session.clear = function () { wbcClearPaneCardGhost(session); };
   session.finish = function (nextEvent) { wbcFinishPaneCardGhost(session, nextEvent); };
   session.finishLostCapture = function (captureEvent) {
-    if (captureEvent && captureEvent.target !== dragHandle) return;
+    if (captureEvent && captureEvent.target !== (event.pointerCaptureTarget || dragHandle)) return;
     wbcFinishPaneCardGhost(session, captureEvent || session.lastPointer);
   };
   document.addEventListener("pointermove", session.move, true);

@@ -40,6 +40,7 @@ class SessionManagementService:
     def __init__(self, directory, host):
         self.store = Store(Path(directory) / "sessions.sqlite3")
         self.host = host
+        self.host.task_store = self.store
         self.loop = None
         self.lock = None
         self.worker = None
@@ -125,6 +126,8 @@ class SessionManagementService:
                 _, chat = self._owned(owner, record["id"])
             except ValueError:
                 continue
+            if chat.get("workDevice"):
+                continue  # A remote path grants no access to this machine.
             workspace = chat.get("workspaceOverride")
             if workspace and resolved.is_relative_to(Path(workspace).expanduser().resolve()):
                 return resolved
@@ -141,21 +144,27 @@ class SessionManagementService:
                 self.store.reserve(key, fingerprint)
                 if operation == "session_create":
                     target = "managed_" + digest(key)[:24]
-                    from cyrene.workbench.chat.chat_application import normalize_workspace_override
-
-                    task_workspace = normalize_workspace_override(args.get("workspace_path"))
+                    task_workspace = str(args.get("workspace_path") or "").strip()
+                    if not (self.host.chat(owner) or {}).get("workDevice"):
+                        from cyrene.workbench.chat.chat_application import normalize_workspace_override
+                        task_workspace = normalize_workspace_override(task_workspace)
                     if not task_workspace:
                         raise ValueError("workspace_path is required")
                     await asyncio.to_thread(self.host.create, owner, target, args["title"], task_workspace)
                     self.store.register(target, owner)
-                    result = {"session_id": target, "status": "idle"}
+                    result = {"session_id": target, "status": "idle",
+                              "work_device": (self.host.chat(target) or {}).get("workDevice") or {"device_id": "local"}}
                     if args.get("message") or args.get("files"):
                         message = await self._enqueue(owner, target, args, key, workspace)
                         result.update(message)
                 else:
                     target = args["session_id"]
                     self._owned(owner, target)
-                    result = await self._command_existing(owner, target, operation, args, key, workspace)
+                    try:
+                        result = await self._command_existing(owner, target, operation, args, key, workspace)
+                    except (ConnectionError, TimeoutError) as exc:
+                        self.work_device_unavailable(owner, target, str(exc))
+                        raise
                 self.store.save(key, fingerprint, result)
                 return result
 
@@ -220,6 +229,14 @@ class SessionManagementService:
                     except ValueError:
                         continue
                     checkpoint = self.host.checkpoint(record["id"])
+                    status = self.host.status(record["id"])
+                    if chat.get("workDevice"):
+                        if chat.get("workDeviceStopped"):
+                            status = "stopped"
+                        elif chat.get("workDeviceError") and status not in {"completed", "failed", "cancelled", "stopped"}:
+                            status = "unknown"
+                    elif record["paused"]:
+                        status = "stopped"
                     result.append(
                         {
                             **{key: checkpoint[key] for key in
@@ -228,7 +245,9 @@ class SessionManagementService:
                             "presentation": self.store.presentation(record["id"]),
                             "title": chat.get("title", ""),
                             "workspace_path": chat.get("workspaceOverride", ""),
-                            "status": "stopped" if record["paused"] else self.host.status(record["id"]),
+                            "work_device": chat.get("workDevice") or {"device_id": "local"},
+                            "device_error": chat.get("workDeviceError", ""),
+                            "status": status,
                             "pending_messages": self.store.pending_count(record["id"]),
                             "delivery_error": self.store.delivery_error(record["id"]),
                             "pending_question": chat.get("pendingQuestion"),
@@ -343,7 +362,27 @@ class SessionManagementService:
                       "message_id": row["id"], "error": error},
         })
 
+    def work_device_unavailable(self, owner_id, target, error):
+        owner, chat = self.host.chat(owner_id), self.host.chat(target)
+        if not owner or not chat or not chat.get("workDevice"):
+            return False
+        notice = self.store.remote_snapshot(target, "connection_notice")
+        self.host.port().service.repository.mutate_one(target, lambda c: c.update(workDeviceError=error))
+        if notice.get("active"):
+            return True
+        generation = int(notice.get("generation", 0)) + 1
+        self.store.notify(f"work_device_unavailable:{target}:{generation}", owner_id, target, {
+            "owner_version": self.host.version(owner),
+            "event": {"status": "blocked", "phase": "work_device_connection", "session_id": target,
+                      "work_device": chat["workDevice"], "error": error, "connection_retries": 3,
+                      "recovery_action": "ask_user", "execution_state": "unknown"},
+        })
+        self.store.save_remote_snapshot(target, {"active": True, "generation": generation}, "connection_notice")
+        return True
+
     async def tick(self):
+        refresh = getattr(self.host, "refresh_remote", None)
+        self._remote_pending = await refresh(self) if refresh else False
         await self.notify_tasks()
         for row in self.store.pending():
             async with self.lock:
@@ -362,6 +401,15 @@ class SessionManagementService:
                 self.store.update(row["id"], "delivered")
             else:
                 self.store.defer(row["id"])
+        except (ConnectionError, TimeoutError) as exc:
+            if self.work_device_unavailable(row["owner"], row["target"], str(exc)):
+                # Keep the original input for explicit recovery, without another silent retry cycle.
+                self.store.update(row["id"], "queued", str(exc))
+                self.store.pause(row["target"])
+            else:
+                self.store.update(row["id"], "failed" if row["attempts"] >= 11 else "queued", str(exc))
+                if row["attempts"] >= 11:
+                    self.delivery_failed(row, str(exc))
         except ValueError as exc:
             self.store.update(row["id"], "failed", str(exc))
             self.delivery_failed(row, str(exc))
@@ -379,7 +427,7 @@ class SessionManagementService:
                 pending = True
                 try:
                     await self.tick()
-                    pending = await asyncio.to_thread(self.store.has_pending)
+                    pending = await asyncio.to_thread(self.store.has_pending) or getattr(self, "_remote_pending", False)
                 except Exception:
                     logger.exception("Managed session queue failed")
                 if pending:

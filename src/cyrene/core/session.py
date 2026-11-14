@@ -4201,9 +4201,18 @@ class AgentSession:
         self.store.update_node(self.tree.id, leaf_id, value)
 
     def _messages(self, node_id: str) -> list[dict[str, Any]]:
-        return project_model_messages(
+        from .context.tool_results import project_tool_messages, result_session_id
+
+        services = self._plugin_services()
+        messages = project_model_messages(
             self.store.get_path(self.tree.id, node_id),
-            observation_services=tuple(self._plugin_services().values()),
+            observation_services=tuple(services.values()),
+        )
+        return project_tool_messages(
+            messages,
+            service=services.get("tool_results"),
+            session_id=result_session_id(self._plugin_context_data, self.tree.id),
+            context_limit_tokens=self._configured_compaction_limit(),
         )
 
     def _persist_auxiliary_model_usage(

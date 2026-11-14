@@ -26,7 +26,7 @@ function mount({hidden = false} = {}) {
   const timeline = harness('./runtime-timeline.jsx').run(mod => mod);
   const page = harness('./runtime-page-hooks.jsx').run(mod => mod);
   const h = harness('../shell/assistant-chat.jsx', {
-    ...timeline, ...page, React, useWbcComposerReserveHeight() {},
+    ...timeline, ...page, React, useWbcComposerReserveHeight() {}, useMainTranscriptResize: () => ({current: null}),
     workbenchServices: {chat: () => ({Model: model, Runtimes: engine,
       Composer: 'composer', Transcript: 'transcript', QuestionPrompt: 'question'})},
   });

@@ -151,3 +151,17 @@ test('icons mounted in the background and reduced-motion users get a static slee
   assert.equal(f.timers.size, 0); assert.equal(svg.querySelector('.cyrene-icon-sleep').style.opacity, 1);
   controller.destroy();
 });
+
+test('DOM paints the startled eyes and drifting sleep mark, then returns to ordinary idle', () => {
+  const f = fixture(), svg = f.svg(), controller = attachCyreneMotion(svg);
+  f.focus(false); for (let i = 0; i < 70; i++) f.frame();
+  f.focus(true); f.frame(); for (let i = 0; i < 12; i++) f.frame(1000 / 60);
+  assert.equal(svg.dataset.waking, 'true');
+  assert.match(svg.querySelector('.cyrene-icon-gaze').style.transform, /scale\(1\.25,1\.4\)/);
+  assert.equal(svg.querySelector('.cyrene-icon-sleep').style.transform, 'translate(2px,-3px)');
+  for (let i = 0; i < 100; i++) f.frame(1000 / 60);
+  assert.equal(svg.dataset.waking, 'false');
+  assert.equal(svg.querySelector('.cyrene-icon-sleep').style.transform, 'none');
+  assert.match(svg.querySelector('.cyrene-icon-gaze').style.transform, /scale\(1,/);
+  controller.destroy(); assert.equal(f.frames.size, 0); assert.equal(f.timers.size, 0);
+});

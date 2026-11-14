@@ -122,3 +122,23 @@ def test_assistant_audience_cannot_be_granted_by_tool_name_or_customization():
         assert plugin.model_visible is False
     with pytest.raises(TypeError):
         tool("InvalidAudience", model_visible="ordinary")
+
+
+def test_full_tool_scope_discovers_live_plugins_and_respects_disabled_tools():
+    async def scenario():
+        registry = PluginRegistry()
+        view = ScopedPluginRegistry(registry, PluginToolScope(include_all_tools=True,
+            excluded_tool_names=frozenset({'Excluded'})))
+        runtime = PluginRuntime(view)
+        registry.register_pack(PluginPack(id='custom', description='User plugin',
+            plugins=(tool('CustomLookup'), tool('Excluded'))), source='user')
+        listing = await runtime.call('toolbox', {'operation': 'list'})
+        assert 'custom' in listing.value['packs']
+        description = await runtime.call('toolbox', {'operation': 'describe', 'name': 'custom'})
+        assert [p['name'] for p in description.value['plugins']] == ['CustomLookup']
+        assert (await runtime.call('toolbox', {'operation': 'invoke', 'name': 'CustomLookup', 'arguments': {}})).success
+        assert not (await runtime.call('Excluded', {})).success
+        registry.set_plugin_enabled('CustomLookup', False)
+        assert not view.plugin_accessible('CustomLookup')
+        assert not (await runtime.call('toolbox', {'operation': 'invoke', 'name': 'CustomLookup', 'arguments': {}})).success
+    asyncio.run(scenario())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import platform
 from pathlib import Path
 from typing import Any
 
@@ -189,7 +190,9 @@ def test_application_setup_commits_routes_services_lifecycle_and_search(
         assert await queries.search_workbench("needle", {"demo"}, 5) == {
             "demo": [{"id": "one", "type": "demo", "title": "needle", "limit": 5}]
         }
-        assert await queries.ui_data() == {"ok": True, "pluginModules": ["demo"]}
+        assert await queries.ui_data() == {
+            "ok": True, "pluginModules": ["demo"], "localDeviceName": platform.node(),
+        }
         await host.startup()
         await host.shutdown()
 

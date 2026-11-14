@@ -194,6 +194,13 @@ def _valid_remote_grant(capability: str) -> bool:
 
 
 _COMMAND_CAPABILITIES = {
+    "tasks.workspaces": "chat:create",
+    "tasks.deliver": "chat:send",
+    "tasks.snapshot": "chat:read",
+    "tasks.stop": "chat:interrupt",
+    "tasks.release": "chat:create",
+    "tasks.answer": "chat:guide",
+    "tasks.model": "",
     "capabilities.read": "",
     "projects.list": "projects:list_shared",
     "chats.list": "chat:read",
@@ -299,6 +306,8 @@ _PROJECT_SCOPED_COMMANDS = frozenset(
     if not command.startswith("desktop.") and command not in {
         "capabilities.read",
         "projects.list",
+        "tasks.workspaces",
+        "tasks.model",
         "settings.read",
         "settings.models.copy",
         "settings.update",
@@ -309,6 +318,9 @@ _PROJECT_SCOPED_COMMANDS = frozenset(
 )
 _SIDE_EFFECT_COMMANDS = frozenset(
     {
+        "tasks.stop",
+        "tasks.release",
+        "tasks.answer",
         "chats.create",
         "chats.update",
         "chats.delete",
@@ -1665,6 +1677,12 @@ class RemoteControlStore:
                 return "execute", None
             return "in_progress", None
 
+    def release_dedupe(self, peer_device_id: str, idempotency_key: str) -> None:
+        # Retryable responses are not final receipts.
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM remote_command_dedupe WHERE peer_device_id=? AND idempotency_key=? AND state='in_progress'",
+                         (peer_device_id, idempotency_key))
+
     def store_dedupe_result(
         self,
         peer_device_id: str,
@@ -2631,12 +2649,10 @@ class RemoteGateway:
                         }
                     if not isinstance(result, dict):
                         result = {"ok": True, "data": result}
-                    self.store.store_dedupe_result(
-                        sender,
-                        idempotency_key,
-                        dedupe_payload,
-                        result,
-                    )
+                    if result.get("retryable") or (command == "tasks.deliver" and result.get("accepted") is False):
+                        self.store.release_dedupe(sender, idempotency_key)
+                    else:
+                        self.store.store_dedupe_result(sender, idempotency_key, dedupe_payload, result)
         self.store.audit(
             "remote_command_completed",
             peer_device_id=sender,

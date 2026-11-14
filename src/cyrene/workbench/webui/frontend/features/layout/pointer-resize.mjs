@@ -1,11 +1,14 @@
+const pendingResizeCloses = new WeakSet();
+
 export function startPointerResize(event, options) {
+  var preview = options.collapsePreview;
+  if (preview && pendingResizeCloses.has(preview.element)) return;
   var handle = event.currentTarget;
   var pointerId = event.pointerId;
   var frame = 0;
   var finished = false;
   var collapsedEdge = "";
   var collapsePosition = 0;
-  var preview = options.collapsePreview;
   var collapseMotion = null;
   var rowTemplate;
   function changePreview(change, closing) {
@@ -45,6 +48,35 @@ export function startPointerResize(event, options) {
   function paint() {
     frame = 0;
     options.paint();
+  }
+  function finishClose() {
+    // Promise resolution can precede React's batched DOM commit. Keep the
+    // collapsed geometry through that commit, then remove the transition lock
+    // on a later frame so CSS never sees the old expanded track as an endpoint.
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        if (preview.kind === "row" && /^(0fr 1fr|1fr 0fr)$/.test(preview.element.style.gridTemplateRows)) {
+          preview.element.style.gridTemplateRows = rowTemplate;
+        }
+        preview.element.removeAttribute("data-resize-collapsed");
+        requestAnimationFrame(function () {
+          preview.element.removeAttribute("data-resize-closing");
+          pendingResizeCloses.delete(preview.element);
+        });
+      });
+    });
+  }
+  function commitClose(edge) {
+    // Keep transcript protection active throughout the preview animation.
+    // Persist size and finish the drag only when handing over to the close.
+    try {
+      options.commit();
+      var result = options.close(edge);
+      if (result && typeof result.then === "function") result.then(finishClose, finishClose);
+      else finishClose();
+    } catch (error) {
+      finishClose();
+    }
   }
   function move(moveEvent) {
     if (finished || moveEvent.pointerId !== pointerId) return;
@@ -90,22 +122,20 @@ export function startPointerResize(event, options) {
       try { handle.releasePointerCapture(pointerId); } catch (error) {}
     }
     if (frame) { cancelAnimationFrame(frame); paint(); }
-    document.body.classList.remove(options.bodyClass);
-    options.commit();
     if (closeEdge && options.close) {
-      function confirmClose() {
-        options.close(closeEdge);
-        // Also clear the preview if a confirmation dialog declines closing.
-        if (preview.kind === "row") preview.element.style.gridTemplateRows = rowTemplate;
-        preview.element.removeAttribute("data-resize-collapsed");
-      }
+      pendingResizeCloses.add(preview.element);
+      // Lock only this layout while awaiting confirmation; do not leave the
+      // entire application in dragging mode while a modal is open.
+      preview.element.setAttribute("data-resize-closing", "");
+      document.body.classList.remove(options.bodyClass);
+      function confirmClose() { commitClose(closeEdge); }
       // A quick release must not unmount the pane halfway through its exit.
       if (collapseMotion && collapseMotion.playState !== "finished") {
-        collapseMotion.finished.then(confirmClose, function () {
-          if (preview.kind === "row") preview.element.style.gridTemplateRows = rowTemplate;
-          preview.element.removeAttribute("data-resize-collapsed");
-        });
+        collapseMotion.finished.then(confirmClose, confirmClose);
       } else confirmClose();
+    } else {
+      document.body.classList.remove(options.bodyClass);
+      options.commit();
     }
   }
   if (handle.setPointerCapture) {

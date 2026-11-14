@@ -82,7 +82,7 @@ def _tool(name, description, properties, required=(), read_only=False):
     if public_name == "task_start":
         required.append("message")
         properties["message"] = {**MESSAGE, "minLength": 1,
-            "description": "Task objective, evidence, constraints and expected result. Starts execution immediately."}
+            "description": "Task objective, evidence, constraints and expected result. Starts execution immediately on the assistant-selected work device; the main assistant stays local."}
 
     async def handler(args, context):
         owner, effect = _caller(context)
@@ -136,10 +136,10 @@ def setup(context):
 
 def application_setup(context):
     from cyrene.workbench.application.app_services import chat_application_port
-    from .host import WorkbenchHost
+    from .remote_host import RemoteAwareHost
     from .service import SessionManagementService
 
-    service = SessionManagementService(context.data_directory / "plugin_data" / "session_management", WorkbenchHost(chat_application_port))
+    service = SessionManagementService(context.data_directory / "plugin_data" / "session_management", RemoteAwareHost(chat_application_port))
     from .routes import register_routes
     register_routes(context, service)
     context.provide("session_management", service)
@@ -154,7 +154,7 @@ plugin_pack = PluginPack(
         _tool(
             "session_create",
             "Start NEW work. If a different goal is active in your context catalog, first call switch_context with context_id=null, a title and a progress checkpoint in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion.",
-            {"title": {"type": "string", "minLength": 1, "maxLength": 80}, "workspace_path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Required absolute path to an existing directory containing this task's input files and deliverables. Use the relevant workspace root, not a scratch subdirectory when outputs are outside it. Create the directory first if needed."}, "message": MESSAGE, "files": FILES},
+            {"title": {"type": "string", "minLength": 1, "maxLength": 80}, "workspace_path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Required absolute path on the selected work device, inside a shared workspace for a remote task. For local tasks, an existing directory containing the input files and deliverables. Use the relevant workspace root, not a scratch subdirectory when outputs are outside it. Create the directory first if needed."}, "message": MESSAGE, "files": FILES},
             ["title", "workspace_path"],
         ),
         _tool("session_organize", "Organize an existing task group in the assistant sidebar. Does not execute, stop or delete work. Use title, position (lower first), archived, hidden_resources (kind:key), and attachment_ids from successful send_file results to associate files delivered in the main conversation. Supplied arrays replace their previous selections; omitted fields remain unchanged.",

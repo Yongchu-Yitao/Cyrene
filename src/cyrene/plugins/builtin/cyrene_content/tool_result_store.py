@@ -8,9 +8,10 @@ import os
 import re
 import tempfile
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
+from threading import RLock
 from pathlib import Path
-from uuid import uuid4
 
 from cyrene.platform.paths import TEMP_DIR
 
@@ -30,6 +31,60 @@ class ProjectedToolResult:
     original_tokens: int
     original_bytes: int
     content_ref: str | None = None
+
+
+# Cache digests/counts and bounded previews, never the complete result text.
+_CACHE_LOCK = RLock()
+_METRICS_CACHE: OrderedDict[str, tuple[int, int]] = OrderedDict()
+_PREVIEW_CACHE: OrderedDict[tuple, ProjectedToolResult] = OrderedDict()
+_METRICS_CACHE_ENTRIES = 512
+_PREVIEW_CACHE_ENTRIES = 128
+_PREVIEW_CACHE_BYTES = 4 * 1024 * 1024
+_preview_cache_bytes = 0
+
+
+def _result_metrics(text: str) -> tuple[str, int, int]:
+    encoded = text.encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    byte_count = len(encoded)
+    with _CACHE_LOCK:
+        cached = _METRICS_CACHE.get(digest)
+        if cached is not None:
+            _METRICS_CACHE.move_to_end(digest)
+            return digest, *cached
+    tokens = _token_count(text)
+    with _CACHE_LOCK:
+        _METRICS_CACHE[digest] = (tokens, byte_count)
+        _METRICS_CACHE.move_to_end(digest)
+        while len(_METRICS_CACHE) > _METRICS_CACHE_ENTRIES:
+            _METRICS_CACHE.popitem(last=False)
+    return digest, tokens, byte_count
+
+
+def _cached_preview(key: tuple) -> ProjectedToolResult | None:
+    with _CACHE_LOCK:
+        cached = _PREVIEW_CACHE.get(key)
+        if cached is not None:
+            _PREVIEW_CACHE.move_to_end(key)
+        return cached
+
+
+def _cache_preview(key: tuple, value: ProjectedToolResult) -> None:
+    global _preview_cache_bytes
+    # Budget Unicode storage conservatively; include room for keys/metadata.
+    size = len(value.content) * 4 + 1024
+    if size > _PREVIEW_CACHE_BYTES:
+        return
+    with _CACHE_LOCK:
+        previous = _PREVIEW_CACHE.pop(key, None)
+        if previous is not None:
+            _preview_cache_bytes -= len(previous.content) * 4 + 1024
+        _PREVIEW_CACHE[key] = value
+        _preview_cache_bytes += size
+        while (len(_PREVIEW_CACHE) > _PREVIEW_CACHE_ENTRIES
+               or _preview_cache_bytes > _PREVIEW_CACHE_BYTES):
+            _, removed = _PREVIEW_CACHE.popitem(last=False)
+            _preview_cache_bytes -= len(removed.content) * 4 + 1024
 
 
 class ToolResultReferenceError(ValueError):
@@ -95,7 +150,9 @@ def store_tool_result(text: str, *, session_id: str) -> str:
     """Persist a complete result and return an opaque session-bound reference."""
 
     session_key = _session_key(session_id)
-    result_id = uuid4().hex
+    # Model history is projected repeatedly and after session restoration.
+    # Stable session-scoped references avoid duplicate files and cache churn.
+    result_id = hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:32]
     _RESULT_ROOT.mkdir(parents=True, exist_ok=True)
     _cleanup_expired(_RESULT_ROOT)
     session_directory = _RESULT_ROOT / session_key
@@ -105,6 +162,9 @@ def store_tool_result(text: str, *, session_id: str) -> str:
     except OSError:
         pass
     target = session_directory / f"{result_id}.txt"
+    if target.is_file():
+        os.utime(target, None)
+        return f"{_RESULT_SCHEME}{session_key}/{result_id}"
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=".pending-",
         dir=session_directory,
@@ -286,20 +346,34 @@ def project_tool_result_for_model(
 
     del tool_name, tool_call_id
     text = str(result)
-    original_tokens = _token_count(text)
-    original_bytes = len(text.encode("utf-8"))
+    metrics = _result_metrics(text)
     token_limit = (
         max(1, int(token_limit_tokens))
         if token_limit_tokens is not None
         else tool_result_token_limit(context_limit_tokens=context_limit_tokens)
     )
+    return _project_result(text, metrics, session_id=session_id, token_limit=token_limit)
+
+
+def _project_result(text, metrics, *, session_id, token_limit):
+    digest, original_tokens, original_bytes = metrics
     if original_tokens <= token_limit:
         return ProjectedToolResult(text, False, original_tokens, original_bytes)
+    key = (str(_RESULT_ROOT.resolve()), _session_key(session_id), digest, token_limit)
+    cached = _cached_preview(key)
+    if cached is not None:
+        try:
+            _resolve_reference(cached.content_ref, session_id=session_id)
+            return cached
+        except ToolResultReferenceError:
+            pass
     try:
         content_ref = store_tool_result(text, session_id=session_id)
     except OSError:
         content_ref = None
-    return ProjectedToolResult(
+    if cached is not None and content_ref == cached.content_ref:
+        return cached
+    projected = ProjectedToolResult(
         _preview(
             text,
             content_ref=content_ref,
@@ -312,6 +386,10 @@ def project_tool_result_for_model(
         original_bytes,
         content_ref,
     )
+    # Do not cache storage failures: a later projection must retry persistence.
+    if content_ref is not None:
+        _cache_preview(key, projected)
+    return projected
 
 
 def _shared_budgets(token_counts: list[int], total: int) -> list[int]:
@@ -349,22 +427,21 @@ def project_tool_result_batch_for_model(
         _MAX_BATCH_TOKENS,
         tool_result_token_limit(context_limit_tokens=context_limit_tokens),
     )
-    token_counts = [_token_count(str(result)) for result, _name, _id in results]
+    texts = [str(result) for result, _name, _id in results]
+    metrics = [_result_metrics(text) for text in texts]
+    token_counts = [item[1] for item in metrics]
     budgets = (
         token_counts
         if sum(token_counts) <= total_limit
         else _shared_budgets(token_counts, total_limit)
     )
     return [
-        project_tool_result_for_model(
-            result,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
+        _project_result(
+            text, measured,
             session_id=session_id,
-            context_limit_tokens=context_limit_tokens,
-            token_limit_tokens=max(1, budget),
+            token_limit=max(1, budget),
         )
-        for (result, tool_name, tool_call_id), budget in zip(results, budgets)
+        for text, measured, budget in zip(texts, metrics, budgets)
     ]
 
 

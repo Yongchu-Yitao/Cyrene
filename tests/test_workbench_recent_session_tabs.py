@@ -1234,7 +1234,9 @@ def test_resource_shelf_stays_right_aligned_without_blocking_window_drag():
     assert '<path d="M12 17v5" />' in empty_hint
     assert '<path d="M5 17h14" />' in empty_hint
     assert "width: auto" in shelf_css
-    assert "min-width: 26px" in shelf_css
+    assert "min-width: 32px" in shelf_css
+    assert "height: auto" in shelf_css
+    assert "padding: 2px" in shelf_css
     assert "max-width: 28vw" in shelf_css
     assert "justify-content: flex-end" in shelf_css
     assert "-webkit-app-region: no-drag" not in shelf_css

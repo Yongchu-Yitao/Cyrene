@@ -1,10 +1,10 @@
 import { createGripLogoMood } from './grip-logo-mood.mjs';
 // A spring moves the outer slot; the inner SVG keeps its own activity animation.
-export function createGripLogoDrag(slot, start, win = window) {
+export function createGripLogoDrag(slot, start, win = window, boundsElement = null) {
   const rect = slot.getBoundingClientRect(), original = slot.style.transform;
   const reduced = () => win.matchMedia('(prefers-reduced-motion: reduce)').matches
     || slot.ownerDocument.documentElement.dataset.performanceMode === 'on';
-  const pane = slot.closest?.('.wbc-pane-card')?.getBoundingClientRect();
+  const pane = (boundsElement || slot.closest?.('.wbc-pane-card'))?.getBoundingClientRect();
   const bounds = pane || {left:0,top:0,right:win.innerWidth,bottom:win.innerHeight};
   const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
   let x=0,y=0,vx=0,vy=0,tx=0,ty=0,last=null,frame=null,released=false,disposed=false;

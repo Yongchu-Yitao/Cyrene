@@ -134,6 +134,9 @@ class MemoryApplication:
 
         def find_project(project_id: str) -> dict[str, Any] | None:
             target = str(project_id or "").strip()
+            from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID, assistant_scope
+            if target == ASSISTANT_SCOPE_ID:
+                return assistant_scope()
             return next(
                 (dict(project) for project in read_projects() if isinstance(project, dict) and str(project.get("id") or "") == target),
                 None,
@@ -804,6 +807,7 @@ class MemoryApplication:
                 "memory:",
                 "project_memory_prompt:",
                 "project_memory_context:",
+                "memory_editor_summary:",
             ):
                 for key in list_document_keys(self.db_path, prefix=prefix):
                     delete_document(self.db_path, key)

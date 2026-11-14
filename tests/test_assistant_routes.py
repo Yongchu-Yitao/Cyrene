@@ -26,7 +26,8 @@ async def test_assistant_entry_is_global_durable_and_does_not_read_contexts(tmp_
     await asyncio.gather(service.worker, return_exceptions=True)
     router = APIRouter()
     register_routes(SimpleNamespace(router=router), service)
-    assert [(r.path, r.methods) for r in router.routes] == [("/api/workbench/assistant", {"GET"}), ("/api/workbench/assistant/reset", {"POST"})]
+    assert [(r.path, r.methods) for r in router.routes] == [("/api/workbench/assistant", {"GET"}), ("/api/workbench/assistant/reset", {"POST"}),
+        ("/api/workbench/assistant/work-device", {"GET"}), ("/api/workbench/assistant/work-device", {"PUT"})]
     sidebar = router.routes[0].endpoint
     try:
         first, second = await asyncio.gather(sidebar(), sidebar())
@@ -169,3 +170,74 @@ async def test_assistant_reset_deletes_tasks_and_durable_queues(tmp_path):
         assert (await service.reset_assistant())["deletedTasks"] == 0
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_work_device_selection_persists_without_mutating_existing_tasks(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from cyrene.workbench.chat.chat_repository import ChatRepository
+    from cyrene.workbench.projects.assistant import ASSISTANT_ID
+    from cyrene.plugins.builtin.session_management import routes
+
+    repo = ChatRepository(str(tmp_path / "app.db"))
+    port = SimpleNamespace(service=SimpleNamespace(repository=repo,
+        create_chat=lambda project, title, **kw: {"projectId": project, "title": title, "messages": []}))
+    host = WorkbenchHost(lambda: port)
+    service = SessionManagementService(tmp_path, host)
+    await service.start()
+    service.worker.cancel()
+    await asyncio.gather(service.worker, return_exceptions=True)
+    router = APIRouter()
+    register_routes(SimpleNamespace(router=router), service)
+    descriptor = {"device_id": "peer", "display_name": "Remote", "projects": []}
+    remote = SimpleNamespace(describe_work_device=AsyncMock(return_value=descriptor),
+        task_devices=AsyncMock(return_value={"peers": [], "enabled": True}))
+    monkeypatch.setattr(routes, "application_plugin_service", lambda _: remote)
+    endpoints = {(r.path, next(iter(r.methods))): r.endpoint for r in router.routes}
+    choose = endpoints[("/api/workbench/assistant/work-device", "PUT")]
+    read = endpoints[("/api/workbench/assistant/work-device", "GET")]
+    try:
+        assert (await choose({"device_id": "peer"}))["work_device"] == descriptor
+        assert (await read())["work_device"] == descriptor
+        assert ChatRepository(str(tmp_path / "app.db")).get(ASSISTANT_ID)["workDevice"] == descriptor
+        repo.insert({"id": "old-task", "workDevice": descriptor, "messages": []})
+        await choose({"device_id": "local"})
+        assert repo.get(ASSISTANT_ID)["workDevice"] is None
+        assert repo.get("old-task")["workDevice"] == descriptor
+        assert not repo.get(ASSISTANT_ID).get("remoteDeviceIds")
+        remote.describe_work_device.side_effect = ValueError("upgrade required")
+        assert (await choose({"device_id": "old-peer"})).status_code == 409
+        assert repo.get(ASSISTANT_ID)["workDevice"] is None
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_registered_devices_load_even_while_task_command_holds_service_lock(monkeypatch):
+    from unittest.mock import AsyncMock
+    from cyrene.plugins.builtin.session_management import routes
+    chat = {'id': 'assistant', 'workDevice': None}
+    lock = asyncio.Lock()
+    service = SimpleNamespace(lock=lock, host=SimpleNamespace(chat=lambda _: chat))
+    remote = SimpleNamespace(task_devices=AsyncMock(return_value={'enabled': True, 'peers': [{'device_id': 'peer'}]}),
+        check_task_device=AsyncMock(return_value={'device_id': 'peer', 'task_state': 'offline', 'task_eligible': False}))
+    monkeypatch.setattr(routes, 'application_plugin_service', lambda _: remote)
+    router = APIRouter()
+    register_routes(SimpleNamespace(router=router), service)
+    read = next(r.endpoint for r in router.routes if r.path.endswith('work-device') and 'GET' in r.methods)
+    async with lock:
+        result = await asyncio.wait_for(read(), 0.5)
+        assert result['peers'] == [{'device_id': 'peer'}]
+        assert (await read(device_id='peer'))['peer']['task_state'] == 'offline'
+    remote.check_task_device.assert_awaited_once_with('peer')
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_includes_local_device_name_without_remote_probe(monkeypatch):
+    from unittest.mock import AsyncMock
+    from cyrene.workbench.artifacts import presentation_service
+    monkeypatch.setattr(presentation_service.presentation_runtime, '_build_ui_data', AsyncMock(return_value={}))
+    remote = SimpleNamespace(store=SimpleNamespace(get_settings=lambda: {'device_name': 'My MacBook'}))
+    host = SimpleNamespace(frontend_modules=['remote'], active_services={'remote': remote})
+    query = presentation_service.PresentationQueryService(plugin_host=host)
+    assert (await query.ui_data())['localDeviceName'] == 'My MacBook'

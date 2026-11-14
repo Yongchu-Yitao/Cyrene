@@ -1,6 +1,7 @@
 import { attachmentSubmissionBlocked, composerSendDisabled, requiresVisionModel } from "./composer-vision.mjs"
 import { prepareComposerSubmission, wbcAvailableContextIds, wbcParseSlashCommandText } from "./composer-submission.jsx"
 import { handleComposerKey } from "./composer-keyboard.jsx"
+import { listenAssistantDeviceSelection } from "../shell/assistant-device-actions.mjs"
 import { useWbcComposerSettings, resolveComposerSettings, wbcNormalizeContextActivations } from "./composer-settings.jsx"
 import { useWbcComposerDraft } from "./composer-draft.jsx"
 import { useWbcComposerContextResource, useWbcComposerCommandCatalog } from "./composer-resources.jsx"
@@ -727,6 +728,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
       setRemoteDeviceIds(previousIds);
     });
   }
+
+  useWbcEffect(function subscribeToWorkDeviceSelection() {
+    return listenAssistantDeviceSelection(chatId, function syncWorkDeviceSelection(ids) {
+      remoteDeviceIdsRef.current = ids;
+      setRemoteDeviceIds(ids);
+      if (chat && chat.id === chatId) chat.remoteDeviceIds = ids;
+      contextResource.invalidate();
+    });
+  }, [chatId, chat]);
 
   function wbcToggleContextActivation(kind, identity) {
     if (WBC_CONTEXT_ACTIVATION_KEYS.indexOf(kind) < 0 || !identity) return;

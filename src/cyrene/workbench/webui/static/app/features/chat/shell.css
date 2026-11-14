@@ -867,7 +867,13 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
 }
 
 .workbench-sidebar-dock-nav {
-  --wb-dock-nav-bg: var(--wbc-composer-glass-background);
+  /* Use the same opaque material as the module directory cards. */
+  --wb-dock-nav-bg: var(--wb-floating-rail-bg);
+  border: var(--wb-floating-rail-border);
+  background: var(--wb-dock-nav-bg);
+  box-shadow: var(--wb-floating-rail-shadow);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   grid-row: 1;
   min-width: 0;
   /* Collapsed navigation items are vertically translated into a stack. During
@@ -1962,13 +1968,12 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   background: transparent;
 }
 
-/* Resource icons and titles align with the task header. */
+/* Keep resource cards inset and give their contents equal side padding. */
 .wbc-rail .assistant-task-group .wbc-chat-group-children {
   padding-inline: 8px;
 }
 .wbc-rail .assistant-task-group .assistant-resource-row {
-  padding-left: 0;
-  padding-right: 8px;
+  padding-inline: 8px;
 }
 .wbc-rail .assistant-task-group .assistant-resource-row .wbc-chat-card-top {
   grid-template-columns: 22px minmax(0, 1fr) auto;

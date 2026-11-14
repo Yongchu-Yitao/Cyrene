@@ -258,6 +258,8 @@ def delete_project_memory(project_id: str, chat_ids: list[str] | None = None) ->
     """Delete a project's prompt and any explicitly supplied chat snapshots."""
     db_path = _require_store()
     delete_document(db_path, _prompt_key(project_id))
+    from .memory_editor import summary_cache_key
+    delete_document(db_path, summary_cache_key(project_id))
     for chat_id in chat_ids or []:
         delete_document(db_path, _context_key(chat_id))
 
@@ -1538,6 +1540,7 @@ class ProjectMemoryApplicationService:
     ) -> None:
         if str(db_path or "").strip():
             configure_store(db_path)
+        self.db_path = str(db_path or "")
         self.projects = projects
         self.chats = chats
         self.structured_memories = structured_memories

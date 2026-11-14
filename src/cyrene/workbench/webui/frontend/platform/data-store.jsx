@@ -7,6 +7,7 @@ const APP_VERSION = "—";
 const DATA = {
   user: { name: "loading…", handle: "loading", initials: "…", avatar: "", avatar_emoji: "", avatar_color: "", bio: "" },
   assistantName: "Cyrene",
+  localDeviceName: "",
   appVersion: APP_VERSION,
   pluginModules: [],
   dashboard: {
@@ -137,6 +138,7 @@ async function bootstrapData() {
     const fresh = await r.json();
     if (fresh.user) DATA.user = fresh.user;
     if (fresh.assistantName) DATA.assistantName = fresh.assistantName;
+    if (fresh.localDeviceName) DATA.localDeviceName = fresh.localDeviceName;
     if (fresh.appVersion) DATA.appVersion = fresh.appVersion;
     if (Array.isArray(fresh.pluginModules)) DATA.pluginModules = fresh.pluginModules.slice();
     if (fresh.dashboard) DATA.dashboard = fresh.dashboard;

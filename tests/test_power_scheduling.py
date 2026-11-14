@@ -38,7 +38,7 @@ async def test_idle_queue_sleeps_until_commit_and_keeps_future_retries(tmp_path,
         table, status = 'messages', "status='queued'"
     elif kind == 'managed':
         from cyrene.plugins.builtin.session_management.service import SessionManagementService
-        service = SessionManagementService(tmp_path, None)
+        service = SessionManagementService(tmp_path, SimpleNamespace())
         store = service.store
         store.register('b', 'a')
         def insert():

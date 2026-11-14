@@ -97,7 +97,7 @@ test('interruptions, cancellation, timeout and cleanup cannot strand hidden mess
   for (const finish of [
     f => f.end('transitioncancel'), f => f.thread.emit('wheel'),
     f => f.doc.emit('keydown'), f => f.doc.emit('pointerdown'),
-    f => f.timers.get(1)(), f => f.cleanup(),
+    f => { f.timers.get(1)(); f.flushFrames(); }, f => f.cleanup(),
   ]) {
     const f = fixture(); f.start(); assert.ok(f.frozen().length); finish(f);
     assert.equal(f.frozen().length, 0); f.cleanup();
@@ -284,4 +284,22 @@ test('document drag interruption and unmount release every hidden block and subs
     assert.equal(f.doc.listeners + f.thread.listeners + f.page.listeners + f.doc.defaultView.listeners, 0);
     assert.equal(f.frames.size + f.timers.size, 0);
   }
+});
+
+test('drag-close reuses frozen history without a second geometry pass and still restores it', () => {
+  const f = fixture(200, 'dragged');
+  f.doc.defaultView.emit('workbench:split-resize-start');
+  const count = f.frozen().length;
+  let reads = 0;
+  for (const row of f.rows) {
+    const measure = row.getBoundingClientRect;
+    row.getBoundingClientRect = () => { reads++; return measure(); };
+  }
+  f.doc.defaultView.emit('workbench:split-resize-end');
+  f.doc.defaultView.emit('workbench:pane-layout-change');
+  assert.equal(reads, 0, 'handoff must not thaw and remeasure the transcript');
+  assert.equal(f.frozen().length, count);
+  f.flushFrames();
+  assert.equal(f.frozen().length, 0);
+  f.cleanup();
 });

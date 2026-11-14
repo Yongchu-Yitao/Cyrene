@@ -139,3 +139,36 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 
 每个已有执行 task 在左侧显示为普通对话组样式的可折叠分组，包含任务对话、交付文件、终端和所属浏览器标签。折叠偏好保存在客户端；搜索会临时展开。
 `task_organize` 暂停注册，不向任何模型或工具发现入口提供；实现与历史数据保留。恢复注册后可更新组标题、position（较小值靠前）、archived、hidden_resources（kind:key）及 attachment_ids。附件 ID 必须来自主助理已交付的附件；数组参数替换原选择，省略的字段保留。`task_list` 返回 presentation 和已关联 files，供助理保留旧选择。展示设置持久化在同一插件数据库的 task_presentation 表，操作仍检查任务归属并复用工具回执。归档不停止执行，可通过“显示已归档任务”找回。组操作不切换动态上下文、不创建会话、不改变资源所有者。
+
+
+### Assistant work device
+
+The identity menu saves `workDevice` on the assistant, independently of the
+chat's remote context devices. New tasks snapshot that choice; updates, answers
+and stops always target the original device. The main assistant remains local.
+Remote tasks require Cyrene >= 0.9.2.0, the assistant-task protocol and existing
+chat execution grants on a shared workspace. Workspace paths belong to that device.
+
+The adapter reuses the durable task queue, Workbench task harness and encrypted
+Remote gateway. The remote harness calls the controller's model router, so model
+selection, fallback configuration and credentials stay on the controller.
+Execution history, evidence, final replies and registered result attachments are
+copied into local storage. The peer keeps a temporary execution cache until the
+controller has durably saved the terminal snapshot, attachments and notification.
+The controller then acknowledges cleanup using the existing session deletion
+mechanism. Working files are retained. Follow-up tasks rehydrate dialogue and task
+evidence from the controller; a lost cleanup receipt cannot repeat execution.
+Workspace files remain on the execution device. Missing devices never fall back
+to local execution. Use the main assistant's task tools to continue remote tasks.
+
+Connection failures receive three retries after the initial attempt (four attempts
+total), with a 10-second deadline per request. If all fail, the durable notification
+wakes the local assistant to ask the user what to do. Undelivered inputs remain
+saved but their queue pauses until explicit recovery. Running-task state remains
+unconfirmed; connection loss never means the remote execution has stopped. A
+continuous outage emits one question notification per task, even across restarts;
+a confirmed recovery allows notification of a later, separate outage. Model
+callbacks use the same four-attempt boundary and persist an exhaustion marker for
+the controller to pick up; generic runtime retries do not multiply that budget.
+Queue pause is not execution stop. Snapshot admission receipts reconcile lost
+delivery replies, and remote paths never authorize controller file exports.

@@ -1,11 +1,12 @@
 import { AssistantHomeTranscript } from "../chat/assistant-home-transcript.jsx"
+import { useMainTranscriptResize } from "../chat/transcript-resize-hooks.jsx"
 import { WbcErrorNotice } from "../chat/messages.jsx"
 import { WbcScrollToBottomButton, useWbcComposerReserveHeight, wbcScrollThreadToBottom, wbcShouldStickToConversationBottom } from "../chat/conversation.jsx"
 import { wbcMergeChatSummary } from "../chat/runtime-page-hooks.jsx"
 import { wbcMergeSavedAssistantMessages, wbcReconcileLiveUserMessages, wbcTruncateMessagesAfterUser } from "../chat/runtime-timeline.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
-import { AssistantGripLogo } from "./assistant-grip-logo.jsx"
 import { CyreneIcon } from "./cyrene-icon.jsx"
+import { AssistantGripLogo } from "./assistant-grip-logo.jsx"
 
 const EMPTY_PERMISSION_REQUESTS = [];
 
@@ -145,25 +146,25 @@ function useAssistantChatSync({ sessionId, model, engine, active, cache, answere
 
 // A conversation surface, not a pane workspace. The shared engine owns streams
 // across navigation; subscribing here must never replace its global hooks.
-function assistantGripVisible(personalAssistant, chat, visible, runtime) {
-  return personalAssistant && chat && (visible.length > 0 || runtime);
+function assistantGripVisible(personalAssistant, chat) {
+  return personalAssistant || !chat;
 }
 
-function assistantWelcome(chat, visible, runtime) {
-  return !chat ? <p role="status">正在加载对话…</p> : !visible.length && !runtime ? <AssistantWelcome /> : null;
+function assistantWelcome(chat, visible, runtime, personalAssistant) {
+  return chat && !visible.length && !runtime ? <AssistantWelcome personalAssistant={personalAssistant} /> : null;
 }
 
-function AssistantWelcome() {
+function AssistantWelcome({ personalAssistant }) {
   return <section className="assistant-chat-welcome">
           <div className="assistant-chat-brand">
-            <div className="assistant-chat-avatar"><CyreneIcon /></div>
+            {!personalAssistant && <div className="assistant-chat-avatar"><CyreneIcon /></div>}
             <span>Cyrene</span>
           </div>
           <h1>需要我做什么？</h1>
         </section>;
 }
 
-function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = EMPTY_PERMISSION_REQUESTS, active = true, personalAssistant = false, cache }) {
+function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = EMPTY_PERMISSION_REQUESTS, active = true, personalAssistant = false, cache, gripActions }) {
   var chatService = workbenchServices.chat();
   var model = chatService.Model;
   var engine = chatService.Runtimes;
@@ -177,6 +178,10 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
   var scrollRef = React.useRef(null);
   var stick = React.useRef(true);
   var lastScrollTop = React.useRef(null);
+  var resizeRestored = useMainTranscriptResize(scrollRef, mainRef, stick, sessionId);
+  resizeRestored.current = function () {
+    if (scrollRef.current) lastScrollTop.current = scrollRef.current.scrollTop;
+  };
   var { chat, setChat, runtime, refreshError, refreshRef, live } = useAssistantChatSync({
     sessionId, model, engine, active, cache, answeredIds, stick,
   });
@@ -188,7 +193,7 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
   var visible = messages;
   React.useEffect(function () {
     var thread = scrollRef.current;
-    if (stick.current && thread) {
+    if (stick.current && thread && !thread.wbcResizeActive) {
       thread.scrollTop = thread.scrollHeight;
       lastScrollTop.current = thread.scrollTop;
       setShowScrollToBottom(false);
@@ -197,6 +202,9 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
 
   function onScroll(event) {
     var thread = event.currentTarget;
+    // Frozen history temporarily changes scroll geometry. Preserve the reader's
+    // intent until the shared resize owner has restored the viewport.
+    if (thread.wbcResizeActive) return;
     stick.current = wbcShouldStickToConversationBottom(
       stick.current, lastScrollTop.current, thread.scrollTop, thread.scrollHeight, thread.clientHeight
     );
@@ -256,14 +264,14 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
 
   var failure = engine.getFailure && engine.getFailure(sessionId);
   var displayError = error || (failure && failure.message) || "";
-  var showGrip = assistantGripVisible(personalAssistant, chat, visible, runtime);
-  return <section ref={mainRef} className="wbc-main assistant-chat" data-cyrene-personal-composer={personalAssistant && active ? "true" : undefined} aria-label={title || "Cyrene 个人助理"}>
-    {showGrip ? <AssistantGripLogo surfaceRef={mainRef} sessionId={sessionId} /> : null}
+  var showGrip = assistantGripVisible(personalAssistant, chat);
+  return <section ref={mainRef} className="wbc-main assistant-chat" data-cyrene-personal-composer={personalAssistant && active ? "true" : undefined} aria-label={title || "Cyrene 个人助理"} aria-busy={!chat}>
+    {showGrip ? <AssistantGripLogo shared={personalAssistant} loading={!chat} surfaceRef={mainRef} sessionId={sessionId} gripActions={gripActions} /> : null}
     {refreshError && <p className="wbc-card-notice" role="status">{refreshError}</p>}
     {displayError && <WbcErrorNotice message={displayError} kind={chat ? "message" : "load"} />}
     <div className="wbc-thread-stage">
       <div className={"wbc-thread" + (visible.length || runtime ? " wbc-thread-messages" : "")} ref={scrollRef} onScroll={onScroll}>
-        {assistantWelcome(chat, visible, runtime)}
+        {assistantWelcome(chat, visible, runtime, personalAssistant)}
         {personalAssistant && chat
           ? <AssistantHomeTranscript key={sessionId} Transcript={chatService.Transcript} messages={visible} runtime={runtime} sessionId={sessionId} active={active} onOpenFile={onOpenFile} />
           : React.createElement(chatService.Transcript, { messages: visible, runtime: runtime, chatId: sessionId, onOpenFile: onOpenFile })}

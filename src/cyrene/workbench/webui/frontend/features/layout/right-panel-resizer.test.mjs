@@ -31,8 +31,10 @@ function panelHarness(closable = true) {
     removeEventListener: name => handleListeners.delete(name),
   }
   const clock = resizeClock()
+  const frames = []
   let pointerResize
   const context = {
+    requestAnimationFrame(fn) { frames.push(fn) },
     module: { exports: {} },
     require: name => {
       if (name.includes("pointer-resize")) return pointerResize
@@ -60,12 +62,14 @@ function panelHarness(closable = true) {
     grid, style, saved, closes, events, listeners, handleListeners, classes, handleClasses, captured: () => captured,
     wait(ms = 400, blocked = false) { clock.advance(ms, blocked) },
     pendingTimers: clock.pending,
+    flush() { while (frames.length) frames.shift()() },
     move(x, pointerId = 1, buttons = 1) { listeners.get("pointermove")?.({ clientX: x, pointerId, pointerType: "mouse", buttons }) },
     stop(type = "pointerup") { (listeners.get(type) || handleListeners.get(type))?.({ pointerId: 1, type }) },
   }
 }
 
 function assertFinished(drag) {
+  drag.flush()
   assert.equal(drag.pendingTimers(), 0)
   assert.equal(drag.listeners.size, 0)
   assert.equal(drag.handleListeners.size, 0)
@@ -75,14 +79,14 @@ function assertFinished(drag) {
   assert.equal(drag.events.filter(event => event.detail.phase === "end").length, 1)
 }
 
-test("conversation panel closes after pausing at its minimum and shrinking another 48px and retains a valid reopen width", () => {
+test("conversation panel closes after 32px overshoot without pausing and retains a valid reopen width", () => {
   const drag = panelHarness()
   drag.move(1320)
   drag.wait()
-  drag.move(1367)
+  drag.move(1351)
   assert.deepEqual(drag.closes, [])
   assert.equal(drag.style["--wb-right-w"], "280px")
-  drag.move(1368, 2)
+  drag.move(1352, 2)
   assert.deepEqual(drag.closes, [])
   drag.move(1368)
   assert.deepEqual(drag.closes, [])
@@ -101,7 +105,7 @@ test("conversation panel clamps ordinary resizing and cancellation never closes 
     drag.move(0)
     assert.equal(drag.style["--wb-right-w"], "1156px")
     drag.move(1320)
-  drag.move(1367)
+  drag.move(1351)
     if (stop === "released-mouse") drag.move(1400, 1, 0)
     else drag.stop(stop)
     assert.deepEqual(drag.closes, [])

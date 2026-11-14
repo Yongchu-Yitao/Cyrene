@@ -18,12 +18,16 @@ export function attachCyreneMotion(svg) {
     const p=motion.pose;
     svg.dataset.motionStyle=motion.style;
     svg.dataset.sleeping=String(motion.sleeping);
+    svg.dataset.waking=String(motion.waking);
     if(motion.attention)svg.dataset.idleAttention=motion.attention;else delete svg.dataset.idleAttention;
     body.style.transform=`translate(${p.x}px,${p.y}px) rotate(${p.r}deg) scale(${p.sx},${p.sy})`;
     body.style.opacity=1-.2*p.sleep;
-    if(sleepMark)sleepMark.style.opacity=p.sleep;
+    if(sleepMark){
+      sleepMark.style.opacity=p.sleep;
+      sleepMark.style.transform=motion.waking?`translate(${2*(1-p.sleep)}px,${-3*(1-p.sleep)}px)`:'none';
+    }
     ring.style.transform=`rotate(${p.angle}deg)`;
-    gaze.style.transform=`translate(${p.ex}px,${p.ey}px) scaleY(${Math.max(.08,p.blink)})`;
+    gaze.style.transform=`translate(${p.ex}px,${p.ey}px) scale(${p.eyeWidth},${Math.max(.08,p.blink)})`;
     left.style.transform=`scaleY(${Math.max(.08,p.leftEye)})`;
     right.style.transform=`scaleY(${Math.max(.08,p.rightEye)})`;
     glint.style.opacity=Math.max(0,Math.min(1,p.glow));
@@ -34,7 +38,7 @@ export function attachCyreneMotion(svg) {
     }
   }
   function clickFeedback(){
-    if(reduced||motion.sleeping)return;
+    if(reduced||motion.sleeping||motion.waking)return;
     clickAnimation?.cancel();
     clickAnimation=svg.parentElement.animate?.([
       {transform:'scale(1)'},{transform:'scale(.82) rotate(-12deg)',offset:.25},

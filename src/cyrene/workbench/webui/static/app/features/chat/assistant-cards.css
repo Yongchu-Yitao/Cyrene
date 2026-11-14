@@ -110,9 +110,10 @@ html[data-theme="light"] .wbc-home-cards.wbc-assistant-home {color-scheme:light}
 :is(.wbc-assistant-home,.wbc-home-atmosphere):is([data-weather=night],[data-weather=storm]) {--weather-area:light-dark(#a7afd48c,#545e9599);--weather-middle:light-dark(#c2c7e45c,#414b7e55);--weather-mist:light-dark(#e0e3fa80,#b5bfe92b);--weather-text:light-dark(#242b48,#fafaff);--weather-detail:light-dark(#3e4767,#eceefe)}
 :is(.wbc-assistant-home,.wbc-home-atmosphere)[data-weather=snow] {--weather-area:light-dark(#a5d3e78c,#43829e70);--weather-middle:light-dark(#cde7f05c,#34687845);--weather-text:light-dark(#183b4b,#f5fdff);--weather-detail:light-dark(#315565,#e5f6fc)}
 .wbc-home-atmosphere {
-  position:absolute;pointer-events:none;z-index:-1;inset:0 0 auto;height:420px;overflow:hidden;
+  /* Keep the bottom fade inside short home cards instead of clipping it. */
+  position:absolute;pointer-events:none;z-index:-1;inset:0 0 auto;height:420px;max-height:100%;overflow:hidden;
   /* A single hue fades in eased steps, avoiding a flat blue band between layers. */
-  background:radial-gradient(ellipse 84% 96% at 96% 28%,
+  background:radial-gradient(ellipse 60% 96% at 96% 28%,
     color-mix(in srgb,var(--weather-area) 82%,transparent) 0%,
     color-mix(in srgb,var(--weather-area) 68%,transparent) 20%,
     color-mix(in srgb,var(--weather-area) 42%,transparent) 42%,
@@ -120,8 +121,8 @@ html[data-theme="light"] .wbc-home-cards.wbc-assistant-home {color-scheme:light}
     color-mix(in srgb,var(--weather-area) 4%,transparent) 84%,transparent 100%);
   mask-image:linear-gradient(to bottom,transparent 0%,#00000030 5%,#00000099 12%,#000000eb 23%,#000 34%,#000000de 53%,#00000080 72%,#00000020 90%,transparent 100%);
 }
-.wbc-home-atmosphere:before {content:"";position:absolute;inset:-25px -25px 0 28%;background:radial-gradient(ellipse at 73% 32%,color-mix(in srgb,var(--weather-mist) 38%,transparent),transparent 74%);filter:blur(18px);animation:wbc-home-air 12s ease-in-out infinite alternate}
-.wbc-home-atmosphere:after {content:"";position:absolute;inset:0;background:radial-gradient(ellipse 48% 72% at 88% 31%,color-mix(in srgb,var(--weather-mist) 28%,transparent),transparent 85%);filter:blur(12px);animation:wbc-home-light 8s ease-in-out infinite alternate}
+.wbc-home-atmosphere:before {content:"";position:absolute;inset:-25px -25px 0 48%;background:radial-gradient(ellipse at 73% 32%,color-mix(in srgb,var(--weather-mist) 38%,transparent),transparent 74%);filter:blur(18px);animation:wbc-home-air 12s ease-in-out infinite alternate}
+.wbc-home-atmosphere:after {content:"";position:absolute;inset:0;background:radial-gradient(ellipse 34% 72% at 88% 31%,color-mix(in srgb,var(--weather-mist) 28%,transparent),transparent 85%);filter:blur(12px);animation:wbc-home-light 8s ease-in-out infinite alternate}
 .wbc-home-precipitation {display:none;position:absolute;inset:0 0 0 48%;mask-image:radial-gradient(ellipse 85% 80% at 100% 0%,#000 22%,transparent 88%)}
 :is(.wbc-assistant-home,.wbc-home-atmosphere):is([data-weather=rain],[data-weather=storm],[data-weather=snow]) .wbc-home-precipitation {display:block}
 .wbc-home-precipitation b {position:absolute;left:var(--x);top:var(--y);width:1px;height:15px;border-radius:2px;background:light-dark(#417ca880,#b9ddf38c);opacity:0;animation:wbc-home-rain var(--speed) linear var(--delay) infinite}

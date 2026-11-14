@@ -8,7 +8,7 @@ function find(element, type) {
   if (element.type===type) return element;
   return find(element.props?.children,type);
 }
-function mount(shared = {}) {
+function mount(shared = {}, props = {}) {
   const React = {createElement(type,props,...children) {return {type,props:{...props,children}};}};
   const sends=[],answers=[],subscribers=new Set();
   const service={Composer:'composer',Transcript:'transcript',QuestionPrompt:'question',
@@ -16,15 +16,52 @@ function mount(shared = {}) {
     Runtimes:{get:()=>null,subscribe(fn) {subscribers.add(fn);return ()=>subscribers.delete(fn);},
       subscribeSaved:()=>()=>{},
       start:async(...args)=>sends.push(args),getFailure:()=>null}};
-  const h=harness('../shell/assistant-chat.jsx',{...shared,React,useWbcComposerReserveHeight:()=>{},workbenchServices:{chat:()=>service}});
+  const h=harness('../shell/assistant-chat.jsx',{useMainTranscriptResize:()=>({current:null}),...shared,React,useWbcComposerReserveHeight:()=>{},workbenchServices:{chat:()=>service}});
   h.context.setTimeout=h.context.window.setTimeout;
   h.context.clearTimeout=h.context.window.clearTimeout;
   h.run((mod,hooks)=>{
     Object.assign(React,{useState:hooks.useWbcState,useRef:hooks.useWbcRef,useEffect:hooks.useWbcEffect});
-    return mod.AssistantChat({sessionId:'a',project:{id:'p'},title:'Cyrene'});
+    return mod.AssistantChat({sessionId:'a',project:{id:'p'},title:'Cyrene',...props});
   });
   return {h,sends,answers,subscribers,service};
 }
+test('assistant resize protection preserves reading intent through sidebar motion', async () => {
+  const conversation = harness('./conversation.jsx').run(mod => mod);
+  const restored = {current: null};
+  let refs;
+  const {h} = mount({
+    wbcShouldStickToConversationBottom: conversation.wbcShouldStickToConversationBottom,
+    useMainTranscriptResize(scroll, main, stick, id) {
+      refs = {scroll, main, stick, id};
+      return restored;
+    },
+  });
+  await settle(); h.flush();
+  assert.equal(refs.id, 'a');
+  assert.equal(find(h.value, 'section').props.ref, refs.main);
+  const threadElement = find(h.value, 'section').props.children.find(child => child?.props?.className === 'wbc-thread-stage').props.children[0];
+  assert.equal(threadElement.props.ref, refs.scroll);
+  const thread = {scrollTop: 900, scrollHeight: 1000, clientHeight: 100, wbcResizeActive: false};
+  refs.scroll.current = thread;
+  threadElement.props.onScroll({currentTarget: thread});
+  assert.equal(refs.stick.current, true);
+  // Shrinking frozen history must not look like the reader scrolled upward.
+  thread.wbcResizeActive = true;
+  thread.scrollTop = 300;
+  threadElement.props.onScroll({currentTarget: thread});
+  assert.equal(refs.stick.current, true);
+  thread.wbcResizeActive = false;
+  restored.current();
+  thread.scrollTop = 250;
+  threadElement.props.onScroll({currentTarget: thread});
+  assert.equal(refs.stick.current, false);
+  // A reader away from the tail must not get pinned by temporary geometry.
+  thread.wbcResizeActive = true;
+  thread.scrollTop = 900;
+  threadElement.props.onScroll({currentTarget: thread});
+  assert.equal(refs.stick.current, false);
+  h.unmount();
+});
 test('assistant surface reuses composer payload and user approval mode without global hooks',async()=>{
   const {h,sends,answers,subscribers}=mount();
   await settle();h.flush();
@@ -84,7 +121,7 @@ test('saved reply replaces the live transcript before an older assistant poll ca
   };
   const React = {createElement(type, props, ...children) { return {type, props: {...props, children}}; }};
   const h = harness('../shell/assistant-chat.jsx', {
-    ...timeline, ...pageHooks, React, useWbcComposerReserveHeight() {},
+    ...timeline, ...pageHooks, React, useWbcComposerReserveHeight() {}, useMainTranscriptResize: () => ({current: null}),
     workbenchServices: {chat: () => ({Model: model, Runtimes: engine, Transcript: 'transcript', Composer: 'composer'})},
   });
   h.context.setTimeout = h.context.window.setTimeout;
@@ -367,7 +404,7 @@ test('assistant page uses one global scope across project changes and forwards t
   h.context.clearTimeout = h.context.window.clearTimeout;
   h.run((mod, hooks) => {
     Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useMemo: hooks.useWbcMemo, useCallback: hooks.useWbcCallback, useEffect: hooks.useWbcEffect});
-    return mod.PersonalAssistantPage({context, active});
+    return mod.PersonalAssistantPage({context, active}).props.children[0];
   });
   await settle(); h.flush();
   assert.equal(h.value.type, 'page');
@@ -446,7 +483,7 @@ test('assistant API errors are reported without trying an old initialization end
   h.context.clearTimeout = h.context.window.clearTimeout;
   h.run((mod, hooks) => {
     Object.assign(React, {useState: hooks.useWbcState, useRef: hooks.useWbcRef, useMemo: hooks.useWbcMemo, useCallback: hooks.useWbcCallback, useEffect: hooks.useWbcEffect});
-    return mod.PersonalAssistantPage({context});
+    return mod.PersonalAssistantPage({context}).props.children[0];
   });
   await settle(); h.flush();
   assert.deepEqual(calls, [['/api/workbench/assistant', 'GET']]);
@@ -461,7 +498,7 @@ test('assistant transcript paints the workspace cache before the background requ
   let active=true, finish;
   const service={Composer:'composer',Transcript:'transcript', Model:{getChat:()=>new Promise(resolve=>{finish=resolve;})},
     Runtimes:{get:()=>null,subscribe:()=>()=>{},subscribeSaved:()=>()=>{},getFailure:()=>null}};
-  const h=harness('../shell/assistant-chat.jsx',{React,useWbcComposerReserveHeight:()=>{},workbenchServices:{chat:()=>service}});
+  const h=harness('../shell/assistant-chat.jsx',{React,useMainTranscriptResize:()=>({current:null}),useWbcComposerReserveHeight:()=>{},workbenchServices:{chat:()=>service}});
   h.context.setTimeout=h.context.window.setTimeout;h.context.clearTimeout=h.context.window.clearTimeout;
   h.run((mod,hooks)=>{
     Object.assign(React,{useState:hooks.useWbcState,useRef:hooks.useWbcRef,useEffect:hooks.useWbcEffect});
@@ -491,5 +528,18 @@ test('polling disconnect is not a message failure and clears after reconnection'
   await settle(); h.flush();
   assert.equal(find(h.value, 'composer').props.error, '');
   assert.doesNotMatch(JSON.stringify(h.value), /连接中断/);
+  h.unmount();
+});
+
+
+test('personal assistant keeps its logo from loading through an empty ready conversation', async () => {
+  const {h} = mount({AssistantGripLogo: 'grip-logo'}, {personalAssistant: true});
+  assert.equal(find(h.value, 'grip-logo').props.loading, true);
+  assert.equal(find(h.value, 'grip-logo').props.shared, true);
+  assert.equal(find(h.value, 'composer'), null);
+  assert.doesNotMatch(JSON.stringify(h.value), /正在加载对话/);
+  await settle(); h.flush();
+  assert.equal(find(h.value, 'grip-logo').props.loading, false);
+  assert.ok(find(h.value, 'composer'));
   h.unmount();
 });

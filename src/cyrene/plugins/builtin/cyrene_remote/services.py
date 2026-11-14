@@ -119,6 +119,22 @@ class RemoteControlApplicationService:
         self.projection = projection
         self.runtime = runtime
 
+    async def request_task(self, device, command, payload=None, **kwargs):
+        from .task_execution import request
+        return await request(device, command, payload, **kwargs)
+
+    async def task_devices(self):
+        from .task_execution import task_devices
+        return await task_devices()
+
+    async def check_task_device(self, device):
+        from .task_execution import check_task_device
+        return await check_task_device(device)
+
+    async def describe_work_device(self, device):
+        from .task_execution import describe_device
+        return await describe_device(device)
+
     @property
     def peer_transport(self) -> Any | None:
         """Return the live peer transport owned by this Plugin generation.
