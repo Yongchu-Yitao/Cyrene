@@ -1934,6 +1934,8 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
    not leave straight border tails behind those curves. Menus use a portal. */
 .wbc-rail .assistant-task-group.expanded {
   clip-path: inset(var(--task-group-clip-top, 0px) 0 0 round 13px);
+  /* 6px + 1px children padding + 1px row margin matches the 8px side inset. */
+  padding-bottom: 6px;
 }
 
 /* The header sticks within its own task, then yields to the following group. */
