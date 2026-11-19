@@ -1,4 +1,4 @@
-"""Assistant-only card authoring, input state and persistent pinning."""
+"""Conversation card authoring, input state and persistent pinning."""
 
 from cyrene.core.plugin import PluginPack
 from .context import setup
@@ -13,13 +13,13 @@ def application_setup(context):
 
 plugin_pack = PluginPack(
     id="cyrene_cards",
-    description="Assistant-only tools to create, update, read, pin and archive interactive card data.",
+    description="Conversation tools to create, update, read, pin and archive interactive card data.",
     plugins=plugins,
     setup=setup,
     application_setup=application_setup,
     metadata={"i18n": {
-        "en": {"name": "Cards", "description": "Assistant card templates, user inputs and persistent pinning."},
-        "zh": {"name": "卡片", "description": "助理专用的卡片模板、用户输入和持久固定。"},
+        "en": {"name": "Cards", "description": "Conversation card templates, user inputs and persistent pinning."},
+        "zh": {"name": "卡片", "description": "会话中的卡片模板、用户输入和持久固定。"},
     }},
 )
 

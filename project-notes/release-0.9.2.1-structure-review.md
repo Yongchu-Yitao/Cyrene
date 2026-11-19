@@ -97,3 +97,49 @@ Functional and release gates must pass independently.
 | `src/cyrene/workbench/webui/frontend/workbench.jsx::WorkbenchApp` | lines | 460 | 461 |
 | `src/cyrene/workbench/webui/frontend/workbench.jsx::WorkbenchApp` | decisions | 41 | 42 |
 | `src/cyrene/workbench/webui/frontend/workbench.jsx::WorkbenchApp` | hooks | 42 | 44 |
+
+## Additional changes reviewed on 2026-11-20
+
+- Conversation cards bind persistence and submissions to their owning chat.
+  Version snapshots and group membership validate owner and revision before use.
+- Inline projection reconciles Markdown references, per-turn versions, schedule
+  receipts and knowledge sources. Group navigation preserves sizing and focus.
+- Pin changes preserve unsaved-content checks and update the owning chat layout.
+  Bound inputs separate persisted task fields from device-local presentation state.
+- Knowledge searches retain workspace and attachment provenance. Schedule receipts
+  retain their original scope checks and report changes after repository success.
+- PDF selection adjusts worker text runs while retaining source extraction and
+  rendering, and fit-width observers release subscriptions on preview disposal.
+
+The following exact per-scope increases are accepted for these additions. Global
+limits and behavior assertions remain subject to their existing checks.
+
+| Scope | Metric | Previous limit | Reviewed value |
+| --- | --- | ---: | ---: |
+| `src/cyrene/plugins/builtin/cyrene_cards/application.py::setup_application` | lines | 99 | 107 |
+| `src/cyrene/plugins/builtin/cyrene_knowledge/search_library.py::handler` | decisions | 23 | 26 |
+| `src/cyrene/plugins/builtin/cyrene_knowledge/service.py` | module_lines | 1215 | 1219 |
+| `src/cyrene/plugins/builtin/cyrene_knowledge/store.py` | module_lines | 2005 | 2007 |
+| `src/cyrene/plugins/builtin/cyrene_schedule/tools.py::edit_schedule` | decisions | 27 | 32 |
+| `src/cyrene/workbench/webui/build-jsx.mjs::build` | lines | 186 | 189 |
+| `src/cyrene/workbench/webui/frontend/features/chat/assistant-card-bridge.mjs::installCardBridge.onBoundInput` | decisions | 20 | 26 |
+| `src/cyrene/workbench/webui/frontend/features/chat/assistant-card-model.mjs::cardReferences.<anonymous>` | decisions | 20 | 32 |
+| `src/cyrene/workbench/webui/frontend/features/chat/assistant-card-visuals.jsx::CardEmbed.<anonymous>.receive` | decisions | 20 | 24 |
+| `src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::CardField` | decisions | 20 | 25 |
+| `src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::WbcAssistantCard` | decisions | 20 | 33 |
+| `src/cyrene/workbench/webui/frontend/features/chat/conversation-card-group.jsx::ConversationCardGroup` | lines | 99 | 142 |
+| `src/cyrene/workbench/webui/frontend/features/chat/conversation-card-group.jsx::ConversationCardGroup` | decisions | 20 | 35 |
+| `src/cyrene/workbench/webui/frontend/features/chat/conversation-card-group.jsx::ConversationCardGroup` | hooks | 15 | 20 |
+| `src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx` | module_lines | 2595 | 2598 |
+| `src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::useWbcConversationProjection` | decisions | 31 | 35 |
+| `src/cyrene/workbench/webui/frontend/features/chat/markdown-card-references.mjs::groupDirective` | decisions | 20 | 26 |
+| `src/cyrene/workbench/webui/frontend/features/chat/markdown-card-references.mjs::markdownCardParts` | decisions | 20 | 28 |
+| `src/cyrene/workbench/webui/frontend/features/chat/messages.jsx` | module_lines | 1861 | 1869 |
+| `src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessage` | lines | 137 | 143 |
+| `src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessage` | decisions | 67 | 70 |
+| `src/cyrene/workbench/webui/frontend/features/chat/page.jsx` | module_lines | 3124 | 3151 |
+| `src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage` | lines | 3051 | 3078 |
+| `src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage` | hooks | 132 | 135 |
+| `src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx` | module_lines | 4391 | 4405 |
+| `src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx` | module_lines | 4391 | 4405 |
+| `src/cyrene/workbench/webui/frontend/shared/pdf/bridge.jsx::<anonymous>.pdfjsInstallSelectionSanitizer.sanitizePage` | decisions | 31 | 32 |

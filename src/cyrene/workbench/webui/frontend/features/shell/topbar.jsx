@@ -113,7 +113,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
   var { sessionMenu, resourceMenu, overflowMenu, resourceMenuRef, openSessionMenu, closeSessionMenu, runSessionMenuAction, openResourceMenu, closeResourceMenu, openOverflowMenu, closeOverflowMenu } = useTopbarMenus({ browserAvailable, onLoadSessionResources, onLoadSessionBrowserPreview, hoverPreview, closeSessionPreview, readTopbarPortalTheme });
   var [activityClock, setActivityClock] = useWorkbenchState(function () { return Date.now(); });
   var [resourceDropActive, setResourceDropActive] = useWorkbenchState(false);
-  var [chatSideHidden, setChatSideHidden] = useWorkbenchState(false);
+  var [showExpandChatSide, setShowExpandChatSide] = useWorkbenchState(false);
   var [projectMenuOpen, setProjectMenuOpen] = useWorkbenchState(false);
   var [projectActionId, setProjectActionId] = useWorkbenchState("");
   var [voiceCommand, setVoiceCommand] = useWorkbenchState(function () { return WbVoiceCommand.snapshot(); });
@@ -584,7 +584,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
   useWorkbenchEffect(function () {
     function handleChatSideVisibility(event) {
       var detail = event && event.detail || {};
-      setChatSideHidden(!!detail.active && !!detail.hidden);
+      setShowExpandChatSide(!!detail.active && !!detail.hidden && !detail.hasPinnedCards);
     }
     window.addEventListener("workbench:chat-side-visibility", handleChatSideVisibility);
     return function () {
@@ -1463,7 +1463,7 @@ function WorkbenchTopbar({ projects, activeProject, activePage, activeChatId, ac
         </div>
       ) : null}
       <div className="workbench-top-actions">
-        {activePage !== "cyrene" && chatSideHidden && (
+        {activePage !== "cyrene" && showExpandChatSide && (
           <button
             type="button"
             className="workbench-icon-btn"

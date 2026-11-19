@@ -1,7 +1,9 @@
+import { ConversationCardGroup } from "./conversation-card-group.jsx"
 import { wbcTraceTimelineItems } from "./trace-timeline.mjs"
 import { homeInsertionIndex } from "./home-timeline.mjs"
 import { WbcInlinePluginView } from "./inline-plugin-view.jsx"
-import { WbcAssistantCard } from "./assistant-cards.jsx"
+import { legacyCardReply } from "./markdown-card-references.mjs"
+import { WbcInlineCard } from "./assistant-cards.jsx"
 import { snapshotStaticMessage, equalAssistantProps } from "./message-memo.mjs"
 import { createDisclosureSubscriptions, subscribeDisclosureUpdates } from "./disclosure-subscriptions.mjs"
 import { wbcProjectTranscript } from "./runtime-timeline.jsx"
@@ -1291,6 +1293,11 @@ var WbcStreamingStableBlock = React.memo(function WbcStreamingStableBlock({ sour
     : null;
 });
 
+const ProseMarkdown = React.memo(function ProseMarkdown({ text, live }) {
+  const html = useWbcMemo(() => wbcRenderMarkdown(text, { interactive: !live }), [text, live]);
+  return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
 function WbcGoalMilestoneMessage({ msg, chatId }) {
   var milestone = msg.goalMilestone && typeof msg.goalMilestone === "object"
     ? msg.goalMilestone : {};
@@ -1345,28 +1352,28 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   // code fences keep their DOM identity for the rest of the stream.
   var streamingPartsRef = useWbcRef(null);
   var streamingParts = useWbcMemo(function () {
-    if (!live) {
+    if (!live || msg.markdownParts) {
       streamingPartsRef.current = null;
       return { source: "", stable: "", stableBlocks: [], active: "" };
     }
     var parts = workbenchServices.markdown().splitStableBlocks(renderedText, streamingPartsRef.current);
     streamingPartsRef.current = parts;
     return parts;
-  }, [renderedText, live]);
+  }, [renderedText, live, msg.markdownParts]);
   var activeBodyHtml = useWbcMemo(function () {
     return streamingParts.active
       ? wbcRenderMarkdown(streamingParts.active, { interactive: false })
       : "";
   }, [streamingParts.active]);
   var bodyHtml = useWbcMemo(function () {
-    return live ? "" : wbcRenderMarkdown(renderedText);
-  }, [renderedText, live]);
+    return live || msg.markdownParts ? "" : wbcRenderMarkdown(renderedText);
+  }, [renderedText, live, msg.markdownParts]);
   var bodyRef = useWbcRef(null);
   var activeBodyRef = useWbcRef(null);
   var previousLiveVisibleTextLengthRef = useWbcRef(0);
   var liveFadeStateRef = useWbcRef({ ranges: [] });
   useWbcLayoutEffect(function () {
-    if (!live || !bodyRef.current) {
+    if (!live || msg.markdownParts || !bodyRef.current) {
       previousLiveVisibleTextLengthRef.current = 0;
       liveFadeStateRef.current.ranges = [];
       return;
@@ -1393,7 +1400,7 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
     return function () {
       if (chartService && typeof chartService.dispose === "function") chartService.dispose(bodyRef.current);
     };
-  }, [bodyHtml, live]);
+  }, [bodyHtml, live, msg.markdownParts]);
   async function copyText() {
     try {
       var text = String(msg.content || "");
@@ -1413,7 +1420,7 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   // timeline renderer. Keep the activity-card compatibility boundary here as
   // well, otherwise a durable reasoning/tool record with empty `content`
   // degrades into a footer-only assistant row on those surfaces.
-  if (msg.assistantCard) return <WbcAssistantCard cardId={msg.assistantCard.card_id} revision={msg.assistantCard.revision} />;
+  if (msg.assistantCard) return <WbcInlineCard key={chatId} chatId={chatId} card={msg.assistantCard} onOpenFile={onOpenFile} />;
   var activityView = live ? null : wbcActivityMessageView(msg);
   if (activityView) {
     if (!activityView.visible) return null;
@@ -1439,7 +1446,13 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   return (
     <div className="wbc-msg assistant">
       {!live && msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
-      {sourceText ? (live ? (
+      {msg.markdownParts ? <div className="wbc-msg-body" ref={bodyRef}>
+        {msg.markdownParts.map((part, index) => part.format
+          ? <ConversationCardGroup key={JSON.stringify([chatId, part.format, part.pages.map(p => p.card_id)])} group={part} chatId={chatId} />
+          : part.card_id
+          ? <WbcInlineCard key={chatId + part.card_id} chatId={chatId} card={part} inProse />
+          : <ProseMarkdown key={index} text={part.text} live={live} />)}
+      </div> : sourceText ? (live ? (
         <div key="streaming-body" className="wbc-msg-body markdown streaming" ref={bodyRef}>
           {(streamingParts.stableBlocks || []).map(function (block, index) {
             return <WbcStreamingStableBlock key={index} source={block} />;
@@ -1715,11 +1728,13 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
 
 function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion, onAnswer, homeInsertion }) {
   var projected = wbcProjectTranscript(messages || [], runtime);
+  const legacy = runtime?.text?.includes("::card[") && legacyCardReply(runtime);
+  if (legacy) projected = [...projected, ...wbcRuntimeTimelineMessages(runtime), legacy];
   if (homeInsertion) {
     var boundary = homeInsertionIndex(projected, homeInsertion.position);
     projected = [...projected.slice(0, boundary), { id: "assistant-home:" + chatId, homeSurface: true }, ...projected.slice(boundary)];
   }
-  var timeline = wbcGroupConsecutiveActivityMessages(presentConversationMessages(projected), runtime);
+  var timeline = wbcGroupConsecutiveActivityMessages(presentConversationMessages(projected, chatId || runtime?.chatId), runtime);
   return <React.Fragment>{timeline.map(function (message) {
     if (message.pluginView) return <WbcInlinePluginView key={message.id} view={message.pluginView} />;
     if (message.homeSurface) return <React.Fragment key={message.id}>{homeInsertion.content}</React.Fragment>;
@@ -1730,13 +1745,13 @@ function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion,
     if (message.modelStatusCard) return <WbcThreadItem key={message.id}><WbcModelStatusMessage msg={message} /></WbcThreadItem>;
     return <WbcThreadItem key={message.id}>{message.role === "user"
       ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
-      : <WbcAssistantMessageBoundary msg={message} onOpenFile={onOpenFile} chatId={chatId} />}</WbcThreadItem>;
+      : <WbcAssistantMessageBoundary msg={message} onOpenFile={onOpenFile} chatId={chatId || runtime?.chatId} />}</WbcThreadItem>;
   })}</React.Fragment>;
 }
 
 function WbcRuntimeTranscript({ runtime, onOpenFile }) {
   if (!runtime) return null;
-  if (runtime.timeline) return <WbcTranscript runtime={runtime} onOpenFile={onOpenFile} />;
+  if (runtime.timeline || runtime.text?.includes("::card[")) return <WbcTranscript runtime={runtime} onOpenFile={onOpenFile} />;
   var timeline = wbcGroupConsecutiveActivityMessages(
     presentConversationMessages(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder: true })),
     runtime
@@ -1745,7 +1760,7 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
     <React.Fragment>
       {timeline.map(function (item) {
         if (item.pluginView) return <WbcInlinePluginView key={item.id} view={item.pluginView} />;
-        if (item.assistantCard) return <WbcThreadItem key={item.id}><WbcAssistantCard cardId={item.assistantCard.card_id} revision={item.assistantCard.revision} /></WbcThreadItem>;
+        if (item.assistantCard) return <WbcThreadItem key={item.id}><WbcInlineCard chatId={runtime.chatId} card={item.assistantCard} onOpenFile={onOpenFile} /></WbcThreadItem>;
         if (item.runtimeHeartbeat) {
           return null;
         }

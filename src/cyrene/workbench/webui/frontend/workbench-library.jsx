@@ -1078,13 +1078,8 @@ import { usePendingKnowledgeSelection } from "./shared/runtime/pending-module-se
         if (!cancelled) setPage(function (old) { return { current: event.pageNumber, total: old.total }; });
       }
       eventBus.on("pagechanging", onPageChanging);
-      var resizeObserver = new ResizeObserver(function () { viewer.update(); });
-      resizeObserver.observe(container);
       var selectionSanitizer = pdf.installSelectionSanitizer
         ? pdf.installSelectionSanitizer(container, viewer, eventBus)
-        : null;
-      var copyFix = pdf.installCopyFix
-        ? pdf.installCopyFix(container, viewer)
         : null;
       pdf.loadPdf(props.url, viewer, abortLoader.signal).then(function (document) {
         loadedDocument = document;
@@ -1108,8 +1103,7 @@ import { usePendingKnowledgeSelection } from "./shared/runtime/pending-module-se
         clearTimeout(timer);
         abortLoader.abort();
         if (selectionSanitizer) selectionSanitizer.abort();
-        if (copyFix) copyFix.abort();
-        resizeObserver.disconnect();
+        result.disconnect();
         eventBus.off("pagechanging", onPageChanging);
         if (viewerRef.current) {
           try { viewerRef.current.setDocument(null); } catch (error) {}

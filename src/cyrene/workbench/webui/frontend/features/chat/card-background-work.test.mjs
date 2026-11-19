@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { observeHomeCards, observeCardVisibility } from './card-background-work.mjs';
 import { harness } from './hook-harness.test.mjs';
+import { conversationCardsUrl } from './pinned-card-model.mjs';
 import { initialCardValues } from './assistant-card-model.mjs';
 
 const settle = async () => {for (let i=0;i<15;i++) await Promise.resolve();};
@@ -57,7 +58,7 @@ test('animation pauses only when invisible and resumes without replacing the ele
 
 test('home cards accept parent refresh without requests and preserve unsaved draft fields', () => {
   const react={};
-  const h=harness('./assistant-cards.jsx',{initialCardValues,
+  const h=harness('./assistant-cards.jsx',{initialCardValues, conversationCardsUrl,
     useState:(...args)=>react.useState(...args),useRef:(...args)=>react.useRef(...args),useEffect:(...args)=>react.useEffect(...args)});
   let network=0;
   h.context.fetch=()=>{network++;throw Error('unexpected per-card request');};

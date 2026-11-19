@@ -12,7 +12,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from cyrene.core.plugin import PluginContext, PluginRegistry, PluginRuntime, PluginUnavailableError
-from cyrene.core.plugin.tool_scope import PluginToolScope, ScopedPluginRegistry
+from cyrene.core.plugin.tool_scope import ScopedPluginRegistry
 from cyrene.plugins.builtin import cyrene_cards
 from cyrene.plugins.builtin.cyrene_cards import TOOL_NAMES, plugin_pack
 from cyrene.plugins.builtin.cyrene_cards.context import setup
@@ -69,26 +69,28 @@ def event(event_id, *, revision=1, input_revision=0, kind="change", values=None,
 
 
 @pytest.mark.asyncio
-async def test_only_assistant_can_discover_and_execute_even_with_explicit_name(rig):
+async def test_work_session_tools_share_cards_and_exclude_home(rig):
     ordinary = PluginRuntime(rig.registry)
-    before = {d["function"]["name"] for d in rig.registry.tool_definitions()}
-    assert not set(TOOL_NAMES) & before
-    assert "cyrene_cards" not in (await ordinary.call("toolbox", {"operation": "list"})).value["packs"]
+    names = {d["function"]["name"] for d in rig.registry.direct_tool_definitions()}
+    assert set(TOOL_NAMES) <= names
     for name in TOOL_NAMES:
-        assert rig.registry.registered(name).plugin.metadata["model_visible"] == "assistant"
-        assert not (await ordinary.call(name, {}, rig.context)).success
-        assert not (await ordinary.call("toolbox", {"operation": "invoke", "name": name, "arguments": {}}, rig.context)).success
         with pytest.raises(PluginUnavailableError):
-            rig.runtime.registry.resolve(name, agent_id="child")
-        rig.registry.customize_tool(name, {"agent_exposure": "direct"})
-        assert not rig.registry.plugin_accessible(name)
-    explicit = ScopedPluginRegistry(rig.registry, PluginToolScope(tool_names=frozenset(TOOL_NAMES)))
-    assert not explicit.plugin_accessible("card.create")
-    assert not (await ordinary.call("toolbox", {"operation": "describe", "name": "cyrene_cards"})).success
-    # A forged ordinary entry using an assistant-scoped registry still lacks host context.
-    rejected = await rig.runtime.call("card.create", {"template": "content", "spec": {"title": "No"}},
-                                      PluginContext(tree_id="ordinary", services={"cards": rig.service}))
-    assert rejected.value["error"]["code"] == "assistant_only"
+            rig.registry.resolve(name, agent_id="child")
+    work = PluginContext(tree_id="work", node_id="node", data={"session_id": "work"}, services=rig.context.services)
+    async def invoke(name, args, call_id=None):
+        result = await ordinary.call(name, args, work, call_id=call_id)
+        assert result.success
+        return result.value
+
+    args = {"template": "data", "spec": form_spec(), "pinned": True}
+    created = await invoke("card.create", args, "work-create")
+    assert created["origin"]["session_id"] == "work"
+    card_id = created["card_id"]
+    assert (await invoke("card.list", {"scope": "pinned"}))["cards"][0]["card_id"] == card_id
+    assert (await call(rig, "card.get", {"card_id": card_id}))["error"]["code"] == "card_not_found"
+    assert (await invoke("card.create", {**args, "spec": {**args["spec"], "home_kind": "resume"}}))["error"]["code"] == "home_unavailable"
+    assert (await invoke("card.update", {"card_id": card_id, "expected_revision": 1, "changes": {"home_visible": True}}))["error"]["code"] == "home_unavailable"
+    assert (await invoke("card.list", {"scope": "home"}))["error"]["code"] == "home_unavailable"
 
 
 @pytest.mark.asyncio
@@ -122,8 +124,9 @@ async def test_real_runtime_create_update_pin_archive_and_durable_replay(rig, tm
 async def test_versions_ownership_context_and_user_pin_override(rig):
     created = await create(rig)
     card_id = created["card_id"]
-    with pytest.raises(CardError, match="scope"):
+    with pytest.raises(CardError) as denied:
         await rig.service.command("other", "purchase", "card.get", {"card_id": card_id})
+    assert denied.value.code == "card_not_found"
     rig.task["active"] = "travel"
     assert not (await call(rig, "card.list", {}))["cards"]
     assert (await call(rig, "card.list", {"scope": "pinned"}))["cards"][0]["card_id"] == card_id
@@ -185,6 +188,27 @@ async def test_invalid_actions_payload_and_unknown_rows_do_not_mutate(rig):
         with pytest.raises(CardError):
             await rig.service.user_event("assistant", card_id, payload)
     assert (await call(rig, "card.get", {"card_id": card_id}))["input_revision"] == 0
+
+
+@pytest.mark.asyncio
+async def test_submit_partial_checklist_with_optional_action_field(rig):
+    spec = form_spec()
+    spec["blocks"] = [{"type": "form", "block_id": "review", "fields": [
+        {"type": "boolean", "field_id": key, "label": key} for key in ("first", "second")]}]
+    spec["input_schema"]["properties"] = {"first": {"type": "boolean"}, "second": {"type": "boolean"},
+                                          "note": {"type": "string"}}
+    spec["input_schema"]["required"] = ["first", "second"]
+    for action in spec["actions"]:
+        action["fields"] = ["first", "second", "note"]
+    card_id = (await create(rig, spec=spec))["card_id"]
+    values = {"first": True, "second": False}
+    with pytest.raises(CardError):
+        await rig.service.user_event("assistant", card_id, event("missing", kind="submit", action="prepare", values={"first": True}))
+    with pytest.raises(CardError):
+        await rig.service.user_event("assistant", card_id, event("incomplete", kind="confirm", action="approve", values=values))
+    receipt = await rig.service.user_event("assistant", card_id, event("partial", kind="submit", action="prepare", values=values))
+    assert receipt["values"] == values
+    assert (await call(rig, "card.get", {"card_id": card_id}))["input_state"]["draft"] == values
 
 
 @pytest.mark.asyncio
@@ -491,11 +515,11 @@ def test_editable_copy_loads_schemas_and_scope(tmp_path):
     assert not registry.load_directory(tmp_path / "plugins")
     for name in TOOL_NAMES:
         assert registry.registered(name).pack_id == "cyrene_cards"
-        assert not registry.plugin_accessible(name)
+        assert registry.plugin_accessible(name)
 
 
 @pytest.mark.asyncio
-async def test_hook_mounts_only_assistant_current_context_and_refreshes_inputs(rig):
+async def test_hook_mounts_current_context_and_refreshes_inputs(rig):
     hooks = []
     context = SimpleNamespace(data={"personal_assistant": True}, agent_id="main", tree_id="assistant", services=rig.context.services,
                               tree=SimpleNamespace(get_path=lambda *a: []),
@@ -539,6 +563,29 @@ def test_application_service_routes_validate_ui_actor_and_keep_accepted_distinct
         assert client.put(path + '/pin', json={"pinned": True, "expected_placement_revision": 1}).status_code == 200
         assert client.get('/api/assistant/cards').json()["cards"][0]["card_id"] == created["card_id"]
         assert client.get('/api/assistant/cards?limit=1000').status_code == 422
+        second = asyncio.run(service.command(ASSISTANT_ID, None, "card.create", {"template": "data", "spec": form_spec()}, effect="second"))
+        pages = [{"card_id": created["card_id"]}, {"card_id": second["card_id"]}]
+        for fmt in ("book", "stack"):
+            group = {"format": fmt, "title": "旅行", "subtitle": "路线", "pages": pages}
+            assert client.put("/api/assistant/cards/groups/pin", json={"pinned": True, "group": group}).status_code == 200
+        assert client.delete("/api/chats/other/cards/pins").json() == {"card_ids": []}
+        assert client.delete("/api/assistant/cards/pins").json() == {"card_ids": [created["card_id"]]}
+        listing = client.get("/api/assistant/cards").json()
+        assert listing["cards"] == listing["groups"] == []
+        assert client.get(path).json()["user_unpinned"] is True
+        assert client.delete("/api/assistant/cards/pins").json() == {"card_ids": []}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_reads_persisted_version_in_its_own_session(rig, tmp_path):
+    card_id = (await create(rig))["card_id"]
+    await call(rig, "card.update", {"card_id": card_id, "expected_revision": 1, "changes": {"title": "修订后"}})
+    reopened = CardService(tmp_path / "cards")
+    assert (await reopened.version("assistant", card_id, 1))["spec"]["title"] == form_spec()["title"]
+    assert (await reopened.version("assistant", card_id, 2))["spec"]["title"] == "修订后"
+    for owner, revision in [("other", 1), ("assistant", 9)]:
+        with pytest.raises(CardError):
+            await reopened.version(owner, card_id, revision)
 
 
 def map_spec():
@@ -631,7 +678,8 @@ async def test_submission_delivery_is_durable_immutable_and_retryable(rig, tmp_p
         await restored.deliver("assistant", "other-card", "submitted", retry=True)
 
 
-def test_ui_submission_routes_dispatch_once_and_offer_delivery_retry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("work", [False, True])
+def test_ui_submission_routes_dispatch_once_and_offer_delivery_retry(tmp_path, monkeypatch, work):
     from cyrene.plugins.builtin.cyrene_cards.application import setup_application
     from cyrene.workbench.application import app_services
     from cyrene.workbench.projects.assistant import ASSISTANT_ID
@@ -650,12 +698,21 @@ def test_ui_submission_routes_dispatch_once_and_offer_delivery_retry(tmp_path, m
     ctx = SimpleNamespace(data_directory=tmp_path, router=router, provide=lambda k, v: services.__setitem__(k, v),
                           on_startup=lambda fn: None, on_shutdown=lambda fn: None)
     setup_application(ctx)
-    created = asyncio.run(services["cards"].command(ASSISTANT_ID, "purchase", "card.create",
+    session_id = "work-session" if work else ASSISTANT_ID
+    created = asyncio.run(services["cards"].command(session_id, "purchase", "card.create",
                                                  {"template": "input", "spec": form_spec()}, effect="create"))
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as client:
-        path = f'/api/assistant/cards/{created["card_id"]}'
+        base = f"/api/chats/{session_id}/cards" if work else "/api/assistant/cards"
+        path = f'{base}/{created["card_id"]}'
+        if work:
+            assert client.get(base + "?scope=home").status_code == 422
+            foreign = f'/api/chats/other/cards/{created["card_id"]}'
+            assert client.get(foreign).status_code == 404
+            assert client.post(foreign + "/events", json=event("wrong-chat")).status_code == 404
+            assert client.put(path + "/pin", json={"pinned": True, "expected_placement_revision": 1}).status_code == 200
+            assert client.get(base).json()["cards"][0]["card_id"] == created["card_id"]
         invalid = event("invalid", kind="submit", action="prepare")
         assert client.post(path + '/events', json=invalid).status_code == 422
         assert calls == []
@@ -669,7 +726,7 @@ def test_ui_submission_routes_dispatch_once_and_offer_delivery_retry(tmp_path, m
         replay = client.post(path + '/events', json=body).json()
         assert replay["delivery"]["status"] == "sent" and len(calls) == 2
         assert client.get(path).json()["input_state"]["submitted"]["delivery"]["status"] == "sent"
-        assert calls[0] == calls[1]
+        assert calls[0] == calls[1] and calls[0][0] == session_id
 
 
 @pytest.mark.parametrize("template,multiple", [("map", True), ("map", False), ("data", False)])
@@ -836,3 +893,24 @@ def test_public_input_contract_and_runtime_reject_same_unsupported_fields(field)
     assert not Draft202012Validator(public).is_valid(schema)
     with pytest.raises(CardError, match="input_schema"):
         input_schema(schema)
+
+@pytest.mark.asyncio
+async def test_pin_collection_preserves_member_placement_and_isolates_owners(rig):
+    service = rig.service
+    async def make(owner, name):
+        return (await service.command(owner, None, "card.create", {"template": "input", "spec": form_spec()}, effect=name))["card_id"]
+    ids = [await make("work", name) for name in ("a", "b")]
+    group = {"format": "book", "title": "Great Ocean Road", "subtitle": "Three days",
+             "pages": [{"card_id": card_id} for card_id in ids]}
+    body = {"group": group, "pinned": True}
+    result = service.pin_group("work", body)
+    assert result == service.pin_group("work", body)
+    assert service.pinned_groups("work") == [{"card_id": result["card_id"], "group": group}]
+    assert not (await service.command("work", None, "card.list", {"scope": "pinned"}))["cards"]
+    assert service.pinned_groups("other") == []
+    with pytest.raises(CardError):
+        service.pin_group("other", body)
+    with pytest.raises(CardError):
+        service.pin_group("work", {**body, "group": {**group, "subtitle": ""}})
+    service.pin_group("work", {**body, "pinned": False})
+    assert service.pinned_groups("work") == []

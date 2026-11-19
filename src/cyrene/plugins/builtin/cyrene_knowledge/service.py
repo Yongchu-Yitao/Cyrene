@@ -106,6 +106,16 @@ def _render_bibtex(item: Mapping[str, Any]) -> str:
     return f"@{item_type}{{{citekey},\n{body}\n}}"
 
 
+def _searches_all_projects(context: PluginContext) -> bool:
+    from cyrene.workbench.projects.assistant import ASSISTANT_ID, ASSISTANT_SCOPE_ID
+
+    data = context.data
+    return reads_all_projects(data) or (
+        bool(data.get("personal_assistant")) and data.get("session_id") == ASSISTANT_ID
+        and data.get("project_id") in (None, "", ASSISTANT_SCOPE_ID)
+    )
+
+
 class KnowledgeService:
     """Backend used directly by HTTP routes, Agent tools, and Workbench hooks."""
 
@@ -298,7 +308,7 @@ class KnowledgeService:
         *,
         limit: int = 6,
     ) -> list[dict[str, Any]]:
-        if reads_all_projects(context.data):
+        if _searches_all_projects(context):
             if not str(query or "").strip():
                 raise ValueError("query cannot be empty")
             result = await read_all_projects(context, self.search_knowledge,
@@ -352,7 +362,7 @@ class KnowledgeService:
         status: str = "",
         tag: str = "",
     ) -> list[dict[str, Any]]:
-        if reads_all_projects(context.data):
+        if _searches_all_projects(context):
             if not str(query or "").strip():
                 raise ValueError("query cannot be empty")
             result = await read_all_projects(context, self.search_library,

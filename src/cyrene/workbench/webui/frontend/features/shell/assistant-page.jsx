@@ -1,4 +1,3 @@
-import { usePinnedAssistantCards } from "../chat/pinned-assistant-cards.jsx"
 import { WbcRailToolbar } from "../chat/rail-toolbar.jsx"
 import { AssistantTaskResources, assistantFileOwners } from "./assistant-task-resources.jsx"
 import { WBC_ICONS, wbcSetChatDrag } from "../../workbench-chat.jsx"
@@ -44,7 +43,6 @@ function compareAssistantTasks(a, b) {
 
 function PersonalAssistantPage({ context, active = true }) {
   var loadingRef = React.useRef(null);
-  var pinnedCards = usePinnedAssistantCards(active);
   var [snapshot, setSnapshot] = React.useState(null);
   var snapshotRef = React.useRef(null);
   var [error, setError] = React.useState("");
@@ -135,7 +133,6 @@ function PersonalAssistantPage({ context, active = true }) {
       </div>
     </WbcPaneCardFrame>
   </main></div> : React.createElement(workbenchServices.chat().Page, {
-    pinnedCards: pinnedCards.cards, pinnedCardsError: pinnedCards.error,
     active: active, project: project, isolated: true, modelOverride: managedModel,
     protectedChatId: personalAssistantId,
     railOverride: renderRail, requestedChatId: sessionId, requestedChatRevision: homeRevision, hideConversationPanel: true,

@@ -110,7 +110,7 @@ function ToolMatcherSelect(props) {
       <option value="">{props.t("settings.hookToolAll")}</option>
       {!known && <option value={value}>{props.t("settings.hookToolCurrent", { name: value })}</option>}
       {tools.map(function (item) { var name = String(item && item.name || ""); return <option key={String(item && item.id || name)} value={name}>{toolOptionLabel(item, props.t)}{item && item.enabled === false ? " · " + props.t("settings.hookToolDisabled") : ""}</option> })}
-    </select><small>{props.t("settings.hookToolHint")}</small>
+    </select>
   </label>
 }
 

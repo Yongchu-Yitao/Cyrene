@@ -1,13 +1,10 @@
 # Cards / 卡片工具包
 
-`cyrene_cards` 使用当前 `PluginPack` / `PluginRuntime` 技术框架实现助理专用的卡片数据工具。
+`cyrene_cards` 使用当前 `PluginPack` / `PluginRuntime` 技术框架实现会话内的卡片数据工具。
 
 ## 使用范围
 
-六个工具使用 `model_visible="assistant"`、`main_only=True`，由
-`assistant_profile.personal_assistant_config()` 加入直接工具白名单。普通聊天、委派的
-`assistant-task` 会话和 subagent 不能发现、描述或执行它们。全局工具自定义不会解除
-assistant audience 限制；handler 另外验证宿主 `personal_assistant=True`。
+个人助理和普通工作会话的主 Agent 共用六个卡片工具。卡片归属由宿主会话决定，固定列表和表单提交按会话隔离。首页卡片仅供个人助理使用。
 
 不修改核心注册表权限协议，不增加第二套 Agent 执行循环。内置插件 seed 会复制整个包，
 应用宿主加载 `application_setup` 后提供 `cards` 服务。用户停用本包时遵循宿主现有的
@@ -90,8 +87,7 @@ HTML 不设字符数上限，卡片文档也不再受 256 KiB 总大小限制。
 卡片在对话正文展示；用户可点击右上角固定图标 固定到右侧，也可使用 `pinned=true` 创建或通过 `card.pin` 固定。右侧复用普通分屏外壳，纵向滚动展示全部已固定卡片，按游标读取完整列表，不设置固定数量上限。切换任务和刷新后仍保留，并与对话引用同一 card_id。取消固定不会删除对话卡片。现有地图分屏保持原有行为。
 
 成功的 `card.create` 和 `card.update` 工具结果携带 `presentation.kind=assistant_card`、
-`card_id`、`revision` 和 `operation`。实时对话与历史重建均保留该引用。每张卡片在正文中
-只显示一次，跟随最新版本对应的工具记录。可见卡片定期读取最新版本，隐藏页面暂停刷新。
+`card_id`、`revision` 和 `operation`。实时对话与历史重建均保留该引用。每张卡片在同一轮只展示一次。助理可以在 Markdown 正文中独占一行写入 `::card[card_id]`（替换为工具返回的实际 ID）。更新成功后，可操作卡片显示在更新轮次的正文引用处，省略引用时显示在该轮的工具记录后。先前轮次在原处保留默认折叠的只读版本快照；展开时按会话和版本读取当时的数据。代码块中的引用按示例文本展示。自定义嵌入随内容高度调整。可见卡片定期读取最新版本，隐藏页面暂停刷新。
 载入失败显示重试，归档后输入只读。
 
 原生区块支持文字、指标、字段、清单、表格、表单、时间线、文件条目信息、图表和地图。
@@ -140,13 +136,13 @@ window.addEventListener("cyrene-card-state", event => {
 
 ## 用户输入与上下文
 
-应用层提供以下 UI 接入入口，owner 固定从真实个人助理会话取得，JSON 不能覆盖 actor：
+应用层从路由所指的会话确定归属，JSON 不能覆盖 actor。个人助理也兼容原有的 /api/assistant/cards 路径。
 
-- `GET /api/assistant/cards`：分页摘要；`scope=current_task` 时提供 `context_id`。
-- `GET /api/assistant/cards/{card_id}`：卡片与可选事件页。
-- `POST /api/assistant/cards/{card_id}/events`：change / submit / confirm 事件。
-- `PUT /api/assistant/cards/{card_id}/pin`：用户固定偏好。
-- `POST /api/assistant/cards/{card_id}/events/{event_id}/retry`：重试该次已保存提交的消息投递。
+- `GET /api/chats/{session_id}/cards`：分页摘要；`scope=current_task` 时提供 `context_id`。
+- `GET /api/chats/{session_id}/cards/{card_id}`：卡片与可选事件页。
+- `POST /api/chats/{session_id}/cards/{card_id}/events`：change / submit / confirm 事件。
+- `PUT /api/chats/{session_id}/cards/{card_id}/pin`：用户固定偏好。
+- `POST /api/chats/{session_id}/cards/{card_id}/events/{event_id}/retry`：重试该次已保存提交的消息投递。
 
 事件包含 `event_id`、`base_revision`、`base_input_revision`、`kind`、`values`；submit /
 confirm 还需当前版本中已声明、kind 匹配的 `action_id`。change 合并字段草稿，submit /
@@ -173,6 +169,7 @@ iframe 的 submit/confirm 请求先在宿主展示提交值，需要
 
 自定义 HTML 的标准输入使用 `data-card-field="字段 ID"` 绑定 input_schema，宿主会在
 加载时恢复已保存的值。自定义控件监听 `cyrene-card-state` 并读取 `event.detail.values`。
+`change(values)` 将已声明的字段保存到卡片草稿，其余键作为本设备上该卡片区块的显示偏好保存；两者都通过 `event.detail.values` 恢复。事件从 document 冒泡到 window。即时预览在嵌入内容中根据输入本地重绘，宿主按内容调整高度。
 单字段、单输入的旧卡片兼容自动恢复。宿主重复发布相同值不会覆盖正在编辑的输入。
 对话仅将提交呈现为可读摘要；Agent 和持久化记录仍保留完整的固定快照。
 

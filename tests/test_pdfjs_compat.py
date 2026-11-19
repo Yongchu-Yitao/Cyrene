@@ -12,7 +12,7 @@ def test_pdfjs_build_uses_legacy_assets_for_every_javascript_context():
     source = BUILD_SCRIPT.read_text(encoding="utf-8")
 
     assert "['legacy/build/pdf.min.mjs', 'pdf.min.js']" in source
-    assert "['legacy/build/pdf.worker.min.mjs', 'pdf.worker.min.js']" in source
+    assert "['legacy/build/pdf.worker.mjs', 'pdf.worker.min.js']" in source
     assert "['legacy/web/pdf_viewer.mjs', 'pdf_viewer.js']" in source
 
 

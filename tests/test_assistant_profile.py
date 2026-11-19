@@ -1,5 +1,6 @@
 from cyrene.core.plugin import PluginRegistry
 from cyrene.core.plugin.core_impl.context import CONTEXT_PLUGINS
+from cyrene.plugins.builtin.cyrene_knowledge import plugin_pack as knowledge
 from cyrene.plugins.builtin import ask_user
 from cyrene.plugins.builtin.cyrene_content import plugin_pack as content
 from cyrene.plugins.builtin.cyrene_delivery import plugin_pack as delivery
@@ -15,9 +16,9 @@ def test_assistant_profile_preserves_ordinary_config_and_resolves_real_tools():
     assistant = personal_assistant_config(ordinary)
     assert ordinary.extra_direct_tool_names == ()
     assert assistant == personal_assistant_config(assistant)
-    assert set(assistant.extra_direct_tool_names) == {*TOOL_NAMES, *ASSISTANT_SCHEDULE_TOOL_NAMES, *CARD_TOOL_NAMES, "ask_user", "send_message", "send_file", "WebSearch"}
+    assert set(assistant.extra_direct_tool_names) == {*TOOL_NAMES, *ASSISTANT_SCHEDULE_TOOL_NAMES, *CARD_TOOL_NAMES, "SearchKnowledge", "SearchLibrary", "ask_user", "send_message", "send_file", "WebSearch"}
     registry = PluginRegistry()
-    for pack in (management, content, delivery, schedule, cards):
+    for pack in (management, content, delivery, schedule, cards, knowledge):
         registry.register_pack(pack, source="test")
     assert ask_user.TOOL_NAME == "ask_user"
     from cyrene.core.plugin.tool_scope import ScopedPluginRegistry
@@ -27,17 +28,17 @@ def test_assistant_profile_preserves_ordinary_config_and_resolves_real_tools():
     core_names = {d["function"]["name"] for d in registry.direct_tool_definitions()}
     assert {p.name for p in CONTEXT_PLUGINS} <= core_names
     assert not set(TOOL_NAMES) & core_names
-    assert not set(CARD_TOOL_NAMES) & core_names
+    assert set(CARD_TOOL_NAMES) <= core_names
 
 
-async def _mounted_prompt(personal, *, home=False):
+async def _mounted_prompt(personal, *, home=False, work=False):
     from types import SimpleNamespace
     from pathlib import Path
     from cyrene.plugins.builtin.cyrene_system_prompt.service import setup_system_prompt
 
     handlers = []
     hooks = SimpleNamespace(list=lambda: [], register=lambda event, handler, **kwargs: handlers.append(handler))
-    setup_system_prompt(SimpleNamespace(data={"personal_assistant": personal, "assistant_home_owner": "owner" if home else ""}, workspace=Path("/workspace"), hooks=hooks))
+    setup_system_prompt(SimpleNamespace(services={"cards": object()}, data={"session_id": "work" if work else "", "personal_assistant": personal, "assistant_home_owner": "owner" if home else ""}, workspace=Path("/workspace"), hooks=hooks))
     handler = handlers[0]
     mounted = await handler(None)
     assert mounted["context_position"] == "system"
@@ -57,6 +58,8 @@ def test_personal_prompt_uses_existing_hook_and_changes_fingerprint():
     assert "toolbox" not in assistant.lower()
     assert "update_plan_progress" not in assistant
     assert asyncio.run(_mounted_prompt(False)) == ordinary
+    work = asyncio.run(_mounted_prompt(False, work=True))
+    assert "::card[card_id]" in work and "Welcome cards are prepared" not in work
     assert ordinary != assistant
 
 
@@ -106,7 +109,7 @@ def test_assistant_two_turns_parse_and_execute_session_creation(tmp_path, monkey
             assert json.loads(result['content'])['success'] is True
             return {'content': '已创建对话', 'tool_calls': []}
         registry = PluginRegistry()
-        for pack in (management, content, delivery, schedule, cards):
+        for pack in (management, content, delivery, schedule, cards, knowledge):
             registry.register_pack(pack, source='test')
         registry.register_plugin(ask_user.plugin, source='test')
         registry.register_plugin(Plugin('TestProvider', 'test', {'type': 'object'}, provider, kind='model',

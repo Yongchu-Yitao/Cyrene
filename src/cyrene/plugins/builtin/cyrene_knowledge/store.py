@@ -1672,7 +1672,7 @@ class KnowledgeStore:
             rows.extend(connection.execute(
                 f"WITH candidate_ids(id) AS (VALUES {candidate_values}) "
                 "SELECT c.id,c.workspace,c.item_id,c.attachment_id,c.ordinal,c.content,"
-                "c.vector_blob,c.embedding_model,c.embedding_dimensions,i.title,a.filename "
+                "c.vector_blob,c.embedding_model,c.embedding_dimensions,i.title,a.filename,a.content_type "
                 "FROM candidate_ids candidate JOIN chunks c ON c.id=candidate.id "
                 "JOIN items i ON i.id=c.item_id "
                 "LEFT JOIN attachments a ON a.id=c.attachment_id "
@@ -1746,6 +1746,8 @@ class KnowledgeStore:
         return [{
             "chunk_id": str(row["id"]),
             "document_id": str(row["attachment_id"] or row["item_id"]),
+            "attachment_id": str(row["attachment_id"] or ""),
+            "content_type": str(row["content_type"] or ""),
             "item_id": str(row["item_id"]),
             "workspace": str(row["workspace"]),
             "document_name": str(row["filename"] or row["title"]),

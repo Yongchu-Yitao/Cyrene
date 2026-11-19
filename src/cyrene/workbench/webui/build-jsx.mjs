@@ -1,4 +1,5 @@
 import * as esbuild from 'esbuild'
+import { customizeSelectionWorker } from './build/pdf-selection-worker.mjs'
 import { createHash } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, rmSync } from 'fs'
 import { join, relative, dirname, extname, resolve, basename, sep } from 'path'
@@ -286,7 +287,7 @@ async function build() {
     settingsIconFiles,
     providerIconFiles,
     EXTENSION_ICON_FILES.map(([source]) => source),
-    [BUILD_SCRIPT],
+    [BUILD_SCRIPT, resolve(__dirname, 'build/pdf-selection-worker.mjs')],
     [resolve(__dirname, 'package-lock.json')],
   )
   const revision = frontendRevision(revisionSources, cssFiles, assetFiles, indexTemplate)
@@ -379,7 +380,7 @@ async function build() {
     // the same polyfills and execute the same asset set.
     const files = [
       ['legacy/build/pdf.min.mjs', 'pdf.min.js'],
-      ['legacy/build/pdf.worker.min.mjs', 'pdf.worker.min.js'],
+      ['legacy/build/pdf.worker.mjs', 'pdf.worker.min.js'],
       ['legacy/web/pdf_viewer.mjs', 'pdf_viewer.js'],
       ['web/pdf_viewer.css', 'pdf_viewer.css'],
     ]
@@ -413,7 +414,10 @@ async function build() {
           })
           content = '(function(){\n' + content + '\n})();'
         } else if (dst === 'pdf.worker.min.js') {
-          // Worker — just remove export, keep globalThis.pdfjsWorker intact.
+          content = customizeSelectionWorker(content)
+          // Preserve the legacy polyfills and their names in the classic worker.
+          content = (await esbuild.transform(content, { minifyWhitespace: true, legalComments: 'inline' })).code
+          // Keep globalThis.pdfjsWorker intact.
           content = content.replace(/\bexport\s*\{[^}]*\};?/g, '/* export removed */')
         }
         // Upstream legacy bundles contain whitespace-only Webpack marker lines.

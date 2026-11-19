@@ -300,7 +300,7 @@
     "decisions": 32
   },
   "src/cyrene/workbench/webui/build-jsx.mjs::build": {
-    "lines": 186,
+    "lines": 189,
     "decisions": 24,
     "nesting": 6
   },
@@ -328,8 +328,23 @@
   "src/cyrene/workbench/webui/frontend/features/chat/agent-events.jsx::wbcAgentToolPayload": {
     "decisions": 58
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-card-bridge.mjs::installCardBridge.onBoundInput": {
+    "decisions": 26
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-card-model.mjs::cardReferences.<anonymous>": {
+    "decisions": 32
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-card-visuals.jsx::CardEmbed.<anonymous>.receive": {
+    "decisions": 24
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::CardBlock": {
     "decisions": 21
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::CardField": {
+    "decisions": 25
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::WbcAssistantCard": {
+    "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-home-layout.jsx::AssistantHomeLayout": {
     "decisions": 26
@@ -470,11 +485,16 @@
   "src/cyrene/workbench/webui/frontend/features/chat/conversation-board.jsx::ConversationBoard.handleBoardWheel": {
     "decisions": 24
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/conversation-card-group.jsx::ConversationCardGroup": {
+    "lines": 142,
+    "decisions": 35,
+    "hooks": 20
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx": {
-    "module_lines": 2595
+    "module_lines": 2598
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::useWbcConversationProjection": {
-    "decisions": 31
+    "decisions": 35
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::useWbcFullscreenBrowserChat": {
     "decisions": 21
@@ -630,11 +650,17 @@
   "src/cyrene/workbench/webui/frontend/features/chat/home-weather-painter.mjs::createWeatherPainter.wind": {
     "decisions": 25
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/markdown-card-references.mjs::groupDirective": {
+    "decisions": 26
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/markdown-card-references.mjs::markdownCardParts": {
+    "decisions": 28
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/message-memo.mjs::snapshotRecord": {
     "decisions": 21
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx": {
-    "module_lines": 1861
+    "module_lines": 1869
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcActivityGroup": {
     "decisions": 44
@@ -643,8 +669,8 @@
     "decisions": 30
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessage": {
-    "lines": 137,
-    "decisions": 67
+    "lines": 143,
+    "decisions": 70
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::WbcAssistantMessageFooter": {
     "decisions": 33
@@ -699,12 +725,12 @@
     "decisions": 40
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx": {
-    "module_lines": 3124
+    "module_lines": 3151
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage": {
-    "lines": 3051,
+    "lines": 3078,
     "decisions": 219,
-    "hooks": 132
+    "hooks": 135
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#43": {
     "decisions": 67
@@ -1481,10 +1507,10 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4391
+    "module_lines": 4405
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4391
+    "module_lines": 4405
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
     "module_lines": 1301
@@ -1520,7 +1546,7 @@
     "decisions": 35
   },
   "src/cyrene/workbench/webui/frontend/shared/pdf/bridge.jsx::<anonymous>.pdfjsInstallSelectionSanitizer.sanitizePage": {
-    "decisions": 31
+    "decisions": 32
   },
   "src/cyrene/workbench/webui/frontend/shared/search/overlay.jsx::SearchOverlay": {
     "lines": 721,

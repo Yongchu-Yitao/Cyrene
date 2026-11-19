@@ -41,7 +41,7 @@ function closeHarness(layout, { drafts = {}, answers = [], pluginClose = () => P
   return {
     context, closes, selected, discarded, calls, prompts, events, drafts,
     closeDirect: ids => controller.wbcClosePaneCard(context, ids, owner),
-    close: cards => confirmation.wbcClosePaneCardsWithConfirmation({ ...context, closePaneCard: onClose }, cards, owner),
+    close: (cards, beforeClose) => confirmation.wbcClosePaneCardsWithConfirmation({ ...context, closePaneCard: onClose }, cards, owner, beforeClose),
     layout: () => plain(context.paneLayoutsByChat[selected.at(-1) || owner]),
   }
 }
@@ -60,6 +60,14 @@ test("collapsing a stacked column removes it atomically and promotes a surviving
   assert.equal(drag.context.paneLayoutsByChat.main, undefined)
 })
 
+test("collapsing a pins-only column commits the unpin without closing the conversation", async () => {
+  const drag = closeHarness({ left: [card("main")], right: [] })
+  let calls = 0
+  assert.equal((await drag.close([], () => { calls++ })).closed, true)
+  assert.equal(calls, 1)
+  assert.deepEqual(drag.closes, [])
+})
+
 test("closing the right column preserves the left column and both height ratios", async () => {
   const left = [card("main"), card("left-bottom")], right = [card("right-top"), card("right-bottom")]
   const drag = closeHarness({ left, right, leftRatio: 0.3, rightRatio: 0.7 })
@@ -75,7 +83,7 @@ test("cancelling any unsaved-file prompt keeps the entire column and every draft
   const files = [card("one", "file"), card("two", "viewer")]
   const drafts = { one: "first draft", two: "second draft" }
   const drag = closeHarness({ left: [card("main")], right: files }, { drafts, answers: [true, false] })
-  assert.equal((await drag.close(files)).cancelled, true)
+  assert.equal((await drag.close(files, () => assert.fail("must keep pins on cancel"))).cancelled, true)
   assert.equal(drag.prompts.length, 2)
   assert.deepEqual(drag.discarded, [])
   assert.deepEqual(drag.drafts, { one: "first draft", two: "second draft" })

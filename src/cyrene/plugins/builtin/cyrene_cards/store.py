@@ -17,6 +17,9 @@ class Store:
                     id TEXT PRIMARY KEY, owner TEXT NOT NULL, context_id TEXT,
                     status TEXT NOT NULL, pinned INTEGER NOT NULL, document TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS cards_owner ON cards(owner,context_id,status);
+                CREATE TABLE IF NOT EXISTS pinned_groups (
+                    owner TEXT NOT NULL, id TEXT NOT NULL, document TEXT NOT NULL,
+                    PRIMARY KEY(owner,id));
                 CREATE TABLE IF NOT EXISTS effects (
                     owner TEXT NOT NULL, effect TEXT NOT NULL, fingerprint TEXT NOT NULL,
                     result TEXT NOT NULL, PRIMARY KEY(owner,effect));

@@ -1066,7 +1066,7 @@ def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
     )[0]
     assert 'className="workbench-icon-btn"' in topbar
     assert 'data-cyrene-node-id="open_settings"' not in topbar
-    assert 'activePage !== "cyrene" && chatSideHidden' in topbar
+    assert 'activePage !== "cyrene" && showExpandChatSide' in topbar
     assert 'data-chat-side-show="true"' in topbar
     assert 'new CustomEvent("workbench:show-chat-side")' in topbar
     assert 'window.addEventListener("workbench:chat-side-visibility"' in topbar
@@ -3389,7 +3389,8 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     assert '<WorkbenchStableSurface active={p.isMemory} enterMotion={true}>' in shell
     assert "workspaceContent: sharedWorkspace" in shell
     assert "WorkbenchBoardModuleSurface" not in shell
-    assert "function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = \"\", active, project" in chat
+    assert "function WorkbenchChatPage({ active, project" in chat
+    assert "usePinnedAssistantCards(isActive, activeChatId)" in chat
     assert "}, !!(isActive && project));" in chat
     assert "!!(isActive && project)" in chat
     assert "function WorkbenchLibraryPage(props)" in library
@@ -8211,7 +8212,6 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'installMemoryFallback("sessionStorage")' in source
     assert 'sandbox="allow-scripts"' in source
     assert 'srcDoc={htmlPreview}' in source
-    assert 'pdf.installCopyFix(container, viewer)' in source
     assert 'pdf.installSelectionSanitizer(container, viewer, eventBus)' in source
     assert 'selectionSanitizer.abort();' in source
     assert '"/api/workbench/library/read?workspace="' in source
@@ -8224,14 +8224,10 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'target.scrollIntoView({ behavior: "smooth", block: "start" });' in source
     assert 'onClick={handleMarkdownLink}' in source
     assert 'return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;' in source
-    assert "viewer.currentScaleValue = 'page-width';" in source
-    assert 'fitScaleRef.current = viewer.currentScale;' in source
+    assert 'pdf.setupViewer(container, function (fittedScale)' in source
+    assert 'fitScaleRef.current = fittedScale;' in source
     assert 'applyPdfGestureScale(v.currentScale / 1.15);' in source
     assert 'Math.max(fitScaleRef.current, Math.min(5, nextScale))' in source
-    assert 'eventBus.on(\'pagesinit\', onPagesInit);' in source
-    assert 'new ResizeObserver(onContainerResize)' in source
-    assert 'Math.abs(measuredWidth - lastFitWidth) < 1' in source
-    assert 'function onSplitResizeEnd() { fitViewerWidth(true); }' in source
     assert '.wbc-viewer .pdfViewer .textLayer' not in styles
     viewer_pre_rule = styles.split('.wbc-viewer-pre {', 1)[1].split('}', 1)[0]
     assert 'color: #c9d1d9;' in viewer_pre_rule

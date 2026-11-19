@@ -126,6 +126,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Match the regular font used by PDF.js to measure character advances. */
+.pdfViewer .textLayer {
+  font-weight: normal;
+}
+
 button,
 input,
 select,

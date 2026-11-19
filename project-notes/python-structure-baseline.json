@@ -535,6 +535,9 @@
     "lines": 106,
     "decisions": 30
   },
+  "src/cyrene/plugins/builtin/cyrene_cards/application.py::setup_application": {
+    "lines": 107
+  },
   "src/cyrene/plugins/builtin/cyrene_channels/wechat/bot.py::_handle_message": {
     "lines": 112
   },
@@ -844,10 +847,10 @@
     "lines": 264
   },
   "src/cyrene/plugins/builtin/cyrene_knowledge/search_library.py::handler": {
-    "decisions": 23
+    "decisions": 26
   },
   "src/cyrene/plugins/builtin/cyrene_knowledge/service.py": {
-    "module_lines": 1215
+    "module_lines": 1219
   },
   "src/cyrene/plugins/builtin/cyrene_knowledge/service.py::KnowledgeService": {
     "methods": 66
@@ -859,7 +862,7 @@
     "lines": 136
   },
   "src/cyrene/plugins/builtin/cyrene_knowledge/store.py": {
-    "module_lines": 2005
+    "module_lines": 2007
   },
   "src/cyrene/plugins/builtin/cyrene_knowledge/store.py::KnowledgeStore": {
     "methods": 60
@@ -1322,7 +1325,7 @@
     "decisions": 25
   },
   "src/cyrene/plugins/builtin/cyrene_schedule/tools.py::edit_schedule": {
-    "decisions": 27
+    "decisions": 32
   },
   "src/cyrene/plugins/builtin/cyrene_skills/candidate.py::CandidateService._build_candidate_script": {
     "decisions": 21

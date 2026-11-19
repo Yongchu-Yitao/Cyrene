@@ -124,26 +124,48 @@ export function CardChart({ block }) {
   return <div><div className="wbc-card-chart" ref={holder} role="img" aria-label={block.title || '数据图表'} /><details><summary>查看图表数据</summary><table><thead><tr><th>项目</th>{block.series.map((s, i) => <th key={i}>{s.label}</th>)}</tr></thead><tbody>{block.labels.map((label, i) => <tr key={i}><th>{label}</th>{block.series.map((s, j) => <td key={j}>{s.values[i]}</td>)}</tr>)}</tbody></table></details></div>;
 }
 
-export function CardEmbed({ block, card, values, disabled, onEvent }) {
+export function CardEmbed({ block, card, values, disabled, snapshot, onEvent }) {
   const frame = useRef(null);
   const callback = useRef(onEvent); callback.current = onEvent;
+  const [height, setHeight] = useState(null);
   const [proposal, setProposal] = useState(null);
-  const doc = React.useMemo(() => customCardDocument(block.html, Object.keys(card.spec.input_schema.properties)), [block.html, JSON.stringify(Object.keys(card.spec.input_schema.properties))]);
+  const doc = React.useMemo(() => customCardDocument(block.html, card.spec.input_schema.properties), [block.html, JSON.stringify(card.spec.input_schema.properties)]);
+  const viewKey = 'cyrene.card.view.' + card.card_id + '.' + block.block_id;
+  // Presentation-only preferences stay on this device. The service owns declared task inputs.
+  const view = React.useMemo(() => {
+    if (snapshot) return { values: {} };
+    try { return { values: JSON.parse(localStorage.getItem(viewKey)) || {} }; }
+    catch { return { values: {} }; }
+  }, [viewKey, snapshot]);
   function publishState() {
-    frame.current?.contentWindow?.postMessage({ channel: 'cyrene-card-state', card_id: card.card_id, revision: card.revision, values, readonly: disabled }, '*');
+    frame.current?.contentWindow?.postMessage({ channel: 'cyrene-card-state', card_id: card.card_id, revision: card.revision, values: { ...view.values, ...values }, readonly: disabled }, '*');
   }
   useEffect(() => {
     function receive(event) {
-      if (event.source !== frame.current?.contentWindow || event.origin !== 'null' || disabled) return;
+      if (event.source !== frame.current?.contentWindow || event.origin !== 'null') return;
       const data = event.data;
-      if (data?.channel !== 'cyrene-card' || !['change', 'submit', 'confirm'].includes(data.kind)
+      if (data?.channel === 'cyrene-card-size' && Number.isFinite(data.height)) {
+        setHeight(Math.max(24, Math.min(8192, Math.ceil(data.height))));
+        return;
+      }
+      if (disabled || data?.channel !== 'cyrene-card' || !['change', 'submit', 'confirm'].includes(data.kind)
         || !data.values || typeof data.values !== 'object' || Array.isArray(data.values)) return;
       if (JSON.stringify(data).length > 65536) return;
       const action = card.spec.actions.find(a => a.action_id === data.action_id && a.kind === data.kind);
       if (data.kind !== 'change' && !action) return;
       if (data.kind === 'change') {
         if (document.activeElement !== frame.current || !navigator.userActivation?.isActive) return;
-        callback.current('change', data.values);
+        const inputs = Object.entries(data.values).filter(([key]) => Object.hasOwn(card.spec.input_schema.properties, key));
+        const preferences = Object.entries(data.values).filter(([key]) => !Object.hasOwn(card.spec.input_schema.properties, key));
+        if (preferences.length) {
+          const next = { ...view.values, ...Object.fromEntries(preferences) };
+          const serialized = JSON.stringify(next);
+          if (serialized.length <= 65536) {
+            view.values = next;
+            try { localStorage.setItem(viewKey, serialized); } catch { /* Available in this view until it closes. */ }
+          }
+        }
+        if (inputs.length) callback.current('change', Object.fromEntries(inputs));
       } else {
         // Generated JavaScript cannot manufacture a user confirmation. Final
         // iframe actions require a native click after values are displayed.
@@ -152,8 +174,8 @@ export function CardEmbed({ block, card, values, disabled, onEvent }) {
     }
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
-  }, [card.spec.actions, disabled]);
+  }, [card.spec.actions, card.spec.input_schema, disabled, view, viewKey]);
   useEffect(publishState, [values, disabled, card.revision]);
   useEffect(() => setProposal(null), [card.revision, block.html]);
-  return <div className="wbc-card-embed"><iframe ref={frame} title={block.title || card.spec.title} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={doc} style={{ height: 360 }} onLoad={publishState} />{proposal && <div className="wbc-card-embed-proposal"><p>{proposal.action.label}</p><ul>{Object.values(proposal.values).map((value, i) => <li key={i}>{Array.isArray(value) ? value.join('、') : String(value)}</li>)}</ul><button type="button" disabled={disabled} onClick={() => { callback.current(proposal.kind, proposal.values, proposal.action); setProposal(null); }}>确认提交</button><button type="button" onClick={() => setProposal(null)}>取消</button></div>}</div>;
+  return <div className="wbc-card-embed" inert={snapshot ? "" : undefined}><iframe ref={frame} data-awaiting-card-size={height == null ? true : undefined} title={block.title || card.spec.title} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={doc} style={{ height: height ?? 96 }} onLoad={publishState} />{proposal && <div className="wbc-card-embed-proposal"><p>{proposal.action.label}</p><ul>{Object.values(proposal.values).map((value, i) => <li key={i}>{Array.isArray(value) ? value.join('、') : String(value)}</li>)}</ul><button type="button" disabled={disabled} onClick={() => { callback.current(proposal.kind, proposal.values, proposal.action); setProposal(null); }}>确认提交</button><button type="button" onClick={() => setProposal(null)}>取消</button></div>}</div>;
 }

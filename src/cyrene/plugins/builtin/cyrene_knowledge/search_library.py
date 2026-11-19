@@ -7,7 +7,7 @@ from typing import Any
 from cyrene.core.plugin import Plugin, PluginContext
 from cyrene.plugins.native_runtime import plugin_localized, plugin_localized_plural
 
-from ._service import knowledge_service
+from ._service import knowledge_service, search_response
 from .definitions import get_native_tool_def, get_plugin_spec
 from .service import creator_label
 
@@ -95,7 +95,8 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
                     mode=hit.get("mode") or "search",
                     content=content[:500],
                 ))
-    return "\n".join(lines)
+    hits = (hit for result in results for hit in result.get("evidence") or [])
+    return search_response(context, "\n".join(lines), hits)
 
 
 _spec = get_plugin_spec(TOOL_NAME)

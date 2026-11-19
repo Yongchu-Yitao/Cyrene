@@ -23,7 +23,7 @@ test('actual transcript shows new messages and the latest inline card once acros
     wbcGroupConsecutiveActivityMessages = messages => messages;
     WbcUserMessage = ({msg}) => React.createElement('p',null,msg.content);
     WbcAssistantMessageBoundary = ({msg}) => msg.assistantCard
-      ? React.createElement('article',null,'CARD_REV_' + msg.assistantCard.revision)
+      ? React.createElement('article',null,(msg.assistantCard.snapshot ? 'SNAPSHOT_' : 'CARD_REV_') + msg.assistantCard.revision)
       : React.createElement('p',null,msg.content);
   `,{loader:'jsx',format:'cjs'}).code;
   const deps={homeInsertionIndex,presentConversationMessages,
@@ -49,6 +49,7 @@ test('actual transcript shows new messages and the latest inline card once acros
     assert.equal(html.match(/HOME/g).length,1);
     assert.equal(html.match(/REPLY/g).length,1);
     assert.equal(html.match(/CARD_REV_/g).length,1);
+    assert.ok(html.includes('SNAPSHOT_1') && html.indexOf('SNAPSHOT_1') < html.indexOf('HOME'));
     assert.ok(html.indexOf('REPLY')<html.indexOf('CARD_REV_2'));
   }
 });

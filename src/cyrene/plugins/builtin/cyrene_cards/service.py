@@ -36,11 +36,59 @@ class CardService:
                 card.update(placement="conversation", placement_revision=card["placement_revision"] + 1)
                 self._save(db, card)
 
+    def unpin_all(self, owner):
+        with self.store.connect(write=True) as db:
+            rows = db.execute("SELECT document FROM cards WHERE owner=? AND pinned=1", (owner,)).fetchall()
+            ids = []
+            for row in rows:
+                card = json.loads(row["document"])
+                self._pin(card, False, card["placement_revision"], user=True)
+                card["updated_at"] = now()
+                self._save(db, card)
+                ids.append(card["card_id"])
+            db.execute("DELETE FROM pinned_groups WHERE owner=?", (owner,))
+        return {"card_ids": ids}
+
+    def pinned_groups(self, owner):
+        with self.store.connect() as db:
+            rows = db.execute("SELECT id, document FROM pinned_groups WHERE owner=? ORDER BY rowid", (owner,))
+            return [{"card_id": row["id"], "group": json.loads(row["document"])} for row in rows]
+
+    def pin_group(self, owner, body):
+        member = obj({"card_id": {"type": "string", "pattern": "^card_[a-f0-9]{32}$"},
+                      "snapshot": {"const": True}, "revision": REVISION}, ["card_id"])
+        group_schema = obj({"format": {"enum": ["book", "stack"]}, "title": {"type": "string", "minLength": 1},
+                            "subtitle": {"type": "string"}, "cover": obj({"palette": {"enum": ["forest", "ocean", "clay", "ink"]},
+                              "motif": {"enum": ["leaves", "waves", "lines"]}}), "pages": {"type": "array", "minItems": 2, "items": member}},
+                           ["format", "title", "pages"])
+        validate(obj({"pinned": {"type": "boolean"}, "group": group_schema}, ["pinned", "group"]), body)
+        group = body["group"]
+        if group["format"] == "book" and not group.get("subtitle", "").strip():
+            raise CardError("invalid_card", "Book requires a cover subtitle")
+        ids = [page["card_id"] for page in group["pages"]]
+        if len(set(ids)) != len(ids):
+            raise CardError("invalid_card", "Duplicate pages")
+        key = "group_" + fingerprint([group["format"], [[p["card_id"], p.get("revision") if p.get("snapshot") else None] for p in group["pages"]]])
+        with self.store.connect(write=True) as db:
+            if body["pinned"]:
+                for page in group["pages"]:
+                    card = self._get(db, owner, page["card_id"])
+                    if card["spec"].get("home_kind"):
+                        raise CardError("invalid_card", "Home cards cannot be grouped")
+                    if page.get("snapshot") and not db.execute("SELECT 1 FROM versions WHERE card_id=? AND revision=?",
+                                                               (page["card_id"], page.get("revision"))).fetchone():
+                        raise CardError("card_not_found", "Missing page revision")
+                db.execute("INSERT INTO pinned_groups VALUES (?,?,?) ON CONFLICT(owner,id) DO UPDATE SET document=excluded.document",
+                           (owner, key, encoded(group)))
+            else:
+                db.execute("DELETE FROM pinned_groups WHERE owner=? AND id=?", (owner, key))
+        return {"pinned": body["pinned"], "card_id": key}
+
     @staticmethod
     def _get(db, owner, card_id):
         row = db.execute("SELECT document FROM cards WHERE id=? AND owner=?", (card_id, owner)).fetchone()
         if row is None:
-            raise CardError("card_not_found", "Card not found in this assistant's scope")
+            raise CardError("card_not_found", "Card not found in this session")
         return json.loads(row["document"])
 
     @staticmethod
@@ -61,8 +109,24 @@ class CardService:
         if card[key] != expected:
             raise CardError("revision_conflict", f"Expected current {key}={card[key]}; read the card again")
 
-    async def command(self, owner, context_id, operation, args, *, effect=None, origin=None, read_html=None):
+    async def version(self, owner, card_id, revision):
+        def read():
+            with self.store.connect() as db:
+                row = db.execute(
+                    "SELECT v.document FROM versions v JOIN cards c ON c.id=v.card_id "
+                    "WHERE c.owner=? AND v.card_id=? AND v.revision=?", (owner, card_id, revision)
+                ).fetchone()
+            if row is None:
+                raise CardError("card_not_found", "Card version not found in this session")
+            return json.loads(row["document"])
+        return await asyncio.to_thread(read)
+
+    async def command(self, owner, context_id, operation, args, *, effect=None, origin=None, read_html=None, allow_home=True):
         validate(DEFINITIONS[operation][1], args)
+        if not allow_home and (args.get("scope") == "home" or any(
+            {"home_kind", "home_visible"}.intersection(args.get(key, {})) for key in ("spec", "changes")
+        )):
+            raise CardError("home_unavailable", "Home cards are available only in the personal assistant")
         encoded(args)
         return await asyncio.to_thread(self._command, owner, context_id, operation, deepcopy(args), effect, origin, read_html)
 
@@ -238,7 +302,10 @@ class CardService:
             validate_values(card["spec"], values, complete=complete)
             if complete:
                 action = next((a for a in card["spec"]["actions"] if a["action_id"] == event.get("action_id")), None)
-                if not action or action["kind"] != event["kind"] or not set(action["fields"]) <= values.keys():
+                if not action or action["kind"] != event["kind"]:
+                    raise CardError("invalid_action", "Action kind must match the current card")
+                # Submissions use input_schema.required; optional inputs may still be blank.
+                if event["kind"] == "confirm" and not set(action["fields"]) <= values.keys():
                     raise CardError("invalid_action", "Action kind and fields must match the current card")
             elif "action_id" in event:
                 raise CardError("invalid_action", "Changes cannot invoke an action")

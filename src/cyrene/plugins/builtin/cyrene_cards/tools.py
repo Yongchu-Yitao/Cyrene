@@ -9,11 +9,12 @@ from .schemas import CardError
 
 
 def caller(context):
-    if run_context_value(context, "personal_assistant", False) is not True:
-        raise CardError("assistant_only", "Card tools are only available to the personal assistant")
-    owner = str(run_context_value(context, "assistant_home_owner") or run_context_value(context, "session_id") or context.tree_id or "").strip()
+    owner = run_context_value(context, "session_id")
+    if run_context_value(context, "personal_assistant", False) is True:
+        owner = run_context_value(context, "assistant_home_owner") or owner or context.tree_id
+    owner = str(owner or "").strip()
     if not owner:
-        raise CardError("missing_session", "Card tools require an assistant session")
+        raise CardError("missing_session", "Card tools require a conversation session")
     tasks = context.services.get("task_contexts")
     context_id = tasks.read().get("active") if tasks is not None else None
     return owner, context_id
@@ -52,6 +53,7 @@ def create_tool(name):
                 effect = f"{context.node_id}:{execution.call.id}"
             origin = {"project_id": str(run_context_value(context, "project_id") or ""), "node_id": context.node_id}
             value = await service.command(owner, context_id, name, arguments, effect=effect, origin=origin,
+                                          allow_home=run_context_value(context, "personal_assistant", False) is True,
                                           read_html=lambda path: read_html_file(context, owner, path))
             return {"ok": True, **value}
         except CardError as exc:
@@ -59,7 +61,7 @@ def create_tool(name):
 
     return Plugin(name=name, description=description, input_schema=schema, handler=handler,
                   allow_parallel=read_only, timeout_seconds=30,
-                  metadata={"main_only": True, "model_visible": "assistant", "requires_order": not read_only, "read_only": read_only})
+                  metadata={"agent_exposure": "direct", "main_only": True, "requires_order": not read_only, "read_only": read_only})
 
 
 plugins = tuple(create_tool(name) for name in TOOL_NAMES)

@@ -1,3 +1,6 @@
+import { InlineCardPreview } from './inline-card-preview.jsx';
+import { conversationCardsUrl } from './pinned-card-model.mjs';
+import { ScheduleChange, ScheduleAgenda, KnowledgeSource } from './tool-result-cards.jsx';
 import { observeCardVisibility } from './card-background-work.mjs';
 import { AssistantHomeLayout, homeDisplayTitle } from './assistant-home-layout.jsx';
 import { CardWeather } from './card-weather.jsx';
@@ -24,7 +27,9 @@ export async function requestCard(url, options) {
 
 function CardField({ field, value, disabled, schema, onEdit, onSave }) {
   const id = React.useId();
-  const common = { id, disabled, required: schema.required, 'aria-label': field.label };
+  // HTML requires a checkbox to be checked. JSON Schema requires its key to exist.
+  const required = field.type === 'boolean' ? schema.enum?.includes(true) && !schema.enum.includes(false) : schema.required;
+  const common = { id, disabled, required, 'aria-label': field.label };
   let control;
   if (field.type === 'boolean') control = <input {...common} type="checkbox" checked={!!value} onChange={e => onSave(e.target.checked)} />;
   else if (field.type === 'select') control = <select {...common} value={value ?? ''} onChange={e => onSave(e.target.value)}><option value="" disabled>请选择</option>{(field.options || []).map((option, i) => <option key={i} value={option.value}>{option.label}</option>)}</select>;
@@ -45,7 +50,7 @@ function CardActionList({ block, card, disabled, onEvent, values }) {
   return <div>{block.collapsed ? <><button className="wb-btn wbc-card-list-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}><strong>{block.title || '事项'}</strong><span className="wbc-card-list-toggle-end"><span>{block.items.length} 项</span><span className="wbc-card-disclosure-icon" aria-hidden="true">{WBC_ICONS.chevronDown}</span></span></button>{expanded && (block.items.length ? rows : <p className="wbc-card-description">暂无事项</p>)}</> : block.items.length ? rows : <p className="wbc-card-description">暂无事项</p>}</div>;
 }
 
-export function CardBlock({ block, card, values, disabled, onEdit, onChange, onEvent }) {
+export function CardBlock({ block, card, values, disabled, snapshot, onEdit, onChange, onEvent }) {
   const selected = block.selection && values[block.selection.field_id];
   const selectedIds = Array.isArray(selected) ? selected : [selected];
   switch (block.type) {
@@ -64,7 +69,7 @@ export function CardBlock({ block, card, values, disabled, onEdit, onChange, onE
     case 'files': return <ul className="wbc-card-list">{block.items.map(item => <li key={item.artifact_id}><strong>{item.name}</strong><small>{item.media_type || item.artifact_id}</small></li>)}</ul>;
     case 'chart': return <CardChart block={block} />;
     case 'map': return <CardMap block={block} values={values} disabled={disabled} onChange={onChange} />;
-    case 'embed': return <CardEmbed block={block} card={card} values={values} disabled={disabled} onEvent={onEvent} />;
+    case 'embed': return <CardEmbed snapshot={snapshot} block={block} card={card} values={values} disabled={disabled} onEvent={onEvent} />;
     default: return <p role="status">暂不支持此内容区块。</p>;
   }
 }
@@ -172,7 +177,7 @@ function useAssistantCardRefresh({ initialCard, managedRefresh, cardId, busy, mo
   }, [initialCard, managedRefresh, busy]);
 }
 
-export function useAssistantCard(cardId, initialCard, managedRefresh = false) {
+export function useAssistantCard(cardId, initialCard, managedRefresh = false, chatId) {
   const [card, setCard] = useState(initialCard);
   const [values, setValues] = useState(() => initialCard ? initialCardValues(initialCard) : {});
   const [busy, setBusy] = useState(false);
@@ -187,7 +192,7 @@ export function useAssistantCard(cardId, initialCard, managedRefresh = false) {
   const draftTimer = useRef(null);
   const sendRef = useRef(null);
   const form = useRef(null);
-  const url = '/api/assistant/cards/' + encodeURIComponent(cardId);
+  const url = conversationCardsUrl(chatId) + '/' + encodeURIComponent(cardId);
   function accept(next) {
     if (!mounted.current) return;
     if (current.current?.revision > next.revision || (current.current?.revision === next.revision && current.current?.input_revision > next.input_revision)) return;
@@ -213,10 +218,15 @@ export function useAssistantCard(cardId, initialCard, managedRefresh = false) {
   }
   function editDraft(key, value) {
     edit(key, value);
+    scheduleDraft();
+  }
+  function scheduleDraft() {
     clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
       const changed = Object.fromEntries(Object.entries(dirty.current).filter(([, v]) => v !== undefined));
-      if (Object.keys(changed).length) sendRef.current('change', changed);
+      if (!Object.keys(changed).length || !mounted.current) return;
+      if (lock.current) { scheduleDraft(); return; }
+      sendRef.current('change', changed);
     }, 700);
   }
   const { send, togglePin, retryDelivery } = createCardActions({ cardId, url, current, pendingEvent, form, draftTimer, lock, mounted, dirty, accept, setBusy, setError, setPendingEvent });
@@ -237,30 +247,120 @@ export function useCardAnimations(ref, enabled) {
   }, [ref, enabled]);
 }
 
-export function WbcAssistantCard({ cardId, revision, initialCard = null, displayTime = new Date(), managedRefresh = false, homeDisclosure }) {
+function InlineChecklistHeading({ card, values }) {
   const { t } = useWorkbenchI18n();
-  const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard, managedRefresh);
+  const keys = new Set();
+  for (const block of card.spec.blocks) {
+    let fields;
+    if (block.type === 'form' && block.fields.every(field => field.type === 'boolean')) {
+      fields = block.fields.map(field => field.field_id);
+    } else if (block.type === 'list' && block.items.every(item => item.field_id)) {
+      fields = block.items.map(item => item.field_id);
+    } else return null;
+    for (const key of fields) keys.add(key);
+  }
+  if (!keys.size) return null;
+  const completed = [...keys].filter(key => values[key] === true).length;
+  return <div className="wbc-inline-checklist-heading">
+    <strong>{card.spec.title}</strong>
+    <small>{t('workbenchChat.checklistCompleted')} {completed}/{keys.size}</small>
+  </div>;
+}
+
+function HistoricalCard({ cardId, revision, chatId }) {
+  const [open, setOpen] = useState(false);
+  const [card, setCard] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!open || card) return;
+    const controller = new AbortController();
+    const url = conversationCardsUrl(chatId) + '/' + encodeURIComponent(cardId) + '?revision=' + revision;
+    setError('');
+    requestCard(url, { signal: controller.signal }).then(result => {
+      if (result.revision !== revision) throw new Error('未找到该版本的快照');
+      if (!controller.signal.aborted) setCard(result);
+    }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
+    return () => controller.abort();
+  }, [open, card, chatId, cardId, revision]);
+  return <details className="wbc-card-snapshot" onToggle={e => setOpen(e.currentTarget.open)}>
+    <summary>查看当时的版本 · 第 {revision} 版（只读）</summary>
+    {open && (card ? <article className="wbc-assistant-card in-prose">
+      <strong>{card.spec.title}</strong>
+      {card.spec.subtitle && <p>{card.spec.subtitle}</p>}
+      <div className={'wbc-card-blocks layout-' + card.spec.layout}>
+        {card.spec.blocks.map(block => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
+          {block.title && <h4>{block.title}</h4>}
+          {block.description && <p>{block.description}</p>}
+          <CardBlock card={card} block={block.collapsed ? { ...block, collapsed: false } : block} values={initialCardValues(card)} disabled snapshot />
+        </section>)}
+      </div>
+    </article> : <p>{error || '正在读取快照…'}</p>)}
+  </details>;
+}
+
+export function WbcInlineCard({ card, chatId, onOpenFile, inProse, onPageTitle }) {
+  if (card.snapshot) return <HistoricalCard key={card.card_id + card.revision} chatId={chatId} cardId={card.card_id} revision={card.revision} />;
+  if (card.change) return <ScheduleChange change={card.change} />;
+  if (card.agenda) return <ScheduleAgenda agenda={card.agenda} />;
+  if (card.source) return <KnowledgeSource source={card.source} onOpenFile={onOpenFile} />;
+  return card.schedule ? <ScheduleReceipt schedule={card.schedule} />
+    : <WbcAssistantCard key={JSON.stringify([chatId, card.card_id])} reservePreview={!onPageTitle} onPageTitle={onPageTitle} inProse={inProse} chatId={chatId} cardId={card.card_id} revision={card.revision} />;
+}
+
+function ScheduleReceipt({ schedule }) {
+  const { lang, t } = useWorkbenchI18n();
+  const at = new Date(schedule.next_run);
+  const once = schedule.schedule_type === 'once';
+  const date = at.toLocaleDateString(lang, {
+    month: 'short', day: 'numeric', weekday: 'short',
+    ...(at.getFullYear() !== new Date().getFullYear() && { year: 'numeric' }),
+  });
+  const time = at.toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  return <article className="wbc-schedule-receipt">
+    <header><h3>{schedule.prompt}</h3>
+      <small data-recurring={!once}>{t(once ? 'schedule.receipt.once' : 'schedule.receipt.recurring')}</small>
+    </header>
+    <time dateTime={schedule.next_run}><span aria-hidden="true">{WBC_ICONS.calendar}</span>
+      {!once && t('schedule.nextRun')} {date} <b>{time}</b>
+    </time>
+  </article>;
+}
+
+export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reservePreview = false, initialCard = null, displayTime = new Date(), managedRefresh = false, homeDisclosure, inProse = false }) {
+  const { t } = useWorkbenchI18n();
+  const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard, managedRefresh, chatId);
   const localDisclosure = useState(null);
   const cardElement = useRef(null);
   useEffect(() => {
     if (!managedRefresh && !document.hidden && revision > (card?.revision ?? 0)) refresh();
   }, [cardId, revision, managedRefresh]);
   useCardAnimations(cardElement, !!card);
-  if (!card) return renderCardLoading(error, refresh);
+  useEffect(() => {
+    if (card && !card.spec.home_kind) onPageTitle?.(cardId, card.spec.title);
+  }, [cardId, card?.spec.title, onPageTitle]);
+  if (onPageTitle && card?.spec.home_kind) return null;
+  const preview = content => <InlineCardPreview card={card} error={error} retry={() => refresh(true)}>{content}</InlineCardPreview>;
+  if (!card) return reservePreview ? preview(null) : renderCardLoading(error, refresh);
   const { disabled, delivery, awaitingDelivery, footerActions, isHome, displayCard } = cardPresentation(card, busy, pendingEvent);
   const renderBlock = (block, inPanel = false) => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
     {block.title && !inPanel && !(block.type === 'action_list' && block.collapsed) && !(isHome && block.type === 'timeline') && <h4>{block.title}</h4>}
     {block.description && <p className="wbc-card-description">{block.description}</p>}
-    <CardBlock block={inPanel && block.collapsed ? { ...block, collapsed: false } : block} card={card} values={values} disabled={disabled || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => send(kind, kind === 'change' ? next : { ...local.current, ...next }, action)} />
+    <CardBlock block={inPanel && block.collapsed ? { ...block, collapsed: false } : block} card={card} values={values} disabled={(block.type === 'embed' && busy && pendingEvent?.kind === 'change' ? card.status !== 'active' : disabled) || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => {
+      if (kind === 'change') {
+        for (const [key, value] of Object.entries(next)) editDraft(key, value);
+      } else send(kind, { ...local.current, ...next }, action);
+    }} />
   </section>;
-  return <article ref={cardElement} className={'wbc-assistant-card density-' + card.spec.density + (isHome ? ' wbc-home-section home-' + card.spec.home_kind : '')} data-card-id={cardId} aria-label={isHome ? homeDisplayTitle(displayCard.spec) : card.spec.title} aria-busy={busy}>
-    {!isHome && renderCardHeader(card, busy, togglePin, t)}
+  const content = <article ref={cardElement} className={'wbc-assistant-card density-' + card.spec.density + (inProse ? ' in-prose' : '') + (isHome ? ' wbc-home-section home-' + card.spec.home_kind : '')} data-card-id={cardId} aria-label={isHome ? homeDisplayTitle(displayCard.spec) : card.spec.title} aria-busy={busy}>
+    {!isHome && !inProse && renderCardHeader(card, busy, togglePin, t)}
     <form ref={form} onSubmit={event => event.preventDefault()}>
+      {inProse && !isHome && <InlineChecklistHeading card={card} values={values} />}
       {isHome ? <AssistantHomeLayout card={displayCard} now={displayTime} disclosure={homeDisclosure ?? localDisclosure} renderBlock={renderBlock} /> : <div className={'wbc-card-blocks layout-' + card.spec.layout}>{card.spec.blocks.map(block => renderBlock(block))}</div>}
       {renderCardFooter(card, footerActions, disabled || awaitingDelivery, send, local)}
     </form>
     {renderCardNotices({ error, delivery, pendingEvent, busy, send, retryDelivery })}
   </article>;
+  return reservePreview ? preview(content) : content;
 }
 
 function renderCardHeader(card, busy, togglePin, t) {
@@ -272,7 +372,7 @@ function renderCardHeader(card, busy, togglePin, t) {
       <h3>{card.spec.title}</h3>
       {card.spec.subtitle && <p>{card.spec.subtitle}</p>}
     </div>
-    <button className={'wbc-pane-icon-action wbc-card-pin' + (card.placement === 'pinned' ? ' active' : '')} type="button" disabled={busy} aria-pressed={card.placement === 'pinned'} aria-label={t(card.placement === 'pinned' ? 'workbenchChat.cardUnpin' : 'workbenchChat.cardPin')} title={t(card.placement === 'pinned' ? 'workbenchChat.cardUnpin' : 'workbenchChat.cardPin')} onClick={togglePin}><span aria-hidden="true">{WBC_ICONS.pin}</span></button>
+    <CardPinButton pinned={card.placement === 'pinned'} busy={busy} onClick={togglePin} t={t} />
   </header>;
 }
 
@@ -302,4 +402,11 @@ function cardPresentation(card, busy, pendingEvent) {
   const isHome = !!card.spec.home_kind;
   const displayCard = card;
   return { disabled, delivery, awaitingDelivery, footerActions, isHome, displayCard };
+}
+
+export function CardPinButton({pinned, busy, onClick, t}) {
+  const label = t(pinned ? 'workbenchChat.cardUnpin' : 'workbenchChat.cardPin');
+  return <button className={'wbc-pane-icon-action wbc-card-pin' + (pinned ? ' active' : '')}
+    type="button" disabled={busy} aria-pressed={pinned} aria-label={label} title={label}
+    onClick={onClick}><span aria-hidden="true">{WBC_ICONS.pin}</span></button>;
 }

@@ -7,7 +7,7 @@ from typing import Any
 from cyrene.core.plugin import Plugin, PluginContext
 from cyrene.plugins.native_runtime import plugin_localized, plugin_localized_plural
 
-from ._service import knowledge_service
+from ._service import knowledge_service, search_response
 from .definitions import get_native_tool_def, get_plugin_spec
 
 TOOL_NAME = "SearchKnowledge"
@@ -53,7 +53,7 @@ async def handler(arguments: dict[str, Any], context: PluginContext) -> str:
             similarity=similarity_text,
             content=content,
         ))
-    return "\n\n".join(lines)
+    return search_response(context, "\n\n".join(lines), results)
 
 
 _spec = get_plugin_spec(TOOL_NAME)

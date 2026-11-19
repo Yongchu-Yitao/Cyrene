@@ -238,3 +238,36 @@ def test_past_once_requests_do_not_create_edit_or_resume_tasks(tmp_path):
         assert task.status == "active" and task.next_run == future
 
     asyncio.run(scenario())
+
+
+def test_assistant_schedule_change_and_agenda_cards(tmp_path):
+    runtime, service, _ = _runtime(tmp_path)
+    context = PluginContext(data={"personal_assistant": True}, services={"schedules": service})
+
+    async def invoke(name, **args):
+        result = await runtime.call("schedule." + name, args, context)
+        assert result.success, result.error
+        return result.value
+
+    async def scenario():
+        start = "2099-01-01T00:00:00+00:00"
+        end = "2099-01-01T23:59:59+00:00"
+        before = "2099-01-01T07:00:00+00:00"
+        after = "2099-01-01T08:30:00+00:00"
+        task = await invoke("create", prompt="交周报", schedule_type="once", schedule_value=before)
+        task_id = task["id"]
+        change = (await invoke("edit", task_id=task_id, schedule_value=after))["presentation"]
+        assert change == {"kind": "schedule_change", "prompt": "交周报", "change": "rescheduled",
+                          "previous": before, "next_run": after}
+        for args in ({}, {"start": start, "end": end}):
+            agenda = (await invoke("list", **args))["presentation"]
+            assert agenda["kind"] == "schedule_agenda"
+            assert agenda["rows"] == [{"title": "交周报", "at": after}]
+        paused = (await invoke("pause", task_id=task_id))["presentation"]
+        assert paused["previous"] == after and paused["change"] == "paused"
+        assert (await invoke("list", start=start, end=end))["presentation"]["rows"] == []
+        assert (await invoke("resume", task_id=task_id))["presentation"]["change"] == "resumed"
+        cancelled = (await invoke("cancel", task_id=task_id))["presentation"]
+        assert cancelled["change"] == "cancelled" and cancelled["prompt"] == "交周报"
+        assert (await invoke("list"))["presentation"]["rows"] == []
+    asyncio.run(scenario())

@@ -331,3 +331,31 @@ def test_card_reference_survives_context_history_reconstruction(wrapped):
     timeline = RunTimeline("r")
     timeline.apply({"type": "tool.completed", "toolCallId": "c", "name": "card.create", "status": "completed", "presentation": presentation})
     assert timeline.messages()[0]["trace"][0]["presentation"] == presentation
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_schedule_creation_receipt_survives_live_and_history_projection(wrapped):
+    from cyrene.workbench.core_adapter.tool_activity_projection import tool_completed_payload
+    from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID
+
+    task = {"id": "abc123", "project_id": ASSISTANT_SCOPE_ID, "prompt": "交周报",
+            "schedule_type": "once", "next_run": "2026-11-20T07:00:00Z"}
+    output = {"ok": True, "id": task["id"], "task": task}
+    name = "toolbox" if wrapped else "schedule.create"
+    value = {"operation": "invoke", "name": "schedule.create", "result": output} if wrapped else output
+    result = {"name": name, "call_id": "create", "success": True, "value": value}
+    live = tool_completed_payload(result, value, "completed")
+    timeline = RunTimeline("run")
+    timeline.apply({"type": "tool.completed", **live})
+    saved = timeline.messages()[0]["trace"][0]["presentation"]
+    nodes = [{"id": "a", "value": {"role": "assistant", "run_id": "run",
+                                   "tool_calls": [{"id": "create", "name": name}]}},
+             {"parent_id": "a", "value": {"role": "tool_results", "run_id": "run", "results": [result]}}]
+    replay = project_tool_activity_messages({"nodes": nodes}, "run")[0]["trace"][0]
+    assert saved == replay["presentation"] == {
+        "kind": "schedule_created", "task_id": "abc123", "prompt": "交周报",
+        "schedule_type": "once", "next_run": "2026-11-20T07:00:00Z",
+    }
+    assert not tool_completed_payload({**result, "success": False}, value, "failed")["presentation"]
+    task["project_id"] = "ordinary-project"
+    assert not tool_completed_payload(result, value, "completed")["presentation"]

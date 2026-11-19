@@ -450,6 +450,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
   html, body {{ width: 100%; height: 100%; overflow: hidden; background: #404040; }}
   #pdfContainer {{ position: relative; width: 100%; height: 100%; overflow: auto; }}
   #pdfContainer .pdfViewer .page {{
+    box-sizing: content-box; /* PDF.js sizes the drawable area before its page border. */
     margin: 8px auto; border-radius: 2px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     background: #fff;
   }}
@@ -531,7 +532,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
 
   var container = document.getElementById('viewerContainer');
   var pdfBridge = window.CyreneUI.require('pdf');
-  var result = pdfBridge.setupViewer(container);
+  var result = pdfBridge.setupViewer(container, updateZoomLabel);
   var viewer = result.viewer;
   var eventBus = result.eventBus;
 
@@ -650,15 +651,13 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
     if (e.key === '-' && (e.ctrlKey || e.metaKey)) {{ e.preventDefault(); document.getElementById('zoomOut').click(); }}
   }});
 
-  // Copy the original PDF text rather than browser-measured text-layer content.
   var selectionSanitizer = pdfBridge.installSelectionSanitizer(container, viewer, eventBus);
-  var copyFix = pdfBridge.installCopyFix(container, viewer);
 
   window.addEventListener('beforeunload', function() {{
     if (selectionTimeout) clearTimeout(selectionTimeout);
     abortLoader.abort();
     selectionSanitizer.abort();
-    copyFix.abort();
+    result.disconnect();
     eventBus.off('pagechanging', onPageChanging);
     try {{ viewer.setDocument(null); }} catch (error) {{}}
     if (currentDoc) {{

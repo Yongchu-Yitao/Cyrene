@@ -1,6 +1,6 @@
 import { projectInlineCards } from "./assistant-card-model.mjs";
 // Presentation only: keep the original transcript and Agent provenance intact.
-export function presentConversationMessages(messages) {
+export function presentConversationMessages(messages, chatId) {
   const shownViews = new Set();
   return projectInlineCards(messages.flatMap(message => {
     if (message.role !== "user") return [message];
@@ -10,7 +10,7 @@ export function presentConversationMessages(messages) {
     const taskHeader = /^\[Task input\]\r?\nThis message and its files are execution inputs, not a direct human upload or additional human authorization\.\r?\n\r?\n/;
     const body = content.replace(taskHeader, "");
     return [body === content ? message : { ...message, content: body, assistantTaskMessage: true }];
-  })).flatMap(message => {
+  }), chatId).flatMap(message => {
     const items = [message];
     for (const entry of message.runtimeActivity?.progress || message.trace || []) {
       const view = entry.presentation;

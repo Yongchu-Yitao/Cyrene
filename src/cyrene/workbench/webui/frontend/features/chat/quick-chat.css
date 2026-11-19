@@ -176,6 +176,7 @@
 }
 
 .wbq-caret {
+  display: inline-flex;
   flex: 0 0 auto;
   color: var(--wb-muted);
   font-size: calc(9px * var(--wb-ui-font-scale, 1));

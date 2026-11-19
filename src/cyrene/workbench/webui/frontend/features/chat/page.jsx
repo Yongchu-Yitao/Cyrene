@@ -1,5 +1,5 @@
 import { paneMenuContributions } from "./pane-menu-contributions.jsx"
-import { PinnedAssistantCard } from "./pinned-assistant-cards.jsx"
+import { PinnedAssistantCard, unpinConversationCards, usePinnedAssistantCards } from "./pinned-assistant-cards.jsx"
 import { restoreConversationPaneLayout } from "./pane-layout-transforms.jsx"
 import { acceptsAssistantScope } from "./assistant-scope.mjs"
 import { graphActivationListener } from "./context-graph-activation.jsx";
@@ -65,7 +65,7 @@ function wbcCompleteBrowserTakeover(activeChat, payload, handleAnswer) {
   return Promise.resolve();
 }
 
-function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, project, modelOverride, railOverride, isolated, requestedChatId, requestedChatRevision, protectedChatId, renderConversation, hideConversationPanel, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
+function WorkbenchChatPage({ active, project, modelOverride, railOverride, isolated, requestedChatId, requestedChatRevision, protectedChatId, renderConversation, hideConversationPanel, workspaceContent, onActivateWorkspace, newChatRequestId, pinnedSessions, onActiveChatChange, onActiveChatIdChange, onChatsChange, onWorkspaceTabsChange, workspaceTabRequest, onWorkspaceTabRequestHandled, navCollapsed, onToggleNavCollapsed, collapseControl, moduleDock }) {
   workbenchServices.i18n().use();
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
@@ -107,6 +107,8 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
   var beginChatListRequest = requestSequencer.beginList;
   var isCurrentChatListRequest = requestSequencer.isCurrentList;
   var [activeChatId, setActiveChatId] = useWbcState("");
+  var pinnedPlacement = usePinnedAssistantCards(isActive, activeChatId);
+  var { cards: pinnedCards, error: pinnedCardsError } = pinnedPlacement;
   var activeChatIdRef = useWbcRef("");
   // Project-owned panes (for example Remote Desktop) are a workspace mode,
   // not a synthetic conversation. Keep that intent across background chat
@@ -532,6 +534,18 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
   // close action can restore the exact previous layout.
   var [floatingConversationPanelOpen, setFloatingConversationPanelOpen] = useWbcState(false);
 
+  // Respond to newly pinned IDs, including pins made by the agent or restored on load.
+  // A background refresh should leave a manually reopened panel alone.
+  var previousPins = useWbcRef(new Set());
+  useWbcEffect(function syncPinnedCardLayout() {
+    var current = new Set(pinnedCards.map(function pinnedCardId(card) { return card.card_id; }));
+    if (pinnedCards.some(function newlyPinnedCard(card) { return !previousPins.current.has(card.card_id); })) {
+      setSideVisible(false);
+      setFloatingConversationPanelOpen(false);
+    }
+    previousPins.current = current;
+  }, [activeChatId, pinnedCards]);
+
   useWbcEffect(function () {
     function openGoalTab(event) {
       var requestedChatId = String(event && event.detail && event.detail.chatId || "");
@@ -607,9 +621,9 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
 
   useWbcEffect(function () {
     window.dispatchEvent(new CustomEvent("workbench:chat-side-visibility", {
-      detail: { active: isActive, hidden: isActive && !sideVisible },
+      detail: { active: isActive, hidden: isActive && !sideVisible, hasPinnedCards: pinnedCards.length > 0 },
     }));
-  }, [isActive, sideVisible]);
+  }, [isActive, sideVisible, pinnedCards.length]);
   var remoteChatRefreshTimerRef = useWbcRef(null);
   var remoteChangedChatIdsRef = useWbcRef(new Set());
   var [compactBusy, setCompactBusy] = useWbcState(false);
@@ -2234,7 +2248,10 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
       sessionId: String(card.payload || activeChatId || requestedChatId),
       chatCache: chatCache,
       gripActions: gripActions,
-      onOpenFile: function (file) { openPaneContent("file", file, { sourceCardId: card.id }); },
+      onOpenFile: function (file, side) {
+        if (side === "right") return openContentFromPaneCard(card, "file", file);
+        openPaneContent("file", file, { sourceCardId: card.id });
+      },
     });
     return (
       <WbcMain
@@ -2259,7 +2276,10 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
         onConversationContextMenu={openPageContextMenu}
         onRename={handleRename}
         onDelete={handleDelete}
-        onOpenFile={function (file) { openPaneContent("file", file, { sourceCardId: card.id }); }}
+        onOpenFile={function (file, side) {
+          if (side === "right") return openContentFromPaneCard(card, "file", file);
+          openPaneContent("file", file, { sourceCardId: card.id });
+        }}
         onOpenDroppedChat={function (chatId) {
           if ((chatsRef.current || []).some(function (item) {
             return String(item && item.id || "") === String(chatId || "");
@@ -2306,7 +2326,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
   }
 
   function canClosePaneColumn(side) {
-    return paneLayout[side].every(canClosePaneCard);
+    return (!pinnedCards.length || side === "right") && paneLayout[side].every(canClosePaneCard);
   }
 
   function closePaneCardWithConfirmation(card, ownerChatId) {
@@ -2314,10 +2334,18 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
     return wbcClosePaneCardsWithConfirmation({ projectId, surfaceSuppressionRef, closePaneCard, canClosePaneCard }, [card], owner);
   }
 
-  function closePaneColumn(side) {
-    return wbcClosePaneCardsWithConfirmation(
-      { projectId, surfaceSuppressionRef, closePaneCard, canClosePaneCard }, paneLayout[side], String(activeChatIdRef.current || "")
-    );
+  async function closePaneColumn(side) {
+    if (!canClosePaneColumn(side)) return { closed: false };
+    var owner = String(activeChatId || "");
+    var unpin = side === "right" && pinnedCards.length ? () => unpinConversationCards(owner, pinnedPlacement) : null;
+    try {
+      return await wbcClosePaneCardsWithConfirmation(
+        { projectId, surfaceSuppressionRef, closePaneCard, canClosePaneCard }, paneLayout[side], owner, unpin
+      );
+    } catch (err) {
+      workbenchServices.feedback().showToast("关闭卡片栏失败，请重试。" + wbcErrorText(err), "error");
+      return { closed: false };
+    }
   }
 
   useWbcEffect(function () {
@@ -2698,9 +2726,11 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
 
   function renderPaneColumn(side, cards) {
     if (side === "right" && pinnedCards.length) return <section key={side} className="wbc-pane-column right wbc-pinned-card-column" aria-label="已固定卡片">
-      {cards.map(function (card, index) { return <div className="wbc-pinned-ordinary-pane" key={card.id}>{renderPaneCard(card, side, cards.length, side + ":" + index)}</div>; })}
-      {pinnedCardsError && <p role="status" className="wbc-card-error">{pinnedCardsError}</p>}
-      {pinnedCards.map(card => <PinnedAssistantCard key={card.card_id} card={card} />)}
+      <div className="wbc-pinned-card-scroll">
+        {cards.map(function (card, index) { return <div className="wbc-pinned-ordinary-pane" key={card.id}>{renderPaneCard(card, side, cards.length, side + ":" + index)}</div>; })}
+        {pinnedCardsError && <p role="status" className="wbc-card-error">{pinnedCardsError}</p>}
+        {pinnedCards.map(card => <PinnedAssistantCard chatId={activeChatId} key={card.card_id} card={card} />)}
+      </div>
     </section>;
     if (!cards.length) return null;
     var ratio = side === "left" ? paneLayout.leftRatio : paneLayout.rightRatio;
@@ -2980,7 +3010,7 @@ function WorkbenchChatPage({ pinnedCards = [], pinnedCardsError = "", active, pr
           : <React.Fragment>
               {renderPaneColumn("left", paneLayout.left)}
               {renderPaneColumn("right", paneLayout.right)}
-              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} canClose={canClosePaneColumn} onResize={resizePaneColumn} onClose={pinnedCards.length ? null : closePaneColumn} /> : null}
+              {paneHasTwoColumns ? <WbcPaneColumnResizer active={isActive} width={paneColumnWidth} canClose={canClosePaneColumn} onResize={resizePaneColumn} onClose={closePaneColumn} /> : null}
             </React.Fragment>}
       </div>
       <WbcChatPageContextMenu

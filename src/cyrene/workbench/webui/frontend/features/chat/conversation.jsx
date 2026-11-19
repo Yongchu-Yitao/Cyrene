@@ -1,3 +1,4 @@
+import { legacyCardReply } from "./markdown-card-references.mjs"
 import { WbcInlinePluginView } from "./inline-plugin-view.jsx"
 import { useNativeWheelElement } from "../../shared/native-wheel.jsx"
 import { wbcProjectRuntimeTranscript, wbcProjectTranscript } from "./runtime-timeline.jsx"
@@ -1438,6 +1439,7 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
   var runtimeTimeline = useWbcMemo(function () {
     return wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime, { showReasoningPlaceholder }));
   }, [runtimeSegments, runtimeActivities, runtimeNotifications, runtimeStartedAt, runtimeFinalizing, runtimeHasReplyText, runtime?.chatId, runtime?.pendingQuestion, runtime?.reconnecting, showReasoningPlaceholder]);
+  const cardReplyText = !runtime?.timeline && runtime?.text?.includes("::card[") ? runtime.text : "";
   var retryClearingKey = Array.isArray(retryClearingMessageIds) ? retryClearingMessageIds.map(String).join("\u0000") : "";
   var retryClearingIds = useWbcMemo(function () {
     return new Set(retryClearingKey ? retryClearingKey.split("\u0000") : []);
@@ -1446,8 +1448,9 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
     var transcript = runtime && runtime.timeline
       ? wbcProjectTranscript(chatMessages, runtime)
       : wbcProjectRuntimeTranscript(durableMessages, runtimeTimeline);
-    return presentConversationMessages(transcript);
-  }, [durableMessages, runtimeTimeline, runtime && runtime.timeline, runtime && runtime.pendingQuestion, runtime && runtime.reconnecting]);
+    if (cardReplyText) transcript = [...transcript, legacyCardReply(runtime)];
+    return presentConversationMessages(transcript, chat?.id);
+  }, [durableMessages, runtimeTimeline, cardReplyText, chat?.id, runtime?.streamDone, runtime && runtime.timeline, runtime && runtime.pendingQuestion, runtime && runtime.reconnecting]);
   var activityTraceKeys = useWbcMemo(function () {
     var keys = new Set();
     messages.forEach(function (message) {
@@ -1749,7 +1752,7 @@ function useWbcFloatingBrowserAlignment(mainRef, active, revision) {
 }
 
 function wbcRenderConversationTimeline(renderedHistory, runtime, onOpenFile, chatId) {
-  if (runtime && runtime.timeline) return renderedHistory;
+  if (runtime && (runtime.timeline || runtime.text?.includes("::card["))) return renderedHistory;
   if (!runtime || (!runtime.text && !(runtime.artifacts && runtime.artifacts.length))) {
     return renderedHistory;
   }

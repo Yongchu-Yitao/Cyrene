@@ -9,6 +9,7 @@ from cyrene.core.hook import (
 )
 from cyrene.core.plugin import PluginSetupContext
 
+from .card_prompt import CARD_PROMPT
 from .system_prompt import SYSTEM_PROMPT
 from .assistant_prompt import ASSISTANT_SYSTEM_PROMPT
 from .home_prompt import HOME_SYSTEM_PROMPT
@@ -28,6 +29,8 @@ def setup_system_prompt(context: PluginSetupContext) -> None:
             if context.data.get("personal_assistant") is True
             else SYSTEM_PROMPT
         )
+        if selected == SYSTEM_PROMPT and context.data.get("session_id") and context.services.get("cards"):
+            selected += "\n\n" + CARD_PROMPT
         prompt = str(selected or "")
         return prompt.replace("{workspace}", str(context.workspace)).strip()
 

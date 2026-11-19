@@ -41,12 +41,13 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
       setLoading(false);
     }, 60000);
 
-    var result = pdf.setupViewer(container);
+    var result = pdf.setupViewer(container, function (fittedScale) {
+      fitScaleRef.current = fittedScale;
+      setScale(fittedScale);
+    });
     var viewer = result.viewer;
     var eventBus = result.eventBus;
     var loadedDocument = null;
-    var fitFrame = 0;
-    var lastFitWidth = 0;
     viewerRef.current = viewer;
     var gestureSurface = gestureRef.current;
     if (gestureSurface) {
@@ -61,34 +62,7 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
     }
     eventBus.on('pagechanging', onPageChanging);
 
-    // Handle resize (e.g. sidebar panel resize)
-    function fitViewerWidth(force) {
-      var measuredWidth = container.getBoundingClientRect().width;
-      if (!force && lastFitWidth && Math.abs(measuredWidth - lastFitWidth) < 1) {
-        viewer.update();
-        return;
-      }
-      lastFitWidth = measuredWidth;
-      window.cancelAnimationFrame(fitFrame);
-      fitFrame = window.requestAnimationFrame(function () {
-        if (cancelled || document.body.classList.contains("wbc-resizing-side-agent")) return;
-        viewer.currentScaleValue = 'page-width';
-        viewer.update();
-        fitScaleRef.current = viewer.currentScale;
-        setScale(viewer.currentScale);
-      });
-    }
-    function onPagesInit() { fitViewerWidth(true); }
-    function onContainerResize() { fitViewerWidth(false); }
-    function onSplitResizeEnd() { fitViewerWidth(true); }
-    eventBus.on('pagesinit', onPagesInit);
-    var resizeObserver = new ResizeObserver(onContainerResize);
-    resizeObserver.observe(container);
-    window.addEventListener("workbench:split-resize-end", onSplitResizeEnd);
-
-    // Copy the original PDF text rather than browser-measured text-layer content.
     var selectionSanitizer = pdf.installSelectionSanitizer(container, viewer, eventBus);
-    var copyFix = pdf.installCopyFix(container, viewer);
 
     // Fetch and load PDF document
     pdf.loadPdf(url, viewer, abortLoader.signal).then(function (doc) {
@@ -101,7 +75,6 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
       setPageCount(doc.numPages);
       setPageNum(1);
       setLoading(false);
-      fitViewerWidth(true);
       if (onViewed) onViewed();
     }).catch(function (err) {
       if (!cancelled) {
@@ -114,20 +87,16 @@ function WbcPdfJsViewer({ file, url, onViewed }) {
 
     return function () {
       cancelled = true;
-      window.cancelAnimationFrame(fitFrame);
       clearTimeout(timer);
       abortLoader.abort();
       selectionSanitizer.abort();
-      copyFix.abort();
-      resizeObserver.disconnect();
+      result.disconnect();
       if (gestureSurface) {
         gestureSurface.removeEventListener("wheel", handlePdfWheel);
         gestureSurface.removeEventListener("touchstart", handlePdfTouchStart);
         gestureSurface.removeEventListener("touchmove", handlePdfTouchMove);
       }
-      window.removeEventListener("workbench:split-resize-end", onSplitResizeEnd);
       eventBus.off('pagechanging', onPageChanging);
-      eventBus.off('pagesinit', onPagesInit);
       if (viewerRef.current) {
         try { viewerRef.current.setDocument(null); } catch (e) {}
       }

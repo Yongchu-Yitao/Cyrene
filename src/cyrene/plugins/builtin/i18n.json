@@ -484,11 +484,11 @@
     "cyrene_cards": {
       "en": {
         "name": "Cards",
-        "description": "Assistant-only card templates, user inputs and persistent pinning."
+        "description": "Conversation card templates, user inputs and persistent pinning."
       },
       "zh": {
         "name": "卡片",
-        "description": "助理专用的卡片模板、用户输入和持久固定。"
+        "description": "会话中的卡片模板、用户输入和持久固定。"
       }
     }
   },
@@ -3036,11 +3036,11 @@
     "schedule.list": {
       "en": {
         "name": "List schedules",
-        "description": "List scheduled tasks in the current project or global personal-assistant scope."
+        "description": "List scheduled tasks. For a day or date range, pass start and end as inclusive ISO timestamps with timezone offsets to list occurrences."
       },
       "zh": {
         "name": "列出定时任务",
-        "description": "列出当前项目或全局个人助理范围内的定时任务。"
+        "description": "列出定时任务。查询某天或某段时间的安排时，用带时区的 ISO 时间 start 和 end 指定起止范围（含边界）。"
       }
     },
     "schedule.occurrences": {
@@ -3406,11 +3406,11 @@
     "card.create": {
       "en": {
         "name": "Create card",
-        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with either html or html_path, never both, and may include native blocks around it. For an existing HTML file, pass html_path directly; the host reads and saves a snapshot, with no HTML character or card byte limit. Omitted block type defaults to embed; native blocks must specify type. Place input_schema and actions inside spec, never at the tool argument root. Action fields and data-card-field bindings must name properties in spec.input_schema. Generate the requested card directly from this contract; do not create disposable probe cards. Successful creation emits an inline conversation card. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared input_schema and actions are required for iframe interactions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
+        "description": "Create a persistent card using content, collection, data, input, map or custom as a starting point. Only the personal assistant can use welcome cards. Welcome cards use spec.home_kind overview/resume/results with native content/collection templates. Weather block holds verified weather and provenance; action_list has collapsible rows with action_ids referencing spec.actions. Counts derive from rows. Per-action target_context_id/task_id identifies the original task to continue. Never invent weather, completion, files or approvals. All native templates can freely mix text, metrics, fields, lists, tables, forms, timelines, files, charts and maps. Choose block titles/order, stack or grid layout, actions and density; optionally pin atomically. Custom requires exactly one embed block with either html or html_path, never both, and may include native blocks around it. For an existing HTML file, pass html_path directly; the host reads and saves a snapshot, with no HTML character or card byte limit. Omitted block type defaults to embed; native blocks must specify type. Place input_schema and actions inside spec, never at the tool argument root. Action fields and data-card-field bindings must name properties in spec.input_schema. Generate the requested card directly from this contract; do not create disposable probe cards. After success place ::card[returned_card_id] alone on a line, or include that ID once in a Book or Stack group. For adjustable results use a custom embed with data-card-field controls and cyreneCard.watch(render). Read controls in render and recompute every dependent output. The bridge redraws on input and restore and autosaves bound inputs; static metrics do not recalculate. Leave actions empty unless an explicit assistant follow-up is needed. Use pinned=true when the user requests persistent visibility in the scrollable right-hand card panel; otherwise default to false. Custom HTML runs in an isolated iframe without network access. Use window.cyreneCard.change(values), window.cyreneCard.submit(action_id, values), or window.cyreneCard.confirm(action_id, values) to send inputs. Bind every iframe input/select/textarea using data-card-field='field_id' matching input_schema; the host restores saved values after reload. Custom widgets must handle cyrene-card-state event.detail.values. Declared fields persist as task inputs. Undeclared change keys are device-local display preferences; submissions require declared fields and actions. Selection fields must accept the exact row_id/place_id values, not display labels. Defaults are not user choices. For map category colors, declare groups (group_id, label) and assign group_id to places/routes; the UI assigns colors and shows a legend. Without groups all places share one color. Routes are straight relationship connectors, never road geometry or navigation tracks."
       },
       "zh": {
         "name": "创建卡片",
-        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后直接显示在对话中；默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。区块省略 type 时默认为 embed，必须且只能提供 html 或 html_path 之一；原生区块必须显式填写 type。可直接提供已有 UTF-8 HTML 文件的路径，卡片会保存读取时的页面快照。HTML 字符数和卡片内容总大小不设上限。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。交互必须声明 input_schema 和 actions。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。 输入定义和操作必须放在卡片规格内，字段绑定须对应已声明的输入字段；直接创建所需卡片，不创建试探用的临时卡片。"
+        "description": "以内容、集合、数据、交互、地图或自定义模板创建持久卡片。原生模板可自由组合文字、指标、字段、清单、表格、表单、时间线、文件、图表和地图，并设置标题、顺序、布局、操作及密度。创建成功后，在回复相应段落独占一行写 ::card[实际返回的卡片ID]。可调结果使用自定义嵌入，通过 data-card-field 绑定控件，在 cyreneCard.watch(render) 的 render 中读取控件并更新所有相关结果。输入和恢复草稿时自动重绘，有效输入自动保存。仅需试算时 actions 留空，只有需要助理继续处理时才提供操作。默认 pinned=false；用户需要持续关注时可设置 pinned=true，同一张卡片会显示在右侧可滚动的固定区。自定义卡片必须包含且仅包含一个 embed HTML 区块，可搭配原生区块。区块省略 type 时默认为 embed，必须且只能提供 html 或 html_path 之一；原生区块必须显式填写 type。可直接提供已有 UTF-8 HTML 文件的路径，卡片会保存读取时的页面快照。HTML 字符数和卡片内容总大小不设上限。HTML 在无网络访问的隔离 iframe 中运行，通过 window.cyreneCard.change(values)、submit(action_id, values) 或 confirm(action_id, values) 传递输入。每个输入控件使用 data-card-field 绑定 input_schema 中的字段以支持刷新恢复；自定义控件需处理 cyrene-card-state 事件的 detail.values。已声明的字段保存为任务输入；change 中未声明的字段保存为本设备的显示偏好。提交须声明输入字段和操作。选择字段必须接受准确的 row_id/place_id，不能使用显示名称。默认值不代表用户选择。 地图按类别配色时，声明 groups（group_id、label）并为地点和连线指定 group_id，界面统一分配颜色并显示图例。未分组时地点使用统一颜色。连线仅表示地点关系，不是道路路线或真实轨迹。 输入定义和操作必须放在卡片规格内，字段绑定须对应已声明的输入字段；直接创建所需卡片，不创建试探用的临时卡片。"
       }
     },
     "card.update": {
@@ -3440,7 +3440,7 @@
       },
       "zh": {
         "name": "列出卡片",
-        "description": "列出当前任务的卡片或此助理已固定的卡片，返回摘要；完整内容和用户输入请使用 card.get 读取。"
+        "description": "列出当前任务的卡片或当前会话已固定的卡片，返回摘要；完整内容和用户输入请使用 card.get 读取。"
       }
     },
     "card.pin": {

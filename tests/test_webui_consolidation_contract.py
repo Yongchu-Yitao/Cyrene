@@ -241,7 +241,8 @@ def test_ui_background_and_pdf_resources_have_explicit_cleanup_paths():
         assert "abortLoader.abort()" in source
         assert "loadedDocument.destroy()" in source
         assert "selectionSanitizer.abort()" in source
-        assert "copyFix.abort()" in source
+        assert "result.disconnect()" in source
+    assert "result.disconnect()" in standalone_pdf
     assert "pdfBridge.loadPdf(pdfUrl, viewer, abortLoader.signal)" in standalone_pdf
     assert "window.addEventListener('beforeunload'" in standalone_pdf
     assert "currentDoc.destroy()" in standalone_pdf

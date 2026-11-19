@@ -10,6 +10,7 @@ from typing import Any
 
 from cyrene.core.plugin import Plugin, PluginContext, PluginExecutionError, PluginFailure
 from cyrene.plugins.native_runtime import plugin_language, plugin_localized
+from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID
 
 from .schedule_spec import next_run, occurrence_window, task_events
 
@@ -130,14 +131,31 @@ async def create_schedule(
     }
 
 
+def _agenda(scope, rows, start=None, end=None):
+    if scope.project_id != ASSISTANT_SCOPE_ID or scope.source == "workbench":
+        return {}
+    return {"presentation": {"kind": "schedule_agenda", "rows": rows, "start": start, "end": end}}
+
+
+def _change_card(scope, task, change, *, prompt=None, next_run=None):
+    if scope.project_id != ASSISTANT_SCOPE_ID or scope.source == "workbench" or task is None:
+        return {}
+    return {"presentation": {"kind": "schedule_change", "change": change, "prompt": prompt or task.prompt,
+                             "previous": task.next_run, "next_run": next_run}}
+
+
 async def list_schedules(
-    _arguments: dict[str, Any], context: PluginContext
+    arguments: dict[str, Any], context: PluginContext
 ) -> dict[str, Any]:
+    if arguments.get("start") or arguments.get("end"):
+        return await list_occurrences(arguments, context)
     service, scope = await _ready(context)
     tasks = [
         _task_payload(task) for task in await service.repository.list(scope.project_id)
     ]
-    return {"ok": True, "count": len(tasks), "tasks": tasks}
+    rows = [{"title": task["prompt"], "at": task["next_run"]} for task in tasks
+            if task["status"] == "active" and task["next_run"]]
+    return {"ok": True, "count": len(tasks), "tasks": tasks, **_agenda(scope, sorted(rows, key=lambda row: row["at"]))}
 
 
 async def list_occurrences(
@@ -162,6 +180,8 @@ async def list_occurrences(
     return {
         "ok": True,
         "events": events,
+        **_agenda(scope, [{"title": event["title"], "at": event["start"]} for event in events
+                          if event["status"] == "active"], start_at.isoformat(), end_at.isoformat()),
         "start": start_at.isoformat(),
         "end": end_at.isoformat(),
     }
@@ -238,7 +258,15 @@ async def edit_schedule(
     if not changed:
         raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
     updated = await service.repository.get(task_id, scope.project_id)
-    return {"ok": True, "task": _task_payload(updated), "changed": sorted(updates)}
+    change = "edited"
+    if updates.get("status") == "paused":
+        change = "paused"
+    elif updates.get("status") == "active" and task.status != "active":
+        change = "resumed"
+    elif schedule_changed and task.next_run != updated.next_run:
+        change = "rescheduled"
+    return {"ok": True, "task": _task_payload(updated), "changed": sorted(updates),
+            **_change_card(scope, task, change, prompt=updated.prompt, next_run=updated.next_run)}
 
 
 async def pause_schedule(
@@ -246,12 +274,13 @@ async def pause_schedule(
 ) -> dict[str, Any]:
     service, scope = await _ready(context)
     task_id = _task_id(arguments, context)
+    task = await service.repository.get(task_id, scope.project_id)
     await service.cancel_active(task_id, "schedule paused")
     if not await service.repository.update_status(
         task_id, "paused", project_id=scope.project_id
     ):
         raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
-    return {"ok": True, "id": task_id, "status": "paused"}
+    return {"ok": True, "id": task_id, "status": "paused", **_change_card(scope, task, "paused")}
 
 
 async def resume_schedule(
@@ -275,7 +304,8 @@ async def resume_schedule(
         next_run=fire_at,
     ):
         raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
-    return {"ok": True, "id": task_id, "status": "active", "next_run": fire_at}
+    return {"ok": True, "id": task_id, "status": "active", "next_run": fire_at,
+            **_change_card(scope, task, "resumed", next_run=fire_at)}
 
 
 async def cancel_schedule(
@@ -283,10 +313,11 @@ async def cancel_schedule(
 ) -> dict[str, Any]:
     service, scope = await _ready(context)
     task_id = _task_id(arguments, context)
+    task = await service.repository.get(task_id, scope.project_id)
     await service.cancel_active(task_id, "schedule cancelled")
     if not await service.repository.delete(task_id, scope.project_id):
         raise LookupError(plugin_localized(context, "Scheduled task not found: {task_id}", "未找到定时任务：{task_id}", task_id=task_id))
-    return {"ok": True, "id": task_id, "cancelled": True}
+    return {"ok": True, "id": task_id, "cancelled": True, **_change_card(scope, task, "cancelled")}
 
 
 async def list_runs(
@@ -432,7 +463,7 @@ TOOL_I18N = {
     "schedule.list": (
         "List schedules",
         "列出定时任务",
-        "列出当前项目或个人助理全局范围的定时任务。",
+        "列出定时任务。查询某天或某段时间的安排时，用带时区的 ISO 时间 start 和 end 指定起止范围（含边界）。",
     ),
     "schedule.occurrences": (
         "Schedule occurrences",
@@ -519,8 +550,8 @@ plugins = (
     ),
     _plugin(
         "schedule.list",
-        "List scheduled tasks in the current project or global personal-assistant scope.",
-        _schema({}),
+        "List scheduled tasks. For a day or date range, pass start and end as inclusive ISO timestamps with timezone offsets to list occurrences.",
+        _schema({"start": {"type": "string"}, "end": {"type": "string"}}),
         list_schedules,
         allow_parallel=True,
     ),

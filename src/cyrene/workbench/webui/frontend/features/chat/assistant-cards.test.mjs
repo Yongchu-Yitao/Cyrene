@@ -29,10 +29,11 @@ test('successful updates move the same card to the latest revision in live and s
   const originalCard = projectInlineCards([created])[1];
   for (const activity of [{ trace: [update] }, { runtimeActivity: { progress: [update] } }]) {
     const messages = presentConversationMessages([...initial, { ...updated, ...activity }, replay]);
-    assert.deepEqual(messages.map(message => message.id), ['create', 'inline:' + otherId, 'request', 'update', originalCard.id, 'replay']);
-    assert.deepEqual(messages[4].assistantCard, { card_id: cardId, revision: 2 });
-    assert.equal(messages[4].runId, updated.runId);
-    assert.equal(messages[4].createdAt, updated.createdAt);
+    assert.deepEqual(messages.map(message => message.id), ['create', originalCard.id + ':1', 'inline:' + otherId, 'request', 'update', originalCard.id, 'replay']);
+    assert.equal(messages[1].assistantCard.snapshot, true);
+    assert.deepEqual(messages[5].assistantCard, { card_id: cardId, revision: 2 });
+    assert.equal(messages[5].runId, updated.runId);
+    assert.equal(messages[5].createdAt, updated.createdAt);
   }
   const sameActivity = projectInlineCards([{ trace: [entry, other, update] }]);
   assert.deepEqual(sameActivity.slice(1).map(message => message.id), ['inline:' + otherId, originalCard.id]);
@@ -105,7 +106,7 @@ test('serialized iframe bridge restores values without overwriting ongoing edits
   const control = { value: '10', type: 'number', getAttribute: () => null };
   const parent = { postMessage: () => assert.fail('hydration must not submit') };
   const listeners = {};
-  const context = { parent, window: {}, document: { querySelectorAll: () => [control] },
+  const context = { parent, window: {}, document: { querySelectorAll: () => [control], dispatchEvent: event => assert.equal(event.bubbles, true) },
     addEventListener: (name, fn) => { listeners[name] = fn; }, dispatchEvent: () => {},
     CustomEvent: class { constructor(name, options) { Object.assign(this, options); } } };
   const script = customCardDocument('', ['minutes']).match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -116,6 +117,27 @@ test('serialized iframe bridge restores values without overwriting ongoing edits
   restore({minutes: 62}); assert.equal(control.value, '62');
   listeners.message({ source: {}, data: { channel: 'cyrene-card-state', values: {minutes: 99} } });
   assert.equal(control.value, '62');
+});
+
+test('watched fields redraw on each edit and restore, emitting only typed draft changes', async () => {
+  const vm = await import('node:vm');
+  const control = { type: 'number', value: '3', getAttribute: () => 'quantity', matches: () => true };
+  const sent = [], listeners = {};
+  const parent = { postMessage: message => sent.push(JSON.parse(JSON.stringify(message))) };
+  const context = { parent, window: {}, document: { querySelectorAll: () => [control], dispatchEvent() {} },
+    addEventListener: (name, fn) => { listeners[name] = fn; }, CustomEvent: class {} };
+  const script = customCardDocument('', { quantity: { type: 'integer' } }).match(/<script>([\s\S]*?)<\/script>/)[1];
+  vm.runInNewContext(script, context);
+  let output;
+  context.window.cyreneCard.watch(() => { output = Number(control.value) * 7; });
+  assert.equal(output, 21);
+  control.value = '5';
+  listeners.input({ target: control, isTrusted: true });
+  assert.equal(output, 35);
+  assert.deepEqual(sent, [{ channel: 'cyrene-card', kind: 'change', values: { quantity: 5 } }]);
+  listeners.message({ source: parent, data: { channel: 'cyrene-card-state', values: { quantity: 8 } } });
+  assert.equal(output, 56);
+  assert.equal(sent.length, 1);
 });
 
 test('card submissions show readable fields while retaining the immutable agent payload', () => {
@@ -225,5 +247,124 @@ test('overview only renders controls and panels for lists with items', async () 
       assert.deepEqual(Array.from(html.matchAll(/<button>(.*?)<\/button>/g), m => m[1]), visibleTitles.map(title => title + ' 1'));
       assert.deepEqual(Array.from(html.matchAll(/<section>(.*?)<\/section>/g), m => m[1]), visibleTitles);
     }
+  }
+});
+
+test('schedule receipts render once outside tool activity with the saved prompt and local time', async () => {
+  const React = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { harness } = await import('./hook-harness.test.mjs');
+  const { context } = harness('./assistant-cards.jsx', {
+    ...React, WBC_ICONS: { calendar: null }, useWorkbenchI18n: () => ({ lang: 'zh', t: key => key }),
+  });
+  const presentation = { kind: 'schedule_created', task_id: '123', schedule_type: 'once',
+    prompt: '交周报', next_run: '2026-11-20T07:00:00Z' };
+  const entry = { status: 'completed', presentation };
+  const rows = presentConversationMessages([{ runtimeActivity: { progress: [entry] } }, { trace: [entry] }]);
+  const receipts = rows.filter(row => row.assistantCard);
+  assert.equal(receipts.length, 1);
+  const html = renderToStaticMarkup(React.createElement(context.module.exports.WbcInlineCard, {card: receipts[0].assistantCard}));
+  assert.match(html, /交周报/);
+  assert.match(html, /schedule.receipt.once/);
+  assert.ok(html.includes(new Date(presentation.next_run).toLocaleTimeString('zh', {hour:'2-digit', minute:'2-digit', hourCycle:'h23'})));
+  assert.doesNotMatch(html, /<button/);
+  for (const change of [{failed:true}, {status:'running'}, {presentation:{...presentation, next_run:'invalid'}}]) {
+    assert.deepEqual(cardReferences({trace:[{...entry, ...change}]}), []);
+  }
+});
+
+test('operation cards survive replay and a source click targets its original attachment on the right', async () => {
+  const React = await import('react');
+  const { harness } = await import('./hook-harness.test.mjs');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { context } = harness('./tool-result-cards.jsx', { ...React, WBC_ICONS: {},
+    useWorkbenchI18n: () => ({lang:'zh', t:key => key}) });
+  const { ScheduleChange, ScheduleAgenda, KnowledgeSource } = context.module.exports;
+  const source = {workspace:'project A', item_id:'paper1', attachment_id:'file2', document_name:'协作手册.md', excerpt:'每周五交周报'};
+  const change = {kind:'schedule_change', prompt:'交周报', change:'rescheduled', previous:'2099-01-01T07:00:00Z', next_run:'2099-01-01T08:30:00Z'};
+  const agenda = {kind:'schedule_agenda', rows:[{at:change.next_run,title:change.prompt}]};
+  const trace = [change, agenda, {kind:'knowledge_sources', sources:[source]}].map((presentation, i) => ({
+    presentation, toolCallId:'tool-'+i, status:'completed',
+  }));
+  const cards = presentConversationMessages([{runtimeActivity:{progress:trace}}, {trace}]).filter(m => m.assistantCard);
+  assert.equal(cards.length,3);
+  assert.match(renderToStaticMarkup(React.createElement(ScheduleChange,{change:cards[0].assistantCard.change})), /<del>/);
+  assert.match(renderToStaticMarkup(React.createElement(ScheduleAgenda,{agenda:cards[1].assistantCard.agenda})), /交周报/);
+  let opened;
+  const button = KnowledgeSource({source:cards[2].assistantCard.source, onOpenFile:(file,side) => {opened={file,side};}});
+  assert.equal(button.type,'button');
+  button.props.onClick();
+  assert.equal(opened.side,'right');
+  assert.equal(opened.file.name,source.document_name);
+  assert.equal(opened.file.url,'/api/workbench/library/items/paper1/attachments/file2/raw?workspace=project%20A');
+});
+
+test('Markdown places one current card between paragraphs across live activity and replay', () => {
+  const marker = '::card[' + cardId + ']';
+  const reply = { role: 'assistant', content: '之前\n' + marker + '\n之后\n' + marker };
+  for (const activity of [{ trace: [entry, update] }, { runtimeActivity: { progress: [entry, update] } }]) {
+    const result = presentConversationMessages([activity, reply, reply], 'assistant_global');
+    assert.deepEqual(result[1].markdownParts, [{ text: '之前\n' }, { card_id: cardId, revision: 2 }, { text: '之后\n' }]);
+    assert.equal(result.some(m => m.assistantCard), false);
+    assert.equal(result[2].markdownParts.some(p => p.card_id), false);
+  }
+  for (const content of ['```md\n' + marker + '\n```', '> ' + marker, '    ' + marker, '示例 ' + marker]) {
+    assert.equal(projectInlineCards([{ role: 'assistant', content }], 'assistant_global')[0].markdownParts, undefined);
+  }
+  assert.equal(projectInlineCards([{ role: 'user', content: marker }])[0].markdownParts, undefined);
+});
+
+test('native boolean fields submit unchecked values and only enforce explicitly true-only inputs', async () => {
+  const React = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { harness } = await import('./hook-harness.test.mjs');
+  const { context } = harness('./assistant-cards.jsx', { ...React, React });
+  const fields = [{ field_id: 'first', type: 'boolean', label: 'First' },
+    { field_id: 'second', type: 'boolean', label: 'Second' }];
+  const block = { type: 'form', fields };
+  const properties = { first: { type: 'boolean' }, second: { type: 'boolean' } };
+  const card = { spec: { blocks: [block], input_schema: { properties, required: ['first', 'second'] } },
+    input_state: { draft: { first: true } } };
+  const values = initialCardValues(card);
+  assert.deepEqual(values, { first: true, second: false });
+  const render = () => renderToStaticMarkup(React.createElement(context.module.exports.CardBlock, { block, card, values }));
+  assert.doesNotMatch(render(), / required=/);
+  properties.second.enum = [true];
+  assert.match(render(), / required=/);
+});
+
+test('each turn retains its version across Markdown, tool fallback and history reload', () => {
+  const marker = '::card[' + cardId + ']';
+  for (const first of [marker, '创建完成']) for (const second of [marker, '更新完成']) {
+    for (const activity of [{ trace: [update] }, { runtimeActivity: { progress: [update] } }]) {
+      const rows = presentConversationMessages([
+        { trace: [entry] }, { role: 'assistant', content: first },
+        { role: 'user', content: '更新清单' },
+        activity, { role: 'assistant', content: second }, { trace: [entry, update] },
+      ], 'work');
+      const split = rows.findIndex(row => row.role === 'user');
+      const cards = items => items.flatMap(row => row.assistantCard || row.markdownParts?.filter(p => p.card_id) || []);
+      assert.deepEqual(cards(rows.slice(0, split)), [{ card_id: cardId, revision: 1, snapshot: true }]);
+      assert.deepEqual(cards(rows.slice(split)), [{ card_id: cardId, revision: 2 }]);
+    }
+  }
+});
+
+test('groups gather ordinary cards across turns, reserving a single placement per revision', () => {
+  const second = 'card_'+'b'.repeat(32);
+  const group = {title:'旅程',subtitle:'沿海三天',pages:[cardId,second,cardId]};
+  const directive = '::card[book] '+JSON.stringify(group);
+  const other = {...entry,presentation:{...entry.presentation,card_id:second}};
+  const messages = [{trace:[entry,other]}, {role:'assistant',content:'::card['+cardId+']'},
+    {role:'user',content:'合订'}, {role:'assistant',content:directive}];
+  const projected = presentConversationMessages(messages, 'work');
+  assert.equal(projected.some(m=>m.assistantCard),false);
+  assert.deepEqual(projected.at(-1).markdownParts[0].pages,[{card_id:cardId,revision:1},{card_id:second,revision:1}]);
+  const afterUpdate = presentConversationMessages([...messages,{role:'user',content:'修改'},{trace:[update]}],'work');
+  assert.equal(afterUpdate.find(m=>m.content===directive).markdownParts[0].pages[0].snapshot,true);
+  assert.equal(afterUpdate.at(-1).assistantCard.revision,2);
+  for (const content of ['```md\n'+directive+'\n```', '::card[book] '+JSON.stringify({...group,subtitle:''}),
+    '::card[stack] '+JSON.stringify({...group,pages:[cardId,'schedule:1']})]){
+    assert.equal(presentConversationMessages([{role:'assistant',content}],'work')[0].markdownParts,undefined);
   }
 });

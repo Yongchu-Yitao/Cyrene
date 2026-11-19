@@ -1,3 +1,4 @@
+import { WBC_ICONS } from "./features/chat/icons.jsx"
 import { workbenchServices } from "./shared/runtime/services.jsx"
 // Quick Chat surface. The Electron main process owns the global shortcut,
 // screenshot and window lifecycle; this renderer reuses the workbench data layer
@@ -685,7 +686,7 @@ function QuickChatApp() {
                   >
                     <span className="wbq-target-ic" aria-hidden="true">{QUICK_CHAT_ICON}</span>
                     <span className="wbq-target-text">{targetLabel}</span>
-                    <span className="wbq-caret" aria-hidden="true">▾</span>
+                    <span className="wbq-caret" aria-hidden="true">{WBC_ICONS.chevronDown}</span>
                   </button>
                   {pickerOpen && (
                     <QuickChatPicker

@@ -4,6 +4,7 @@ from typing import Any
 import json
 
 from cyrene.core.plugin.result_codec import decoded_plugin_value
+from cyrene.workbench.projects.assistant import ASSISTANT_SCOPE_ID
 
 _TRACE_SKIP_TOOLS = {
     "use_tools",
@@ -30,10 +31,34 @@ def tool_result_presentation(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _created_schedule_receipt(result, value):
+    name = result.get("name")
+    if not result.get("success") or name not in {"schedule.create", "toolbox"}:
+        return None
+    payload = decoded_plugin_value(value)
+    if name == "toolbox":
+        if (not isinstance(payload, Mapping) or payload.get("operation") != "invoke"
+                or payload.get("name") != "schedule.create" or payload.get("error")):
+            return None
+        payload = decoded_plugin_value(payload.get("result"))
+    if not isinstance(payload, Mapping) or payload.get("ok") is not True:
+        return None
+    task = payload.get("task")
+    if not isinstance(task, Mapping) or task.get("project_id") != ASSISTANT_SCOPE_ID:
+        return None
+    return {"kind": "schedule_created", "task_id": task.get("id"), "prompt": task.get("prompt"),
+            "schedule_type": task.get("schedule_type"), "next_run": task.get("next_run")}
+
+
 def result_presentation(result, value):
     """Bind inline views to the host-recorded tool owner before publishing or replay."""
     stored = result.get("presentation")
     base = dict(stored) if isinstance(stored, Mapping) and stored else tool_result_presentation(value)
+    receipt = _created_schedule_receipt(result, value)
+    if receipt is not None:
+        return {**base, **receipt}
+    if base.get("kind") == "schedule_created":
+        return {}
     origin = result.get("plugin_origin")
     if not result.get("success") or not isinstance(origin, Mapping):
         return base

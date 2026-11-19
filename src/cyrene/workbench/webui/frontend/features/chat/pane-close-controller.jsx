@@ -41,8 +41,8 @@ function cleanupClosedPane(context, card, draftKey) {
   ).catch(function () {});
 }
 
-export async function wbcClosePaneCardsWithConfirmation(context, cards, ownerChatId) {
-  if (!cards.length || (context.canClosePaneCard && !cards.every(context.canClosePaneCard))) return { closed: false };
+export async function wbcClosePaneCardsWithConfirmation(context, cards, ownerChatId, beforeClose) {
+  if ((!cards.length && !beforeClose) || (context.canClosePaneCard && !cards.every(context.canClosePaneCard))) return { closed: false };
   var ids = cards.map(function (card) { return String(card.id); });
   var draftKeys = cards.map(function (card) {
     var key = paneDraftKey(card, context.projectId);
@@ -53,6 +53,8 @@ export async function wbcClosePaneCardsWithConfirmation(context, cards, ownerCha
   for (var key of draftKeys) {
     if (key && !await confirmDraftClose()) return { closed: false, cancelled: true, card_id: ids[0], card_ids: ids };
   }
+  if (beforeClose) await beforeClose();
+  if (!cards.length) return { closed: true };
   // Draft/suppression updates are synchronous. Plugin disposal is best-effort
   // and must not keep the pane visible while a remote session shuts down.
   cards.forEach(function (card, index) { cleanupClosedPane(context, card, draftKeys[index]); });

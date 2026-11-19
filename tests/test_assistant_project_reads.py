@@ -76,6 +76,9 @@ async def test_knowledge_reads_sources_limits_and_write_scope(projects, tmp_path
     hits = await service.search_knowledge(context, "telescope", limit=2)
     assert {hit["project_id"] for hit in hits} == {"one", "two"}
     assert len(await service.search_knowledge(context, "telescope", limit=1)) == 1
+    main = PluginContext(data={"session_id": ASSISTANT_ID, "project_id": ASSISTANT_SCOPE_ID, "personal_assistant": True})
+    assert {hit["workspace"] for hit in await service.search_knowledge(main, "telescope")} == {"one", "two"}
+    assert {row["project_id"] for row in await service.search_library(main, "telescope")} == {"one", "two"}
     documents = await service.list_documents(context)
     assert {item["project_name"] for item in documents} == {"First", "Second"}
     papers = await service.search_library(context, "telescope")

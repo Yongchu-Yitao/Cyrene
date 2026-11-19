@@ -2265,14 +2265,14 @@
 }
 
 /* Keep native details keyboard and accessibility behavior with the Cyrene chevron. */
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel) details > summary {
+:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary {
   list-style: none;
   cursor: pointer;
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel) details > summary::-webkit-details-marker {
+:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary::-webkit-details-marker {
   display: none;
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel) details > summary:not(.wb-doctor-disclosure)::before,
+:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary:not(.wb-doctor-disclosure)::before,
 .settings-overlay .about-version-line button[aria-expanded]::after {
   content: "";
   display: inline-block;
@@ -2285,17 +2285,17 @@
   transform: rotate(-90deg);
   transition: transform 160ms ease;
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel) details > summary:not(.wb-doctor-disclosure)::before {
+:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary:not(.wb-doctor-disclosure)::before {
   margin-inline-end: 0.35em;
 }
 .settings-overlay .about-version-line button[aria-expanded]::after {
   margin-inline-start: 0.25em;
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel) details[open] > summary:not(.wb-doctor-disclosure)::before,
+:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details[open] > summary:not(.wb-doctor-disclosure)::before,
 .settings-overlay .about-version-line button[aria-expanded=true]::after {
   transform: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  :where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel) details > summary::before,
+  :where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary::before,
   .settings-overlay .about-version-line button[aria-expanded]::after { transition: none; }
 }

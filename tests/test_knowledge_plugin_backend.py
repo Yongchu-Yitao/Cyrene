@@ -501,3 +501,32 @@ def test_zotero_sync_is_order_independent_and_idempotent(tmp_path: Path, monkeyp
     assert len(detail["annotations"]) == 1
     assert detail["annotations"][0]["attachment_id"] == detail["attachments"][0]["id"]
     assert detail["collections"][0]["name"] == "Imported papers"
+
+
+@pytest.mark.parametrize("tool_name", ["SearchKnowledge", "SearchLibrary"])
+def test_assistant_search_card_opens_indexed_original(tmp_path, tool_name):
+    from cyrene.workbench.core_adapter.tool_activity_projection import result_presentation
+
+    service = _service(tmp_path)
+    client = _client(service)
+    contents = b"Weekly report: progress, blockers, and next steps."
+    upload = client.post("/api/workbench/library/upload", params={"workspace": "project-one"},
+                         files={"files": ("handbook.md", contents, "text/markdown")})
+    assert upload.status_code == 200
+    attachment = upload.json()["items"][0]["attachments"][0]
+    registry = PluginRegistry()
+    registry.register_pack(plugin_pack, source="test")
+    runtime = PluginRuntime(registry)
+    context = PluginContext(data={"personal_assistant": True, "project_id": "project-one"},
+                            services={"knowledge": service})
+    result = asyncio.run(runtime.call("toolbox", {"operation": "invoke", "name": tool_name,
+                                      "arguments": {"query": "Weekly report"}}, context))
+    assert result.success
+    view = result_presentation({"name": "toolbox", "success": True}, result.value)
+    assert view["kind"] == "knowledge_sources"
+    source, = view["sources"]
+    assert source["attachment_id"] == attachment["id"]
+    assert source["document_name"] == "handbook.md" and "blockers" in source["excerpt"]
+    path = f"/api/workbench/library/items/{source['item_id']}/attachments/{source['attachment_id']}/raw"
+    assert client.get(path, params={"workspace": source["workspace"]}).content == contents
+    assert client.get(path, params={"workspace": "project-two"}).status_code == 404
