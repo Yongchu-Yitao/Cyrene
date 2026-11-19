@@ -143,3 +143,15 @@ limits and behavior assertions remain subject to their existing checks.
 | `src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx` | module_lines | 4391 | 4405 |
 | `src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx` | module_lines | 4391 | 4405 |
 | `src/cyrene/workbench/webui/frontend/shared/pdf/bridge.jsx::<anonymous>.pdfjsInstallSelectionSanitizer.sanitizePage` | decisions | 31 | 32 |
+
+### Final card-panel state review
+
+The latest pin panel change preserves the user's underlying panel preference and
+suppresses the conversation panel only while pins occupy its space. Removing the
+last pin restores that preference. Reviewed exact increments follow.
+
+| Scope | Metric | Previous limit | Reviewed value |
+| --- | --- | ---: | ---: |
+| `src/cyrene/plugins/builtin/cyrene_cards/application.py::setup_application` | lines | 107 | 108 |
+| `src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage` | decisions | 219 | 220 |
+| `src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard` | decisions | 102 | 106 |

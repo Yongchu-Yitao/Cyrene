@@ -502,7 +502,10 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
   }
   var [sideTab, setSideTab] = useWbcState("");
   var [sideVisibleState, setSideVisible] = useWbcState(true);
-  var sideVisible = !hideConversationPanel && sideVisibleState;
+  // Pins temporarily occupy the panel's space. Keep the user's underlying
+  // open/closed choice so removing the last pin reveals the same layout.
+  var panelSuppressedByPins = pinnedCards.length > 0;
+  var sideVisible = !hideConversationPanel && !panelSuppressedByPins && sideVisibleState;
   // Match the CSS breakpoint that removes the docked context track. A hidden
   // track must never intercept the card's five-way split targets.
   var [compactContextLayout, setCompactContextLayout] = useWbcState(function () {
@@ -532,19 +535,8 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
   // the main conversation grip without disturbing that split. If a resource
   // is opened from the floating panel, remember the displaced split so its
   // close action can restore the exact previous layout.
-  var [floatingConversationPanelOpen, setFloatingConversationPanelOpen] = useWbcState(false);
-
-  // Respond to newly pinned IDs, including pins made by the agent or restored on load.
-  // A background refresh should leave a manually reopened panel alone.
-  var previousPins = useWbcRef(new Set());
-  useWbcEffect(function syncPinnedCardLayout() {
-    var current = new Set(pinnedCards.map(function pinnedCardId(card) { return card.card_id; }));
-    if (pinnedCards.some(function newlyPinnedCard(card) { return !previousPins.current.has(card.card_id); })) {
-      setSideVisible(false);
-      setFloatingConversationPanelOpen(false);
-    }
-    previousPins.current = current;
-  }, [activeChatId, pinnedCards]);
+  var [floatingPanelRequested, setFloatingConversationPanelOpen] = useWbcState(false);
+  var floatingConversationPanelOpen = !panelSuppressedByPins && floatingPanelRequested;
 
   useWbcEffect(function () {
     function openGoalTab(event) {
@@ -2455,7 +2447,7 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
         menuDisabled={singlePane}
         onToggleSide={move}
         onClose={close}
-        onOpenConversationPanel={hideConversationPanel ? null : openConversationPanelFromMainGrip}
+        onOpenConversationPanel={hideConversationPanel || panelSuppressedByPins ? null : openConversationPanelFromMainGrip}
         onSplitPointerDown={pointerDown}
         onSplitDragStart={dragStart}
         onSplitDragEnd={handlePaneCardDragEnd}
@@ -2485,7 +2477,7 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
         menuDisabled={singlePane}
         onToggleSide={move}
         onClose={close}
-        onOpenConversationPanel={function () {
+        onOpenConversationPanel={panelSuppressedByPins ? null : function () {
           setSideTab("side-agents");
           setFloatingConversationPanelOpen(true);
         }}

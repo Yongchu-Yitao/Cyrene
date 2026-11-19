@@ -729,7 +729,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage": {
     "lines": 3078,
-    "decisions": 219,
+    "decisions": 220,
     "hooks": 135
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.<anonymous>.<anonymous>#43": {
@@ -761,7 +761,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard": {
     "lines": 334,
-    "decisions": 102,
+    "decisions": 106,
     "nesting": 11
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>.<anonymous>#4": {

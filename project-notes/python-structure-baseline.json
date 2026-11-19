@@ -536,7 +536,7 @@
     "decisions": 30
   },
   "src/cyrene/plugins/builtin/cyrene_cards/application.py::setup_application": {
-    "lines": 107
+    "lines": 108
   },
   "src/cyrene/plugins/builtin/cyrene_channels/wechat/bot.py::_handle_message": {
     "lines": 112
