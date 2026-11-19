@@ -3,6 +3,8 @@ from collections.abc import Mapping
 from typing import Any
 import json
 
+from cyrene.core.plugin.result_codec import decoded_plugin_value
+
 _TRACE_SKIP_TOOLS = {
     "use_tools",
     "send_message",
@@ -23,9 +25,35 @@ def tool_result_presentation(value: Any) -> dict[str, Any]:
             return {}
         presentation = value.get("presentation")
         if isinstance(presentation, Mapping):
-            return dict(presentation)
+            return {} if presentation.get("kind") == "plugin_view" else dict(presentation)
         value = value.get("result")
     return {}
+
+
+def result_presentation(result, value):
+    """Bind inline views to the host-recorded tool owner before publishing or replay."""
+    stored = result.get("presentation")
+    base = dict(stored) if isinstance(stored, Mapping) and stored else tool_result_presentation(value)
+    origin = result.get("plugin_origin")
+    if not result.get("success") or not isinstance(origin, Mapping):
+        return base
+    value = decoded_plugin_value(value)
+    if result.get("name") == "toolbox":
+        if (not isinstance(value, Mapping) or value.get("operation") != "invoke"
+                or value.get("error") or value.get("pack") != origin["pack_id"]):
+            return base
+        value = decoded_plugin_value(value.get("result"))
+    if not isinstance(value, Mapping) or value.get("ok") is False:
+        return base
+    view = value.get("presentation")
+    if not isinstance(view, Mapping) or view.get("kind") != "plugin_view":
+        return base
+    if not isinstance(view.get("view_id"), str) or not view["view_id"]:
+        return base
+    # The client resolves this ID against the owning pack's enabled frontend_views.
+    return {**base, "kind": "plugin_view", "packId": origin["pack_id"],
+            "projectId": origin["project_id"], "instanceId": origin["instance_id"],
+            "viewId": view["view_id"], "state": view.get("state")}
 
 
 def bash_exit_code(name: str, value: Any) -> int | None:
@@ -43,8 +71,6 @@ def bash_exit_code(name: str, value: Any) -> int | None:
 
 def tool_completed_payload(data, value, status):
     name = str(data.get("name") or "")
-    presentation = data.get("presentation")
-    presentation = dict(presentation) if isinstance(presentation, Mapping) else {}
     payload = {
         "toolCallId": str(data.get("call_id") or ""),
         "name": name,
@@ -52,7 +78,7 @@ def tool_completed_payload(data, value, status):
         "failed": not bool(data.get("success")),
         "outputSummary": data.get("value"),
         "error": str(data.get("error") or ""),
-        "presentation": presentation or tool_result_presentation(value),
+        "presentation": result_presentation(data, value),
     }
     if (exit_code := bash_exit_code(name, value)) is not None:
         payload["exitCode"] = exit_code
@@ -201,7 +227,7 @@ def _tool_trace_entry(item, index, call, results_by_call_id):
     if raw_name == "Bash":
         _apply_bash_result(entry, arguments, result)
     if result is not None and success:
-        presentation = tool_result_presentation(result.get("value"))
+        presentation = result_presentation(result, result.get("value"))
         if presentation:
             entry["presentation"] = presentation
     if result is None:

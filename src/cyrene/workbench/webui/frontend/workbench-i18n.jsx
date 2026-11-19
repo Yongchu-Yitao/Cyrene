@@ -185,19 +185,21 @@ function workbenchPermissionQuestionText(pending, lang) {
   return lines.join("\n");
 }
 
-function persistWorkbenchRuntimeLanguage(lang) {
+function persistWorkbenchRuntimeLanguage(lang, requireSave) {
   try {
     return fetch("/api/settings/namespaces/runtime", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ changes: { app_language: lang } }),
-    }).catch(function () {});
-  } catch (e) {
-    return Promise.resolve();
+    }).then(function (response) {
+      if (requireSave && !response.ok) throw new Error(workbenchT("settings.error") + " (HTTP " + response.status + ")");
+    }).catch(function (error) { if (requireSave) throw error; });
+  } catch (error) {
+    return requireSave ? Promise.reject(error) : Promise.resolve();
   }
 }
 
-function syncWorkbenchDesktopLanguage(lang) {
+function syncWorkbenchDesktopLanguage(lang, requireSave) {
   try {
     if (!window.cyrene || typeof window.cyrene.updateDesktopSettings !== "function") return Promise.resolve();
     var read = typeof window.cyrene.getDesktopSettings === "function"
@@ -206,12 +208,13 @@ function syncWorkbenchDesktopLanguage(lang) {
     return Promise.resolve(read).then(function (settings) {
       if (settings && settings.language === lang) return;
       __workbenchExpectedDesktopLanguage = lang;
-      return window.cyrene.updateDesktopSettings({ language: lang }).catch(function () {
+      return window.cyrene.updateDesktopSettings({ language: lang }).catch(function (error) {
         if (__workbenchExpectedDesktopLanguage === lang) __workbenchExpectedDesktopLanguage = "";
+        throw error;
       });
-    }).catch(function () {});
-  } catch (e) {
-    return Promise.resolve();
+    }).catch(function (error) { if (requireSave) throw error; });
+  } catch (error) {
+    return requireSave ? Promise.reject(error) : Promise.resolve();
   }
 }
 
@@ -220,10 +223,13 @@ function applyWorkbenchLang(lang, options) {
   options = options || {};
   var changed = workbenchI18nLang !== lang;
   workbenchI18nLang = lang;
+  var saved;
   if (options.persist !== false) {
     try { localStorage.setItem("cyrene-workbench-lang", lang); } catch (e) {}
-    syncWorkbenchDesktopLanguage(lang);
-    persistWorkbenchRuntimeLanguage(lang);
+    saved = Promise.all([
+      syncWorkbenchDesktopLanguage(lang, options.requireSave),
+      persistWorkbenchRuntimeLanguage(lang, options.requireSave),
+    ]);
   }
   if (changed || options.force === true) {
     workbenchI18nVersion += 1;
@@ -236,10 +242,11 @@ function applyWorkbenchLang(lang, options) {
       window.dispatchEvent(new CustomEvent("cyrene:i18n-changed", { detail: { lang: lang } }));
     } catch (e) {}
   }
+  return saved;
 }
 
-function setWorkbenchLang(lang) {
-  applyWorkbenchLang(lang, { persist: true });
+function setWorkbenchLang(lang, options) {
+  return applyWorkbenchLang(lang, { persist: true, requireSave: options?.requireSave === true });
 }
 
 function useWorkbenchI18n() {

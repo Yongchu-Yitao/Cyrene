@@ -159,6 +159,7 @@ class _PreToolRequest:
     permission: dict[str, Any] | None
     time: datetime
     future: Future[dict[str, Any]]
+    contexts: list[str] | None
 
 
 @dataclass(slots=True)
@@ -167,6 +168,7 @@ class _PreToolBatchRequest:
         tuple[str, dict[str, Any], datetime, dict[str, Any] | None], ...
     ]
     future: Future[tuple[dict[str, Any] | BaseException, ...]]
+    contexts: Sequence[list[str]] | None
 
 
 @dataclass(slots=True)
@@ -692,6 +694,7 @@ class HookSet:
         time: datetime,
         *,
         permission: Mapping[str, Any] | None = None,
+        contexts: list[str] | None = None,
         skip_plugin_ids: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
         await self._prepare_dispatch()
@@ -705,6 +708,7 @@ class HookSet:
             event_time=time,
         ) as op:
             current = dict(arguments)
+            invocation_id = uuid4().hex
             event_payload = {
                 "tool": {"name": name, "arguments": dict(current)},
                 "permission": dict(permission) if permission is not None else None,
@@ -727,6 +731,7 @@ class HookSet:
                     self.tree_id,
                     time,
                     payload={
+                        "hook_invocation_id": invocation_id,
                         "tool": {"name": name, "arguments": dict(current)},
                         "permission": (
                             dict(permission) if permission is not None else None
@@ -737,6 +742,8 @@ class HookSet:
                     raw = await self._call(hook, event)
                     output = raw if isinstance(raw, Mapping) else {}
                     decision = str(output.get("decision") or "allow").strip().lower()
+                    if contexts is not None and isinstance(output.get("context"), str) and output["context"].strip():
+                        contexts.append(output["context"].strip())
                     if decision == "ask":
                         raise HookAwaitingUser(output.get("question") or {})
                     if decision == "block":
@@ -820,6 +827,7 @@ class HookSet:
         calls: tuple[
             tuple[str, dict[str, Any], datetime, dict[str, Any] | None], ...
         ],
+        contexts: Sequence[list[str]] | None = None,
     ) -> tuple[dict[str, Any] | BaseException, ...]:
         """Run ordinary Hooks per call, then review all calls in one model batch."""
 
@@ -834,13 +842,14 @@ class HookSet:
             ],
         ) as op:
             results: list[dict[str, Any] | BaseException] = []
-            for name, arguments, time, permission in calls:
+            for index, (name, arguments, time, permission) in enumerate(calls):
                 try:
                     results.append(await self._run_pre_tool(
                         name,
                         arguments,
                         time,
                         permission=permission,
+                        contexts=contexts[index] if contexts is not None else None,
                         skip_plugin_ids=frozenset({"core.permission"}),
                     ))
                 except asyncio.CancelledError:
@@ -1138,6 +1147,7 @@ class HookSet:
                                 item.arguments,
                                 item.time,
                                 permission=item.permission,
+                                contexts=item.contexts,
                             )
                         )
                     except BaseException as exc:
@@ -1147,7 +1157,7 @@ class HookSet:
                 elif isinstance(item, _PreToolBatchRequest):
                     try:
                         result = loop.run_until_complete(
-                            self._run_pre_tool_batch(item.calls)
+                            self._run_pre_tool_batch(item.calls, item.contexts)
                         )
                     except BaseException as exc:
                         _settle_future(item.future, error=exc)
@@ -1346,6 +1356,7 @@ class HookSet:
         *,
         permission: Mapping[str, Any] | None = None,
         time: datetime | None = None,
+        contexts: list[str] | None = None,
     ) -> dict[str, Any]:
         if self._in_worker_thread():
             return await self._run_pre_tool(
@@ -1353,6 +1364,7 @@ class HookSet:
                 dict(arguments),
                 time or _utc_now(),
                 permission=permission,
+                contexts=contexts,
             )
         future: Future[dict[str, Any]] = Future()
         with self._lock:
@@ -1365,6 +1377,7 @@ class HookSet:
                     dict(permission) if permission is not None else None,
                     time or _utc_now(),
                     future,
+                    contexts,
                 )
             )
         return await asyncio.wrap_future(future)
@@ -1374,11 +1387,14 @@ class HookSet:
         calls: tuple[tuple[str, Mapping[str, Any]], ...],
         *,
         permissions: Sequence[Mapping[str, Any] | None] | None = None,
+        contexts: Sequence[list[str]] | None = None,
         time: datetime | None = None,
     ) -> tuple[dict[str, Any] | BaseException, ...]:
         """Queue one batch, then run its independent reviews concurrently."""
 
         reviewed_at = time or _utc_now()
+        if contexts is not None and len(contexts) != len(calls):
+            raise ValueError("contexts must match the tool call count")
         permission_values = tuple(permissions or (None for _call in calls))
         if len(permission_values) != len(calls):
             raise ValueError("permissions must match the tool call count")
@@ -1392,12 +1408,12 @@ class HookSet:
             for (name, arguments), permission in zip(calls, permission_values)
         )
         if self._in_worker_thread():
-            return await self._run_pre_tool_batch(normalized)
+            return await self._run_pre_tool_batch(normalized, contexts)
         future: Future[tuple[dict[str, Any] | BaseException, ...]] = Future()
         with self._lock:
             self._ensure_open()
             self._ensure_worker_locked()
-            self._work.put(_PreToolBatchRequest(normalized, future))
+            self._work.put(_PreToolBatchRequest(normalized, future, contexts))
         return await asyncio.wrap_future(future)
 
     async def post_tool_use(

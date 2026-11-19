@@ -79,10 +79,22 @@ Generated pack files are intentionally small: `tool.py` exposes `TOOL_PLUGIN`, `
 exposes `MODEL_PLUGIN`, `context.py` registers the Hook, `application.py` registers backend
 services/RPC, and `ui/index.html` is the sandboxed view. `__init__.py` composes them.
 
-For UI, keep assets inside the pack; declare `frontend_views` and `project_tools` in pack
-metadata, contribute a typed `WORKBENCH_SURFACE` when the view should participate in dynamic
-split panes, and register backend calls with `provide_frontend_method`. Python/tool/model
-changes reload live; application contribution changes may require restart.
+## Show a tool result inside a chat
+
+For a tool with its own interactive UI, start with
+`PluginScaffold({"path":"reports","pack_id":"reports","name":"Reports","plugin_type":"ui_plugin","plugin_name":"ShowReport","chat_inline_view":true})`.
+The same option works with `full_pack`. Edit the generated `tool.py` and `ui/index.html`.
+The successful handler returns `{"presentation":{"kind":"plugin_view","view_id":"main","state":{"message":"Ready"}}}`
+alongside the business result. Match `view_id` to an enabled `frontend_views[].id` in the same pack.
+The host binds the pack, project and instance for direct calls and `toolbox.invoke`.
+
+The existing PluginView sends `init` from `cyrene-host`. Read `event.data.context.state` for initial
+or restored inputs. On edits, send a JSON object patch with
+`parent.postMessage({source:"cyrene-plugin",type:"state",state:{message:input.value}}, "*")`.
+The host restores that instance in chat history and keeps edits in the same browser.
+Persist shared business data via a registered frontend RPC. Keep assets inside the pack.
+`project_tools` adds a sidebar entry and `WORKBENCH_SURFACE` adds a dynamic split pane;
+both are optional for inline views. Application contribution changes may require restart.
 
 For standalone automatic triggers outside a pack, call `HookManager(action="generate")` with
 `hook={name, event, action_instruction, matcher?}`. For `PreToolUse`/`PostToolUse`, set
@@ -169,7 +181,9 @@ and its reason; inspect the correct supported workflow or request genuinely miss
   SessionStart runs once; TurnStart is for per-turn values. Keep Hook ids stable on rebind.
 - Application: after any required restart, verify the registered service/route and startup;
   check shutdown cleanup when applicable. Registry loading alone does not prove startup worked.
-- UI: verify the view opens and its actual frontend RPC works, including backend availability.
+- UI: verify the registered frontend RPC. For inline views, invoke the installed tool in ordinary
+  chat, edit the generated field and reopen the conversation. Verify one view under that tool
+  message with the edited value. A second invocation should start with its own inputs.
 - Model Provider: configure its connection, verify discovery when supported and a completion.
 - Full pack: verify each contributed capability; a pack with no executable tools need not
   invent a dummy tool for acceptance.
@@ -211,9 +225,19 @@ setup 只注册服务和准备状态。确需异步应用初始化时，通过 `
 `context.py` 注册 Hook，`application.py` 注册后端服务/RPC，`ui/index.html` 提供沙箱
 视图，最后由 `__init__.py` 组合。
 
-UI 资源必须位于插件包内；在 metadata 声明 `frontend_views` 与 `project_tools`，并用
-typed `WORKBENCH_SURFACE` contribution 接入动态分屏，再用 `provide_frontend_method`
-注册后端调用。工具和模型代码可重载，应用贡献修改可能需要重启。
+## 在聊天消息下展示工具界面
+
+需要让工具在普通聊天中展示交互界面时，调用
+`PluginScaffold({"path":"reports","pack_id":"reports","name":"报表","plugin_type":"ui_plugin","plugin_name":"ShowReport","chat_inline_view":true})`。
+`full_pack` 也支持这个选项。编辑生成的 `tool.py` 和 `ui/index.html`：
+工具成功时随业务结果返回 `{"presentation":{"kind":"plugin_view","view_id":"main","state":{"message":"就绪"}}}`。
+`view_id` 对应本包已启用的 `frontend_views[].id`。直接调用和 `toolbox.invoke` 都由宿主绑定插件包、项目和调用实例。
+
+页面收到 `cyrene-host` 的 `init` 消息时，从 `event.data.context.state` 读取初始值或恢复值。
+用户编辑后，用 `parent.postMessage({source:"cyrene-plugin",type:"state",state:{message:input.value}}, "*")`
+发送 JSON 对象补丁。重开对话会恢复该实例，同一浏览器保留编辑进度。跨设备的业务数据通过已注册的 RPC 持久化。
+UI 资源放在插件包内。`project_tools` 用于侧栏入口，`WORKBENCH_SURFACE` 用于动态分屏，两者对聊天内联展示均为可选。
+修改应用贡献后可能需要重启。
 
 若要创建包外的自动触发，调用 `HookManager(action="generate")`，并传入
 `hook={name, event, action_instruction, matcher?}`。对于 `PreToolUse`/`PostToolUse`，
@@ -288,7 +312,7 @@ confirmation_token。这些字段不能代替实际用户授权。预览被截�
 - Context：启用后打开会话，检查真实 Hook 输出和上下文。SessionStart 只运行一次，动态每轮内容
   使用 TurnStart；恢复绑定时保持 Hook id 稳定。
 - 应用：完成必要重启后，验证服务/路由和 startup；适用时检查 shutdown 清理。注册成功不代表启动成功。
-- UI：验证视图实际打开、前端 RPC 成功及后端可用。
+- UI：验证实际的前端 RPC。对内联视图，在普通聊天中调用安装后的工具，修改字段，再重开对话。确认调用消息下只有一份视图且保留修改，再次调用应使用新实例的输入。
 - 模型 Provider：配置连接后，验证支持的模型发现和一次补全。
 - 组合包：逐项验收贡献；没有可执行工具的包不需要为了验收增加虚拟工具。
 
@@ -371,8 +395,12 @@ def _plugin_i18n(name: str, description: str) -> str:
     })
 
 
-def _tool_source(plugin_name: str, name: str, description: str, *, standalone: bool) -> str:
+def _tool_source(plugin_name: str, name: str, description: str, *, standalone: bool, inline_view: bool = False) -> str:
     export = "plugin" if standalone else "TOOL_PLUGIN"
+    presentation = (
+        '        "presentation": {"kind": "plugin_view", "view_id": "main", "state": {"message": arguments["message"]}},\n'
+        if inline_view else ""
+    )
     return f'''"""Tool Plugin generated by Cyrene."""
 
 from cyrene.core.plugin import Plugin, PluginContext
@@ -384,7 +412,7 @@ async def run(arguments: dict, context: PluginContext) -> dict:
         "ok": True,
         "message": str(arguments.get("message") or ""),
         "workspace": str(context.workspace or ""),
-    }}
+{presentation}    }}
 
 
 {export} = Plugin(
@@ -668,7 +696,6 @@ def setup_application(context: PluginApplicationContext) -> None:
 
 
 def _ui_source(name: str) -> str:
-    safe = json.dumps(name, ensure_ascii=False)
     title = html.escape(name, quote=True)
     return f'''<!doctype html>
 <html lang="en">
@@ -684,9 +711,12 @@ def _ui_source(name: str) -> str:
   </style>
 </head>
 <body>
-  <main><h1 id="title"></h1><button id="ping">Test backend</button><pre id="output">Ready</pre></main>
+  <main><h1>{title}</h1><label>Message <input id="message"></label> <button id="ping">Test backend</button><pre id="output">Ready</pre></main>
   <script>
-    document.querySelector('#title').textContent = {safe};
+    const input = document.querySelector('#message');
+    input.addEventListener('input', () => {{
+      parent.postMessage({{source:'cyrene-plugin',type:'state',state:{{message:input.value}}}}, '*');
+    }});
     const pending = new Map();
     function call(method,args) {{
       const requestId = crypto.randomUUID();
@@ -695,15 +725,19 @@ def _ui_source(name: str) -> str:
     }}
     addEventListener('message', event => {{
       const message = event.data || {{}};
-      if (message.source !== 'cyrene-host') return;
-      if (message.type === 'init') window.pluginContext = message.context;
+      if (event.source !== parent || message.source !== 'cyrene-host') return;
+      if (message.type === 'init') {{
+        window.pluginContext = message.context;
+        input.value = message.context.state?.message ?? '';
+        return;
+      }}
       if (message.type !== 'response') return;
       const request = pending.get(message.requestId); if (!request) return;
       pending.delete(message.requestId);
       message.ok ? request.resolve(message.result) : request.reject(new Error(message.error));
     }});
     document.querySelector('#ping').addEventListener('click', async () => {{
-      try {{ document.querySelector('#output').textContent = JSON.stringify(await call('ping',{{from:'ui'}}),null,2); }}
+      try {{ document.querySelector('#output').textContent = JSON.stringify(await call('ping',{{from:'ui',message:input.value}}),null,2); }}
       catch (error) {{ document.querySelector('#output').textContent = String(error); }}
     }});
   </script>
@@ -733,6 +767,12 @@ async def scaffold(arguments: dict[str, Any], context: PluginContext) -> str:
             "plugin_type must be one of: {values}",
             "plugin_type 必须是以下值之一：{values}",
             values=", ".join(SCAFFOLD_TYPES),
+        )})
+    inline_view = arguments.get("chat_inline_view") is True
+    if inline_view and plugin_type not in {"ui_plugin", "full_pack"}:
+        return _json({"ok": False, "error": plugin_localized(
+            context, "chat_inline_view requires ui_plugin or full_pack.",
+            "chat_inline_view 仅适用于 ui_plugin 或 full_pack。",
         )})
     pack_id = str(arguments.get("pack_id") or "").strip()
     name = str(arguments.get("name") or pack_id).strip()
@@ -792,7 +832,7 @@ async def scaffold(arguments: dict[str, Any], context: PluginContext) -> str:
         "model_plugin": (False, True, False, False, False),
         "context_plugin": (False, False, True, False, False),
         "application_plugin": (False, False, False, True, False),
-        "ui_plugin": (False, False, False, True, True),
+        "ui_plugin": (inline_view, False, False, True, True),
         "full_pack": (True, True, True, True, True),
     }
     include_tool, include_model, include_context, include_application, include_ui = flags[plugin_type]
@@ -808,7 +848,7 @@ async def scaffold(arguments: dict[str, Any], context: PluginContext) -> str:
         ),
     }
     if include_tool:
-        files["tool.py"] = _tool_source(tool_name, name, description, standalone=False)
+        files["tool.py"] = _tool_source(tool_name, name, description, standalone=False, inline_view=inline_view)
     if include_model:
         files["model.py"] = _model_source(model_name, provider_id, name, description)
     if include_context:
@@ -869,6 +909,18 @@ async def install(arguments: dict[str, Any], context: PluginContext) -> str:
     if result.get("error") in messages:
         result["error"] = plugin_localized(context, result["error"], messages[result["error"]])
     return _json(result)
+
+
+async def update_plugin(arguments: dict[str, Any], context: PluginContext) -> str:
+    from zipfile import BadZipFile
+    from cyrene.plugins.update import update_source
+
+    try:
+        source = resolve_workspace_path(str(arguments.get("path") or ""), context)
+        result = await update_source(application_plugin_scope(), source, str(arguments.get("id") or ""))
+    except (ValueError, OSError, BadZipFile) as exc:
+        result = {"ok": False, "error": str(exc)}
+    return _json(_localized_validation(result, context))
 
 
 async def reload_plugins(_arguments: dict[str, Any], _context: PluginContext) -> str:

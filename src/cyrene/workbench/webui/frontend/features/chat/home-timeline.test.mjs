@@ -17,12 +17,14 @@ test('home keeps its place across new messages and missing history', () => {
   assert.equal(homeInsertionIndex(messages,captureHomePosition([],'assistant',now)),0);
 });
 
-test('actual transcript renders new human messages and live replies after the home exactly once', () => {
+test('actual transcript shows new messages and the latest inline card once across the home boundary', () => {
   const source=readFileSync(new URL('./messages.jsx',import.meta.url),'utf8');
   const code=transformSync(source+`
     wbcGroupConsecutiveActivityMessages = messages => messages;
     WbcUserMessage = ({msg}) => React.createElement('p',null,msg.content);
-    WbcAssistantMessageBoundary = ({msg}) => React.createElement('p',null,msg.content);
+    WbcAssistantMessageBoundary = ({msg}) => msg.assistantCard
+      ? React.createElement('article',null,'CARD_REV_' + msg.assistantCard.revision)
+      : React.createElement('p',null,msg.content);
   `,{loader:'jsx',format:'cjs'}).code;
   const deps={homeInsertionIndex,presentConversationMessages,
     createDisclosureSubscriptions:()=>new Map(),
@@ -30,7 +32,12 @@ test('actual transcript renders new human messages and live replies after the ho
     WbcThreadItem:({children})=>React.createElement('section',null,children)};
   const context={module:{exports:{}},require:()=>deps,React};
   vm.runInNewContext(code,context);
-  const old={id:'old',role:'assistant',content:'OLD'}, user={id:'new',role:'user',content:'NEW'}, reply={id:'reply',role:'assistant',content:'REPLY'};
+  const cardResult = (operation, revision) => ({status:'completed',presentation:{
+    kind:'assistant_card',card_id:'card_' + 'a'.repeat(32),operation,revision,
+  }});
+  const old={id:'old',role:'assistant',content:'OLD',trace:[cardResult('card.create',1)]};
+  const user={id:'new',role:'user',content:'NEW'};
+  const reply={id:'reply',role:'assistant',content:'REPLY',trace:[cardResult('card.update',2)]};
   for(const live of [true,false]) {
     const html=renderToStaticMarkup(React.createElement(context.module.exports.WbcTranscript,{
       messages:live?[old,user]:[old,user,reply],runtime:live?{timeline:{messages:[reply]}}:null,
@@ -41,6 +48,8 @@ test('actual transcript renders new human messages and live replies after the ho
     assert.ok(html.indexOf('NEW')<html.indexOf('REPLY'));
     assert.equal(html.match(/HOME/g).length,1);
     assert.equal(html.match(/REPLY/g).length,1);
+    assert.equal(html.match(/CARD_REV_/g).length,1);
+    assert.ok(html.indexOf('REPLY')<html.indexOf('CARD_REV_2'));
   }
 });
 

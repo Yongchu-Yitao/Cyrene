@@ -45,6 +45,7 @@ async def test_scheduler_uses_independent_maintenance_cadences(
         "proactive_heartbeat",
         "steward",
         "short_term_cleanup",
+        "soul_temporary_cleanup",
     }
     assert jobs["scheduled_tasks"].trigger.interval.total_seconds() == 60
     assert jobs["behavior_learning"].trigger.interval.total_seconds() == 600
@@ -52,6 +53,8 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     assert jobs["proactive_heartbeat"].next_run_time is not None
     assert jobs["steward"].trigger.interval.total_seconds() == 3600
     assert jobs["short_term_cleanup"].trigger.interval.total_seconds() == 86400
+    assert jobs["soul_temporary_cleanup"].trigger.interval.total_seconds() == 86400
+    assert jobs["soul_temporary_cleanup"].next_run_time is not None
 
 
 async def test_due_task_job_invokes_hidden_plugin_not_maintenance(monkeypatch, tmp_path):
@@ -102,6 +105,7 @@ async def test_disabled_background_packs_are_not_scheduled_or_invoked(
             "cyrene_proactive": False,
             "cyrene_skills": False,
             "cyrene_memory": False,
+            "cyrene_soul": False,
         },
     )
     host.attach()
@@ -112,6 +116,7 @@ async def test_disabled_background_packs_are_not_scheduled_or_invoked(
     assert "behavior_learning" not in jobs
     assert "steward" not in jobs
     assert "short_term_cleanup" not in jobs
+    assert "soul_temporary_cleanup" not in jobs
     assert "plugin_registry_sync" in jobs
 
     plugin_call = AsyncMock()
@@ -122,6 +127,7 @@ async def test_disabled_background_packs_are_not_scheduled_or_invoked(
         ("skills.learning.tick", "behavior_learning"),
         ("memory.steward.tick", "steward"),
         ("memory.short_term.cleanup", "short_term_cleanup"),
+        ("soul.temporary.cleanup", "soul_temporary_cleanup"),
     ):
         await host._invoke(plugin_name, {}, job_id, None, "disabled", 0)
     plugin_call.assert_not_awaited()

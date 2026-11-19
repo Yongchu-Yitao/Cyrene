@@ -225,3 +225,31 @@ async def test_endpoint_aggregation_preserves_selected_stream_diagnostics(
 
     assert captured.value.details.retry_scope == "different_arguments"
     assert captured.value.as_error_details()["stream_diagnostics"] == diagnostics
+
+
+@pytest.mark.parametrize("header", ["120", "Wed, 21 Oct 2037 07:28:00 GMT", "invalid", None])
+def test_rate_limit_retry_after_survives_model_routing(header):
+    from datetime import datetime, timezone
+    from cyrene.model.error_details import details_from_mapping
+
+    request = httpx.Request("POST", "https://model.invalid")
+    response = httpx.Response(429, request=request, headers={"Retry-After": header} if header else {})
+    before = datetime.now(timezone.utc).timestamp()
+    details = classify_model_error(httpx.HTTPStatusError("busy", request=request, response=response))
+    assert details.retry_scope == "after_delay"
+    assert details_from_mapping(details.as_dict()) == details
+    if header == "120":
+        assert before + 120 <= details.retry_at <= datetime.now(timezone.utc).timestamp() + 120
+    elif header and header.endswith("GMT"):
+        assert details.retry_at == datetime(2037, 10, 21, 7, 28, tzinfo=timezone.utc).timestamp()
+    else:
+        assert details.retry_at is None
+
+
+def test_http_429_exhausted_quota_does_not_schedule_rate_limit_recovery():
+    request = httpx.Request("POST", "https://model.invalid")
+    response = httpx.Response(429, request=request, headers={"Retry-After": "120"})
+    exc = httpx.HTTPStatusError("rejected", request=request, response=response)
+    exc.diagnostics = {"provider_error_code": "insufficient_quota"}
+    details = classify_model_error(exc)
+    assert (details.code, details.retryable, details.retry_at) == ("model_quota_exhausted", False, None)

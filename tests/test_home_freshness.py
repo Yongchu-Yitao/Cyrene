@@ -35,8 +35,8 @@ def home_rig(tmp_path, monkeypatch):
 async def add_overview(rig):
     return await rig.service.command('assistant', None, 'card.create', {
         'template': 'content', 'spec': {'title': '今日安排', 'home_kind': 'overview', 'blocks': [
-            {'block_id': 'weather', 'type': 'weather', 'location': '广州', 'condition': '小雨',
-             'temperature': '20°C', 'range': '18–23°C', 'advice': '带伞', 'source': 'test observation', 'updated_at': datetime.fromtimestamp(rig.clock[0], timezone.utc).isoformat()}]}}, effect='initial')
+            {'block_id': 'weather', 'type': 'weather_observation', 'location': '广州', 'condition_code': 'rain',
+             'temperature_c': 20, 'range_c': {'low': 18, 'high': 23}, 'advice': '带伞', 'source': 'test observation', 'updated_at': datetime.fromtimestamp(rig.clock[0], timezone.utc).isoformat()}]}}, effect='initial')
 
 
 @pytest.mark.asyncio

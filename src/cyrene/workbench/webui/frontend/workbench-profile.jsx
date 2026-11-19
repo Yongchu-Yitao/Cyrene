@@ -127,7 +127,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
     );
   }
 
-  function WorkbenchProfilePage() {
+  function WorkbenchProfilePage({ title } = {}) {
     var i18n = workbenchServices.i18n().use();
     var t = i18n.t, lang = i18n.lang;
     var dataStore = workbenchServices.data();
@@ -201,7 +201,7 @@ import { workbenchServices } from "./shared/runtime/services.jsx"
 
     return (
       <div className="wbp-page">
-        <div className="wbp-inner">
+        <div className="wbp-inner">{title && <h2 className="stats-title">{title}</h2>}
           <div className={"wbp-hero" + (editing ? " is-editing" : "")}>
             {!editing && (
               <button type="button" className="wbp-edit-fab" title={t("profile.edit")} onClick={beginEdit}>

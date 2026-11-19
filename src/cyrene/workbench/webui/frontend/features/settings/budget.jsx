@@ -528,7 +528,7 @@ function BudgetPanel(p) {
       t(mode === "usage" ? "settings.usageSubtitle" : "settings.budgetSubtitle")
     ),
 
-    mode === "usage" && SectionBlock(t("settings.profileUsageSnapshot"), t("settings.profileUsageSnapshotHint"),
+    mode === "usage" && SectionBlock(t("settings.profileUsageSnapshot"), null,
       React.createElement("div", { className: "wb-usage-metrics is-profile" },
         usageMetric(formatCost(profileSpend), t("profile.spend")),
         usageMetric(i18n.formatNumber(profileUsage.requests || 0), t("profile.requests")),

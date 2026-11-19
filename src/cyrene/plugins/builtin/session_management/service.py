@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 
 from .host import KIND, OWNER
@@ -207,6 +208,7 @@ class SessionManagementService:
             if len(text) > 20000 or (not text and not args.get("files")):
                 raise ValueError("Provide a message (at most 20000 characters) or files")
             attachments = await asyncio.to_thread(self._files, args.get("files", []), workspace)
+            checkpoint = await asyncio.to_thread(self.host.checkpoint, target)
             self.store.enqueue(
                 owner,
                 target,
@@ -216,8 +218,13 @@ class SessionManagementService:
                     "attachments": attachments,
                     "version": self.host.version(chat),
                 },
+                retry_at=checkpoint.get("retry_at", 0),
             )
-        return {"session_id": target, "message_id": message_id, "status": self.store.message(message_id)["status"]}
+        row = self.store.message(message_id)
+        result = {"session_id": target, "message_id": message_id, "status": row["status"]}
+        if row["status"] == "queued" and row["next_attempt"] > time.time():
+            result["retry_at"] = row["next_attempt"]
+        return result
 
     async def list(self, owner):
         async def perform():
@@ -240,7 +247,7 @@ class SessionManagementService:
                     result.append(
                         {
                             **{key: checkpoint[key] for key in
-                               ("run_id", "node_id", "cancel_reason", "interruption_kind", "recovery_action") if key in checkpoint},
+                               ("run_id", "node_id", "cancel_reason", "interruption_kind", "recovery_action", "failure_kind", "retry_at") if key in checkpoint},
                             "session_id": record["id"],
                             "presentation": self.store.presentation(record["id"]),
                             "title": chat.get("title", ""),
@@ -352,15 +359,17 @@ class SessionManagementService:
             except Exception:
                 logger.exception("Managed session notification will retry")
 
-    def delivery_failed(self, row, error):
+    def delivery_failed(self, row, error, *, finish_update=False):
         owner = self.host.chat(row["owner"])
-        if owner is None:
-            return
-        self.store.notify("delivery_failure_" + row["id"], row["owner"], row["target"], {
+        notice = ("delivery_failure_" + row["id"], row["owner"], row["target"], {
             "owner_version": self.host.version(owner),
             "event": {"status": "failed", "phase": "delivery", "session_id": row["target"],
                       "message_id": row["id"], "error": error},
-        })
+        }) if owner is not None else None
+        if finish_update:
+            self.store.update(row["id"], "failed", error, notification=notice)
+        elif notice:
+            self.store.notify(*notice)
 
     def work_device_unavailable(self, owner_id, target, error):
         owner, chat = self.host.chat(owner_id), self.host.chat(target)
@@ -386,7 +395,7 @@ class SessionManagementService:
         await self.notify_tasks()
         for row in self.store.pending():
             async with self.lock:
-                if self.store.message(row["id"]) is None:
+                if self.store.message(row["id"]) != row:
                     continue
                 await self._deliver_message(row)
         await self.notify_tasks()
@@ -396,27 +405,30 @@ class SessionManagementService:
             record, _chat = self._owned(row["owner"], row["target"])
             if record["paused"]:
                 return
+            # This update may already have been queued when the preceding run failed.
+            checkpoint = await asyncio.to_thread(self.host.checkpoint, row["target"])
+            retry_at = checkpoint.get("retry_at", 0)
+            if retry_at > time.time():
+                self.store.defer(row["id"], until=retry_at)
+                return
             accepted = await self.host.deliver(row["owner"], row["target"], row["id"], json.loads(row["payload"]))
             if accepted:
                 self.store.update(row["id"], "delivered")
             else:
                 self.store.defer(row["id"])
-        except (ConnectionError, TimeoutError) as exc:
-            if self.work_device_unavailable(row["owner"], row["target"], str(exc)):
-                # Keep the original input for explicit recovery, without another silent retry cycle.
+        except Exception as exc:
+            if isinstance(exc, (ConnectionError, TimeoutError)) and self.work_device_unavailable(
+                row["owner"], row["target"], str(exc)
+            ):
                 self.store.update(row["id"], "queued", str(exc))
                 self.store.pause(row["target"])
+                return
+            failed = (isinstance(exc, ValueError) or getattr(exc, "code", "") == "agent_input_rejected"
+                      or row["attempts"] >= 11)
+            if failed:
+                self.delivery_failed(row, str(exc), finish_update=True)
             else:
-                self.store.update(row["id"], "failed" if row["attempts"] >= 11 else "queued", str(exc))
-                if row["attempts"] >= 11:
-                    self.delivery_failed(row, str(exc))
-        except ValueError as exc:
-            self.store.update(row["id"], "failed", str(exc))
-            self.delivery_failed(row, str(exc))
-        except Exception as exc:
-            self.store.update(row["id"], "failed" if row["attempts"] >= 11 else "queued", str(exc))
-            if row["attempts"] >= 11:
-                self.delivery_failed(row, str(exc))
+                self.store.update(row["id"], "queued", str(exc))
 
     async def _worker(self):
         # Subscribe before replaying durable state: no enqueue can fall between

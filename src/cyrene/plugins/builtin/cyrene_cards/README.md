@@ -89,10 +89,10 @@ HTML 不设字符数上限，卡片文档也不再受 256 KiB 总大小限制。
 
 卡片在对话正文展示；用户可点击右上角固定图标 固定到右侧，也可使用 `pinned=true` 创建或通过 `card.pin` 固定。右侧复用普通分屏外壳，纵向滚动展示全部已固定卡片，按游标读取完整列表，不设置固定数量上限。切换任务和刷新后仍保留，并与对话引用同一 card_id。取消固定不会删除对话卡片。现有地图分屏保持原有行为。
 
-成功 `card.create` 的工具结果携带 `presentation.kind=assistant_card`、`card_id` 和
-`operation=card.create`。实时对话与历史重建均保留该引用，前端将其投影为独立的正文
-卡片，不隐藏在工具记录折叠区。`card.update` 不追加重复卡片；可见卡片定期读取最新
-版本，隐藏页面暂停刷新。载入失败显示重试，归档后输入只读。
+成功的 `card.create` 和 `card.update` 工具结果携带 `presentation.kind=assistant_card`、
+`card_id`、`revision` 和 `operation`。实时对话与历史重建均保留该引用。每张卡片在正文中
+只显示一次，跟随最新版本对应的工具记录。可见卡片定期读取最新版本，隐藏页面暂停刷新。
+载入失败显示重试，归档后输入只读。
 
 原生区块支持文字、指标、字段、清单、表格、表单、时间线、文件条目信息、图表和地图。
 地图沿用现有底图配置和坐标转换，支持备注、地点选择、路线聚焦；连线并非导航路线。
@@ -186,8 +186,10 @@ iframe 的 submit/confirm 请求先在宿主展示提交值，需要
 固定状态与用户输入沿用已有版本保护。home_kind 在创建后不可变更。
 
 新增原生区块：
-- `weather`：location、condition、temperature、range、advice、source、updated_at。
-  所有值由助理根据实际查询填写，缺少地点或查询失败时使用文字说明，不捏造天气。
+- 首页新写入的天气使用 `weather_observation`，提供地点、来源和带时区的观测时间 `updated_at`。
+  `temperature_c` 是摄氏温度数值，`condition_code` 是天气枚举，缺失的一项填 JSON null。
+  可选的 `condition_label` 提供简短的本地化描述，`range_c` 保存今日最低和最高摄氏温度，`advice` 保存天气详情。
+  两项都缺失时使用普通 `text` 区块，例如“广州番禺 · 天气暂缺”。
 - `action_list`：items 为 item_id、label、可选 detail、action_ids；可选 collapsed。
   标题和条目数量构成折叠入口，计数来自条目；每行按钮引用 spec.actions，不重复显示在底部。
 - action 可携带 target_context_id、task_id；提交时这两个字段随不可变快照交给助理，
@@ -200,7 +202,7 @@ iframe 的 submit/confirm 请求先在宿主展示提交值，需要
 
 后台启动 5 秒后开始，每 30 秒检查实际任务消息、任务文档和同项目任务状态；
 变化触发助理整理待确认事项、进度和成果。天气按带时区 updated_at 判断，一小时
-过期后自动请求新观测；查不到时保留原观测和时间，十分钟后重试。维护使用独立助理执行环境，前台运行或等待用户回答时仍可准备，不向前台发送
+过期后自动请求新观测；查不到时仅复用同地点仍在有效期内的观测及原时间，十分钟后重试。维护使用独立助理执行环境，前台运行或等待用户回答时仍可准备，不向前台发送
 消息、不切换上下文，也不显示工具或处理过程。后台只获准查询天气和编辑首页草稿；
 完成后统一发布，遇到前台卡片修改或提交冲突则保留前台版本并重试。失败或中断
 两分钟后重试，准备过程不暴露半成品。
@@ -211,8 +213,7 @@ iframe 的 submit/confirm 请求先在宿主展示提交值，需要
 
 三类槽位均可选，Agent 用 `spec.home_visible=false` 隐藏当前无用的卡片，true 恢复。
 自动创建回访卡片强制 conversation，Agent 无法将回访卡片 pin；用户和 Agent 都无法固定回访内容。旧版所有回访固定引用在加载服务时移除，内容保留。
-天气可指定 icon：clear、partly_cloudy、cloudy、rain、snow、storm、fog、night；
-未指定时按条件文字选择图案，未知情况不假装晴天。动效尊重 prefers-reduced-motion。
+天气动画由 `condition_code` 决定，支持 clear、partly_cloudy、cloudy、rain、snow、storm、fog、night。仅有温度时显示中性背景。动效尊重 prefers-reduced-motion。
 
 
 首页展示使用独立布局，保留普通卡片的交互和数据协议。overview 的 spec.title 是

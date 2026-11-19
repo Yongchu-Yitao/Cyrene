@@ -348,7 +348,7 @@ class WorkbenchChatApplicationPort:
             # A retry may observe the run created by its own earlier attempt
             # before that run has mounted input. Do not also enqueue guidance.
             if active.events and active.events[0].get("clientRequestId") == request_id:
-                await self._wait_agent_message_admission(chat_id, request_id)
+                await self._wait_agent_message_admission(chat_id, request_id, active.run_id)
                 return {"status": "admitted", "session_id": chat_id, "run_id": active.run_id}
             return await guide_active()
         try:
@@ -369,20 +369,33 @@ class WorkbenchChatApplicationPort:
             if exc.status_code == 409 or exc.code == "chat_run_in_progress":
                 return await guide_active()
             raise
-        await self._wait_agent_message_admission(chat_id, request_id)
+        run_id = str(payload.get("run_id") or payload.get("runId") or "")
+        await self._wait_agent_message_admission(chat_id, request_id, run_id)
         return {
             **payload,
             "status": "started",
             "session_id": str(chat_id),
-            "run_id": str(payload.get("run_id") or payload.get("runId") or ""),
+            "run_id": run_id,
         }
 
-    async def _wait_agent_message_admission(self, chat_id: str, request_id: str) -> None:
+    async def _wait_agent_message_admission(self, chat_id: str, request_id: str, run_id: str = "") -> None:
         # HTTP 202 only means an in-memory runner exists. Wait for its input
         # commit, independently of whether the eventual model call succeeds.
         async with asyncio.timeout(20):
             while not await self.agent_message_admitted(chat_id, request_id):
-                if self.run_manager.get(chat_id) is None:
+                active = self.run_manager.get(chat_id)
+                if active is None or (run_id and active.run_id != run_id):
+                    # Admission may have committed while the last read was in flight.
+                    if await self.agent_message_admitted(chat_id, request_id):
+                        return
+                    run = self.run_manager.get_replayable_by_run_id(run_id) if run_id else None
+                    if run and run.chat_id == chat_id and run.done.is_set() and (run.outcome or {}).get("kind") == "error":
+                        event = next((e for e in reversed(run.events) if e.get("type") == "error"), {})
+                        reason = event.get("code") or event.get("error") or run.termination_reason
+                        raise ControlServiceError(
+                            f"Task update was not accepted by run {run_id}: {reason}.",
+                            code="agent_input_rejected", status_code=422,
+                        )
                     raise ControlServiceError("Agent run ended before input admission.", status_code=503)
                 await asyncio.sleep(0.05)
 

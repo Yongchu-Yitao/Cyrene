@@ -74,3 +74,16 @@ test("the assistant's actual Transcript component filters saved and live inputs"
     ]), []);
   }
 });
+
+test("place each completed plugin view after its owner, including live and replayed tool calls", () => {
+  const presentation = { kind: "plugin_view", packId: "reports", viewId: "report", instanceId: "tool_" + "a".repeat(32) };
+  const tool = { status: "completed", presentation };
+  const live = { id: "activity", runtimeActivity: { progress: [tool] } };
+  const history = { id: "stored", trace: [tool] };
+  const reply = { id: "reply", role: "assistant", content: "Report ready" };
+  const inline = presentConversationMessages([history, reply])[1];
+  assert.equal(inline.pluginView, presentation);
+  assert.deepEqual(presentConversationMessages([live, history, reply]), [live, inline, history, reply]);
+  const failed = { trace: [{ ...tool, failed: true }, { ...tool, status: "running" }] };
+  assert.deepEqual(presentConversationMessages([failed]), [failed]);
+});

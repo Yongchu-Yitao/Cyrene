@@ -219,7 +219,7 @@ class SessionPlugins:
                 self.owns_driver = False
 
 
-    def _attach_session_pack(self, pack: PluginPack, source: str) -> None:
+    def _attach_session_pack(self, pack: PluginPack, source: str, fingerprint: tuple[Any, ...]) -> None:
         if "agent_session" in self.services:
             raise ValueError("Plugin service name is reserved: agent_session")
         before = dict(self.services)
@@ -241,7 +241,7 @@ class SessionPlugins:
             attachment = _SessionPackAttachment(
                 pack=pack,
                 source=source,
-                setup_fingerprint=self._pack_setup_fingerprint(pack, source),
+                setup_fingerprint=fingerprint,
                 hooks=set(tracker.touched),
                 previous_services=previous,
                 provided_services=changed,
@@ -330,8 +330,14 @@ class SessionPlugins:
 
             self._remember_required_session_packs(host)
             failed_sources = self._failed_pack_sources(host)
-            desired: dict[str, tuple[PluginPack, str]] = {}
+            desired: dict[str, tuple[PluginPack, str, tuple[Any, ...]]] = {}
+            running_pack = getattr(host, "running_pack_snapshot", None)
             for pack in self.registry.list_packs():
+                # Old trees restore Hook registrations from disk. Bind their
+                # handlers from the same generation as the running services.
+                snapshot = running_pack(pack.id) if running_pack is not None else None
+                if snapshot is not None:
+                    pack = snapshot[0]
                 if not pack.has_session_contributions:
                     continue
                 try:
@@ -339,22 +345,22 @@ class SessionPlugins:
                     enabled = self.registry.pack_enabled(pack.id)
                 except Exception:
                     continue
+                if not enabled or str(Path(source).resolve()) in failed_sources:
+                    continue
+                if snapshot is not None:
+                    desired[pack.id] = snapshot
+                    continue
                 application_error = self._application_pack_error(pack, host)
                 if application_error:
                     self.setup_failures[pack.id] = application_error
-                if (
-                    enabled
-                    and not application_error
-                    and str(Path(source).resolve()) not in failed_sources
-                ):
-                    desired[pack.id] = (pack, source)
+                    continue
+                desired[pack.id] = (pack, source, self._pack_setup_fingerprint(pack, source))
 
             for pack_id, attachment in tuple(self.attachments.items()):
                 next_value = desired.get(pack_id)
                 if next_value is None or (
                     attachment.source != next_value[1]
-                    or attachment.setup_fingerprint
-                    != self._pack_setup_fingerprint(*next_value)
+                    or attachment.setup_fingerprint != next_value[2]
                 ):
                     self._detach_session_pack(
                         pack_id,
@@ -362,9 +368,9 @@ class SessionPlugins:
                     )
 
             self._sync_application_host_services(host)
-            for pack_id, (pack, source) in desired.items():
+            for pack_id, snapshot in desired.items():
                 if pack_id not in self.attachments:
-                    self._attach_session_pack(pack, source)
+                    self._attach_session_pack(*snapshot)
 
             self.sync_token = (
                 self.registry.sync_token,

@@ -745,3 +745,44 @@ def test_plugin_center_marks_unmanaged_user_sources_for_top_section(tmp_path) ->
     frontend = (ROOT / "src/cyrene/workbench/webui/frontend/features/settings/custom-plugins.jsx").read_text(encoding="utf-8")
     assert frontend.index("UserCreatedPluginsSection") < frontend.index("PluginPacksSection, { controller: c }")
     assert "item.user_created === true" in frontend
+
+
+def test_delete_standalone_plugin_only_removes_its_own_user_source(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from cyrene.workbench.http import plugins
+
+    def registered(name, source, pack=None):
+        return SimpleNamespace(plugin=SimpleNamespace(name=name, canonical_name=name), source=source, pack_id=pack)
+
+    managed = tmp_path / "custom.py"
+    managed.write_text("# local plugin")
+    seeded = tmp_path / "builtin.py"
+    seeded.write_text("# seeded plugin")
+    (tmp_path / ".upstream-hashes.json").write_text(json.dumps({"version": 1, "files": {"builtin.py": "hash"}}))
+    shared = tmp_path / "shared.py"
+    shared.write_text("# shared source")
+    entries = [
+        registered("custom", str(managed)), registered("builtin", str(seeded)),
+        registered("core", "core"), registered("member", str(managed), "my-pack"),
+        registered("a", str(shared)), registered("b", str(shared)),
+    ]
+    async def reload_user_plugins():
+        return SimpleNamespace(directory=tmp_path, created=[], updated=[], existing=[], removed=[], diagnostics=[], manifest=""), []
+
+    host = SimpleNamespace(
+        registry=SimpleNamespace(list_plugins=lambda: entries, plugin_locked=lambda name: False),
+        plugin_directory=tmp_path, restart_required_packs=[], reload_user_plugins=reload_user_plugins,
+    )
+    monkeypatch.setattr(plugins, "plugin_registry_status", lambda _: {"ok": True})
+    router = APIRouter()
+    plugins.register_plugin_routes(router, host)
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        assert client.delete("/api/plugins/standalone/unknown").status_code == 404
+        for protected in ("builtin", "member", "core", "a", "custom"):
+            assert client.delete("/api/plugins/standalone/" + protected).status_code == 400
+        entries.remove(next(entry for entry in entries if entry.plugin.name == "member"))
+        assert client.delete("/api/plugins/standalone/custom").status_code == 200
+    assert not managed.exists()
+    assert shared.is_file() and seeded.is_file()

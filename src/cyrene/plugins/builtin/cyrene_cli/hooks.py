@@ -18,28 +18,21 @@ from typing import Any
 from cyrene.core.hook import (
     POST_TOOL_USE,
     PRE_TOOL_USE,
-    SESSION_END,
     SESSION_START,
-    STOP,
     TURN_START,
     HookEvent,
 )
+from cyrene.core.hook.actions import ActionError, EVENT_DESCRIPTIONS, combine_decisions, validate_action
 from cyrene.core.hook.storage import encode_event_payload
 from cyrene.config import DATA_DIR
+from cyrene.localization import localized
 from cyrene.plugins.builtin.cyrene_extensions.extension_service import agent_process_environment
 from cyrene.platform.secret_redaction import redact_text
 from cyrene.platform.settings_store import get as get_setting, set_ as set_setting
 
 logger = logging.getLogger(__name__)
 
-CLI_HOOK_EVENTS = (
-    PRE_TOOL_USE,
-    POST_TOOL_USE,
-    SESSION_START,
-    TURN_START,
-    SESSION_END,
-    STOP,
-)
+CLI_HOOK_EVENTS = tuple(EVENT_DESCRIPTIONS)
 _HOOKS_KEY = "cli_plugin_hooks"
 _PROPOSALS_KEY = "cli_plugin_hook_proposals"
 _RESULTS_KEY = "cli_plugin_hook_configuration_results"
@@ -270,7 +263,7 @@ async def _communicate(process: asyncio.subprocess.Process, payload: bytes) -> t
 
 
 def event_payload(event: HookEvent, *, test: bool = False) -> dict[str, Any]:
-    payload = json.loads(encode_event_payload(event))
+    payload = dict(event.payload) if isinstance(event.payload, Mapping) else json.loads(encode_event_payload(event))
     result = {
         "protocol_version": 2,
         "event": event.name,
@@ -288,6 +281,48 @@ def event_payload(event: HookEvent, *, test: bool = False) -> dict[str, Any]:
     if test:
         result["test"] = True
     return result
+
+
+def _sample_tool_name(matcher: str) -> str:
+    """Build a sample for the settings Test button, including glob character classes."""
+    def sample(match: re.Match[str]) -> str:
+        token = match.group()
+        if token == "*":
+            return "HookTestTool"
+        if token == "?":
+            return "X"
+        return next((c for c in "Tool0_-" + token if fnmatch.fnmatchcase(c, token)), "X")
+
+    return re.sub(r"\[!?\]?[^\]]*\]|[?*]", sample, matcher)
+
+
+class CliHookOutputError(RuntimeError):
+    """The subprocess completed but its stdout violates the event contract."""
+
+
+def _parse_output(event: str, stdout: bytes) -> dict[str, Any]:
+    if not stdout.strip():
+        return {}
+    try:
+        output = json.loads(stdout.decode("utf-8"))
+    except ValueError as exc:
+        raise CliHookOutputError(localized(
+            "{event} output must be a UTF-8 JSON object.",
+            "{event} 的输出必须是 UTF-8 编码的 JSON 对象。", event=event,
+        )) from exc
+    if not isinstance(output, dict):
+        raise CliHookOutputError(localized(
+            "{event} output must be a JSON object.",
+            "{event} 的输出必须是 JSON 对象。", event=event,
+        ))
+    try:
+        if "actions" in output:
+            if set(output) != {"actions"} or not isinstance(output["actions"], list):
+                raise ActionError("actions must be an array, by itself")
+            return {"actions": [validate_action(item) for item in output["actions"]]}
+        return validate_action(output)
+    except ActionError as exc:
+        raise CliHookOutputError(f"{event}: {exc}") from exc
 
 
 class CliHookService:
@@ -625,12 +660,7 @@ class CliHookService:
             stderr_text = stderr.decode("utf-8", errors="replace")
             if process.returncode != 0:
                 raise RuntimeError(f"CLI Hook exited with code {process.returncode}")
-            if not stdout.strip():
-                return {}
-            parsed = json.loads(stdout.decode("utf-8", errors="replace"))
-            if not isinstance(parsed, dict):
-                raise RuntimeError("CLI Hook stdout JSON must be an object")
-            return parsed
+            return _parse_output(str(hook["event"]), stdout)
         except asyncio.CancelledError:
             status, error = "cancelled", "cancelled"
             raise
@@ -656,56 +686,78 @@ class CliHookService:
                 "duration_ms": round((asyncio.get_running_loop().time() - started) * 1000, 2),
             })
 
-    async def dispatch(self, event: HookEvent) -> dict[str, Any]:
-        current_arguments: dict[str, Any] | None = None
-        contexts: list[str] = []
+    async def dispatch(self, event: HookEvent, *, session=None) -> dict[str, Any]:
+        return await self._dispatch(event, self.matching(event), session=session)
+
+    async def _dispatch(
+        self, event: HookEvent, hooks: list[dict[str, Any]], *, session=None,
+        test_errors: list[str] | None = None,
+    ) -> dict[str, Any]:
+        testing = test_errors is not None
+        target = {PRE_TOOL_USE: "tool", POST_TOOL_USE: "result"}.get(event.name)
         payload = event.payload if isinstance(event.payload, Mapping) else {}
-        tool = payload.get("tool") if isinstance(payload, Mapping) else {}
-        if event.name == PRE_TOOL_USE and isinstance(tool, Mapping):
-            current_arguments = dict(tool.get("arguments") or {})
-        for hook in self.matching(event):
-            effective_event = event
-            if current_arguments is not None:
-                effective_event = HookEvent(
-                    event.name,
-                    event.tree_id,
-                    event.time,
-                    payload={**dict(payload), "tool": {**dict(tool), "arguments": dict(current_arguments)}},
-                    node_id=event.node_id,
-                    is_root=event.is_root,
-                )
+        tool = payload.get("tool") or {}
+        initial = tool.get("arguments") or {}
+        decisions = []
+        if target and session is not None:
+            decisions.extend(session.pending_hook_actions(target, event))
+        contexts = []
+        messages = []
+        deferred = []
+        for hook in hooks:
+            current = combine_decisions(decisions)
+            if current.get("decision") == "block":
+                break
+            script_input = event_payload(event, test=testing)
+            if "arguments" in current:
+                if target == "tool":
+                    script_input["tool"] = {**tool, "arguments": current["arguments"]}
+                elif target == "result":
+                    script_input["result"] = {**script_input.get("result", {}), **current["arguments"]}
             try:
-                output = await self.execute(hook, event_payload(effective_event))
+                output = await self.execute(hook, script_input, test=testing)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if testing:
+                    test_errors.append(str(redact_text(str(exc))))
                 logger.warning("CLI Hook %s failed", hook.get("id"), exc_info=True)
-                if event.name == PRE_TOOL_USE and hook.get("failure_policy") == "block":
-                    return {"decision": "block", "reason": f"{hook.get('name') or hook.get('id')}: {exc}"}
+                if hook.get("failure_policy") == "block":
+                    decisions.append({"decision": "block", "reason": f"{hook['name']}: {exc}"})
                 continue
-            if event.name == PRE_TOOL_USE:
-                decision = str(output.get("decision") or "allow").strip().lower()
-                if decision == "block":
-                    return {"decision": "block", "reason": str(output.get("reason") or hook.get("name") or hook.get("id"))}
-                if decision not in {"allow", "modify"}:
-                    if hook.get("failure_policy") == "block":
-                        return {"decision": "block", "reason": "CLI Hook returned an invalid decision"}
-                    continue
-                if "arguments" in output:
-                    if not isinstance(output.get("arguments"), Mapping):
-                        if hook.get("failure_policy") == "block":
-                            return {"decision": "block", "reason": "CLI Hook returned invalid arguments"}
+            effects = []
+            for action in output.get("actions", [output]):
+                if message := action.get("message"):
+                    messages.append(message)
+                    effects.append(("message", {"message": message, "hook": hook["name"]}))
+                if prompt := (action.get("context") or "").strip():
+                    if event.name in {SESSION_START, TURN_START, PRE_TOOL_USE}:
+                        contexts.append(prompt)
                     else:
-                        current_arguments = dict(output["arguments"])
-            elif event.name in {SESSION_START, TURN_START}:
-                context = str(output.get("context") or "").strip()
-                if context:
-                    contexts.append(context[:16000])
-        if event.name == PRE_TOOL_USE:
-            return {"decision": "modify" if current_arguments != dict(tool.get("arguments") or {}) else "allow", "arguments": current_arguments or {}}
-        if event.name in {SESSION_START, TURN_START} and contexts:
-            return {"context": "\n\n".join(contexts)}
-        return {}
+                        effects.append(("model", {"context": prompt}))
+                if "decision" in action:
+                    decision = {k: v for k, v in action.items() if k not in {"message", "context"}}
+                    destination = decision.pop("target", "tool")
+                    if destination == target:
+                        decisions.append(decision)
+                    else:
+                        effects.append((destination, {**decision, "target": destination}))
+            if session is not None:
+                session.record_hook_actions(event, hook["id"], effects)
+            deferred.extend({"target": dest, **body} for dest, body in effects if dest != "message")
+        result = combine_decisions(decisions)
+        if target == "tool" and result.get("decision") == "ask" and session is not None:
+            result = session.review_hook_question(event, tool, result)
+        if target == "tool" and result.get("decision") not in {"block", "ask"}:
+            arguments = result.get("arguments", initial)
+            result.update(decision="modify" if arguments != initial else "allow", arguments=arguments)
+        if contexts:
+            result["context"] = "\n\n".join(contexts)
+        if messages:
+            result["message"] = "\n\n".join(messages)
+        if deferred:
+            result["deferred"] = deferred
+        return result
 
     async def test(self, hook_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         hook = self.get(hook_id)
@@ -717,14 +769,35 @@ class CliHookService:
         ):
             raise ValueError("Agent configuration is not complete")
         event = str(hook.get("event") or SESSION_START)
-        payload_data = dict(payload or {})
+        now = datetime.now(timezone.utc)
+        samples = {
+            "ContextChange": {"tree_id": "cli-hook-test", "node_id": "sample", "parent_id": "root",
+                              "action": "mount", "time": now.isoformat(), "deleted_node_ids": []},
+            "ContextUsed": {"tree_id": "cli-hook-test", "node_id": "sample", "time": now.isoformat(),
+                            "tokens": 128, "token_limit": 1024, "usage_ratio": 0.125, "node_tokens": {}},
+            "ConversationTurnCommitted": {"event_id": "sample-commit", "run_id": "sample-run",
+                                          "turn_id": "sample-turn", "status": "completed",
+                                          "user_text": "Sample request", "assistant_text": "Sample reply"},
+            "Stop": {"run_id": "sample-run", "reason": "user_cancelled"},
+            "SessionEnd": {"run_id": "sample-run", "status": "completed", "assistant_text": "Sample reply"},
+        }
+        payload_data = {**samples.get(event, {"run_id": "sample-run"}), **(payload or {})}
         if event in {PRE_TOOL_USE, POST_TOOL_USE} and not isinstance(payload_data.get("tool"), Mapping):
             matcher = str(hook.get("matcher") or "*")
-            payload_data["tool"] = {"name": matcher if not any(char in matcher for char in "*?[") else "HookTestTool", "arguments": {}}
+            payload_data["tool"] = {"name": _sample_tool_name(matcher), "arguments": {}}
         if event == POST_TOOL_USE and not isinstance(payload_data.get("result"), Mapping):
             payload_data["result"] = {"success": True, "value": "Hook test", "error": ""}
         hook_event = HookEvent(event, "cli-hook-test", datetime.now(timezone.utc), payload=payload_data, node_id="root", is_root=True)
-        output = await self.execute(hook, event_payload(hook_event, test=True), test=True)
+        selected = [item for item in self.matching(hook_event) if item["id"] == hook_id]
+        if not selected:
+            return {"ok": False, "error": localized(
+                "The Hook is disabled or the test tool does not match its tool pattern.",
+                "Hook 未启用，或测试工具名称与匹配规则不符。",
+            )}
+        errors: list[str] = []
+        output = await self._dispatch(hook_event, selected, test_errors=errors)
+        if errors:
+            return {"ok": False, "error": errors[0], "output": output}
         return {"ok": True, "output": output}
 
 

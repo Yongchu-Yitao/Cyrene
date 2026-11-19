@@ -453,6 +453,11 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                 "stage": "provider_request_sent",
             },
         )
+    if event.type == "hook.message":
+        return (_envelope(event, "notification.created", event_id, {
+            "id": event.node_id, "category": "hook", "severity": "info", "source": "hook",
+            "message": data["message"], "hook": data.get("hook", ""),
+        }),)
     if event.type == "guidance.applied":
         return (
             _envelope(
@@ -575,7 +580,7 @@ def workbench_events(event: AgentSessionEvent) -> tuple[dict[str, Any], ...]:
                 )
             )
         return tuple(projected)
-    if event.type == "assistant.completed":
+    if event.type in {"assistant.completed", "assistant.pre_tool_reply"}:
         return _assistant_completed_events(event, data, event_id)
     if event.type == "run.failed":
         return (

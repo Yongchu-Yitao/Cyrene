@@ -643,11 +643,6 @@ html[data-theme] .settings-overlay .wb-textarea::placeholder {
   font-weight: 620;
 }
 
-.settings-overlay .wb-export-format .wb-seg {
-  width: auto;
-  align-self: flex-start;
-}
-
 .settings-overlay .wb-export-submit {
   min-width: 104px;
   min-height: 44px;

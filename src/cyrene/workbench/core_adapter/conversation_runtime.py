@@ -38,6 +38,17 @@ from cyrene.platform.task_lifecycle import cancel_and_wait
 logger = logging.getLogger(__name__)
 
 
+class UnfinishedRunError(RuntimeError):
+    code = "conversation_unfinished_run"
+    retryable = False
+
+    def __init__(self, run_id: str):
+        super().__init__(
+            f"Conversation has unfinished run {run_id!r}; "
+            "resume it or explicitly cancel it before starting a different run."
+        )
+
+
 def _assistant_context_data(config, personal_assistant):
     data = {"personal_assistant": personal_assistant, "assistant_home_owner": config.assistant_home_owner}
     return data
@@ -515,6 +526,28 @@ class ConversationRuntime:
             if application_host is not None
             else {}
         )
+        if chat:
+            def save_hook_message(tree_id, message_id, run_id, stamp, body):
+                if tree_id != config.session_id:
+                    return
+                from cyrene.workbench.chat.chat_application import merge_chat_messages_chronologically
+                from cyrene.workbench.chat.chat_events import publish_chat_changed
+
+                def append(current):
+                    merge_chat_messages_chronologically(current, [{
+                        "id": message_id, "role": "assistant", "content": "", "runId": run_id,
+                        "roundId": run_id, "createdAt": stamp, "status": "completed", "intermediate": True,
+                        "notificationCard": True, "notification": {**body, "id": message_id,
+                            "category": "hook", "severity": "info", "source": "hook"},
+                    }])
+
+                ChatRepository(config.db_path).mutate_one(tree_id, append)
+                # After a public commit there is no live run stream to wake the UI.
+                if raw_publisher is None and not owner_loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(publish_chat_changed(
+                        tree_id, config.project_id, "updated", message_id=message_id,
+                    ), owner_loop)
+            plugin_services["save_hook_message"] = save_hook_message
         if chat and chat.get("remoteControllerDeviceId"):
             from cyrene.plugins.builtin.cyrene_remote.task_execution import model_delegate
             plugin_services["model_delegate"] = model_delegate(chat, owner_loop, ChatRepository(config.db_path))
@@ -667,10 +700,7 @@ class ConversationRuntime:
                 if (checkpoint and checkpoint.get("status") == "running"
                     and checkpoint.get("run_id") != expected_run_id
                     and not replace_interrupted_run):
-                    raise RuntimeError(
-                        f"Conversation has unfinished run {checkpoint.get('run_id')!r}; "
-                        "resume it or explicitly cancel it before starting a different run."
-                    )
+                    raise UnfinishedRunError(checkpoint.get("run_id"))
             open_started = time.perf_counter()
             open_options = {}
             if (replace_interrupted_run and checkpoint
@@ -796,10 +826,7 @@ class ConversationRuntime:
                         publish=event_publisher,
                         cancel_on_caller_cancel=False,
                     )
-                raise RuntimeError(
-                    f"Conversation has unfinished run {restored_run_id!r}; "
-                    "resume it or explicitly cancel it before starting a different run."
-                )
+                raise UnfinishedRunError(restored_run_id)
             retry_origin: Mapping[str, str] = {}
             graph_replay = bool(metadata and metadata.get("fork_replay") and bridge.has_graph_draft())
             if retry_branch or graph_replay:

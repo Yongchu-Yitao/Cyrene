@@ -4,6 +4,9 @@ from typing import Any
 from .bridge import WorkbenchPendingQuestion
 
 
+MODEL_RATE_LIMIT_WAIT_SECONDS = 60
+
+
 def _cancellation_details(value):
     reason = str(value.get("cancel_reason") or "unknown")
     kind, recovery = {
@@ -86,6 +89,11 @@ def context_checkpoint_from_nodes(nodes: Sequence[Any], committed_leaf_id: str =
         "run_id": run_id,
         "node_id": leaf.id,
     }
+    if status == "failed" and value.get("failure_kind"):
+        result["failure_kind"] = value["failure_kind"]
+        if value["failure_kind"] == "model_rate_limited":
+            # Anchor to the original failure so replay/restart cannot extend the wait.
+            result["retry_at"] = value.get("retry_at", leaf.created_at.timestamp() + MODEL_RATE_LIMIT_WAIT_SECONDS)
     if status == "cancelled":
         result.update(_cancellation_details(value))
     return result

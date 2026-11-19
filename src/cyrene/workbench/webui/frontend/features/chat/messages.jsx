@@ -1,5 +1,6 @@
 import { wbcTraceTimelineItems } from "./trace-timeline.mjs"
 import { homeInsertionIndex } from "./home-timeline.mjs"
+import { WbcInlinePluginView } from "./inline-plugin-view.jsx"
 import { WbcAssistantCard } from "./assistant-cards.jsx"
 import { snapshotStaticMessage, equalAssistantProps } from "./message-memo.mjs"
 import { createDisclosureSubscriptions, subscribeDisclosureUpdates } from "./disclosure-subscriptions.mjs"
@@ -301,6 +302,11 @@ function WbcAgentNotification({ notice }) {
     tls_certificate: wbcT("workbenchChat.notification.tlsCertificate", "Secure connection warning"),
     transport_warning: wbcT("workbenchChat.notification.transportWarning", "Connection warning"),
   };
+  if (category === "hook") {
+    return <aside className="wbc-agent-notification" role="status"><span className="wbc-agent-notification-copy">
+      <b>{item.hook || "Hook"}</b><span style={{whiteSpace: "pre-wrap"}}>{message}</span>
+    </span></aside>;
+  }
   var title = titleByCategory[category] || titleByCategory.transport_warning;
   function copyDetail() {
     var copied = navigator.clipboard && navigator.clipboard.writeText
@@ -1407,7 +1413,7 @@ function WbcAssistantMessage({ msg, liveRuntime, onOpenFile, onRetryMessage, cha
   // timeline renderer. Keep the activity-card compatibility boundary here as
   // well, otherwise a durable reasoning/tool record with empty `content`
   // degrades into a footer-only assistant row on those surfaces.
-  if (msg.assistantCard) return <WbcAssistantCard cardId={msg.assistantCard.card_id} />;
+  if (msg.assistantCard) return <WbcAssistantCard cardId={msg.assistantCard.card_id} revision={msg.assistantCard.revision} />;
   var activityView = live ? null : wbcActivityMessageView(msg);
   if (activityView) {
     if (!activityView.visible) return null;
@@ -1709,12 +1715,13 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
 
 function WbcTranscript({ messages, runtime, onOpenFile, chatId, pendingQuestion, onAnswer, homeInsertion }) {
   var projected = wbcProjectTranscript(messages || [], runtime);
-  var group = items => wbcGroupConsecutiveActivityMessages(presentConversationMessages(items), runtime);
-  var boundary = homeInsertion ? homeInsertionIndex(projected, homeInsertion.position) : -1;
-  var timeline = homeInsertion
-    ? [...group(projected.slice(0, boundary)), {id:"assistant-home:" + chatId, homeSurface:true}, ...group(projected.slice(boundary))]
-    : group(projected);
+  if (homeInsertion) {
+    var boundary = homeInsertionIndex(projected, homeInsertion.position);
+    projected = [...projected.slice(0, boundary), { id: "assistant-home:" + chatId, homeSurface: true }, ...projected.slice(boundary)];
+  }
+  var timeline = wbcGroupConsecutiveActivityMessages(presentConversationMessages(projected), runtime);
   return <React.Fragment>{timeline.map(function (message) {
+    if (message.pluginView) return <WbcInlinePluginView key={message.id} view={message.pluginView} />;
     if (message.homeSurface) return <React.Fragment key={message.id}>{homeInsertion.content}</React.Fragment>;
     if (message.questionPrompt && pendingQuestion && message.questionId === pendingQuestion.id) return <WbcThreadItem key={message.id}><WbcQuestionPrompt pending={pendingQuestion} onAnswer={onAnswer} busy={false} /></WbcThreadItem>;
     if (message.runtimeContinuation) return <WbcContinuationIndicator key={message.id} immediate={!!message.runtimeInitial} />;
@@ -1737,7 +1744,8 @@ function WbcRuntimeTranscript({ runtime, onOpenFile }) {
   return (
     <React.Fragment>
       {timeline.map(function (item) {
-        if (item.assistantCard) return <WbcThreadItem key={item.id}><WbcAssistantCard cardId={item.assistantCard.card_id} /></WbcThreadItem>;
+        if (item.pluginView) return <WbcInlinePluginView key={item.id} view={item.pluginView} />;
+        if (item.assistantCard) return <WbcThreadItem key={item.id}><WbcAssistantCard cardId={item.assistantCard.card_id} revision={item.assistantCard.revision} /></WbcThreadItem>;
         if (item.runtimeHeartbeat) {
           return null;
         }

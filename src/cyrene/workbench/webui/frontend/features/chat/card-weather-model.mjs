@@ -1,4 +1,17 @@
-const kinds = new Set(['clear', 'partly_cloudy', 'cloudy', 'rain', 'snow', 'storm', 'fog', 'night']);
+const conditionLabels = {
+  clear: '晴', partly_cloudy: '多云', cloudy: '阴', rain: '雨', snow: '雪', storm: '雷雨', fog: '雾', night: '晴',
+};
+const kinds = new Set(Object.keys(conditionLabels));
+
+export function weatherReadout(block) {
+  if (block.type !== 'weather_observation') return block;
+  const condition = block.condition_label || conditionLabels[block.condition_code];
+  const temperature = block.temperature_c == null ? null : block.temperature_c + '°C';
+  const range = block.range_c && '今天 ' + block.range_c.low + '–' + block.range_c.high + '°C';
+  if (temperature == null) return { location: [block.location, condition].filter(Boolean).join(' · '), range };
+  return { location: block.location, temperature, condition, range };
+}
+
 // Match the home clock; saved observations must not freeze the display in daytime.
 export function weatherPeriod(now = new Date()) {
   const hour = now.getHours();
@@ -6,7 +19,7 @@ export function weatherPeriod(now = new Date()) {
 }
 
 export function weatherKind(block, now = new Date()) {
-  const kind = conditionKind(block);
+  const kind = block.type === 'weather_observation' ? block.condition_code ?? 'unknown' : conditionKind(block);
   if (kind === 'clear' || kind === 'night') return weatherPeriod(now) === 'night' ? 'night' : 'clear';
   return kind;
 }

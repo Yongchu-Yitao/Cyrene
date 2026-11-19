@@ -666,6 +666,38 @@ def register_plugin_routes(
             "application_restart_required": bool(host.restart_required_packs),
         }
 
+    @router.delete("/api/plugins/standalone/{canonical_name}")
+    async def api_delete_standalone_plugin(canonical_name: str):
+        """Remove the managed file that defines a user-created standalone plugin."""
+        plugins = host.registry.list_plugins()
+        item = next((entry for entry in plugins if entry.plugin.canonical_name == canonical_name), None)
+        if item is None:
+            return localized_error_response("Plugin not found.", "未找到插件。", 404, "plugin_not_found")
+        if (
+            item.pack_id is not None
+            or host.registry.plugin_locked(item.plugin.name)
+            or not _user_created_source(item.source, _seeded_contribution_names(host.plugin_directory))
+            or any(entry is not item and entry.source == item.source for entry in plugins)
+        ):
+            return localized_error_response(
+                "This source cannot be removed as a standalone user plugin.",
+                "此来源不能作为独立的用户插件删除。",
+                400,
+                "standalone_plugin_not_removable",
+            )
+        try:
+            seed, _failures = await delete_source(host, Path(item.source))
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("Standalone plugin deletion failed: %s", canonical_name, exc_info=True)
+            return localized_error_response(
+                "The plugin could not be removed.", "无法移除插件。", 400, "standalone_plugin_remove_failed",
+            )
+        return {
+            **plugin_registry_status(host),
+            "reload": _seed_value(seed),
+            "application_restart_required": bool(host.restart_required_packs),
+        }
+
     @router.patch("/api/plugins/tools/{canonical_name}")
     async def api_update_plugin_tool(
         canonical_name: str,

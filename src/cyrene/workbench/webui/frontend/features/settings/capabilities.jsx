@@ -1,3 +1,4 @@
+import {ChoiceCards} from "./choice-cards.jsx"
 import {
   SectionTitle,
   SectionBlock,
@@ -128,27 +129,11 @@ function CapabilitiesPanel(p) {
             React.createElement("b", null, t("settings.voiceProfile")),
             React.createElement("small", null, t("settings.voiceProfileHint")),
           ),
-          React.createElement("div", {
-            className: "wb-seg wb-voice-mode-switch",
-            role: "group",
-            "aria-label": t("settings.voiceProfile"),
-          },
-            React.createElement("button", {
-              type: "button",
-              className: "wb-seg-btn" + (!customVoiceSelected ? " active" : ""),
-              "aria-pressed": customVoiceSelected ? "false" : "true",
-              disabled: !!voiceBusy || voiceReferenceActive,
-              onClick: function () { saveVoiceMode("preset"); },
-            }, t("settings.voicePresetMode")),
-            React.createElement("button", {
-              type: "button",
-              className: "wb-seg-btn" + (customVoiceSelected ? " active" : ""),
-              "aria-pressed": customVoiceSelected ? "true" : "false",
-              disabled: !!voiceBusy || voiceReferenceActive || !voiceStatus.custom_tts_model_ready,
-              title: voiceStatus.custom_tts_model_ready ? "" : t("settings.voiceCustomRequiresZipVoice"),
-              onClick: function () { saveVoiceMode("custom"); },
-            }, t("settings.voiceCustomMode")),
-          ),
+          <ChoiceCards compact descriptionId={voiceStatus.custom_tts_model_ready?undefined:"voice-mode-unavailable"} label={t("settings.voiceProfile")} value={customVoiceSelected?"custom":"preset"} onChange={saveVoiceMode} options={[
+            {id:"preset",title:t("settings.voicePresetMode"),disabled:!!voiceBusy||voiceReferenceActive},
+            {id:"custom",title:t("settings.voiceCustomMode"),disabled:!!voiceBusy||voiceReferenceActive||!voiceStatus.custom_tts_model_ready}
+          ]}/>,
+          !voiceStatus.custom_tts_model_ready && <small className="voice-mode-note" id="voice-mode-unavailable">{t("settings.voiceCustomRequiresZipVoice")}</small>,
           customVoiceSelected
             ? React.createElement("div", { className: "wb-voice-custom-fields" },
                 React.createElement("div", { className: "wb-voice-profile-copy" },

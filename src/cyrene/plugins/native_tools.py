@@ -84,6 +84,11 @@ def _canonical_root():
     return importlib.resources.files(_CANONICAL_PACKAGE)
 
 
+def is_bundled_plugin_entry(name: str) -> bool:
+    entry = _canonical_root().joinpath(name)
+    return entry.is_file() or entry.is_dir()
+
+
 def _collect_canonical_files() -> Mapping[str, bytes]:
     """Read the canonical Plugin tree without importing any Plugin module."""
 

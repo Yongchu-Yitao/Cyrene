@@ -690,6 +690,94 @@ def test_v13_upgrade_adopts_legacy_deepseek_and_removes_v12_duplicate(
     assert migrated["routes"]["secondary"] == ["new-profile"]
 
 
+@pytest.fixture
+def duplicated_local_embedding():
+    model = "qwen3-embedding-0.6b"
+    seed_id = f"local_onnx:{model}"
+    connection = {"name": "Local ONNX", "adapter": "local_onnx"}
+    profile = {"model": model, "dimensions": 1024, "capabilities": ["embedding"]}
+    return {
+        "version": 13,
+        "connections": [
+            {**connection, "id": "connection-5"},
+            {**connection, "id": "local_onnx", "options": {"provider_preset": "local_onnx"}},
+        ],
+        "profiles": [
+            {**profile, "id": "profile-1", "connection_id": "connection-5", "name": model},
+            {**profile, "id": seed_id, "connection_id": "local_onnx", "name": "Qwen3 Embedding 0.6B"},
+        ],
+        "routes": {"primary": [], "secondary": [], "vision": [], "embedding": [seed_id]},
+    }
+
+
+@pytest.mark.parametrize("selection", ["seed", "legacy", "empty"])
+def test_v14_merges_only_the_duplicate_preserving_selection(
+    isolated_model_store, duplicated_local_embedding, selection,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import CONFIG_VERSION, get_model_configuration
+
+    graph = duplicated_local_embedding
+    legacy, seed = graph["profiles"]
+    keep = legacy if selection == "legacy" else seed
+    graph["routes"]["embedding"] = [] if selection == "empty" else [keep["id"]]
+    isolated_model_store.set_setting("model_configuration", graph)
+    migrated = get_model_configuration()
+    assert migrated["version"] == CONFIG_VERSION
+    assert [(p["id"], p["name"]) for p in migrated["profiles"]] == [(keep["id"], keep["name"])]
+    assert [c["id"] for c in migrated["connections"]] == [keep["connection_id"]]
+    assert migrated["connections"][0]["options"] == {"provider_preset": "local_onnx"}
+    assert migrated["routes"] == graph["routes"]
+    assert get_model_configuration() == isolated_model_store.get_setting("model_configuration") == migrated
+
+
+def test_v14_preserves_other_profiles_and_remaps_ordered_routes(
+    isolated_model_store, duplicated_local_embedding,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import get_model_configuration
+
+    graph = duplicated_local_embedding
+    legacy, seed = graph["profiles"]
+    graph["profiles"].append({**legacy, "id": "custom", "dimensions": 512})
+    graph["routes"]["embedding"] = ["custom", seed["id"], legacy["id"]]
+    isolated_model_store.set_setting("model_configuration", graph)
+    migrated = get_model_configuration()
+    assert [p["id"] for p in migrated["profiles"]] == [seed["id"], "custom"]
+    assert [c["id"] for c in migrated["connections"]] == ["connection-5", "local_onnx"]
+    assert migrated["routes"]["embedding"] == ["custom", seed["id"]]
+
+
+@pytest.mark.parametrize(("collection", "change"), [
+    ("profiles", {"dimensions": 512}),
+    ("profiles", {"name": "My local embedding"}),
+    ("connections", {"options": {"provider_preset": "my-provider"}}),
+])
+def test_v14_keeps_distinct_local_configurations(
+    isolated_model_store, duplicated_local_embedding, collection, change,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import get_model_configuration
+
+    duplicated_local_embedding[collection][0].update(change)
+    isolated_model_store.set_setting("model_configuration", duplicated_local_embedding)
+    migrated = get_model_configuration()
+    assert [p["id"] for p in migrated["profiles"]] == [p["id"] for p in duplicated_local_embedding["profiles"]]
+
+
+def test_pre_v13_seed_upgrade_keeps_original_embedding_selection(
+    isolated_model_store, duplicated_local_embedding,
+):
+    from cyrene.plugins.builtin.cyrene_model.configuration import get_model_configuration
+
+    graph = duplicated_local_embedding
+    graph["version"] = 12
+    graph["connections"].pop()
+    graph["profiles"].pop()
+    graph["routes"]["embedding"] = ["profile-1"]
+    isolated_model_store.set_setting("model_configuration", graph)
+    migrated = get_model_configuration()
+    assert [p["id"] for p in migrated["profiles"]] == ["profile-1"]
+    assert migrated["routes"]["embedding"] == ["profile-1"]
+
+
 def test_default_provider_connections_include_managed_local_provider(
     isolated_model_store,
 ):
@@ -1228,7 +1316,7 @@ def test_model_discovery_errors_are_context_specific_and_safe_to_copy():
     assert "secret response body" not in not_found.body.decode()
 
 
-def test_frontend_registers_split_pages_and_live_context_contract():
+def test_frontend_registers_model_services_and_live_context_contract():
     root = Path(__file__).resolve().parents[1]
     settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
     overlay = workbench_settings_source()
@@ -1238,11 +1326,11 @@ def test_frontend_registers_split_pages_and_live_context_contract():
 
     assert 'register("model-settings"' in settings
     assert "ServicesPage: ServicesPage" in settings
-    assert "UsagePage: UsagePage" in settings
+    assert "<ModelRoutes config={config}" in settings
     assert 'id: "setting-model-" + route + "-route"' in settings
     assert 'CustomEvent("cyrene:model-configuration-changed"' in settings
     assert 'workbenchServices.modelSettings().ServicesPage' in overlay
-    assert 'workbenchServices.modelSettings().UsagePage' in overlay
+    assert '"model-usage": "models"' in overlay
     assert '"settings.modelUsage": "模型配置"' in i18n
     assert 'v.label(v.props, "settings.adapter", "Adapter")' in settings
     assert '"settings.adapter": "Adapter"' in i18n
@@ -1261,13 +1349,13 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert '"model_discovery_response_invalid"' in settings
     assert "modelConfigurationTechnicalDetail(error)" in settings
     assert "copyModelTechnicalDetail(v.discovery.technicalDetail, v.props)" in settings
-    assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list"))' in settings
+    assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list") + " · " + v.profiles.length)' in settings
     assert "档案描述一个可被多个用途引用的远端模型。" not in settings
     assert "连接配置与模型档案" not in settings
-    assert 'v.selectedDescription ? h("p", null, v.selectedDescription) : null' in settings
-    assert 'className: "wb-mcfg-capability-picker"' in settings
+    assert '{selectedDescription}' in settings
+    assert 'className="model-cap-options"' in settings
     assert 'var capabilityOptions = ["chat", "vision", "embedding"];' in settings
-    assert 'capabilityLabel(capability, props)' in settings
+    assert 'capabilityLabel(capability,props)' in settings
     assert 'props.onChange("capabilities", next);' in settings
     assert 'body: JSON.stringify({ connection: connectionDraftPayload(selected), profile: profile })' in settings
     assert 'onTest: function () { v.testProfile(profile); }' in settings
@@ -1286,22 +1374,22 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'label(props, "settings.outputPrice", "Output price")' in settings
     assert 'label(props, "settings.cachePrice", "Cache price")' in settings
     assert 'props.onChange("price", updateProfilePriceField' in settings
-    assert 'label(props, "settings.modelCapabilities", "Model capabilities")' in settings
+    assert 't("settings.modelCapabilities")' in settings
     assert 'h("button", {' in settings
-    assert 'className: "wb-mcfg-profile-summary"' in settings
-    assert '"aria-expanded": expanded' in settings
-    assert 'h("span", { className: "wb-btn wb-mcfg-profile-details-button"' in settings
-    assert 'className: "wb-workbench-searchbox wb-mcfg-searchbox"' in settings
-    assert 'placeholder: v.label(v.props, "settings.searchModelServicesPlaceholder", "Search model services…")' in settings
-    assert "config.connections.filter(matchesConnectionQuery)" in settings
+    assert 'className="model-selector"' in settings
+    assert 'aria-expanded={selected}' in settings
+    assert '<Disclosure id={region} open={open}>' in settings
+    assert "<WbcRailToolbar collapsed={collapsed}" in overlay
+    assert 'searchLabel={t("settings.searchAll")}' in overlay
+    assert "config.connections.map(connection" in overlay and "connection.base_url" in overlay
     assert 'className: "wb-mcfg-filter"' not in settings
     assert 'return presetIcons[preset] || (isLocalConnection(connection) ? "onnx" : "")' in settings
     assert 'settingsGlyph("server", 17)' in settings
     assert ".wb-mcfg-toggle.is-on span {\n  transform: translateX(18px);\n  background: #fff;\n}" in styles
     assert 'label: "Adapter"' not in settings
     assert 'label(props, "settings.localModels", "Local models")' in settings
-    assert 'var serviceLabel = local ? v.label(v.props, "settings.localProvider", "Local")' in settings
-    assert 'localModels.filter(function (model) { return model.ready === true; }).length' in settings
+    assert 't("settings.localRuntime")' in settings
+    assert 'v.localModels.filter(m=>m.ready)' in settings
     assert "localConnectionSignature" not in settings
     assert 'useEffect(function () { refreshLocalModels(); }, []);' in settings
     assert "function selectableConnectionAdapters()" in settings
@@ -1315,7 +1403,10 @@ def test_frontend_registers_split_pages_and_live_context_contract():
     assert 'label(props, "settings.localModelActive"' in settings
     assert '!v.isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section"' in settings
     assert 'hideHeader: true' in settings
-    assert 'title: "Embedding model", titleKey: "settings.embeddingRouteTitle"' in settings
+    assert 'defaultPicker("embedding",t("settings.embeddingRouteTitle"))' in settings
+    advanced_routes = settings.split("var ADVANCED_ROUTES = {", 1)[1].split("};", 1)[0]
+    assert all(name + ":" in advanced_routes for name in ("fallback", "secondary", "vision"))
+    assert "primary:" not in advanced_routes and "embedding:" not in advanced_routes
     assert 'label(props, "settings.selectModelProfile", "Select model profile…")' in settings
     assert 'capabilityText(profile, props)' in settings
     for key in (
@@ -1398,8 +1489,8 @@ def test_settings_and_provider_icons_are_inlined_before_first_render():
     assert "function svgMarkup(" in build
     assert "inlineIconAssets(settingsIconFiles, PROVIDER_ICON_FILES, EXTENSION_ICON_FILES)" in build
     assert "window.CyreneIconAssets" in overlay
-    assert "settingsIconMarkup(item.icon)" in overlay
-    assert 'className: "settings-overlay-tab-glyph is-inline"' in overlay
+    assert "CyreneIconAssets.settings" in overlay
+    assert 'className="settings-action-icon"' in overlay
     assert "window.CyreneIconAssets" in settings
     assert 'iconMarkup("providers", name)' in settings
     assert 'className: "wb-mcfg-provider-logo is-inline is-" + name' in settings
@@ -1419,8 +1510,8 @@ def test_model_service_credentials_are_agent_write_only_and_r3():
     assert 'String(input.secret_value || "")' in surface
     assert 'element.classList.contains("is-danger")' in surface
     assert '"aria-label": v.label(v.props, "settings.connectionName", "Connection name")' in settings
-    assert 'label(props, "settings.modelId", "Model ID")' in settings
-    assert '"aria-label": v.label(v.props, "settings.modelServiceApiEndpoint", "Model service API endpoint")' in settings
+    assert 't("settings.modelId")' in settings
+    assert 'aria-label={t("settings.modelServiceApiEndpoint")}' in settings
 
 
 def test_switching_model_protocol_does_not_manage_connection_credentials():
@@ -1446,7 +1537,7 @@ def test_model_service_api_row_has_per_connection_proxy_switch():
     settings = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx").read_text()
     styles = (root / "src/cyrene/workbench/webui/frontend/settings-model-configuration.css").read_text()
 
-    assert 'className: "wb-mcfg-api-proxy-row"' in settings
+    assert 'className:"svc-proxy-field"' in settings
     assert 'checked: selected.use_proxy === true' in settings
     assert 'v.updateConnection("use_proxy", value)' in settings
     assert 'payload.external_agent_proxy_enabled === true' in settings
@@ -1541,5 +1632,5 @@ def test_new_model_profile_stays_local_until_explicitly_committed():
 
     assert "disabled: !!v.profileDraft" in settings
     assert "draft: isDraft" in settings
-    assert 'label(props, "common.save", "Save")' in settings
-    assert 'label(props, "common.cancel", "Cancel")' in settings
+    assert 'onClick={props.onCommit}>{t("common.save")}' in settings
+    assert 'onClick={props.onRemove}>{t("common.cancel")}' in settings

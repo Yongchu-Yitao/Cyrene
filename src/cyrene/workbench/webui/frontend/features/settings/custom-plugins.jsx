@@ -1,3 +1,6 @@
+import { ExtensionFilter } from "./extension-filter.jsx"
+import {ActionIcon} from "./action-icon.jsx"
+import {Disclosure} from "./disclosure.jsx"
 import {
   workbenchServices,
   useStateSt,
@@ -49,13 +52,16 @@ function itemDescription(item, t, pack) {
   var id = String(item && (item.id || item.name) || "")
   if (!pack && item && item.customized_description === true) return String(item.description || "")
   var authored = authoredTranslation(item, "description")
-  if (authored) return authored
-  if (pack) return t("pluginPackDesc." + id, item.description || id)
-  return t("toolDesc." + id, item.description || id)
+  const description = authored || t((pack ? "pluginPackDesc." : "toolDesc.") + id, item.description || id)
+  // Installed built-ins can carry descriptions from an older language pack.
+  if (item.source === "builtin" || item.source === "core") {
+    return description.replace(/\bWorkbench\b/gi, "Cyrene").replace(/工作台/g, "应用")
+  }
+  return description
 }
 
 function workbenchEntryLabel(item) {
-  return authoredTranslation(item, "title") || String(item && (item.title || item.id) || "Workbench entry")
+  return authoredTranslation(item, "title") || String(item && (item.title || item.id) || "App entry")
 }
 
 function workbenchEntryDescription(item) {
@@ -250,25 +256,36 @@ function ToolActions(props) {
   )
 }
 
+function SourcePath({path}) {
+  if (!path) return null;
+  const parts = path.split("/");
+  return <dl className="registry-source-path">
+    <dt>{currentLanguage().startsWith("zh") ? "来源路径" : "Source path"}</dt>
+    <dd><code>{parts.map((part,index)=><React.Fragment key={index}>{index>0&&<>/<wbr/></>}{part}</React.Fragment>)}</code></dd>
+  </dl>;
+}
+
 function RegistryMember(props) {
   var item = props.item || {}
   var t = props.t
   var disabled = props.disabled || item.locked === true || props.parentEnabled === false
   var actionsDisabled = props.disabled || props.parentEnabled === false
-  return React.createElement("div", { className: "wb-registry-member" },
-    React.createElement("div", { className: "wb-registry-member-copy" },
-      React.createElement("strong", null, itemLabel(item, t)),
-      React.createElement("code", { title: item.source_path || "" }, String(item.name || item.id || ""))
-    ),
-    React.createElement("div", { className: "wb-extension-title-row" },
-      React.createElement(RegistryBadges, { item: item, t: t }),
-      Toggle(configuredEnabled(item), function () { props.onToggle("plugin", item, !configuredEnabled(item)) }, disabled,
-        t("settings.pluginToggleLabel", { name: itemLabel(item, t) }, "Enable or disable {name}")),
-      item.kind === "tool" && React.createElement(ToolActions, {
-        item: item, t: t, disabled: actionsDisabled, onUpdate: props.onUpdate, onDelete: props.onDelete,
-      })
-    )
-  )
+  const pack=props.pack;
+  const kinds=new Set((pack.plugins||[]).map(plugin=>plugin.kind));
+  const notes=[];
+  if(kinds.size>1 && item.kind)notes.push(t("settings.pluginKind."+item.kind,item.kind));
+  if(item.source && item.source!==pack.source)notes.push(t("settings.pluginSourceKind."+item.source,item.source));
+  if(item.locked)notes.push(t("settings.pluginLocked","Locked"));
+  return <div className="wb-registry-member">
+    <div className="wb-registry-member-copy"><strong>{itemLabel(item,t)}</strong>
+      <code>{item.name||item.id}</code>{notes.length>0&&<small>{notes.join(" · ")}</small>}
+    </div>
+    <div className="member-actions">
+      {Toggle(configuredEnabled(item),()=>props.onToggle("plugin",item,!configuredEnabled(item)),disabled,t("settings.pluginToggleLabel",{name:itemLabel(item,t)},"Enable or disable {name}"))}
+      {item.kind==="tool"&&<ToolActions item={item} t={t} disabled={actionsDisabled} onUpdate={props.onUpdate} onDelete={props.onDelete}/>}
+    </div>
+    {item.source_path!==pack.source_path&&<SourcePath path={item.source_path}/>}
+  </div>
 }
 
 function WorkbenchEntryMember(props) {
@@ -276,7 +293,7 @@ function WorkbenchEntryMember(props) {
   var title = workbenchEntryLabel(item)
   return React.createElement("div", { className: "wb-registry-member wb-registry-entry-member" },
     React.createElement("div", { className: "wb-registry-member-copy" },
-      React.createElement("span", { className: "wb-registry-entry-eyebrow" }, props.t("settings.workbenchEntry", "Workbench entry")),
+      React.createElement("span", { className: "wb-registry-entry-eyebrow" }, props.t("settings.workbenchEntry", "App entry")),
       React.createElement("strong", null, title),
       workbenchEntryDescription(item) && React.createElement("small", null, workbenchEntryDescription(item))),
     Toggle(item.configured_visible !== false, function () {
@@ -409,6 +426,20 @@ function usePluginRegistryMutations(model) {
       throw error
     }).finally(function () { model.setBusy("") })
   }
+  async function removeContribution(isPack, item) {
+    if (model.busy || !item.user_created || item.locked) return
+    const kind = isPack ? "packs" : "standalone"
+    model.setBusy("remove:" + item.id)
+    try {
+      const result = await settingsFetch("/api/plugins/" + kind + "/" + encodeURIComponent(item.id), { method: "DELETE" }).then(readSettingsResponse)
+      await Promise.all([model.pluginService.refresh(), workbenchServices.data().reload()])
+      tell(result.application_restart_required ? t("settings.pluginRestartRequired") : t("settings.deletedPlugin"), "success")
+    } catch (error) {
+      tell(error.message || String(error), "error")
+    } finally {
+      model.setBusy("")
+    }
+  }
   function updateWorkbenchEntry(item, visible) {
     if (!item || model.busy) return
     var packId = String(item.pack_id || "")
@@ -422,7 +453,7 @@ function usePluginRegistryMutations(model) {
       tell(error && error.message || String(error), "error")
     }).finally(function () { model.setBusy("") })
   }
-  return { tell: tell, reloadRegistry: reloadRegistry, installFromFile: installFromFile, updateEnabled: updateEnabled, updateTool: updateTool, deleteTool: deleteTool, updateWorkbenchEntry: updateWorkbenchEntry }
+  return { removeContribution, tell: tell, reloadRegistry: reloadRegistry, installFromFile: installFromFile, updateEnabled: updateEnabled, updateTool: updateTool, deleteTool: deleteTool, updateWorkbenchEntry: updateWorkbenchEntry }
 }
 
 function usePluginRegistryController(props) {
@@ -442,7 +473,7 @@ function PluginRegistryHeader(props) {
       props.onAdd && React.createElement(PluginCenterAddButton, { t: c.t, disabled: c.disabled, onClick: props.onAdd }),
       React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button",
         disabled: c.disabled, onClick: c.installFromFile },
-      c.busy || c.registry.reloading ? c.t("settings.loading", "Loading…") : c.t("settings.pluginInstallFromFile", "Install from file"))
+      <ActionIcon name="folder-open"/>, c.busy || c.registry.reloading ? c.t("settings.loading", "Loading…") : c.t("settings.pluginInstallFromFile", "Install from file"))
     )
   )
 }
@@ -450,16 +481,17 @@ function PluginRegistryHeader(props) {
 function PluginDirectorySummary(props) {
   var c = props.controller
   var directory = c.directory
+  const status = directory.status || (directory.exists ? "ready" : "missing")
+  const warnings = [
+    status !== "ready" && c.t("settings.pluginDirectoryStatus." + status, status),
+    directory.readable === false && c.t("settings.pluginDirectoryUnreadable", "not readable"),
+    directory.writable === false && c.t("settings.pluginDirectoryReadOnly", "read-only"),
+  ].filter(Boolean)
   return React.createElement("section", { className: "wb-plugin-registry-directory" },
     React.createElement("strong", null, c.t("settings.pluginDirectory", "Plugin directory")),
     React.createElement("code", { title: directory.path || "" }, directory.path || c.t("settings.pluginDirectoryUnavailable", "Unavailable")),
     React.createElement("small", { className: "wb-plugin-registry-directory-meta" },
-      React.createElement("span", null, [
-        c.t("settings.pluginDirectoryStatus." + (directory.status || (directory.exists ? "ready" : "missing")), directory.status || (directory.exists ? "ready" : "missing")),
-        directory.readable === false ? c.t("settings.pluginDirectoryUnreadable", "not readable") : "",
-        directory.writable === false ? c.t("settings.pluginDirectoryReadOnly", "read-only") : "",
-        directory.seeded === true ? c.t("settings.pluginDirectorySeeded", "seeded") : "",
-      ].filter(Boolean).join(" · ")),
+      warnings.length > 0 && React.createElement("span", null, warnings.join(" · ")),
       React.createElement("span", { className: "wb-plugin-registry-directory-hint" },
         c.t("settings.pluginCreateInNewChatHint", "To create a Plugin, start a new chat."))
     )
@@ -469,12 +501,8 @@ function PluginDirectorySummary(props) {
 function PluginRegistryFilter(props) {
   var c = props.controller
   return React.createElement(React.Fragment, null,
-    React.createElement("div", { className: "wb-extension-filter" },
-      React.createElement("input", { className: "wb-input", value: c.query,
-        onChange: function (event) { c.setQuery(event.target.value) }, placeholder: c.t("settings.pluginFilter", "Filter Plugins"),
-        "aria-label": c.t("settings.pluginFilter", "Filter Plugins") }),
-      React.createElement("span", null, c.t("settings.pluginCount", { n: c.resultCount }, String(c.resultCount) + " items"))
-    ),
+    <ExtensionFilter query={c.query} onChange={c.setQuery} label={c.t("settings.pluginFilter", "Filter Plugins")}
+      count={c.t("settings.pluginCount", { n: c.resultCount }, String(c.resultCount) + " items")}/>,
     (c.notice || c.registry.error) && React.createElement("div", {
       className: "wb-extension-notice " + (c.registry.error ? "error" : c.noticeKind),
       role: c.registry.error || c.noticeKind === "error" ? "alert" : "status",
@@ -482,70 +510,58 @@ function PluginRegistryFilter(props) {
   )
 }
 
-function PluginPackCard(props) {
-  var c = props.controller
-  var pack = props.pack
-  var packId = String(pack.id || "")
-  var members = Array.isArray(pack.plugins) ? pack.plugins : []
-  var entries = Array.isArray(pack.workbench_entries) ? pack.workbench_entries : []
-  var expandable = members.length > 0 || entries.length > 0
-  var [expanded, setExpanded] = useStateSt(false)
-  var packName = packLabel(pack, c.t)
-  var membersId = "wb-registry-pack-members-" + encodeURIComponent(packId)
-  var disclosureLabel = expanded
-    ? c.t("settings.collapsePackage", { name: packName }, "Collapse " + packName)
-    : c.t("settings.expandPackage", { name: packName }, "Expand " + packName)
-  function toggleFromCard(event) {
-    if (!expandable) return
-    var interactive = event.target && event.target.closest && event.target.closest([
-      "button", "a", "input", "select", "textarea", "label", "form",
-      "[role='button']", "[role='switch']", "[role='menuitem']", "[role='dialog']",
-      "[contenteditable='true']", ".wb-tool-dialog-backdrop",
-    ].join(","))
-    if (interactive) return
-    setExpanded(function (value) { return !value })
+function RemoveUserContribution({item,isPack,title,controller:c}){
+  const [confirming,setConfirming]=useStateSt(false);
+  const trigger=useRefSt(null),cancel=useRefSt(null);
+  const zh=currentLanguage().startsWith("zh");
+  const label=zh?(isPack?"删除插件包":"删除插件"):(isPack?"Delete plugin pack":"Delete plugin");
+  function dismiss(){setConfirming(false);requestAnimationFrame(()=>trigger.current?.focus())}
+  function remove() {
+    c.removeContribution(isPack, item);
   }
-  function toggleFromDisclosure() {
-    setExpanded(function (value) { return !value })
-  }
-  return React.createElement("article", {
-    className: "wb-extension-card wb-registry-pack-card", onClick: toggleFromCard,
-  },
-    React.createElement("div", { className: "wb-extension-card-main" },
-      React.createElement("div", { className: "wb-registry-pack-summary" },
-        React.createElement("span", { className: "wb-extension-glyph extension-agent", "aria-hidden": "true" },
-          React.createElement("span", { className: "wb-extension-glyph-text" }, packName.slice(0, 1).toUpperCase())),
-        React.createElement("span", { className: "wb-extension-copy" },
-          React.createElement("span", { className: "wb-extension-title-row" },
-            React.createElement("strong", null, packName), React.createElement(RegistryBadges, { item: pack, t: c.t })),
-          React.createElement("span", { className: "wb-extension-description" }, itemDescription(pack, c.t, true)),
-          React.createElement("span", { className: "wb-extension-meta" },
-            React.createElement("code", { title: pack.source_path || "" }, packId),
-            React.createElement("span", null, c.t("settings.pluginMemberCount", { n: members.length }, String(members.length) + " plugins")))
-        )
-      ),
-      React.createElement("div", { className: "wb-extension-actions" },
-        Toggle(configuredEnabled(pack), function () { c.updateEnabled("pack", pack, !configuredEnabled(pack)) },
-          c.disabled || pack.locked === true, packName)),
-      expandable && React.createElement("button", {
-        type: "button", className: "wb-registry-pack-disclosure",
-        "aria-expanded": expanded ? "true" : "false", "aria-controls": membersId,
-        "aria-label": disclosureLabel, title: disclosureLabel,
-        onClick: toggleFromDisclosure,
-      }, React.createElement(DisclosureIcon, { expanded: expanded }))
-    ),
-    expandable && React.createElement("div", {
-      className: "wb-registry-pack-members", id: membersId, hidden: !expanded,
-    }, entries.map(function (item) {
-      return React.createElement(WorkbenchEntryMember, { key: "entry:" + String(item.id || ""), item: item, t: c.t,
-        disabled: c.disabled, parentEnabled: effectiveEnabled(pack), onToggle: c.updateWorkbenchEntry })
-    }), members.map(function (item) {
-      return React.createElement(RegistryMember, { key: item.id || item.name, item: item, t: c.t,
-        disabled: c.disabled, parentEnabled: effectiveEnabled(pack), onToggle: c.updateEnabled,
-        onUpdate: c.updateTool, onDelete: c.deleteTool })
-    }))
-  )
+  useEffectSt(()=>{if(confirming)cancel.current?.focus()},[confirming]);
+  return <div className="user-plugin-remove">
+    {confirming?<div role="group" aria-label={label} onKeyDown={e=>{if(e.key==="Escape"){e.stopPropagation();dismiss()}}}>
+      <strong>{zh?"确认删除「"+title+"」？":"Delete "+title+"?"}</strong>
+      <p>{isPack?(zh?"将一并移除 "+(item.plugins||[]).length+" 个成员和 "+(item.workbench_entries||[]).length+" 个应用入口。":"Also removes "+(item.plugins||[]).length+" members and "+(item.workbench_entries||[]).length+" app entries."):""}{zh?"将从本机插件目录移除。":" This removes the installed source from this device."}</p>
+      <div className="remove-options"><button type="button" className="wb-btn" ref={cancel} onClick={dismiss}>{zh?"取消":"Cancel"}</button><button type="button" className="wb-btn danger" data-cyrene-risk="R3" disabled={c.disabled} onClick={remove}>{zh?"确认删除":"Confirm deletion"}</button></div>
+    </div>:<button type="button" className="remove-user-trigger" disabled={c.disabled||item.locked} ref={trigger} onClick={()=>setConfirming(true)}>{label}</button>}
+  </div>
 }
+function RegistryTile({controller:c,item,isPack=false}) {
+  const [open,setOpen]=useStateSt(false);
+  const title=isPack?packLabel(item,c.t):itemLabel(item,c.t);
+  const enabled=configuredEnabled(item);
+  const locked=item.locked===true;
+  const kind=isPack?'pack':'plugin';
+  const detailsId='settings-plugin-'+kind+'-'+encodeURIComponent(item.id||item.name);
+  const members=item.plugins||[];
+  const sharedKind=members.length && members.every(x=>x.kind===members[0].kind)?members[0].kind:null;
+  function toggleFromCard(event) {
+    const interactive = event.target.closest([
+      "button", "a", "input", "select", "textarea", "label", "form",
+      "[role='switch']", ".registry-tile-details",
+    ].join(","));
+    if (interactive) return;
+    setOpen(value => !value);
+  }
+  return <article className="registry-tile" onClick={toggleFromCard}>
+    <div className="registry-tile-head"><strong>{title}</strong>
+      {Toggle(enabled,()=>c.updateEnabled(kind,item,!enabled),c.disabled||locked,title)}
+      <button type="button" className="tile-disclosure" aria-label={c.t(open?"settings.collapsePackage":"settings.expandPackage",{name:title})} aria-expanded={open} aria-controls={detailsId} onClick={()=>setOpen(!open)}><DisclosureIcon expanded={open}/></button></div>
+    <p>{itemDescription(item,c.t,isPack)}</p>
+    <div className="tile-id"><code>{item.id||item.name}</code>{locked&&<small>{c.t("settings.pluginLocked")}</small>}</div>
+    <Disclosure id={detailsId} open={open}><div className="registry-tile-details">
+      <div className="tile-metadata"><RegistryBadges item={item} t={c.t}/>{isPack&&members.length>0&&<span>{c.t("settings.pluginMemberCount",{n:members.length})}{sharedKind && " · "+c.t("settings.pluginKind."+sharedKind,sharedKind)}</span>}
+      {!isPack&&item.kind==='tool'&&<ToolActions item={item} t={c.t} disabled={c.disabled} onUpdate={c.updateTool} onDelete={c.deleteTool}/>}</div>
+      <SourcePath path={item.source_path}/>
+      {isPack&&(item.workbench_entries||[]).map(x=><WorkbenchEntryMember key={x.id} item={x} t={c.t} disabled={c.disabled} parentEnabled={effectiveEnabled(item)} onToggle={c.updateWorkbenchEntry}/>)}
+      {isPack&&(item.plugins||[]).map(x=><RegistryMember key={x.id} pack={item} item={x} t={c.t} disabled={c.disabled} parentEnabled={effectiveEnabled(item)} onToggle={c.updateEnabled} onUpdate={c.updateTool} onDelete={c.deleteTool}/>)}
+      {open&&item.user_created===true&&<RemoveUserContribution item={item} isPack={isPack} title={title} controller={c}/>}
+    </div></Disclosure>
+  </article>
+}
+function PluginPackCard({controller,pack}){return <RegistryTile controller={controller} item={pack} isPack/>}
 
 function PluginPacksSection(props) {
   var c = props.controller
@@ -560,28 +576,7 @@ function PluginPacksSection(props) {
   )
 }
 
-function StandalonePluginCard(props) {
-  var c = props.controller
-  var item = props.item
-  var id = String(item.name || item.id || "")
-  return React.createElement("article", { className: "wb-extension-card" },
-    React.createElement("div", { className: "wb-extension-card-main" },
-      React.createElement("span", { className: "wb-extension-glyph", "aria-hidden": "true" },
-        React.createElement("span", { className: "wb-extension-glyph-text" }, itemLabel(item, c.t).slice(0, 1).toUpperCase())),
-      React.createElement("div", { className: "wb-extension-copy" },
-        React.createElement("div", { className: "wb-extension-title-row" },
-          React.createElement("strong", null, itemLabel(item, c.t)), React.createElement(RegistryBadges, { item: item, t: c.t })),
-        React.createElement("span", { className: "wb-extension-description" }, itemDescription(item, c.t, false)),
-        React.createElement("div", { className: "wb-extension-meta" }, React.createElement("code", { title: item.source_path || "" }, id))
-      ),
-      React.createElement("div", { className: "wb-extension-actions" },
-        Toggle(configuredEnabled(item), function () { c.updateEnabled("plugin", item, !configuredEnabled(item)) },
-          c.disabled || item.locked === true, itemLabel(item, c.t)),
-        item.kind === "tool" && React.createElement(ToolActions, { item: item, t: c.t, disabled: c.disabled,
-          onUpdate: c.updateTool, onDelete: c.deleteTool }))
-    )
-  )
-}
+function StandalonePluginCard({controller,item}){return <RegistryTile controller={controller} item={item}/>}
 
 function UserCreatedPluginsSection(props) {
   var c = props.controller
@@ -656,11 +651,12 @@ function PluginRegistryPanel(props) {
   }
   return React.createElement("div", { className: "settings-panel wb-plugin-registry-page", id: "setting-plugin-registry" },
     React.createElement(PluginRegistryHeader, { controller: c, onAdd: canAdd ? function () { setShowCenter(true) } : null }),
-    React.createElement(PluginDirectorySummary, { controller: c }),
+
     React.createElement(PluginRegistryFilter, { controller: c }),
     React.createElement(UserCreatedPluginsSection, { controller: c }),
     React.createElement(PluginPacksSection, { controller: c }),
     React.createElement(StandalonePluginsSection, { controller: c }),
+    <PluginDirectorySummary controller={c}/>,
     React.createElement(RegistryFailures, { controller: c })
   )
 }

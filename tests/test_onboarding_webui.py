@@ -510,7 +510,8 @@ def test_completed_onboarding_creates_and_opens_the_first_chat():
         in welcome_source
     )
     assert "props.onComplete();" in welcome_source
-    assert "Page: OnboardingFlow" in welcome_source
+    registration = root / "src/cyrene/workbench/webui/frontend/entry/welcome.jsx"
+    assert "Page: OnboardingFlow" in registration.read_text(encoding="utf-8")
 
     completion_handler = workbench_source.split(
         "function handleOnboardingComplete() {", 1

@@ -322,7 +322,7 @@ function SearchOverlay({ onClose, onCommand, onOpenSettings }) {
     // guard pattern as settingTabLabel).
     function settingTabAvailable(tab) {
       var requirements = {
-        search: ["search"], "model-usage": ["model"], models: ["model"], media: ["media"],
+        search: ["search"], network: ["extensions"], maps: ["map"], models: ["model"], media: ["media"],
         agents: ["soul", "proactive", "skills", "subagent"], voice: ["voice"], channels: ["channels"],
         remote: ["remote"], integrations: ["office", "knowledge"],
       };

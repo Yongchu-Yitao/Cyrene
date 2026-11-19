@@ -1,3 +1,4 @@
+import {ChoiceCards} from "./choice-cards.jsx"
 import {
   useStateSt,
   useEffectSt,
@@ -322,13 +323,9 @@ function AppearancePanel(p) {
   }, [accentPickerOpen]);
 
   return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.appearance"), t("settings.appearanceSubtitle")),
+    SectionTitle(t("settings.appearance")),
     FieldRow(t("settings.theme"), t("settings.themeHint"),
-      React.createElement("div", { className: "wb-seg" },
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.theme === "system" ? " active" : ""), onClick: function () { setTweak("theme", "system"); } }, t("settings.system")),
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.theme === "light" ? " active" : ""), onClick: function () { setTweak("theme", "light"); } }, t("settings.light")),
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.theme === "dark" ? " active" : ""), onClick: function () { setTweak("theme", "dark"); } }, t("settings.dark")),
-      ),
+      <ChoiceCards compact label={t("settings.theme")} value={tweaks.theme} onChange={value=>setTweak("theme",value)} options={["system","light","dark"].map(id=>({id,title:t("settings."+id)}))}/>,
       undefined, "setting-theme",
     ),
     FieldRow(t("settings.themeColor"), t("settings.themeColorHint", { theme: actualTheme || t("settings.system") }),
@@ -397,10 +394,7 @@ function AppearancePanel(p) {
       undefined, "setting-workbench-background",
     ),
     FieldRow(t("settings.textSize"), t("settings.textSizeHint"),
-      React.createElement("div", { className: "wb-seg" },
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "default" ? " active" : ""), onClick: function () { setTweak("textSize", "default"); } }, React.createElement("span", { className: "wb-text-size-sample default" }, "A"), " ", t("settings.default")),
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "large" ? " active" : ""), onClick: function () { setTweak("textSize", "large"); } }, React.createElement("span", { className: "wb-text-size-sample large" }, "A"), " ", t("settings.large")),
-      ),
+      <ChoiceCards compact label={t("settings.textSize")} value={tweaks.textSize} onChange={value=>setTweak("textSize",value)} options={["default","large"].map(id=>({id,title:t("settings."+id),detail:<i aria-hidden="true" className={"wb-text-size-sample "+id}>Aa</i>}))}/>,
       undefined, "setting-text-size",
     ),
     FieldRow(t("settings.performanceMode"), t("settings.performanceModeHint"),

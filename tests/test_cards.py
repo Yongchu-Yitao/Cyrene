@@ -708,8 +708,8 @@ async def test_map_groups_validate_references_and_preserve_labels(rig):
 async def test_home_slots_editable_across_contexts_and_actions_preserve_target(rig):
     from cyrene.plugins.builtin.cyrene_cards.delivery import submission_message
     spec = {"title": "欢迎回来", "home_kind": "overview", "blocks": [
-        {"block_id": "weather", "type": "weather", "location": "常州", "condition": "多云",
-         "temperature": "18°C", "range": "14–21°C", "advice": "带外套", "source": "测试天气来源", "updated_at": "2026-11-08T19:50:00+08:00"},
+        {"block_id": "weather", "type": "weather_observation", "location": "常州", "condition_code": "partly_cloudy",
+         "temperature_c": 18, "range_c": {"low": 14, "high": 21}, "advice": "带外套", "source": "测试天气来源", "updated_at": "2026-11-08T19:50:00+08:00"},
         {"block_id": "pending", "type": "action_list", "title": "待你确认", "collapsed": True,
          "items": [{"item_id": "purchase", "label": "采购", "action_ids": ["continue"]}]},
     ], "actions": [{"action_id": "continue", "label": "继续进行", "kind": "submit", "fields": [],

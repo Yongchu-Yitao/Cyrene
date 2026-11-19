@@ -147,7 +147,7 @@ test("literal frontend translation calls are backed by the merged catalog", asyn
 
 test("JSX does not expose untranslated English text nodes", () => {
   const allowedTechnicalLabels = new Set([
-    "Cyrene", "CARTO", "ESC", "Git", "SKILL", "SSE", "Streamable HTTP", "URL", "stdio",
+    "Aa", "Cyrene", "CARTO", "ESC", "Git", "SKILL", "SSE", "Streamable HTTP", "URL", "stdio",
   ])
   const missing = []
   for (const filename of frontendSourceFiles(FRONTEND_ROOT)) {
@@ -165,6 +165,6 @@ test("JSX does not expose untranslated English text nodes", () => {
 
 test("model ID combobox receives the settings translator", () => {
   const source = fs.readFileSync(path.join(FRONTEND_ROOT, "settings-model-configuration.jsx"), "utf8")
-  const invocation = source.split("h(ModelIdCombobox, {", 2)[1].split("})", 1)[0]
-  assert.match(invocation, /\bt:\s*props\.t\b/)
+  const invocation = source.split("<ModelIdCombobox ", 2)[1].split("/>", 1)[0]
+  assert.match(invocation, /\bt=\{props\.t\}/)
 })

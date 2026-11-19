@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
+from cyrene.core.plugin.plugin import PluginPack
 from cyrene.core.plugin.source import python_source_signature
 import inspect
 import logging
@@ -41,6 +44,7 @@ from .contributions import (
     workspace_file_types,
     workspace_project_types,
 )
+from .update import prepare_plugin_updates, verify_restarted_updates
 from .context import (
     PluginApplicationContext,
     PluginFrontendHandler,
@@ -114,12 +118,12 @@ class PluginApplicationHost:
         self._startup_handlers: dict[str, list[PluginLifecycleHandler]] = {}
         self._shutdown_handlers: dict[str, list[PluginLifecycleHandler]] = {}
         self._running_packs: set[str] = set()
-        self._attached_packs: list[str] = []
-        self._attached_pack_sources: dict[str, str] = {}
-        self._attached_pack_generations: dict[str, tuple[Any, ...]] = {}
+        self._attached_packs: dict[str, tuple[PluginPack, str, tuple[Any, ...]]] = {}
         self._restart_required_packs: set[str] = set()
         self._setup_failures: dict[str, str] = {}
         self._startup_failures: dict[str, str] = {}
+        self._update_boot = ExitStack()
+        self._updates_to_verify: tuple[str, ...] = ()
         self._attached = False
         self._started = False
 
@@ -135,6 +139,8 @@ class PluginApplicationHost:
     ) -> "PluginApplicationHost":
         started = time.perf_counter()
         root = Path(plugin_directory or default_plugin_impl_directory()).expanduser().resolve()
+        update_boot = ExitStack()
+        updates_to_verify = prepare_plugin_updates(root, update_boot)
         seed_builtin_plugin_directory(root)
         seeded = time.perf_counter()
         logger.info("Plugin initialization stage=seed elapsed_ms=%.1f", (seeded - started) * 1000)
@@ -172,6 +178,8 @@ class PluginApplicationHost:
             plugin_directory=root,
             load_failures=failures,
         )
+        host._update_boot = update_boot
+        host._updates_to_verify = updates_to_verify
         logger.info("Plugin initialization stage=attach elapsed_ms=%.1f", (time.perf_counter() - loaded) * 1000)
         return host
 
@@ -206,6 +214,12 @@ class PluginApplicationHost:
     def attached_packs(self) -> tuple[str, ...]:
         return tuple(self._attached_packs)
 
+    def running_pack_snapshot(self, pack_id: str) -> tuple[PluginPack, str, tuple[Any, ...]] | None:
+        """Return the definition that owns the currently running application services."""
+        if pack_id in self._running_packs:
+            return self._attached_packs.get(pack_id)
+        return None
+
     @property
     def setup_failures(self) -> dict[str, str]:
         return dict(self._setup_failures)
@@ -238,7 +252,7 @@ class PluginApplicationHost:
         """Quarantine application closures that no longer match registry code."""
 
         packs = {pack.id: pack for pack in self.registry.list_packs()}
-        for pack_id in self._attached_packs:
+        for pack_id, (_, attached_source, generation) in self._attached_packs.items():
             pack = packs.get(pack_id)
             if pack is None:
                 self._restart_required_packs.add(pack_id)
@@ -248,11 +262,7 @@ class PluginApplicationHost:
             except PluginRegistryError:
                 self._restart_required_packs.add(pack_id)
                 continue
-            if (
-                source != self._attached_pack_sources.get(pack_id)
-                or self._source_generation(source)
-                != self._attached_pack_generations.get(pack_id)
-            ):
+            if source != attached_source or self._source_generation(source) != generation:
                 self._restart_required_packs.add(pack_id)
         for pack in packs.values():
             if (
@@ -577,10 +587,8 @@ class PluginApplicationHost:
             self._startup_handlers[pack.id] = list(startup_handlers)
             self._shutdown_handlers[pack.id] = list(shutdown_handlers)
             self._frontend_methods[pack.id] = dict(frontend_methods)
-            self._attached_packs.append(pack.id)
             source = self.registry.pack_source(pack.id)
-            self._attached_pack_sources[pack.id] = source
-            self._attached_pack_generations[pack.id] = self._source_generation(source)
+            self._attached_packs[pack.id] = (pack, source, self._source_generation(source))
 
     @staticmethod
     async def _call_lifecycle(handler: PluginLifecycleHandler) -> None:
@@ -711,6 +719,8 @@ class PluginApplicationHost:
         self._started = True
         try:
             await self.reconcile_activation()
+            await verify_restarted_updates(self, self._updates_to_verify)
+            self._updates_to_verify = ()
         except BaseException:
             logger.exception(
                 "Plugin startup host failed running_packs=%d "
@@ -720,6 +730,8 @@ class PluginApplicationHost:
                 (time.perf_counter() - started) * 1000,
             )
             raise
+        finally:
+            self._update_boot.close()
         logger.info(
             "Plugin startup host complete running_packs=%d "
             "startup_failures=%d elapsed_ms=%.1f",

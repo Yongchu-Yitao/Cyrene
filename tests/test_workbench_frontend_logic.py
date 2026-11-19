@@ -1980,7 +1980,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.0">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.1">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/cyrene/workbench/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -5119,7 +5119,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.1"></script>' in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -5941,7 +5941,8 @@ def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     assert '"/api/plugin-center/cli/hooks"' in plugin_cli_hooks
     assert '"/api/plugin-center/cli/hooks/proposals/"' in plugin_cli_hooks
     assert 'function HooksPanel(props)' in plugin_cli_hooks
-    assert 'className="wb-hook-filter"' in plugin_cli_hooks
+    assert "<ExtensionFilter " in plugin_cli_hooks and "<ExtensionFilter " in plugin_settings
+    assert "<EditorDialog\n" in plugin_cli_hooks
     assert 'settings.hookCount' in plugin_cli_hooks
     assert 'settings.hookEnabled' in plugin_cli_hooks
     assert 'payload.system_hooks' in plugin_cli_hooks
@@ -5949,8 +5950,8 @@ def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     assert 'settings.userHooks' in plugin_cli_hooks
     assert 'onEdit={edit}' in plugin_cli_hooks
     assert 'function SystemHookEditor(props)' in plugin_cli_hooks
-    assert 'var SYSTEM_EVENTS' in plugin_cli_hooks
-    assert 'SYSTEM_EVENTS.map' in plugin_cli_hooks
+    assert 'var EVENTS' in plugin_cli_hooks
+    assert 'EVENTS.map' in plugin_cli_hooks
     assert 'settings.systemHookWhen' in plugin_cli_hooks
     assert 'settings.systemHookThen' in plugin_cli_hooks
     assert 'action: action' in plugin_cli_hooks
@@ -5970,9 +5971,10 @@ def test_plugin_center_combines_runtime_status_with_plugin_owned_intake_apis():
     assert 'settings.hookPriorityRange' in plugin_cli_hooks
     assert 'window.setInterval' in plugin_cli_hooks
     assert 'manageable={customAvailable}' in plugin_cli_hooks
-    assert 'aria-expanded={expanded ? "true" : "false"}' in plugin_cli_hooks
-    assert 'className="wb-hook-card-actions"' in plugin_cli_hooks
-    assert plugin_cli_hooks.index('wb-hook-card-edit"') < plugin_cli_hooks.index('className="wb-hook-chevron-button"')
+    assert 'className="registry-tile hook-tile"' in plugin_cli_hooks
+    assert 'aria-expanded={expanded} aria-controls={detailsId}' in plugin_cli_hooks
+    assert '<Disclosure open={expanded} id={detailsId}>' in plugin_cli_hooks
+    assert 'Toggle(item.enabled === true, () => props.onToggle(item)' in plugin_cli_hooks
     assert '"/api/plugin-center/cli/" + encodeURIComponent(id) + "/configure-hook"' in plugin_intake
     assert "wb-plugin-center-page" in plugin_intake
     assert "McpToolDetails" in plugin_catalog
@@ -6372,6 +6374,8 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert '(railCollapsed ? " rail-collapsed" : "")' in source
     assert 'ref={mobileGridRef}' in source
     assert 'wbApplyStoredRightWidth' in source
+    assert "moduleDock: p.isSettings ? navigation.renderDockSlot() : null" in source
+    assert "var activeDestination = isSettings ? null" in source
     assert grid_markup.count("<WorkbenchSidebarDock") == 1
     assert "persistent={true}" in grid_markup
     assert "collapsed={railCollapsed}" in grid_markup
@@ -6502,7 +6506,7 @@ def test_workbench_keeps_one_persistent_module_dock_across_workspace_switches():
     assert "border: var(--wb-floating-rail-border);" in dock_nav_css
     assert "border-radius: 15px;" in dock_nav_css
     assert "background: var(--wb-dock-nav-bg);" in dock_nav_css
-    assert "box-shadow: var(--wb-floating-rail-shadow);" in dock_nav_css
+    assert "box-shadow: var(--wbc-composer-glass-shadow);" in dock_nav_css
     assert "-webkit-backdrop-filter: none;" in dock_nav_css
     assert "backdrop-filter: none;" in dock_nav_css
     assert "height: 48px;" in dock_button_css
@@ -7867,8 +7871,10 @@ def test_session_export_uses_balanced_responsive_action_layout():
 
     assert 'className: "wb-export-footer"' in session_export
     assert 'className: "wb-export-format"' in session_export
-    assert 'role: "radiogroup"' in session_export
-    assert '"aria-checked": exportFmt === "markdown"' in session_export
+    assert '<ChoiceCards compact label={t("settings.sessionExportFormat")}' in session_export
+    assert 'value={exportFmt} onChange={setExportFmt}' in session_export
+    assert '{ id: "markdown", title: "Markdown" }' in session_export
+    assert '{ id: "json", title: "JSON" }' in session_export
     assert 'className: "wb-section-block wb-session-export-block"' in session_export
     assert "var sessionDate = s.updatedAt || s.createdAt;" in session_export
     assert ".settings-overlay .wb-export-session-option {\n  min-height: 44px;" in styles
@@ -8340,7 +8346,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.9.2.0" in index
+    assert "workbench.css?v=0.9.2.1" in index
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
@@ -8360,7 +8366,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.1"></script>' in index
 
 
 def test_desktop_uses_cross_platform_native_directory_picker():
@@ -8804,7 +8810,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.1"></script>' in index
 
 
 def test_workbench_api_json_times_out_when_body_stalls_after_headers():
@@ -8861,7 +8867,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert 'requestJson("/api/settings/model-config")' in source
     assert "store.setConfig(snapshot);" in source
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.0"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.1"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -9299,29 +9305,14 @@ def test_workbench_about_hero_owns_update_action_and_download_progress():
     about_block = source.split("function UpdateSection({ t, config }) {", 1)[1].split(
         "// ── Skills Panel", 1
     )[0]
-    hero_index = about_block.index('className: "wb-about-product-card"')
-    action_index = about_block.index('className: "wb-btn primary wb-about-check-btn"')
-    update_index = about_block.index('className: "wb-about-update-card"')
-
-    assert hero_index < action_index < update_index
-    assert 'className: "wb-about-hero-progress"' in about_block
-    assert '"--wb-about-download-progress": heroProgress + "%"' in about_block
+    assert about_block.index('className="about-mast"') < about_block.index("onClick={actionHandler}") < about_block.index('className="about-options"')
+    assert 'value={heroProgress}' in about_block
+    assert 'data-cyrene-risk={downloaded ? "R3" : "R2"}' in about_block
     assert "var heroProgress = downloaded\n    ? 100" in about_block
     assert about_block.index("var heroProgress = downloaded") < about_block.index("progressTotal > 0")
-    assert 'className: "wb-about-update-footer"' not in about_block
-    assert 'className: "wb-about-related-card"' in about_block
-    assert "var relatedLinks = [" in about_block
-
-    progress_rule = styles.split(".wb-about-hero-progress {", 1)[1].split("}", 1)[0]
-    assert "position: absolute" in progress_rule
-    assert "inset: 0 auto 0 0" in progress_rule
-    assert "width: var(--wb-about-download-progress)" in progress_rule
-    assert ".wb-about-product-card.is-downloading .wb-about-hero-progress" in styles
-    assert ".wb-about-related-row" in styles
-
-    changelog_modal_rule = styles.split(".wb-changelog-modal {", 1)[1].split("}", 1)[0]
-    assert "height: min(460px, calc(100vh - 48px));" in changelog_modal_rule
-    assert "--wb-settings-panel-height" not in styles
+    assert 'className="about-resources"' in about_block
+    assert 'className="about-support"' in about_block
+    assert ".about-support" in styles
 
 
 def test_extension_center_uses_fixed_settings_geometry_and_localized_catalog_copy():
@@ -10721,7 +10712,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.0">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.1">' in index_html
     entry_html = (root / "src/cyrene/workbench/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html
@@ -11172,7 +11163,8 @@ def test_media_settings_hide_comfyui_and_use_progressive_autosave_ui():
     assert 'className: "wb-media-runtime"' in media
     assert '{ id: "media", labelKey: "settings.mediaGeneration", icon: "photo-video" }' in settings_overlay
     assert "'photo-video.svg'" in build
-    assert 'icon: "sparkles"' not in settings_overlay
+    media_tab = settings_overlay.split('id: "media",', 1)[1].split("}", 1)[0]
+    assert 'icon: "sparkles"' not in media_tab
     assert 'kind: "image"' in media
     assert 'kind: "video"' in media
     assert 'kind: "music"' in media

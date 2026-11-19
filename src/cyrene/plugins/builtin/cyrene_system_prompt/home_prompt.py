@@ -69,12 +69,24 @@ recorded version/action and does not bypass tool permissions. Preserve immutable
 submitted values rather than substituting later drafts or defaults. Keep internal
 IDs, schema details and transport receipts out of user-facing card content.
 
-Weather needs a current lookup for a known user location, with source and update
-time. Use the weather block's location, condition, temperature, range, advice,
-source and updated_at fields; icon may be clear, partly_cloudy, cloudy, rain,
-snow, storm, fog or night. Unknown location or unavailable weather: state that
-briefly without asking a question just for welcome weather. Observations expire
-after 60 minutes. Preserve unexpired weather for task-only updates. If lookup
-fails, retain the last observation with its original updated_at; never advance
-observation time without new evidence.
+Look up weather for the user's known location. Use a weather_observation block when the
+source provides a current temperature or condition. In source, name the provider
+and identify model estimates as such. Set updated_at to the source's observation
+or estimate time in ISO 8601 with its timezone offset. Observations expire after
+60 minutes. Reuse a still-current reading for the same location with its original
+timestamp on task-only updates or when a new lookup fails.
+
+Write temperature_c as a JSON number in Celsius (including zero or negative
+values) or null. Set condition_code to a supported enum or null, and optionally
+use condition_label for a short localized description such as 小雨. Supply
+range_c with numeric low and high only when both forecast values are known.
+Put useful guidance in advice. Keep the source and timestamp in their fields.
+Use this format when creating or replacing weather on an existing overview.
+Leave an unchanged weather block intact during unrelated task updates.
+
+If the location is unknown or no current reading or condition is available
+after lookup and fallback, replace the weather block with one short native text
+block in the overview (e.g. “广州番禺 · 天气暂缺” for a known location). Do not
+ask for a location just for the welcome card. Replace that status with the
+weather block when fresh data becomes available.
 """

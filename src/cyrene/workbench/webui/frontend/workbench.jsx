@@ -74,7 +74,7 @@ window.CyreneUI.performanceMode = {
 
 
 
-function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
+function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding, onboardingAppearance }) {
   var dataStore = workbenchServices.data();
   dataStore.useVersion();
   var dataState = dataStore.state;
@@ -374,15 +374,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // backend reports needsOnboarding=false the shell falls through to normal.
   var onboarding = dataState.onboarding || {};
   var onboardingActive = onboarding.needsOnboarding != null ? !!onboarding.needsOnboarding : !!needsOnboarding;
+  // Keep the completion summary open while the store refreshes after the final save.
+  const [reviewingSetup, setReviewingSetup] = useWorkbenchState(onboardingActive);
+  React.useEffect(() => {
+    if (onboardingActive) setReviewingSetup(true);
+  }, [onboardingActive]);
   function handleOnboardingComplete() {
+    setReviewingSetup(false);
     createChat();
   }
-  if (onboardingActive) {
+  if (onboardingActive || reviewingSetup) {
     return <WorkbenchOnboardingShell
       onboarding={onboarding}
-      theme={theme}
-      actualTheme={actualTheme}
-      onToggleTheme={onToggleTheme}
+      appearance={onboardingAppearance}
       onComplete={handleOnboardingComplete}
       t={t}
     />;

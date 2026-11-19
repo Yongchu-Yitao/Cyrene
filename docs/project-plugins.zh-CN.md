@@ -220,6 +220,16 @@ Effect 转换为已验证的 Presentation Location。Effect 默认可更新已�
 新的 Editor 或 Files Surface 应要求用户明确提出显示或编辑某个具名文件，避免普通
 Read/Search 不断改变用户布局。
 
+## 聊天正文中的插件视图
+
+使用 `PluginScaffold` 时，选择 `ui_plugin` 或 `full_pack` 并传入 `"chat_inline_view": true`。生成的 `tool.py` 返回 `main` 视图，`ui/index.html` 演示初始值、编辑恢复与后端 RPC。
+
+工具可以在成功结果中返回下面的引用。宿主根据实际工具绑定所属包、项目和本次调用实例，并从该包已启用的 `frontend_views` 解析 `view_id`。直接调用和 `toolbox.invoke` 均支持。重新打开对话时，宿主从历史工具记录恢复同一实例，并在 iframe 的 `init.context.state` 中传入初始状态。页面可通过 `{source:"cyrene-plugin", type:"state", state:{...}}` 发送状态补丁，在当前浏览器恢复交互进度。需要跨设备保存的业务数据由插件通过 RPC 持久化。
+
+```python
+return {"presentation": {"kind": "plugin_view", "view_id": "usage", "state": {"days": 7}}}
+```
+
 ## 后端 RPC
 
 ```python

@@ -769,6 +769,8 @@ def test_parent_failure_stops_children_without_resuming_inbox(tmp_path, monkeypa
                     child_cancelled.set()
                 return answer("too late")
             main_calls += 1
+            if main_calls == 2:
+                return answer("recovered")
             manager = context.services["subagents"]
             await manager.spawn("main", "worker", "wait")
             assert await asyncio.to_thread(child_started.wait, 2)
@@ -796,6 +798,20 @@ def test_parent_failure_stops_children_without_resuming_inbox(tmp_path, monkeypa
             # even though a child inbox still has an unread message.
             await asyncio.wait_for(session.drain(), 2)
             assert main_calls == 1
+            assert inbox.get_unread_count("worker", session_id="failed-chat") == 1
+            assert session.snapshot()["status"] == "idle"
+            session.close()
+
+            session = AgentSession(
+                tmp_path / "data", tmp_path / "workspace", plugin_directory,
+                tree_id="failed-chat", registry=model_registry(model),
+                plugin_context_data={"session_id": "failed-chat"},
+            )
+            assert session.snapshot()["status"] == "idle"
+            session.submit("continue", run_id="next-run", metadata={"agent_originated": True})
+            await asyncio.wait_for(session.drain(), 5)
+            assert session.final_output("next-run")["content"] == "recovered"
+            assert main_calls == 2
         finally:
             session.close()
 

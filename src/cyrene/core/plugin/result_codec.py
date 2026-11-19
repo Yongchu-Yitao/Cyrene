@@ -64,6 +64,7 @@ def stored_result(result: PluginCallResult) -> dict[str, Any]:
         "value": json_value(result.value),
         "error": result.error,
         "time": result.time.isoformat(),
+        **({"pack_id": result.pack_id} if result.pack_id else {}),
         **(
             {"failure": result.failure.as_dict()}
             if result.failure is not None
@@ -86,5 +87,6 @@ def restored_result(raw: Mapping[str, Any]) -> PluginCallResult:
             if isinstance(raw_failure, Mapping)
             else None
         ),
+        pack_id=raw.get("pack_id"),
     )
 

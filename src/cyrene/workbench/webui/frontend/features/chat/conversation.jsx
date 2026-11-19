@@ -1,3 +1,4 @@
+import { WbcInlinePluginView } from "./inline-plugin-view.jsx"
 import { useNativeWheelElement } from "../../shared/native-wheel.jsx"
 import { wbcProjectRuntimeTranscript, wbcProjectTranscript } from "./runtime-timeline.jsx"
 import { openDoctor } from "../doctor/doctor.jsx"
@@ -1475,7 +1476,7 @@ function useWbcConversationProjection(chat, runtime, retryClearingMessageIds) {
     for (var index = messages.length - 1; index >= 0; index -= 1) {
       if (messages[index].role === "user") {
         if (!user) user = String(messages[index].id || "");
-      } else if (!assistant) {
+      } else if (!assistant && !messages[index].pluginView) {
         assistant = String(messages[index].id || "");
       }
       if (user && assistant) break;
@@ -1507,6 +1508,7 @@ function wbcRenderHistoryMessage(msg, context) {
         return context.retryClearingIds.has(String(activityMessage && activityMessage.id || ""));
       })
     : context.retryClearingIds.has(String(msg && msg.id || ""));
+  if (msg.pluginView) return <WbcInlinePluginView key={renderKey} view={msg.pluginView} />;
   if (msg.activityGroup) {
     return (
       <WbcThreadItem key={renderKey} className={retryClearing ? "retry-clearing" : ""}>
@@ -1560,6 +1562,7 @@ function wbcRenderHistoryMessage(msg, context) {
   }
   if (
     msg.role !== "user"
+    && !msg.assistantCard
     && !String(msg.content || "").trim()
     && !(Array.isArray(msg.attachments) && msg.attachments.length)
     && !(Array.isArray(msg.referenceAttachments) && msg.referenceAttachments.length)

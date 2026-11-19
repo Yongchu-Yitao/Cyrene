@@ -37,13 +37,13 @@ class RunTimeline:
         self.pending_replacements: set[str] = set()
         self.removed_message_ids: set[str] = set()
 
-    def _new(self, kind: str, at: str, source: str = "") -> dict[str, Any]:
+    def _new(self, kind: str, at: str, source: str = "", *, record_id: str = "") -> dict[str, Any]:
         self.counter += 1
         if self.records:
             previous_at = next(reversed(self.records.values()))["createdAt"]
             if datetime.fromisoformat(at.replace("Z", "+00:00")) < datetime.fromisoformat(previous_at.replace("Z", "+00:00")):
                 at = previous_at
-        identity = f"{self.run_id}:{kind}:{self.counter}"
+        identity = record_id or f"{self.run_id}:{kind}:{self.counter}"
         record: dict[str, Any] = {
             "id": identity, "role": "assistant", "content": "",
             "runId": self.run_id, "roundId": self.run_id,
@@ -283,7 +283,7 @@ class RunTimeline:
             self._settle_activity(record, at)
         elif kind in {"notification.created", "notification"}:
             identity = str(payload.get("id") or event_id)
-            record = self._new("notification", at, identity)
+            record = self._new("notification", at, identity, record_id=identity if payload.get("category") == "hook" else "")
             record.update(notificationCard=True, notification=copy.deepcopy(payload), status="completed", intermediate=True, endedAt=at)
         elif kind in {"artifact.created", "artifact.updated"}:
             self._apply_artifact(payload, at, source)

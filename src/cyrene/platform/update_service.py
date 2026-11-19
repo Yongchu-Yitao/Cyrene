@@ -38,6 +38,11 @@ class ReleaseNotesRepository:
                 return path.read_text(encoding="utf-8").strip()
         return ""
 
+    def notes_for_release(self, info: updater.UpdateInfo) -> str:
+        if info.available:
+            return (info.release_notes or "").strip()
+        return info.release_notes or self.local_text()
+
     def get(self) -> dict[str, Any]:
         value = settings_store.get("update_changelog", {}) or {}
         return value if isinstance(value, dict) else {}
@@ -228,7 +233,7 @@ class UpdateApplicationService:
     async def check(self) -> dict[str, Any]:
         info = await updater.check_for_update()
         updater.set_cached_update_info(info)
-        release_notes = info.release_notes or self.release_notes.local_text()
+        release_notes = self.release_notes.notes_for_release(info)
         if release_notes or info.latest_version:
             self.release_notes.save(info, release_notes)
         return {
@@ -249,7 +254,7 @@ class UpdateApplicationService:
         changelog = self.release_notes.get()
         if not str(changelog.get("release_notes") or "").strip():
             info = await updater.check_for_update()
-            release_notes = info.release_notes or self.release_notes.local_text()
+            release_notes = self.release_notes.notes_for_release(info)
             if release_notes or info.latest_version:
                 changelog = self.release_notes.save(info, release_notes)
         return {

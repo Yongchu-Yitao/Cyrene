@@ -311,7 +311,7 @@
     "lines": 108
   },
   "src/cyrene/workbench/webui/frontend/entry/bootstrap.jsx::WorkbenchRoot": {
-    "lines": 155
+    "lines": 163
   },
   "src/cyrene/workbench/webui/frontend/features/chat/agent-events.jsx::wbcAgentElicitationPayload": {
     "decisions": 21
@@ -328,6 +328,12 @@
   "src/cyrene/workbench/webui/frontend/features/chat/agent-events.jsx::wbcAgentToolPayload": {
     "decisions": 58
   },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::CardBlock": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-home-layout.jsx::AssistantHomeLayout": {
+    "decisions": 26
+  },
   "src/cyrene/workbench/webui/frontend/features/chat/behavior.mjs::permissionOptionLabel": {
     "decisions": 23
   },
@@ -339,6 +345,9 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/capabilities.jsx::wbcFileViewKind": {
     "decisions": 40
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/card-weather.jsx::CardWeather": {
+    "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/chat-action-controller.jsx::wbcAnswerQuestionForChat": {
     "decisions": 21
@@ -462,7 +471,7 @@
     "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx": {
-    "module_lines": 2592
+    "module_lines": 2595
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::useWbcConversationProjection": {
     "decisions": 31
@@ -505,7 +514,7 @@
     "decisions": 36
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::wbcRenderHistoryMessage": {
-    "decisions": 131
+    "decisions": 134
   },
   "src/cyrene/workbench/webui/frontend/features/chat/conversation.jsx::wbcValidateElicitationForm.<anonymous>": {
     "decisions": 27
@@ -611,6 +620,15 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/floating-pane-handoff.jsx::beginFloatingPanelSplit": {
     "decisions": 28
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/home-weather-painter.mjs::createWeatherPainter": {
+    "lines": 155
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/home-weather-painter.mjs::createWeatherPainter.cloud": {
+    "decisions": 21
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/home-weather-painter.mjs::createWeatherPainter.wind": {
+    "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/message-memo.mjs::snapshotRecord": {
     "decisions": 21
@@ -1058,8 +1076,8 @@
   },
   "src/cyrene/workbench/webui/frontend/features/settings/about.jsx::UpdateSection": {
     "lines": 322,
-    "decisions": 99,
-    "hooks": 16
+    "decisions": 123,
+    "hooks": 17
   },
   "src/cyrene/workbench/webui/frontend/features/settings/appearance.jsx::AppearancePanel": {
     "lines": 142,
@@ -1097,6 +1115,15 @@
     "lines": 197,
     "decisions": 36
   },
+  "src/cyrene/workbench/webui/frontend/features/settings/custom-plugins.jsx::RegistryTile": {
+    "decisions": 30
+  },
+  "src/cyrene/workbench/webui/frontend/features/settings/custom-plugins.jsx::RemoveUserContribution": {
+    "decisions": 35
+  },
+  "src/cyrene/workbench/webui/frontend/features/settings/custom-plugins.jsx::usePluginRegistryMutations": {
+    "lines": 112
+  },
   "src/cyrene/workbench/webui/frontend/features/settings/custom-search-sources.jsx::CustomSourceForm": {
     "decisions": 24
   },
@@ -1105,7 +1132,7 @@
     "decisions": 43
   },
   "src/cyrene/workbench/webui/frontend/features/settings/general.jsx::GeneralPanel": {
-    "lines": 286,
+    "lines": 291,
     "decisions": 78
   },
   "src/cyrene/workbench/webui/frontend/features/settings/media.jsx": {
@@ -1165,8 +1192,8 @@
     "decisions": 133
   },
   "src/cyrene/workbench/webui/frontend/features/settings/plugin-center-cli-hooks.jsx::CliHooksPanel": {
-    "lines": 169,
-    "decisions": 46
+    "lines": 198,
+    "decisions": 65
   },
   "src/cyrene/workbench/webui/frontend/features/settings/plugin-center-cli-hooks.jsx::draftFromHook": {
     "decisions": 35
@@ -1204,7 +1231,7 @@
     "decisions": 29
   },
   "src/cyrene/workbench/webui/frontend/features/shell/module-presentation.jsx::useWorkbenchModulePresentation": {
-    "decisions": 53
+    "decisions": 55
   },
   "src/cyrene/workbench/webui/frontend/features/shell/shell-composition.jsx::wbOpenPinnedResource": {
     "decisions": 26
@@ -1343,7 +1370,7 @@
     "decisions": 41
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx": {
-    "module_lines": 2222
+    "module_lines": 2240
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>": {
     "lines": 1977
@@ -1362,9 +1389,9 @@
     "decisions": 37
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.ServicesPage": {
-    "lines": 739,
-    "decisions": 57,
-    "hooks": 38
+    "lines": 767,
+    "decisions": 92,
+    "hooks": 42
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.ServicesPage.applyDiscoveredModel.<anonymous>": {
     "decisions": 22
@@ -1384,13 +1411,16 @@
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::renderModelDetailPane": {
     "decisions": 96
   },
+  "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::ServicesOverview.row": {
+    "decisions": 25
+  },
   "src/cyrene/workbench/webui/frontend/settings-overlay.jsx::agentSettingsPayload": {
     "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/settings-overlay.jsx::SettingsPage": {
     "lines": 712,
     "decisions": 29,
-    "hooks": 51
+    "hooks": 52
   },
   "src/cyrene/workbench/webui/frontend/shared/browser/viewport.jsx": {
     "module_lines": 1463
@@ -1451,13 +1481,13 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4351
+    "module_lines": 4391
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4351
+    "module_lines": 4391
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
-    "module_lines": 1234
+    "module_lines": 1301
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/format.jsx::<anonymous>.formatLocalizedSpend": {
     "decisions": 22
@@ -1637,7 +1667,7 @@
   },
   "src/cyrene/workbench/webui/frontend/workbench-profile.jsx::<anonymous>.WorkbenchProfilePage": {
     "lines": 225,
-    "decisions": 93
+    "decisions": 94
   },
   "src/cyrene/workbench/webui/frontend/workbench-quick-chat.jsx": {
     "parse_errors": 2
@@ -1700,10 +1730,15 @@
     "lines": 189,
     "decisions": 62
   },
+  "src/cyrene/workbench/webui/frontend/workbench-welcome.jsx::OnboardingFlow": {
+    "lines": 185,
+    "decisions": 96,
+    "hooks": 19
+  },
   "src/cyrene/workbench/webui/frontend/workbench.jsx::WorkbenchApp": {
-    "lines": 460,
-    "decisions": 41,
-    "hooks": 42
+    "lines": 461,
+    "decisions": 42,
+    "hooks": 44
   },
   "src/cyrene/workbench/webui/frontend/features/chat/messages.jsx::wbcGroupConsecutiveActivityMessages.<anonymous>": {
     "decisions": 26

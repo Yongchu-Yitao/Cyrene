@@ -1,6 +1,7 @@
 """Validation shared by model tools and the card UI bridge."""
 
 from copy import deepcopy
+from datetime import datetime
 import hashlib
 import json
 
@@ -148,9 +149,28 @@ def _validate_checklist(block, fields, bindings):
             bindings.append(key)
 
 
-def _validate_blocks(spec, fields, bindings):
+def _validate_observation(block):
+    if block["condition_code"] is None and block["temperature_c"] is None:
+        raise CardError("invalid_card", "No temperature_c or condition_code: use a short text block for unavailable weather")
+    if block.get("condition_label") and block["condition_code"] is None:
+        raise CardError("invalid_card", "condition_label requires a condition_code")
+    if "range_c" in block and block["range_c"]["low"] > block["range_c"]["high"]:
+        raise CardError("invalid_card", "range_c.low must not exceed range_c.high")
+    try:
+        stamp = datetime.fromisoformat(block["updated_at"].replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CardError("invalid_card", "updated_at must be an ISO 8601 observation time") from exc
+    if stamp.tzinfo is None:
+        raise CardError("invalid_card", "updated_at must include a timezone offset")
+
+
+def _validate_blocks(spec, fields, bindings, previous_blocks):
     for block in spec["blocks"]:
         kind = block["type"]
+        if kind == "weather_observation":
+            _validate_observation(block)
+        if kind == "weather" and spec.get("home_kind") and block not in previous_blocks:
+            raise CardError("invalid_card", "Use weather_observation for new or changed home weather, or text for unavailable weather")
         if kind == "action_list":
             _validate_action_list(block, spec)
         if kind == "form":
@@ -167,7 +187,7 @@ def _validate_blocks(spec, fields, bindings):
             raise CardError("invalid_card", "Chart labels and values must have equal lengths")
 
 
-def normalize(template, supplied, *, read_html=None):
+def normalize(template, supplied, *, read_html=None, previous_blocks=()):
     # Stored legacy cards keep their IDs, template identity and authored blocks.
     # New creation is restricted to the six public names by the tool schema.
     template = LEGACY_TEMPLATES.get(template, template)
@@ -194,7 +214,7 @@ def normalize(template, supplied, *, read_html=None):
     unique([b["block_id"] for b in spec["blocks"]], "block_id")
     unique([a["action_id"] for a in spec["actions"]], "action_id")
     bindings = []
-    _validate_blocks(spec, fields, bindings)
+    _validate_blocks(spec, fields, bindings, previous_blocks)
     unique(bindings, "input binding")
     if template == "custom" and sum(block["type"] == "embed" for block in spec["blocks"]) != 1:
         raise CardError("invalid_card", "Custom cards require exactly one embed block")

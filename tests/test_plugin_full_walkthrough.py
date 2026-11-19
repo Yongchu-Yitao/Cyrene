@@ -10,8 +10,11 @@ from cyrene.plugins.application import PluginApplicationHost
 from cyrene.plugins.builtin.cyrene_plugin_development import tools, plugin_pack as development
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('kind', tools.SCAFFOLD_TYPES)
-async def test_walkthrough(tmp_path,monkeypatch,kind):
+@pytest.mark.parametrize(('kind', 'inline_view'), [
+    *((kind, False) for kind in tools.SCAFFOLD_TYPES),
+    ('ui_plugin', True), ('full_pack', True),
+])
+async def test_walkthrough(tmp_path,monkeypatch,kind,inline_view):
     root=tmp_path/'installed'
     root.mkdir()
     workspace=tmp_path/'workspace'
@@ -43,7 +46,8 @@ async def test_walkthrough(tmp_path,monkeypatch,kind):
         return json.loads(result.value['result'])
     assert (await author('PluginAuthoringGuide',{}))['ok']
     source='example.py' if kind=='standalone_tool' else 'example'
-    result=await author('PluginScaffold',{'path':source,'plugin_type':kind,'pack_id':'example','name':'Example'})
+    result=await author('PluginScaffold',{'path':source,'plugin_type':kind,'pack_id':'example','name':'Example',
+                                          'chat_inline_view':inline_view})
     assert result['ok'],result
     assert (await author('PluginValidate',{'path':source}))['ok']
     installed=await author('PluginInstall',{'path':source})
@@ -65,11 +69,17 @@ async def test_walkthrough(tmp_path,monkeypatch,kind):
             response=await client.get('/example/status')
             assert response.status_code==200,response.text
             assert response.json()['ok']
-    if kind in ('tool_pack','standalone_tool','full_pack'):
+    if inline_view or kind in ('tool_pack','standalone_tool','full_pack'):
         listed=await runtime.call('toolbox',{'operation':'list'},ctx)
         assert listed.success
         result=await runtime.call('toolbox',{'operation':'invoke','name':'ExampleTool','arguments':{'message':'walkthrough'}},ctx)
         assert result.value['result']['message']=='walkthrough',result
+        if inline_view:
+            assert result.value['result']['presentation'] == {
+                'kind': 'plugin_view', 'view_id': 'main', 'state': {'message': 'walkthrough'},
+            }
+        else:
+            assert 'presentation' not in result.value['result']
     if kind in ('context_plugin','full_pack'):
         registry.register_plugin(Plugin('WalkModel','test model',{'type':'object'},lambda a,c:{'content':''},kind='model'),source='test-model')
         session=AgentSession(tmp_path/'session',workspace,root,registry=registry,load_plugins=False,application_scope=host,model_plugin='WalkModel')

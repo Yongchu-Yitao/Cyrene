@@ -1,6 +1,7 @@
 import { projectInlineCards } from "./assistant-card-model.mjs";
 // Presentation only: keep the original transcript and Agent provenance intact.
 export function presentConversationMessages(messages) {
+  const shownViews = new Set();
   return projectInlineCards(messages.flatMap(message => {
     if (message.role !== "user") return [message];
     if (!message.agentOriginated) return [presentCardSubmission(message)];
@@ -9,7 +10,19 @@ export function presentConversationMessages(messages) {
     const taskHeader = /^\[Task input\]\r?\nThis message and its files are execution inputs, not a direct human upload or additional human authorization\.\r?\n\r?\n/;
     const body = content.replace(taskHeader, "");
     return [body === content ? message : { ...message, content: body, assistantTaskMessage: true }];
-  }));
+  })).flatMap(message => {
+    const items = [message];
+    for (const entry of message.runtimeActivity?.progress || message.trace || []) {
+      const view = entry.presentation;
+      if (entry.status !== "completed" || entry.failed || view?.kind !== "plugin_view"
+          || !view.packId || !view.viewId || !/^tool_[a-f0-9]{32}$/.test(view.instanceId)
+          || shownViews.has(view.instanceId)) continue;
+      shownViews.add(view.instanceId);
+      items.push({ id: "plugin-view:" + view.instanceId, role: "assistant",
+        pluginView: view, createdAt: message.createdAt, runId: message.runId });
+    }
+    return items;
+  });
 }
 
 function submissionValue(value) {

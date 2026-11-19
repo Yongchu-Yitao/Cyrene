@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Literal, TypeAlias
 
 
@@ -34,6 +36,7 @@ class ModelErrorDetails:
     retryable: bool
     retry_scope: ModelRetryScope = "never"
     status_code: int = 0
+    retry_at: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -44,6 +47,8 @@ class ModelErrorDetails:
             "retryable": self.retryable,
             "retry_scope": self.retry_scope,
         }
+        if self.retry_at is not None:
+            result["retry_at"] = self.retry_at
         if self.status_code:
             result["status_code"] = self.status_code
         return result
@@ -243,14 +248,31 @@ def _retry_scope(
     return default
 
 
+def _provider_retry_at(exc: BaseException) -> float | None:
+    headers = getattr(getattr(exc, "response", None), "headers", {})
+    value = headers.get("retry-after", "").strip()
+    if not value:
+        return None
+    try:
+        if re.fullmatch(r"[0-9]+", value):
+            return (datetime.now(timezone.utc) + timedelta(seconds=int(value))).timestamp()
+        date = parsedate_to_datetime(value)
+        return (date if date.tzinfo else date.replace(tzinfo=timezone.utc)).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def _details(
     code: str,
     retryable: bool,
     status_code: int,
     *,
     retry_scope: ModelRetryScope | None = None,
+    retry_at: float | None = None,
 ) -> ModelErrorDetails:
     message_en, message_zh = _ERROR_MESSAGES[code]
+    if code == "model_rate_limited":
+        retry_scope = "after_delay"
     scope = retry_scope or (
         "immediate"
         if retryable and code == "model_response_invalid"
@@ -263,6 +285,7 @@ def _details(
         retryable,
         scope,
         status_code,
+        retry_at,
     )
 
 
@@ -333,7 +356,9 @@ def classify_model_error(error: BaseException | str) -> ModelErrorDetails:
     if status == 402 or re.search(r"insufficient (?:credit|fund)|billing|quota (?:exhausted|exceeded)|out of credit", signature):
         return _details("model_quota_exhausted", False, status)
     if status == 429 or re.search(r"rate.?limit|too many requests", signature):
-        return _details("model_rate_limited", True, status)
+        if isinstance(diagnostics, Mapping) and diagnostics.get("provider_error_code") == "insufficient_quota":
+            return _details("model_quota_exhausted", False, status)
+        return _details("model_rate_limited", True, status, retry_at=_provider_retry_at(exc))
     if status == 404 or re.search(r"model .*(?:not found|does not exist|unavailable)|unknown model", signature):
         return _details("model_unavailable", False, status)
     if status == 413 or re.search(r"context length|context window|too many tokens|request (?:is )?too large|maximum context", signature):
@@ -403,6 +428,7 @@ def details_from_mapping(value: Any) -> ModelErrorDetails | None:
             ),
         ),
         int(value.get("status_code") or 0),
+        value.get("retry_at") if isinstance(value.get("retry_at"), (int, float)) else None,
     )
 
 

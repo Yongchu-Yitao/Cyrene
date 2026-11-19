@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
+import { transformSync } from 'esbuild'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -26,7 +27,7 @@ function setup(picked) {
     useEffectSt: fn => effects.push(fn),
   }
   vm.createContext(sandbox)
-  vm.runInContext(source, sandbox)
+  vm.runInContext(transformSync(source, { loader: 'jsx' }).code, sandbox)
   return { sandbox, model, requests, notices, busy, effects, counts: () => ({ reloads, refreshes }) }
 }
 

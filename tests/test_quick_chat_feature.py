@@ -73,7 +73,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'return surface === "quick-chat"' in app
     assert 'var QuickChatApp = window.CyreneUI.require("quickChat").App;' in app
     assert "<QuickChatApp />" in app
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.0">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.1">' in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat
@@ -233,8 +233,8 @@ def test_quick_chat_is_opt_in_behind_general_settings_toggles():
     # until background residency is on.
     assert 'settings.runInBackground' in general
     assert 'settings.quickChatAssistant' in general
-    assert 'setLang("en")' in general
-    assert 'setLang("zh")' in general
+    assert 'value={lang} onChange={setLang}' in general
+    assert '{id:"en",title:"English"},{id:"zh",title:"中文"}' in general
     assert "applyDesktop({ runInBackground:" in general
     assert "applyDesktop({ quickChatEnabled:" in general
     assert "desktopBusy || !runInBackground" in general

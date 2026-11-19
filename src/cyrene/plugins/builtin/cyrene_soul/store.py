@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from shutil import copymode
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from cyrene.config import ASSISTANT_NAME, WORKSPACE_DIR, cyrene_dir
@@ -94,13 +96,7 @@ def reset_soul() -> None:
     ensure_soul()
 
 
-def read_persona_context() -> str:
-    """Return SOUL.md with expired temporary entries omitted."""
-
-    content = read_soul()
-    if not content:
-        return ""
-    now = datetime.now(timezone.utc)
+def _without_expired_temporary(content: str, now: datetime) -> str:
     expiry = timedelta(hours=24)
     result: list[str] = []
     in_temporary = False
@@ -124,7 +120,13 @@ def read_persona_context() -> str:
             if expired:
                 continue
         result.append(line)
-    return "".join(result).strip()
+    return "".join(result)
+
+
+def read_persona_context() -> str:
+    """Return SOUL.md with expired temporary entries omitted."""
+
+    return _without_expired_temporary(read_soul(), datetime.now(timezone.utc)).strip()
 
 
 def _section_name(line: str) -> str | None:
@@ -254,6 +256,26 @@ class SoulApplication:
 
     def persona_context(self) -> str:
         return read_persona_context()
+
+    def clear_expired_temporary(self) -> None:
+        path = self.path().resolve()
+        # Keep the original line endings and whitespace in the editable file.
+        try:
+            original = path.read_bytes()
+        except FileNotFoundError:
+            return
+        cleaned = _without_expired_temporary(
+            original.decode("utf-8"), datetime.now(timezone.utc)
+        ).encode("utf-8")
+        if cleaned == original:
+            return
+        with NamedTemporaryFile(dir=path.parent, delete_on_close=False) as temporary:
+            temporary.write(cleaned)
+            temporary.close()
+            replacement = Path(temporary.name)
+            copymode(path, replacement)
+            if path.read_bytes() == original:
+                replacement.replace(path)
 
     def presentation_state(self) -> dict[str, object]:
         """Project Soul-owned data into core UI payloads without file access there."""

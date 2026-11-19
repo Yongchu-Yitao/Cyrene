@@ -12,6 +12,9 @@ from cyrene.plugins.builtin.cyrene_cards.definitions import definition
 
 @pytest.mark.parametrize("operation,container", [("card.create", "spec"), ("card.update", "changes")])
 @pytest.mark.parametrize("block,fragments", [
+    ({"block_id": "weather", "type": "weather_observation", "location": "广州", "source": "气象站",
+      "updated_at": "2026-11-18T10:30:00+08:00", "temperature_c": "暂无气温", "condition_code": None},
+     ["blocks[0].temperature_c"]),
     ({"block_id": "app", "type": "embed"}, ["blocks[0].html", "缺少必填参数"]),
     ({"block_id": "app"}, ["blocks[0].html", "缺少必填参数"]),
     ({"block_id": "app", "html": ""}, ["blocks[0].html", "至少需要 1 个字符"]),

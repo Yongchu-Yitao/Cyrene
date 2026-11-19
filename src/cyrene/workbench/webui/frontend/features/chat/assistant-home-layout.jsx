@@ -1,6 +1,6 @@
 import React from 'react';
 import { CardWeather } from './card-weather.jsx';
-import { WBC_ICONS } from './icons.jsx';
+import { HomeToggle, HomePanel, HomeWeatherReport } from './home-disclosure.jsx';
 
 // Hide legacy branding in saved overview titles without rewriting Agent content.
 export function homeDisplayTitle(spec) {
@@ -9,26 +9,55 @@ export function homeDisplayTitle(spec) {
     : spec.title;
 }
 
-// The Agent authors every headline and subtitle. This component only arranges them.
-export function AssistantHomeLayout({ card, renderBlock, now = new Date() }) {
+function foldable(kind, block) {
+  return (block.type === 'action_list' && (block.collapsed || kind === 'results'))
+    || (kind === 'resume' && block.type === 'timeline');
+}
+
+export function homePanelId(card, block) {
+  return 'home-' + card.card_id + '-' + block.block_id;
+}
+
+export function AssistantHomeLayout({ card, renderBlock, disclosure, now = new Date() }) {
   const { spec } = card;
-  const weather = spec.home_kind === 'overview' ? spec.blocks.find(block => block.type === 'weather') : null;
-  const label = { resume: '继续进行', results: '最近成果' }[spec.home_kind];
+  const kind = spec.home_kind;
+  const weather = kind === 'overview' ? spec.blocks.find(block => block.type === 'weather_observation' || block.type === 'weather') : null;
+  const blocks = spec.blocks.filter(block => block !== weather
+    && !(kind === 'overview' && block.type === 'action_list' && block.items.length === 0));
+  const folds = blocks.filter(block => foldable(kind, block));
+  const inHeader = kind !== 'overview' && folds.length === 1;
+  const sectionLabel = { overview: '今日概览', resume: '继续进行', results: '最近成果' }[kind];
+  function toggle(block) {
+    const id = homePanelId(card, block);
+    const fallback = block.type === 'timeline' ? '查看进度' : kind === 'results' ? '交付物' : '事项';
+    return <HomeToggle key={id} id={id} label={block.title || fallback} count={block.items.length} disclosure={disclosure} />;
+  }
+  function panel(block) {
+    const id = homePanelId(card, block);
+    return <HomePanel key={id} id={id} disclosure={disclosure}>{renderBlock(block, true)}</HomePanel>;
+  }
+  // Adjacent lists share a button row and full-width details at their authored position.
+  const content = [];
+  for (let i = 0; i < blocks.length;) {
+    const block = blocks[i++];
+    if (!foldable(kind, block)) { content.push(renderBlock(block)); continue; }
+    const group = [block];
+    while (i < blocks.length && foldable(kind, blocks[i])) group.push(blocks[i++]);
+    if (!inHeader) content.push(<div key={'controls-' + block.block_id} className="wbc-home-toggles">{group.map(toggle)}</div>);
+    content.push(...group.map(panel));
+  }
   return <>
-    {label && <div className="wbc-home-section-label">{label}</div>}
-    <div className={'wbc-home-heading' + (weather ? ' with-weather' : '')}>
+    <div className={'wbc-home-heading' + (weather ? ' with-weather' : '') + (inHeader ? ' with-toggle' : '')}>
       <div className="wbc-home-intro">
-        {spec.home_kind === 'overview' && <div className="wbc-home-date">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(now)}</div>}
-        <h3>{homeDisplayTitle(spec)}</h3>{spec.subtitle && <p>{spec.subtitle}</p>}
+        <div className="wbc-home-section-label">{sectionLabel}</div>
+        {kind === 'overview' && <div className="wbc-home-date">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(now)}</div>}
+        <h3>{homeDisplayTitle(spec)}</h3>{!weather && spec.subtitle && <p>{spec.subtitle}</p>}
       </div>
-      {weather && <CardWeather block={weather} now={now} showMetadata={false} />}
+      {weather && <CardWeather block={weather} now={now} homeArtwork showMetadata={false} />}
+      {weather && spec.subtitle && <p className="wbc-home-subtitle">{spec.subtitle}</p>}
+      {inHeader && toggle(folds[0])}
     </div>
-    <div className="wbc-home-content">{spec.blocks.filter(block => block !== weather).map(block => {
-      if (spec.home_kind === 'resume' && block.type === 'timeline') return <details className="wbc-home-progress" key={block.block_id}>
-        <summary className="wb-btn"><span>{block.title || '查看进度'}</span><span className="wbc-home-progress-count">{block.items.length} 项</span><span className="wbc-card-disclosure-icon" aria-hidden="true">{WBC_ICONS.chevronDown}</span></summary>
-        {renderBlock(block)}
-      </details>;
-      return renderBlock(block);
-    })}</div>
+    {weather?.advice && <HomeWeatherReport id={homePanelId(card, weather)} text={weather.advice} disclosure={disclosure} />}
+    <div className="wbc-home-content">{content}</div>
   </>;
 }

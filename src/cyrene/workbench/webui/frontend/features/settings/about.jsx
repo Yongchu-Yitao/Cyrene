@@ -1,3 +1,5 @@
+import {ActionIcon} from "./action-icon.jsx"
+import {Disclosure} from "./disclosure.jsx"
 import {
   workbenchServices,
   useStateSt,
@@ -9,7 +11,6 @@ import {
   showSettingsToast,
   renderSettingsMarkdown,
   AboutRelatedIcon,
-  SectionTitle,
   Toggle,
 } from "./shared.jsx"
 
@@ -18,7 +19,7 @@ function AboutPanel(p) {
   var { t, config } = p;
 
   return React.createElement("div", { className: "settings-panel wb-about-settings" },
-    SectionTitle(t("settings.about"), t("settings.aboutSubtitle")),
+
     React.createElement(UpdateSection, { t: t, config: config }),
   );
 }
@@ -50,7 +51,7 @@ function UpdateSection({ t, config }) {
   var [beta, setBeta] = useStateSt(!!(config && config.beta_updates));
   var [autoUpdate, setAutoUpdate] = useStateSt(!!(!config || config.auto_update !== false));
   var [changelogOpen, setChangelogOpen] = useStateSt(false);
-  var [changelog, setChangelog] = useStateSt({ version: "", published_at: "", release_notes: "" });
+  var [releaseNotes, setReleaseNotes] = useStateSt(null);
 
   useEffectSt(function () { checkUpdate(); }, []);
   // 后台自动下载可能已完成/进行中，页面打开时恢复其状态（checkUpdate 失败也兜底）。
@@ -81,28 +82,31 @@ function UpdateSection({ t, config }) {
     settingsFetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
       setInfo(d);
       if (d.error) setError(d.error);
-      setChangelog({ version: d.latest_version || "", published_at: d.published_at || "", release_notes: d.release_notes || "" });
       syncDownloadState();
     }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
   }
 
-  function openChangelog() {
-    settingsFetch("/api/update/changelog").then(function (r) { return r.json(); }).then(function (d) {
-      setChangelog({
-        version: d.version || (info && info.latest_version) || "",
-        published_at: d.published_at || (info && info.published_at) || "",
-        release_notes: d.release_notes || (info && info.release_notes) || "",
-      });
-      setChangelogOpen(true);
-    }).catch(function () {
-      setChangelog({
-        version: (info && info.latest_version) || "",
-        published_at: (info && info.published_at) || "",
-        release_notes: (info && info.release_notes) || "",
-      });
-      setChangelogOpen(true);
-    });
-  }
+  useEffectSt(function () {
+    if (!changelogOpen || info?.update_available) return;
+    let active = true;
+    setReleaseNotes(null);
+    settingsFetch("/api/update/changelog")
+      .then(response => response.ok ? response.json() : null)
+      .then(notes => { if (active) setReleaseNotes(notes); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [changelogOpen, info?.update_available, info?.latest_version]);
+
+  // A pending upgrade owns its release notes, even when the publisher left them empty.
+  const changelog = info?.update_available ? {
+    version: info.latest_version,
+    published_at: info.published_at,
+    release_notes: info.release_notes,
+  } : {
+    version: releaseNotes?.version || info?.latest_version,
+    published_at: releaseNotes?.published_at || info?.published_at,
+    release_notes: releaseNotes?.release_notes || info?.release_notes,
+  };
 
   function toggleBeta() {
     if (checking || downloading) return;
@@ -142,26 +146,12 @@ function UpdateSection({ t, config }) {
       .then(function (mode) { if (mode !== "following") setDownloading(false); });
   }
 
-  function notesText() {
-    return String((info && info.release_notes) || "").trim() || t("settings.updateNoReleaseNotes", null, "No release notes provided.");
-  }
-
   function downloadStatus() {
-    if (!info) return "—";
-    if (downloading) return t("settings.updateDownloading", null, "Downloading...") + " " + fmtBytes(progress.downloaded) + " / " + fmtBytes(progress.total || info.asset_size);
+    if (!info || downloading) return "";
     if (downloaded && progress.verified) return t("settings.updateVerified", null, "Downloaded and verified");
     if (progress && progress.verification_error) return t("settings.updateVerificationFailed", null, "Verification failed") + ": " + progress.verification_error;
     if (info.update_available && !info.checksum_available) return t("settings.updateCannotVerify", null, "Cannot verify: release has no sha256 checksum.");
-    if (info.update_available) return t("settings.updateReadyToDownload", null, "Ready to download");
-    return t("settings.upToDate");
-  }
-
-  function statusDetailText() {
-    if (!info || checking) return "";
-    var detail = downloadStatus();
-    if (!detail || detail === "—" || detail === statusText) return "";
-    if (!info.update_available && detail === t("settings.upToDate")) return "";
-    return detail;
+    return "";
   }
 
   function confirmInstall() {
@@ -201,7 +191,7 @@ function UpdateSection({ t, config }) {
     return function () { clearInterval(timer); };
   }, [downloading]);
 
-  var lv = info && info.latest_version ? "v" + info.latest_version : "";
+  const lv = info?.latest_version ? "v" + String(info.latest_version).replace(/^v/i, "") : "";
   var statusText = checking
     ? t("settings.updateChecking")
     : (info && info.update_available
@@ -213,8 +203,10 @@ function UpdateSection({ t, config }) {
     : (checking
       ? t("settings.updateChecking")
       : (info && info.update_available ? t("settings.updateToVersion", { version: lv }) : t("settings.checkForUpdates")));
+
+  if (downloading) actionLabel = t("settings.updateDownloading");
   var actionHandler = downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate);
-  var statusDetail = statusDetailText();
+  var statusDetail = checking ? "" : downloadStatus();
   var progressTotal = Number(progress.total || (info && info.asset_size) || 0);
   // A verified download is the terminal state. The last byte-progress event can
   // arrive just below the reported total, so completion must take precedence
@@ -248,117 +240,77 @@ function UpdateSection({ t, config }) {
 
   var relatedLinks = [
     { icon: "docs", title: t("settings.relatedDocs", null, "Help docs"), action: t("settings.view", null, "View"), href: REPO_DOCS_URL },
-    { icon: "changelog", title: t("settings.relatedChangelog", null, "Changelog"), action: t("settings.view", null, "View"), onClick: openChangelog },
     { icon: "website", title: t("settings.relatedWebsite", null, "Official website"), action: t("settings.view", null, "View"), href: REPO_URL },
     { icon: "github", title: t("settings.relatedGithub", null, "GitHub repository"), action: t("settings.view", null, "View"), href: REPO_URL },
     { icon: "issue", title: t("settings.relatedIssue", null, "Submit Issue"), action: t("settings.feedback", null, "Feedback"), href: REPO_ISSUES_URL },
     { icon: "log", title: t("settings.exportLogs", null, "Export logs"), action: exporting ? t("common.loading", null, "Loading...") : t("settings.exportLogsAction", null, "Download"), onClick: exportLogs, disabled: exporting },
   ];
 
-  return React.createElement("div", { className: "wb-about-stack" },
-    React.createElement("section", {
-      className: "wb-about-product-card" + (downloading ? " is-downloading" : "") + (downloaded ? " is-downloaded" : ""),
-      style: { "--wb-about-download-progress": heroProgress + "%" },
-      "aria-busy": downloading ? "true" : undefined,
-    },
-      React.createElement("div", { className: "wb-about-hero-progress", "aria-hidden": "true" }),
-      React.createElement("div", { className: "wb-about-product-copy" },
-        React.createElement("div", { className: "wb-about-logo", "aria-hidden": "true" },
-          React.createElement("div", { className: "brand-mark" }),
-        ),
-        React.createElement("div", { className: "wb-about-product-text" },
-          React.createElement("div", { className: "wb-about-title-row" },
-            React.createElement("h3", null, "Cyrene"),
-            React.createElement("span", { className: "wb-about-version-chip" }, dataState.appVersion || "—"),
-          ),
-          React.createElement("p", null, t("settings.aboutHeroCopy")),
-        ),
-      ),
-      React.createElement("div", { className: "wb-about-hero-action" },
-        React.createElement("button", {
-          className: "wb-btn primary wb-about-check-btn",
-          "data-cyrene-risk": downloaded ? "R3" : "R2",
-          disabled: actionDisabled,
-          onClick: actionHandler,
-        }, actionLabel),
-      ),
-    ),
+  const zh=workbenchServices.i18n().getLang()==="zh";
+  const version = info?.current_version || dataState.appVersion;
+  const installedLabel = version ? "v" + String(version).replace(/^v/i, "") : "—";
+  const versionLabel = info?.update_available && lv ? installedLabel + " → " + lv : installedLabel;
 
-    React.createElement("section", { className: "wb-about-update-card" },
-      React.createElement("div", { className: "wb-about-card-head" },
-        React.createElement("h3", null, t("settings.updateSettings", null, "Update settings")),
-        (info || checking) && React.createElement("span", { className: "wb-about-status-pill" }, statusText),
-      ),
-      React.createElement("div", { className: "wb-about-toggle-list" },
-        React.createElement("label", { className: "wb-about-toggle-row" },
-          React.createElement("span", null,
-            React.createElement("strong", null, t("settings.autoUpdate", null, "Automatic updates")),
-            React.createElement("small", null, t("settings.autoUpdateHint", null, "Automatically download and install new versions")),
-          ),
-          Toggle(autoUpdate, toggleAutoUpdate),
-        ),
-        React.createElement("label", { className: "wb-about-toggle-row" },
-          React.createElement("span", null,
-            React.createElement("strong", null, t("settings.betaUpdates")),
-            React.createElement("small", null, t("settings.betaUpdatesHint", null, "Preview the latest features and improvements")),
-          ),
-          Toggle(beta, toggleBeta),
-        ),
-      ),
-      React.createElement("div", { className: "wb-about-version-grid" },
-        React.createElement("div", null, React.createElement("span", null, t("settings.updateCurrentVersion", null, "Current version")), React.createElement("strong", null, info && info.current_version ? "v" + info.current_version : (dataState.appVersion || "—"))),
-        React.createElement("div", null, React.createElement("span", null, t("settings.updateLatestVersion", null, "Latest version")), React.createElement("strong", null, lv || (dataState.appVersion || "—"))),
-        React.createElement("div", null, React.createElement("span", null, t("settings.updateReleaseBranch", null, "Release branch")), React.createElement("strong", null, "main")),
-        React.createElement("div", null, React.createElement("span", null, t("settings.updatePublishedAt", null, "Published")), React.createElement("strong", null, fmtDate(info && info.published_at))),
-      ),
-      statusDetail && React.createElement("p", { className: "wb-about-update-status" }, statusDetail),
-      error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
-      info && info.update_available && React.createElement("div", { className: "wb-update-notes" },
-        React.createElement("span", null, t("settings.updateReleaseNotes", null, "Release notes")),
-        React.createElement("div", {
-          className: "wb-update-notes-body markdown",
-          dangerouslySetInnerHTML: { __html: renderSettingsMarkdown(notesText()) },
-        })
-      ),
-    ),
-
-    React.createElement("section", { className: "wb-about-related-card" },
-      React.createElement("div", { className: "wb-about-card-head" },
-        React.createElement("h3", null, t("settings.relatedLinks", null, "Related links")),
-        React.createElement("small", null, t("settings.relatedLinksHint", null, "Documentation, releases, support, and diagnostics.")),
-      ),
-      React.createElement("div", { className: "wb-about-related-list" },
-        relatedLinks.map(function (item) {
-          var action = item.onClick
-            ? React.createElement("button", { type: "button", className: "wb-about-related-action", disabled: item.disabled, onClick: item.onClick }, item.action)
-            : React.createElement("a", { className: "wb-about-related-action", href: item.href, target: "_blank", rel: "noopener noreferrer" }, item.action);
-          return React.createElement("div", { key: item.title, className: "wb-about-related-row" },
-            React.createElement("span", { className: "wb-about-related-icon" }, AboutRelatedIcon(item.icon)),
-            React.createElement("strong", null, item.title),
-            action,
-          );
-        })
-      ),
-    ),
-    changelogOpen && React.createElement("div", { className: "wb-changelog-modal-scrim", onMouseDown: function (e) { if (e.target === e.currentTarget) setChangelogOpen(false); } },
-      React.createElement("div", { className: "wb-changelog-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-changelog-title" },
-        React.createElement("div", { className: "wb-changelog-head" },
-          React.createElement("div", null,
-            React.createElement("h3", { id: "wb-changelog-title" }, t("settings.relatedChangelog", null, "Changelog")),
-            React.createElement("p", null,
-              changelog.version ? "v" + changelog.version : (dataState.appVersion || "—"),
-              changelog.published_at ? " · " + fmtDate(changelog.published_at) : "",
-            ),
-          ),
-          React.createElement("button", { className: "wb-btn", onClick: function () { setChangelogOpen(false); } }, t("settings.close", null, "Close")),
-        ),
-        React.createElement("div", {
-          className: "wb-changelog-body markdown",
-          dangerouslySetInnerHTML: { __html: renderSettingsMarkdown(String(changelog.release_notes || "").trim() || t("settings.updateNoReleaseNotes", null, "No release notes provided.")) },
-        }),
-      )
-    ),
-  );
+  function resource(item){
+    const footerIcon={issue:"alert-circle",log:"download"}[item.icon];
+    const content = <>
+      {footerIcon ? <ActionIcon name={footerIcon}/> : AboutRelatedIcon(item.icon)}
+      <span>{item.title}</span>
+      {!footerIcon && <svg className="about-outbound" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12l8-8M5 4h7v7"/></svg>}
+    </>;
+    return item.href?<a key={item.icon} href={item.href} target="_blank" rel="noopener noreferrer">{content}</a>:<button key={item.icon} disabled={item.disabled} onClick={item.onClick}>{content}</button>;
+  }
+  return <div className="about-window">
+    <header className="about-mast">
+      <div className="about-banner">
+        <div className="about-brand">
+          <img src="logo-mark.png" alt="" width="64" height="64"/>
+          <h2>Cyrene</h2>
+        </div>
+        <div className="about-release">
+          <div className="about-version-line">
+            <button onClick={() => setChangelogOpen(open => !open)} aria-expanded={changelogOpen} aria-controls="about-notes" aria-label={versionLabel + " · " + t("settings.relatedChangelog")}>{versionLabel}</button>
+            <span role="status" data-current={!!info && !info.update_available && !checking && !error}>{error||statusText}</span>
+          </div>
+          <div className="about-buttons">
+            <button className="wb-btn" data-cyrene-risk={downloaded ? "R3" : "R2"} disabled={actionDisabled} onClick={actionHandler}>
+              {!downloaded && <ActionIcon name={actionHandler === startDownload ? "download" : "refresh"}/>}{actionLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+      {(downloading || downloaded) && <div className="about-download">
+        <div className="about-download-values">
+          <span>{downloaded && progressTotal ? fmtBytes(progressTotal) : fmtBytes(progress.downloaded)}{!downloaded && progressTotal > 0 && " / " + fmtBytes(progressTotal)}</span>
+          {(progressTotal > 0 || downloaded) && <strong>{heroProgress}%</strong>}
+        </div>
+        {progressTotal > 0 || downloaded
+          ? <progress max="100" value={heroProgress} aria-label={actionLabel}/>
+          : <progress aria-label={actionLabel}/>}
+      </div>}
+      {statusDetail&&<p>{statusDetail}</p>}
+    </header>
+    <div className="about-drawers">
+      <Disclosure id="about-notes" open={changelogOpen}><div className="about-notes-text">
+        <h4>{t("settings.relatedChangelog")} {changelog.version && "· v" + String(changelog.version).replace(/^v/i, "")} {changelog.published_at && fmtDate(changelog.published_at)}</h4>
+        <div className="markdown" dangerouslySetInnerHTML={{__html: renderSettingsMarkdown(changelog.release_notes || t("settings.updateNoReleaseNotes"))}}/>
+        <dl className="about-meta">{[
+        ["settings.updateCurrentVersion",version?"v"+String(version).replace(/^v/,""):"—"],["settings.updateLatestVersion",lv||dataState.appVersion||"—"],["settings.updateReleaseBranch","main"],["settings.updatePublishedAt",fmtDate(info?.published_at)]
+      ].map(([k,x])=><div key={k}><dt>{t(k)}</dt><dd>{x}</dd></div>)}</dl>
+      </div></Disclosure>
+    </div>
+    <div className="about-columns">
+      <section className="about-options"><h3>{t("settings.updateSettings")}</h3>
+        <div className="about-group">{[[autoUpdate,toggleAutoUpdate,"autoUpdate"],[beta,toggleBeta,"betaUpdates"]].map(([checked,apply,key])=><div className="about-pref" key={key}><div><strong>{t("settings."+key)}</strong><small>{t("settings."+key+"Hint")}</small></div>{Toggle(checked,apply,checking||downloading,t("settings."+key))}</div>)}</div>
+      </section>
+      <section className="about-resources"><h3>{zh?"项目资源":"Project resources"}</h3>
+        <div className="about-resource-grid">{relatedLinks.filter(x=>["docs","website","github"].includes(x.icon)).map(resource)}</div>
+      </section>
+    </div>
+    <footer className="about-support">
+      <strong>{t("settings.feedbackDiagnostics")}</strong>
+      <div className="about-support-actions">{relatedLinks.filter(x=>["issue","log"].includes(x.icon)).map(resource)}</div>
+    </footer>
+  </div>;
 }
-
 export { AboutPanel };

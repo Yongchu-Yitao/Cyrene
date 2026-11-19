@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
+import { transformSync } from 'esbuild'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -27,11 +28,11 @@ function setup({ confirmed = true, failure = false } = {}) {
     },
     readSettingsResponse: async response => response,
     showSettingsToast: (...args) => notices.push(args),
-    SectionTitle: () => null, SectionBlock: () => element('section'), Toggle: () => null,
+    ChoiceCards: () => null, SectionTitle: () => null, SectionBlock: () => element('section'), Toggle: () => null,
     FieldRow: (title, hint, control, unused, id) => element('row', { id }, control),
   }
   vm.createContext(sandbox)
-  vm.runInContext(source, sandbox)
+  vm.runInContext(transformSync(source, { loader: 'jsx' }).code, sandbox)
   const tree = sandbox.DataPanel({
     t: key => key, resetting: false, setResetting: value => busy.push(value),
     config: {}, backupList: [], exportSids: [], formatBytes: String,

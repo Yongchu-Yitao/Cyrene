@@ -49,7 +49,8 @@ export function CardBlock({ block, card, values, disabled, onEdit, onChange, onE
   const selected = block.selection && values[block.selection.field_id];
   const selectedIds = Array.isArray(selected) ? selected : [selected];
   switch (block.type) {
-    case 'weather': return <CardWeather block={block} />;
+    case 'weather':
+    case 'weather_observation': return <CardWeather block={block} />;
     case 'action_list': return <CardActionList block={block} card={card} values={values} disabled={disabled} onEvent={onEvent} />;
     case 'text': return <div className="markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(block.text) }} />;
     case 'metrics': return <div className="wbc-card-metrics">{block.items.map((item, i) => <div key={i}><span>{item.label}</span><strong>{asText(item.value)} <small>{item.unit}</small></strong>{item.source && <small>{item.source}</small>}</div>)}</div>;
@@ -236,22 +237,26 @@ export function useCardAnimations(ref, enabled) {
   }, [ref, enabled]);
 }
 
-export function WbcAssistantCard({ cardId, initialCard = null, displayTime = new Date(), managedRefresh = false }) {
+export function WbcAssistantCard({ cardId, revision, initialCard = null, displayTime = new Date(), managedRefresh = false, homeDisclosure }) {
   const { t } = useWorkbenchI18n();
   const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard, managedRefresh);
+  const localDisclosure = useState(null);
   const cardElement = useRef(null);
+  useEffect(() => {
+    if (!managedRefresh && !document.hidden && revision > (card?.revision ?? 0)) refresh();
+  }, [cardId, revision, managedRefresh]);
   useCardAnimations(cardElement, !!card);
   if (!card) return renderCardLoading(error, refresh);
   const { disabled, delivery, awaitingDelivery, footerActions, isHome, displayCard } = cardPresentation(card, busy, pendingEvent);
-  const renderBlock = block => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
-    {block.title && !(block.type === 'action_list' && block.collapsed) && !(isHome && block.type === 'timeline') && <h4>{block.title}</h4>}
+  const renderBlock = (block, inPanel = false) => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
+    {block.title && !inPanel && !(block.type === 'action_list' && block.collapsed) && !(isHome && block.type === 'timeline') && <h4>{block.title}</h4>}
     {block.description && <p className="wbc-card-description">{block.description}</p>}
-    <CardBlock block={block} card={card} values={values} disabled={disabled || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => send(kind, kind === 'change' ? next : { ...local.current, ...next }, action)} />
+    <CardBlock block={inPanel && block.collapsed ? { ...block, collapsed: false } : block} card={card} values={values} disabled={disabled || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => send(kind, kind === 'change' ? next : { ...local.current, ...next }, action)} />
   </section>;
   return <article ref={cardElement} className={'wbc-assistant-card density-' + card.spec.density + (isHome ? ' wbc-home-section home-' + card.spec.home_kind : '')} data-card-id={cardId} aria-label={isHome ? homeDisplayTitle(displayCard.spec) : card.spec.title} aria-busy={busy}>
     {!isHome && renderCardHeader(card, busy, togglePin, t)}
     <form ref={form} onSubmit={event => event.preventDefault()}>
-      {isHome ? <AssistantHomeLayout card={displayCard} now={displayTime} renderBlock={renderBlock} /> : <div className={'wbc-card-blocks layout-' + card.spec.layout}>{card.spec.blocks.map(renderBlock)}</div>}
+      {isHome ? <AssistantHomeLayout card={displayCard} now={displayTime} disclosure={homeDisclosure ?? localDisclosure} renderBlock={renderBlock} /> : <div className={'wbc-card-blocks layout-' + card.spec.layout}>{card.spec.blocks.map(block => renderBlock(block))}</div>}
       {renderCardFooter(card, footerActions, disabled || awaitingDelivery, send, local)}
     </form>
     {renderCardNotices({ error, delivery, pendingEvent, busy, send, retryDelivery })}

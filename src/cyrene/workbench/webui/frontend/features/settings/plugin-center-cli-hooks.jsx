@@ -1,22 +1,10 @@
-import { workbenchServices, useStateSt, useEffectSt, readSettingsResponse, settingsFetch, showSettingsToast } from "./shared.jsx"
+import { EditorDialog } from "./editor-dialog.jsx"
+import { ExtensionFilter } from "./extension-filter.jsx"
+import { Disclosure } from "./disclosure.jsx"
+import { ActionIcon } from "./action-icon.jsx"
+import { Toggle, workbenchServices, useStateSt, useEffectSt, readSettingsResponse, settingsFetch, showSettingsToast } from "./shared.jsx"
 
-var EVENTS = ["PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop"]
-var SYSTEM_EVENTS = ["ContextChange", "ContextUsed"].concat(EVENTS)
-var LOCALIZED_RUNTIME_HOOK_IDS = {
-  "agent-session-context-mount": true, "agent-session-transition": true, "core-permission-review": true,
-  "cyrene-browser-session-end": true, "cyrene-browser-stop": true, "cyrene-cli-post-tool-use": true,
-  "cyrene-cli-pre-tool-use": true, "cyrene-cli-session-end": true, "cyrene-cli-session-start": true,
-  "cyrene-cli-stop": true, "cyrene-composer-context-session-start": true, "cyrene-composer-context-turn-start": true,
-  "cyrene-context-session-start": true, "cyrene-context-turn-start": true,
-  "cyrene-entity-proactive-session-start": true, "cyrene-entity-proactive-turn-start": true,
-  "cyrene-global-hooks-post-tool-use": true, "cyrene-global-hooks-pre-tool-use": true,
-  "cyrene-global-hooks-session-end": true, "cyrene-global-hooks-session-start": true, "cyrene-global-hooks-stop": true,
-  "cyrene-memory-context_used": true, "cyrene-memory-session_end": true, "cyrene-memory-session_start": true,
-  "cyrene-memory-stop": true, "cyrene-skills-learning-post-tool-use": true,
-  "cyrene-skills-learning-session-end": true, "cyrene-skills-learning-session-start": true,
-  "cyrene-skills-learning-stop": true, "cyrene-soul-session-start": true,
-  "cyrene-subagent-spawn-policy-turn-start": true, "cyrene-system-prompt-session-start": true,
-}
+var EVENTS = ["SessionStart", "TurnStart", "ModelStart", "PreToolUse", "PostToolUse", "ContextChange", "ContextUsed", "SessionEnd", "ConversationTurnCommitted", "Stop"]
 
 function request(path, init) {
   return settingsFetch(path, init).then(readSettingsResponse).then(function (payload) {
@@ -76,26 +64,15 @@ function systemDraftFromHook(item) {
   }
 }
 
-function HookGlyph() {
-  var assets = window.CyreneIconAssets
-  var markup = assets && assets.settings && assets.settings.webhook || ""
-  return <span className="wb-hook-glyph" aria-hidden="true" dangerouslySetInnerHTML={{ __html: markup }} />
-}
-
-function ChevronGlyph(props) {
-  var assets = window.CyreneIconAssets
-  var markup = assets && assets.settings && assets.settings["chevron-down"] || ""
-  return <span className={'wb-hook-chevron' + (props.expanded ? ' expanded' : '')} aria-hidden="true" dangerouslySetInnerHTML={{ __html: markup }} />
-}
-
-function humanizeHookId(value) {
-  return String(value || "").replace(/^cyrene[-_.]/, "").replace(/[-_.]+/g, " ").replace(/\b\w/g, function (letter) { return letter.toUpperCase() })
-}
-
 function hookDisplayName(item, t) {
-  if (item && item.readonly !== true && item.name) return item.name
-  var id = String(item && item.id || "")
-  return LOCALIZED_RUNTIME_HOOK_IDS[id] ? t("settings.runtimeHookName." + id) : humanizeHookId(id) || id
+  if (!item) return ""
+  if (item.readonly !== true) return item.name || item.id
+  const fallback = item.name || t("settings.hookForEvent", { event: hookEventLabel(item.event, t) })
+  return t("settings.runtimeHookName." + item.id, null, fallback)
+}
+
+function hookLogLabel(value, t) {
+  return value ? t("settings.hookLogValue." + value, null, value) : ""
 }
 
 function hookDisplayDescription(item, t) {
@@ -176,30 +153,42 @@ function CliHookItem(props) {
   var ready = agentStatus === "ready"
   var statusClass = system ? (item.current === false ? "historical" : "current") : agentStatus === "configuring" ? "configuring" : agentStatus === "failed" ? "failed" : (item.enabled === true ? "enabled" : "disabled")
   var statusLabel = system ? (item.current === false ? props.t("settings.hookHistorical", "Historical") : props.t("settings.hookCurrent", "Current")) : agentStatus === "configuring" ? props.t("settings.hookAgentConfiguring") : agentStatus === "failed" ? props.t("settings.hookAgentFailed") : (item.enabled === true ? props.t("settings.hookEnabled", "Enabled") : props.t("settings.hookDisabled", "Disabled"))
-  return <article className={'wb-cli-hook-item wb-hook-card' + (!system && item.enabled !== true ? ' disabled' : '') + (expanded ? ' expanded' : '')}>
-    <div className="wb-hook-card-summary">
-    <button type="button" className="wb-hook-card-toggle" onClick={function () { props.onExpand(item) }} aria-expanded={expanded ? "true" : "false"} aria-label={props.t(expanded ? "settings.hookCollapseDetails" : "settings.hookExpandDetails", { name: hookDisplayName(item, props.t) })}>
-    <div className="wb-hook-card-main"><HookGlyph /><div className="wb-cli-hook-item-copy">
-      <div className="wb-hook-title-row"><strong>{hookDisplayName(item, props.t)}</strong><span>{hookEventLabel(item.event, props.t)}</span>
-        {item.readonly === true && <em className="system">{props.t("settings.hookSystemManaged", "System")}</em>}
+  const title = hookDisplayName(item, props.t)
+  const detailsId = React.useId()
+  const toggleDetails = () => props.onExpand(item)
+  const editLabel = props.t(item.configured_by_agent ? "settings.hookAdvancedEdit" : "settings.edit", "Edit")
+  function toggleFromCard(event) {
+    if (!event.target.closest("button, input, label, .registry-tile-details")) toggleDetails()
+  }
+  return <article className="registry-tile hook-tile" onClick={toggleFromCard}>
+    <div className="registry-tile-head">
+      <strong>{title}</strong>
+      {!system && props.manageable !== false && ready &&
+        Toggle(item.enabled === true, () => props.onToggle(item), props.busy, title)}
+      {(system || props.manageable !== false) && ready &&
+        <button type="button" className="tile-disclosure" aria-haspopup="dialog" title={editLabel} aria-label={editLabel + " · " + title}
+          disabled={props.busy} onClick={() => props.onEdit(item)}><ActionIcon name="pencil"/></button>}
+      <button type="button" className="tile-disclosure" aria-expanded={expanded} aria-controls={detailsId}
+        aria-label={props.t(expanded ? "settings.hookCollapseDetails" : "settings.hookExpandDetails", {name: title})}
+        onClick={toggleDetails}><ActionIcon name="chevron-down"/></button>
+    </div>
+    <p>{item.action_instruction || hookDisplayDescription(item, props.t)}</p>
+    <div className="tile-id"><code>{item.id}</code>
+      {(!ready || (system && item.current === false)) && <small>{statusLabel}</small>}
+      {system && item.enabled === false && <small>{props.t("settings.hookDisabled", "Disabled")}</small>}
+    </div>
+    <Disclosure open={expanded} id={detailsId}><div className="registry-tile-details"><div className="wb-hook-details">
+      <div className="wb-hook-title-row"><span>{hookEventLabel(item.event, props.t)}</span>
+        {system && <em className="system">{props.t("settings.hookSystemManaged", "System")}</em>}
         <em className={statusClass}>{statusLabel}</em>
-        {system && item.enabled === false && <em className="disabled">{props.t("settings.hookDisabled", "Disabled")}</em>}</div>
-      <small>{item.action_instruction || hookDisplayDescription(item, props.t)}</small>
-      <div className="wb-hook-meta">{item.matcher && item.matcher !== "*" && <code>{item.matcher}</code>}
-        <code>{target}{Array.isArray(runner.args) && runner.args.length ? " " + runner.args.join(" ") : ""}</code></div>
-    </div>
-    </div></button>
-    <div className="wb-hook-card-actions">
-      {!props.editing && (system || props.manageable !== false) && ready && <button type="button" className="wb-btn wb-hook-card-edit" disabled={props.busy} onClick={function () { props.onEdit(item) }}>{props.t(item.configured_by_agent === true ? "settings.hookAdvancedEdit" : "settings.edit", "Edit")}</button>}
-      {!system && agentStatus === "failed" && props.manageable !== false && <button type="button" className="wb-btn" disabled={props.busy} onClick={function () { props.onRetry(item) }}>{props.t("settings.hookAgentRetry")}</button>}
-      <button type="button" className="wb-hook-chevron-button" disabled={props.busy} onClick={function () { props.onExpand(item) }} aria-expanded={expanded ? "true" : "false"} aria-label={props.t(expanded ? "settings.hookCollapseDetails" : "settings.hookExpandDetails", { name: hookDisplayName(item, props.t) })}><ChevronGlyph expanded={expanded} /></button>
-    </div>
-    </div>
-    {expanded && <div className="wb-hook-details">
+        {system && item.enabled === false && <em className="disabled">{props.t("settings.hookDisabled", "Disabled")}</em>}
+      </div>
+      {!system && agentStatus === "failed" && props.manageable !== false &&
+        <button type="button" className="wb-btn" disabled={props.busy} onClick={() => props.onRetry(item)}>{props.t("settings.hookAgentRetry")}</button>}
       <dl>
         <div><dt>{props.t("settings.hookDetailId", "ID")}</dt><dd><code>{item.id}</code></dd></div>
         <div><dt>{props.t("settings.hookEvent", "Event")}</dt><dd>{hookEventLabel(item.event, props.t)}</dd></div>
-        <div><dt>{props.t(system ? "settings.systemHookThen" : "settings.hookDetailTarget", system ? "What to do" : "Execution target")}</dt><dd><code>{target}</code></dd></div>
+        <div><dt>{props.t(system ? "settings.systemHookThen" : "settings.hookDetailTarget", system ? "What to do" : "Execution target")}</dt><dd><code>{[target, ...(runner.args || [])].join(" ")}</code></dd></div>
         {item.matcher && <div><dt>{props.t("settings.hookMatcher", "Tool name or glob")}</dt><dd><code>{item.matcher}</code></dd></div>}
         {item.priority !== undefined && <div><dt>{props.t("settings.hookPriority", "Priority")}</dt><dd>{String(item.priority)}</dd></div>}
         {item.timeout_seconds !== undefined && <div><dt>{props.t("settings.hookTimeout", "Timeout (seconds)")}</dt><dd>{String(item.timeout_seconds)}</dd></div>}
@@ -211,14 +200,13 @@ function CliHookItem(props) {
       </dl>
       {!system && agentStatus === "configuring" && <div className="wb-hook-generation-state" role="status"><span className="wb-hook-generation-spinner" aria-hidden="true" /><div><strong>{props.t("settings.hookAgentConfiguring")}</strong><small>{props.t("settings.hookAgentConfiguringHint")}</small></div></div>}
       {!system && agentStatus === "failed" && <div className="wb-hook-generation-state failed" role="alert"><div><strong>{props.t("settings.hookAgentFailed")}</strong><small>{item.configuration_error || props.t("settings.hookAgentFailedHint")}</small></div></div>}
-      {!props.editing && !system && props.manageable !== false && ready && <div className="wb-cli-hook-row-actions">
+      {!system && props.manageable !== false && ready && <div className="wb-cli-hook-row-actions">
       <button type="button" className="wb-btn" disabled={props.busy} onClick={function () { props.onTest(item) }}>{props.t("settings.test", "Test")}</button>
-      <button type="button" className="wb-btn" disabled={props.busy} onClick={function () { props.onToggle(item) }}>{item.enabled === true ? props.t("settings.pluginCenterDisable", "Disable") : props.t("settings.pluginCenterEnable", "Enable")}</button>
       <button type="button" className="wb-btn danger" disabled={props.busy} onClick={function () { props.onDelete(item) }}>{props.t("settings.pluginCenterRemove", "Remove")}</button>
       </div>}
       {!system && props.manageable === false && <div className="wb-hook-inline-warning">{props.t("settings.hookCliUnavailable")}</div>}
-      {props.editing && (system ? <SystemHookEditor item={item} t={props.t} tools={props.tools} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSaveSystem} onCancel={props.onCancelEdit} /> : item.configured_by_agent === true ? <AgentHookEditor t={props.t} tools={props.tools} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSaveTuning} onCancel={props.onCancelEdit} /> : <CliHookEditor t={props.t} tools={props.tools} draft={props.draft} setDraft={props.setDraft} busy={props.busy} onSave={props.onSave} onCancel={props.onCancelEdit} editing={true} />)}
-    </div>}
+
+    </div></div></Disclosure>
   </article>
 }
 
@@ -226,7 +214,7 @@ function HookRequestEditor(props) {
   var draft = props.draft
   function update(name, value) { props.setDraft(Object.assign({}, draft, { [name]: value })) }
   return <form className="wb-cli-hook-editor wb-hook-request-editor" onSubmit={props.onSave}>
-    <header><h4>{props.t("settings.hookRequestTitle")}</h4><p>{props.t("settings.hookRequestHint")}</p></header>
+    <header><p>{props.t("settings.hookRequestHint")}</p></header>
     <div className="wb-cli-hook-editor-grid">
       <label><span>{props.t("settings.name")} *</span><input className="wb-input" required maxLength="120" value={draft.name} disabled={props.busy} onChange={function (event) { update("name", event.target.value) }} /></label>
       <label><span>{props.t("settings.hookEvent")} *</span><select className="wb-select" value={draft.event} disabled={props.busy} onChange={function (event) { update("event", event.target.value) }}>{EVENTS.map(function (event) { return <option key={event} value={event}>{hookEventLabel(event, props.t)}</option> })}</select></label>
@@ -272,7 +260,7 @@ function SystemHookEditor(props) {
     <h4>{props.t("settings.systemHookWhen")}</h4>
     <p>{props.t("settings.systemHookWhenHint")}</p>
     <div className="wb-cli-hook-editor-grid">
-      <label><span>{props.t("settings.hookEvent")}</span><select className="wb-select" value={draft.event} disabled={props.busy} onChange={function (event) { var nextEvent = event.target.value; props.setDraft(Object.assign({}, draft, { event: nextEvent, failure: draft.failure === "block" && nextEvent !== "PreToolUse" ? "open" : draft.failure })) }}>{SYSTEM_EVENTS.map(function (event) { return <option key={event} value={event}>{hookEventLabel(event, props.t)}</option> })}</select></label>
+      <label><span>{props.t("settings.hookEvent")}</span><select className="wb-select" value={draft.event} disabled={props.busy} onChange={function (event) { var nextEvent = event.target.value; props.setDraft(Object.assign({}, draft, { event: nextEvent, failure: draft.failure === "block" && nextEvent !== "PreToolUse" ? "open" : draft.failure })) }}>{EVENTS.map(function (event) { return <option key={event} value={event}>{hookEventLabel(event, props.t)}</option> })}</select></label>
       <label><span>{props.t("settings.hookStatus")}</span><select className="wb-select" value={draft.enabled ? "enabled" : "disabled"} disabled={props.busy} onChange={function (event) { update("enabled", event.target.value === "enabled") }}><option value="enabled">{props.t("settings.hookEnabled")}</option><option value="disabled">{props.t("settings.hookDisabled")}</option></select></label>
       <label><span>{props.t("settings.hookScope")}</span><select className="wb-select" value={draft.rootOnly ? "root" : "all"} disabled={props.busy} onChange={function (event) { update("rootOnly", event.target.value === "root") }}><option value="all">{props.t("settings.hookEveryAgent")}</option><option value="root">{props.t("settings.hookRootOnly")}</option></select></label>
       {isToolEvent(draft.event) && <ToolMatcherSelect t={props.t} tools={props.tools} value={draft.matcher} busy={props.busy} onChange={function (value) { update("matcher", value) }} />}
@@ -325,11 +313,12 @@ function CliHooksPanel(props) {
   var t = props.t
   var [hooks, setHooks] = useStateSt([]), [systemHooks, setSystemHooks] = useStateSt([]), [proposals, setProposals] = useStateSt([])
   var [tools, setTools] = useStateSt([])
-  var [results, setResults] = useStateSt({}), [audit, setAudit] = useStateSt([])
+  var [results, setResults] = useStateSt({})
   var [loading, setLoading] = useStateSt(true), [busy, setBusy] = useStateSt("")
   var [customAvailable, setCustomAvailable] = useStateSt(false)
   var [loadError, setLoadError] = useStateSt(false), [systemStatus, setSystemStatus] = useStateSt("empty")
   var { editing, setEditing, draft, setDraft, expanded, setExpanded, query, setQuery } = useHookEditor();
+  const [editError, setEditError] = useStateSt("")
   function tell(message, level) { if (props.notify) props.notify(message, level || "info") }
   function load(silent) {
     if (!silent) setLoading(true)
@@ -343,8 +332,6 @@ function CliHooksPanel(props) {
       setTools(Array.isArray(payload.tools) ? payload.tools : [])
       setProposals(Array.isArray(payload.proposals) ? payload.proposals.filter(function (item) { return item.status === "pending" }) : [])
       setResults(payload.configuration_results && typeof payload.configuration_results === "object" ? payload.configuration_results : {})
-      if (!available) { setAudit([]); return null }
-      return request("/api/plugin-center/cli/hooks/audit?limit=30").then(function (auditPayload) { setAudit(Array.isArray(auditPayload.records) ? auditPayload.records : []) }).catch(function (error) { tell(error.message || String(error), "error") })
     }).catch(function (error) { setLoadError(true); tell(error.message || String(error), "error") }).finally(function () { if (!silent) setLoading(false) })
   }
   useEffectSt(function () { load() }, [])
@@ -376,8 +363,7 @@ function CliHooksPanel(props) {
   }
   function edit(item) {
     if (item.configured_by_agent === true && item.configuration_status !== "ready") return
-    var key = hookItemKey(item)
-    setExpanded(Object.assign({}, expanded, { [key]: true }))
+    setEditError("")
     setDraft(draftFromHook(item))
     setEditing(item.id)
   }
@@ -394,13 +380,14 @@ function CliHooksPanel(props) {
     Promise.resolve(confirmation).then(function (confirmed) {
       if (!confirmed) return
       var key = hookItemKey(item)
-      setExpanded(Object.assign({}, expanded, { [key]: true }))
+      setEditError("")
       setDraft(systemDraftFromHook(item))
       setEditing("system:" + key)
     })
   }
   function save(event) {
     event.preventDefault()
+    setEditError("")
     var payload = {
       name: draft.name.trim(), event: draft.event, matcher: draft.matcher.trim() || "*", enabled: draft.enabled !== false,
       description: draft.description.trim(), timeout_seconds: Number(draft.timeout || 10), priority: Number(draft.priority || 100),
@@ -411,10 +398,16 @@ function CliHooksPanel(props) {
     var path = editing && editing !== "new" ? "/api/plugin-center/cli/hooks/" + encodeURIComponent(editing) : "/api/plugin-center/cli/hooks"
     request(path, { method: editing && editing !== "new" ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(function () {
       setEditing(""); setDraft(emptyDraft()); tell(t("settings.hookSaved"), "success"); return load()
-    }).catch(function (error) { tell(error.message || String(error), "error") }).finally(function () { setBusy("") })
+    }).catch(function (error) { setEditError(error.message || String(error)) }).finally(function () { setBusy("") })
+  }
+  function openCreateDialog() {
+    setEditError("")
+    setDraft(emptyRequestDraft())
+    setEditing("new")
   }
   function submitGeneration(event) {
     event.preventDefault()
+    setEditError("")
     setBusy("generate")
     request("/api/plugin-center/cli/hooks/generate", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -425,10 +418,11 @@ function CliHooksPanel(props) {
       }),
     }).then(function () {
       setEditing(""); setDraft(emptyDraft()); tell(t("settings.hookAgentStarted"), "success"); return load()
-    }).catch(function (error) { tell(error.message || String(error), "error") }).finally(function () { setBusy("") })
+    }).catch(function (error) { setEditError(error.message || String(error)) }).finally(function () { setBusy("") })
   }
   function saveTuning(event, item) {
     event.preventDefault()
+    setEditError("")
     setBusy("tune:" + item.id)
     request("/api/plugin-center/cli/hooks/" + encodeURIComponent(item.id) + "/regenerate", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -440,16 +434,17 @@ function CliHooksPanel(props) {
       }),
     }).then(function () {
       setEditing(""); tell(t("settings.hookReconfigurationStarted"), "success"); return load()
-    }).catch(function (error) { tell(error.message || String(error), "error") }).finally(function () { setBusy("") })
+    }).catch(function (error) { setEditError(error.message || String(error)) }).finally(function () { setBusy("") })
   }
   function saveSystem(event, item) {
     event.preventDefault()
+    setEditError("")
     var config
     try {
       config = JSON.parse(draft.configText || "{}")
       if (!config || Array.isArray(config) || typeof config !== "object") throw new Error("config")
     } catch (error) {
-      tell(t("settings.systemHookConfigInvalid"), "error")
+      setEditError(t("settings.systemHookConfigInvalid"))
       return
     }
     setBusy("system-save:" + item.id)
@@ -469,24 +464,47 @@ function CliHooksPanel(props) {
       }),
     }).then(function () {
       setEditing(""); tell(t("settings.systemHookSaved"), "success"); return load()
-    }).catch(function (error) { tell(error.message || String(error), "error") }).finally(function () { setBusy("") })
+    }).catch(function (error) { setEditError(error.message || String(error)) }).finally(function () { setBusy("") })
   }
   var recentResults = Object.keys(results).map(function (key) { return { key: key, value: results[key] } }).slice(-4).reverse()
   var normalizedQuery = query.trim().toLowerCase()
   var visibleHooks = hooks.filter(function (item) { return !normalizedQuery || hookSearchText(item, t).indexOf(normalizedQuery) >= 0 })
   var standalone = props.standalone === true
   var visibleSystemHooks = standalone ? systemHooks.filter(function (item) { return !normalizedQuery || hookSearchText(item, t).indexOf(normalizedQuery) >= 0 }) : []
+  const editedHook = editing && editing !== "new" && (
+    hooks.find(item => item.id === editing) ||
+    systemHooks.find(item => "system:" + hookItemKey(item) === editing)
+  )
+  const editorProps = { t, tools, draft, setDraft, busy: !!busy, onCancel: () => setEditing("") }
   var totalVisible = visibleSystemHooks.length + visibleHooks.length
   return <section className={'wb-cli-hooks-panel' + (standalone ? ' wb-cli-hooks-page' : '')}>
-    <header><div>{standalone ? <h2>{t("settings.hooks", "Automatic triggers")}</h2> : <h4>{t("settings.agentHooks", "CLI Hooks")}</h4>}<p>{standalone ? t("settings.hooksSubtitle", "Review every system and user-defined lifecycle trigger in one place.") : t("settings.agentHooksSubtitle", "Run approved CLI commands through tree-local Hooks.")}</p></div>{customAvailable && <button type="button" className={'wb-btn' + (standalone ? ' primary' : '')} disabled={!!busy} onClick={function () { setEditing(editing === "new" ? "" : "new"); setDraft(emptyRequestDraft()) }}>{editing === "new" ? t("common.cancel", "Cancel") : t("settings.addHook", "Add trigger")}</button>}</header>
-    {editing === "new" && <HookRequestEditor t={t} tools={tools} draft={draft} setDraft={setDraft} busy={busy === "generate"} onSave={submitGeneration} onCancel={function () { setEditing("") }} />}
-    <HookFilter {...{ standalone, query, loading, setQuery, t, loadError, systemStatus, totalVisible }} />
+    <header>
+      <div>
+        {standalone ? <h2>{t("settings.hooks", "Automatic triggers")}</h2> : <h4>{t("settings.agentHooks", "CLI Hooks")}</h4>}
+        <p>{standalone ? t("settings.hooksSubtitle") : t("settings.agentHooksSubtitle")}</p>
+      </div>
+      {customAvailable && <button type="button" className={'wb-btn' + (standalone ? ' primary' : '')}
+        disabled={!!busy} aria-haspopup="dialog" onClick={openCreateDialog}>{t("settings.addHook")}</button>}
+    </header>
+    {(editing === "new" || editedHook) && <EditorDialog
+      title={editing === "new" ? t("settings.addHook") : hookDisplayName(editedHook, t)}
+      busy={!!busy} className="hook-editor-dialog" onClose={editorProps.onCancel}>
+      {editError && <div className="wb-tool-dialog-error" role="alert">{editError}</div>}
+      {editing === "new" && <HookRequestEditor {...editorProps} onSave={submitGeneration}/>}
+      {editedHook && (editedHook.readonly
+        ? <SystemHookEditor {...editorProps} item={editedHook} onSave={event => saveSystem(event, editedHook)}/>
+        : editedHook.configured_by_agent
+          ? <AgentHookEditor {...editorProps} onSave={event => saveTuning(event, editedHook)}/>
+          : <CliHookEditor {...editorProps} editing onSave={save}/>)}
+    </EditorDialog>}
+    {standalone && <ExtensionFilter query={query} onChange={setQuery} disabled={loading} label={t("settings.hookFilter")}
+      count={loading ? t("settings.loading") : loadError || systemStatus === "error"
+        ? t("settings.hookCountUnavailable") : t("settings.hookCount", { n: totalVisible })}/>}
     {!loading && loadError && <div className="wb-extensions-empty" role="alert"><p>{t("settings.hookLoadError")}</p><button type="button" className="wb-btn" onClick={function () { load() }}>{t("settings.hookReload")}</button></div>}
-    <div className="wb-cli-hook-group"><h5>{t("settings.userHooks", "User triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !loadError && !visibleHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t(customAvailable ? "settings.hookEmpty" : "settings.hookCustomUnavailable")}</div>}{visibleHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} manageable={customAvailable} expanded={expanded[key] === true} editing={editing === item.id} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={edit} onSave={save} onSaveTuning={function (event) { saveTuning(event, item) }} onCancelEdit={function () { setEditing("") }} onToggle={toggle} onTest={test} onDelete={remove} onRetry={retry} /> })}</div>
+    <div className="wb-cli-hook-group"><h5>{t("settings.userHooks", "User triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !loadError && !visibleHooks.length && <div className="wb-extensions-empty">{normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t(customAvailable ? "settings.hookEmpty" : "settings.hookCustomUnavailable")}</div>}<div className="hook-tile-grid">{visibleHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} busy={!!busy} manageable={customAvailable} expanded={expanded[key] === true} onExpand={toggleExpanded} onEdit={edit} onToggle={toggle} onTest={test} onDelete={remove} onRetry={retry} /> })}</div></div>
     {proposals.length > 0 && <div className="wb-cli-hook-group"><h5>{t("settings.hookPendingApprovals", "Pending approvals")}</h5>{proposals.map(function (item) { return <CliHookProposal key={item.id} item={item} t={t} busy={!!busy} onDecide={decide} /> })}</div>}
-    <SystemHookGroup {...{ standalone, visibleSystemHooks, systemHooks, loading, loadError, systemStatus, load, t, tools, busy, expanded, editing, draft, setDraft, toggleExpanded, editSystem, saveSystem, setEditing, normalizedQuery }} />
-    {recentResults.length > 0 && <div className="wb-cli-hook-group"><h5>{t("settings.extensionHookTitle", "Automatic integration")}</h5>{recentResults.map(function (item) { return <div key={item.key} className="wb-cli-hook-result"><code>{item.key}</code><span>{String(item.value && (item.value.reason || item.value.status) || "")}</span></div> })}</div>}
-    {audit.length > 0 && <details className="wb-cli-hook-audit"><summary>{t("settings.hookExecutionLog", "Execution and audit log")}</summary>{audit.slice(0, 10).map(function (item, index) { return <div key={String(item.timestamp || index)}><code>{item.event ? hookEventLabel(item.event, t) : item.action || item.kind}</code><span>{item.status || item.result || item.hook_id}</span></div> })}</details>}
+    <SystemHookGroup {...{ standalone, visibleSystemHooks, loading, loadError, systemStatus, load, t, busy, expanded, toggleExpanded, editSystem, normalizedQuery }} />
+    {recentResults.length > 0 && <div className="wb-cli-hook-group"><h5>{t("settings.extensionHookTitle", "Automatic integration")}</h5>{recentResults.map(function (item) { return <div key={item.key} className="wb-cli-hook-result"><code>{item.key}</code><span>{String(item.value && (item.value.reason || hookLogLabel(item.value.status, t)) || "")}</span></div> })}</div>}
   </section>
 }
 
@@ -498,10 +516,6 @@ function HooksPanel(props) {
 
 export { CliHooksPanel, HooksPanel }
 
-function SystemHookGroup({ standalone, visibleSystemHooks, systemHooks, loading, loadError, systemStatus, load, t, tools, busy, expanded, editing, draft, setDraft, toggleExpanded, editSystem, saveSystem, setEditing, normalizedQuery }) {
-  return standalone && <div className="wb-cli-hook-group"><h5>{t("settings.systemHooks", "System triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !loadError && !visibleSystemHooks.length && <div className="wb-extensions-empty">{systemStatus === "error" ? t("settings.hookSystemLoadError") : systemStatus === "uninitialized" ? t("settings.hookSystemUninitialized") : normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t("settings.hookSystemEmpty", "No persisted system triggers found.")}{(systemStatus === "error" || systemStatus === "uninitialized") && <p><button type="button" className="wb-btn" onClick={function () { load() }}>{t("settings.hookReload")}</button></p>}</div>}{visibleSystemHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} tools={tools} busy={!!busy} expanded={expanded[key] === true} editing={editing === "system:" + key} draft={draft} setDraft={setDraft} onExpand={toggleExpanded} onEdit={editSystem} onSaveSystem={function (event) { saveSystem(event, item) }} onCancelEdit={function () { setEditing("") }} /> })}</div>;
-}
-
-function HookFilter({ standalone, query, loading, setQuery, t, loadError, systemStatus, totalVisible }) {
-  return standalone && <div className="wb-hook-filter"><input className="wb-input" value={query} disabled={loading} onChange={function (event) { setQuery(event.target.value) }} placeholder={t("settings.hookFilter", "Filter Hooks")} aria-label={t("settings.hookFilter", "Filter Hooks")} /><span>{loading ? t("settings.loading", "Loading…") : loadError || systemStatus === "error" ? t("settings.hookCountUnavailable") : t("settings.hookCount", { n: totalVisible }, String(totalVisible) + " Hooks")}</span></div>;
+function SystemHookGroup({ standalone, visibleSystemHooks, loading, loadError, systemStatus, load, t, busy, expanded, toggleExpanded, editSystem, normalizedQuery }) {
+  return standalone && <div className="wb-cli-hook-group"><h5>{t("settings.systemHooks", "System triggers")}</h5>{loading && <div className="wb-extensions-empty">{t("settings.loading", "Loading…")}</div>}{!loading && !loadError && !visibleSystemHooks.length && <div className="wb-extensions-empty">{systemStatus === "error" ? t("settings.hookSystemLoadError") : systemStatus === "uninitialized" ? t("settings.hookSystemUninitialized") : normalizedQuery ? t("settings.extensionEmpty", "No matching extensions.") : t("settings.hookSystemEmpty", "No persisted system triggers found.")}{(systemStatus === "error" || systemStatus === "uninitialized") && <p><button type="button" className="wb-btn" onClick={function () { load() }}>{t("settings.hookReload")}</button></p>}</div>}<div className="hook-tile-grid">{visibleSystemHooks.map(function (item) { var key = hookItemKey(item); return <CliHookItem key={key} item={item} t={t} busy={!!busy} expanded={expanded[key] === true} onExpand={toggleExpanded} onEdit={editSystem} /> })}</div></div>;
 }

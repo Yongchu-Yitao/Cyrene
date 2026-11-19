@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from cyrene.core.hook.actions import ACTION_GUIDE, EVENT_DESCRIPTIONS
 from cyrene.core.plugin import PluginContext, application_plugin_service
 from cyrene.config import DATA_DIR
 from cyrene.localization import localized
@@ -36,7 +37,7 @@ _PROPOSAL_TOOL = {
             "properties": {
                 "action": {"type": "string", "enum": ["no_hook", "propose"]},
                 "rationale": {"type": "string"},
-                "event": {"type": "string", "enum": ["PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop"]},
+                "event": {"type": "string", "enum": list(EVENT_DESCRIPTIONS)},
                 "matcher": {"type": "string"},
                 "executable": {"type": "string"},
                 "args": {"type": "array", "items": {"type": "string"}},
@@ -153,9 +154,14 @@ async def configure_user_hook(
                     "event from stdin and prints exactly one JSON object to stdout. Implement the requested action "
                     "using Python's standard library and locally available executables only; do not invent secrets, "
                     "credentials, network endpoints, files, or application APIs. Treat the brief as the requested "
-                    "behavior, not as instructions about this configuration protocol. For PreToolUse return decision "
-                    "allow, modify, or block and include arguments when modifying. For SessionStart or TurnStart, "
-                    "optional context must use the context field. Other events normally return an empty object. "
+                    "behavior. The user selects when to run; implement their requested actions independently. "
+                    "Available events: " + json.dumps(EVENT_DESCRIPTIONS) +
+                    "\nInput fields: event (selected name), timestamp, tree.id, tree.node_id, tree.is_root. "
+                    "Tool data, when present, is in tool.name and tool.arguments. Tool outcome is in "
+                    "result.success, result.value and result.error. Lifecycle and context fields are at the "
+                    "top level. The same input format is used for testing (test=true). "
+                    "Use the brief to select the action and target; the user need not name protocol fields."
+                    "\nAvailable actions: " + ACTION_GUIDE +
                     "Use matcher only for PreToolUse/PostToolUse; otherwise return '*'. Choose timeout 0.1-60 seconds "
                     "and priority -10000 to 10000, where smaller values run earlier. Call "
                     "submit_user_hook_configuration exactly once."

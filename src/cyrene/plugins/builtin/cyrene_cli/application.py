@@ -108,7 +108,10 @@ def register_cli_hook_routes(
     @context.router.post(f"{prefix}/{{hook_id}}/test")
     async def api_test_cli_hook(hook_id: str, request: Request):
         try:
-            return await service.test_hook(hook_id, await _payload(request))
+            result = await service.test_hook(hook_id, await _payload(request))
+            if not result["ok"]:
+                return JSONResponse(result, status_code=422)
+            return result
         except ValueError as exc:
             return _error(exc, 404)
         except Exception as exc:

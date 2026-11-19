@@ -3690,7 +3690,8 @@ html[data-theme="dark"] .wbc-command-chip {
   padding: 0;
 }
 
-/* The assistant grip shares the input material, including theme overrides. */
+/* The grip uses the input material. The navigation dock uses its shadow. */
+.workbench-sidebar-dock-nav,
 .wbc-composer,
 .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
   --wbc-composer-glass-border: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
@@ -3731,6 +3732,7 @@ html[data-theme="dark"] .wbc-command-chip {
 /* Match the dark composer's glass construction in light mode. The material
    stays light, but uses the same translucency, blur and three-layer elevation
    instead of falling back to the nearly flat shared control shadow. */
+html[data-theme="light"] .workbench-sidebar-dock-nav,
 html[data-theme="light"] .wbc-composer,
 html[data-theme="light"] .wbc-composer-box,
 html[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
@@ -3745,6 +3747,7 @@ html[data-theme="light"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
    canvas, so dark mode needs stronger edge contrast to carry the same visual
    weight. Only material colours change here: both themes retain the base
    three-layer shadow and the exact same compositor filter. */
+html[data-theme="dark"] .workbench-sidebar-dock-nav,
 html[data-theme="dark"] .wbc-composer,
 html[data-theme="dark"] .wbc-side-split-grip-bar-visual:has(> .cyrene-motion) {
   --wbc-composer-glass-background: var(--wb-composer-surface);
@@ -5741,4 +5744,10 @@ html[data-theme="dark"] .wbc-model-button.active {
     width: min(320px, calc(100cqw - 58px));
     min-width: min(320px, calc(100cqw - 58px));
   }
+}
+
+.wbc-inline-plugin-view {
+  height: clamp(15rem, 44vh, 32rem);
+  min-width: 0;
+  overflow: hidden;
 }

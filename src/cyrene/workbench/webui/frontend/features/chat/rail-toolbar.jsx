@@ -1,7 +1,7 @@
 import { WBC_ICONS, wbcT } from "../../workbench-chat.jsx"
 
-// Shared by Work and the personal assistant; geometry belongs to the Work rail.
-export function WbcRailToolbar({ collapsed, onAction, actionLabel, actionIcon, actionRef, actionNodeId, query, onQueryChange, searchRef, searchNodeId, collapseControl, onToggleCollapsed }) {
+// Shared sidebar controls keep search and collapse aligned across modules.
+export function WbcRailToolbar({ collapsed, onAction, actionLabel, actionIcon, actionRef, actionNodeId, query, onQueryChange, searchRef, searchNodeId, searchPlaceholder, searchLabel, onSearchKeyDown, collapseControl, onToggleCollapsed }) {
   return (
       <div className="wbc-rail-glass">
         <div className="wbc-nav-card">
@@ -25,8 +25,9 @@ export function WbcRailToolbar({ collapsed, onAction, actionLabel, actionIcon, a
                   data-cyrene-node-id={searchNodeId}
                   value={query}
                   onChange={function (e) { onQueryChange(e.target.value); }}
-                  placeholder={wbcT("rail.searchEverythingShort", "Search all")}
-                  aria-label={wbcT("rail.searchEverything", "Search chats, files, and terminals")}
+                  onKeyDown={onSearchKeyDown}
+                  placeholder={searchPlaceholder || wbcT("rail.searchEverythingShort", "Search all")}
+                  aria-label={searchLabel || wbcT("rail.searchEverything", "Search chats, files, and terminals")}
                 />
               </div>
             )}

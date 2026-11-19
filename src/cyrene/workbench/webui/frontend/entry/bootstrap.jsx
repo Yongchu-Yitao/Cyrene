@@ -26,7 +26,7 @@ function writeWorkbenchThemeLocal(mode) {
   } catch (error) {}
 }
 
-function saveWorkbenchThemeToAppearance(mode, retry) {
+function saveWorkbenchThemeToAppearance(mode, retry, textSize) {
   return fetch("/api/settings/namespaces/appearance").then(function (response) {
     return response.ok ? response.json() : Promise.reject(new Error("appearance unavailable"));
   }).then(function (payload) {
@@ -43,6 +43,7 @@ function saveWorkbenchThemeToAppearance(mode, retry) {
       changes.animate_pulse = readWorkbenchTweak("animatePulse", true) !== false;
       changes.appearance_migrated = true;
     }
+    if (textSize !== undefined) changes.text_size = textSize;
     return fetch("/api/settings/namespaces/appearance", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -53,7 +54,7 @@ function saveWorkbenchThemeToAppearance(mode, retry) {
     });
   }).then(function (response) {
     if (response.ok) return response;
-    if (response.status === 409 && !retry) return saveWorkbenchThemeToAppearance(mode, true);
+    if (response.status === 409 && !retry) return saveWorkbenchThemeToAppearance(mode, true, textSize);
     throw new Error("appearance theme save failed");
   });
 }
@@ -250,6 +251,13 @@ function WorkbenchRoot() {
     persistWorkbenchTheme(next);
   }
 
+  async function saveOnboardingAppearance(mode, size) {
+    await saveWorkbenchThemeToAppearance(mode, false, size);
+    writeWorkbenchThemeLocal(mode);
+    setThemeMode(mode);
+    setTextSize(size);
+  }
+
   var WorkbenchApp = window.CyreneUI.require("shell").App;
   if (typeof WorkbenchApp !== "function") {
     return (
@@ -263,6 +271,7 @@ function WorkbenchRoot() {
       theme={themeMode}
       actualTheme={actualTheme}
       onToggleTheme={toggleWorkbenchTheme}
+      onboardingAppearance={{ theme: themeMode, textSize, save: saveOnboardingAppearance }}
       needsOnboarding={needsOnboarding}
     />
   );

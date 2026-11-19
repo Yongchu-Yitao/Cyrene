@@ -68,8 +68,9 @@ FIELD = obj({"field_id": ID, "label": TEXT, "type": {"enum": ["string", "number"
              "default": {}, "options": array(obj({"value": {}, "label": TEXT}, ["value", "label"])), "unit": TEXT}, ["field_id", "label", "type"])
 ITEM = obj({"item_id": ID, "label": TEXT, "detail": TEXT, "field_id": ID, "owner": TEXT, "due_at": TEXT}, ["item_id", "label"])
 COLUMN = obj({"key": ID, "label": TEXT, "format": {"enum": ["text", "number", "currency", "date"]}, "currency": TEXT}, ["key", "label"])
+WEATHER_CODES = ["clear", "partly_cloudy", "cloudy", "rain", "snow", "storm", "fog", "night"]
 BLOCK_PROPERTIES = {
-    "weather": {"icon": {"enum": ["clear", "partly_cloudy", "cloudy", "rain", "snow", "storm", "fog", "night"]}, "location": TEXT, "condition": TEXT, "temperature": TEXT,
+    "weather": {"icon": {"enum": WEATHER_CODES}, "location": TEXT, "condition": TEXT, "temperature": TEXT,
                 "range": TEXT, "advice": TEXT, "source": TEXT, "updated_at": TEXT},
     "action_list": {"items": array(obj({"item_id": ID, "label": TEXT, "detail": TEXT,
                     "action_ids": array(ID, 4)}, ["item_id", "label", "action_ids"])),
@@ -100,6 +101,21 @@ BLOCK = {"oneOf": [{**obj({"block_id": ID, "type": {"const": kind, **({"default"
                     **({"if": {"required": ["html_path"]}, "then": {"not": {"required": ["html"]}},
                         "else": {"required": ["html"]}} if kind == "embed" else {})}
                    for kind, properties in BLOCK_PROPERTIES.items()]}
+WEATHER_OBSERVATION = obj({
+    "block_id": ID, "type": {"const": "weather_observation"},
+    "location": {**TEXT, "minLength": 1},
+    "temperature_c": {"type": ["number", "null"]},
+    "condition_code": {"enum": [*WEATHER_CODES, None]},
+    "condition_label": {"type": "string", "maxLength": 32},
+    "range_c": obj({"low": {"type": "number"}, "high": {"type": "number"}}, ["low", "high"]),
+    "advice": TEXT, "source": {**TEXT, "minLength": 1},
+    "updated_at": {"type": "string", "format": "date-time"},
+}, ["block_id", "type", "location", "temperature_c", "condition_code", "source", "updated_at"])
+WEATHER_OBSERVATION["description"] = (
+    "Use for new home weather. Supply at least one current reading. When both values are missing, "
+    "use a short text block instead. Optional range_c is today's forecast in Celsius."
+)
+BLOCK["oneOf"].append(WEATHER_OBSERVATION)
 ACTION = obj({"action_id": ID, "label": TEXT, "kind": {"enum": ["submit", "confirm"]}, "fields": array(ID, 64), "intent": TEXT, "target_context_id": ID, "task_id": ID},
              ["action_id", "label", "kind", "fields", "intent"])
 SPEC_PROPERTIES = {

@@ -104,7 +104,7 @@ class Store:
         with self.connect() as db:
             db.execute("UPDATE sessions SET paused=1 WHERE id=?", (target,))
 
-    def enqueue(self, owner, target, message_id, payload):
+    def enqueue(self, owner, target, message_id, payload, *, retry_at=0):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT id FROM messages WHERE id=?", (message_id,)).fetchone()
@@ -115,7 +115,7 @@ class Store:
                 db.execute("INSERT INTO messages(id,owner,target,payload) VALUES (?,?,?,?)", (message_id, owner, target, json.dumps(payload, ensure_ascii=False)))
                 # Only a new explicit message resumes the queue, never replay.
                 db.execute("UPDATE sessions SET paused=0 WHERE id=?", (target,))
-                db.execute("UPDATE messages SET next_attempt=0 WHERE target=? AND status='queued'", (target,))
+                db.execute("UPDATE messages SET next_attempt=? WHERE target=? AND status='queued'", (retry_at, target))
 
     def message(self, message_id):
         with self.connect() as db:
@@ -144,11 +144,14 @@ class Store:
                 )
             ]
 
-    def update(self, message_id, status, error=""):
+    def update(self, message_id, status, error="", *, notification=None):
         with self.connect() as db:
             db.execute(
                 "UPDATE messages SET status=?,error=?,attempts=attempts+?,next_attempt=? WHERE id=?", (status, error, int(bool(error)), time.time() + 5 if error else 0, message_id)
             )
+
+            if notification is not None:
+                self._insert_notification(db, *notification)
 
     def pending_count(self, target):
         with self.connect() as db:
@@ -159,9 +162,9 @@ class Store:
             row = db.execute("SELECT id,status,error FROM messages WHERE target=? AND error<>'' ORDER BY seq DESC LIMIT 1", (target,)).fetchone()
         return dict(row) if row else None
 
-    def defer(self, message_id):
+    def defer(self, message_id, *, until=None):
         with self.connect() as db:
-            db.execute("UPDATE messages SET next_attempt=? WHERE id=?", (time.time() + 2, message_id))
+            db.execute("UPDATE messages SET next_attempt=? WHERE id=?", (until if until is not None else time.time() + 2, message_id))
 
     def session(self, target):
         with self.connect() as db:
@@ -170,7 +173,12 @@ class Store:
 
     def notify(self, event_id, owner, target, payload):
         with self.connect() as db:
-            db.execute("INSERT OR IGNORE INTO notifications(id,owner,target,payload) VALUES (?,?,?,?)", (event_id, owner, target, json.dumps(payload, ensure_ascii=False)))
+            self._insert_notification(db, event_id, owner, target, payload)
+
+    @staticmethod
+    def _insert_notification(db, event_id, owner, target, payload):
+        db.execute("INSERT OR IGNORE INTO notifications(id,owner,target,payload) VALUES (?,?,?,?)",
+                   (event_id, owner, target, json.dumps(payload, ensure_ascii=False)))
 
     def notifications(self):
         with self.connect() as db:

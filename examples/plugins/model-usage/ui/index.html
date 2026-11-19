@@ -18,7 +18,7 @@
   </style>
 </head>
 <body>
-  <header><div><h1>模型用量</h1><span>最近 7 天</span></div><span id="updated"></span></header>
+  <header><div><h1>模型用量</h1><label>最近 <input id="days" aria-label="天数" type="number" min="1" max="90" value="7"> 天</label></div><span id="updated"></span></header>
   <main id="content"><p class="muted">正在加载…</p></main>
   <script>
     const number = new Intl.NumberFormat();
@@ -31,20 +31,37 @@
     }
     addEventListener('message', event => {
       const message = event.data || {};
-      if (message.source !== 'cyrene-host' || message.type !== 'response') return;
+      if (event.source !== parent || message.source !== 'cyrene-host') return;
+      if (message.type === 'init') {
+        days.value = message.context.state?.days || 7;
+        load();
+        return;
+      }
+      if (message.type !== 'response') return;
       const request = pending.get(message.requestId); if (!request) return;
       pending.delete(message.requestId);
       message.ok ? request.resolve(message.result) : request.reject(new Error(message.error));
     });
-    (async () => {
+    const days = document.querySelector('#days');
+    let generation = 0;
+    days.addEventListener('change', () => {
+      if (!days.value || !days.validity.valid) return;
+      parent.postMessage({source:'cyrene-plugin',type:'state',state:{days:days.valueAsNumber}}, '*');
+      load();
+    });
+    async function load() {
+      const current = ++generation;
       try {
-        const stats = await call('usage.load',{days:7}) || {};
+        const stats = await call('usage.load',{days:days.valueAsNumber}) || {};
+        if (current !== generation) return;
         const total = stats.total && typeof stats.total === 'object' ? stats.total : stats;
         const models = Array.isArray(stats.by_model) ? stats.by_model : [];
         document.querySelector('#content').innerHTML = `<section class="grid">${metric('输入 Token',total.prompt_tokens)}${metric('输出 Token',total.completion_tokens)}${metric('总 Token',total.total_tokens)}${metric('调用次数',total.requests)}</section><table><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>总量</th></tr></thead><tbody>${models.map(item => `<tr><td>${String(item.model||'—').replace(/[<>&]/g,'')}</td><td>${number.format(item.prompt_tokens||0)}</td><td>${number.format(item.completion_tokens||0)}</td><td>${number.format(item.total_tokens||0)}</td></tr>`).join('')}</tbody></table>`;
         document.querySelector('#updated').textContent = new Date().toLocaleTimeString();
-      } catch (error) { document.querySelector('#content').innerHTML = `<p class="error">${String(error.message||error)}</p>`; }
-    })();
+      } catch (error) {
+        if (current === generation) document.querySelector('#content').textContent = String(error.message || error);
+      }
+    }
   </script>
 </body>
 </html>

@@ -130,7 +130,8 @@ class CardService:
     def _update(self, db, owner, card, args, read_html):
         if "home_kind" in args["changes"] and args["changes"]["home_kind"] != card["spec"].get("home_kind"):
             raise CardError("invalid_card", "home_kind is assigned at creation and cannot be changed")
-        spec = normalize(card["template"], {**card["spec"], **args["changes"]}, read_html=read_html)
+        spec = normalize(card["template"], {**card["spec"], **args["changes"]}, read_html=read_html,
+                         previous_blocks=card["spec"]["blocks"])
         old_fields = card["spec"]["input_schema"].get("properties", {})
         new_fields = spec["input_schema"].get("properties", {})
         draft = card["input_state"]["draft"]

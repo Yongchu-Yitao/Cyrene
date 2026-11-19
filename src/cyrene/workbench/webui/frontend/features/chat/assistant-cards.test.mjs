@@ -4,6 +4,7 @@ import { cardReferences, projectInlineCards, initialCardValues, cardEvent, toggl
 import { presentConversationMessages } from './message-presentation.mjs';
 const cardId = 'card_' + 'a'.repeat(32);
 const entry = { status: 'completed', presentation: { kind: 'assistant_card', card_id: cardId, revision: 1, operation: 'card.create' } };
+const update = { ...entry, presentation: { ...entry.presentation, operation: 'card.update', revision: 2 } };
 test('completed creation is visible outside trace, in live and reloaded conversation', () => {
   const history = [{ id: 'a', role: 'assistant', activityCard: true, trace: [entry] }, { id: 'b', role: 'assistant', content: '完成' }];
   const result = presentConversationMessages(history);
@@ -12,11 +13,44 @@ test('completed creation is visible outside trace, in live and reloaded conversa
   assert.equal(presentConversationMessages([{ id: 'live', runtimeActivity: { progress: [entry] } }])[1].id, result[1].id);
   assert.equal(history.length, 2);
 });
-test('failed/pending calls, updates and duplicate results do not create extra cards', () => {
+test('failed, pending, unrelated and duplicate results do not move or create cards', () => {
   assert.equal(projectInlineCards([{ trace: [entry, entry] }]).length, 2);
-  for (const changed of [{ ...entry, failed: true }, { ...entry, status: 'running' }, { ...entry, presentation: { ...entry.presentation, operation: 'card.update' } }, { ...entry, presentation: { ...entry.presentation, card_id: '../bad' } }]) {
+  for (const changed of [{ ...update, failed: true }, { ...update, status: 'running' }, { ...update, presentation: { ...update.presentation, operation: 'card.pin' } }, { ...update, presentation: { ...update.presentation, card_id: '../bad' } }]) {
     assert.deepEqual(cardReferences({ trace: [changed] }), []);
   }
+});
+test('successful updates move the same card to the latest revision in live and saved conversations', () => {
+  const otherId = 'card_' + 'b'.repeat(32);
+  const other = { ...entry, presentation: { ...entry.presentation, card_id: otherId } };
+  const created = { id: 'create', trace: [entry] };
+  const initial = [{ ...created, trace: [entry, other] }, { id: 'request', role: 'user', content: '请更新卡片' }];
+  const updated = { id: 'update', createdAt: '2026-11-18T02:00:00Z', runId: 'new-run' };
+  const replay = { id: 'replay', trace: [entry, update] };
+  const originalCard = projectInlineCards([created])[1];
+  for (const activity of [{ trace: [update] }, { runtimeActivity: { progress: [update] } }]) {
+    const messages = presentConversationMessages([...initial, { ...updated, ...activity }, replay]);
+    assert.deepEqual(messages.map(message => message.id), ['create', 'inline:' + otherId, 'request', 'update', originalCard.id, 'replay']);
+    assert.deepEqual(messages[4].assistantCard, { card_id: cardId, revision: 2 });
+    assert.equal(messages[4].runId, updated.runId);
+    assert.equal(messages[4].createdAt, updated.createdAt);
+  }
+  const sameActivity = projectInlineCards([{ trace: [entry, other, update] }]);
+  assert.deepEqual(sameActivity.slice(1).map(message => message.id), ['inline:' + otherId, originalCard.id]);
+  assert.equal(projectInlineCards([{ trace: [update] }])[1].id, originalCard.id);
+});
+
+test('the main conversation renders inline cards without text or attachments', async () => {
+  const { harness } = await import('./hook-harness.test.mjs');
+  const React = await import('react');
+  const { context } = harness('./conversation.jsx', {
+    React, WbcAssistantMessage: 'assistant-message', wbcIsActivityMessage: () => false,
+    wbcTraceDedupeKey: () => '',
+  });
+  const card = projectInlineCards([{ trace: [update] }])[1];
+  const row = context.wbcRenderHistoryMessage(card, { retryClearingIds: new Set(), chat: { id: 'chat' } });
+  assert.equal(row.key, card.id);
+  assert.equal(row.props.children.type, 'assistant-message');
+  assert.equal(row.props.children.props.msg, card);
 });
 test('display defaults never mutate saved user input and events carry exact revisions', () => {
   const card = { revision: 4, input_revision: 8, spec: { blocks: [{ type: 'form', fields: [{ field_id: 'budget', default: 2400 }] }, { type: 'map', selection: { mode: 'multiple', field_id: 'places' } }] }, input_state: { draft: { budget: 3000 } } };
@@ -97,9 +131,9 @@ test('card submissions show readable fields while retaining the immutable agent 
 });
 
 test('welcome cards use the live conversation slots without duplicate inline references', () => {
-  const message = { role: 'assistant', trace: [{ status: 'completed', presentation: {
-    kind: 'assistant_card', operation: 'card.create', card_id: 'card_' + 'a'.repeat(32), revision: 1, home_kind: 'overview',
-  } }] };
+  const message = { role: 'assistant', trace: [entry, update].map(result => ({
+    ...result, presentation: { ...result.presentation, home_kind: 'overview' },
+  })) };
   assert.deepEqual(cardReferences(message), []);
 });
 
@@ -149,7 +183,7 @@ test('home layout displays Agent-authored copy and compact weather without times
   const context = { module: { exports: {} }, require: name => name === 'react' ? React : {CardWeather: Weather} };
   vm.runInNewContext(transformSync(readFileSync(new URL('./assistant-home-layout.jsx', import.meta.url), 'utf8'), {loader:'jsx',format:'cjs'}).code, context);
   const weather = {block_id:'weather',type:'weather'};
-  const block = {block_id:'pending',type:'action_list'};
+  const block = {block_id:'pending',type:'action_list',items:[{item_id:'one',label:'确认安排'}]};
   const headline = 'Agent 自己编写的问候\n第二行';
   const tree = context.module.exports.AssistantHomeLayout({card:{spec:{home_kind:'overview',title:headline,subtitle:'Agent 的动态说明',blocks:[weather,block]}},renderBlock:b=>React.createElement('section',{'data-block':b.block_id,key:b.block_id})});
   function nodes(node) { if (!node || typeof node !== 'object') return []; return [node,...React.Children.toArray(node.props?.children).flatMap(nodes)]; }
@@ -164,4 +198,32 @@ test('home layout displays Agent-authored copy and compact weather without times
   assert.equal(title({home_kind:'overview',title:'Cyrene · 今日概览'}),'今日概览');
   assert.equal(title({home_kind:'overview',title:'早上好，从这里继续。'}),'早上好，从这里继续。');
   assert.equal(title({home_kind:'resume',title:'Cyrene 开发进度'}),'Cyrene 开发进度');
+});
+
+test('overview only renders controls and panels for lists with items', async () => {
+  const { harness } = await import('./hook-harness.test.mjs');
+  const React = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { context } = harness('./assistant-home-layout.jsx', {
+    createElement: React.createElement, Fragment: React.Fragment,
+    HomeToggle: ({ label, count }) => React.createElement('button', null, label + ' ' + count),
+    HomePanel: ({ children }) => React.createElement('section', null, children),
+  });
+  const { AssistantHomeLayout } = context.module.exports;
+  for (const pending of [0, 1]) {
+    for (const completed of [0, 1]) {
+      const blocks = [['pending', pending], ['completed', completed]].map(([id, count]) => ({
+        block_id: id, type: 'action_list', title: id, collapsed: true,
+        items: count ? [{ item_id: 'one', label: id + ' item' }] : [],
+      }));
+      const card = { card_id: 'overview', spec: { home_kind: 'overview', title: '下午好', blocks } };
+      const html = renderToStaticMarkup(React.createElement(AssistantHomeLayout, {
+        card, renderBlock: block => block.title,
+      }));
+      assert.equal(html.includes('wbc-home-toggles'), Boolean(pending || completed));
+      const visibleTitles = blocks.filter(block => block.items.length).map(block => block.title);
+      assert.deepEqual(Array.from(html.matchAll(/<button>(.*?)<\/button>/g), m => m[1]), visibleTitles.map(title => title + ' 1'));
+      assert.deepEqual(Array.from(html.matchAll(/<section>(.*?)<\/section>/g), m => m[1]), visibleTitles);
+    }
+  }
 });

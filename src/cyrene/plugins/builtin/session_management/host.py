@@ -162,7 +162,7 @@ class WorkbenchHost:
                         return False
                     raise
                 return True
-            await port.send(
+            receipt = await port.send(
                 target,
                 {
                     "message": text,
@@ -174,7 +174,7 @@ class WorkbenchHost:
                     "stream": True,
                 },
             )
-            await port._wait_agent_message_admission(target, message_id)
+            await port._wait_agent_message_admission(target, message_id, receipt["run_id"])
             return True
 
     async def answer(self, owner, target, question_id, answer, request_id):
@@ -295,7 +295,7 @@ class WorkbenchHost:
             return None
         chat = self.chat(target) or {}
         event = {
-            **{key: checkpoint[key] for key in ("cancel_reason", "interruption_kind", "recovery_action") if key in checkpoint},
+            **{key: checkpoint[key] for key in ("cancel_reason", "interruption_kind", "recovery_action", "failure_kind", "retry_at") if key in checkpoint},
             "status": checkpoint["status"],
             "run_id": checkpoint.get("run_id", ""),
             "node_id": checkpoint.get("node_id", ""),
@@ -359,6 +359,10 @@ class WorkbenchHost:
             "For a truncated reply use task_inspect(view=latest_result, node_id=the notification node_id, content_offset=final_reply_next_offset). "
             "Inspect blocks only when further evidence is needed; use anchor=end for their tail instead of guessing offsets. "
             "Answer clarification questions with task_answer_question using known context; ask the user in your own conversation only when you cannot answer. Human permission approvals still require the user. Failures include error details below; recover or report the blocker. "
+            "For model_rate_limited, queue one recovery update for unfinished work. The task queue waits until "
+            "retry_at (Unix time) before dispatch; further updates do not shorten the wait. "
+            "If execution ended before accepting an update, inspect the task before sending another update; "
+            "if the same blocker persists, report it instead of submitting identical work. "
             "A cancelled execution is not a completed task. Use cancel_reason, interruption_kind and recovery_action: "
             "resume_existing_task means inspect current task evidence and use task_update on the same task to continue the still-authorized unfinished goal after a system interruption. "
             "wait_for_user/do_not_resume means do not automatically restart a user-stopped task; a later explicit user request to continue can authorize recovery. "

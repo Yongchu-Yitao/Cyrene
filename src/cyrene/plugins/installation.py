@@ -26,15 +26,23 @@ async def install_source(host: Any, source: Path) -> dict[str, Any]:
     staging_root = Path(tempfile.mkdtemp(prefix=f".{identity}.install-", dir=host.plugin_directory))
     staged = staging_root / target.name
     try:
-        if source_type == "pack":
-            shutil.copytree(source, staged, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
-        else:
-            shutil.copy2(source, staged)
+        stage_source(source, staged)
         if target.exists():
             raise FileExistsError(f"Plugin source already exists: {target}")
         staged.rename(target)
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
+    return await reload_installed_source(host, target, identity, source_type)
+
+
+def stage_source(source: Path, staged: Path) -> None:
+    if source.is_dir():
+        shutil.copytree(source, staged, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+    else:
+        shutil.copy2(source, staged)
+
+
+async def reload_installed_source(host: Any, target: Path, identity: str, source_type: str) -> dict[str, Any]:
     seed, failures = await host.reload_user_plugins()
     target_failures = [item for item in failures if Path(item.path).resolve() == target.resolve()]
     other_failures = [item for item in failures if item not in target_failures]

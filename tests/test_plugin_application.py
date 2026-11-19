@@ -595,6 +595,83 @@ plugin_pack = PluginPack(
         assert client.get("/live-demo").status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_restored_session_uses_running_application_hook_generation(tmp_path):
+    directory = tmp_path / "plugin_impl"
+    directory.mkdir()
+    package = directory / "persona"
+    package.mkdir()
+    source = package / "__init__.py"
+    definition = """
+from cyrene.core.plugin import PluginPack
+
+VERSION = {version!r}
+
+def app_setup(context):
+    context.provide("persona_version", VERSION)
+
+def session_setup(context):
+    assert context.services["persona_version"] == VERSION
+    def mount(event):
+        return {{"context": VERSION}}
+    if any(h.id == "persona-start" for h in context.hooks.list()):
+        context.hooks.bind_plugin("persona.mount", mount, replace=True)
+    else:
+        context.hooks.register("SessionStart", mount, hook_id="persona-start",
+                               plugin_id="persona.mount", failure_policy="closed")
+
+plugin_pack = PluginPack("persona", "persona", (), setup=session_setup, application_setup=app_setup)
+"""
+    def make_host():
+        registry = PluginRegistry(include_core=False)
+        assert registry.load_directory(directory) == ()
+        registry.register_plugin(Plugin(
+            "test.model", "test model", {"type": "object"}, lambda args, ctx: {}, kind="model",
+        ), source="test")
+        host = _host(tmp_path, registry)
+        host.attach(APIRouter())
+        return host
+
+    def reopen(host):
+        return AgentSession(
+            tmp_path / "sessions", tmp_path / "workspace", directory,
+            tree_id="old-tree", model_plugin="test.model", registry=host.registry,
+            application_scope=host, load_plugins=False,
+        )
+
+    source.write_text(definition.format(version="original"))
+    host = make_host()
+    await host.startup()
+    try:
+        session = reopen(host)
+        try:
+            assert await session.hooks.session_start() == "original"
+            source.write_text(definition.format(version="updated definition"))
+            _, failures = await host.reload_user_plugins(seed=False)
+            assert not failures and host.pack_restart_required("persona")
+            assert await session.hooks.session_start() == "original"
+        finally:
+            session.close()
+        restored = reopen(host)
+        try:
+            assert await restored.hooks.session_start() == "original"
+        finally:
+            restored.close()
+    finally:
+        await host.shutdown()
+
+    fresh = make_host()
+    await fresh.startup()
+    try:
+        restored = reopen(fresh)
+        try:
+            assert await restored.hooks.session_start() == "updated definition"
+        finally:
+            restored.close()
+    finally:
+        await fresh.shutdown()
+
+
 def test_background_host_uses_authoritative_state_and_cancels_inflight_work(
     tmp_path,
     monkeypatch,

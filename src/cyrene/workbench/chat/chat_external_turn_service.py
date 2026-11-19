@@ -142,6 +142,11 @@ class _ExternalEventProjector:
         elif event_type in {"reasoning.delta", "reasoning.completed"}:
             self._reasoning(event_type, payload)
         elif event_type in {"tool.started", "tool.updated", "tool.completed"}:
+            # External tool events have no local PluginPack execution identity.
+            presentation = payload.get("presentation")
+            if isinstance(presentation, dict) and presentation.get("kind") == "plugin_view":
+                payload = {**payload, "presentation": {}}
+                event = {**event, "payload": payload}
             self._tool(event_type, event, payload)
         elif event_type == "usage.updated":
             self._usage(payload)

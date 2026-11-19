@@ -1,7 +1,7 @@
 """SOUL.md context-mounting Plugin pack."""
 
 from cyrene.plugins.context import PluginApplicationContext
-from cyrene.core.plugin import PluginPack
+from cyrene.core.plugin import Plugin, PluginContext, PluginPack
 
 from .service import setup_soul
 from .onboarding import SoulOnboardingApplication
@@ -31,10 +31,31 @@ def application_setup(context: PluginApplicationContext) -> None:
     context.expose_frontend("soul")
 
 
+async def _clear_expired_temporary(_arguments: dict, context: PluginContext) -> dict:
+    context.services["soul"].clear_expired_temporary()
+    return {"ok": True}
+
+
+temporary_cleanup_job = Plugin(
+    name="soul.temporary.cleanup",
+    description="Remove expired entries from the TEMPORARY section of SOUL.md.",
+    input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    handler=_clear_expired_temporary,
+    metadata={
+        "model_visible": False,
+        "background_job": {
+            "id": "soul_temporary_cleanup",
+            "interval_seconds": 86400,
+            "run_on_start": True,
+        },
+    },
+)
+
+
 plugin_pack = PluginPack(
     id="cyrene_soul",
     description="Mount the enabled SOUL.md persona directly below the system prompt.",
-    plugins=(),
+    plugins=(temporary_cleanup_job,),
     setup=setup_soul,
     application_setup=application_setup,
     metadata={

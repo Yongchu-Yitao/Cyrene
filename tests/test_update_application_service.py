@@ -1,7 +1,20 @@
 from pathlib import Path
 
 from cyrene.platform import updater
-from cyrene.platform.update_service import DownloadCoordinator
+from cyrene.platform.update_service import DownloadCoordinator, ReleaseNotesRepository
+
+
+def test_pending_upgrade_uses_only_target_release_notes(tmp_path):
+    local = tmp_path / "CHANGELOG.md"
+    local.write_text("Installed release notes", encoding="utf-8")
+    repository = ReleaseNotesRepository((local,))
+    pending = updater.UpdateInfo(available=True, current_version="1", latest_version="2")
+
+    assert repository.notes_for_release(pending) == ""
+    pending.release_notes = "Target release notes"
+    assert repository.notes_for_release(pending) == "Target release notes"
+    current = updater.UpdateInfo(available=False, current_version="1", latest_version="1")
+    assert repository.notes_for_release(current) == "Installed release notes"
 
 
 class _Progress:

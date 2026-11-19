@@ -1212,3 +1212,59 @@ def test_card_creation_presentation_reaches_live_conversation(batch, wrapped):
                               data={"results": [result]} if batch else result)
     projected = workbench_events(event)
     assert projected[0]["payload"]["presentation"] == presentation
+
+
+@pytest.mark.parametrize("toolbox", [False, True])
+def test_chat_plugin_view_survives_session_reopen(tmp_path, toolbox):
+    target = "ShowReport"
+    direct = {"id": "report-1", "name": target, "arguments": {}}
+    call = {**direct, "name": "toolbox", "arguments": {
+        "operation": "invoke", "name": target, "arguments": {},
+    }} if toolbox else direct
+
+    async def model(arguments, context):
+        if arguments["messages"][-1]["role"] == "user":
+            return {"tool_calls": [call], "content": ""}
+        return {"content": "Report ready", "tool_calls": []}
+
+    def report(_arguments, _context):
+        return {"presentation": {"kind": "plugin_view", "view_id": "report",
+                                 "packId": "other", "projectId": "other", "state": {"days": 7}}}
+
+    registry = model_registry(model)
+    registry.register_pack(PluginPack(
+        "reports", "Reports", (Plugin(target, "Report", {"type": "object"}, report),),
+        metadata={"frontend_views": ({"id": "report", "entry": "ui.html"},)},
+    ), source="test")
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+
+    def open_session():
+        return AgentSession(tmp_path / "data", tmp_path / "workspace", plugin_dir,
+                            tree_id="ordinary-chat", registry=registry,
+                            plugin_context_data={"project_id": "project-1"})
+
+    bridge = WorkbenchSessionBridge(open_session())
+    events = []
+
+    async def publish(event):
+        events.append(event)
+
+    try:
+        assert run(bridge.submit("show report", run_id="report-run", publish=publish)) == "Report ready"
+        views = [e["payload"]["presentation"] for e in events if e["type"] == "tool.completed"
+                 and e["payload"]["toolCallId"] == "report-1"]
+        assert views and all(view == views[0] for view in views)
+        view = views[0]
+        assert view["instanceId"].startswith("tool_")
+        assert view == {"kind": "plugin_view", "packId": "reports", "projectId": "project-1",
+                        "instanceId": view["instanceId"], "viewId": "report", "state": {"days": 7}}
+    finally:
+        bridge.close()
+    session = open_session()
+    try:
+        history = project_tool_activity_messages(session.snapshot(), "report-run")
+        assert [entry["presentation"] for message in history for entry in message["trace"]
+                if entry["toolCallId"] == "report-1"] == [view]
+    finally:
+        session.close()

@@ -1,3 +1,4 @@
+import { SettingsNavigation } from "./features/settings/navigation.jsx"
 import { useWorkbenchI18n } from "./workbench-i18n.jsx"
 import { DoctorPanel } from "./features/doctor/doctor.jsx"
 import {
@@ -14,20 +15,21 @@ import {
 // ── Tab definitions ──
 var TABS = [
   { id: "doctor", labelKey: "settings.doctor", icon: "stethoscope" },
-  { id: "profile", labelKey: "rail.profile", icon: "user" },
-  { id: "general", labelKey: "settings.general", icon: "settings" },
+  { id: "profile", labelKey: "settings.page.profile", icon: "chart-line" },
+  { id: "general", labelKey: "settings.page.general", icon: "settings" },
   { id: "search", labelKey: "settings.searchProviders", icon: "browser" },
   { id: "appearance", labelKey: "settings.appearance", icon: "palette" },
   { id: "shortcuts", labelKey: "settings.shortcuts", icon: "keyboard" },
-  { id: "model-usage", labelKey: "settings.modelUsage", icon: "route" },
   { id: "models", labelKey: "settings.modelServices", icon: "box" },
   { id: "media", labelKey: "settings.mediaGeneration", icon: "photo-video" },
-  { id: "agents", labelKey: "settings.agents", icon: "robot" },
+  { id: "agents", labelKey: "settings.page.agents", icon: "robot" },
   { id: "voice", labelKey: "settings.voiceTab", icon: "microphone" },
   { id: "channels", labelKey: "settings.channels", icon: "messages" },
-  { id: "remote", labelKey: "settings.remoteTab", icon: "device-desktop-up" },
+  { id: "remote", labelKey: "settings.page.remote", icon: "device-desktop-up" },
   { id: "plugin-registry", labelKey: "settings.pluginRegistry", icon: "package" },
   { id: "hooks", labelKey: "settings.hooks", icon: "webhook" },
+  { id: "network", labelKey: "settings.page.network", icon: "server" },
+  { id: "maps", labelKey: "settings.page.maps", icon: "route" },
   { id: "integrations", labelKey: "settings.integrations", icon: "plug-connected" },
   // Keep the budget surface available for direct routing while its sidebar
   // entry is temporarily withheld from the settings navigation.
@@ -38,12 +40,11 @@ var TABS = [
 ];
 
 var SETTINGS_TAB_GROUPS = [
-  { labelKey: "settings.group.general", ids: ["profile", "general", "search", "appearance", "shortcuts"] },
-  { labelKey: "settings.group.intelligence", ids: ["model-usage", "models", "media", "agents", "voice"] },
-  { labelKey: "settings.group.connections", ids: ["channels", "remote"] },
-  { labelKey: "settings.group.extensionsSystem", ids: ["plugin-registry", "hooks", "integrations"] },
-  { labelKey: "settings.group.data", ids: ["budget", "usage", "data"] },
-  { labelKey: "settings.group.other", ids: ["doctor", "about"] },
+  { labelKey: "settings.page.preferences", icon: "device-desktop", ids: ["general", "appearance", "shortcuts"] },
+  { labelKey: "settings.page.modelsGroup", icon: "sparkles", ids: ["models", "agents", "search", "voice", "media"] },
+  { labelKey: "settings.page.connections", icon: "plug-connected", ids: ["channels", "remote", "network", "maps", "integrations"] },
+  { labelKey: "settings.page.automation", icon: "puzzle", ids: ["plugin-registry", "hooks"] },
+  { labelKey: "settings.page.maintenance", icon: "database", ids: ["data", "usage", "budget", "doctor", "about"] },
 ];
 
 var TABS_BY_ID = TABS.reduce(function (acc, item) {
@@ -53,7 +54,8 @@ var TABS_BY_ID = TABS.reduce(function (acc, item) {
 
 var SETTINGS_TAB_MODULES = {
   search: ["search"],
-  "model-usage": ["model"],
+  network: ["extensions"],
+  maps: ["map"],
   models: ["model"],
   media: ["media"],
   agents: ["soul", "proactive", "skills", "subagent"],
@@ -64,6 +66,7 @@ var SETTINGS_TAB_MODULES = {
 };
 
 var LEGACY_SETTINGS_TABS = {
+  "model-usage": "models",
   "mcp-providers": "plugin-registry",
   extensions: "plugin-registry",
   skills: "plugin-registry",
@@ -77,28 +80,6 @@ var LEGACY_SETTINGS_ANCHORS = {
   "setting-plugin-packs": "setting-plugin-registry",
   "setting-standalone-plugins": "setting-plugin-registry",
 };
-
-function settingsIconMarkup(name) {
-  var assets = window.CyreneIconAssets;
-  return assets && assets.settings && assets.settings[name] || "";
-}
-
-function SettingsTabIcon(id) {
-  var item = TABS_BY_ID[id] || TABS_BY_ID.general;
-  var markup = settingsIconMarkup(item.icon);
-  if (markup) {
-    return React.createElement("span", {
-      className: "settings-overlay-tab-glyph is-inline",
-      dangerouslySetInnerHTML: { __html: markup },
-      "aria-hidden": "true",
-    });
-  }
-  return React.createElement("span", {
-    className: "settings-overlay-tab-glyph",
-    style: { "--settings-tab-icon": 'url("settings-icons/' + item.icon + '.svg")' },
-    "aria-hidden": "true",
-  });
-}
 
 // ── Settings Page ──
 function agentSettingsPayload(config, agentProactive, pluginModules) {
@@ -155,7 +136,14 @@ function SettingsPage({
     var target = LEGACY_SETTINGS_TABS[value] || value;
     return TABS_BY_ID[target] && settingsTabAvailable(target) ? target : "general";
   }
-  var normalizedScrollToId = LEGACY_SETTINGS_ANCHORS[scrollToId] || scrollToId;
+  const [navigation, setNavigation] = useStateSt({ anchor: scrollToId, connection: "", revision: 0 });
+  const normalizedScrollToId = LEGACY_SETTINGS_ANCHORS[navigation.anchor] || navigation.anchor;
+  function navigate(next, anchor = "", connection = "") {
+    if (next === "model-usage" && !anchor) anchor = "setting-model-primary-route";
+    const indexed = anchor && workbenchServices.settingsIndex().items.find(item => item.id === anchor);
+    setTab(normalizeSettingsTab(indexed?.tab || next));
+    setNavigation(previous => ({ anchor, connection, revision: previous.revision + 1 }));
+  }
   var [tab, setTab] = useStateSt(normalizeSettingsTab(initialTab));
 
   useEffectSt(function () {
@@ -177,9 +165,8 @@ function SettingsPage({
   // also re-checks the anchor after the switch).
   useEffectSt(function () {
     if (!initialTab) return; // plain "open settings" — keep the current tab
-    var target = normalizeSettingsTab(initialTab);
-    setTab(function (current) { return current === target ? current : target; });
-  }, [initialTab]);
+    navigate(initialTab, scrollToId);
+  }, [initialTab, scrollToId]);
 
   // Deep-link support: the search overlay can open a specific setting and ask
   // the panel to scroll to the anchor (id) after the tab has rendered. Some
@@ -203,7 +190,7 @@ function SettingsPage({
     }
     function tryScroll() {
       var el = document.getElementById(normalizedScrollToId);
-      if (el) {
+      if (el && !el.closest("[inert]")) {
         el.scrollIntoView({ block: "center", behavior: "smooth" });
         el.classList.add("wb-settings-highlight");
         setTimeout(function () { el.classList.remove("wb-settings-highlight"); }, 2200);
@@ -220,7 +207,7 @@ function SettingsPage({
     return function () {
       if (timer) clearTimeout(timer);
     };
-  }, [normalizedScrollToId]);
+  }, [normalizedScrollToId, navigation.revision]);
 
   // ── General state ──
   var [desktopNotifications, setDesktopNotifications] = useStateSt(function () {
@@ -770,50 +757,26 @@ function SettingsPage({
       React.createElement("div", { className: "settings-overlay-body" },
         // Sidebar tabs
         React.createElement("nav", { className: "settings-overlay-nav workbench-integrated-rail" + (collapsed ? " is-collapsed" : ""), "aria-label": t("nav.settings") },
-          React.createElement("header", { className: "settings-overlay-nav-head workbench-integrated-rail-head" },
-            React.createElement("b", null, t("nav.settings")),
-            collapseControl || null,
-          ),
-          React.createElement("div", { className: "settings-overlay-nav-scroll" },
-          SETTINGS_TAB_GROUPS.map(function (group, groupIndex) {
-            return React.createElement("div", {
-              key: group.ids.join("-"),
-              className: "settings-overlay-nav-section" + (groupIndex === 0 ? " first" : ""),
-            },
-              React.createElement("div", { className: "settings-overlay-nav-label" }, t(group.labelKey)),
-              group.ids.map(function (id) {
-                var item = TABS_BY_ID[id];
-                if (!item || item.hidden === true || !settingsTabAvailable(id)) return null;
-                return React.createElement("button", {
-                  key: item.id,
-                  type: "button",
-                  className: "settings-overlay-tab" + (tab === item.id ? " active" : ""),
-                  "aria-current": tab === item.id ? "page" : undefined,
-                  onClick: function () { setTab(item.id); },
-                },
-                  React.createElement("span", { className: "settings-overlay-tab-icon" }, SettingsTabIcon(item.id)),
-                  React.createElement("span", null, t(item.labelKey)),
-                );
-              }),
-            );
-          })),
+          <SettingsNavigation tab={tab} t={t} groups={SETTINGS_TAB_GROUPS} tabs={TABS_BY_ID}
+            available={settingsTabAvailable} navigate={navigate} collapsed={collapsed} collapseControl={collapseControl}/>,
           moduleDock || null,
         ),
 
         // Content area
         React.createElement("main", {
-          className: "settings-overlay-content",
+          className: "settings-overlay-content main-region",
           key: tab,
           "data-settings-active-tab": tab,
           "data-cyrene-node-id": "settings_content_" + tab,
         },
+          tab !== "profile" && <div className="settings-crumb">{t(SETTINGS_TAB_GROUPS.find(group => group.ids.includes(tab))?.labelKey)}{tab === "about" && <span className="about-crumb-page" aria-current="page">{t("settings.about")}</span>}</div>,
           tab === "profile" && React.createElement("div", { className: "settings-profile-panel" },
             React.createElement(workbenchServices.profile().Page)
           ),
-          tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project, pluginModules }),
+          ["general","network","maps"].includes(tab) && React.createElement(GeneralPanel, { section: tab, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project, pluginModules }),
           tab === "search" && React.createElement(SearchPanel, { t: t }),
-          tab === "models" && React.createElement(workbenchServices.modelSettings().ServicesPage, { t: t, project: project }),
-          tab === "model-usage" && React.createElement(workbenchServices.modelSettings().UsagePage, { t: t, project: project }),
+          tab === "models" && React.createElement(workbenchServices.modelSettings().ServicesPage, { t: t, project: project, routeAnchor: normalizedScrollToId, initialConnectionId: navigation.connection, navigationRequest: navigation.revision }),
+
           tab === "media" && React.createElement(MediaPanel, { t: t, available: settingsTabAvailable("media") }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),

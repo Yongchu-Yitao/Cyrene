@@ -14,7 +14,7 @@ function AgentsPanel(p) {
   var hasSkills = modules.indexOf("skills") >= 0;
 
   return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.agents"), t("settings.agentsSubtitle")),
+    SectionTitle(t("settings.page.agents")),
 
     // SOUL.md
     hasSoul && React.createElement("div", { className: "wb-field wb-field-stack wb-field-soul", id: "setting-soul" },

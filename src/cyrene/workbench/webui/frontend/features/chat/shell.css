@@ -345,6 +345,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   content: none;
 }
 
+.workbench-grid.integrated-sidebars .settings-overlay-nav.workbench-integrated-rail .wbc-rail-glass,
 .workbench-grid.integrated-sidebars .wbc-rail.workbench-integrated-rail .wbc-rail-glass {
   position: relative;
   inset: auto;
@@ -871,7 +872,7 @@ html[data-theme="dark"] .workbench-grid.integrated-sidebars {
   --wb-dock-nav-bg: var(--wb-floating-rail-bg);
   border: var(--wb-floating-rail-border);
   background: var(--wb-dock-nav-bg);
-  box-shadow: var(--wb-floating-rail-shadow);
+  box-shadow: var(--wbc-composer-glass-shadow);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   grid-row: 1;

@@ -1595,8 +1595,7 @@
 .wb-cli-hook-proposal,
 .wb-cli-hook-row-actions,
 .wb-cli-hook-editor-actions,
-.wb-cli-hook-result,
-.wb-cli-hook-audit > div {
+.wb-cli-hook-result {
   display: flex;
   align-items: center;
 }
@@ -1808,10 +1807,6 @@
 .wb-cli-hook-result { gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--wb-line); }
 .wb-cli-hook-result code { flex: 0 0 180px; }
 .wb-cli-hook-result span { color: var(--wb-muted); font-size: calc(11px * var(--wb-ui-font-scale, 1)); }
-.wb-cli-hook-audit { color: var(--wb-muted); font-size: calc(11px * var(--wb-ui-font-scale, 1)); }
-.wb-cli-hook-audit summary { cursor: pointer; }
-.wb-cli-hook-audit > div { gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--wb-line); }
-.wb-cli-hook-audit > div code { min-width: 120px; }
 
 /* Standalone Hooks page ------------------------------------------------------ */
 
@@ -1852,27 +1847,6 @@
   min-width: 112px;
   min-height: 44px;
   justify-content: center;
-}
-
-.wb-hook-filter {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--wb-line);
-  border-radius: 14px;
-  background: var(--wb-card-bg);
-}
-
-.wb-hook-filter .wb-input {
-  min-height: 44px;
-  flex: 1;
-}
-
-.wb-hook-filter > span {
-  flex: 0 0 auto;
-  color: var(--wb-faint);
-  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
 }
 
 .wb-cli-hooks-page .wb-cli-hook-group {
@@ -2017,12 +1991,6 @@
   justify-content: center;
 }
 
-.wb-cli-hooks-page .wb-cli-hook-audit {
-  padding: 12px 14px;
-  border: 1px solid var(--wb-line);
-  border-radius: 12px;
-  background: var(--wb-card-bg);
-}
 
 @media (max-width: 780px) {
   .wb-hook-details dl { grid-template-columns: minmax(0, 1fr); }
@@ -2030,8 +1998,6 @@
     justify-content: flex-end;
     flex-wrap: wrap;
   }
-  .wb-hook-filter { align-items: stretch; flex-direction: column; }
-  .wb-hook-filter > span { padding: 0 2px 3px; }
 }
 
 .wb-plugin-center-popover .wb-extension-skill-content {

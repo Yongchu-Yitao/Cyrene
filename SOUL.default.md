@@ -19,4 +19,4 @@
 ## PATTERN:USER
 
 ## TEMPORARY
-<!-- Items expire from injected memory context after 24h; source lines are retained. -->
+<!-- Dated items expire after 24h and are removed from this file by daily cleanup. -->

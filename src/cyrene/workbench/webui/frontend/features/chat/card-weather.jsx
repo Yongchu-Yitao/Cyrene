@@ -1,5 +1,7 @@
 import React from 'react';
-import { weatherKind, weatherPeriod } from './card-weather-model.mjs';
+import { HomeWeatherArt } from './home-weather-art.jsx';
+import { weatherWash } from './home-weather-painter.mjs';
+import { weatherKind, weatherPeriod, weatherReadout } from './card-weather-model.mjs';
 
 // Distinct silhouettes stay legible at the compact home icon size.
 const cloudShapes = {
@@ -30,24 +32,31 @@ const cloudShapes = {
   },
 };
 
-export function CardWeather({ block, showMetadata = true, now = new Date() }) {
+export function CardWeather({ block, showMetadata = true, homeArtwork = false, now = new Date() }) {
   const kind = weatherKind(block, now);
   const period = weatherPeriod(now);
   const sun = period === 'day' && ['clear', 'partly_cloudy'].includes(kind);
   const moon = period === 'night' && ['night', 'partly_cloudy'].includes(kind);
   const cloud = cloudShapes[kind];
-  return <div className={'wbc-weather-scene weather-' + kind} data-period={period}>
+  const { location, temperature, condition, range } = weatherReadout(block);
+  const showArt = block.type !== 'weather_observation' || block.condition_code != null;
+  return <div className={'wbc-weather-scene weather-' + kind} data-period={period} style={homeArtwork ? { '--home-wash': weatherWash(kind, period) } : undefined}>
     <div className="wbc-weather-main">
-      <div className="wbc-weather-copy"><span className="wbc-weather-location">{block.location}</span><strong className="wbc-weather-temperature">{block.temperature}</strong><span>{block.condition}</span>{block.range && <small>{block.range}</small>}</div>
-      <div className="wbc-weather-art" aria-hidden="true">
+      <div className="wbc-weather-copy">
+        <span className="wbc-weather-location">{location}</span>
+        {temperature && <strong className="wbc-weather-temperature">{temperature}</strong>}
+        {condition && <span>{condition}</span>}
+        {range && <small>{range}</small>}
+      </div>
+      {showArt && (homeArtwork ? <HomeWeatherArt kind={kind} period={period} /> : <div className="wbc-weather-art" aria-hidden="true">
         <svg viewBox="0 0 160 140" focusable="false">
           {sun && <g className="weather-sun" transform={cloud ? undefined : "translate(2 22)"}><g className="weather-rays" stroke="currentColor" strokeWidth="3" strokeLinecap="round">{Array.from({length: 8}, (_, i) => <path key={i} d="M 78 13 L 78 20" transform={`rotate(${i * 45} 78 48)`} />)}</g><circle className="weather-sun-halo" cx="78" cy="48" r="29"/><circle className="weather-sun-disc" cx="78" cy="48" r="22"/></g>}
           {moon && <g transform={cloud ? "translate(28 -16) scale(.85)" : "translate(-9 15)"}><g className="weather-moon"><path d="M100 25a32 32 0 1 0 22 50A33 33 0 0 1 100 25Z"/><circle cx="47" cy="30" r="2"/><circle cx="130" cy="40" r="3"/><circle cx="115" cy="104" r="2"/></g></g>}
           <WeatherConditions kind={kind} cloud={cloud} />
         </svg>
-      </div>
+      </div>)}
     </div>
-    {block.advice && <p className="wbc-weather-advice">{block.advice}</p>}
+    {!homeArtwork && block.advice && <p className="wbc-weather-advice">{block.advice}</p>}
     {showMetadata && <small className="wbc-weather-source">{[block.source, block.updated_at].filter(Boolean).join(' · ')}</small>}
   </div>;
 }

@@ -42,6 +42,8 @@ from .context.compaction import (
 from .context.projection import (
     project_model_messages,
 )
+from .hook.action_store import HookActionStore
+from .hook.actions import combine_decisions
 from .hook import (
     CONTEXT_CHANGE,
     PRE_TOOL_USE,
@@ -205,6 +207,8 @@ def _model_failure_projection(
         "detail_params": dict(details.get("detail_params") or {}),
         "retryable": bool(details.get("retryable", True)),
     }
+    if metadata["failure_kind"] == "model_rate_limited" and details.get("retry_at") is not None:
+        metadata["retry_at"] = details["retry_at"]
     retry_scope = str(details.get("retry_scope") or "").strip()
     if retry_scope:
         metadata["retry_scope"] = retry_scope
@@ -219,6 +223,8 @@ AgentEventType = Literal[
     "input.answered",
     "guidance.applied",
     "assistant.tool_calls",
+    "assistant.pre_tool_reply",
+    "hook.message",
     "permission.reviewed",
     "tool.completed",
     "tools.completed",
@@ -471,6 +477,7 @@ class AgentSession:
         self.task_contexts = TaskContexts(self)
         self.task_contexts.initialize()
         self._plugin_service_values["task_contexts"] = self.task_contexts
+        self.hook_actions = HookActionStore(self.store.tree_database_path(self.tree.id))
         self.hooks = self.store.hooks_for(self.tree.id)
         existing_hooks = {hook.id for hook in self.hooks.list()}
         if "agent-session-context-mount" in existing_hooks:
@@ -1151,6 +1158,42 @@ class AgentSession:
     def _ensure_required_session_packs(self) -> None:
         self._plugins._ensure_required_session_packs()
 
+    def record_hook_actions(self, event, hook_id, effects):
+        if not effects:
+            return
+        payload = event.payload if isinstance(event.payload, Mapping) else {}
+        run_id = str(payload.get("run_id") or self.current_run_id)
+        stamp = event.time.isoformat()
+        occurrence = payload.get("event_id") or payload.get("hook_invocation_id") or stamp
+        identity = json.dumps([event.name, event.node_id, occurrence, hook_id, payload.get("tool")], sort_keys=True)
+        entries = [(self._stable_id("hook", f"{identity}:{i}"), target, body, run_id, stamp)
+                   for i, (target, body) in enumerate(effects)]
+        fresh = self.hook_actions.record(entries)
+        save = self._plugin_service_values.get("save_hook_message")
+        if save:
+            for key, target, body, run, timestamp in entries:
+                if target == "message":
+                    save(self.tree.id, key, run, timestamp, body)
+        for key, target, body, run, _ in fresh:
+            if target == "message":
+                self._emit_event("hook.message", run_id=run, node_id=key, time=event.time, data=body)
+
+    def review_hook_question(self, event, tool, result):
+        arguments = result.get("arguments", tool.get("arguments", {}))
+        question = result["question"]
+        identity = json.dumps([self.current_run_id, tool.get("name"), arguments, question], sort_keys=True)
+        key = self._stable_id("hook_ask", identity)
+        if self.pending_hook_actions(key, event):
+            return {"decision": "modify", "arguments": arguments}
+        return {**result, "question": {**question, "hook_resume_key": key,
+                                       "requested_tool": tool.get("name"), "requested_arguments": arguments}}
+
+    def pending_hook_actions(self, target, event):
+        tool = event.payload.get("tool", {}) if isinstance(event.payload, Mapping) else {}
+        occurrence = event.payload.get("hook_invocation_id") if isinstance(event.payload, Mapping) else None
+        key = json.dumps([occurrence or event.time.isoformat(), tool], sort_keys=True)
+        return self.hook_actions.take(target, key)
+
     def _plugin_services(self) -> dict[str, Any]:
         self.reconcile_plugins()
         self._ensure_required_session_packs()
@@ -1219,6 +1262,14 @@ class AgentSession:
             if event is not None:
                 events.append(event)
             value = node.value if isinstance(node.value, Mapping) else {}
+            for receipt in value.get("pre_tool_replies", ()):
+                if receipt["content"]:
+                    events.append(AgentSessionEvent(
+                        sequence=len(events) + 1, type="assistant.pre_tool_reply",
+                        tree_id=node.tree_id, run_id=str(value.get("run_id") or ""),
+                        node_id=receipt["id"], time=datetime.fromisoformat(receipt["time"]),
+                        data={"content": receipt["content"]},
+                    ))
             stored_reviews = value.get("permission_reviews")
             reviews = stored_reviews if isinstance(stored_reviews, list) else ()
             for raw_review in reviews:
@@ -1241,6 +1292,13 @@ class AgentSession:
                     time=review_time,
                     data=review,
                 ))
+        notices = self.hook_actions.messages()
+        if notices:
+            for key, run_id, stamp, body in notices:
+                events.append(AgentSessionEvent(sequence=0, type="hook.message", tree_id=self.tree.id,
+                              run_id=run_id, node_id=key, time=datetime.fromisoformat(stamp), data=body))
+            events.sort(key=lambda e: e.time)
+            events = [replace(event, sequence=i) for i, event in enumerate(events, 1)]
         result = tuple(event for event in events if event.sequence > int(after_sequence))
         log_operation(
             logger,
@@ -1695,6 +1753,8 @@ class AgentSession:
                     or ""
                 ),
             }
+            if kind == "hook" and isinstance(payload.get("hook_resume_key"), str):
+                question["hook_resume_key"] = payload["hook_resume_key"]
             plan = payload.get("plan")
             if isinstance(plan, (Mapping, list)):
                 question["plan"] = self._json_value(plan)
@@ -1889,7 +1949,7 @@ class AgentSession:
         if latest_user is not None:
             user_position = path.index(latest_user)
             self._model_calls = sum(
-                1
+                1 + len(node.value.get("pre_tool_replies", ()))
                 for node in path[user_position + 1:]
                 if isinstance(node.value, Mapping)
                 and node.value.get("role") == "assistant"
@@ -2254,7 +2314,7 @@ class AgentSession:
             elif resume and str(pending.get("kind") or "") == "clarification":
                 self._append_clarification_authorization(run_id, normalized_answer)
 
-            matched = False
+            matched = "hook_model_actions" in value
             updated_results: list[Any] = []
             for raw in value.get("results") if isinstance(value.get("results"), list) else ():
                 if not isinstance(raw, Mapping):
@@ -2300,6 +2360,9 @@ class AgentSession:
             }
             value["trigger_model"] = resume
             node = self.store.update_node(self.tree.id, node.id, value)
+            if resume and pending.get("kind") == "hook" and pending.get("hook_resume_key"):
+                self.hook_actions.record([(pending["hook_resume_key"] + normalized_question_id, pending["hook_resume_key"],
+                                           {"answered": True}, run_id, node.updated_at.isoformat())])
             answered_state = self._set_state_locked(
                 "queued",
                 _l(
@@ -3207,6 +3270,57 @@ class AgentSession:
             "batch_key": batch_key,
         }
 
+    async def _prepare_hook_model_actions(self, trigger, run_id, prepared):
+        previous = trigger.value.get("hook_model_actions", [])
+        actions = [*previous, *self.hook_actions.take("model", trigger.id)]
+        if not actions and "hook_model_actions" not in trigger.value:
+            return prepared
+        gate = combine_decisions(actions)
+        if gate.get("decision") == "block":
+            terminal = self._mount_assistant(trigger.id, gate["reason"], error=True,
+                                             caused_by=self._transition_key(trigger), run_id=run_id)
+            if terminal is not None:
+                await self._finish_terminal(terminal, status="failed")
+            return None
+        if gate.get("decision") == "ask":
+            question_id = self._stable_id("question", trigger.id)
+            question = {
+                **gate["question"], "id": question_id, "round_id": run_id,
+                "original_user_message": self.current_user_request,
+            }
+            # Reuse the normal durable user-question flow without inventing a
+            # model tool call. Resume the same operation with its reviewed edits.
+            with self._linearized_context_commit():
+                if self._is_cancelled(run_id):
+                    return None
+                node = self.store.mount(self.tree.id, trigger.id, {
+                    "role": "tool_results", "run_id": run_id, "results": [],
+                    "trigger_model": False, "pending_question": question,
+                    "hook_model_actions": [a for a in actions if a.get("decision") != "ask"],
+                    "task_context_id": trigger.value.get("task_context_id"),
+                }, node_id=self._stable_id("hook_question", trigger.id))
+                state = self._set_state_locked("awaiting_user", question["text"], leaf_id=node.id)
+            self._emit_state_snapshot(state)
+            return None
+        patch = gate.get("arguments", {})
+        messages = list(patch.get("messages", prepared.messages))
+        tools = list(patch.get("tools", prepared.tools))
+        # Hooks may narrow the visible tool catalog; tool authority still comes
+        # from the runtime registry and its normal permission review.
+        if any(tool not in prepared.tools for tool in tools):
+            raise ValueError("Hook model tools must belong to the current model tool catalog")
+        for action in actions:
+            if action.get("context"):
+                messages.append({"role": "user", "content": action["context"]})
+        pending = trigger.value.get("pending_question", {})
+        if "hook_model_actions" in trigger.value and pending.get("answer"):
+            messages.append({"role": "user", "content": pending["text"] + "\n" + pending["answer"]})
+        message_tokens = messages_token_estimate(messages)
+        tool_tokens = message_token_estimate({"role": "system", "tools": tools}) if tools else 0
+        return replace(prepared, messages=messages, tools=tools, message_tokens=message_tokens,
+                       tool_tokens=tool_tokens, compaction_tokens=message_tokens + tool_tokens,
+                       routing_tokens=message_tokens + tool_tokens)
+
     async def _advance(self, trigger: ContextNode) -> None:
         run_id = self._node_run_id(trigger)
         if self._is_cancelled(run_id):
@@ -3238,7 +3352,8 @@ class AgentSession:
                 if mounted_guidance is not None:
                     return
         prepared = self._prepare_model_input(trigger)
-        model_start_runtime = {"prepared_model_input": prepared}
+        model_start_runtime = {"prepared_model_input": prepared,
+                               "resuming_hook_question": "hook_model_actions" in trigger.value}
         contributions = await self.hooks.model_start_mounts({
             "node_id": trigger.id, "run_id": run_id,
         }, runtime=model_start_runtime)
@@ -3259,6 +3374,9 @@ class AgentSession:
             trigger, prepared, run_id = await self._automatic_compaction(
                 trigger, prepared, run_id
             )
+        prepared = await self._prepare_hook_model_actions(trigger, run_id, prepared)
+        if prepared is None:
+            return
         if self._is_cancelled(run_id):
             return
         with self._state_lock:
@@ -3776,6 +3894,15 @@ class AgentSession:
             return None
         return unknown
 
+    def _tool_result_origin(self, result: PluginCallResult, assistant_id: str) -> dict[str, Any]:
+        if not result.pack_id:
+            return {}
+        return {"plugin_origin": {
+            "pack_id": result.pack_id,
+            "project_id": str(self._plugin_context_data.get("project_id") or ""),
+            "instance_id": self._stable_id("tool", json.dumps([self.tree.id, assistant_id, result.call_id])),
+        }}
+
     def _persist_effect_result(self, assistant_id: str, result: PluginCallResult) -> None:
         with self._state_lock:
             node = self.store.get_node(self.tree.id, assistant_id)
@@ -3788,6 +3915,7 @@ class AgentSession:
                 and str(call.get("id") or "") == result.call_id
             ), None)
             stored_result = self._stored_result(result)
+            stored_result.update(self._tool_result_origin(result, assistant_id))
             presentation = self._resource_presentation(
                 source_call,
                 phase="completed",
@@ -3913,6 +4041,75 @@ class AgentSession:
             }, node_id=self._stable_id("tool_results", str(assistant.value.get("batch_key"))))
             self._set_state("model", _l("Task reflection saved", "任务反思已保存"), leaf_id=node.id)
 
+    async def _apply_pre_tool_context(
+        self, assistant: ContextNode, contributions: list[dict[str, Any]],
+    ) -> None:
+        run_id = self._node_run_id(assistant)
+        if self._is_cancelled(run_id):
+            raise asyncio.CancelledError()
+        node = self.store.get_node(self.tree.id, assistant.id)
+        receipts = node.value.get("pre_tool_replies", ())
+        handled = {key for receipt in receipts for key in receipt["keys"]}
+        pending = []
+        keys = []
+        for item in contributions:
+            key = self._stable_id("pre_tool", json.dumps(item, sort_keys=True, ensure_ascii=False))
+            if key not in handled:
+                pending.append(item)
+                keys.append(key)
+        if not pending:
+            return
+
+        # Project the same active conversation, leaving out the unanswered tool
+        # call. Providers require each tool call to be followed by its results.
+        messages = self._messages(assistant.parent_id or self.tree.root_id)
+        if node.value.get("content"):
+            messages.append({"role": "assistant", "content": node.value["content"]})
+        for receipt in receipts:
+            messages.append({"role": "user", "content": receipt["prompt"]})
+            if receipt["content"]:
+                messages.append({"role": "assistant", "content": receipt["content"]})
+        prompt = "PreToolUse instructions for these calls:\n" + json.dumps(pending, ensure_ascii=False)
+        messages.append({
+            "role": "user",
+            "content": prompt + "\nApply these instructions now. The runtime handles the tool calls. "
+                       "Return only the text to say to the user before execution. "
+                       "Leave the reply empty if no user-facing text is needed.",
+        })
+        with self._state_lock:
+            if self._max_model_calls is not None and self._model_calls >= self._max_model_calls:
+                raise RuntimeError("PreToolUse context reached the model-call limit before tool execution.")
+            self._model_calls += 1
+        result = await self.runtime.call(
+            self.model_plugin, {"messages": messages, "tools": []},
+            PluginContext(workspace=self.workspace, tree=self.store, tree_id=self.tree.id,
+                          node_id=node.id, services=self._plugin_services(),
+                          data=self._plugin_data(run_id=run_id, model_call_kind="pre_tool_context",
+                                                 user_request=self.current_user_request)),
+        )
+        if self._is_cancelled(run_id):
+            raise asyncio.CancelledError()
+        if not result.success or not isinstance(result.value, Mapping):
+            raise RuntimeError(f"PreToolUse context model failed: {result.error}")
+        if result.value.get("tool_calls"):
+            raise ValueError("PreToolUse context requires a text reply before executing the pending tools.")
+        content = str(result.value.get("content") or "").strip()
+        when = datetime.now(timezone.utc)
+        receipt_id = self._stable_id("pre_tool_reply", node.id + "|".join(keys))
+        with self._linearized_context_commit():
+            if self._transitions.closed or run_id in self._cancelled_run_ids:
+                raise asyncio.CancelledError()
+            latest = dict(self.store.get_node(self.tree.id, node.id).value)
+            latest["pre_tool_replies"] = [*latest.get("pre_tool_replies", ()), {
+                "keys": keys, "id": receipt_id, "time": when.isoformat(),
+                "prompt": prompt, "content": content,
+            }]
+            self.store.update_node(self.tree.id, node.id, latest)
+        self._persist_auxiliary_model_usage(node.id, result.value, kind="pre_tool_context")
+        if content:
+            self._emit_event("assistant.pre_tool_reply", run_id=run_id, node_id=receipt_id,
+                             time=when, data={"content": content})
+
     async def _continue_tools(self, assistant: ContextNode) -> None:
         run_id = self._node_run_id(assistant)
         if self._is_cancelled(run_id):
@@ -4013,6 +4210,12 @@ class AgentSession:
                 leaf_id=assistant.id,
             )
         self._emit_state_snapshot(tools_state)
+        pre_tool_lock = asyncio.Lock()
+
+        async def deliver_pre_tool_context(contributions: list[dict[str, Any]]) -> None:
+            async with pre_tool_lock:
+                await self._apply_pre_tool_context(assistant, contributions)
+
         results = await self.batch.run(
             plugin_calls,
             PluginContext(
@@ -4026,7 +4229,7 @@ class AgentSession:
                     model_call_kind="tool",
                     user_request=self.current_user_request,
                 ),
-                services=self._plugin_services(),
+                services={**self._plugin_services(), "pre_tool_context": deliver_pre_tool_context},
             ),
             completed=completed,
             on_result=lambda result: self._persist_effect_result(assistant.id, result),
@@ -4058,7 +4261,7 @@ class AgentSession:
                 for call in calls
                 if isinstance(call, Mapping)
             }
-            result_values = self._tool_result_values(call_by_id, results)
+            result_values = self._tool_result_values(assistant.id, call_by_id, results)
             tool_node = self.store.mount(
                 self.tree.id,
                 assistant.id,
@@ -4109,12 +4312,14 @@ class AgentSession:
 
     def _tool_result_values(
         self,
+        assistant_id: str,
         call_by_id: Mapping[str, Mapping[str, Any]],
         results: Sequence[PluginCallResult],
     ) -> list[dict[str, Any]]:
         values: list[dict[str, Any]] = []
         for item in results:
             stored = {
+                **self._tool_result_origin(item, assistant_id),
                 "call_id": item.call_id,
                 "name": item.name,
                 "success": item.success,
@@ -4183,9 +4388,12 @@ class AgentSession:
         self._emit_state_snapshot(terminal_state)
         return node
 
-    def _mark_leaf_waiting_for_driver(self) -> None:
+    def _mark_leaf_waiting_for_driver(self, leaf_id: str) -> None:
+        # Discarding stale inbox messages can finish the driver without a new
+        # turn. In that case the current answer is still the final answer.
         with self._state_lock:
-            leaf_id = self._leaf_id
+            if self._leaf_id == leaf_id:
+                return
         node = self.store.get_node(self.tree.id, leaf_id)
         value = dict(node.value) if isinstance(node.value, Mapping) else {}
         if (
@@ -4219,9 +4427,10 @@ class AgentSession:
         self,
         assistant_id: str,
         output: Mapping[str, Any],
+        *, kind: str = "permission",
     ) -> None:
         entry = {
-            "kind": "permission",
+            "kind": kind,
             "usage": self._json_value(output.get("usage") or {}),
             "model": str(output.get("model") or self.model_plugin),
             "model_identity": self._json_value(output.get("model_identity") or {}),
@@ -4620,8 +4829,10 @@ class AgentSession:
             leaf_id = self._leaf_id
             run_id = self._current_run_id
         event_sequence = self._events.sequence
+        # Match drain(): a failed or cancelled leaf cannot drive pending inboxes.
         pending_driver = bool(
-            self._plugins.owns_driver
+            not self._is_run_terminated(run_id)
+            and self._plugins.owns_driver
             and self._plugins.driver is not None
             and self._plugins.driver.has_pending_work
         )
@@ -4769,7 +4980,6 @@ class AgentSession:
                         and self._plugins.driver is not None
                         and self._plugins.driver.has_pending_work
                     ):
-                        self._mark_leaf_waiting_for_driver()
                         guidance_service = self._guidance_service()
                         if (
                             guidance_service is not None
@@ -4788,6 +4998,7 @@ class AgentSession:
                                     guidance_events,
                                     run_id=guidance_run_id,
                                 )
+                                self._mark_leaf_waiting_for_driver(leaf_id)
                                 continue
                         drove, guidance_events = (
                             await self._drive_session_driver_with_guidance(
@@ -4807,8 +5018,10 @@ class AgentSession:
                                 run_id=guidance_run_id,
                             )
                             if mounted_guidance is not None:
+                                self._mark_leaf_waiting_for_driver(leaf_id)
                                 continue
                         if drove:
+                            self._mark_leaf_waiting_for_driver(leaf_id)
                             continue
                     op.finish(attempts=attempt, status=self._status, leaf_id=self._leaf_id)
                     return

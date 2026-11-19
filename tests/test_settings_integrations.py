@@ -106,8 +106,8 @@ def test_settings_ui_moves_zotero_to_integrations_and_keeps_embedding_in_models(
     for kind in ("embedding", "ocr", "asr", "tts"):
         assert f".wb-local-model-icon.is-{kind}" in styles
     assert "var(--wb-local-model-icon-color)" in styles
-    assert 'title: "Embedding model", titleKey: "settings.embeddingRouteTitle"' in model_source
-    assert 'capability: "embedding"' in model_source
+    assert 'defaultPicker("embedding",t("settings.embeddingRouteTitle"))' in model_source
+    assert 'v.supportsRoute(m,route)' in model_source
     assert translations.count('"settings.zoteroIntegration"') == 2
     assert translations.count('"settings.zoteroImportAction"') == 2
 
@@ -124,16 +124,16 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     workbench = workbench_shell_source()
     styles = workbench_style_source()
 
-    assert '{ id: "profile", labelKey: "rail.profile", icon: "user" }' in settings
-    assert 'ids: ["profile", "general", "search", "appearance", "shortcuts"]' in settings
-    assert 'ids: ["model-usage", "models", "media", "agents", "voice"]' in settings
+    assert '{ id: "profile", labelKey: "settings.page.profile", icon: "chart-line" }' in settings
+    assert 'ids: ["general", "appearance", "shortcuts"]' in settings
+    assert 'ids: ["models", "agents", "search", "voice", "media"]' in settings
     assert '{ id: "plugins", labelKey: "settings.pluginsTab", icon: "tools" }' not in settings
     assert 'tab === "plugins"' not in settings
     assert 'mode === "plugins"' not in settings
     icon_names = re.findall(r'\{ id: "[^"]+", labelKey: "[^"]+", icon: "([^"]+)"[^}]*\}', settings)
-    assert len(icon_names) == 20
+    assert len(icon_names) == 21
     assert len(set(icon_names)) == len(icon_names)
-    assert 'className: "settings-overlay-tab-glyph"' in settings
+    assert 'className="settings-action-icon"' in settings
     build_source = (root / "src/cyrene/workbench/webui/build-jsx.mjs").read_text(encoding="utf-8")
     assert '@tabler/icons/icons/outline' in build_source
     assert "'code.svg'," in build_source
@@ -151,8 +151,8 @@ def test_profile_is_a_settings_item_without_a_collapsed_settings_icon_stack():
     assert '"rail.profile": "个人信息"' in translations
     assert '"profile.basicInfo": "个人信息"' in translations
     for label in (
-        "通用设置", "界面外观", "键盘快捷键", "模型配置", "智能代理",
-        "语音交互", "消息渠道", "远程连接", "插件与集成", "插件中心",
+        "语言与桌面", "界面与外观", "键盘快捷键", "模型服务", "助手行为",
+        "语音交互", "消息渠道", "远程设备", "连接与服务", "插件中心",
         "服务集成", "预算管理", "用量统计", "数据管理", "关于 Cyrene",
     ):
         assert f'": "{label}"' in translations
@@ -297,38 +297,17 @@ def test_usage_settings_reuses_profile_metrics_and_expands_model_breakdown():
 
 def test_about_settings_matches_the_shared_settings_page_hierarchy():
     settings = workbench_settings_source()
-    translations = workbench_i18n_source()
     styles = workbench_style_source()
 
     panel = settings.split("function AboutPanel(p) {", 1)[1].split("// ── Skills Panel", 1)[0]
     assert 'className: "settings-panel wb-about-settings"' in panel
-    assert 'SectionTitle(t("settings.about"), t("settings.aboutSubtitle"))' in panel
-    assert 'className: "wb-about-product-card"' in panel
-    assert panel.index('className: "wb-about-product-card"') < panel.index('className: "wb-btn primary wb-about-check-btn"')
-    assert 'className: "wb-about-hero-progress"' in panel
-    assert '"--wb-about-download-progress": heroProgress + "%"' in panel
-    assert "var heroProgress = downloaded\n    ? 100" in panel
-    assert 'className: "wb-about-update-footer"' not in panel
-    assert 'className: "wb-about-card-head"' in panel
-    assert 'className: "wb-about-related-card"' in panel
-    assert 't("settings.relatedLinksHint"' in panel
-    assert 'className: "wb-about-related-list"' in panel
-    assert 'className: "wb-about-related-row"' in panel
-    assert 'className: "wb-changelog-modal"' in panel
+    assert 'className="about-mast"' in panel
+    assert 'aria-expanded={changelogOpen} aria-controls="about-notes"' in panel
+    assert panel.count('aria-controls="about-notes"') == 1
+    assert 'renderSettingsMarkdown(changelog.release_notes' in panel
     assert 'settingsFetch("/api/logs/export"' in panel
-
-    assert translations.count('"settings.aboutSubtitle"') == 2
-    assert translations.count('"settings.relatedLinksHint"') == 2
-    update_rule = styles.split(".wb-about-update-card {", 1)[1].split("}", 1)[0]
-    assert "padding: 4px 0 0" in update_rule
-    assert "border: 0" in update_rule
-    assert "background: transparent" in update_rule
-    hero_rule = styles.split(".wb-about-hero-progress {", 1)[1].split("}", 1)[0]
-    assert "width: var(--wb-about-download-progress)" in hero_rule
-    assert "background: color-mix(in srgb, var(--wb-blue) 15%, var(--wb-card-bg))" in hero_rule
-    assert ".wb-about-related-list" in styles
-    assert ".wb-about-related-row" in styles
-    assert ".wb-about-update-footer" not in styles
+    assert 'toggleAutoUpdate' in panel and 'toggleBeta' in panel
+    assert ".about-support" in styles and ".about-resource-grid" in styles
 
 
 def test_general_settings_has_opt_in_external_agent_proxy():

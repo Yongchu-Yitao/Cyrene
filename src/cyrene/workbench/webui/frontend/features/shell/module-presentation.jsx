@@ -105,7 +105,7 @@ function useWorkbenchModulePresentation(
     });
   }, [fullPage, isModulePage]);
 
-  var activeDestination = isSchedule ? "schedule"
+  var activeDestination = isSettings ? null : isSchedule ? "schedule"
     : isKnowledge ? "knowledge"
       : isMemory ? "memory"
         : isCyrene ? "cyrene" : "work";

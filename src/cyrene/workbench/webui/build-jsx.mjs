@@ -15,6 +15,20 @@ const TABLER_ICONS_DIR = resolve(__dirname, 'node_modules/@tabler/icons/icons/ou
 const SIMPLE_ICONS_DIR = resolve(__dirname, 'node_modules/simple-icons/icons')
 const LOBE_ICONS_DIR = resolve(__dirname, 'node_modules/@lobehub/icons-static-svg/icons')
 const SETTINGS_ICON_FILES = [
+  'refresh.svg',
+  'check.svg',
+  'pencil.svg',
+  'trash.svg',
+  'restore.svg',
+  'folder-open.svg',
+  'plus.svg',
+  'arrow-left.svg',
+  'alert-circle.svg',
+  'chevron-right.svg',
+  'search.svg',
+  'device-desktop.svg',
+  'sparkles.svg',
+  'chart-line.svg',
   'stethoscope.svg',
   'user.svg',
   'settings.svg',

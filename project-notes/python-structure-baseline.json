@@ -121,22 +121,27 @@
   "src/cyrene/core/context/tasks.py::project_tasks": {
     "decisions": 54
   },
+  "src/cyrene/core/hook/actions.py::validate_action": {
+    "decisions": 34,
+    "nesting": 6
+  },
   "src/cyrene/core/hook/registry.py": {
-    "module_lines": 1689
+    "module_lines": 1705
   },
   "src/cyrene/core/hook/registry.py::HookSet": {
     "methods": 46
   },
   "src/cyrene/core/hook/registry.py::HookSet._run_pre_tool": {
-    "lines": 129
+    "lines": 134,
+    "decisions": 22
   },
   "src/cyrene/core/hook/registry.py::HookSet._run_pre_tool_batch": {
-    "lines": 169,
-    "decisions": 36,
+    "lines": 171,
+    "decisions": 37,
     "nesting": 6
   },
   "src/cyrene/core/hook/registry.py::HookSet._worker_main": {
-    "lines": 117,
+    "lines": 118,
     "decisions": 24,
     "nesting": 7
   },
@@ -171,33 +176,37 @@
   "src/cyrene/core/plugin/registry.py::PluginRegistry.register_pack": {
     "decisions": 21
   },
+  "src/cyrene/core/plugin/runtime.py": {
+    "module_lines": 1016
+  },
   "src/cyrene/core/plugin/runtime.py::PluginRuntime.execute": {
     "lines": 126
   },
   "src/cyrene/core/plugin/runtime.py::PluginRuntime.review_batch": {
-    "lines": 214,
-    "decisions": 24
+    "lines": 245,
+    "decisions": 36,
+    "nesting": 6
   },
   "src/cyrene/core/plugin/session_plugins.py::SessionPlugins.reconcile_plugins": {
-    "decisions": 23
+    "decisions": 25
   },
   "src/cyrene/core/plugin/validation.py::_promote_operation_to_invocation": {
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 4919
+    "module_lines": 5073
   },
   "src/cyrene/core/session.py::AgentSession": {
-    "methods": 124,
-    "fields": 47
+    "methods": 130,
+    "fields": 48
   },
   "src/cyrene/core/session.py::AgentSession.__init__": {
-    "lines": 255,
+    "lines": 256,
     "decisions": 34
   },
   "src/cyrene/core/session.py::AgentSession._advance": {
-    "lines": 248,
-    "decisions": 59
+    "lines": 252,
+    "decisions": 60
   },
   "src/cyrene/core/session.py::AgentSession._answer": {
     "lines": 118,
@@ -211,7 +220,7 @@
     "decisions": 25
   },
   "src/cyrene/core/session.py::AgentSession._continue_tools": {
-    "lines": 193,
+    "lines": 199,
     "decisions": 48
   },
   "src/cyrene/core/session.py::AgentSession._event_for_node": {
@@ -221,7 +230,7 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py::AgentSession._pending_question_from_results": {
-    "decisions": 39
+    "decisions": 41
   },
   "src/cyrene/core/session.py::AgentSession._permission_requirement": {
     "lines": 125,
@@ -277,7 +286,7 @@
     "decisions": 26
   },
   "src/cyrene/model/error_details.py::classify_model_error": {
-    "decisions": 39
+    "decisions": 41
   },
   "src/cyrene/model/protocol_adapters.py": {
     "module_lines": 1464
@@ -462,7 +471,7 @@
     "decisions": 21
   },
   "src/cyrene/plugins/application.py::PluginApplicationHost": {
-    "methods": 32,
+    "methods": 33,
     "fields": 27
   },
   "src/cyrene/plugins/background.py::BackgroundPluginHost._invoke": {
@@ -540,7 +549,10 @@
     "decisions": 35
   },
   "src/cyrene/plugins/builtin/cyrene_cli/config_agent.py::configure_user_hook": {
-    "lines": 115
+    "lines": 120
+  },
+  "src/cyrene/plugins/builtin/cyrene_cli/hooks.py::CliHookService._dispatch": {
+    "decisions": 35
   },
   "src/cyrene/plugins/builtin/cyrene_cli/hooks.py::CliHookService.dispatch": {
     "decisions": 31
@@ -1061,6 +1073,9 @@
   "src/cyrene/plugins/builtin/cyrene_model/configuration.py::validate_active_route_provider_families": {
     "decisions": 25
   },
+  "src/cyrene/plugins/builtin/cyrene_model/configuration_validation.py::_merge_legacy_local_embedding": {
+    "decisions": 26
+  },
   "src/cyrene/plugins/builtin/cyrene_model/oauth.py::register_oauth_routes": {
     "lines": 122
   },
@@ -1136,7 +1151,7 @@
     "decisions": 39
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py": {
-    "module_lines": 1444
+    "module_lines": 1496
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::_model_source": {
     "lines": 100
@@ -1154,8 +1169,8 @@
     "decisions": 41
   },
   "src/cyrene/plugins/builtin/cyrene_plugin_development/tools.py::scaffold": {
-    "lines": 102,
-    "decisions": 27
+    "lines": 108,
+    "decisions": 29
   },
   "src/cyrene/plugins/builtin/cyrene_proactive/outcome.py::outcome_from_result": {
     "decisions": 26
@@ -1418,7 +1433,7 @@
     "decisions": 25
   },
   "src/cyrene/plugins/builtin/session_management/store.py::Store": {
-    "methods": 28
+    "methods": 29
   },
   "src/cyrene/plugins/contributions.py::_validate_project_tools": {
     "decisions": 36
@@ -1449,6 +1464,9 @@
   "src/cyrene/plugins/native_tools.py::_seed_canonical_directory": {
     "lines": 193,
     "decisions": 45
+  },
+  "src/cyrene/plugins/update.py::update_source": {
+    "decisions": 24
   },
   "src/cyrene/plugins/validation.py::validate_pack_directory": {
     "lines": 109,
@@ -1645,7 +1663,7 @@
   },
   "src/cyrene/workbench/chat/run_timeline.py::RunTimeline.apply": {
     "lines": 125,
-    "decisions": 81,
+    "decisions": 82,
     "nesting": 15
   },
   "src/cyrene/workbench/core_adapter/bridge.py": {
@@ -1663,12 +1681,15 @@
     "lines": 199,
     "decisions": 36
   },
+  "src/cyrene/workbench/core_adapter/checkpoint.py::context_checkpoint_from_nodes": {
+    "decisions": 21
+  },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py": {
     "module_lines": 1094
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._open_bridge": {
-    "lines": 151,
-    "decisions": 49
+    "lines": 173,
+    "decisions": 50
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime._own_bridge": {
     "decisions": 21,
@@ -1692,7 +1713,7 @@
     "decisions": 21
   },
   "src/cyrene/workbench/http/plugins.py::register_plugin_routes": {
-    "lines": 265
+    "lines": 297
   },
   "src/cyrene/workbench/http/settings/plugin_service.py::_activation_update_error": {
     "lines": 110,

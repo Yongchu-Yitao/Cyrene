@@ -517,7 +517,7 @@ def test_voice_controls_follow_existing_chat_layout():
     assert '["zipvoice", "settings.voiceZipVoiceGroup"]' in capabilities
     assert 'preset.group === "zipvoice"' in capabilities
     assert 'nextMode === "custom" && !voiceStatus.custom_tts_model_ready' in settings
-    assert '!voiceStatus.custom_tts_model_ready,' in capabilities
+    assert 'disabled:!!voiceBusy||voiceReferenceActive||!voiceStatus.custom_tts_model_ready' in capabilities
     assert 'settings.voiceCustomRequiresZipVoice' in capabilities
     assert 'className: "wb-select wb-voice-preset-select"' in capabilities
     custom_voice = capabilities.split('customVoiceSelected\n            ?', 1)[1].split(': React.createElement("div", { className: "wb-voice-preset-row" }', 1)[0]

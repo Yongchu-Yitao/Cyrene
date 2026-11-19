@@ -6,4 +6,6 @@
 - `application.py` 使用 `provide_frontend_method` 注册 View RPC。
 - `ui/index.html` 是插件拥有的 iframe 页面。
 
+在普通聊天中让 Agent 调用 `ShowModelUsage` 即可看到内联报表。修改天数后重新打开同一对话，可恢复已选范围。
+
 使用 `PluginValidate` 验证本目录，再通过 `PluginInstall` 安装。应用贡献首次安装或 Python 代码变化后需要重启 Cyrene；HTML/CSS/JS 资源可直接刷新。

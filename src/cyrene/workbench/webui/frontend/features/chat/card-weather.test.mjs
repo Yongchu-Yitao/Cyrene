@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { weatherKind, weatherPeriod } from './card-weather-model.mjs';
+import { weatherKind, weatherPeriod, weatherReadout } from './card-weather-model.mjs';
 const day = new Date(2026, 10, 9, 12);
 const night = new Date(2026, 10, 9, 21);
 test('weather artwork follows actual conditions and explicit night choice', () => {
@@ -28,7 +28,7 @@ test('rain shares the moving cloud frame and falls below its center', async () =
   const {transformSync} = await import('esbuild');
   const vm = await import('node:vm');
   const React = await import('react');
-  const context = {module:{exports:{}},require:name => name === 'react' ? React : {weatherKind, weatherPeriod}};
+  const context = {module:{exports:{}},require:name => name === 'react' ? React : {weatherKind, weatherPeriod, weatherReadout}};
   vm.runInNewContext(transformSync(readFileSync(new URL('./card-weather.jsx',import.meta.url),'utf8'),{loader:'jsx',format:'cjs'}).code,context);
   function nodes(node) {if (typeof node?.type === 'function') return nodes(node.type(node.props)); return !node || typeof node !== 'object' ? [] : [node,...React.Children.toArray(node.props?.children).flatMap(nodes)];}
   for (const condition of ['小雨','雷阵雨']) {
@@ -60,7 +60,7 @@ test('day and night artwork retain each condition and never show a sun at night'
   const {transformSync} = await import('esbuild');
   const vm = await import('node:vm');
   const React = await import('react');
-  const context = {module:{exports:{}},require:name => name === 'react' ? React : {weatherKind, weatherPeriod}};
+  const context = {module:{exports:{}},require:name => name === 'react' ? React : {weatherKind, weatherPeriod, weatherReadout}};
   vm.runInNewContext(transformSync(readFileSync(new URL('./card-weather.jsx',import.meta.url),'utf8'),{loader:'jsx',format:'cjs'}).code,context);
   function classes(node) {if (typeof node?.type === 'function') return classes(node.type(node.props)); return !node || typeof node !== 'object' ? [] : [node.props?.className,...React.Children.toArray(node.props?.children).flatMap(classes)];}
   for (const icon of ['clear','partly_cloudy','cloudy','rain','snow','storm','fog']) {
@@ -77,4 +77,35 @@ test('day and night artwork retain each condition and never show a sun at night'
       if (['partly_cloudy','cloudy','rain','snow','storm'].includes(icon)) assert.ok(all.includes('weather-cloud'));
     }
   }
+});
+
+test('home observations render partial readings without inferring weather from text', async () => {
+  const { buildSync } = await import('esbuild');
+  const { createRequire } = await import('node:module');
+  const { runInNewContext } = await import('node:vm');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const React = await import('react');
+  const result = buildSync({ entryPoints: [new URL('./card-weather.jsx', import.meta.url).pathname],
+    bundle: true, format: 'cjs', external: ['react'], write: false });
+  const context = { module: { exports: {} }, require: createRequire(import.meta.url) };
+  runInNewContext(result.outputFiles[0].text, context);
+  function render(temperature_c, condition_code, condition_label) {
+    const block = { type: 'weather_observation', location: '南山', temperature_c, condition_code, condition_label };
+    return renderToStaticMarkup(React.createElement(context.module.exports.CardWeather,
+      { block, now: day, homeArtwork: true, showMetadata: false }));
+  }
+  const complete = render(23.8, 'partly_cloudy', '局部多云');
+  assert.match(complete, /23.8°C/);
+  assert.match(complete, /weather-partly_cloudy/);
+  assert.match(complete, /局部多云/);
+  for (const value of [0, -3.5]) {
+    const onlyTemp = render(value, null);
+    assert.ok(onlyTemp.includes(value + '°C'));
+    assert.match(onlyTemp, /weather-unknown/);
+    assert.doesNotMatch(onlyTemp, /<canvas/);
+  }
+  const onlyRain = render(null, 'rain', '小雨');
+  assert.match(onlyRain, /南山 · 小雨/);
+  assert.match(onlyRain, /<canvas/);
+  assert.doesNotMatch(onlyRain, /wbc-weather-temperature/);
 });

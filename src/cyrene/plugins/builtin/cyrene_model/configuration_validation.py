@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from cyrene.model.adapter_registry import require_adapter
 
-CONFIG_VERSION = 13
+CONFIG_VERSION = 14
 ROUTE_NAMES = ("primary", "secondary", "vision", "embedding")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -114,6 +114,55 @@ def _migrate_bailian_connection(
     ]
 
 
+def _merge_legacy_local_embedding(config: dict[str, Any]) -> None:
+    """Repair the generated local profile duplicated by the v12/v13 seed."""
+    model = "qwen3-embedding-0.6b"
+    seed_id = f"local_onnx:{model}"
+    profiles = config["profiles"]
+    connections = {c["id"]: c for c in config["connections"]}
+    seeded = next((p for p in profiles if p["id"] == seed_id), None)
+    provider = connections.get("local_onnx")
+    if (
+        not provider or provider["adapter"] != "local_onnx"
+        or provider["options"] != {"provider_preset": "local_onnx"}
+        or not seeded or seeded["connection_id"] != "local_onnx" or seeded["model"] != model
+    ):
+        return
+
+    # Match the generated pre-Plugin ids and effective settings. A different
+    # adapter, dimensions, proxy, or other tuning can represent a distinct service.
+    matches = []
+    for profile in profiles:
+        connection = connections[profile["connection_id"]]
+        if (
+            re.fullmatch(r"connection-\d+", connection["id"])
+            and re.fullmatch(r"profile-\d+", profile["id"])
+            and connection["options"] == {}
+            and {**connection, "id": provider["id"], "options": provider["options"]} == provider
+            and {**profile, "id": seed_id, "connection_id": "local_onnx", "name": seeded["name"]} == seeded
+        ):
+            matches.append(profile)
+    if len(matches) != 1:
+        return
+
+    legacy = matches[0]
+    route = config["routes"]["embedding"]
+    selected = next((pid for pid in route if pid in (legacy["id"], seed_id)), seed_id)
+    keep, drop = (legacy, seeded) if selected == legacy["id"] else (seeded, legacy)
+    if drop["name"] not in (model, "Qwen3 Embedding 0.6B"):
+        return
+
+    profiles.remove(drop)
+    for name, ids in config["routes"].items():
+        config["routes"][name] = list(dict.fromkeys(
+            keep["id"] if pid == drop["id"] else pid for pid in ids
+        ))
+    if not any(p["connection_id"] == drop["connection_id"] for p in profiles):
+        config["connections"].remove(connections[drop["connection_id"]])
+        if keep is legacy:
+            connections[keep["connection_id"]]["options"]["provider_preset"] = "local_onnx"
+
+
 def normalize_model_configuration(
     raw: Any, *, previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -153,12 +202,15 @@ def normalize_model_configuration(
     profiles = _normalize_profiles(raw_profiles, connections)
     routes = _normalize_routes(raw_routes, {item["id"] for item in profiles})
 
-    return {
+    configured = {
         "version": CONFIG_VERSION,
         "connections": connections,
         "profiles": profiles,
         "routes": routes,
     }
+    if version is None or version < 14:
+        _merge_legacy_local_embedding(configured)
+    return configured
 
 
 def _validate_connection_fields(source):

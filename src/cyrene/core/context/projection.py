@@ -236,6 +236,14 @@ def project_model_messages(
                 "content": str(value.get("content") or ""),
             }
             calls = value.get("tool_calls")
+            if calls and value.get("pre_tool_replies"):
+                if message["content"]:
+                    messages.append(dict(message))
+                message["content"] = ""
+                for receipt in value["pre_tool_replies"]:
+                    messages.append({"role": "user", "content": receipt["prompt"]})
+                    if receipt["content"]:
+                        messages.append({"role": "assistant", "content": receipt["content"]})
             if isinstance(calls, list) and calls:
                 message["tool_calls"] = [
                     {

@@ -251,3 +251,36 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
         assert (await live.command('isolated', None, 'card.list', {'scope': 'home'}))['cards'] == []
     finally:
         session.close()
+
+
+@pytest.mark.asyncio
+async def test_weather_write_boundary_preserves_legacy_and_accepts_replacement(tmp_path):
+    service = CardService(tmp_path / "live")
+    old = {"block_id": "w", "type": "weather", "location": "广州", "temperature": "暂无气温",
+           "condition": "暂无实况", "range": "", "advice": "", "source": "", "updated_at": ""}
+    created = await create(service)
+    card_id = created["card_id"]
+    # Seed a previously published document without sending it through the new write contract.
+    with service.store.connect(write=True) as db:
+        card = service._get(db, "assistant", card_id)
+        card["spec"]["blocks"] = [old]
+        service._save(db, card)
+    draft = HomeDraft(service, "assistant", tmp_path / "draft")
+
+    async def update(revision, blocks, effect):
+        return await draft.command("assistant", None, "card.update", {
+            "card_id": card_id, "expected_revision": revision, "changes": {"blocks": blocks}}, effect=effect)
+
+    text = {"block_id": "status", "type": "text", "text": "广州 · 天气暂缺"}
+    await update(1, [old, {"block_id": "note", "type": "text", "text": "今日概览"}], "task-edit")
+    with pytest.raises(CardError, match="weather_observation"):
+        await update(2, [{**old, "temperature": "新的说明"}], "legacy-edit")
+    reading = {"block_id": "w", "type": "weather_observation", "location": "广州", "source": "气象站",
+               "updated_at": "2026-11-18T10:30:00+08:00", "temperature_c": 0, "condition_code": None}
+    with pytest.raises(CardError, match="text block"):
+        await update(2, [{**reading, "temperature_c": None}], "no-data")
+    await update(2, [text], "unavailable")
+    await update(3, [reading], "fresh")
+    draft.publish()
+    saved = await service.command("assistant", None, "card.get", {"card_id": card_id})
+    assert saved["spec"]["blocks"] == [reading]

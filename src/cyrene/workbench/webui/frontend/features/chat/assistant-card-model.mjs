@@ -5,19 +5,24 @@ export function cardReferences(message) {
   return entries.flatMap(entry => {
     const p = entry.presentation;
     if (entry.failed || entry.status !== 'completed' || p?.kind !== 'assistant_card'
-      || p.home_kind || p.operation !== 'card.create' || !/^card_[a-f0-9]{32}$/.test(p.card_id || '')) return [];
+      || p.home_kind || !['card.create', 'card.update'].includes(p.operation) || !/^card_[a-f0-9]{32}$/.test(p.card_id || '')) return [];
     return [{ card_id: p.card_id, revision: p.revision }];
   });
 }
 
 export function projectInlineCards(messages) {
-  const seen = new Set();
-  return messages.flatMap(message => {
-    const cards = cardReferences(message).filter(card => {
-      if (seen.has(card.card_id)) return false;
-      seen.add(card.card_id);
-      return true;
-    });
+  const latest = new Map();
+  const references = messages.map(message => {
+    const cards = cardReferences(message);
+    for (const card of cards) {
+      const previous = latest.get(card.card_id);
+      // Equal or older revisions can be replayed later in the transcript.
+      if (!previous || (card.revision ?? 0) > (previous.revision ?? 0)) latest.set(card.card_id, card);
+    }
+    return cards;
+  });
+  return messages.flatMap((message, index) => {
+    const cards = references[index].filter(card => latest.get(card.card_id) === card);
     return [message, ...cards.map(card => ({
       id: 'inline:' + card.card_id, role: 'assistant', assistantCard: card,
       createdAt: message.createdAt, runId: message.runId,

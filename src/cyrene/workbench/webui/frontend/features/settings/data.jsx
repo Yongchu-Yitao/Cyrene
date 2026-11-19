@@ -11,6 +11,8 @@ import {
   Toggle,
 } from "./shared.jsx"
 
+import {ChoiceCards} from "./choice-cards.jsx"
+
 // ── Data Panel ──
 var STORAGE_LABEL = {
   database: "settings.storageDatabase",
@@ -415,10 +417,10 @@ function DataPanel(p) {
         React.createElement("div", { className: "wb-export-footer" },
           React.createElement("div", { className: "wb-export-format" },
             React.createElement("span", null, t("settings.sessionExportFormat")),
-            React.createElement("div", { className: "wb-seg", role: "radiogroup", "aria-label": t("settings.sessionExportFormat") },
-              React.createElement("button", { type: "button", role: "radio", "aria-checked": exportFmt === "markdown", className: "wb-seg-btn" + (exportFmt === "markdown" ? " active" : ""), onClick: function () { setExportFmt("markdown"); } }, "Markdown"),
-              React.createElement("button", { type: "button", role: "radio", "aria-checked": exportFmt === "json", className: "wb-seg-btn" + (exportFmt === "json" ? " active" : ""), onClick: function () { setExportFmt("json"); } }, "JSON"),
-            ),
+            <ChoiceCards compact label={t("settings.sessionExportFormat")} value={exportFmt} onChange={setExportFmt} options={[
+              { id: "markdown", title: "Markdown" },
+              { id: "json", title: "JSON" },
+            ]} />,
           ),
           React.createElement("button", { type: "button", className: "wb-btn primary wb-export-submit", disabled: !exportSids.length, onClick: exportSelectedSessions },
             React.createElement(SessionExportIcon),

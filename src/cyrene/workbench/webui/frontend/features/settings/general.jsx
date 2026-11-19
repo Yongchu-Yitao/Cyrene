@@ -1,3 +1,5 @@
+import {ChoiceCards} from "./choice-cards.jsx"
+import { Disclosure } from "./disclosure.jsx"
 import { useAgentProxySettings, renderAgentProxySettings } from "./agent-proxy-settings.jsx"
 import {
   workbenchServices,
@@ -295,15 +297,14 @@ function GeneralPanel(p) {
   }
 
   return React.createElement("div", { className: "settings-panel wb-general-settings" },
-    SectionTitle(t(p.integrationsOnly ? "settings.integrations" : "settings.general")),
-    !p.integrationsOnly && FieldRow(t("settings.language"), t("settings.languageHint"),
-      React.createElement("div", { className: "wb-seg" },
-        React.createElement("button", { className: "wb-seg-btn" + (lang === "en" ? " active" : ""), onClick: function () { setLang("en"); } }, "English"),
-        React.createElement("button", { className: "wb-seg-btn" + (lang === "zh" ? " active" : ""), onClick: function () { setLang("zh"); } }, "中文"),
-      ),
+    SectionTitle(p.integrationsOnly?t("settings.integrations"):t("settings.page."+p.section)),
+    p.section==="general" && FieldRow(t("settings.language"), t("settings.languageHint"),
+      <ChoiceCards compact label={t("settings.language")} value={lang} onChange={setLang} options={[
+        {id:"en",title:"English"},{id:"zh",title:"中文"}
+      ]}/>,
       undefined, "setting-language",
     ),
-    !p.integrationsOnly && FieldRow(t("settings.timezone"), t("settings.timezoneHint"),
+    p.section==="general" && FieldRow(t("settings.timezone"), t("settings.timezoneHint"),
       React.createElement("select", {
         className: "wb-select",
         value: selectedTimezone,
@@ -316,38 +317,44 @@ function GeneralPanel(p) {
       ),
       undefined, "setting-timezone",
     ),
-    !p.integrationsOnly && FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),
+    p.section==="general" && FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),
       Toggle(desktopNotifications, toggleDesktopNotifications),
       undefined, "setting-desktop-notifications",
     ),
-    !p.integrationsOnly && hasExtensions && renderAgentProxySettings({ ...proxySettings, t, hasSearch, hasBrowser }),
-    !p.integrationsOnly && hasMap && FieldRow(t("settings.mapProvider"), t("settings.mapProviderHint"),
-      React.createElement("div", { className: "wb-seg" },
-        React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "direct" ? " active" : ""), onClick: function () { setMapProvider("direct"); localStorage.setItem("cyrene-tweak-map-provider", "direct"); } }, t("settings.mapProviderDirect")),
-        React.createElement("button", { className: "wb-seg-btn" + (mapProvider === "amap" ? " active" : ""), onClick: function () { setMapProvider("amap"); } }, t("settings.mapProviderAmap")),
-      ),
-      undefined, "setting-map-provider",
-    ),
-    !p.integrationsOnly && hasMap && mapProvider === "amap" && FieldRow(t("settings.amapKey"), t("settings.amapKeyHint"),
-      [
-        React.createElement("div", { className: "wb-inline-row" },
-          React.createElement("input", { className: "wb-input mono", type: "password", value: amapKey, onChange: function (e) { setAmapKey(e.target.value); }, placeholder: t("settings.amapKeyPlaceholder") }),
-          React.createElement("button", { className: "wb-btn primary", onClick: saveAmapKey }, t("settings.save")),
-        ),
-        amapKeySaved && React.createElement("span", { className: "wb-hint saved" }, amapKeySaved),
-      ],
-      undefined, "setting-amap-key",
-    ),
-    !p.integrationsOnly && supportsDesktop && FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
+    p.section==="network" && hasExtensions && renderAgentProxySettings({ ...proxySettings, t, hasSearch, hasBrowser }),
+    p.section==="maps" && hasMap && <div className="map-form">
+      <fieldset id="setting-map-provider">
+        <legend>{t("settings.mapProvider")}</legend>
+        <ChoiceCards label={t("settings.mapProvider")} value={mapProvider} onChange={value => {
+          setMapProvider(value);
+          if (value === "direct") localStorage.setItem("cyrene-tweak-map-provider", value);
+        }} options={[
+          {id:"direct",title:t("settings.mapProviderDirect"),detail:lang==="zh"?"以直线连接地点":"Connect places with straight lines"},
+          {id:"amap",title:lang==="zh"?"高德地图":"AMap",detail:lang==="zh"?"沿实际道路绘制路线":"Follow roads between places"}
+        ]}/>
+      </fieldset>
+      <Disclosure id="map-key-fields" open={mapProvider==="amap"}>
+        <form id="setting-amap-key" onSubmit={e=>{e.preventDefault();if(amapKey.trim()&&!amapKey.startsWith("••"))saveAmapKey()}}>
+          <label htmlFor="map-provider-key">{t("settings.amapKey")}</label>
+          <div className="map-key-line">
+            <input id="map-provider-key" className="wb-input" type="password" autoComplete="off" aria-describedby="map-key-hint" value={amapKey} placeholder={t("settings.amapKeyPlaceholder")} onChange={e=>{setAmapKey(e.target.value);setAmapKeySaved("")}}/>
+            <button className="wb-btn primary map-save" type="submit" disabled={!amapKey.trim()||amapKey.startsWith("••")}>{t("settings.save")}</button>
+          </div>
+          <small id="map-key-hint">{t("settings.amapKeyHint")}</small>
+          <span role="status">{amapKeySaved}</span>
+        </form>
+      </Disclosure>
+    </div>,
+    p.section==="general" && supportsDesktop && FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
       Toggle(runInBackground, function () { applyDesktop({ runInBackground: !runInBackground }); }, desktopBusy),
       undefined, "setting-run-in-background",
     ),
-    !p.integrationsOnly && supportsDesktop && FieldRow(t("settings.quickChatAssistant"),
+    p.section==="general" && supportsDesktop && FieldRow(t("settings.quickChatAssistant"),
       runInBackground ? t("settings.quickChatAssistantHint") : t("settings.quickChatAssistantNeedsResident"),
       Toggle(quickChatEnabled, function () { applyDesktop({ quickChatEnabled: !quickChatEnabled }); }, desktopBusy || !runInBackground),
       undefined, "setting-quick-chat",
     ),
-    !p.integrationsOnly && supportsDesktop && desktopNotice
+    p.section==="general" && supportsDesktop && desktopNotice
       && React.createElement("div", { className: "wb-hint", style: { color: "var(--wb-error-text)" } }, desktopNotice),
     p.integrationsOnly && hasOffice && React.createElement(OfficeIntegrationSection, { t: t }),
     p.integrationsOnly && hasKnowledge && React.cloneElement(SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
@@ -392,4 +399,4 @@ function GeneralPanel(p) {
   );
 }
 
-export { GeneralPanel };
+export { GeneralPanel, GENERAL_TIMEZONE_OPTIONS };

@@ -1173,6 +1173,16 @@
         "description": "分页列出短期记忆和当前项目记忆，并支持筛选。 助理创建的执行任务可读取所有项目，并在结果中标明来源项目 ID 和名称；普通项目对话保持原有范围。"
       }
     },
+    "soul.temporary.cleanup": {
+      "en": {
+        "name": "Temporary persona memory cleanup",
+        "description": "Remove expired entries from the TEMPORARY section of SOUL.md."
+      },
+      "zh": {
+        "name": "临时人格记忆清理",
+        "description": "清理 SOUL.md 中已过期的临时记忆。"
+      }
+    },
     "memory.short_term.cleanup": {
       "en": {
         "name": "Short-term memory cleanup",
@@ -1376,11 +1386,11 @@
     "PluginAuthoringGuide": {
       "en": {
         "name": "Read plugin authoring guide",
-        "description": "Load the unified Cyrene PluginPack authoring, Workbench view, and RPC contract."
+        "description": "Load the unified Cyrene PluginPack authoring, chat inline view, Workbench pane, and RPC contract."
       },
       "zh": {
         "name": "读取插件开发规范",
-        "description": "加载统一的 Cyrene PluginPack 编写、Workbench 视图与 RPC 契约。"
+        "description": "加载统一的 Cyrene PluginPack 编写、聊天内联视图、Workbench 分屏与 RPC 契约。"
       }
     },
     "HookManager": {
@@ -1473,6 +1483,16 @@
         "description": "启用一个已安装 Plugin。"
       }
     },
+    "PluginUpdate": {
+      "en": {
+        "name": "Update plugin",
+        "description": "Replace a user-installed plugin from a workspace folder, Python file, or ZIP. Preserve data and activation and report reload or restart status."
+      },
+      "zh": {
+        "name": "更新插件",
+        "description": "用工作区目录、Python 文件或 ZIP 整体更新已安装插件，保留数据和启用设置。"
+      }
+    },
     "PluginInstall": {
       "en": {
         "name": "Install plugin",
@@ -1516,11 +1536,11 @@
     "PluginScaffold": {
       "en": {
         "name": "Scaffold plugin",
-        "description": "Create any supported Plugin source: standalone tool, tool pack, model Provider, context Hook, application service, sandboxed UI, or a full composable pack."
+        "description": "Create any supported Plugin source: standalone tool, tool pack, model Provider, context Hook, application service, sandboxed UI with optional chat inline views, or a full composable pack."
       },
       "zh": {
         "name": "创建插件骨架",
-        "description": "创建独立工具、工具包、模型、上下文、应用、UI 或组合插件。"
+        "description": "创建独立工具、工具包、模型、上下文、应用、UI 或组合插件；UI 可接入聊天内联视图。"
       }
     },
     "PluginValidate": {

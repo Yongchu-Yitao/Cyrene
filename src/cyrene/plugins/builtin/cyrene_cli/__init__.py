@@ -14,6 +14,7 @@ from cyrene.core.hook import (
 from cyrene.plugins.context import PluginApplicationContext
 from cyrene.core.plugin import Plugin, PluginPack, PluginSetupContext
 
+from .hooks import CLI_HOOK_EVENTS
 from .tools import definitions
 
 
@@ -30,15 +31,9 @@ def setup(context: PluginSetupContext) -> None:
     hooks_service = getattr(service, "hooks", None)
     if hooks_service is None or context.hooks is None:
         return
+    session = context.services.get("agent_session")
     existing = {hook.id for hook in context.hooks.list()}
-    for event in (
-        PRE_TOOL_USE,
-        POST_TOOL_USE,
-        SESSION_START,
-        TURN_START,
-        SESSION_END,
-        STOP,
-    ):
+    for event in CLI_HOOK_EVENTS:
         slug = {
             PRE_TOOL_USE: "pre-tool-use",
             POST_TOOL_USE: "post-tool-use",
@@ -46,12 +41,20 @@ def setup(context: PluginSetupContext) -> None:
             TURN_START: "turn-start",
             SESSION_END: "session-end",
             STOP: "stop",
+            "ContextChange": "context-change",
+            "ContextUsed": "context-used",
+            "ModelStart": "model-start",
+            "ConversationTurnCommitted": "conversation-turn-committed",
         }[event]
         hook_id = f"cyrene-cli-{slug}"
         plugin_id = f"cyrene_cli.{slug.replace('-', '_')}"
 
         async def dispatch(hook_event, *, _hooks=hooks_service):
-            return await _hooks.dispatch(hook_event)
+            if hook_event.name == "ModelStart" and (hook_event.runtime or {}).get("resuming_hook_question"):
+                return {}
+            if session is None:
+                return await _hooks.dispatch(hook_event)
+            return await _hooks.dispatch(hook_event, session=session)
 
         if event == SESSION_START:
             def cache_fingerprint(_event, *, _hooks=hooks_service):
@@ -74,6 +77,7 @@ def setup(context: PluginSetupContext) -> None:
                 hook_id=hook_id,
                 root_only=event in {SESSION_START, TURN_START, SESSION_END},
                 failure_policy="open",
+                **({"config": {"include_node_tokens": False}} if event == "ContextUsed" else {}),
             )
 
 

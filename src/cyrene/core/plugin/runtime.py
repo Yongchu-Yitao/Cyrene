@@ -6,11 +6,12 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
 from ..hook import HookAwaitingUser
+from ..hook.actions import combine_decisions
 from ..observability import log_operation, operation
 from ..plugin_boundary import PLUGIN_BOUNDARY_ERRORS, PluginBoundaryError
 from .execution import bind_plugin_execution
@@ -198,6 +199,7 @@ class PreparedPluginCall:
     arguments: dict[str, Any]
     permission_boundary: dict[str, Any] | None = None
     argument_repairs: tuple[dict[str, str], ...] = ()
+    pack_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +454,7 @@ class PluginRuntime:
                     plugin, normalization, arguments, permission_request = (
                         await _validated_call(self, call, context)
                     )
+                    owner = self.registry.registered(normalization.effective_plugin.name)
                 except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
                     if isinstance(exc, asyncio.CancelledError):
                         exc = _local_cancellation(exc, review=True)
@@ -506,6 +509,7 @@ class PluginRuntime:
                 )
                 item = PreparedPluginCall(
                     call=normalization.call,
+                    pack_id=owner.pack_id if owner.plugin.handler is normalization.effective_plugin.handler else None,
                     plugin=plugin,
                     arguments=arguments,
                     permission_boundary=permission_request,
@@ -520,10 +524,13 @@ class PluginRuntime:
                     review_permissions.append(permission_request)
 
             if review_calls:
+                deliver_context = context.services.get("pre_tool_context")
+                contexts: list[list[str]] = [[] for _ in review_calls]
                 try:
                     decisions = await context.hooks.pre_tool_use_batch(
                         tuple(review_calls),
                         permissions=tuple(review_permissions),
+                        **({"contexts": contexts} if deliver_context is not None else {}),
                     )
                 except asyncio.CancelledError as exc:
                     failure = _local_cancellation(exc, review=True)
@@ -626,11 +633,37 @@ class PluginRuntime:
                             )
                             prepared[position] = PreparedPluginCall(
                                 call=reviewed.call,
+                                pack_id=item.pack_id,
                                 plugin=item.plugin,
                                 arguments=reviewed_arguments,
                                 permission_boundary=item.permission_boundary,
                                 argument_repairs=reviewed.argument_repairs,
                             )
+                contributions = []
+                for position, prompts in zip(review_positions, contexts):
+                    item = prepared[position]
+                    if not prompts or item is None:
+                        continue
+                    allowed = isinstance(item, PreparedPluginCall)
+                    contributions.append({
+                        "call_id": calls[position].id,
+                        "tool": calls[position].name,
+                        "will_execute": allowed,
+                        "arguments": dict(item.arguments) if allowed else None,
+                        "context": "\n\n".join(prompts),
+                    })
+                if contributions:
+                    try:
+                        await deliver_context(contributions)
+                    except (RuntimeError, ValueError) as exc:
+                        failure = PluginFailure("pre_tool_context_failed", str(exc), retry_scope="never")
+                        for position, prompts in zip(review_positions, contexts):
+                            item = prepared[position]
+                            if prompts and isinstance(item, PreparedPluginCall):
+                                prepared[position] = PluginCallResult(
+                                    item.call.id, item.call.name, False, None,
+                                    failure.message, _utc_now(), failure,
+                                )
             result = tuple(item for item in prepared if item is not None)
             op.finish(
                 result_count=len(result),
@@ -728,25 +761,30 @@ class PluginRuntime:
         if blocked is None:
             return None
         arguments = dict(prepared.arguments)
-        if _dispatches_own_tool_hooks(plugin):
-            await self._post(
-                context,
-                prepared.call.name,
-                arguments,
-                None,
-                False,
-                blocked.message,
-                failure=blocked,
-            )
-        return PluginCallResult(
-            prepared.call.id,
-            prepared.call.name,
-            False,
-            None,
-            blocked.message,
-            _utc_now(),
-            blocked,
-        )
+        result = PluginCallResult(prepared.call.id, prepared.call.name, False, None,
+                                  blocked.message, _utc_now(), blocked)
+        return await self._review_result(plugin, context, arguments, result)
+
+    async def _review_result(self, plugin, context, arguments, result):
+        if not _dispatches_own_tool_hooks(plugin):
+            return result
+        outcomes = await self._post(context, result.name, arguments, result.value,
+                                    result.success, result.error, failure=result.failure)
+        gate = combine_decisions(item for item in outcomes if isinstance(item, Mapping))
+        if gate.get("decision") == "block":
+            failure = PluginFailure("hook_result_blocked", gate["reason"])
+            return replace(result, success=False, value=None, error=failure.message,
+                           failure=failure, error_details={})
+        edited = gate.get("arguments", {})
+        value = edited.get("value", result.value)
+        if gate.get("decision") == "ask":
+            return replace(result, success=True, value={**gate["question"], "tool_result": value,
+                           "tool_success": result.success, "tool_error": result.error},
+                           error="", failure=None, error_details={})
+        if "value" in edited:
+            return replace(result, value=value, error="" if not result.success else result.error,
+                           failure=None if not result.success else result.failure, error_details={})
+        return result
 
     async def execute(
         self,
@@ -822,18 +860,8 @@ class PluginRuntime:
                     ),
                 )
                 self._record_failure(plugin, context, failure)
-                if _dispatches_own_tool_hooks(plugin):
-                    await self._post(
-                        context,
-                        call.name,
-                        arguments,
-                        None,
-                        False,
-                        error,
-                        failure=failure,
-                    )
                 op.finish(success=False, timed_out=True, error=error)
-                return PluginCallResult(
+                result = PluginCallResult(
                     call.id,
                     call.name,
                     False,
@@ -842,24 +870,15 @@ class PluginRuntime:
                     _utc_now(),
                     failure,
                 )
+                return await self._review_result(plugin, context, arguments, result)
             except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
                 if isinstance(exc, asyncio.CancelledError):
                     exc = _local_cancellation(exc)
                 error, failure = self._handler_failure(
                     plugin, call, context, exc
                 )
-                if _dispatches_own_tool_hooks(plugin):
-                    await self._post(
-                        context,
-                        call.name,
-                        arguments,
-                        None,
-                        False,
-                        error,
-                        failure=failure,
-                    )
                 op.finish(success=False, error=exc)
-                return PluginCallResult(
+                result = PluginCallResult(
                     call.id,
                     call.name,
                     False,
@@ -870,10 +889,12 @@ class PluginRuntime:
                     _execution_error_details(exc),
                 )
 
-            if _dispatches_own_tool_hooks(plugin):
-                await self._post(context, call.name, arguments, value, True, "")
-            op.finish(success=True, result=value)
-            return PluginCallResult(call.id, call.name, True, value, "", _utc_now())
+                return await self._review_result(plugin, context, arguments, result)
+
+            result = PluginCallResult(call.id, call.name, True, value, "", _utc_now(), pack_id=prepared.pack_id)
+            result = await self._review_result(plugin, context, arguments, result)
+            op.finish(success=result.success, result=result.value)
+            return result
 
     async def call(
         self,
@@ -936,7 +957,7 @@ class PluginRuntime:
         error: str,
         *,
         failure: PluginFailure | None = None,
-    ) -> None:
+    ) -> tuple:
         if context.hooks is None:
             log_operation(
                 logger,
@@ -948,7 +969,7 @@ class PluginRuntime:
                 success=success,
                 **_context_fields(context),
             )
-            return
+            return ()
         with operation(
             logger,
             "plugin.runtime",
@@ -970,6 +991,7 @@ class PluginRuntime:
                     failure=(failure.as_dict() if failure is not None else None),
                 )
                 op.finish(hook_result_count=len(results))
+                return results
             except (asyncio.CancelledError, *PLUGIN_BOUNDARY_ERRORS) as exc:
                 if isinstance(exc, asyncio.CancelledError):
                     task = asyncio.current_task()
@@ -987,6 +1009,8 @@ class PluginRuntime:
                     error=exc,
                     **_context_fields(context),
                 )
+
+                return ()
 
 
 __all__ = ["PluginRuntime", "PreparedPluginCall"]

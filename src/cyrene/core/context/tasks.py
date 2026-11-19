@@ -43,8 +43,11 @@ goal arrives, checkpoint and switch before working on it. Do not ask the user
 to manage IDs or output the decision labels. Leave context-management call prose
 empty and put checkpoints in arguments. Unless asked, omit internal operations,
 IDs and state from replies and send_message; report progress or actionable blockers.
-Honor explicit workstream boundaries, but do not split every checklist item or
-brief lookup; split for capacity only when warned. Reports alone do not start new
+Honor explicit workstream boundaries, but do not split every checklist item.
+Keep a brief lookup in the active context when it serves the active goal.
+If the user asks for something independent of that goal, switch before answering
+or calling a tool, even for a one-step lookup.
+Split for capacity only when warned. Reports alone do not start new
 goals; when returning from a separate research workstream, resume the matching
 implementation context.
 A switch pauses a workstream, not the overall request: continue remaining work

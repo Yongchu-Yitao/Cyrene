@@ -167,6 +167,7 @@ _WORKBENCH_STYLE_FILES = (
     "features/chat/settings-surfaces.css",
     "features/chat/shell.css",
     "features/chat/workspace.css",
+    "features/settings/layout.css",
 )
 
 _WORKBENCH_I18N_SOURCE_FILES = (
@@ -182,6 +183,9 @@ _WORKBENCH_I18N_SOURCE_FILES = (
 )
 
 _WORKBENCH_SETTINGS_SOURCE_FILES = (
+    "features/settings/action-icon.jsx",
+    "features/settings/navigation.jsx",
+    "features/settings/disclosure.jsx",
     "features/settings/shared.jsx",
     "features/settings/remote.jsx",
     "features/settings/general.jsx",

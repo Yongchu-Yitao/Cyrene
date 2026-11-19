@@ -1,7 +1,7 @@
 export const HOOK_LABELS = {
   en: {
     "settings.hooks": "Automatic triggers",
-    "settings.hooksSubtitle": "Review every persisted system and user-defined lifecycle trigger in one place.",
+    "settings.hooksSubtitle": "Manage system and user-defined triggers.",
     "settings.hookFilter": "Filter automatic triggers",
     "settings.hookCount": "{n} triggers",
     "settings.hookEnabled": "Enabled",
@@ -17,7 +17,7 @@ export const HOOK_LABELS = {
   },
   zh: {
     "settings.hooks": "自动触发",
-    "settings.hooksSubtitle": "集中查看所有已持久化的系统与用户自动触发。",
+    "settings.hooksSubtitle": "管理系统和自定义触发器。",
     "settings.hookFilter": "筛选自动触发",
     "settings.hookCount": "{n} 项自动触发",
     "settings.hookEnabled": "已启用",

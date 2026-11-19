@@ -1,3 +1,4 @@
+import {ActionIcon} from "./action-icon.jsx"
 import {
   workbenchServices,
   useStateSt,
@@ -228,10 +229,10 @@ function ShortcutsPanel(p) {
           capturingId !== "system-quick-chat" && React.createElement("button", {
             type: "button",
             className: "wb-icon-btn-small",
-            title: t("settings.shortcutReset"),
+            title: t("settings.shortcutReset"), "aria-label": t("settings.shortcutReset"),
             disabled: quickChatBusy,
             onClick: resetQuickChatShortcut,
-          }, "↺"),
+          }, <ActionIcon name="restore"/>),
         ),
         quickChatError && React.createElement("div", { className: "wb-shortcut-conflict" },
           quickChatError === "shortcut_in_use"
@@ -273,9 +274,9 @@ function ShortcutsPanel(p) {
                 !isCapturing && item.isCustom && React.createElement("button", {
                   type: "button",
                   className: "wb-icon-btn-small",
-                  title: t("settings.shortcutReset"),
+                  title: t("settings.shortcutReset"), "aria-label": t("settings.shortcutReset"),
                   onClick: function () { resetOne(item.id); },
-                }, "↺"),
+                }, <ActionIcon name="restore"/>),
               ),
               isConflict && React.createElement("div", { className: "wb-shortcut-conflict" },
                 t("settings.shortcutConflict", { name: conflictLabel(conflict.withId, items, t) })

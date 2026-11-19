@@ -87,7 +87,7 @@ def test_browser_manager_topbar_uses_page_favicons_and_opaque_flyout():
     assert 'className="workbench-browser-manager-preview"' in source
     assert "page.favicon ? <img" in source
     assert 'className="workbench-browser-manager-count"' not in source
-    assert '"--wb-flyout-bg", "--wb-flyout-border", "--wb-flyout-shadow"' in source
+    assert '"--wb-flyout-bg", "--wb-flyout-border", "--wb-flyout-radius", "--wb-flyout-shadow"' in source
     assert "background: var(--wb-flyout-bg, var(--wb-card-bg-strong, var(--wb-card-bg, #ffffff)));" in styles
     assert ".workbench-browser-manager-preview-icon img {" in styles
     assert "border-color: color-mix(in srgb, var(--wb-blue) 34%, var(--wb-line));" in styles

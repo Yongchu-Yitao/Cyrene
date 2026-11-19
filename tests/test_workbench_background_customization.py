@@ -25,8 +25,8 @@ def test_workbench_background_preferences_are_exposed_and_applied_before_paint()
     assert 'className: "wb-btn muted wb-background-reset"' in settings
     assert 'disabled: !normalizeAccentHex(value)' in settings
     assert 't("settings.workbenchBackground")' in settings
-    assert '"settings.workbenchBackground": "Workbench background"' in translations
-    assert '"settings.workbenchBackground": "Workbench 背景"' in translations
+    assert '"settings.workbenchBackground": "Interface background"' in translations
+    assert '"settings.workbenchBackground": "界面背景"' in translations
     assert "--wb-surface: var(--wb-user-bg-light, #f5f6f8);" in styles
     assert "--wb-surface: var(--wb-user-bg-dark, #101114);" in styles
     assert "--wb-conversation-surface: color-mix(in srgb, #1a1a1a 76%, transparent);" in styles

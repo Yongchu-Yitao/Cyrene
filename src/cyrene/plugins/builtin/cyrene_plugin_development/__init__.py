@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from cyrene.core.hook.actions import EVENT_DESCRIPTIONS
 from cyrene.core.plugin import Plugin, PluginPack
 
 from . import tools
@@ -11,9 +12,10 @@ from .inspection import INSPECTION_PLUGIN
 def _plugin(name, description, schema, handler, *, read_only):
     zh = {
         "PluginAuthoringGuide": ("插件开发指南", "读取当前统一 PluginPack 协议与开发流程。"),
-        "PluginScaffold": ("创建插件脚手架", "创建独立工具、工具包、模型、上下文、应用、UI 或组合插件。"),
+        "PluginScaffold": ("创建插件脚手架", "创建独立工具、工具包、模型、上下文、应用、UI 或组合插件；UI 可接入聊天内联视图。"),
         "PluginValidate": ("验证插件", "不执行插件代码，静态验证独立插件或 PluginPack。"),
         "PluginInstall": ("安装插件", "将验证通过的插件安装到用户插件目录并重载。"),
+        "PluginUpdate": ("更新插件", "用工作区目录、Python 文件或 ZIP 整体更新已安装插件，保留数据和启用设置。"),
         "PluginReload": ("重载插件", "重新扫描用户插件目录并报告需重启的应用贡献。"),
         "PluginManager": ("管理插件", "查看、启用、停用或删除已安装的插件与插件包。"),
         "PluginSourceManager": ("管理插件源码", "读取或精确修改任意可编辑插件源码；系统源码必须由用户审核。"),
@@ -67,9 +69,9 @@ _HOOK = {
         "id": {"type": "string"},
         "name": {"type": "string"},
         "description": {"type": "string"},
-        "event": {"type": "string", "enum": ["PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop"]},
+        "event": {"type": "string", "enum": list(EVENT_DESCRIPTIONS)},
         "new_hook_id": {"type": "string", "description": "New identity for a system Hook."},
-        "new_event": {"type": "string", "enum": ["PreToolUse", "PostToolUse", "SessionStart", "TurnStart", "SessionEnd", "Stop", "ContextChange", "ContextUsed"], "description": "New trigger event for a system Hook."},
+        "new_event": {"type": "string", "enum": list(EVENT_DESCRIPTIONS), "description": "New trigger event for a system Hook."},
         "new_plugin_id": {"type": "string", "description": "New handler Plugin id for a system Hook."},
         "action_instruction": {"type": "string", "description": "Natural-language action used by Agent generation."},
         "matcher": {
@@ -100,18 +102,19 @@ plugin_pack = PluginPack(
         INSPECTION_PLUGIN,
         _plugin(
             "PluginAuthoringGuide",
-            "Load the unified Cyrene PluginPack authoring, Workbench view, and RPC contract.",
+            "Load the unified Cyrene PluginPack authoring, chat inline view, Workbench pane, and RPC contract.",
             {"type": "object", "properties": {}, "additionalProperties": False},
             tools.authoring_guide,
             read_only=True,
         ),
         _plugin(
             "PluginScaffold",
-            "Create any supported Plugin source: standalone tool, tool pack, model Provider, context Hook, application service, sandboxed UI, or a full composable pack.",
+            "Create any supported Plugin source: standalone tool, tool pack, model Provider, context Hook, application service, sandboxed UI with optional chat inline views, or a full composable pack.",
             {
                 "type": "object",
                 "properties": {
                     "path": _PATH,
+                    "chat_inline_view": {"type": "boolean", "description": "For ui_plugin or full_pack, generate a tool that opens the pack view under its chat message and restores interactive state. Defaults to false."},
                     "plugin_type": {"type": "string", "enum": list(tools.SCAFFOLD_TYPES)},
                     "pack_id": {"type": "string", "minLength": 1},
                     "name": {"type": "string", "minLength": 1},
@@ -138,6 +141,16 @@ plugin_pack = PluginPack(
             "Install a validated standalone Plugin or PluginPack into Cyrene's editable user plugin directory and reload the unified registry.",
             {"type": "object", "properties": {"path": _PATH}, "required": ["path"], "additionalProperties": False},
             tools.install,
+            read_only=False,
+        ),
+        _plugin(
+            "PluginUpdate",
+            "Replace a user-installed plugin from a workspace folder, Python file, or ZIP. Preserve data and activation and report reload or restart status.",
+            {"type": "object", "properties": {
+                "id": {"type": "string", "minLength": 1, "description": "Installed pack ID or standalone plugin name."},
+                "path": _PATH,
+            }, "required": ["id", "path"], "additionalProperties": False},
+            tools.update_plugin,
             read_only=False,
         ),
         _plugin(

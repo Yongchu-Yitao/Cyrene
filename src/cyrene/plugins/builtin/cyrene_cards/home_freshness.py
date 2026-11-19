@@ -29,7 +29,7 @@ def evidence(chat, siblings, contexts=None):
 
 def weather_expired(cards, now):
     blocks = [block for card in cards if card["spec"].get("home_kind") == "overview"
-              for block in card["spec"].get("blocks", []) if block.get("type") == "weather"]
+              for block in card["spec"].get("blocks", []) if block.get("type") in {"weather", "weather_observation"}]
     if not blocks:
         return True
     for block in blocks:

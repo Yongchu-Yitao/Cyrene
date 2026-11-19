@@ -109,7 +109,7 @@ def atomic_write(path: Path, raw: bytes) -> None:
 
 
 @contextmanager
-def repair_lock(directory: Path):
+def repair_lock(directory: Path, *, busy_message: str = "Another Doctor repair is committing"):
     """Cross-process nonblocking lock, shared by Doctor commits and rollbacks."""
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / '.commit.lock').open('a+b') as stream:
@@ -124,7 +124,7 @@ def repair_lock(directory: Path):
                 import fcntl
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            raise ValueError('Another Doctor repair is committing') from None
+            raise ValueError(busy_message) from None
         try:
             yield
         finally:

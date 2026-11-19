@@ -620,6 +620,7 @@ class PluginCallResult:
     time: datetime
     failure: PluginFailure | None = None
     error_details: Mapping[str, Any] = field(default_factory=dict)
+    pack_id: str | None = None
 
 
 __all__ = [

@@ -1,5 +1,6 @@
 """Plugin-owned SOUL storage has no direct dependency on the retired backend."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,32 @@ def test_soul_application_owns_edit_reset_and_backup(soul_env):
 
     application.reset()
     assert "## SELF:IDENTITY" in application.read()
+
+
+async def test_daily_cleanup_preserves_other_soul_content(soul_env):
+    from cyrene.core.plugin import PluginContext
+    from cyrene.plugins.builtin.cyrene_soul import temporary_cleanup_job
+
+    application = SoulApplication()
+    path = application.path()
+    context = PluginContext(workspace=soul_env["workspace"], services={"soul": application})
+    today = datetime.now(timezone.utc).date()
+    expected = (
+        "# Persona\r\n## TEMPORARY\r\n<!-- 2001-01-01 comment -->\r\n"
+        f"- {today} current\r\n"
+        "- 2999-01-01 future\r\n- no timestamp\r\n- 2026-02-30 invalid\r\n"
+        "\r\n## PATTERN:USER\r\n- 2001-01-01 durable  \r\n\r\n"
+    ).encode()
+    original = expected.replace(b"- no timestamp", b"- 2001-01-01 expired\r\n- no timestamp")
+    path.write_bytes(original)
+    assert "expired" not in application.persona_context()
+    assert path.read_bytes() == original
+
+    await temporary_cleanup_job.handler({}, context)
+    assert path.read_bytes() == expected
+    modified = path.stat().st_mtime_ns
+    await temporary_cleanup_job.handler({}, context)
+    assert path.stat().st_mtime_ns == modified
 
 
 def test_soul_onboarding_status_is_owned_by_soul_pack(

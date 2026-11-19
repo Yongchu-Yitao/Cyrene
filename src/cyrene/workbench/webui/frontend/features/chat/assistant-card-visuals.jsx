@@ -88,7 +88,7 @@ export function CardMap({ block, values, disabled, onChange }) {
   useEffect(fit, [JSON.stringify(block.places.map(p => [p.latitude, p.longitude])), provider]);
   return <div className="wbc-card-map">
     <div className="wbc-card-map-canvas" ref={holder} aria-label={block.title || '地点地图'} />
-    <div className="wbc-card-map-toolbar"><button type="button" onClick={fit}>显示全部地点</button><label>底图 <select aria-label="地图底图" value={provider} onChange={e => { switched.current = false; setProvider(e.target.value); }}><option value="amap">高德</option><option value="direct">CARTO</option></select></label><span>连线表示地点关系，不是导航路线</span></div>
+    <div className="wbc-card-map-toolbar"><button type="button" onClick={fit}>显示全部地点</button><label>底图 <select aria-label="地图底图" value={provider} onChange={e => { switched.current = false; setProvider(e.target.value); }}><option value="amap">高德</option><option value="direct">CARTO</option></select></label></div>
     {styles.groups.length > 0 && <div className="wbc-card-map-legend" aria-label="地图分组图例">{styles.groups.map(group => <span key={group.group_id}><i style={{ background: group.color }} aria-hidden="true" />{group.label}</span>)}{block.places.some(place => !place.group_id) && <span><i style={{ background: styles.placeColor({}) }} aria-hidden="true" />未分组地点</span>}</div>}
     {failed && <p role="status">底图暂时无法加载，仍可使用下方地点列表。</p>}
     {!block.places.length && <p>暂无地点</p>}

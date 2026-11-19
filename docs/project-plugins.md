@@ -254,6 +254,16 @@ new Editor or Files surface should require an explicit user request such as
 showing or editing a named file. This keeps ordinary reads and searches from
 continually changing the user's layout.
 
+## Plugin views in chat messages
+
+With `PluginScaffold`, select `ui_plugin` or `full_pack` and pass `"chat_inline_view": true`. The generated `tool.py` returns the `main` view. Its `ui/index.html` demonstrates initial input, restoring edits, and backend RPC.
+
+Return a view reference from a successful tool call. The host binds the pack, project and instance to the tool execution and resolves `view_id` against the owning pack’s enabled `frontend_views`. Direct calls and `toolbox.invoke` both support this. Reopening the conversation restores the instance from tool history and supplies its state in the iframe’s `init.context.state`. Send `{source:"cyrene-plugin", type:"state", state:{...}}` to merge a local state patch. Use plugin RPC to persist business data across devices.
+
+```python
+return {"presentation": {"kind": "plugin_view", "view_id": "usage", "state": {"days": 7}}}
+```
+
 ## Backend RPC
 
 ```python

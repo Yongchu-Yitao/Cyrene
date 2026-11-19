@@ -295,6 +295,7 @@ async def test_task_steer_finishing_run_retries_without_delivery_error(tmp_path)
         nonlocal admitted
         calls.append(body)
         admitted = True
+        return {"run_id": "new-run"}
 
     async def wait_admitted(*args):
         assert admitted
@@ -537,6 +538,7 @@ async def test_host_creates_hidden_chat_and_delivers_real_attachment_payload(tmp
         assert error is None
         assert selected is not None
         sent.append((target, body))
+        return {"run_id": "child-run"}
 
     async def admitted(*args):
         return bool(sent)
@@ -816,3 +818,150 @@ async def test_completion_notification_includes_blocks_and_exact_run_reply(tmp_p
         assert 'OLD_REPLY' not in sent[0][1] and 'LATER_REPLY' not in sent[0][1]
     finally:
         session.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_update_wakes_owner_on_first_attempt(tmp_path):
+    import json
+    from cyrene.core.session import AgentSession
+    from cyrene.workbench.chat.chat_application import chat_error_metadata
+    from cyrene.workbench.core_adapter.conversation_runtime import UnfinishedRunError
+    from test_session_messaging import durable_port
+    from test_subagents import model_registry
+
+    port = durable_port(tmp_path)
+    host = WorkbenchHost(lambda: port)
+    service = await service_at(tmp_path, host)
+    port.service.repository.mutate_one("b", lambda chat: chat.update(kind=KIND, **{OWNER: "a"}))
+    service.store.register("b", "a")
+    received = []
+
+    async def owner_model(arguments, context):
+        notice = next(m["content"] for m in arguments["messages"]
+                      if m.get("role") == "user" and "[Task status update]" in str(m["content"]))
+        received.append(json.loads(next(line for line in notice.splitlines() if line.startswith("{"))))
+        return {"content": "The existing run blocked this update.", "tool_calls": []}
+
+    owner = AgentSession(tmp_path / "agent-state", tmp_path / "work", tmp_path / "plugins",
+                         registry=model_registry(owner_model), load_plugins=False, tree_id="a")
+
+    async def send(target, body):
+        if target == "a":
+            assert body["agentMessageKind"] == "task_notification"
+            owner.submit(body["message"], run_id="owner-receipt", metadata={
+                "agent_originated": True, "client_request_id": body["clientRequestId"],
+            })
+            await owner.drain()
+            return {"run_id": "owner-receipt"}
+
+        async def reject(run):
+            error = UnfinishedRunError("old-run")
+            run.outcome = {"kind": "error", "exc": error}
+            await run.publish({"type": "error", **chat_error_metadata(error)})
+
+        run, _ = port.run_manager.start_or_get(target, {"clientRequestId": body["clientRequestId"]}, reject)
+        return {"run_id": run.run_id}
+
+    port.send = send
+    try:
+        sent = await service.command("a", "session_send_message", {"session_id": "b", "message": "continue"},
+                                     "continue-task", tmp_path)
+        await service.tick()
+        row = service.store.message(sent["message_id"])
+        assert (row["status"], row["attempts"]) == ("failed", 1)
+        assert "conversation_unfinished_run" in row["error"]
+        assert len(received) == 1
+        assert received[0] == {"status": "failed", "phase": "delivery", "task_id": "b",
+                               "update_id": sent["message_id"], "error": row["error"]}
+        assert owner.final_output("owner-receipt")["content"] == "The existing run blocked this update."
+        await service.tick()
+        assert len(received) == 1
+    finally:
+        owner.close()
+        await service.stop()
+        await port.run_manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_delivery_retries_same_update_without_failure_notice(tmp_path):
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    deliver = host.deliver
+
+    async def timeout(*args):
+        raise TimeoutError("transport timeout")
+
+    try:
+        sent = await create(service, message="work")
+        host.deliver = timeout
+        await service.tick()
+        row = service.store.message(sent["message_id"])
+        assert (row["status"], row["attempts"]) == ("queued", 1)
+        assert not service.store.notifications()
+        host.deliver = deliver
+        service.store.update(row["id"], "queued")
+        await service.tick()
+        assert service.store.message(row["id"])["status"] == "delivered"
+        assert host.accepted == {row["id"]}
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_deadline", [None, 2_300_000_000])
+async def test_rate_limit_waits_from_failure_across_updates_and_restart(tmp_path, monkeypatch, provider_deadline):
+    from cyrene.core.session import _model_failure_projection
+    from cyrene.plugins.builtin.session_management import service as service_module, store as store_module
+    from test_task_contexts import make_session
+
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    session = make_session(tmp_path)
+    source = WorkbenchHost(lambda: SimpleNamespace(
+        context=SimpleNamespace(conversation_context=SimpleNamespace(
+            agent_states=SimpleNamespace(context_directory=tmp_path / "data" / "context"))),
+        service=SimpleNamespace(repository=SimpleNamespace(get=host.chat)),
+    ))
+    clock = SimpleNamespace(time=lambda: now)
+    monkeypatch.setattr(service_module, "time", clock)
+    monkeypatch.setattr(store_module, "time", clock)
+    now = 0
+    try:
+        target = session.tree.id
+        host.create("a", target, "limited task", str(tmp_path))
+        service.store.register(target, "a")
+        args = {"session_id": target, "message": "continue"}
+        first = await service.command("a", "session_send_message", args, "before-failure", tmp_path)
+        details = {"code": "model_rate_limited"}
+        if provider_deadline is not None:
+            details["retry_at"] = provider_deadline
+        _, metadata = _model_failure_projection(details)
+        failure = session.store.mount(target, session.tree.root_id, {
+            "role": "assistant", "run_id": "limited", "error": True, "content": "busy", **metadata,
+        })
+        event = source.notification(target, failure.id)
+        deadline = provider_deadline or failure.created_at.timestamp() + 60
+        assert event["failure_kind"] == "model_rate_limited"
+        assert event["retry_at"] == deadline
+        host.checkpoint = lambda task_id: event if task_id == target else {}
+        now = deadline - 15
+        await service.tick()
+        first_row = service.store.message(first["message_id"])
+        assert (first_row["next_attempt"], first_row["attempts"]) == (deadline, 0)
+        second = await service.command("a", "session_send_message", args, "later-request", tmp_path)
+        assert second["retry_at"] == deadline
+        other = await create(service, effect="other", message="independent work")
+        await service.stop()
+        service = await service_at(tmp_path, host)
+        now = deadline - 0.01
+        await service.tick()
+        assert host.accepted == {other["message_id"]}
+        assert not service.store.pending(target)
+        now = deadline
+        await service.tick()
+        await service.tick()
+        assert [item[2] for item in host.deliveries if item[1] == target] == [
+            first["message_id"], second["message_id"]]
+    finally:
+        session.close()
+        await service.stop()

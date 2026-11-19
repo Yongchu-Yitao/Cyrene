@@ -332,16 +332,13 @@ def _migrate_plugin_seed_connections(raw: dict[str, Any]) -> dict[str, Any]:
             if profile_id in added_profile_ids and profile_id not in route:
                 route.append(profile_id)
 
-    migrated["version"] = CONFIG_VERSION
+    migrated["version"] = 13
     return migrated
 
 
 def _normalize_stored_configuration(raw: dict[str, Any]) -> dict[str, Any]:
-    source = (
-        _migrate_plugin_seed_connections(raw)
-        if _configuration_version(raw) < CONFIG_VERSION
-        else raw
-    )
+    version = _configuration_version(raw)
+    source = _migrate_plugin_seed_connections(raw) if version < 13 else raw
     return normalize_model_configuration(source, previous=raw)
 
 
@@ -378,7 +375,7 @@ def get_model_configuration(*, persist_seed: bool = True) -> dict[str, Any]:
     except config_store.SettingsRevisionConflict:
         latest = config_store.get_setting("model_configuration", None)
         if isinstance(latest, dict):
-            return normalize_model_configuration(latest, previous=latest)
+            return _normalize_stored_configuration(latest)
         raise
     return seeded
 
@@ -766,7 +763,7 @@ def patch_model_configuration(
     def mutate(previous_raw: Any) -> dict[str, Any]:
         if not isinstance(previous_raw, dict):
             raise ValueError("stored model configuration must be an object")
-        current = normalize_model_configuration(previous_raw, previous=previous_raw)
+        current = _normalize_stored_configuration(previous_raw)
         patch_state["observed_hash"] = model_configuration_hash(current)
         patch_state["rebased"] = bool(
             base_hash and base_hash != patch_state["observed_hash"]

@@ -483,6 +483,13 @@ def test_cli_hook_mutations_are_not_captured_as_cli_extension_ids(monkeypatch):
         },
     ).json()["hook"]
     hook_id = created["id"]
+    invalid_runner = {"type": "command", "executable": sys.executable,
+                      "args": ["-c", """print('{"unknown_field":"ignored"}')"""]}
+    assert client.put(f"/api/plugin-center/cli/hooks/{hook_id}", json={"runner": invalid_runner}).is_success
+    failure = client.post(f"/api/plugin-center/cli/hooks/{hook_id}/test", json={})
+    assert failure.status_code == 422
+    assert failure.json()["ok"] is False
+    assert "unknown_field" in failure.json()["error"] and "PostToolUse" in failure.json()["error"]
 
     toggled = client.post(
         f"/api/plugin-center/cli/hooks/{hook_id}/enabled",
@@ -593,7 +600,9 @@ def test_user_hook_brief_is_configured_by_background_agent(tmp_path, monkeypatch
     assert configured["matcher"] == "Read"
     assert Path(configured["runner"]["path"]).is_file()
     tested = asyncio.run(hooks.test(configured["id"]))
-    assert tested["output"] == {"received_event": "PostToolUse"}
+    assert tested["ok"] is False
+    assert "PostToolUse" in tested["error"] and "received_event" in tested["error"]
+    assert tested["output"] == {}
 
     tuned = service.save_hook(
         {"timeout_seconds": 12, "priority": 250},
