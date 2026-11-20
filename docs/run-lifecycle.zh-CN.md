@@ -3,7 +3,7 @@
 ## 上下文挂载
 
 ContextChange Hook 只投递 `context` transition。SessionStart / TurnStart 的上下文构建、上下文写入都由 Session transition 执行器拥有。
-必需上下文构建失败时生成失败结果，不能把 `trigger_model` 直接放行为 true；缺失权限策略或系统指令时不调用模型。新的用户请求可以再次尝试构建。
+只有权限策略、系统指令等必需上下文都已就绪，执行器才将 `trigger_model` 设为 true 并调用模型。缺少其中任何一项，本次运行就返回失败。新的用户请求可以再次尝试构建。
 
 ## 工具执行协议
 
@@ -12,7 +12,7 @@ ContextChange Hook 只投递 `context` transition。SessionStart / TurnStart 的
 3. handler 返回后，执行结果与结果持久化是两个独立结果。持久化失败返回 `tool_result_not_persisted`，保留执行成功与否及可序列化的原始输出，不让回执异常中断其他并行调用。
 4. 恢复优先使用已挂载的 tool_results，其次使用执行回执。回执随 assistant 节点保留，节点删除时级联清理，不在批次完成路径上同步删除。
 
-这提供的是安全的“不盲目重放”，不是对任意外部系统的 exactly-once 保证。进程可能在登记后、执行前退出，也可能在外部操作成功后、结果落盘前退出；这两种情况都必须标记为结果未知。解除未知状态需要核对外部状态，或由工具提供幂等键/事务协议。整个存储不可用时，不能保证继续持久化对话，但已登记的操作不能因此被自动再执行。
+外部操作的结果未知时，先核对结果，再决定是否重试。进程可能在登记后、执行前退出，也可能在外部操作成功后、结果落盘前退出；这两种情况都必须标记为结果未知。解除未知状态需要核对外部状态，或由工具提供幂等键/事务协议。整个存储不可用时，不能保证继续持久化对话，但已登记的操作不能因此被自动再执行。
 
 ## 最终答案与 SessionEnd
 
@@ -26,7 +26,7 @@ SessionEnd 故障发出 `session.postprocess_pending` 事件，不生成覆盖�
 
 ConversationRuntime 持有独立 operation task，operation 拥有整个 bridge 生命周期和会话锁。调用方只是 shielded waiter；取消等待不会关闭 bridge。显式用户取消仍通过 Session 取消协议执行。进程关闭须等待 runtime.shutdown；事件循环或进程被强制结束不能保证后台运行继续。
 
-新 run ID 的冲突检查在同一会话锁内、打开 bridge 之前读取持久化 checkpoint。不同 ID 不能隐式取消可恢复的运行；调用方应恢复原 ID，或先明确取消旧运行。
+新 run ID 的冲突检查在同一会话锁内、打开 bridge 之前读取持久化 checkpoint。如果旧运行可以恢复，调用方应使用原 ID 继续，或明确取消旧运行后再开始。
 
 ## 工作线程、超时和实时发布
 

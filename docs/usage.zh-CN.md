@@ -51,7 +51,7 @@ Workbench 以项目为中心：
 | Schedule | 查看和管理 Scheduled Task |
 | Memory | 检查、搜索、创建和 Retire Project Memory |
 | Settings Overlay | 配置 Model、Integration、Capability、Channel、Agent、Data 和 Budget |
-| Help/Profile/Search | Secondary Overlay/Navigation，不是旧 UI 页面 |
+| Help/Profile/Search | 打开帮助、个人资料或搜索面板 |
 
 ### Conversation Goal 与 Plan
 
@@ -122,15 +122,7 @@ Enter/Space 打开，Delete/Backspace 移除。`Cmd/Ctrl+1…3` 打开三个 Ses
 `Ctrl+Tab` / `Ctrl+Shift+Tab` 前后切换，`Cmd/Ctrl+W` 从顶栏移除当前 Session
 但不停止对话。项目快捷键为 `Cmd/Ctrl+Shift+1`。
 
-固定 File 会作为全局用户资源索引进入后续 Agent Turn。固定 Browser 只有所属
-Session 保留控制权；其他 Session 只能获取 Snapshot/Screenshot，不能导航、
-点击、输入、刷新、上传或进行其他页面修改。取消固定只删除顶栏引用，不删除源
-文件、文字、知识库条目或页面。
-
-Workbench 是唯一 Web UI。实时 Markdown 对话、运行 Guidance、Subagent 与
-Browser 状态、Session History、Memory、Knowledge/Search、Schedule、Map、
-Model/Tool/MCP/API Key 设置和主题能力都通过 Workbench 的页面、面板或
-Settings Overlay 提供。
+固定文件后，各个对话都能查到它，需要时再读取正文。固定网页仍由打开它的对话操作，其他对话可以查看快照或截图。取消固定只会移除顶栏入口，原文件、文字、知识库条目和网页都保留。
 
 ### Agent 操作 Cyrene 界面
 

@@ -64,10 +64,10 @@ MiniMax 自 2026-08-20 起不再向新用户提供付费音乐生成 API；此�
 | OpenAI GPT Image | 图片；可选图片 mask | 一张或多张参考图会把请求切换到 `/images/edits`；mask 只能和编辑请求一起使用。 |
 | Seedream | 一张或多张图片 | 通过 Seedream 的 `image` 输入进行参考图生成。 |
 | Google Gemini 图片 | 一张或多张本地图片 | 图片与提示词一起传给 Gemini 图片模型。 |
-| Google Gemini Omni 视频 | 本地图片，或一个本地短视频 | 两种模式不能混用；目前不支持上传音频参考。短视频编辑最多接收一个本地文件，并仍受 Google 模型、地区和 preview 能力限制。 |
-| Google Veo 视频 | 首帧图片和可选尾帧图片 | 保留显式的 `first_frame` / `last_frame` 角色。兼容的 Veo 模型还可接收最多三张 asset 参考图，但 asset 模式不能与首尾帧模式混用。 |
+| Google Gemini Omni 视频 | 本地图片，或一个本地短视频 | 每次选择图片或短视频。音频参考暂未开放。短视频编辑最多接收一个本地文件，并仍受 Google 模型、地区和 preview 能力限制。 |
+| Google Veo 视频 | 首帧图片和可选尾帧图片 | 保留显式的 `first_frame` / `last_frame` 角色。兼容的 Veo 模型还可接收最多三张 asset 参考图；参考图模式和首尾帧模式二选一。 |
 | Seedance | 本地/data URL 或公开 HTTPS 图片、公开 HTTPS 视频，以及所选模型支持时的音频 | 图片可以指定为首帧/尾帧。视频参考必须是公开 HTTPS URL；不支持的本地视频或 data URL 会在提交前被拒绝。 |
-| MiniMax H3 视频 | 最多 9 张图片、3 个视频、3 段音频，总数最多 12 个文件 | 通用参考素材模式不能与首尾帧模式混用。本地文件会按 API 要求编码，公开 HTTPS 输入直接使用 URL。 |
+| MiniMax H3 视频 | 最多 9 张图片、3 个视频、3 段音频，总数最多 12 个文件 | 请选择通用参考素材或首尾帧其中一种模式。本地文件会按 API 要求编码，公开 HTTPS 输入直接使用 URL。 |
 | ComfyUI MCP | 由 workflow 决定的图片、视频、音频和可选 mask | 每个输入都必须通过 Cyrene 占位符绑定到配置的 workflow JSON。本地文件只能由 local MCP profile 上传；cloud 模式只接受公开 HTTPS 参考素材。 |
 
 具体能力可能随模型版本变化。显式选择 Provider 时，Cyrene 不会悄悄丢弃不兼容的参考素材，而是让任务在验证阶段失败。
@@ -76,7 +76,7 @@ MiniMax 自 2026-08-20 起不再向新用户提供付费音乐生成 API；此�
 
 Cyrene 不打包 Comfy MCP，而是调用用户已在 MCP 设置中启用的 server。官方本地 server 的主链路是 `run_workflow`、`job(action=wait)`、`fetch_outputs`；Comfy Cloud 的工具名可在媒体设置中单独配置。
 
-每种媒体类型的 Workflow 路径都是操作员设置，不能由模型从 `parameters` 注入。它必须指向一个已存在的 JSON 文件（1 byte–10 MiB）。Cyrene 只渲染临时副本，不修改源文件。Workflow 的 JSON 字符串值中可以使用以下占位符：
+每类媒体的工作流路径都由用户在设置中指定。它必须指向一个已存在的 JSON 文件（1 byte–10 MiB）。Cyrene 只渲染临时副本，不修改源文件。Workflow 的 JSON 字符串值中可以使用以下占位符：
 
 - 核心字段：`{{prompt}}`、`{{negative_prompt}}`、`{{lyrics}}`、`{{seed}}`、`{{duration}}`、`{{number_of_outputs}}`、`{{aspect_ratio}}`、`{{resolution}}`、`{{size}}`、`{{quality}}`、`{{output_format}}`。
 - 自定义参数：`{{parameter.foo}}` 绑定 `parameters` 中的 `foo`。`confirm_spend`、生成超时等操作员控制项不能通过这里注入。

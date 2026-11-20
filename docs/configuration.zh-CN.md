@@ -4,17 +4,9 @@
 
 ## 加密配置存储
 
-Cyrene 将配置保存在 Fernet 加密的 JSON Blob 中，源码模式默认位置是
-`data/config.enc`。首次启动向导和 Web UI Settings 可以写入并在运行时更新配置。
+首次启动时按向导填写配置，以后可以在设置里修改。Cyrene 使用 Fernet 加密配置，默认保存在 `data/config.enc`。解密密钥由系统钥匙串保管。如果钥匙串不可用，Cyrene 会在日志里提醒，并将密钥写入 `data/.config_key`。此时密钥的保护依赖文件权限：只有当前系统用户可读写（`0600`）。
 
-加密值位于 `data/config.enc`。其 Fernet Key 在可用时进入 OS Keyring；
-Headless/Portable 环境没有可用 Keyring 时，会回退到权限为 `0600` 的
-`data/.config_key` 并记录 Warning。该 Degraded Mode 只依靠 File Permission
-保护 Key。
-
-Portable Backup ZIP 不由 Cyrene 加密。为了让 Restore 能用目标 Installation
-的 Key 重新加密，它会包含 Logical Config Snapshot（包括已配置 Credential）；
-所有导出 Backup 都必须按 Secret 处理。
+导出的备份 ZIP 包含一份未加密的配置，可能有你填写的 API 密钥等凭据。在另一台设备上恢复时，Cyrene 会用那台设备的密钥重新加密配置。请像保管密钥一样保管备份。
 
 ## Runtime 路径与持久化
 
@@ -178,15 +170,14 @@ Cyrene 按实际返回 Response 的 Model 记录 Token Usage 和估算 Cost。�
 `input/output` 或 `input/cache-hit/output`；`$` 前缀表示 USD，`¥` 表示 CNY，
 无前缀默认 CNY。
 
-内置 Catalog 是代码数据，不是实时 Provider Quote。当前源码标记的核对日期为
+内置价格表随软件发布。上次核对日期为
 2026-06-25；USD Provider 使用固定 `1 USD = 7.25 CNY` 换算。Catalog 覆盖
 GPT 5.5、Claude Fable/Mythos 5、Gemini 3.5 Flash/3.1 Pro Preview、
 DeepSeek V4 Flash/Pro、GLM 5.2、MiniMax M3、MiMo V2.5 和 Kimi K2.7 Code
 Alias。依赖 Cost Estimate 前应检查 Source 和 Provider Invoice。
 
 Budget Settings 会把 Monthly Amount 分配到 Adaptive Monthly、Weekly 和
-Five-hour Window，并可 Warn 或 Block 新 Workbench Run。它是对本地估算值的
-Gate，不是 Provider 侧 Quota 或 Billing Guarantee。
+Five-hour Window，并可 Warn 或 Block 新 Workbench Run。提醒和限制按本机估算的用量触发。实际配额和账单以服务商记录为准。
 
 ### 自定义 SimpleXNG 搜索源
 

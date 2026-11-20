@@ -146,19 +146,7 @@ sessions and resources, Enter/Space opens, and Delete/Backspace removes.
 `Ctrl+Shift+Tab` cycle, and `Cmd/Ctrl+W` removes the current session without
 stopping it. The project shortcut is `Cmd/Ctrl+Shift+1`.
 
-Pinned files are listed as global user-provided resources for subsequent Agent
-turns. A pinned Browser remains controllable only by its owner session; other
-sessions can request a snapshot or screenshot but cannot navigate, click, type,
-reload, upload, or otherwise mutate it. Unpinning removes only the topbar
-reference and never deletes the source file, text, knowledge item, or page.
-
----
-
-Workbench is the only Web UI. Real-time Markdown chat, guidance, subagent and
-browser status, session history, memory, knowledge/search, scheduling, maps,
-model/tool/MCP/API-key settings, theme controls, and the other established
-Workbench capabilities remain available through its pages, panels, and settings
-overlay.
+Pin a file to make it discoverable in other conversations. A pinned page stays under the control of the conversation that opened it. Other conversations can inspect it through a snapshot or screenshot. Unpinning removes the shortcut. The original file, text, library item, or page stays where it was.
 
 ### Agent control of the Cyrene UI
 

@@ -1258,7 +1258,7 @@ cyrene stop</code></pre></div>
       <section data-topic="security-model">
         <h2>安全模型</h2>
         <ul>
-          <li><strong>网络层</strong>——Web UI 只绑定 <code>127.0.0.1</code>，不暴露到网络。Electron 桌面构建在 OS 钥匙串中存储随机令牌，每次请求验证。</li>
+          <li><strong>网络层</strong>——网页服务只接受本机连接（<code>127.0.0.1</code>）。桌面版每次启动时生成临时令牌，用它验证发给本地服务的请求。系统钥匙串保管的是配置文件的加密密钥。</li>
           <li><strong>工作区守卫</strong>——文件读写和 Shell 操作有工作区范围守卫。在 Workbench 中，代理工作区被限定到项目的 <code>workspacePath</code>。</li>
           <li><strong>权限升降级</strong>——跨越工作区的读写操作需要权限提升请求。</li>
         </ul>
@@ -1333,7 +1333,7 @@ cyrene stop</code></pre></div>
       <section data-topic="security-model">
         <h2>Security</h2>
         <ul>
-          <li><strong>Network</strong> — the Web UI binds only to <code>127.0.0.1</code>. Electron desktop builds store a random token in the OS keyring and validate every request.</li>
+          <li><strong>Network</strong> — the web server accepts local connections on <code>127.0.0.1</code>. At each launch the desktop app generates a fresh token to authenticate requests to the local service. The OS keyring holds the configuration encryption key.</li>
           <li><strong>Workspace guard</strong> — file and shell operations are bounded to the workspace; in Workbench, that is the project's <code>workspacePath</code>.</li>
           <li><strong>Permission elevation</strong> — reads or writes outside the workspace require an elevation request.</li>
         </ul>
@@ -1726,7 +1726,7 @@ cyrene stop</code></pre></div>
           <li><strong>可验证交互</strong>——Snapshot 为当前可见元素生成短期 Ref；Electron Click 会在发送可信 Chromium Input 前重新定位目标，并拒绝被遮挡或持续移动的元素。</li>
           <li><strong>受控文件上传</strong>——文件输入由专用工具设置，每次绑定站点、页面/Frame、Input 和文件 Hash，并要求一次性用户批准；工具不会额外点击 Submit。</li>
         </ul>
-        <div class="note"><strong>当前边界：</strong>Snapshot、Ref 和 Wait 主要覆盖 Top-level DOM，不完整递归 Iframe、Shadow DOM、Canvas/WebGL 或复杂 Editor。Network Log 只提供 Resource Performance Entry，不是完整 DevTools Trace。Browser URL 检查会阻止直接访问保留网络，但不构成覆盖所有子资源、脚本导航和 Electron Redirect 的逐 Request 网络 Sandbox。Click、Type 和 Enter Submit 也不会自动获得 File Upload 的 Human-only Confirmation。</div>
+        <div class="note"><strong>浏览器可查看的内容：</strong>快照和等待主要针对当前页面。嵌入网页、画布或复杂编辑器可能需要截图或接管。网络日志列出资源加载时间和大小。打开网址时会检查目的地址，子资源、脚本跳转和桌面版重定向可能绕过检查。点击、输入和提交遵循普通工具权限，上传文件需要单独确认。</div>
       </section>
 
       <section data-topic="setup">
@@ -1753,7 +1753,7 @@ playwright install chromium</code></pre></div>
           <div class="step"><div class="step-number">4</div><div><strong>代理继续</strong>——浏览器以<strong>无头模式</strong>在同一配置（已认证）上重启。代理自动恢复轮次。</div></div>
         </div>
         <p>因为配置文件是持久化的，对于大多数网站，接管只需要在首次登录时出现一次。</p>
-        <p>Snapshot Ref 是页面状态凭据而不是永久 Selector。导航、滚动或明显重排后应重新 Snapshot；购买、发布、删除、账号修改等高影响网页动作仍必须由调用方依据用户请求和 Permission Policy 控制。</p>
+        <p>页面元素的编号只在当前布局中有效。跳转、滚动或布局变化后，请重新获取快照。购买、发布、删除和账号修改还需核对用户请求和相应权限。</p>
       </section>
 
       <section data-topic="configuration">
@@ -1818,7 +1818,7 @@ playwright install chromium</code></pre></div>
           <li><strong>Verified interaction</strong> — snapshots assign short-lived refs to currently visible elements; Electron resolves a click target again before sending trusted Chromium input and refuses obscured or persistently moving targets.</li>
           <li><strong>Controlled file upload</strong> — the dedicated tool binds every upload to the site, page/frame, input, and file hashes, requires single-use user approval, and never clicks a separate submit control.</li>
         </ul>
-        <div class="note"><strong>Current boundaries:</strong> Snapshot, ref, and wait behavior primarily cover the top-level DOM; they do not recursively model every iframe, shadow DOM, Canvas/WebGL control, or complex editor. Network Log exposes Resource Performance entries rather than a full DevTools trace. URL validation blocks direct reserved-network targets but is not a per-request sandbox for every subresource, script navigation, or Electron redirect. Click, type, and Enter submission also do not automatically receive the human-only confirmation used for file upload.</div>
+        <div class="note"><strong>What the browser can inspect:</strong> Snapshots and waits cover the main page. Embedded pages, canvas controls, and complex editors may require a screenshot or user takeover. The network log lists resource timings and sizes. URL checks cover initial navigation. Subresources, scripts, and desktop redirects can bypass those checks. Clicks, typing, and form submissions follow ordinary tool permissions. File uploads need separate approval.</div>
       </section>
       <section data-topic="setup">
         <h2>Setup</h2>
@@ -1838,7 +1838,7 @@ playwright install chromium</code></pre></div>
           <div class="step"><div class="step-number">4</div><div><strong>The agent resumes</strong> — the browser restarts headlessly with the same authenticated profile and the agent resumes its round automatically.</div></div>
         </div>
         <p>Because the profile persists, most sites need takeover only for the first login.</p>
-        <p>Snapshot refs are page-state credentials rather than permanent selectors. Take a new snapshot after navigation, scrolling, or substantial layout changes. Callers must still apply the user's request and permission policy before purchases, publishing, deletion, account changes, or other high-impact web actions.</p>
+        <p>Element references apply to the current layout. Take a fresh snapshot after navigation, scrolling, or a layout change. Check the user’s request and permissions before purchases, publishing, deletion, or account changes.</p>
       </section>
       <section data-topic="configuration">
         <h2>Configuration</h2>

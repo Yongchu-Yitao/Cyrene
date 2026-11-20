@@ -317,64 +317,19 @@ correlation fingerprints.
 
 ### Web UI
 
-Cyrene ships one Workbench front-end. Its primary areas are Chat,
-Knowledge/Library, Schedule, and Memory. Search, Browser/PDF/Diff views,
-settings, onboarding, help, profile, and Quick Chat are overlays, panels, or
-secondary surfaces rather than separate legacy pages. The source lives under
-`src/cyrene/workbench/webui/frontend`; the only generated web output root is
-`src/cyrene/workbench/webui/static/app`.
+The main interface brings together chat, documents and literature, schedules, and memory. Search, settings, help, and profile open within it. You can read a web page or PDF beside a conversation, or compare file changes there. First-run setup and Quick Chat use the same frontend.
 
-`WorkbenchTopbar` keeps two deliberately separate collections: a local
-MRU/pinned list of at most three conversation tabs, and a persistent
-Pinned Resource Shelf. Resource drag payloads use the internal
-`application/x-cyrene-work-resource+json` MIME; native macOS text drags are
-accepted as `text/plain` and materialized as Markdown. Knowledge attachments
-are resolved server-side so renderer payloads do not expose absolute paths.
+**Conversations and pinned resources.** The top bar shows up to three recent or pinned conversations. A separate shelf remembers pinned resources across restarts. Drag selected text onto the shelf to save it as Markdown. Pin a file and other conversations can find it by its index. The agent reads the contents when it needs them. The backend looks up library attachments so the interface can refer to them without receiving their absolute paths.
 
-The pinned-resource registry is stored through the Workbench document store.
-Only compact file/browser indexes enter subsequent Agent context. File content
-is read on demand. Browser references carry an owner session: the owner retains
-normal control, while tool execution restricts other sessions to snapshot and
-screenshot operations. This is an execution-layer policy, not only a prompt
-instruction.
+**Opening a page in two conversations.** The conversation that opened a page keeps control of it. Browser tools let other conversations inspect a pinned page through snapshots and screenshots. Drag the page into another conversation to open the same URL in a new tab there. Each conversation controls its own tab. Both share cookies and login state.
 
-Dropping a Browser on another conversation does not transfer the original
-Browser reference or elevate pinned-resource permissions. The renderer calls
-Electron `browser:create-tab` for the target session's `BrowserTabManager`, then
-synchronizes that conversation's PiP state through an event. Managers remain
-session-isolated; only the persistent cookie/login partition is shared.
+**How the agent uses the browser.** In the desktop app, you and the agent use the same embedded Chromium browser. Its 17 operations are available to the main agent and run in order by default. A snapshot gives temporary references to visible elements that can receive a click. After moving the pointer, Cyrene checks that the target is still in place and unobstructed before clicking. Waits and resource timings come from the current page. Embedded frames and custom controls may need separate inspection.
 
-The Web UI binds to `127.0.0.1` and is served by the FastAPI backend. Electron
-generates a shared token for each launch, passes it to the Python child, and
-injects it as `X-Cyrene-Token` on desktop requests. The OS keyring is used for
-the Fernet key protecting `data/config.enc`, not for the per-launch HTTP token.
+Browser pages run in an isolated sandbox with Node integration disabled. Camera, microphone, location, and screen capture are blocked by default. You approve each file upload for a particular destination. Cyrene checks the file again before sending it, and the approval expires after one use. Clicks, typing, and form submissions follow their own permission rules. [Browser interaction and permissions](browser-live-view.md)
 
-Desktop browser tools use Electron's embedded Chromium through a token-authenticated
-loopback RPC bridge, and the visible `WebContentsView` shares the same persistent
-profile as agent actions. Packaged desktop builds therefore exclude Playwright and
-its separate Chromium download. Non-Electron Web UI/CLI runs retain Playwright as
-an optional extra, with text-only `httpx` navigation as the final fallback.
+**Connections and builds.** FastAPI serves the interface locally. The desktop app controls its embedded browser over an authenticated local connection. Outside the desktop app, the web UI and CLI can use Playwright or fall back to reading page text with `httpx`. Before opening a URL, Cyrene checks its IP address and blocks loopback, private, link-local, cloud metadata, and reserved addresses. The text client checks every redirect. The desktop browser checks only some requests, and Playwright checks the final URL after connecting. Enforce network isolation at the OS or network level when required.
 
-The browser surface exposes 17 main-agent-only operations that execute in order
-by default. Snapshot injects a DOM projection into the current top-level
-document and assigns short-lived refs to visible, hit-testable elements. After
-cursor movement and press animation, Electron resolves a click target again,
-checks hit testing, obstruction, and coordinate stability, then sends trusted
-input through `sendInputEvent`. Wait and Network Log also run in the current page
-context; Network Log reads only Resource Performance entries. There is no one
-recursive projection for iframes and shadow DOM.
-
-Before initial navigation, the Python entry point resolves the hostname and
-rejects loopback, private, link-local, cloud-metadata, and reserved addresses;
-the `httpx` redirect hook checks each Location again. Electron does not currently
-apply the same IP policy to every browser request, and Playwright checks a final
-redirect URL after the browser has established the connection. This is therefore
-an agent-observation guard, not a strict network sandbox. Browser pages enable
-context isolation and sandboxing, disable Node integration, and deny camera,
-microphone, location, and capture permissions by default. File upload adds a
-separate human-only, single-use destination/file-hash binding and pre-execution
-revalidation; ordinary click and type/submit operations do not inherit that
-confirmation boundary.
+Frontend source lives in `src/cyrene/workbench/webui/frontend`. Builds go to `src/cyrene/workbench/webui/static/app`. The top bar component, `WorkbenchTopbar`, saves pinned resources in the document store. In-app drags use `application/x-cyrene-work-resource+json`, and text dragged from macOS arrives as `text/plain`.
 
 ### Search
 
@@ -399,19 +354,11 @@ Two CLI surfaces exist:
 
 ## Security & Local Auth
 
-The raw web server binds only to `127.0.0.1`, validates local Host/Origin
-headers, and has no user-login layer. The Electron build adds
-`LocalAuthMiddleware`, which requires its generated per-launch token on every
-desktop request. Configuration secrets live in `data/config.enc`; its Fernet
-key is stored in the OS keyring when available and falls back to a mode-0600
-local key file with a warning when it is not.
+**Who can connect?** The web server listens on the local address `127.0.0.1` and checks the host and origin of incoming requests. It serves one person on one computer and has no account login. Keep it accessible only from that computer. At each launch the desktop app generates a fresh token and sends it to the local backend in the `X-Cyrene-Token` header. Projects organize work, and tool permissions govern agent actions. Use operating-system controls to isolate people who share a machine.
 
-These are application controls, not an OS sandbox or multi-tenant boundary.
-Project stores and permission modes do not isolate mutually untrusted users.
-Only the configuration blob is application-encrypted; workspace files,
-databases, logs/traces, exports, and backups rely on operating-system storage
-protection. Portable backup ZIPs include a logical configuration snapshot for
-cross-install restore and can contain credentials.
+**Where are secrets stored?** Cyrene encrypts configuration secrets in `data/config.enc`. It keeps the encryption key in the OS keyring when available. If the keyring is unavailable, Cyrene logs a warning and writes the key to a file that only the current OS user can read or write (mode `0600`).
+
+**What is in a backup?** A portable backup ZIP includes a copy of the configuration so you can restore it on another installation. That copy may contain API keys or other credentials. Handle it as you would a file containing those keys. Workspace files, databases, logs, traces, exports, and backups rely on operating-system file permissions and storage protection.
 
 ## Project Structure
 

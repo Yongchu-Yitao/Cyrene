@@ -106,12 +106,10 @@ SSRF Initial/Redirect Check、Snapshot Credential、Upload Binding、Takeover �
 Lifecycle；Electron Test 覆盖 Target Selection、Popup Policy、Context Menu 和
 Source Contract。但大量用例使用 Fake Page、Mock Locator 或独立 VM Script，
 不会启动真实 Electron 并遍历带 OAuth/CAPTCHA、跨 Origin Iframe、Shadow DOM
-和各平台 Native Window 的网站。此类流程必须进入 Release/Manual Integration
-Matrix，不能仅凭 Unit Suite 通过宣称完整网站兼容性。
+和各平台 Native Window 的网站。这些流程需要在各平台发布前用真实浏览器验证。
 
 文档复核期间 OpenAPI Test 最初失败，是因为其 Hash 由 Ambient Python
-3.13.12、FastAPI 0.115.8、Pydantic 2.12.5 采集，而不是使用 `uv.lock` 中
-早已存在的版本。直接对比发现 10 个 Generator-level Difference：4 个
+3.13.12、FastAPI 0.115.8、Pydantic 2.12.5 采集，与 `uv.lock` 锁定的版本有差异。直接对比发现 10 个 Generator-level Difference：4 个
 Upload Schema 用 `contentMediaType: application/octet-stream` 替代
 `format: binary`，标准 `ValidationError` 增加 `input` 和 `ctx`；Route 和
 Application Request Model 都没有变化。

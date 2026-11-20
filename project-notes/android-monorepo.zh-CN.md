@@ -3,9 +3,7 @@
 ## 开发入口
 
 Android 源码已从 `Yongchu-Yitao/Cyrene-mobile` 导入 `Cyrene/mobile/`。
-导入使用未 squash 的 Git subtree 合并，保留原仓库全部祖先提交；目录是普通文件，
-不是 submodule，克隆 Cyrene 不需要额外初始化子仓库。今后的修改统一提交到 Cyrene。
-旧仓库保留历史和迁移提示，不再双向同步，也没有重写或删除历史。
+这次合并使用 Git subtree 保留了原仓库的全部提交历史。克隆 Cyrene 即可获得 Android 源码，后续修改统一提交到这里。旧仓库保留历史和迁移说明。
 
 ```text
 Cyrene/
@@ -39,7 +37,7 @@ Cyrene/
 APK 保留 7 天，中间运行时资源保留 3 天。失败运行不会标记为成功交付。
 临时私钥在任务结束时删除，不上传 artifact，不需要仓库签名 secrets。
 
-这些是实验 Debug 包；CI 的 Android debug 签名不是稳定的发行签名，不能保证跨运行覆盖安装。
+这些实验包使用 CI 的调试签名。不同次构建的签名可能变化，覆盖安装需要签名一致。
 正式分发需要另行配置持久发行签名、版本号递增和发布策略。
 Android 显示版本 `versionName` 已直接读取根目录 `pyproject.toml` 的 `[project].version`；
 Android 安装更新序号 `versionCode` 由统一版本自动派生，不单独维护。

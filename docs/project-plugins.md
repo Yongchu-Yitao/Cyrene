@@ -46,8 +46,7 @@ plugin_pack = PluginPack(
 
 ## Agent composition and context Hooks
 
-Plugins do not inject content after a fixed Agent has already been created; the
-enabled packs are the Agent's composition. At application startup,
+Cyrene assembles each agent from its enabled plugin packs. At application startup,
 `application_setup` may contribute routes, services, background jobs, and UI.
 When a conversation opens, `setup` receives a `PluginSetupContext`, publishes
 session services, and binds Hooks to that conversation's ContextTree. Each run
@@ -90,8 +89,7 @@ Use `context_position="system"` for base system instructions, `"top"` for a
 high-priority block immediately below them (such as SOUL), and an empty value
 for ordinary context. Ordinary blocks retain deterministic registration order.
 A Hook ID persists with the tree; when restoring a session, the pack should use
-`bind_plugin(..., replace=True)` to reconnect its implementation instead of
-creating another state store.
+`bind_plugin(..., replace=True)` to reconnect its implementation to the existing state.
 
 | Hook | Appropriate work |
 |---|---|
@@ -113,7 +111,6 @@ changes. Bound Hook owners may instead implement
 learned skills, CLI Hooks, and third-party providers inside their own plugin
 boundaries.
 
-Input-box selections are not read independently by every provider.
 `cyrene_composer_context` is the single composer-context plugin: it persists the
 conversation's choices, then asks enabled workspace, MCP, and skills providers
 for their `TurnStart` contribution and produces an explicit mount. Plugin

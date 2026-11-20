@@ -39,7 +39,7 @@ plugin_pack = PluginPack(
 
 ## Agent 组装与 Context Hook
 
-插件不是在 Agent 创建完成后再“注入”内容；启用的插件包本身就是 Agent 的组成。
+创建 Agent 时，Cyrene 会加载已启用的插件包。
 应用启动时，`application_setup` 可以贡献 Route、Service、Background Job 与界面；
 打开对话时，`setup` 收到 `PluginSetupContext`，可以发布 Session Service 并把 Hook
 绑定到当前 ContextTree；每一轮运行再由这些 Tree-local Hook 构建 Context、审核工具、
@@ -80,7 +80,7 @@ plugin_pack = PluginPack(
 `context_position="system"` 用于基础 System Prompt，`"top"` 用于紧随其后的高
 优先级 Block（例如 SOUL），空值用于普通 Context。普通 Block 保持确定性的注册顺序。
 同一 Hook ID 会随 Tree 持久化；恢复 Session 时插件应通过 `bind_plugin(...,
-replace=True)` 重新绑定实现，而不是建立第二份状态。
+replace=True)` 重新绑定实现，沿用已保存的状态。
 
 | Hook | 适合处理的工作 |
 |---|---|
@@ -99,7 +99,7 @@ replace=True)` 重新绑定实现，而不是建立第二份状态。
 插件包实现版本一起计算指纹；值变化时只重建一次稳定前缀。SOUL、Memory、已学习
 技能、CLI Hook 与第三方 Provider 的依赖逻辑因此仍归各自插件所有。
 
-输入框选项不是由各插件分别读取 UI State。`cyrene_composer_context` 是唯一的输入框
+`cyrene_composer_context` 是唯一的输入框
 上下文插件：它持久化当前对话选择，再在 `TurnStart` 读取已启用的 Workspace、
 MCP 与 Skills Provider 并生成一个明确的 Mount。Plugin Center 负责插件是否可用；
 Composer 菜单负责本对话选中什么；工具菜单负责“Agent 直接可见”或“Agent 寻找使用”。

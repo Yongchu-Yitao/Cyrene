@@ -4,19 +4,9 @@
 
 ## Encrypted Config Store
 
-Cyrene stores configuration in a Fernet-encrypted JSON config blob
-(`data/config.enc` by default). The first-run onboarding wizard writes the
-required values, and the Web UI Settings page can update them at runtime.
+First-run setup saves your configuration. You can change it later in Settings. Cyrene uses Fernet to encrypt the configuration and saves it in `data/config.enc` by default. The OS keyring holds the encryption key. If the keyring is unavailable, Cyrene logs a warning and saves the key to `data/.config_key`. In that case, the key relies on file permissions: only the current OS user can read or write it (mode `0600`).
 
-The encrypted values live in `data/config.enc`. Its Fernet key is stored in the
-OS keyring when available. Headless/portable environments without a working
-keyring fall back to `data/.config_key` with mode `0600` and emit a warning;
-that fallback protects the key only through filesystem permissions.
-
-Portable backup ZIPs are not encrypted by Cyrene. They contain a logical
-configuration snapshot—including configured credentials—so that restore can
-re-encrypt it with the destination installation's key. Treat every exported
-backup as a secret.
+An exported backup ZIP contains an unencrypted copy of the configuration, including any credentials you configured. On restore, Cyrene encrypts the configuration with the destination installation’s key. Store the backup as carefully as you store your API keys.
 
 ## Runtime Paths and Persistence
 
@@ -198,17 +188,14 @@ converted to the currency selected beside Monthly Budget for display and
 budget enforcement. Billing-period totals use the configured start timestamp,
 not a rolling-day approximation.
 
-The catalog is code data, not a live quote. Its current source is marked as
-verified on 2026-06-25 and uses a fixed `7.25 CNY = 1 USD` conversion for
+The price list ships with Cyrene. It was last checked on 2026-06-25 and uses a fixed `7.25 CNY = 1 USD` conversion for
 USD-priced providers. It contains aliases for GPT 5.5, Claude Fable/Mythos 5,
 Gemini 3.5 Flash/3.1 Pro Preview, DeepSeek V4 Flash/Pro, GLM 5.2, MiniMax M3,
 MiMo V2.5, and Kimi K2.7 Code. Check the source and provider invoice before
 relying on an estimate.
 
 Budget Settings can divide a configured monthly amount into adaptive monthly,
-weekly, and five-hour windows and can warn or block new Workbench runs. These
-are local gates over Cyrene's estimates, not provider-side quotas or billing
-guarantees.
+weekly, and five-hour windows and can warn or block new Workbench runs. These limits use local estimates. Your provider determines the actual quota and bill.
 
 ### Custom SimpleXNG sources
 

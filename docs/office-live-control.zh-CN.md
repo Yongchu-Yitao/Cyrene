@@ -11,7 +11,7 @@ Cyrene 的 Office 工具包可以控制 PowerPoint 当前打开的演示文稿�
 
 只有检测到加载项已经安装（Windows 上也可以由一次真实连接证明）时，Cyrene 才会把 PowerPoint 工具放入 Agent 上下文。未安装时，服务集成页只保留安装入口，不显示 Gateway、证书或连接参数等高级设置，也不会给 Agent 暴露空壳工具；安装完成后的新任务会自动获得工具，不需要运行命令。命令行入口只供开发和故障排查使用。
 
-如果安装后列表中暂时没有出现 Cyrene，先确认 PowerPoint 已用 `⌘Q` 完全退出而不是只关闭窗口，再重新打开。开发期间更新过 manifest 时，PowerPoint 仍可能保留旧的 Wef 缓存；此时按 Microsoft 的 Office 缓存清理流程清理后重新安装。
+如果安装后列表中暂时没有出现 Cyrene，请按 `⌘Q` 退出 PowerPoint，再重新打开。开发期间更新过 manifest 时，PowerPoint 仍可能保留旧的 Wef 缓存；此时按 Microsoft 的 Office 缓存清理流程清理后重新安装。
 
 面向开发者的命令行安装入口仍然保留：`uv run python -m cyrene.plugins.builtin.cyrene_office.install --trust`。
 

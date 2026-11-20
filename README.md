@@ -35,13 +35,7 @@ https://github.com/user-attachments/assets/41b19f4a-a101-47de-8f74-1ca773ffad03
 - **Research you can trace and reuse** — Cyrene combines cited web research with
   your PDFs, Office files, media, and literature library, then turns the evidence
   into structured knowledge or polished PDF reports.
-- **A browser the agent can actually operate** — watch Cyrene navigate, click,
-  type, upload, and inspect pages in a live view. When login, CAPTCHA, or 2FA
-  needs you, take over the same browser and hand it back without losing the
-  session. Snapshot refs, verified trusted clicks, and single-use upload approval
-  reduce accidental actions, while DOM projection remains primarily top-level
-  and URL policy is not a complete per-request network sandbox; see
-  [browser capabilities and boundaries](docs/browser-live-view.md#page-interaction-model-and-current-boundaries).
+- **Browse together** — watch Cyrene navigate, click, type, and inspect a page. Take over the same tab to sign in or complete a verification step, then hand it back. You approve each file upload. [Browser controls and permissions](docs/browser-live-view.md#page-interaction-model-and-current-boundaries)
 - **Live PowerPoint composition** — a local Office add-in lets Cyrene inspect,
   batch-create, move, resize, style, render, and verify elements in the open
   presentation while the user watches each slide change progressively.
@@ -56,8 +50,7 @@ https://github.com/user-attachments/assets/41b19f4a-a101-47de-8f74-1ca773ffad03
 
 ## One Agent, assembled from plugins
 
-Cyrene's personality, memory, models, tools, and workflows come from plugins
-rather than a fixed, unchangeable agent. Each conversation and project can use a
+Cyrene's personality, memory, models, tools, and workflows come from plugins. Each conversation and project can use a
 different set of capabilities, while Plugin Center lets you manage plugins and
 tool visibility.
 

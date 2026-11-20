@@ -7,8 +7,7 @@ fixtures; databases and files are created in temporary directories.
 Every group executes at least two sessions/workers in parallel, and every
 session/worker completes at least two ordered turns/rounds. A turn in the
 conversation benchmarks reuses the same session and carries the previous
-messages forward. `--repeats` only controls independent timing samples; it is
-not counted as conversation history or cache reuse.
+messages forward. Use `--repeats` to collect independent timing samples. History and cache reuse are measured within each conversation.
 
 ## Coverage
 

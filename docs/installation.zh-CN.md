@@ -104,11 +104,9 @@ Child Process Error；手工改 Vendored Package 不属于当前支持的安装�
 uv run python -m cyrene
 ```
 
-打开 `http://localhost:4242`。首次启动应显示 Onboarding。
+打开 `http://localhost:4242`。首次启动时，按设置向导完成配置。
 
-`cyrene_tools` 自管理工具包只在 Electron Host 与 Workbench Renderer 都已连接时
-可用。仅浏览器 Web UI 或 CLI 仍可使用普通 Agent Tool，但不能借用未向该
-Runtime 注册的 Electron UI Surface。
+桌面版连接到界面后，助理可以通过 `cyrene_tools` 操作当前窗口。网页版和命令行可以使用常规助理工具。
 
 无 Web 运行 Agent：
 

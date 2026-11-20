@@ -2,49 +2,29 @@
 
 [English](limitations.md) · [简体中文](limitations.zh-CN.md)
 
-This document records the boundaries and known limitations of the current
-Cyrene beta. These are product and deployment constraints, not merely a list of
-open bugs.
-
 ## Operator and security boundaries
 
-- Cyrene is designed for one local operator. Projects are organizational
-  boundaries, not separate users or security tenants.
-- The Web server is local-only and is not intended for public internet
-  exposure.
-- Tool permissions reduce accidental actions but do not provide an operating
-  system, VM, or container sandbox.
-- Electron browser cookies and logins are shared across projects.
-- Pinning a file to the topbar is an explicit global-sharing action: every
-  session can discover its index and may read it through normal file tools.
-- A Browser pinned by another session is read-only at Cyrene's tool layer, but
-  all Electron Browser sessions still share the same local cookie partition.
-- Browser navigation blocks direct access to loopback, private, link-local,
-  cloud-metadata, and reserved networks, but it is not a complete per-request
-  network sandbox. Page subresources, script navigation, and Electron redirects
-  must not be treated as network-isolated.
-- Browser clicks, typing, and Enter submission do not automatically receive the
-  human-only confirmation used for file uploads. High-impact web actions such as
-  purchases, publishing, deletion, and account changes still depend on the user
-  request, agent policy, and normal permission judgment.
+- Cyrene serves one person on one computer. Keep the web server local. Projects organize that person's work and share the OS account’s access. Use OS accounts, virtual machines, or containers when users or programs need isolation.
+- Tool permissions govern the actions the agent can take. Desktop browser cookies and logins are shared across projects.
+- Pinning a file makes it discoverable and readable through file tools in every conversation. A pinned page stays under the original conversation’s control. Other conversations have read-only access through snapshots and screenshots.
+- Before opening a URL, the browser blocks direct access to loopback, private, link-local, cloud metadata, and reserved addresses. Page resources, script navigation, and desktop browser redirects can still reach these addresses.
+- A file upload needs separate user approval. Purchases, publishing, deletion, and account changes follow the user’s request and ordinary tool permissions, including when a click or pressing Enter completes the action.
 
 ## Models, integrations, and budgets
 
 - Prompts and selected context are sent to configured model services.
   Integrations may also exchange data with their configured services.
 - Chat models currently require an OpenAI-compatible endpoint.
-- Usage budgets are local estimates, not provider billing controls.
+- Budgets use local usage estimates. Your provider determines the actual charge.
 
 ## Data and API lifecycle
 
-- Data has no automatic retention period; it remains until explicitly removed
-  or reset.
+- Data stays on disk until you delete it or reset the installation.
 - The HTTP API is not yet versioned as a stable public API.
 
 ## Cyrene self-control boundaries
 
-- UI snapshot and inspect expose the current rendered surface, not hypothetical
-  future screens. The agent must perform an action and take a new snapshot after
+- UI snapshot and inspect show the currently rendered interface. The agent must perform an action and take a new snapshot after
   navigation, expansion, scrolling, or opening a context menu.
 - Stable semantic controls are preferred; generic DOM projection covers visible,
   operable HTML controls. Canvas/WebGL-only controls require a dedicated semantic
@@ -59,9 +39,9 @@ open bugs.
 
 ## Features not yet implemented
 
-- Literature DOI and title lookup is not implemented.
-- Zotero Web API two-way synchronization is not implemented.
-- Experiments and Manuscripts are not implemented.
+- Literature lookup by DOI or title
+- Two-way synchronization with the Zotero Web API
+- Experiments and Manuscripts
 
 ## Platform and validation constraints
 
@@ -77,8 +57,7 @@ open bugs.
   release or manual integration testing.
 - Browser snapshot, ref targeting, and wait behavior primarily cover the current
   top-level DOM. Iframes, shadow DOM, Canvas/WebGL, and complex editors do not
-  have a unified recursive semantic model. The network log is also a Resource
-  Performance view rather than a complete DevTools trace.
+  have a unified recursive semantic model. The network log shows resource timings. Use developer tools for a full request trace.
 
 See [Development](development.md) for the exact validation baseline and
 [Development Status](../project-notes/README.md) for

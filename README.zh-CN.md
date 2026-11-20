@@ -31,12 +31,7 @@ https://github.com/user-attachments/assets/9ab35079-491f-482c-a4a5-50e55683a20b
   在中断后继续执行。
 - **研究过程可追溯，成果可复用**：Cyrene 能把带引用的网页研究与你的 PDF、
   Office 文档、音视频和文献库结合起来，沉淀为结构化知识或精美的 PDF 报告。
-- **真正会操作浏览器**：你可以实时看到 Cyrene 浏览页面、点击、输入、上传和
-  检查内容；遇到登录、CAPTCHA 或 2FA 时，可在同一个浏览器中接管，完成后再
-  交还给 Agent，无需丢失会话状态。Snapshot Ref、可信点击和一次性批准上传
-  降低误操作，但当前 DOM Projection 主要覆盖 Top-level Document，且 Browser
-  URL Policy 不等同于完整的逐 Request 网络 Sandbox；详见
-  [Browser 能力与边界](docs/browser-live-view.zh-CN.md#页面操作模型与当前边界)。
+- **一起用浏览器**：你可以看到 Cyrene 打开网页、点击和输入。遇到登录或验证时，直接接管当前标签页，完成后再让它继续。上传文件由你逐次确认。[浏览器操作与权限](docs/browser-live-view.zh-CN.md#页面操作模型与当前边界)
 - **实时创作 PowerPoint**：通过本地 Office 加载项，Cyrene 能检查、批量新增、
   移动、缩放和修改当前演示文稿中的元素，并在每页完成后直接让 PowerPoint
   渲染和验证；用户可以连续看到整套 PPT 的渐进式变化。
@@ -50,9 +45,7 @@ https://github.com/user-attachments/assets/9ab35079-491f-482c-a4a5-50e55683a20b
 
 ## 一个由插件组装出来的 Agent
 
-Cyrene 的人格、记忆、模型、工具与工作流都由插件提供，而不是固化在一个不可改变
-的 Agent 中。不同 Conversation 和 Project 可以启用不同能力；你也可以在 Plugin
-Center 中管理插件和工具的可见性。
+Cyrene 的人格、记忆、模型、工具与工作流都由插件提供。每个对话和项目可以启用不同的能力。你可以在插件中心选择插件，设置助理能看到哪些工具。
 
 - **单一连续运行**：Cyrene 组织 Project 和 Conversation；每次 Run 连续处理
   模型输出、工具调用、用户提问与最终交付，Runtime 内置取消与恢复机制。

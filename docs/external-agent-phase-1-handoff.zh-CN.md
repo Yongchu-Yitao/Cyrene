@@ -28,7 +28,7 @@
 | 非推荐 Agent | 通过安装 API 接入的非推荐 Agent 必须进入同一个“已安装”列表，并明确标记来源和信任状态。 |
 | 权限 UI | 必须根据 Agent 返回的权限请求动态渲染，按钮提交原始 `optionId`。 |
 | 消息与工具事件 | 使用统一事件信封和注册式渲染；根据能力与事件内容显示或降级。 |
-| Composer | 必须由当前 Agent 的能力驱动，不能默认所有 Agent 都支持 Cyrene 内置 Agent 的全部功能。 |
+| Composer | 按当前 Agent 声明的能力显示输入选项。 |
 | 模型来源 | 每个 Agent 可以使用 Cyrene 模型配置，也可以选择 Agent 自有登录或配置。 |
 | 安全边界 | Agent 自己决定权限语义和安全限制；Cyrene 不伪装成外部 Agent 的权限策略引擎。 |
 | 第一阶段协议 | 架构做成可扩展的内部通用接口，首个正式驱动采用 ACP stdio。 |
@@ -110,7 +110,7 @@ class AgentConnection(Protocol):
     def events(self) -> AsyncIterator[AgentEvent]: ...
 ```
 
-所有可选操作都必须先经过能力判断。不支持的操作返回稳定的 `capability_missing`，不能静默忽略。
+所有可选操作都必须先经过能力判断。缺少相应能力时返回 `capability_missing`，让调用方知道原因。
 
 ## 6. Agent 描述与能力协商
 
@@ -133,11 +133,11 @@ class AgentConnection(Protocol):
 }
 ```
 
-区分 `agentId` 和 `installationId`：同一个 Agent 后续可以存在多个安装或配置实例。聊天绑定 `installationId`，不能只保存产品名。
+区分 `agentId` 和 `installationId`：同一个 Agent 后续可以存在多个安装或配置实例。聊天通过 `installationId` 绑定到具体安装实例。
 
 ### 6.2 能力结构
 
-能力状态至少支持 `supported`、`unsupported`、`unknown` 和 `degraded`，不能只使用布尔值：
+能力状态至少支持 `supported`、`unsupported`、`unknown` 和 `degraded`：
 
 ```json
 {
@@ -186,7 +186,7 @@ class AgentConnection(Protocol):
 
 ## 7. 扩展中心与已安装 Agent 详情
 
-现有扩展中心位于 `src/cyrene/workbench/webui/frontend/settings-overlay.jsx` 的 `ExtensionsPanel`。第一阶段在这里增加 `agent` 分类，而不是新增 Settings Tab。
+现有扩展中心位于 `src/cyrene/workbench/webui/frontend/settings-overlay.jsx` 的 `ExtensionsPanel`。第一阶段在这里增加 `agent` 分类。
 
 ### 7.1 Agent Tab 固定布局
 
@@ -211,11 +211,11 @@ Agent
 
 - Agent Tab **不显示搜索框、远程搜索结果、游标分页或高级搜索开关**。
 - “推荐”只展示 Cyrene 维护的少量固定推荐 Agent；第一阶段目标为 OpenCode、Codex ACP 和 Pi ACP。
-- 推荐列表的数据仍来自后端 Catalog，前端不能写死版本、下载地址或校验摘要。
+- 推荐列表的版本、下载地址和校验摘要都从后端目录读取。
 - 已经安装的推荐 Agent 不重复显示“安装”按钮，可以显示“已安装”或“升级”。
-- “已安装”必须根据真实 Installation Store 枚举，不能取“已安装 ID”和推荐 Catalog 的交集。
+- “已安装”列出安装记录中的所有项目，包括推荐目录以外的项目。
 - 任何通过 API、导入 Manifest 或以后其他可信安装入口安装的 `kind=agent` 项，都必须进入同一个“已安装”列表。
-- 非推荐项显示“外部来源”标记，并展示 Manifest URL/Repository、Publisher、校验和与验证状态；缺失字段显示“未验证”，不能伪装成 Cyrene 推荐。
+- 非推荐项显示“外部来源”标记，并展示 Manifest URL/Repository、Publisher、校验和与验证状态；缺失字段显示“未验证”。
 - 推荐列表为空或请求失败不影响已安装列表显示。
 
 建议列表响应明确分离两类数据：
@@ -255,7 +255,7 @@ Agent
 - 默认模型来源；
 - 能力等级摘要。
 
-推荐卡片提供直接“安装”按钮。安装仍进入统一的来源检查、摘要校验、用户确认和异步安装任务流程，不能因为是推荐项而绕过安装审计。
+推荐卡片提供直接“安装”按钮。安装仍进入统一的来源检查、摘要校验、用户确认和异步安装任务流程，推荐项也要经过安装审计。
 
 ### 7.3 “安装其他 Agent”API 入口
 
@@ -331,7 +331,7 @@ POST /api/extensions/agents/install-proposals
 4. 后端进入与推荐 Agent 相同的异步安装任务管线；
 5. 安装成功后，该 Agent 立即出现在“已安装”列表并可打开详情完成登录、模型和能力配置。
 
-重复提交同一 Source/Version 应返回现有 Installation 或同一个进行中的任务，避免重复安装。安装失败也应在“已安装/安装任务”区域保留可诊断状态，而不是从界面消失。
+重复提交同一 Source/Version 应返回现有 Installation 或同一个进行中的任务，避免重复安装。安装失败也应在“已安装/安装任务”区域保留可诊断状态，方便查看失败原因。
 
 ### 7.4 展开后的详情
 
@@ -359,7 +359,7 @@ POST /api/extensions/agents/install-proposals
 - UI 根据 Agent 声明的认证方法显示 OAuth、浏览器登录、终端登录、API Key 或现有配置状态；
 - Agent 不需要凭据时显示“使用本机 Agent 配置”；
 - 登录按钮触发后端认证流程，UI 展示 `not_configured → authenticating → connected / failed / expired`；
-- 已保存凭据只显示“已配置”，不能回显密钥。
+- 已保存的密钥在界面上统一显示为“已配置”。
 
 建议运行 API：
 
@@ -501,7 +501,7 @@ Cyrene 对话 ID wbchat_xxx
 - 同时保留 Cyrene 对话 ID 和外部 Agent Session ID；外部 Session 尚未创建时显示 `—`。
 - 模型来源明确显示“Cyrene”或“Agent 自有配置”。
 - Agent 版本和 Driver 可放在名称的辅助信息或 Tooltip，不挤占主要键值行。
-- 对不报告 Token/Cache Usage 的 Agent，隐藏相应统计区，而不是显示虚假的 `0`。
+- 对不报告 Token/Cache Usage 的 Agent，隐藏相应统计区。
 
 ## 10. 模型访问契约
 
@@ -537,7 +537,7 @@ Cyrene 对话 ID wbchat_xxx
 
 - Cyrene 不覆盖 Agent 的 Provider、模型选择或账号安全策略。
 - 如果 Agent 能报告当前模型，概览展示它；无法报告时显示“由 Agent 配置”。
-- Agent 自有模型列表只能来自 Agent 的正式能力或配置接口，不能由前端猜测。
+- Agent 自有模型列表只能来自 Agent 的正式能力或配置接口。
 
 ## 11. 权限 UI 动态化
 
@@ -773,7 +773,7 @@ Slash Command 也必须由 Agent Capability/Command 列表提供。Cyrene 专属
 | `session_not_loadable` | 在新对话继续。 |
 | `request_expired` | 关闭过期权限/问题卡并刷新会话。 |
 
-错误卡必须显示 Agent 名称和失败阶段，不能只显示通用“请求失败”。
+错误卡显示 Agent 名称和失败阶段。
 
 ## 16. 现有代码改动地图
 
@@ -938,11 +938,11 @@ Slash Command 也必须由 Agent Capability/Command 列表提供。Cyrene 专属
 
 第一阶段不实现聚合或 swarm，但以下字段现在就应稳定下来：
 
-- Chat 绑定使用 `installationId`，而不是写死产品名。
+- 通过 `installationId` 关联对话和安装实例。
 - Event 包含 `actorId`、`runId` 和可选 `parentRunId`。
 - Artifact、Tool Call 和 Permission Request 都绑定具体 `actorId`。
 - Agent Runtime 通过 Driver Registry 创建连接，而不是 Chat Route 中的产品分支。
-- 能力是每个 Agent/Session 的数据，不是全局常量。
+- 每个 Agent 和会话分别记录支持的能力。
 
 未来聚合层应该作为另一个实现同一内部 Agent 接口的“编排 Agent”，因此无需重写 Cyrene 前端。
 

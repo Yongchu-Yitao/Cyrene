@@ -56,15 +56,9 @@ Browser Frame 本身也以稳定 Cyrene UI Component 暴露。Agent 可通过
 或还原（包括双击标题栏手势）；操作不依赖当前键盘焦点。这一层控制的是 Cyrene
 浮窗，网页内部自动化仍由独立的 `browser_*` Tool Family 完成。
 
-把 PiP 标题栏、最小化 favicon 按钮或顶栏固定 Browser 图标拖到另一个
-Conversation Tab，会在目标 Session 的 Browser Manager 中创建同 URL 的新
-页面。该操作复制页面入口而不是转移 Owner/控制权；登录态因共享 Partition
-继续可用，但两边的 Tab、导航历史和后续操作互相独立。
+把网页小窗的标题栏、最小化图标或顶栏固定的网页拖到另一个对话，就会在那里打开同一网址。两个对话共享登录状态，各自保留页面、浏览历史和操作权。
 
-Owner Session 保留正常 Browser 控制。其他 Session 只能把 Resource ID 传给
-`browser_snapshot` 或 `browser_screenshot`；Navigate、Click、Type、Reload、
-History、Upload 和其他页面修改都会在 Browser 执行层被拒绝。顶栏右键菜单可
-显示只读页面预览，同时不会隐藏原 PiP View。
+原对话可以继续操作固定的网页。其他对话只能用资源编号调用 `browser_snapshot` 或 `browser_screenshot`；浏览器工具执行时会检查权限。右键顶栏图标可以查看预览，原来的小窗仍然可见。
 
 ### 非 Electron Playwright
 
@@ -76,24 +70,12 @@ History、Upload 和其他页面修改都会在 Browser 执行层被拒绝。顶
 
 ## 页面操作模型与当前边界
 
-- `browser_snapshot` 只返回当前视口中可见、可命中的元素，并为它们生成短期
-  `e1`、`e2` 等 Ref。页面导航、同页导航、滚动或明显重排后应重新 Snapshot，
-  不应继续使用旧 Ref。
-- Electron Click 会在发送 Chromium Trusted Mouse Input 前重新定位目标、检查
-  点击点是否被遮挡，并在目标移动时最多重试三次；目标持续变化时不会盲目点击。
-- `browser_navigate` 会检查初始 HTTP(S) 目标并阻止 Loopback、Private、
-  Link-local、Cloud Metadata 和 Reserved Network。该检查不是完整的浏览器网络
-  Sandbox：页面子资源、脚本触发的导航和 Electron 中的每个 Redirect 并未全部
-  经过逐请求 IP Policy，因此 Browser 仍只适合单一本地使用者访问可信公网内容。
-- Snapshot、Ref Targeting 和 Wait 的 DOM Projection 主要覆盖当前 Top-level
-  Document。Iframe、跨 Origin Frame、Shadow DOM、Canvas/WebGL 和复杂富文本
-  Editor 没有统一的递归语义支持，必要时应使用 Screenshot 或 User Takeover。
-- `browser_network_log` 来源是页面的 Resource Performance Entry，仅提供 URL、
-  Initiator Type、Duration 和 Transfer Size；它不是完整 DevTools Network Trace，
-  不提供 Request/Response Header、Body、Status 或 WebSocket Message。
-- Navigate、Click、Type 和可选 Enter Submit 属于正常 Browser Tool Action，
-  不会像文件上传一样自动触发 Human-only Confirmation。购买、发布、删除、账号
-  修改等高影响动作仍必须由调用方依据用户请求和 Permission Policy 控制。
+- `browser_snapshot` 给当前视口里可点击的元素分配临时编号，例如 `e1`、`e2`。打开新页、页内跳转、滚动或布局变化后，再取一次快照。
+- 桌面版会在点击前重新检查目标的位置和遮挡情况。目标移动时最多重试三次，仍在移动就跳过这次点击。
+- 首次打开网址前，`browser_navigate` 会检查地址，拦截本机、内网、链路本地、云元数据和保留地址。子资源、脚本跳转和桌面版重定向可能绕过这项检查。浏览器适合单人在本机访问可信的公网内容。
+- 快照和等待主要针对当前网页的顶层内容。遇到嵌入页面、跨域框架、Shadow DOM、画布或富文本编辑器，可以查看截图或接管浏览器。
+- `browser_network_log` 列出资源网址、发起类型、耗时和传输大小。查看请求头、正文、状态码或 WebSocket 消息需要使用开发者工具。
+- 文件上传需要单独确认。点击、输入和回车提交遵循普通工具权限。涉及购买、发布、删除或修改账号时，还要核对用户请求和相应权限。
 
 ## Login Takeover
 

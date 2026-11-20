@@ -29,7 +29,7 @@
 | FreeRDP Sidecar 进程协议、能力探测、凭据管道和打包查找 | 已实现 |
 | RDP 端口发现、监听诊断、非 RDP 占用识别和 Sidecar 动态本地端口 | 已实现 |
 | Windows/Linux FreeRDP 原生二进制、签名、SBOM 和平台认证 | 外部发布制品；缺失时插件明确显示 `unsupported`，不会伪装为可用 |
-| Windows/macOS/Linux 真实设备发布矩阵 | 仍需使用正式 Sidecar 制品完成发布验收；当前仓库不能据此宣称全平台端到端已验证 |
+| Windows/macOS/Linux 真实设备发布矩阵 | 发布前需用正式 Sidecar 在三个平台的真实设备上完成端到端验收 |
 | 本次集中自动化验证 | 10 个 Electron/Plugin JavaScript 文件语法通过；App Use 输入桥 45/45、Remote Desktop/Remote 控制/Plugin/Workbench 分屏相关 Python 测试 484/484 通过 |
 
 本次实现遵守“远程桌面业务只属于插件”的边界。Workbench Core 仅增加可复用的集合工具、Pane 菜单、用户手势来源和资源观察宿主能力；`cyrene_remote` 仅增加声明式 capability、远程命令分发和受限文件 Scope，没有在核心层复制远程桌面业务。
@@ -216,7 +216,7 @@ native/remote-desktop/
 实际原生目录可以根据现有打包流水线调整，但必须保持以下原则：
 
 - PluginPack 是用户看到的安装和启用单位。
-- 原生运行时是该 PluginPack 的声明式依赖，不是另一个需要用户理解的产品。
+- 插件包声明并管理所需的原生运行时。
 - 控制端和被控端都要启用兼容版本的插件。
 - 原生组件必须有平台、架构、版本、校验和和签名元数据。
 - 插件禁用或卸载时必须停止服务并撤销后台监听，不留下可连接的孤儿进程。
@@ -236,9 +236,9 @@ native/remote-desktop/
 
 - Tier 1：Windows 11、macOS 14+、Ubuntu 24.04 LTS GNOME。
 - Tier 2：Windows Server 2022+、Windows 10 22H2、Debian 系 xrdp、Fedora 系 Wayland。
-- 其他现代 Linux 发行版按 Provider 能力探测展示为 `supported`、`degraded` 或 `unsupported`，不能假装完全兼容。
+- 其他现代 Linux 发行版按 Provider 能力探测展示为 `supported`、`degraded` 或 `unsupported`。
 
-最终最低版本应在原型通过后写入正式支持矩阵；这里的 Tier 是实施和验证优先级，不是发布承诺。
+最终最低版本应在原型通过后写入正式支持矩阵；这里的 Tier 表示实施和验证的先后顺序。
 
 ## 8. Provider 接口
 
@@ -311,7 +311,7 @@ class RemoteDesktopProvider(Protocol):
 - 麦克风通过系统媒体权限采集并建立 WebRTC 音轨。
 - 安装流程逐项检查屏幕录制、辅助功能和麦克风权限。
 - Host Agent 使用合适的 LaunchDaemon/用户态 Agent 拆分，系统服务不假设能直接访问用户 WindowServer。
-- FileVault 预启动环境不在普通远程桌面承诺内；卡片应明确显示限制，而不是无限重试。
+- FileVault 预启动环境不在普通远程桌面承诺内；卡片应提示用户当前处于预启动环境，并结束重试。
 
 ## 10. RDP Controller Sidecar
 
@@ -665,7 +665,7 @@ display.changed
 - 当前桌面模式列出物理/Portal 输出。
 - 远程登录模式列出 RDP 虚拟显示器。
 - 第一阶段只将一个显示器送入 Pane；不生成跨屏拼接坐标系。
-- Agent 只能查看用户当前选中的显示器，不能指定另一个显示器。
+- 用户选择要共享的显示器，Agent 只能查看这一块屏幕。
 
 ## 21. 用户输入
 

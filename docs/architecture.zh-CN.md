@@ -276,54 +276,19 @@ Agent 可提供精确用户引用；若省略，则由同一个 Permission Revie
 
 ### Web UI
 
-Cyrene 只提供 Workbench 前端。主要区域是 Chat、Knowledge/Library、
-Schedule 和 Memory；Search、Browser/PDF/Diff、Settings、Onboarding、Help、
-Profile 和 Quick Chat 是 Overlay、Panel 或 Secondary Surface，不是旧 UI
-页面。唯一源码根是 `src/cyrene/workbench/webui/frontend`，唯一生成输出根是
-`src/cyrene/workbench/webui/static/app`。
+Cyrene 的主界面用来聊天、查资料、看日程和管理记忆。搜索、设置、帮助和个人资料可以在主界面上打开。网页、PDF 和文件差异可以放在对话旁边看。首次设置和快速聊天也使用同一套界面。
 
-`WorkbenchTopbar` 明确维护两个独立集合：最多 3 个 Conversation Session 的本地
-MRU/置顶列表，以及持久化的 Pinned Resource Shelf。资源拖动使用内部 MIME
-`application/x-cyrene-work-resource+json`；macOS 原生文字拖动以
-`text/plain` 接收并固化为 Markdown。知识库附件由服务端解析，Renderer Payload
-不暴露本机绝对路径。
+**对话与固定资源。** 顶栏最多显示三个最近使用或已置顶的对话。旁边的资源栏单独保存，重启后仍在。把选中的文字拖进去，Cyrene 会将它存为 Markdown 文件。固定文件后，各个对话都能看到文件索引，需要内容时再读取正文。知识库附件由后端查找，界面通过附件引用获取内容，本机的完整文件路径留在服务端。
 
-固定资源 Registry 通过 Workbench Document Store 持久化。后续 Agent Context
-只注入紧凑的 File/Browser 索引，文件正文按需读取。Browser Reference 记录
-Owner Session：Owner 保留正常控制，其他 Session 在 Tool 执行层只能调用
-Snapshot/Screenshot。这是执行层权限约束，不只是 Prompt 提示。
+**两个对话打开同一网页时。** 原对话可以继续点击和输入。其他对话可以查看固定网页的快照或截图，浏览器工具会检查这项权限。如果把网页拖到另一个对话，Cyrene 会在那里打开同一网址的新标签页。两个页面分别操作，共享 Cookie 和登录状态。
 
-Browser 拖到另一个 Conversation 时不转移原 Browser Reference，也不提升固定
-资源权限。Renderer 通过 Electron `browser:create-tab` 为目标 Session 的
-`BrowserTabManager` 新建同 URL 页面，再以事件同步目标对话的 PiP 状态。Manager
-仍按 Session 隔离，只有持久 Partition（Cookie/Login）共享。
+**浏览器如何操作页面。** 桌面版直接使用窗口里的 Chromium，你和助理看到的是同一个浏览器。主助理有 17 项浏览器操作，默认依次执行。每次快照会给当前页面上可见、可点击的元素分配临时编号。移动指针后，Cyrene 会再次检查目标的位置和遮挡情况，再发出点击。等待和资源加载记录也取自当前页面。嵌套网页和自定义控件的内容有时需要单独检查。
 
-Web UI 绑定 `127.0.0.1`，由 FastAPI Backend 提供。Electron 每次启动生成
-Shared Token、传给 Python Child，并把它作为 `X-Cyrene-Token` 注入 Desktop
-Request。OS Keyring 保存的是保护 `data/config.enc` 的 Fernet Key，不是该
-Per-launch HTTP Token。
+网页默认无法使用摄像头、麦克风、位置或屏幕录制，也无法直接调用 Node.js。上传文件时，由你确认文件和目的地；每次确认只对一次上传有效，发送前还会核对文件内容。点击、输入和提交表单遵循各自的工具权限。[浏览器操作与权限](browser-live-view.zh-CN.md)
 
-Electron Browser Tool 通过 Token-authenticated loopback RPC 直接使用内嵌
-Chromium，并与可见 `WebContentsView` 共享持久 Profile。打包桌面版不包含
-Playwright/第二份 Chromium。非 Electron 模式可选 Playwright，最终可回退到
-`httpx` 文本导航。
+**连接与构建。** FastAPI 在本机提供界面。桌面版通过本机连接控制内置浏览器；单独运行网页版或命令行时，可以选用 Playwright，否则使用 `httpx` 读取网页文本。首次打开网址前会检查目标 IP，拦截本机、内网、链路本地、云元数据和保留地址。`httpx` 会逐次检查重定向。桌面浏览器只检查部分请求，Playwright 检查最终网址时连接已建立。需要隔离网络时，应在系统或网络层设置访问规则。
 
-Browser Tool Surface 由 17 个 Main-only、默认有序执行的操作组成。Snapshot 在
-当前 Top-level Document 注入 DOM Projection，为可见且可命中的 Element 分配
-短期 Ref；Electron Click 在 Cursor Move 和 Press 后重新解析 Target，验证
-Hit-test、遮挡与位置稳定性，再通过 `sendInputEvent` 发送 Trusted Input。Wait
-与 Network Log 同样运行在当前 Page Context，后者只读取 Resource Performance
-Entry。Iframe/Shadow DOM 没有统一递归 Projection。
-
-Python 入口在初始 Navigate 前解析 Hostname 并拒绝 Loopback、Private、
-Link-local、Cloud Metadata 与 Reserved IP；`httpx` Redirect Hook 会再次检查
-Location。Electron Session 当前没有对每个 Request 执行同等 IP Policy，
-Playwright 对最终 Redirect URL 的检查发生在 Browser 已建立连接之后，因此该
-机制是 Agent Observation Guard，而不是严格的 Network Sandbox。Browser Page
-启用 Context Isolation、Sandbox，并关闭 Node Integration；Camera、Microphone、
-Location 和 Capture Permission 默认拒绝。File Upload 另有 Human-only、
-Single-use、Destination/File Hash Binding 与执行前 Revalidation；普通 Click、
-Type/Submit 不继承该确认边界。
+前端源码在 `src/cyrene/workbench/webui/frontend`，构建结果在 `src/cyrene/workbench/webui/static/app`。顶栏组件 `WorkbenchTopbar` 通过文档存储保存固定资源。应用内拖放使用 `application/x-cyrene-work-resource+json`，macOS 拖入的文字使用 `text/plain`。
 
 ### Search
 
@@ -346,16 +311,11 @@ History、Tool Result 等来源。`--verbose` 写入 `data/debug_*.jsonl`，API 
 
 ## 安全与本地认证
 
-Raw Web Server 只绑定 `127.0.0.1`，校验本地 Host/Origin，没有 User Login，
-不适合作为远程服务暴露。Electron 要求 Desktop 请求携带 Per-launch Token。
-Credential 保存在 `data/config.enc`；其 Fernet Key 优先进入 OS Keyring，
-Keyring 不可用时回退到权限为 0600 的本地 Key File 并记录 Warning。
+**谁能连接？** 网页服务只监听本机地址 `127.0.0.1`，并检查请求的主机名和来源。它面向同一台电脑上的一个用户，没有账号登录功能，请仅在本机使用。桌面版每次启动都会生成新的临时凭证，并通过 `X-Cyrene-Token` 验证发给本地后端的请求。项目用来整理工作，工具权限用来管理助理能执行的操作。多人共用设备时，用户之间的数据隔离需要由操作系统提供。
 
-这些属于应用层 Control，不是 OS Sandbox 或 Multi-tenant Boundary。Project
-Store 和 Permission Mode 不能隔离互不信任的用户。只有 Config Blob 由应用
-加密；Workspace File、Database、Log/Trace、Export 和 Backup 仍依赖操作系统
-Storage Protection。Portable Backup ZIP 为跨 Installation Restore 包含
-Logical Config Snapshot，其中可能存在 Credential。
+**密钥存在哪里？** Cyrene 使用 Fernet 加密配置里的密钥等敏感信息，保存在 `data/config.enc`。解密用的密钥优先存入系统钥匙串；如果钥匙串不可用，Cyrene 会在日志里提醒，并将密钥存入仅当前系统用户可读写的文件（权限 `0600`）。
+
+**备份里有什么？** 为了能在另一套安装中恢复设置，便携备份 ZIP 会包含一份配置，其中可能有 API 密钥等凭据。请把它当作含有密钥的文件保管。工作区文件、数据库、日志、运行记录、导出文件和备份都依靠操作系统的文件权限与存储保护。
 
 ## 项目结构
 

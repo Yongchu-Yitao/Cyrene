@@ -76,17 +76,9 @@ the titlebar double-click gesture) without depending on whichever input currentl
 has keyboard focus. This controls Cyrene's frame; browser-page automation remains
 in the separate `browser_*` tool family.
 
-Dropping the PiP titlebar, minimized favicon button, or pinned Browser chip on
-another conversation creates a new same-URL page in that session's Browser
-manager. This copies the page entry instead of transferring ownership or
-control. Login state remains available through the shared partition, while
-tabs, navigation history, and subsequent operations are independent.
+Drag the floating browser’s title bar, its minimized icon, or a pinned page onto another conversation to open the same URL there. Both conversations share login state. Each keeps its own tab, browsing history, and controls.
 
-The owner session keeps normal Browser control. Other sessions may pass the
-resource ID only to `browser_snapshot` or `browser_screenshot`. Navigation,
-clicking, typing, reload, history movement, uploads, and all other mutations are
-rejected by the browser execution layer. The topbar context menu can show a
-read-only current-page preview without hiding the original PiP view.
+The original conversation keeps control of a pinned page. The browser tools restrict other conversations to `browser_snapshot` and `browser_screenshot` for that resource ID. Right-click its top bar icon to preview the page while the original window stays visible.
 
 ### Non-Electron Playwright mode
 
@@ -104,32 +96,12 @@ read-only current-page preview without hiding the original PiP view.
 
 ## Page interaction model and current boundaries
 
-- `browser_snapshot` returns only visible, hit-testable elements in the current
-  viewport and assigns short-lived refs such as `e1` and `e2`. Take a fresh
-  snapshot after navigation, same-document navigation, scrolling, or substantial
-  layout changes instead of reusing stale refs.
-- Before an Electron click sends trusted Chromium mouse input, it resolves the
-  target again, checks whether the click point is obscured, and retries up to
-  three times when the target moves. It refuses to click a persistently unstable
-  target.
-- `browser_navigate` validates the initial HTTP(S) destination and blocks
-  loopback, private, link-local, cloud-metadata, and reserved networks. This is
-  not a complete browser network sandbox: subresources, script-driven
-  navigation, and every Electron redirect are not all governed by a per-request
-  IP policy. The browser remains intended for one local operator browsing
-  trusted public content.
-- Snapshot, ref targeting, and wait DOM projection primarily cover the current
-  top-level document. Iframes, cross-origin frames, shadow DOM, Canvas/WebGL, and
-  complex rich-text editors do not have one recursive semantic model; use a
-  screenshot or user takeover when the projected DOM is insufficient.
-- `browser_network_log` reads the page's Resource Performance entries. It reports
-  URL, initiator type, duration, and transfer size, not full DevTools request or
-  response headers, bodies, status codes, or WebSocket messages.
-- Navigation, clicking, typing, and optional Enter submission are normal browser
-  tool actions and do not automatically receive the human-only confirmation used
-  for file uploads. Callers must apply the user's request and permission policy
-  before purchases, publishing, deletion, account changes, or other high-impact
-  actions.
+- A snapshot gives visible, clickable elements temporary references such as `e1` and `e2`. Call `browser_snapshot` again after navigating, scrolling, or changing the layout.
+- Before clicking, the desktop browser rechecks the target’s position and whether another element covers it. If the target moves, it retries up to three times and skips the click if the target keeps moving.
+- Before opening a URL, `browser_navigate` checks its address and blocks loopback, private, link-local, cloud metadata, and reserved networks. Subresources, script navigation, and desktop browser redirects can bypass that check. Use the browser locally for trusted public content.
+- Snapshots, element references, and waits cover the top-level page. For embedded or cross-origin frames, shadow DOM, canvas, or rich-text editors, use a screenshot or take over the browser.
+- `browser_network_log` lists resource URLs, initiator types, durations, and transfer sizes. Use developer tools for headers, bodies, status codes, or WebSocket messages.
+- File uploads require separate approval. Clicks, typing, and form submissions follow the usual tool permissions. Check the user’s request and permissions before purchasing, publishing, deleting, or changing an account.
 
 ## Login takeover
 
