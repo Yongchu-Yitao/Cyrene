@@ -5,29 +5,27 @@
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
 
-<p align="center">
-  <img src="docs/assets/cyrene-hero.png" alt="Cyrene architecture: a continuous Agent runtime composed from context, model and capability plugins, with parallel subagents and local persistence" width="100%">
-</p>
-
 <h1 align="center">Cyrene — AI Agent That Evolves</h1>
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-<p align="center">
-  An open-source, local-first AI agent with durable memory, parallel subagents,
-  project workspaces, and a Workbench desktop UI.
-</p>
+<p align="center">A local-first, open-source AI agent that remembers your projects and can put your other computers to work.</p>
 
-## What Cyrene can do
+## Before doors open
 
-- **An agent that grows with you** — Cyrene carries its personality and useful
-  memories across sessions, while keeping every project's context cleanly
-  isolated.
-- **Context that flows with the work** — Cyrene composes traceable, shareable
-  context blocks: each conversation keeps its own goal, plan, workspace,
-  memory, and execution state, while subagents receive only the context they
-  need. Stable blocks remain reusable, and the full composition stays
-  inspectable.
+A musician is choosing an opening track when the stage manager moves soundcheck to six. Watch Cyrene pick up the set list again, turn it into a stage book, and send the mix export to the studio Mac.
+
+https://github.com/user-attachments/assets/d5edd0c6-4275-4b3c-9193-20164cecd945
+
+## Inside the Workbench
+
+- **Pick up where you left off.** Handle a side request in the same chat. Cyrene saves the current task and brings back its decisions and constraints when you return.
+- **Work directly in a reply.** Choose a row on a card, fill in a form, or pin a result beside the conversation. Gather related cards into a book with a cover, chapters, and a table of contents.
+- **Choose where a task runs.** Click the Cyrene icon to select a paired computer with access to the workspace. Start a new task there, then follow its progress and open delivered files from your local chat. The animated icon reflects what the agent is doing, from answering to running a tool.
+- **Keep useful knowledge close.** Ask the assistant to find a passage across your projects and open the cited document beside the answer. Review and edit what Cyrene remembers about your work.
+
+## Research, tools, and automation
+
 - **From conversation to verified results** — Cyrene can plan, browse, edit
   files, run shell and Git operations, connect MCP servers, use skills, delegate
   to parallel subagents, verify the result, and resume interrupted work.
@@ -55,6 +53,10 @@
   receive results through desktop, Telegram, or WeChat notifications.
 
 ## One Agent, assembled from plugins
+
+<p align="center">
+  <img src="docs/assets/cyrene-hero.png" alt="Cyrene architecture: a continuous Agent runtime composed from context, model and capability plugins, with parallel subagents and local persistence" width="100%">
+</p>
 
 Cyrene's personality, memory, models, tools, and workflows come from plugins
 rather than a fixed, unchangeable agent. Each conversation and project can use a

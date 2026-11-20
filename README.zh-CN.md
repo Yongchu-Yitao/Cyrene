@@ -5,26 +5,27 @@
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
 
-<p align="center">
-  <img src="docs/assets/cyrene-hero.png" alt="Cyrene 架构：由上下文、模型与能力插件组装的连续 Agent Runtime，支持并行 Subagent 与本地持久化" width="100%">
-</p>
-
 <h1 align="center">Cyrene — 会成长的 AI Agent</h1>
 
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
-<p align="center">
-  开源、本地优先的 AI Agent，具备持久记忆、并行 Subagent、Project Workspace
-  和 Workbench Desktop UI。
-</p>
+<p align="center">一个开源、本地优先的 AI Agent。它记得你的项目，也能把工作交给你配对的另一台电脑。</p>
 
-## Cyrene 能做什么
+## 沿苏州河走走
 
-- **一个会与你共同成长的 Agent**：Cyrene 能跨会话延续 Personality 与有价值
-  的长期记忆，同时让每个 Project 的上下文保持清晰隔离。
-- **让上下文随工作流动**：Cyrene 将上下文编排为可追踪、可共享的 Block；每个
-  Conversation 独立保留 Goal、Plan、Workspace、Memory 与执行状态，Subagent
-  只获取所需上下文；稳定 Block 持续复用，完整构成随时可查。
+周末只有半天，正选着沿河散步的路线，同事发来消息，要先过一遍周会预算。看 Cyrene 在同一段对话里处理完周会，接回刚才的路线，把取景点收进手册，再把照片交给家中电脑归档。
+
+https://github.com/user-attachments/assets/c9ffbf30-02e5-421b-a27b-2fbd7d92f12d
+
+## 在 Workbench 里可以这样工作
+
+- **接着上次的事往下做。** 临时有事，直接在当前对话里说。Cyrene 会保存手头的任务，等你说「继续刚才的计划」，它会带回先前的选择和限制。
+- **在回复里做选择。** 在卡片上选一行、填一份表，或把结果固定在对话右侧。相关卡片还能编成一本带封面和目录的册子，翻页就能查到需要的内容。
+- **选一台合适的电脑开工。** 点开 Cyrene 图标，选一台已配对且有工作区执行权限的设备，新任务就能在那里运行。你可以在本机跟进进度、打开交付的文件。回复文字、运行工具时，图标也会随 Agent 的实际状态变化。
+- **随时翻回依据。** 让助理跨项目找一段资料，点开引用，就能在回答旁边对照原文。也可以用自己的话修订 Cyrene 对项目的记忆。
+
+## 研究、工具与自动化
+
 - **从对话一路做到结果验收**：Cyrene 能规划任务、操作浏览器、编辑文件、执行
   Shell 与 Git、连接 MCP Server、调用 Skill、并行委派 Subagent、验证结果，并
   在中断后继续执行。
@@ -48,6 +49,10 @@
   Telegram 或微信接收结果通知。
 
 ## 一个由插件组装出来的 Agent
+
+<p align="center">
+  <img src="docs/assets/cyrene-hero.png" alt="Cyrene 架构：由上下文、模型与能力插件组装的连续 Agent Runtime，支持并行 Subagent 与本地持久化" width="100%">
+</p>
 
 Cyrene 的人格、记忆、模型、工具与工作流都由插件提供，而不是固化在一个不可改变
 的 Agent 中。不同 Conversation 和 Project 可以启用不同能力；你也可以在 Plugin
