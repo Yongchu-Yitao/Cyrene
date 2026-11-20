@@ -4,8 +4,7 @@
 
 Cyrene has one plugin framework. Custom tools, application services, context
 Hooks, model providers, and Workbench views are all supplied by `Plugin` or
-`PluginPack`. The retired `plugin.json`, project-plugin subprocess, and
-`cyrene.view` extension mechanisms are not part of the runtime.
+`PluginPack`.
 
 ## Directory format
 

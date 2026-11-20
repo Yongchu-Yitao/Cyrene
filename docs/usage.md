@@ -178,8 +178,7 @@ must switch there in the visible UI, fill that composer, and invoke its visible
 submit action.
 
 Typed settings cover every non-model Settings tab. Direct changes use a
-revision value, so a concurrent user edit causes a conflict instead of being
-overwritten. Secrets, OAuth, QR login, file selection, OS permissions, and the
+revision value, so a concurrent edit is preserved and the agent receives a conflict report. Secrets, OAuth, QR login, file selection, OS permissions, and the
 Models tab remain user-controlled ceremonies.
 
 Verbose context traces are intentionally inspected outside the Web UI through
@@ -276,11 +275,7 @@ card. It shows message tokens, a colored composition bar, and grouped System
 Prefix, Ephemeral, and Conversation Message blocks. User, assistant, tool, and
 system-injection rows are consistently indented.
 
-These groups project the durable ContextTree, not a separate prompt estimate.
-`SessionStart` freezes the editable system prompt, SOUL, memory, and learned
-skills once per conversation. `TurnStart` appends composer-selected workspace,
-MCP, attachments, and runtime context for each turn. The stable prefix is reused
-byte-for-byte before the changing suffix. See [Architecture](architecture.md#how-plugins-become-one-agent).
+These groups come from the conversation’s saved context tree. The opening system message contains the system instructions, personality, memory, and learned skills. Each turn also includes the workspace, MCP services, and attachments selected in the composer, along with any context needed for that turn. [How context is assembled](architecture.md#how-plugins-become-one-agent)
 
 `/config` uses a localized two-axis settings navigator: Left/Right switches
 between General, Models, Tools, Connections, Data, and About tabs; Up/Down

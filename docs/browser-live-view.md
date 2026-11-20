@@ -18,7 +18,7 @@ the shared persistent `persist:cyrene-browser` partition. Cookies and login stat
 therefore remain available across conversations. Browser tool calls are routed
 by the originating conversation ID and share that conversation's visible tabs.
 Deleting a conversation closes its tabs without clearing the shared login data.
-An Electron RPC failure is reported instead of silently opening a second browser.
+If the connection to Electron fails, the tool reports the error.
 
 When Cyrene runs without Electron (source Web UI or CLI), `browser_navigate` can
 fall back to a plain HTTP fetch (`httpx`). For full non-desktop automation, live

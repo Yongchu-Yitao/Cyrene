@@ -4,9 +4,7 @@
 
 ## 插件原生 Agent Runtime
 
-Cyrene 现在使用由插件组装的一套连续 Agent Runtime，不再先经过路由阶段、再
-进入另一套执行阶段。用户消息进入同一个可持久恢复的 Run，并在其中连续完成
-模型输出、工具调用、向用户提问、取消、恢复、上下文压缩和最终结果投递。
+Cyrene 通过插件组装助理。每条用户消息都会启动一次可恢复的运行。助理在这次运行里调用模型、使用工具、向用户提问，并交付结果。运行期间可以压缩上下文，也可以取消或恢复任务。
 
 ```text
 用户消息
@@ -62,9 +60,9 @@ Run 组装再用当前对话选项触发这些 Hook，得到这一轮实际发�
 Plugin Center 控制全局可用性；Composer Context 插件控制每个对话的选择；工具
 可见性则是第三个独立开关：“Agent 直接可见”会把当前 Schema 放入模型即时 Tool
 List，“Agent 寻找使用”则只通过 Toolbox 发现。两条路径解析的是同一个活动 Plugin，
-经过同一套 Schema 校验和 Hook 审核，不存在第二份工具实现。
+经过相同的参数校验和权限审核。
 
-ContextTree 不只是 Transcript，也是完整的组装记录。它持久化 System Root、带来源
+上下文树记录每轮对话及模型收到的内容。它持久化 System Root、带来源
 的有序 Context Mount、User/Assistant Node、Tool Call/Result、Model Identity 与
 Usage、Compaction Node、Subagent State 和恢复 Checkpoint。“对话上下文”面板和 CLI
 `/context` 都投影这棵 Tree，因此界面显示的构成就是实际发送给模型的构成。
@@ -85,16 +83,11 @@ Hook 属于 ContextTree，并在恢复后保留 Plugin Binding。Session 打开�
 | `SessionEnd` | Run 已有持久结果后，完成插件拥有的收尾工作。 |
 | `Stop` | 用户停止 Run 或 Session 关闭时，取消或关闭插件拥有的工作。 |
 
-Context Contribution 是普通 Plugin Output，不是 Model Router 内部的字符串拼接。
-每项贡献都有稳定 Tree Identity、Mount Position、Source 与 Failure Policy。System
-Prompt、Composer Context 等必需 Provider Fail Closed；可选的临时 Runtime Context
-可以 Fail Open。Session Mount 始终位于 Turn Mount 之前；稳定 Identity 与逐字节复用
-能保留 Provider Prompt Cache 前缀，切换选项只生成下一轮明确的动态后缀。
-只有 SessionStart Mount 会投影到首条 System Message；TurnStart Mount 追加到当前
-User Message，形成 `稳定 system → 既有历史 → 当前 user + 动态后缀` 的缓存顺序。
-冻结前缀带有持久依赖指纹，覆盖 SessionStart Hook 拓扑、贡献插件包实现版本、SOUL
-状态与内容、稳定 Memory Snapshot，以及已学习技能版本。指纹变化只创建一次新的稳定
-Epoch，之后未变化的轮次继续复用。
+上下文是插件的一种输出。插件每提供一段内容，Cyrene 就在上下文树里记下它的标识、来源、插入位置，以及加载失败时该怎么处理。系统指令和输入框选定的上下文必须准备好，本轮才会调用模型。可选的临时信息加载失败时，本轮可以继续。
+
+会话开始时，Cyrene 把 `SessionStart` 插件提供的内容放入第一条系统消息。每轮开始时，它把 `TurnStart` 插件提供的内容附在本轮用户消息末尾。例如，在输入框里切换工作区后，新的工作区选择会随下一条消息发给模型。已有的对话记录保持原样。
+
+为了复用模型服务的缓存，Cyrene 会原样保留开头的系统消息。它会记录这段内容依赖的会话启动钩子及其连接关系、插件版本、SOUL 的状态和内容、记忆快照，以及已学习技能的版本。其中一项发生变化，就重新生成一次开头的消息，供后续各轮继续使用。
 
 ## Runtime 启动与迁移
 
@@ -109,7 +102,7 @@ Epoch，之后未变化的轮次继续复用。
 主数据库是 `store/cyrene.runtime.database`。如果存在旧
 `store/cyrene.db` 且新 Target 未承载数据，启动会使用 SQLite Backup API，
 校验 Snapshot，写入幂等 Marker，并保留 Source 用于回滚。如果 Target 已有
-数据但状态不明确，启动会停止而不是覆盖。
+数据但状态不明确，Cyrene 会停止启动，保留现有数据。
 
 ## 主要功能
 
@@ -149,15 +142,13 @@ Short-term Entry 保存情绪、提及次数和 Fact/Pattern/Preference/Emotion 
 托管附件、内容抽取、分块、本地向量、混合检索、Zotero 同步、Workbench HTTP
 Route、全局搜索与 Agent 工具。数据统一保存在
 `data/plugin_data/cyrene_knowledge/`，所有记录按 Workbench Project 隔离。
-Chat Attachment 和 Generated Export 都进入同一个
-插件服务；旧 `cyrene.knowledge` 与 Workbench Library Route 不再位于活动调用链。
+聊天附件和导出文件都由这个插件管理。
 Agent 通过 `toolbox.list → describe → invoke` 使用这些工具。
 
 ### Entity
 
 可编辑的 `cyrene_entity` 插件包通过
-`toolbox.list → describe → invoke` 提供 `entity.track`、`query`、`update`、`delete`；
-旧实体工具入口不再注册。
+`toolbox.list → describe → invoke` 提供 `entity.track`、`query`、`update`、`delete`。
 
 ### Skill
 
@@ -185,9 +176,7 @@ Electron 与 Web 后端仅作为客户端连接，因此关闭视图不会结束
 
 ### Conversation 拥有的 Goal 与 Dynamic Workspace
 
-Workbench 只有一种持久工作单元：Conversation。旧 Task 产品及其 Runtime Branch、
-Route、Persistence Model 与页面已删除。可选能力把状态挂到 Conversation，而不是
-创建第二种 Session：
+Cyrene 按对话保存工作进度。启用的插件将目标、计划和工作区状态保存在所属对话中。
 
 ```text
 Conversation
@@ -218,8 +207,7 @@ Selected Resource 与 Layout 按 Conversation 持久化。
 
 Project-type Plugin 检测 JavaScript/TypeScript、Python、TeX、Go、Rust、Java、
 Make 与 GitHub Workspace 的安全 Action，并跟随对应 Runtime Extension 激活。
-Action Descriptor 是数据而不是任意 Shell Snippet：Owning Provider 在已验证的
-Workspace 内解析 Executable 与 Argument，统一 Execution Service 管理 Identity、
+每项操作都列出要运行的程序和参数。插件在经过验证的工作区中解析这些信息，统一 Execution Service 管理 Identity、
 Status、Terminal Attachment、Diagnostic、Artifact、Endpoint、Interruption 与
 Restart。因此 TeX PDF 编译和应用开发服务器共用同一条 Build/Run/Test/Preview
 路径。
@@ -241,7 +229,7 @@ Restart。因此 TeX PDF 编译和应用开发服务器共用同一条 Build/Run
 Finalize 防止重复执行，也避免旧 Run 覆盖并发 Pause/Edit。Agent Action 直接通过
 Workbench Chat Runtime 执行并把一个最终结果投递回 Workbench。插件包的
 `application_setup` 同时注册 Workbench Route、全局搜索 Provider 和 Schedule
-模块；插件未加载时不会回退到另一套内置定时任务后端。
+模块。
 
 ### Cyrene 自管理控制面
 
@@ -354,9 +342,4 @@ workspace/
 store/
 ```
 
-`cyrene.core` 不得导入 `cyrene.plugins` 或 `cyrene.workbench`。产品层通过
-Plugin Scope 提供 Model 和 Application Service，Workbench 在打开 Core Session
-时显式传入该 Application Scope。原顶层 `agent`、`route`、`webui` 包已删除，
-不发布兼容外壳或重复实现。旧 Task 产品同样不存在：Goal 与 Plan 是 Conversation
-上的 Plugin State，不是另一套 Workbench Runtime。Workbench 业务模块按领域组织；
-包根目录不放业务 Service 实现，也不保留旧路径转发模块。
+核心层 `cyrene.core` 独立于插件层和界面层。打开会话时，界面层通过插件作用域向核心传入模型和应用服务。目标和计划由插件按对话保存。界面层的业务代码按功能组织在 `cyrene.workbench` 的各个子包中。

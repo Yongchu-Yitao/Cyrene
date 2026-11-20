@@ -1,6 +1,6 @@
 # Cyrene PluginPack 自定义界面
 
-Cyrene 只有一套插件框架。自定义工具、应用服务、上下文 Hook、模型和 Workbench 界面都由 `Plugin` / `PluginPack` 提供；旧的 `plugin.json`、项目插件子进程和 `cyrene.view` 扩展点已废弃。
+Cyrene 只有一套插件框架。自定义工具、应用服务、上下文 Hook、模型和 Workbench 界面都由 `Plugin` / `PluginPack` 提供。
 
 [English](project-plugins.md) · [简体中文](project-plugins.zh-CN.md)
 

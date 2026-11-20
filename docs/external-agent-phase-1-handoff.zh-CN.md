@@ -86,7 +86,7 @@ Universal Agent Runtime（内部稳定 SPI）
         └── Agent 自有认证/配置
 ```
 
-“Universal”指 Cyrene 内部统一生命周期、会话、能力、事件和错误，不是要求所有 Agent 实现一份功能完全相同的新外部协议。
+“Universal”指 Cyrene 用相同的方式管理各个 Agent 的生命周期、会话、能力、事件和错误。
 
 ## 5. 内部通用 Agent 接口
 
@@ -292,7 +292,7 @@ Manifest API        cyrene.agent/v1
 
 复制内容不得包含 Cyrene Shared Token、Model Gateway Token、API Key 或任何长期凭据。接口只绑定本机并沿用 Cyrene 现有桌面认证边界。
 
-建议采用安装提案而不是允许外部 Agent 静默执行安装：
+外部 Agent 可以提交安装提案，由用户确认后执行。
 
 ```json
 POST /api/extensions/agents/install-proposals
@@ -941,7 +941,7 @@ Slash Command 也必须由 Agent Capability/Command 列表提供。Cyrene 专属
 - 通过 `installationId` 关联对话和安装实例。
 - Event 包含 `actorId`、`runId` 和可选 `parentRunId`。
 - Artifact、Tool Call 和 Permission Request 都绑定具体 `actorId`。
-- Agent Runtime 通过 Driver Registry 创建连接，而不是 Chat Route 中的产品分支。
+- Agent Runtime 通过 Driver Registry 创建连接。
 - 每个 Agent 和会话分别记录支持的能力。
 
 未来聚合层应该作为另一个实现同一内部 Agent 接口的“编排 Agent”，因此无需重写 Cyrene 前端。

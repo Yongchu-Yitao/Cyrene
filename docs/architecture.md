@@ -4,10 +4,7 @@
 
 ## Plugin-Native Agent Runtime
 
-Cyrene now uses one continuous Agent runtime assembled from plugins. There is
-no routing phase followed by a separate execution phase: a user message enters
-one durable run, and that run continues through model output, tool calls,
-questions, cancellation, recovery, context compaction, and final delivery.
+Cyrene assembles each agent from plugins. A user message starts a durable run in which the agent calls the model, uses tools, asks questions, and delivers the result. The runtime handles cancellation, recovery, and context compaction within that run.
 
 ```text
 User message
@@ -72,9 +69,9 @@ per-conversation selections. Tool visibility is a third, independent choice:
 **directly visible** places the current schema in the model's immediate tool
 list, while **Agent finds and uses** keeps it behind toolbox discovery. Both
 paths resolve the same active Plugin object and pass the same schema validation
-and Hook review; there is no duplicate tool implementation.
+and hook review.
 
-The ContextTree is the composition record, not only a transcript. It persists
+The context tree records each turn and the inputs assembled for the model. It persists
 the system root, ordered context mounts and their sources, user and assistant
 nodes, tool calls and results, model identity and usage, compaction nodes,
 subagent state, and recovery checkpoints. The Conversation Context panel and
@@ -98,20 +95,11 @@ Plugin IDs before pending work resumes.
 | `SessionEnd` | Finalizes plugin-owned work after the run has a durable result. |
 | `Stop` | Cancels or closes plugin-owned work when the user stops a run or the session shuts down. |
 
-Context contributions are ordinary Plugin output, not string concatenation in
-the model router. A contribution has a stable tree identity, mount position,
-source, and failure policy. Required providers such as the system prompt and
-composer context fail closed; optional, transient runtime context may fail open.
-Session mounts always precede turn mounts. Stable identities and byte-for-byte
-reuse preserve provider prompt-cache prefixes, while replacing a selection
-creates the next explicit suffix rather than silently mutating history.
-Only SessionStart mounts are projected into the leading system message.
-TurnStart mounts are appended to the current user message, producing the cache
-order `stable system → prior history → current user + dynamic turn suffix`.
-The frozen prefix is keyed by a durable dependency fingerprint covering the
-SessionStart Hook topology, contributing pack implementation versions, SOUL
-state/content, stable memory snapshots, and learned-skill revisions. A changed
-fingerprint creates one new stable epoch; unchanged later turns reuse it.
+Plugins provide context to the model. For each contribution, Cyrene records a stable ID in the context tree, its source, where it belongs, and how to handle a loading error. The system instructions and the context selected in the composer must be ready before Cyrene calls the model. A turn can proceed if an optional piece of runtime context is unavailable.
+
+At the start of a conversation, Cyrene puts the content from `SessionStart` hooks in the first system message. At the start of each turn, it appends the content from `TurnStart` hooks to the current user message. For example, when you switch workspaces in the composer, the new selection goes to the model with your next message. Earlier messages stay as they were.
+
+Cyrene reuses the exact bytes of the opening system message so the model provider can reuse its prompt cache. It tracks the arrangement of session-start hooks, the versions of contributing plugins, SOUL state and content, the memory snapshot, and learned skill versions. When a dependency changes, Cyrene rebuilds the opening message once and reuses it on subsequent turns.
 
 ## Runtime Startup and Migration
 
@@ -126,8 +114,7 @@ resolve paths → create runtime directories → migrate legacy database
 The active main database is `store/cyrene.runtime.database`. If the historical
 `store/cyrene.db` exists and the new target is not populated, startup uses the
 SQLite backup API, verifies the snapshot, writes an idempotent migration marker,
-and retains the source for rollback. Ambiguous populated targets stop startup
-instead of overwriting data.
+and retains the source for rollback. If the target already holds data and its migration status is unclear, startup stops and preserves the data.
 
 ## Key Features
 
@@ -169,8 +156,7 @@ hybrid retrieval, Zotero synchronization, Workbench HTTP routes, global search,
 and Agent tools. Its data lives under
 `data/plugin_data/cyrene_knowledge/`; every row is keyed by Workbench project.
 Chat attachments and generated exports enter through
-the same service. The old `cyrene.knowledge`/Workbench-library route stack is
-not part of the active request path. Agent access uses
+the same service. Agent access uses
 `toolbox.list → describe → invoke`.
 
 ### Entities
@@ -207,10 +193,7 @@ Codebase-aware implementations live in the editable
 
 ### Conversation-owned goals and dynamic workspaces
 
-Workbench has one durable work unit: the conversation. The former Task product,
-its runtime branch, routes, persistence model, and page are removed. Optional
-capabilities attach their state to the conversation instead of creating a
-second session type:
+Cyrene saves work by conversation. Enabled plugins keep goals, plans, and workspace state with the conversation they belong to.
 
 ```text
 Conversation
@@ -245,9 +228,7 @@ the selected resource and layout are persisted per conversation.
 
 Project-type plugins detect safe actions for JavaScript/TypeScript, Python,
 TeX, Go, Rust, Java, Make, and GitHub workspaces. Their activation follows the
-matching runtime extensions. Action descriptors are data, not arbitrary shell
-snippets: the owning provider resolves the executable and arguments inside the
-validated workspace, while one execution service manages identity, status,
+matching runtime extensions. Each action describes a program and its arguments. The provider resolves them within the validated workspace, while one execution service manages identity, status,
 terminal attachment, diagnostics, artifacts, endpoints, interruption, and
 restart. This is why TeX PDF compilation and an application development server
 use the same Build/Run/Test/Preview path.
@@ -272,8 +253,7 @@ and revision-checked finalization prevent duplicate execution and stale runs fro
 undoing a concurrent pause or edit. Agent actions execute through the Workbench
 Chat runtime and project one result back into Workbench. The pack's
 `application_setup` contribution owns its Workbench routes, global-search
-provider, and Schedule module activation, so removing or breaking the pack does
-not leave a second built-in schedule backend active.
+provider, and Schedule module activation.
 
 ### Cyrene self-management control plane
 
@@ -397,12 +377,4 @@ workspace/                           # Source-run SOUL.md and user workspace
 store/                               # Source-run SQLite databases
 ```
 
-`cyrene.core` never imports `cyrene.plugins` or `cyrene.workbench`. The product
-layer supplies model and application services through plugin scopes, while the
-Workbench explicitly receives that application scope when opening a core
-session. The former top-level `agent`, `route`, and `webui` packages have been
-removed; no compatibility packages or duplicate implementations are shipped.
-The former Task product is likewise absent: goals and plans are plugin state on
-conversations, not another Workbench runtime. Workbench business modules are
-grouped by domain; its package root contains no business-service
-implementations or legacy forwarding modules.
+The core package, `cyrene.core`, stays independent of the plugin and interface layers. When the interface opens a core session, it passes in model and application services through a plugin scope. Plugins store goals and plans on each conversation. The `cyrene.workbench` subpackages organize application services by function.

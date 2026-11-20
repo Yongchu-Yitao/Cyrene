@@ -147,7 +147,7 @@ Agent 可以填写当前可见 Composer。发送或发送 Guidance 是 R2，必�
 目标 Composer，再调用其显式 Submit。
 
 Typed Settings 覆盖全部非模型 Settings Tab。直接修改携带 Revision；若用户同时
-修改，Agent 会得到冲突而不是覆盖用户新值。Secret、OAuth、扫码、文件选择、
+修改，系统会保留用户的新值，并向助理报告冲突。Secret、OAuth、扫码、文件选择、
 系统权限和 Models Tab 仍由用户亲自完成。
 
 Verbose Context Trace 不属于 WebUI；通过 `cyrene flow`、
@@ -229,10 +229,7 @@ Ctrl+O、Esc、Q 或 Ctrl+C 返回后详情会真正从界面消失，不写入�
 总数、彩色比例条，以及“系统前缀 / 临时注入 / 对话消息”分组。用户、助手、
 工具和各系统注入块均缩进显示，并使用与 App 对应的语义颜色。
 
-这些分组直接投影持久 ContextTree，不是另一套 Prompt 估算。`SessionStart` 在每个
-对话中只冻结一次 System Prompt、SOUL、Memory 与已学习技能；`TurnStart` 每轮追加
-输入框选择的 Workspace、MCP、Attachment 与 Runtime Context。稳定前缀逐字节复用，
-变化只发生在其后的动态后缀。详见[架构说明](architecture.zh-CN.md#插件如何组成一个-agent)。
+这些分组来自对话保存的上下文树。系统指令、人格、记忆和已学习的技能构成开头的系统消息。每轮对话会带上输入框里选定的工作区、MCP 服务和附件，以及本轮所需的其他信息。[上下文的组成](architecture.zh-CN.md#插件如何组成一个-agent)
 
 `/config` 使用本地化的两轴设置导航：←/→ 在“常规、模型、工具、连接、数据、
 关于”Tab 之间切换，↑/↓ 选择当前 Tab 的详细设置项，Enter 打开。常规设置和

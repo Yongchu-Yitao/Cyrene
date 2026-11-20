@@ -173,7 +173,7 @@
         <ul>
           <li><strong>Workbench UI</strong>——项目中心化桌面体验：项目隔离、实时聊天与执行状态、Session、Browser、Knowledge、Memory、Schedule、Map 和 Settings。</li>
           <li><strong>Context Trace</strong>——每次 LLM 调用标记 <code>_ctx</code> 来源元数据，并可通过 JSONL、API 或 CLI 精确追溯上下文来源。</li>
-          <li><strong>Electron 桌面应用</strong>——CI 自动构建 macOS、Windows（x64 + ARM64）和 Linux 包。凭据存在 OS 钥匙串，浏览器工具复用 Electron 内嵌 Chromium，不携带第二套 Playwright 浏览器。</li>
+          <li><strong>Electron 桌面应用</strong>——CI 自动构建 macOS、Windows（x64 + ARM64）和 Linux 包。桌面浏览器工具直接使用 Electron 内置的 Chromium。</li>
           <li><strong>引导向导</strong>——首次启动自动运行，引导配置 API 密钥、模型和人格，无需手动编辑文件。</li>
           <li><strong>地图引擎</strong>——AMap / Leaflet 交互式地图，支持标注点和路线。</li>
           <li><strong>Telegram / WeChat Bot</strong>——从聊天软件访问同一套连续 Agent Runtime 和已启用工具。</li>
@@ -243,7 +243,7 @@
         <h3>Agent Core</h3>
         <ul>
           <li><strong>Plugin-native Agent runtime</strong> — one continuous, recoverable run uses context plugins, directly visible tools, and <code>toolbox.list → describe → invoke</code> discovery. See <a href="#" onclick="navigateTo('architecture')">Architecture</a>.</li>
-          <li><strong>SOUL.md personality</strong> — a self-rewriting personality document maintained by a steward agent. Learns your preferences and evolves across sessions instead of resetting.</li>
+          <li><strong>SOUL.md personality</strong> — a self-rewriting personality document maintained by a steward agent. Learns your preferences and evolves across sessions.</li>
           <li><strong>Deep Research</strong> — multi-round pipeline: sub-question planning, parallel search, source reading, and structured PDF report export.</li>
           <li><strong>Deep Reflection</strong> — reframes ambiguous or complex requests over several internal rounds before responding, trading latency for accuracy.</li>
           <li><strong>Behavior Learning</strong> — distills reusable action patterns from past conversations, making recurring workflows faster over time.</li>
@@ -1225,7 +1225,7 @@ cyrene stop</code></pre></div>
 
       <section data-topic="conversation-workspace">
         <h2>Conversation、Goal 与 Workspace</h2>
-        <p>Conversation 是唯一持久工作单元；旧 Task 产品、页面和独立 Runtime 已删除。<code>cyrene_goal</code> 把目标、时间限制、Review 与循环状态存入 Conversation，<code>cyrene_control</code> 保存 Plan 与 Step Progress。只有独立 Review 通过或用户手动接受才会完成 Goal。</p>
+        <p>Cyrene 按对话保存工作进度。<code>cyrene_goal</code> 把目标、时间限制、Review 与循环状态存入 Conversation，<code>cyrene_control</code> 保存 Plan 与 Step Progress。只有独立 Review 通过或用户手动接受才会完成 Goal。</p>
         <p>File/Directory Tool 只发布经过 Workspace 校验的 Resource Effect。统一 Workspace Surface 根据内容显示 Editor、Terminal、Problems、Review、Preview 与 Files；Project-type Plugin 为 JavaScript/TypeScript、Python、TeX、Go、Rust、Java、Make 与 GitHub 提供 Action Detection，并由匹配 Runtime Extension 自动启用。</p>
       </section>
 
@@ -1271,7 +1271,7 @@ cyrene stop</code></pre></div>
       </div>
       <section data-topic="plugin-runtime">
         <h2>Plugin-Native Agent Runtime</h2>
-        <p>Cyrene uses one continuous, recoverable Agent run instead of separate routing and execution phases. Model output, tool calls, user questions, cancellation, recovery, context compaction, and final delivery all belong to the same run.</p>
+        <p>Cyrene runs each request as a continuous, recoverable task. Model output, tool calls, user questions, cancellation, recovery, context compaction, and final delivery all belong to the same run.</p>
         <div class="flow-diagram">
           <div class="flow-node flow-start">User message</div>
           <div class="flow-arrow">↓</div>
@@ -1303,7 +1303,7 @@ cyrene stop</code></pre></div>
       </section>
       <section data-topic="conversation-workspace">
         <h2>Conversations, Goals, and Workspaces</h2>
-        <p>The conversation is the only durable work unit; the former Task product, page, and separate runtime are removed. <code>cyrene_goal</code> stores the objective, time limit, review, and loop status on the conversation, while <code>cyrene_control</code> stores its plan and step progress. Only a passing independent review or explicit manual acceptance completes a goal.</p>
+        <p>Cyrene saves work by conversation. <code>cyrene_goal</code> stores the objective, time limit, review, and loop status on the conversation, while <code>cyrene_control</code> stores its plan and step progress. Only a passing independent review or explicit manual acceptance completes a goal.</p>
         <p>File and directory tools publish only workspace-validated resource effects. One workspace surface reveals Editor, Terminal, Problems, Review, Preview, and Files according to available content. Project-type plugins detect actions for JavaScript/TypeScript, Python, TeX, Go, Rust, Java, Make, and GitHub workspaces and are enabled by matching runtime extensions.</p>
       </section>
       <section data-topic="self-control">
@@ -1468,7 +1468,7 @@ cyrene stop</code></pre></div>
         <ul>
           <li>Stops being injected into the context window</li>
           <li>Is no longer recalled or cited</li>
-          <li>Remains on disk instead of being destructively deleted</li>
+          <li>The record stays on disk</li>
         </ul>
         <p>This makes recovery possible and prevents a deleted memory from simply being learned again.</p>
       </section>
@@ -1731,7 +1731,7 @@ cyrene stop</code></pre></div>
 
       <section data-topic="setup">
         <h2>设置</h2>
-        <p><strong>Electron 桌面版无需额外安装。</strong>浏览器工具通过本机令牌认证的 RPC 调用内嵌 Chromium；RPC 故障会明确返回，不会静默启动另一套浏览器。</p>
+        <p><strong>Electron 桌面版无需额外安装。</strong>浏览器工具通过本机令牌认证的 RPC 调用内嵌 Chromium。连接失败时，工具会报告错误。</p>
 
         <p>非 Electron 运行的基本功能无需额外依赖：<code>browser_navigate</code> 在没有 Playwright 时会降级为纯文本 HTTP 获取。</p>
 
@@ -1956,7 +1956,7 @@ marp-deck         stdio        connected      4        python mcp_server.py</cod
           <li><strong>stdio</strong> — start a subprocess and communicate through standard input and output; suitable for local tools and scripts</li>
           <li><strong>SSE (Server-Sent Events)</strong> — connect to a remote MCP server over HTTP; suitable for remote tools and APIs</li>
         </ul>
-        <p>Connected capabilities are discovered on demand through <code>integration_tools</code> instead of being appended to the fixed tool bundle.</p>
+        <p>Connected capabilities are discovered on demand through <code>integration_tools</code>.</p>
       </section>
       <section data-topic="adding-servers">
         <h2>Add an MCP Server</h2>
@@ -2026,7 +2026,7 @@ marp-deck         stdio        connected      4        python mcp_server.py</cod
           <li>可编辑的 <code>cyrene_schedule</code> 插件提供创建、查询、编辑、暂停、恢复、取消与执行历史</li>
           <li>隐藏的 <code>schedule.tick</code> 通过插件元数据注册到通用后台 Plugin Host</li>
           <li>任务和 Run History 持久化在 SQLite，并使用 Lease 防止重复执行</li>
-          <li>Workbench Schedule 页面通过同一插件 Runtime 管理任务，不存在第二套旧后端</li>
+          <li>日程页面通过定时任务插件管理任务</li>
         </ul>
       </section>
 
@@ -2045,7 +2045,7 @@ marp-deck         stdio        connected      4        python mcp_server.py</cod
 
       <section data-topic="steward-agent">
         <h2>管家代理（Steward）</h2>
-        <p>管家代理不是用户可调度的任务，而是一个特殊的内置代理，按 <code>STEWARD_INTERVAL</code>（默认 30 分钟）运行：</p>
+        <p>内置管家按 <code>STEWARD_INTERVAL</code>（默认 30 分钟）运行：</p>
         <ul>
           <li>回顾最近的对话历史</li>
           <li>判断需要更新 SOUL.md 的哪些内容</li>
@@ -2077,7 +2077,7 @@ marp-deck         stdio        connected      4        python mcp_server.py</cod
           <li>The editable <code>cyrene_schedule</code> plugin provides create, query, edit, pause, resume, cancel, and execution history</li>
           <li>Its hidden <code>schedule.tick</code> job is registered with the generic background Plugin Host through plugin metadata</li>
           <li>Tasks and run history persist in SQLite, with leases preventing duplicate execution</li>
-          <li>The Workbench Schedule page uses the same Plugin Runtime rather than a second legacy backend</li>
+          <li>The Schedule page manages tasks through the scheduling plugin</li>
         </ul>
       </section>
       <section data-topic="proactive-lottery">
@@ -2094,7 +2094,7 @@ marp-deck         stdio        connected      4        python mcp_server.py</cod
       </section>
       <section data-topic="steward-agent">
         <h2>Steward Agent</h2>
-        <p>The steward is not a user-scheduled task. It is a special built-in agent that runs at <code>STEWARD_INTERVAL</code> (30 minutes by default) to:</p>
+        <p>The built-in steward runs at <code>STEWARD_INTERVAL</code> (30 minutes by default) to:</p>
         <ul>
           <li>Review recent conversation history</li>
           <li>Decide what should change in SOUL.md</li>
