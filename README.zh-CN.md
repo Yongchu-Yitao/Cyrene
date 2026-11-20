@@ -15,7 +15,7 @@
 
 <p><strong>Cyrene · 沿苏州河走走</strong></p>
 
-<video controls src="https://github.com/user-attachments/assets/c9ffbf30-02e5-421b-a27b-2fbd7d92f12d" title="Cyrene · 沿苏州河走走"></video>
+https://github.com/user-attachments/assets/9ab35079-491f-482c-a4a5-50e55683a20b
 
 ## Cyrene 能做什么
 

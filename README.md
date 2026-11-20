@@ -15,7 +15,7 @@
 
 <p><strong>Cyrene · Before Doors Open</strong></p>
 
-<video controls src="https://github.com/user-attachments/assets/aee6b2a2-f380-498d-921f-dace2189597b" title="Cyrene · Before Doors Open"></video>
+https://github.com/user-attachments/assets/41b19f4a-a101-47de-8f74-1ca773ffad03
 
 ## What Cyrene can do
 
