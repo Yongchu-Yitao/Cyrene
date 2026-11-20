@@ -5,27 +5,25 @@
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
 
+<p align="center">
+  <img src="docs/assets/cyrene-hero.png" alt="Cyrene 架构：由上下文、模型与能力插件组装的连续 Agent Runtime，支持并行 Subagent 与本地持久化" width="100%">
+</p>
+
 <h1 align="center">Cyrene — 会成长的 AI Agent</h1>
 
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
-<p align="center">一个开源、本地优先的 AI Agent。它记得你的项目，也能把工作交给你配对的另一台电脑。</p>
-
-## 沿苏州河走走
-
-周末只有半天，正选着沿河散步的路线，同事发来消息，要先过一遍周会预算。看 Cyrene 在同一段对话里处理完周会，接回刚才的路线，把取景点收进手册，再把照片交给家中电脑归档。
-
 https://github.com/user-attachments/assets/c9ffbf30-02e5-421b-a27b-2fbd7d92f12d
 
-## 在 Workbench 里可以这样工作
+## Cyrene 能做什么
 
-- **接着上次的事往下做。** 临时有事，直接在当前对话里说。Cyrene 会保存手头的任务，等你说「继续刚才的计划」，它会带回先前的选择和限制。
-- **在回复里做选择。** 在卡片上选一行、填一份表，或把结果固定在对话右侧。相关卡片还能编成一本带封面和目录的册子，翻页就能查到需要的内容。
-- **选一台合适的电脑开工。** 点开 Cyrene 图标，选一台已配对且有工作区执行权限的设备，新任务就能在那里运行。你可以在本机跟进进度、打开交付的文件。回复文字、运行工具时，图标也会随 Agent 的实际状态变化。
-- **随时翻回依据。** 让助理跨项目找一段资料，点开引用，就能在回答旁边对照原文。也可以用自己的话修订 Cyrene 对项目的记忆。
-
-## 研究、工具与自动化
-
+- **一个会与你共同成长的 Agent**：Cyrene 能跨会话延续 Personality 与有价值
+  的长期记忆，同时让每个 Project 的上下文保持清晰隔离。
+- **让上下文随工作流动**：Cyrene 将上下文编排为可追踪、可共享的 Block；每个
+  Conversation 独立保留 Goal、Plan、Workspace、Memory 与执行状态，Subagent
+  只获取所需上下文；稳定 Block 持续复用，完整构成随时可查。同一段对话里可以切换任务，再带着原有上下文继续。
+- **卡片与册子**：可以在回复里操作卡片，将卡片固定在对话旁，也可以把多张卡片编成带目录的册子。
+- **远程任务**：可以在已配对的电脑上运行新任务，在当前对话里查看进度和结果。
 - **从对话一路做到结果验收**：Cyrene 能规划任务、操作浏览器、编辑文件、执行
   Shell 与 Git、连接 MCP Server、调用 Skill、并行委派 Subagent、验证结果，并
   在中断后继续执行。
@@ -44,23 +42,17 @@ https://github.com/user-attachments/assets/c9ffbf30-02e5-421b-a27b-2fbd7d92f12d
   和操作自己的界面、调整设置、管理 Project 与 Chat、备份数据并处理更新。
 - **承载长期思考的一体化工作空间**：Project 将 Conversation、Goal Loop、
   Plan、可编辑文件、Terminal、Review、Memory、Knowledge、Entity、Schedule
-  与 Literature 汇集到同一个 Workbench，并可在浏览器或桌面端使用。
+  与 Literature 汇集在一起，可在浏览器或桌面端使用。
 - **离开之后也会继续工作**：支持一次性与周期性自动任务，并可通过桌面、
   Telegram 或微信接收结果通知。
 
 ## 一个由插件组装出来的 Agent
 
-<p align="center">
-  <img src="docs/assets/cyrene-hero.png" alt="Cyrene 架构：由上下文、模型与能力插件组装的连续 Agent Runtime，支持并行 Subagent 与本地持久化" width="100%">
-</p>
-
 Cyrene 的人格、记忆、模型、工具与工作流都由插件提供，而不是固化在一个不可改变
 的 Agent 中。不同 Conversation 和 Project 可以启用不同能力；你也可以在 Plugin
 Center 中管理插件和工具的可见性。
 
-上图展示了原生 Cyrene Agent 的当前架构：
-
-- **单一连续运行**：Workbench 组织 Project 和 Conversation；每次 Run 连续处理
+- **单一连续运行**：Cyrene 组织 Project 和 Conversation；每次 Run 连续处理
   模型输出、工具调用、用户提问与最终交付，Runtime 内置取消与恢复机制。
 - **ContextTree 与 Hook**：上下文插件将系统指令、SOUL.md、记忆和会话选择组装为
   持久化上下文树。Hook 管理生命周期行为与工具权限审查；上下文压缩限制模型输入
@@ -107,7 +99,7 @@ npm install
 npm run dev
 ```
 
-Workbench 后端和终端客户端命令：
+后端和终端客户端命令：
 
 ```bash
 uv run cyrene
@@ -115,7 +107,7 @@ uv run cyrene chat
 uv run cyrene status
 ```
 
-裸命令 `cyrene` 会使用新 Agent Runtime 启动 Workbench 后端。
+裸命令 `cyrene` 会使用新 Agent Runtime 启动后端。
 `cyrene chat` 提供流式回复、工具/计划进度、权限确认、附件、历史对话切换、
 运行中断与断线恢复；一次性调用可使用
 `cyrene chat --json "你的任务"`。
@@ -143,4 +135,4 @@ uv run cyrene status
 
 ## Android
 
-Android 移动端已整合到 [`mobile/`](mobile/README.md)，与桌面端共用当前提交的 Workbench 和 Python 后端。参见[统一仓库与自动构建说明](project-notes/android-monorepo.zh-CN.md)。
+Android 移动端已整合到 [`mobile/`](mobile/README.md)，与桌面端共用 Web 界面和 Python 后端。参见[统一仓库与自动构建说明](project-notes/android-monorepo.zh-CN.md)。

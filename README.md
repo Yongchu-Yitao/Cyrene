@@ -5,27 +5,28 @@
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status">
 </p>
 
+<p align="center">
+  <img src="docs/assets/cyrene-hero.png" alt="Cyrene architecture: a continuous Agent runtime composed from context, model and capability plugins, with parallel subagents and local persistence" width="100%">
+</p>
+
 <h1 align="center">Cyrene — AI Agent That Evolves</h1>
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-<p align="center">A local-first, open-source AI agent that remembers your projects and can put your other computers to work.</p>
+https://github.com/user-attachments/assets/aee6b2a2-f380-498d-921f-dace2189597b
 
-## Before doors open
+## What Cyrene can do
 
-A musician is choosing an opening track when the stage manager moves soundcheck to six. Watch Cyrene pick up the set list again, turn it into a stage book, and send the mix export to the studio Mac.
-
-https://github.com/user-attachments/assets/d5edd0c6-4275-4b3c-9193-20164cecd945
-
-## Inside the Workbench
-
-- **Pick up where you left off.** Handle a side request in the same chat. Cyrene saves the current task and brings back its decisions and constraints when you return.
-- **Work directly in a reply.** Choose a row on a card, fill in a form, or pin a result beside the conversation. Gather related cards into a book with a cover, chapters, and a table of contents.
-- **Choose where a task runs.** Click the Cyrene icon to select a paired computer with access to the workspace. Start a new task there, then follow its progress and open delivered files from your local chat. The animated icon reflects what the agent is doing, from answering to running a tool.
-- **Keep useful knowledge close.** Ask the assistant to find a passage across your projects and open the cited document beside the answer. Review and edit what Cyrene remembers about your work.
-
-## Research, tools, and automation
-
+- **An agent that grows with you** — Cyrene carries its personality and useful
+  memories across sessions, while keeping every project's context cleanly
+  isolated.
+- **Context that flows with the work** — Cyrene composes traceable, shareable
+  context blocks: each conversation keeps its own goal, plan, workspace,
+  memory, and execution state, while subagents receive only the context they
+  need. Stable blocks remain reusable, and the full composition stays
+  inspectable. You can switch tasks in one conversation and resume either with its own context.
+- **Cards and books** — interact with cards in a reply, pin them beside the conversation, or collect them into a book with a table of contents.
+- **Remote tasks** — run a new task on a paired computer and follow its progress from the current chat.
 - **From conversation to verified results** — Cyrene can plan, browse, edit
   files, run shell and Git operations, connect MCP servers, use skills, delegate
   to parallel subagents, verify the result, and resume interrupted work.
@@ -47,25 +48,18 @@ https://github.com/user-attachments/assets/d5edd0c6-4275-4b3c-9193-20164cecd945
   chats, back up data, and handle updates.
 - **A workspace for long-running thinking** — projects bring conversations,
   goal loops, plans, editable files, terminals, reviews, memories, knowledge,
-  entities, schedules, and literature together in one Workbench, available in
-  both the browser and desktop app.
+  entities, schedules, and literature together in the browser and desktop app.
 - **Automation that keeps working** — schedule one-shot or recurring tasks and
   receive results through desktop, Telegram, or WeChat notifications.
 
 ## One Agent, assembled from plugins
-
-<p align="center">
-  <img src="docs/assets/cyrene-hero.png" alt="Cyrene architecture: a continuous Agent runtime composed from context, model and capability plugins, with parallel subagents and local persistence" width="100%">
-</p>
 
 Cyrene's personality, memory, models, tools, and workflows come from plugins
 rather than a fixed, unchangeable agent. Each conversation and project can use a
 different set of capabilities, while Plugin Center lets you manage plugins and
 tool visibility.
 
-The diagram above shows the native Cyrene Agent architecture:
-
-- **One continuous run** — Workbench organizes projects and conversations;
+- **One continuous run** — Cyrene organizes projects and conversations;
   each run continues through model output, tool calls, user questions, and
   final delivery, with cancellation and recovery built into the runtime.
 - **ContextTree and Hooks** — context plugins compose system instructions,
@@ -117,7 +111,7 @@ npm install
 npm run dev
 ```
 
-Workbench backend and terminal client commands:
+Backend and terminal client commands:
 
 ```bash
 uv run cyrene
@@ -125,7 +119,7 @@ uv run cyrene chat
 uv run cyrene status
 ```
 
-Bare `cyrene` starts the Workbench backend with the new agent runtime.
+Bare `cyrene` starts the backend with the new agent runtime.
 `cyrene chat` provides streaming replies, tool and plan progress, permission
 prompts, attachments, conversation switching, interruption, and run resume.
 For scripts, use `cyrene chat --json "your task"`.
@@ -153,4 +147,4 @@ see [Installation](docs/installation.md) and
 
 ## Android
 
-Android development now lives in [`mobile/`](mobile/README.md), sharing this checkout’s Workbench and Python backend. See the [monorepo build guide](project-notes/android-monorepo.zh-CN.md).
+Android development now lives in [`mobile/`](mobile/README.md), sharing the same web interface and Python backend. See the [monorepo build guide](project-notes/android-monorepo.zh-CN.md).
