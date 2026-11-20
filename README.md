@@ -13,7 +13,9 @@
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-https://github.com/user-attachments/assets/aee6b2a2-f380-498d-921f-dace2189597b
+<p><strong>Cyrene · Before Doors Open</strong></p>
+
+<video controls src="https://github.com/user-attachments/assets/aee6b2a2-f380-498d-921f-dace2189597b" title="Cyrene · Before Doors Open"></video>
 
 ## What Cyrene can do
 

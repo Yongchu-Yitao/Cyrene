@@ -13,7 +13,9 @@
 
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
-https://github.com/user-attachments/assets/c9ffbf30-02e5-421b-a27b-2fbd7d92f12d
+<p><strong>Cyrene · 沿苏州河走走</strong></p>
+
+<video controls src="https://github.com/user-attachments/assets/c9ffbf30-02e5-421b-a27b-2fbd7d92f12d" title="Cyrene · 沿苏州河走走"></video>
 
 ## Cyrene 能做什么
 
