@@ -1348,8 +1348,9 @@ def test_frontend_registers_model_services_and_live_context_contract():
     assert '"model_discovery_catalog_not_found"' in settings
     assert '"model_discovery_response_invalid"' in settings
     assert "modelConfigurationTechnicalDetail(error)" in settings
-    assert "copyModelTechnicalDetail(v.discovery.technicalDetail, v.props)" in settings
-    assert 'h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list") + " · " + v.profiles.length)' in settings
+    model_list = (root / "src/cyrene/workbench/webui/frontend/features/settings/editable-model-list.jsx").read_text()
+    assert "copyModelTechnicalDetail(v.discovery.technicalDetail, v.props)" in model_list
+    assert '<h4 id="wb-mcfg-profiles-heading">{t("settings.modelList")} <small>{v.profiles.length}</small></h4>' in model_list
     assert "档案描述一个可被多个用途引用的远端模型。" not in settings
     assert "连接配置与模型档案" not in settings
     assert '{selectedDescription}' in settings
@@ -1369,16 +1370,16 @@ def test_frontend_registers_model_services_and_live_context_contract():
     assert "modelConfigurationPatchOperations(" in settings
     assert 'role: "combobox"' in settings
     assert 'aria-autocomplete": "list"' in settings
-    assert '"settings.refreshModels"' in settings
+    assert '"settings.refreshModels"' in model_list
     assert 'label(props, "settings.inputPrice", "Input price")' in settings
     assert 'label(props, "settings.outputPrice", "Output price")' in settings
     assert 'label(props, "settings.cachePrice", "Cache price")' in settings
     assert 'props.onChange("price", updateProfilePriceField' in settings
     assert 't("settings.modelCapabilities")' in settings
     assert 'h("button", {' in settings
-    assert 'className="model-selector"' in settings
-    assert 'aria-expanded={selected}' in settings
-    assert '<Disclosure id={region} open={open}>' in settings
+    assert 'className="model-selector"' in model_list
+    assert 'aria-expanded={selected}' in model_list
+    assert '<Disclosure id={region} open={open}>' in model_list
     assert "<WbcRailToolbar collapsed={collapsed}" in overlay
     assert 'searchLabel={t("settings.searchAll")}' in overlay
     assert "config.connections.map(connection" in overlay and "connection.base_url" in overlay
@@ -1630,7 +1631,8 @@ def test_new_model_profile_stays_local_until_explicitly_committed():
     assert "profiles: config.profiles.concat([committed])" in commit_profile
     assert "{ immediate: true }" in commit_profile
 
-    assert "disabled: !!v.profileDraft" in settings
+    model_list = (root / "src/cyrene/workbench/webui/frontend/features/settings/editable-model-list.jsx").read_text()
+    assert "disabled={!!v.profileDraft}" in model_list
     assert "draft: isDraft" in settings
     assert 'onClick={props.onCommit}>{t("common.save")}' in settings
     assert 'onClick={props.onRemove}>{t("common.cancel")}' in settings

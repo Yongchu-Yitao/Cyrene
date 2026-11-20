@@ -89,14 +89,6 @@ async def _handle_message(update: Update, context) -> None:
     chat_id = update.effective_chat.id
     user_text = update.message.text
 
-    # User initiative resets the proactive lottery impulse
-    from cyrene.core.plugin import application_plugin_service
-
-    proactive = application_plugin_service("proactive")
-    reset = getattr(proactive, "reset_lottery", None)
-    if callable(reset):
-        reset()
-
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     service = get_channel_chat_service(

@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from cyrene.workbench.chat import background_projection as projection
-from cyrene.plugins.builtin.cyrene_proactive.projection import create_proactive_chat
 from cyrene.plugins.builtin.cyrene_schedule.projection import create_scheduled_chat
 
 
@@ -28,7 +27,7 @@ def delivery(monkeypatch):
         mutate_one=mutate_one,
     )
     service = SimpleNamespace(repository=repository,
-        create_chat=lambda project, title, model: {'projectId': project, 'title': title, 'model': model},
+        create_chat=lambda project, title, model: {'projectId': project, 'title': 'Scheduled task', 'model': model},
         public_chat_light=lambda chat: dict(chat),
         public_message=lambda message: dict(message),
         merge_chat_messages_chronologically=lambda chat, additions: chat.setdefault('messages', []).extend(additions))
@@ -43,13 +42,12 @@ def delivery(monkeypatch):
     return payload, repository, repair, publish
 
 
-@pytest.mark.parametrize('producer,title', [(create_scheduled_chat, 'Scheduled task'), (create_proactive_chat, 'Proactive work')])
-async def test_background_producers_repair_context_without_duplicate_delivery(delivery, producer, title):
+async def test_scheduled_delivery_repairs_context_without_duplicate_delivery(delivery):
     payload, _, repair, publish = delivery
-    result = await producer('db', 'project', ' first ', chat_id='stable', model='model', source_chat_id='source', lang='en')
+    result = await create_scheduled_chat('db', 'project', ' first ', chat_id='stable', model='model', source_chat_id='source', lang='en')
     original = deepcopy(payload)
-    repeated = await producer('db', 'project', 'replacement must not win', chat_id='stable', lang='en')
-    assert result == repeated == {'chat_id': 'stable', 'project_id': 'project', 'title': title}
+    repeated = await create_scheduled_chat('db', 'project', 'replacement must not win', chat_id='stable', lang='en')
+    assert result == repeated == {'chat_id': 'stable', 'project_id': 'project', 'title': 'Scheduled task'}
     assert payload == original
     chat = payload['chats'][0]
     assert chat['completedTurnCount'] == 0
@@ -111,14 +109,12 @@ async def test_scheduled_result_returns_to_its_existing_source_chat(delivery, mo
     assert publish.await_count == 1
 
 
-async def test_invalid_or_already_delivered_input_does_not_evaluate_usage(delivery, monkeypatch):
-    from cyrene.plugins.builtin.cyrene_proactive import projection as proactive
+async def test_invalid_or_already_delivered_input_does_not_evaluate_usage(delivery):
     def usage(*_):
         raise AssertionError('usage should not be evaluated')
-    monkeypatch.setattr(proactive, 'runtime_usage_message_fields', usage)
-    assert await create_proactive_chat('db', '', 'text', chat_id='stable') is None
+    assert await projection.create_completed_background_chat('db', '', 'text', chat_id='stable', title='Scheduled task', message_fields=usage) is None
     delivery[0]['chats'].append({'id': 'stable', 'title': 'existing', 'messages': []})
-    assert await create_proactive_chat('db', 'project', 'text', chat_id='stable')
+    assert await projection.create_completed_background_chat('db', 'project', 'text', chat_id='stable', title='Scheduled task', message_fields=usage)
 
 
 async def test_completed_context_is_not_rewritten_and_missing_context_retains_durable_ids(monkeypatch):

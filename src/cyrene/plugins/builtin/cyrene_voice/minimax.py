@@ -33,7 +33,7 @@ def _is_minimax_connection(connection: dict[str, Any]) -> bool:
     )
 
 
-def configured_connection() -> dict[str, Any] | None:
+def configured_connection(model: str | None = None) -> dict[str, Any] | None:
     """Return the first enabled MiniMax model connection with an API key."""
     from cyrene.core.plugin import application_plugin_service
 
@@ -49,9 +49,21 @@ def configured_connection() -> dict[str, Any] | None:
             and connection.get("enabled", True)
             and str(connection.get("api_key") or "").strip()
             and _is_minimax_connection(connection)
+            and (model is None or any(
+                profile.get("connection_id") == connection.get("id")
+                and profile.get("enabled", True) and profile.get("model") == model
+                for profile in configuration.get("profiles", [])
+            ))
         ),
         None,
     )
+
+
+VOICES = (DEFAULT_VOICE_ID, "female-shaonv", "presenter_female")
+
+
+def available_models() -> tuple[str, ...]:
+    return tuple(model for model in MODEL_IDS if configured_connection(model))
 
 
 def is_configured() -> bool:
@@ -81,7 +93,7 @@ def synthesize(
 ) -> bytes:
     if model not in MODEL_IDS:
         raise ValueError("unsupported MiniMax speech model")
-    connection = configured_connection()
+    connection = configured_connection(model)
     if connection is None:
         raise RuntimeError("Configure MiniMax in Model Services before using MiniMax TTS")
     payload = {

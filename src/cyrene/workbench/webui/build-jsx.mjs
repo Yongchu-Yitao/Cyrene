@@ -50,6 +50,7 @@ const SETTINGS_ICON_FILES = [
   'webhook.svg',
   'code.svg',
   'plug-connected.svg',
+  'key.svg',
   'wallet.svg',
   'chart-bar.svg',
   'database.svg',

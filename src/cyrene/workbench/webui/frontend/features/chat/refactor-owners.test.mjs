@@ -74,7 +74,7 @@ test('pane promotion and restoration keep reduced-motion commits synchronous', (
   assert.equal(commits,2);
 });
 
-test('clipboard files and item fallback upload attachments without intercepting text or busy input', async () => {
+test('clipboard files preserve text paste, accept running guidance, and block pending answers', async () => {
   const uploads=[];
   const h=harness('./composer-attachments.jsx', {
     wbcLoadAttachments:()=>[],wbcSaveAttachments:()=>{},
@@ -98,6 +98,8 @@ test('clipboard files and item fallback upload attachments without intercepting 
   await settle();h.flush();
   assert.deepEqual(uploads,[[file],[fallback]]);assert.equal(prevented,2);
   options.running=true;h.flush();h.value.onPaste(event({files:[file]}));
-  options.running=false;options.awaitingAnswer=true;h.flush();h.value.onPaste(event({files:[file]}));
-  assert.equal(prevented,2);assert.equal(uploads.length,2);h.unmount();
+  await settle();h.flush();
+  assert.equal(prevented,3);assert.equal(uploads.length,3);
+  options.awaitingAnswer=true;h.flush();h.value.onPaste(event({files:[file]}));
+  assert.equal(prevented,3);assert.equal(uploads.length,3);h.unmount();
 });

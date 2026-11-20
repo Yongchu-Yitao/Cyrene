@@ -42,7 +42,7 @@ const CRITICAL_TOPICS = {
   subagents: ["overview", "lifecycle", "communication", "use-cases", "considerations"],
   browser: ["features", "setup", "workflow", "configuration", "tools"],
   mcp: ["overview", "adding-servers", "management-commands", "example-output", "runtime-management"],
-  scheduler: ["task-types", "scheduling-mechanism", "proactive-lottery", "steward-agent"],
+  scheduler: ["task-types", "scheduling-mechanism", "steward-agent"],
   search: ["search-providers", "deep-research"],
 }
 

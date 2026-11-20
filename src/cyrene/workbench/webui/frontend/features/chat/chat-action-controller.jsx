@@ -2,19 +2,19 @@ import { beginAnswerProjection, guidanceProjection, hydrateAnswerProjection } fr
 import { WbcVoice, wbcClearModelOutputForRetry, wbcErrorText, wbcMergeChronologicalMessages, wbcNormalizePermissionMode, wbcRetryTurnSelection } from "../../workbench-chat.jsx"
 import { wbcIsLiveAgentRequest } from "./conversation.jsx"
 
-function wbcHandleGuidance(context, message) {
+function wbcHandleGuidance(context, message, attachments = []) {
   var chatId = context.activeChatIdRef.current;
   var text = String(message || "").trim();
-  if (!chatId || !text || !context.runtimeEngine.isRunning(chatId)) return Promise.resolve(null);
+  if (!chatId || (!text && !attachments.length) || !context.runtimeEngine.isRunning(chatId)) return Promise.resolve(null);
   var requestId = "guide_" + Date.now();
   var optimistic = {
-    id: "guidance_pending_" + requestId, role: "user", content: text,
+    id: "guidance_pending_" + requestId, role: "user", content: text, attachments,
     createdAt: new Date().toISOString(), guidance: true, optimistic: true,
     clientRequestId: requestId,
   };
   context.setError("");
   guidanceProjection(context, chatId, { type: "begin", message: optimistic }, wbcMergeChronologicalMessages);
-  return context.model.sendGuidance(chatId, text, requestId).then(function (response) {
+  return context.model.sendGuidance(chatId, text, requestId, attachments).then(function (response) {
     if (response && response.userMessage) {
       guidanceProjection(context, chatId, { type: "confirm", message: response.userMessage, optimisticId: optimistic.id }, wbcMergeChronologicalMessages);
     }
@@ -22,7 +22,7 @@ function wbcHandleGuidance(context, message) {
   }).catch(function (error) {
     guidanceProjection(context, chatId, { type: "reject", requestId: requestId }, wbcMergeChronologicalMessages);
     if (error && error.code === "chat_not_running") {
-      context.runtimeEngine.deferSend(chatId, { message: text }, context.model);
+      context.runtimeEngine.deferSend(chatId, { message: text, attachments }, context.model);
       return { deferred: true };
     }
     context.setErrorKind("message");

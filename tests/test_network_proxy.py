@@ -29,6 +29,7 @@ def test_model_client_ignores_implicit_proxy_and_uses_only_opted_in_proxy(
     )
 
     assert direct["trust_env"] is False
+    assert direct["timeout"].connect == 10.0
     assert "proxy" not in direct
 
     monkeypatch.setattr(

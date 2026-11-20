@@ -107,8 +107,11 @@ class StreamDecoder:
         if event_type == "response.output_item.done":
             self.responses_item_done(data)
             return
-        if event_type == "response.failed":
-            self.responses_failed(data)
+        if event_type in {"error", "response.failed"}:
+            envelope = data.get("response") if event_type == "response.failed" else data
+            envelope = envelope if isinstance(envelope, dict) else {}
+            error = envelope.get("error", envelope)
+            self.responses_failed(error if isinstance(error, dict) else {})
             return
         if event_type in {"response.completed", "response.incomplete"}:
             self.responses_completed(data, event_type)
@@ -196,11 +199,7 @@ class StreamDecoder:
                 "arguments": str(item.get("arguments") or "{}"),
             }
 
-    def responses_failed(self, data):
-        failed = data.get("response")
-        failed = failed if isinstance(failed, dict) else {}
-        error = failed.get("error")
-        error = error if isinstance(error, dict) else {}
+    def responses_failed(self, error):
         # Retain only known codes, never upstream messages or request data.
         code = str(error.get("code") or "")
         known_codes = {
@@ -208,6 +207,10 @@ class StreamDecoder:
             "invalid_api_key", "authentication_error", "context_length_exceeded",
             "invalid_prompt", "invalid_request_error", "model_not_found",
         }
+        if code == "credit_balance_exhausted":
+            code = "insufficient_quota"
+        if code not in known_codes:
+            code = str(error.get("type") or "")
         self.diagnostics["provider_error_code"] = code if code in known_codes else "unknown"
         self.diagnostics["terminal_event_seen"] = True
         self.diagnostics["finish_reason"] = "failed"

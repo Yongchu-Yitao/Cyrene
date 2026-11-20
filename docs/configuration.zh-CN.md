@@ -85,9 +85,7 @@ embedding 路由。模型目录与推理操作由可编辑的 Model Plugin 提�
 | `STEWARD_INTERVAL` | SOUL Steward 间隔 | `3600` |
 | `PATTERN_DETECTION_INTERVAL` | 行为 Pattern 扫描间隔 | `600` |
 
-当前真正生效的 Proactive Cadence 是加密 Runtime Setting
-`heartbeat_interval`，可在 Settings 中修改，默认 `1800` 秒；Scheduler 在启动
-时读取它。
+“设置 → 助手行为 → 主动工作”（`agent_proactive`）控制个人助理对历史上下文的随机回访。只在取得实质进展时向主助理报告。短期私有唤醒始终可用，不占用用户日程。
 
 ### Search
 

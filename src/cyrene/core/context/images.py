@@ -6,6 +6,8 @@ import io
 from copy import deepcopy
 from pathlib import Path
 
+from .paths import current_request_start
+
 IMAGE_TYPE = "cyrene_local_image"
 
 
@@ -72,11 +74,9 @@ def retire_historical_images(path, retired_ids=()):
     from dataclasses import replace
     retired_ids = set(retired_ids)
     boundary = -1
-    current_user = None
+    request_start = current_request_start(path)
     for index, node in enumerate(path):
         value = node.value
-        if value.get("role") == "user":
-            current_user = getattr(node, "id", None)
         if value.get("role") in {"context_compaction", "context_reflection"}:
             boundary = index
         if value.get("role") == "tool_results" and any(
@@ -90,7 +90,7 @@ def retire_historical_images(path, retired_ids=()):
         if (
             value.get("role") == "user"
             and (value.get("metadata") or {}).get("input_images")
-            and node.id != current_user
+            and index < request_start
             and (index < boundary or node.id in retired_ids)
         ):
             value = deepcopy(value)

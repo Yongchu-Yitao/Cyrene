@@ -1,3 +1,4 @@
+import { executionLimits, discussionLimits } from "../features/settings/agent-limits.jsx"
 // Workbench settings index — shared by the search overlay (settings results)
 // and the settings overlay (anchor scrolling). The search overlay matches
 // items by their translated label/hint/keywords; clicking one opens the
@@ -62,10 +63,14 @@ window.CyreneUI.settingsIndex = window.CyreneUI.register("settings-index", {
     { id: "setting-telegram", tab: "channels", labelKey: "settings.telegram", keywords: ["telegram", "电报"] },
     { id: "setting-wechat", tab: "channels", labelKey: "settings.wechat", keywords: ["微信", "wechat", "weixin"] },
     // ── Agents ──
+    { id: "setting-reply_detail", tab: "agents", labelKey: "settings.replyDetail", hintKey: "settings.replyDetailHint", keywords: ["详略", "length", "detail"] },
+    { id: "setting-reply_tone", tab: "agents", labelKey: "settings.replyTone", hintKey: "settings.replyToneHint", keywords: ["语气", "tone"] },
+    { id: "setting-soul-default", tab: "agents", labelKey: "settings.soulDefault", hintKey: "settings.soulDefaultHint", keywords: ["人格", "persona", "soul"] },
+    ...[...executionLimits, ...discussionLimits].map(field => ({
+      id: "setting-" + field.key, tab: "agents", labelKey: field.label, keywords: ["subagent", "子代理", field.key],
+    })),
     { id: "setting-soul", tab: "agents", labelKey: "settings.soulMd", hintKey: "settings.soulMdHint", keywords: ["soul", "人格", "人设", "角色"] },
     { id: "setting-spawn-policy", tab: "agents", labelKey: "settings.spawnPolicy", hintKey: "settings.spawnPolicyHint", keywords: ["子代理", "spawn", "策略", "policy", "并发"] },
-    { id: "setting-agent-proactive", tab: "agents", labelKey: "settings.agentProactive", hintKey: "settings.agentProactiveHint", keywords: ["主动", "proactive", "自发"] },
-    { id: "setting-heartbeat", tab: "agents", labelKey: "settings.heartbeatInterval", hintKey: "settings.heartbeatIntervalHint", keywords: ["心跳", "heartbeat", "间隔"] },
     // ── Appearance ──
     { id: "setting-theme", tab: "appearance", labelKey: "settings.theme", hintKey: "settings.themeHint", keywords: ["主题", "theme", "深色", "浅色", "dark", "light"] },
     { id: "setting-theme-color", tab: "appearance", labelKey: "settings.themeColor", keywords: ["主题色", "颜色", "color", "hue"] },

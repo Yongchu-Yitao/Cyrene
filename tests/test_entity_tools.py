@@ -110,51 +110,19 @@ async def test_seeded_entity_pack_owns_session_and_application_backend(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_path):
+async def test_entity_pack_removes_legacy_proactive_hook(tmp_path):
     from cyrene.core.context import ContextStoreRouter
     from cyrene.core.plugin import PluginSetupContext
     from cyrene.plugins.builtin.cyrene_entity import setup
 
-    class Entities:
-        filters = None
-
-        async def list(self, **filters):
-            self.filters = filters
-            return [
-                {
-                    "id": "task-explicit",
-                    "title": "Publish release",
-                    "content": "Publish the verified artifacts.",
-                    "type": "task",
-                    "status": "active",
-                    "source": "explicit",
-                    "priority": "high",
-                    "project_id": "project-a",
-                    "updated_at": "2026-06-17T12:00:00+00:00",
-                },
-                {
-                    "id": "decision-extracted",
-                    "title": "Choose rollout strategy",
-                    "type": "decision",
-                    "status": "active",
-                    "source": "extracted",
-                    "project_id": "project-a",
-                    "last_referenced_at": "2000-01-01T00:00:00+00:00",
-                },
-                {
-                    "id": "other-project",
-                    "title": "Other project task",
-                    "type": "task",
-                    "status": "active",
-                    "source": "explicit",
-                    "project_id": "project-b",
-                },
-            ]
-
-    entities = Entities()
     store = ContextStoreRouter(tmp_path / "context")
     tree = store.create_tree(tree_id="proactive", root_id="root")
     hooks = store.hooks_for(tree.id)
+    async def stale_hook(_event):
+        return {"context": "obsolete proactive context"}
+
+    hooks.register("TurnStart", stale_hook, hook_id="cyrene-entity-proactive-turn-start",
+                   plugin_id="cyrene_entity.proactive_context")
     setup(PluginSetupContext(
         data_directory=tmp_path / "data",
         plugin_directory=tmp_path / "plugins",
@@ -164,19 +132,12 @@ async def test_entity_pack_mounts_attention_context_only_for_proactive_runs(tmp_
         root_id=tree.root_id,
         hooks=hooks,
         data={"project_id": "project-a"},
-        services={"entities": entities},
+        services={"entities": object()},
     ))
 
     assert await hooks.turn_start({"metadata": {}}) == ""
-    mounted = await hooks.turn_start({"metadata": {"proactive": True}})
-    assert "Publish release" in mounted
-    assert "Choose rollout strategy" not in mounted
-    assert "Other project task" not in mounted
-    assert entities.filters == {
-        "status": "active",
-        "project_id": "project-a",
-        "limit": 200,
-    }
+    assert await hooks.turn_start({"metadata": {"proactive": True}}) == ""
+    assert all(hook.id != "cyrene-entity-proactive-turn-start" for hook in hooks.list())
     store.close()
 
 

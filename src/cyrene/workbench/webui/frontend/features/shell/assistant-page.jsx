@@ -144,7 +144,7 @@ function PersonalAssistantPage({ context, active = true }) {
       return <AssistantChat key={surface.sessionId} sessionId={surface.sessionId} active={active} cache={surface.chatCache}
         personalAssistant={surface.sessionId === personalAssistantId}
         gripActions={surface.gripActions}
-        project={project} title={task ? task.title : "Cyrene"} onOpenFile={surface.onOpenFile}
+        project={project} title={task ? task.title : "Cyrene"} onOpenFile={surface.onOpenFile} onOpenResult={surface.onOpenResult}
         permissionRequests={surface.sessionId === personalAssistantId ? snapshot.sessions.filter(function (item) {
           return item.pending_question && item.pending_question.kind && item.pending_question.kind !== "clarification";
         }) : []} />;

@@ -5,7 +5,6 @@ import {
   useRefSt,
   readSettingsResponse,
   settingsFetch,
-  SectionTitle,
   FieldRow,
   Toggle,
 } from "./shared.jsx"
@@ -323,7 +322,6 @@ function AppearancePanel(p) {
   }, [accentPickerOpen]);
 
   return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.appearance")),
     FieldRow(t("settings.theme"), t("settings.themeHint"),
       <ChoiceCards compact label={t("settings.theme")} value={tweaks.theme} onChange={value=>setTweak("theme",value)} options={["system","light","dark"].map(id=>({id,title:t("settings."+id)}))}/>,
       undefined, "setting-theme",

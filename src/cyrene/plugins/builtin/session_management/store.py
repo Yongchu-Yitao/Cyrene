@@ -28,6 +28,10 @@ class Store:
                     owner TEXT NOT NULL, target TEXT NOT NULL, payload TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'queued', error TEXT NOT NULL DEFAULT '',
                     attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS assistant_wakes (
+                    id TEXT PRIMARY KEY, context TEXT NOT NULL, kind TEXT NOT NULL, due REAL NOT NULL,
+                    prompt TEXT NOT NULL, version TEXT NOT NULL, state TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS assistant_wakes_due ON assistant_wakes(state,due);
                 CREATE TABLE IF NOT EXISTS notifications (
                     id TEXT PRIMARY KEY, owner TEXT NOT NULL, target TEXT NOT NULL,
                     payload TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0);
@@ -210,5 +214,7 @@ class Store:
             db.execute("DELETE FROM messages WHERE owner=?", (owner,))
             db.execute("DELETE FROM notifications WHERE owner=?", (owner,))
             db.execute("DELETE FROM sessions WHERE owner=?", (owner,))
+            if owner == "assistant_global":
+                db.execute("DELETE FROM assistant_wakes")
             prefix = owner + ":"
             db.execute("DELETE FROM effects WHERE substr(key, 1, ?)=?", (len(prefix), prefix))

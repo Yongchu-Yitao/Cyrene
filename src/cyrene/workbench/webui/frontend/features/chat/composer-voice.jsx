@@ -21,6 +21,7 @@ function useWbcComposerVoice({
 }) {
   var [voiceSnapshot, setVoiceSnapshot] = useWbcState({ status: {}, activeKey: "" })
   var [voicePhase, setVoicePhase] = useWbcState("")
+  var voiceSession = useWbcRef(0)
   var voiceRecorderRef = useWbcRef(null)
   var voiceChatIdRef = useWbcRef(String(chatId || ""))
   var voiceFeedbackRef = useWbcRef(null)
@@ -34,6 +35,8 @@ function useWbcComposerVoice({
     voiceChatIdRef.current = String(chatId || "")
     setVoicePhase("")
     return function () {
+      voiceSession.current += 1
+      voiceChatIdRef.current = null
       var recorder = voiceRecorderRef.current
       voiceRecorderRef.current = null
       voiceFeedbackRef.current.dismiss()
@@ -43,6 +46,7 @@ function useWbcComposerVoice({
 
   useWbcEffect(function () {
     if (!awaitingAnswer) return
+    voiceSession.current += 1
     setToolsOpen(false)
     setModelOpen(false)
     setModelPanel("root")
@@ -57,8 +61,10 @@ function useWbcComposerVoice({
     voiceFeedbackRef.current.error(error)
   }
 
-  function transcribeVoiceBlob(blob) {
+  function transcribeVoiceBlob(blob, session) {
+    if (voiceSession.current !== session) return
     return wbcTranscribeVoiceBlob(blob).then(function (transcript) {
+      if (voiceSession.current !== session) return false
       if (transcript === false) {
         voiceFeedbackRef.current.noSpeech()
         return false
@@ -83,10 +89,11 @@ function useWbcComposerVoice({
     voiceRecorderRef.current = null
     setVoicePhase("transcribing")
     voiceFeedbackRef.current.transcribing()
+    var session = voiceSession.current
     recorder.stop()
-      .then(transcribeVoiceBlob)
-      .catch(showVoiceError)
-      .finally(function () { setVoicePhase("") })
+      .then(blob => transcribeVoiceBlob(blob, session))
+      .catch(error => { if (voiceSession.current === session) showVoiceError(error) })
+      .finally(() => { if (voiceSession.current === session) setVoicePhase("") })
   }
 
   function toggleVoiceInput() {
@@ -103,12 +110,14 @@ function useWbcComposerVoice({
     WbcVoice.stop()
     setVoicePhase("starting")
     voiceFeedbackRef.current.starting()
+    var session = ++voiceSession.current
     var startedForChat = String(chatId || "")
     wbcStartVoiceRecorder({
+      maxSeconds: voiceSnapshot.status.asr_provider === "deepseek" ? 120 : 0,
       autoStopOnSilence: voiceSnapshot.status.auto_stop_on_silence !== false,
       onSilence: finishVoiceInput,
     }).then(function (recorder) {
-      if (voiceChatIdRef.current !== startedForChat) {
+      if (voiceSession.current !== session || voiceChatIdRef.current !== startedForChat) {
         recorder.stop().catch(function () {})
         return
       }
@@ -116,6 +125,7 @@ function useWbcComposerVoice({
       setVoicePhase("recording")
       voiceFeedbackRef.current.listening()
     }).catch(function (error) {
+      if (voiceSession.current !== session) return
       setVoicePhase("")
       showVoiceError(error)
     })

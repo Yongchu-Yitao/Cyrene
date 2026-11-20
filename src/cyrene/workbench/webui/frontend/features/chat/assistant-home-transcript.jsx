@@ -7,7 +7,7 @@ import { captureHomePosition } from './home-timeline.mjs';
 const homeClientStartedAt = Date.now() / 1000;
 
 // Only a claimed daily/time-slot display moves the home. Data updates never move it.
-export function AssistantHomeTranscript({ Transcript, messages, runtime, sessionId, active, onOpenFile }) {
+export function AssistantHomeTranscript({ Transcript, messages, runtime, sessionId, active, onOpenFile, onOpenResult }) {
   const [position, setPosition] = useState(null);
   const [clientId] = useState(() => crypto.randomUUID());
   const shownSlot = useRef(null);
@@ -45,5 +45,5 @@ export function AssistantHomeTranscript({ Transcript, messages, runtime, session
     };
   }, [active, ready, sessionId, clientId]);
   return <Transcript messages={messages} runtime={runtime} chatId={sessionId} onOpenFile={onOpenFile}
-    homeInsertion={{ position, content: <AssistantHomeCards active={active} sessionId={sessionId} onReady={onReady} visible={!!position} /> }} />;
+    homeInsertion={{ position, content: <AssistantHomeCards onOpenResult={onOpenResult} active={active} sessionId={sessionId} onReady={onReady} visible={!!position} /> }} />;
 }

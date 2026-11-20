@@ -1,4 +1,5 @@
 import {
+  PageDescription,
   workbenchServices,
   useStateSt,
   useEffectSt,
@@ -6,7 +7,6 @@ import {
   readSettingsResponse,
   settingsFetch,
   showSettingsToast,
-  SectionTitle,
   SectionBlock,
   FieldRow,
   Toggle,
@@ -523,8 +523,7 @@ function BudgetPanel(p) {
   return React.createElement("div", {
     className: "settings-panel" + (mode === "usage" ? " wb-usage-settings" : ""),
   },
-    SectionTitle(
-      t(mode === "usage" ? "settings.usage" : "settings.budget"),
+    PageDescription(
       t(mode === "usage" ? "settings.usageSubtitle" : "settings.budgetSubtitle")
     ),
 

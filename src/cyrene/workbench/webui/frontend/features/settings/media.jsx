@@ -1,4 +1,5 @@
 import {
+  PageDescription,
   useStateSt,
   useEffectSt,
   useRefSt,
@@ -970,12 +971,12 @@ function MediaPanel(p) {
 
   if (media.loading) {
     return React.createElement("div", { className: "settings-panel" },
-      SectionTitle(t("settings.mediaGeneration"), t("settings.loading")));
+      PageDescription(t("settings.loading")));
   }
 
   if (media.loadFailed && !Number.isInteger(media.settings.revision)) {
     return React.createElement("div", { className: "settings-panel wb-media-settings" },
-      SectionTitle(t("settings.mediaGeneration"), t("settings.mediaGenerationSubtitle")),
+      PageDescription(t("settings.mediaGenerationSubtitle")),
       React.createElement("div", { className: "wb-media-error", role: "alert" },
         React.createElement("span", null, media.loadError),
         React.createElement("button", {
@@ -1002,7 +1003,7 @@ function MediaPanel(p) {
     undoKeyClear: media.undoKeyClear,
   };
   return React.createElement("div", { className: "settings-panel wb-media-settings" },
-    SectionTitle(t("settings.mediaGeneration"), t("settings.mediaGenerationSubtitle")),
+    PageDescription(t("settings.mediaGenerationSubtitle")),
     MediaFlowOverview(t),
     media.loadError && React.createElement("div", { className: "wb-media-error", role: "alert" },
       React.createElement("span", null, media.loadError),

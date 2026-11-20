@@ -1,10 +1,10 @@
 import {ActionIcon} from "./action-icon.jsx"
 import {
+  PageDescription,
   workbenchServices,
   useStateSt,
   useEffectSt,
   showSettingsToast,
-  SectionTitle,
   SectionBlock,
 } from "./shared.jsx"
 
@@ -199,10 +199,7 @@ function ShortcutsPanel(p) {
   };
 
   return React.createElement("div", { className: "settings-panel wb-shortcuts-panel" },
-    SectionTitle(t("settings.shortcuts"), t("settings.shortcutsSubtitle")),
-    React.createElement("p", { className: "wb-shortcuts-platform" },
-      t("settings.shortcutPlatformHint", { os: isMac ? "macOS" : "Windows / Linux" })
-    ),
+    PageDescription(t("settings.shortcutsSubtitle")),
     supportsSystemShortcut && SectionBlock(t("settings.shortcutGroupSystem"), null,
       React.createElement("div", { className: "wb-shortcut-row" },
         React.createElement("div", { className: "wb-shortcut-info" },

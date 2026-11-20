@@ -312,15 +312,16 @@ function WbcChatSplit({ chatId, project, runtimeEngine, onOpenContent, browserAc
     });
   }
 
-  function guide(message) {
+  function guide(message, attachments = []) {
     var current = chatIdRef.current;
     var text = String(message || "").trim();
-    if (!running || !current || !text) return Promise.resolve(null);
+    if (!running || !current || (!text && !attachments.length)) return Promise.resolve(null);
     setError("");
     return WorkbenchChatModel.sendGuidance(
       current,
       text,
-      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8)
+      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+      attachments
     ).then(function (response) {
       if (response && response.userMessage && !disposedRef.current) {
         setChat(function (prev) {
@@ -1668,15 +1669,16 @@ function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
     });
   }
 
-  function guide(message) {
+  function guide(message, attachments = []) {
     var current = agentRef.current;
     var text = String(message || "").trim();
-    if (!running || !current || !current.id || !text) return Promise.resolve(null);
+    if (!running || !current || !current.id || (!text && !attachments.length)) return Promise.resolve(null);
     setError("");
     return WorkbenchChatModel.sendGuidance(
       current.id,
       text,
-      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8)
+      "guide_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+      attachments
     ).then(function (response) {
       if (response && response.userMessage && mountedRef.current) {
         var latest = agentRef.current;

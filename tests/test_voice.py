@@ -259,10 +259,10 @@ def test_zipvoice_default_preset_is_available_and_uses_bundled_reference(monkeyp
     assert speech.startswith(b"RIFF")
 
 
-def test_auto_tts_prefers_configured_minimax_without_local_runtime(monkeypatch):
+def test_legacy_auto_tts_does_not_switch_to_configured_minimax(monkeypatch):
     monkeypatch.setattr(engine, "_runtime_available", lambda: False)
     _patch_voice_model_service(monkeypatch, lambda _model_id: False)
-    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: True)
+    monkeypatch.setattr(engine.minimax_tts, "available_models", lambda: minimax_tts.MODEL_IDS)
     monkeypatch.setattr(engine, "_settings", lambda: {
         "auto_read": True,
         "auto_send_after_asr": False,
@@ -277,12 +277,12 @@ def test_auto_tts_prefers_configured_minimax_without_local_runtime(monkeypatch):
 
     payload = engine.status()
 
-    assert payload["tts_model_selection"] == engine.TTS_MODEL_AUTO
-    assert payload["tts_model"] == minimax_tts.TURBO_MODEL_ID
-    assert payload["tts_provider"] == "minimax"
+    assert payload["tts_model_selection"] == engine.PRESET_TTS_MODEL_ID
+    assert payload["tts_model"] == engine.PRESET_TTS_MODEL_ID
+    assert payload["tts_provider"] == "local"
     assert payload["minimax_configured"] is True
-    assert payload["tts_ready"] is True
-    assert payload["local_tts_active"] is False
+    assert payload["tts_ready"] is False
+    assert payload["local_tts_active"] is True
     assert payload["voice_presets"] == []
 
 
@@ -299,7 +299,7 @@ def test_explicit_minimax_tts_reuses_model_service_and_returns_wav(monkeypatch):
     }
     calls = []
     monkeypatch.setattr(engine, "_settings", lambda: dict(settings))
-    monkeypatch.setattr(engine.minimax_tts, "is_configured", lambda: True)
+    monkeypatch.setattr(engine.minimax_tts, "available_models", lambda: minimax_tts.MODEL_IDS)
     monkeypatch.setattr(
         engine.minimax_tts,
         "synthesize",
@@ -315,6 +315,7 @@ def test_explicit_minimax_tts_reuses_model_service_and_returns_wav(monkeypatch):
 def test_minimax_adapter_uses_configured_connection_and_decodes_hex(monkeypatch):
     requested = {}
     model_service = SimpleNamespace(get_model_configuration=lambda: {
+        "profiles": [{"connection_id":"minimax", "model":minimax_tts.TURBO_MODEL_ID}],
         "connections": [{
             "id": "minimax",
             "name": "MiniMax",
@@ -524,12 +525,12 @@ def test_voice_controls_follow_existing_chat_layout():
     assert 'type: "file"' not in custom_voice
     assert 'React.createElement("textarea"' not in custom_voice
     assert "wbcStartVoiceRecorder" in settings
-    assert "wbcTranscribeVoiceBlob(blob)" in settings
+    assert "wbcTranscribeVoiceBlob(blob, {reference:true})" in settings
     assert "voiceReferenceSessionRef.current += 1" in settings
     assert 'if (tab === "voice") return;' in settings
     assert "wbcStartVoiceRecorder().then" in settings
     assert "autoStopOnSilence: true" not in settings.split("function startVoiceReferenceRecording", 1)[1].split("useEffectSt(function ()", 1)[0]
-    capabilities_call = settings.split('tab === "voice" && CapabilitiesPanel({', 1)[1].split("}),", 1)[0]
+    capabilities_call = settings.split('tab === "voice" && React.createElement(CapabilitiesPanel, {', 1)[1].split("}),", 1)[0]
     capabilities_props = settings.split("function CapabilitiesPanel(p)", 1)[1].split("} = p;", 1)[0]
     assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_call
     assert "voiceReferencePhase, voiceReferenceElapsed" in capabilities_props
@@ -582,7 +583,7 @@ def test_voice_controls_follow_existing_chat_layout():
     assert '"question:" + String(pendingQuestion.id' in chat
     assert 'return [text, optionText].filter(Boolean).join("。 ")' in chat
     assert '"可选择："' not in chat
-    assert 'currentStatus.tts_provider === "minimax" ? 240 : 60' in chat
+    assert 'currentStatus.tts_provider === "local" ? 60 : 240' in chat
     assert "var WbVoiceCommand = {" in chat
     assert "initialSilenceMs: WBC_TOPBAR_INITIAL_SILENCE_MS" in chat
     assert 'fetch("/api/workbench/voice-command"' in chat
@@ -681,3 +682,58 @@ def test_local_model_card_hides_stale_error_and_localizes_backend_errors():
         "settings.localModelErrorGeneric",
     ):
         assert translations.count(f'"{key}"') == 2
+
+
+def test_deepseek_speech_round_trip_and_local_reference(monkeypatch):
+    """Drive both HTTP routes with the real adapter and a deterministic upstream."""
+    import httpx
+    from cyrene.plugins.builtin.cyrene_voice import deepseek
+
+    connection = {"id": "speech", "base_url": "https://api.deepseek.com/v1",
+                  "api_key": "fixture-key", "enabled": True}
+    model_service = SimpleNamespace(get_model_configuration=lambda: {"connections": [connection]})
+    monkeypatch.setattr(deepseek, "application_plugin_service", lambda _: model_service)
+    _patch_voice_model_service(monkeypatch, lambda _: False)
+    monkeypatch.setattr(engine, "_runtime_available", lambda: False)
+    monkeypatch.setattr(minimax_tts, "available_models", lambda: ())
+    settings = {}
+    monkeypatch.setattr(engine.config_store, "get_setting", lambda key, default=None: settings.get(key, default))
+    monkeypatch.setattr(engine.config_store, "set_setting", lambda key, value: settings.update({key: value}))
+    monkeypatch.setattr(engine, "transcribe_reference", lambda _: {"text": "local"})
+    wav = io.BytesIO()
+    engine.sf.write(wav, np.zeros(16000), 16000, format="WAV", subtype="PCM_16")
+    audio = wav.getvalue()
+    requests = []
+
+    def upstream(request):
+        import json
+        requests.append(request.url.path)
+        assert request.headers["authorization"] == "Bearer fixture-key"
+        if request.url.path == "/v1/tools/asr":
+            assert b'name="file"' in request.content and audio in request.content
+            return httpx.Response(200, json={"text": "你好", "duration_ms": 1000})
+        assert json.loads(request.content) == {"text": "你好", "voice_id": "tide", "format": "wav"}
+        return httpx.Response(200, content=audio)
+
+    client_type = httpx.Client
+    monkeypatch.setattr(deepseek, "httpx", SimpleNamespace(
+        Client=lambda **kwargs: client_type(transport=httpx.MockTransport(upstream), **kwargs),
+        Timeout=httpx.Timeout, HTTPError=httpx.HTTPError, HTTPStatusError=httpx.HTTPStatusError))
+    app = FastAPI()
+    router = APIRouter()
+    voice_routes.register_voice_routes(router)
+    app.include_router(router)
+    with TestClient(app) as client:
+        status = client.put("/api/voice/settings", json={
+            "asr_provider": "deepseek", "tts_model": "deepseek", "deepseek_voice_id": "tide",
+        }).json()
+        assert status["asr_ready"] and status["tts_ready"] and not status["local_asr_ready"]
+        files = {"audio": ("mic.wav", audio, "audio/wav")}
+        assert client.post("/api/voice/asr", files=files).json()["text"] == "你好"
+        assert client.post("/api/voice/asr", files=files, data={"reference": "true"}).json()["text"] == "local"
+        assert client.post("/api/voice/asr", files={"audio": ("bad.wav", b"x")}).status_code == 400
+        assert client.post("/api/voice/tts", json={"text": "你好"}).content == audio
+        connection["enabled"] = False
+        status = client.get("/api/voice/status").json()
+        assert not status["deepseek_ready"] and not status["asr_ready"] and not status["tts_ready"]
+    assert requests == ["/v1/tools/asr", "/v1/tools/tts"]

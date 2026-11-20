@@ -218,7 +218,7 @@ def test_config_field_labels_and_values_are_localized():
     chat = object.__new__(InteractiveChat)
     chat.options = ChatOptions(lang="zh")
     assert chat._config_field_label("model") == "模型"
-    assert chat._config_field_label("heartbeat_interval") == "心跳间隔"
+    assert chat._config_field_label("agent_proactive") == "助理主动跟进"
     assert chat._config_value_preview("color", True) == "开启"
 
     chat.options = ChatOptions(lang="en")

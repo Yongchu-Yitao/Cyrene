@@ -747,17 +747,6 @@
   width: 100%;
   max-width: none;
 }
-.settings-overlay .about-crumb-page::before {
-  content: "";
-  display: inline-block;
-  width: .42em;
-  height: .42em;
-  margin: 0 12px;
-  border-block-start: 1px solid currentColor;
-  border-inline-end: 1px solid currentColor;
-  transform: rotate(45deg);
-  vertical-align: .12em;
-}
 .settings-overlay .about-window {
   width: 100%;
   container: about-window / inline-size;
@@ -1112,28 +1101,6 @@
   max-width: 880px;
   margin-inline: auto;
   min-width: 0;
-}
-.settings-overlay .svc-crumb {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.settings-overlay .svc-crumb > .settings-action-icon {
-  width: 12px;
-  height: 12px;
-}
-.settings-overlay .svc-crumb > .settings-action-icon svg {
-  width: 100%;
-  height: 100%;
-}
-.settings-overlay .main-region .svc-crumb .svc-back {
-  color: var(--text-2);
-  font-size: 12px !important;
-  min-height: 30px;
-  font-weight: 500;
-  padding: 4px;
 }
 .settings-overlay .svc-back:hover,
 .settings-overlay .svc-address:hover {
@@ -2046,10 +2013,40 @@
   font-size: var(--settings-type-body) !important;
   line-height: 1.45;
 }
-.settings-overlay :is(.section-crumb, .svc-crumb, .route-caption, .service-meta, .svc-state, .provider-extra-toggle small, .wb-label small, .wb-section-title p, .wb-section-block-head small, .wb-hint, .wb-shortcuts-platform, .wb-shortcut-info small, .wb-shortcut-keys kbd, .wb-media-flow p, .wb-media-settings small, .wb-media-service-state, .wb-media-capability, .wb-channel-desc, .remote-pairing-copy small, .wb-proxy-scope-status, .map-form small, .voice-mode-note, .wb-voice-profile-copy small, .wb-office-integration-copy small, .wb-extension-type, .registry-tile p, .registry-tile code, .registry-source-path dt, .wb-extension-filter > span, .wb-registry-section-heading > span, .wb-registry-directory-meta, .wb-plugin-registry-directory-hint, .wbp-hint, .wbp-legend, .wbp-insight-label, .wbp-kpi > span, .wbp-handle, .wb-usage-metric > span, .wb-usage-trend-head small, .wb-doctor-usage, .wb-doctor-description-hint, .provider-address, .svc-note, .svc-toggle > span, .inspector-id, .model-selector code, .wb-mcfg-field small, .model-price-label small, .about-version-line span, .about-mast p, .rail-result small, .wb-search-engine-count, .wb-search-priority, .wb-budget-progress-label, .wb-media-autosave span, .wb-voice-status span) {
+.settings-overlay :is(.section-crumb, .svc-crumb, .route-caption, .service-meta, .svc-state, .provider-extra-toggle small, .wb-label small, .wb-section-title p, .wb-section-block-head small, .wb-hint, .wb-shortcut-info small, .wb-shortcut-keys kbd, .wb-media-flow p, .wb-media-settings small, .wb-media-service-state, .wb-media-capability, .wb-channel-desc, .remote-pairing-copy small, .wb-proxy-scope-status, .map-form small, .voice-mode-note, .wb-voice-profile-copy small, .wb-office-integration-copy small, .wb-extension-type, .registry-tile p, .registry-tile code, .registry-source-path dt, .wb-extension-filter > span, .wb-registry-section-heading > span, .wb-registry-directory-meta, .wb-plugin-registry-directory-hint, .wbp-hint, .wbp-legend, .wbp-insight-label, .wbp-kpi > span, .wbp-handle, .wb-usage-metric > span, .wb-usage-trend-head small, .wb-doctor-usage, .wb-doctor-description-hint, .provider-address, .svc-note, .svc-toggle > span, .inspector-id, .model-selector code, .wb-mcfg-field small, .model-price-label small, .about-version-line span, .about-mast p, .rail-result small, .wb-search-engine-count, .wb-search-priority, .wb-budget-progress-label, .wb-media-autosave span, .wb-voice-status span) {
   font-size: var(--settings-type-note) !important;
   line-height: 1.45;
 }
+.settings-overlay .main-region :is(.wb-doctor-initial h3, .model-list-toolbar h4) {
+  font-size: var(--settings-type-section) !important;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.settings-overlay .main-region :is(
+  .voice-methods > button strong, .voice-setup-popover strong, .voice-download > [role="status"],
+  .wb-voice-record-btn, .wb-voice-reference-transcript, .model-list-tools button,
+  .model-list-tools summary, .wb-media-model-refresh, .remote-identity-grid label > span,
+  .remote-option span, .about-options strong, .wb-storage-legend-row b,
+  .wb-provider-usage-card-head strong, .wb-provider-balance strong
+),
+.settings-overlay #setting-storage > .wb-inline-row b {
+  font-size: var(--settings-type-body) !important;
+  line-height: 1.45;
+}
+.settings-overlay .voice-methods > button strong { font-weight: 650; }
+.settings-overlay .main-region :is(
+  .voice-methods small, .voice-setup-popover p, .wb-wechat-status-copy small,
+  .remote-identity-facts span, .remote-identity-facts code, .remote-pairing-toolbar p,
+  .wb-mcfg-inline-empty, .model-list-toolbar h4 small, .wb-media-flow-index,
+  .tile-id small, .wb-plugin-registry-directory code, .wb-plugin-registry-directory small,
+  .wb-extensions-empty, .wb-usage-trend-empty, .wb-provider-usage-card-head small,
+  .wb-provider-usage-state, .wb-provider-quota-label :is(span, strong), .wb-provider-quota-window small,
+  .wb-provider-usage-card footer, .wb-provider-balance :is(span, small), .wb-provider-usage-error
+) {
+  font-size: var(--settings-type-note) !important;
+  line-height: 1.45;
+}
+.settings-overlay .voice-methods small { font-weight: 400; }
 .settings-overlay .main-region {
   --action-font:var(--settings-type-body);
 }
@@ -2128,13 +2125,31 @@
 .settings-overlay [data-settings-active-tab=usage],
 .settings-overlay [data-settings-active-tab=budget] { --settings-page-width: 1120px; }
 .settings-overlay .settings-crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: min(100%, var(--settings-page-width, 920px));
   margin: 0 auto 8px;
-  font-size: var(--settings-type-note);
+  font-size: var(--settings-type-body);
   color: var(--wb-muted);
 }
-.settings-overlay .main-region:has(.svc-detail) > .settings-crumb {
-  display: none;
+.settings-overlay .main-region .settings-crumb > button {
+  font-size: inherit !important;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.settings-overlay .settings-crumb > button:hover { text-decoration: underline; }
+.settings-overlay .settings-crumb > .settings-action-icon { width: 12px; height: 12px; flex: none; }
+.settings-overlay .settings-crumb svg { display: block; width: 100%; height: 100%; }
+.settings-overlay .settings-crumb h1 {
+  margin: 0;
+  font: inherit;
+  font-weight: 700;
+  color: var(--wb-text);
 }
 .settings-overlay .settings-overlay-content[data-settings-active-tab=models] {
   overflow-y: auto;
@@ -2264,38 +2279,126 @@
   .settings-overlay .hook-editor-dialog .wb-cli-hook-editor-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* Keep native details keyboard and accessibility behavior with the Cyrene chevron. */
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary {
-  list-style: none;
+.settings-overlay .model-list-column {
+  position: relative;
+  min-width: 0;
+}
+.settings-overlay .model-list-toolbar,
+.settings-overlay .model-list-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.settings-overlay .model-list-toolbar {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.settings-overlay .model-list-toolbar h4 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--wb-text);
+  font-size: 14px;
+}
+.settings-overlay .model-list-toolbar h4 small {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+}
+.settings-overlay .model-list-tools :is(button, summary) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  min-height: 30px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
   cursor: pointer;
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary::-webkit-details-marker {
+.settings-overlay .model-list-tools :is(button, summary):hover {
+  background: var(--wb-row-hover-bg);
+}
+.settings-overlay .model-list-tools .model-add {
+  padding-inline: 10px;
+  background: var(--wb-text);
+  color: var(--bg-1);
+}
+.settings-overlay .model-list-tools button:disabled {
+  opacity: .55;
+  cursor: default;
+}
+.settings-overlay .model-refresh-error summary,
+.settings-overlay .model-issue-text,
+.settings-overlay .service-key-mark {
+  color: var(--wb-warning, light-dark(#85531b, #efbc80));
+}
+.settings-overlay .model-refresh-error summary::-webkit-details-marker {
   display: none;
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary:not(.wb-doctor-disclosure)::before,
-.settings-overlay .about-version-line button[aria-expanded]::after {
-  content: "";
-  display: inline-block;
-  width: 1rem;
-  height: 1rem;
-  flex: none;
-  vertical-align: -0.18em;
-  background-color: var(--wb-muted, currentColor);
-  mask: url("/static/app/settings-icons/chevron-down.svg") center / contain no-repeat;
-  transform: rotate(-90deg);
-  transition: transform 160ms ease;
+.settings-overlay .model-refresh-popup {
+  position: absolute;
+  z-index: 5;
+  inset-inline-end: 0;
+  width: min(246px, 100%);
+  margin-top: 5px;
+  padding: 12px;
+  background: var(--bg-1);
+  color: var(--wb-text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 5px 18px #0002;
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary:not(.wb-doctor-disclosure)::before {
-  margin-inline-end: 0.35em;
+.settings-overlay .model-refresh-popup > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
 }
-.settings-overlay .about-version-line button[aria-expanded]::after {
-  margin-inline-start: 0.25em;
+.settings-overlay .service-key-mark {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
-:where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details[open] > summary:not(.wb-doctor-disclosure)::before,
-.settings-overlay .about-version-line button[aria-expanded=true]::after {
-  transform: none;
+
+.settings-overlay .agent-behavior { gap: 20px; }
+.agent-behavior > section {
+  min-width: 0;
+  padding: 16px clamp(14px, 2.5vw, 24px) 4px;
+  border: 1px solid var(--wb-line);
+  border-radius: 14px;
+  background: var(--wb-card-bg);
 }
-@media (prefers-reduced-motion: reduce) {
-  :where(.settings-overlay, .wb-plugin-center-popover, .wb-doctor-panel, .wbc-assistant-card, .markdown) details > summary::before,
-  .settings-overlay .about-version-line button[aria-expanded]::after { transition: none; }
+.agent-behavior > section h2 { margin: 0 0 4px; }
+.settings-overlay .agent-behavior .wb-field:last-child { border-bottom: 0; }
+.agent-behavior .agent-limit { width: 7em; max-width: 100%; font-variant-numeric: tabular-nums; }
+.agent-persona-editor { padding-block: 12px; }
+.agent-persona-editor summary {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(1rem, 1fr);
+  align-items: center;
+  column-gap: .35em;
 }
+.agent-persona-editor summary::before {
+  grid-area: 1 / 2;
+  margin-inline-end: 0;
+}
+.agent-persona-editor summary small {
+  grid-area: 2 / 1 / 3 / -1;
+}
+.agent-persona-editor textarea { margin-block: 12px; width: 100%; }
+.agent-persona-editor .wb-hint { overflow-wrap: anywhere; }

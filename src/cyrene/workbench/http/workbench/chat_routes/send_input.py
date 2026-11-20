@@ -117,6 +117,9 @@ def append_user_message(chat, messages, source: SendInput, origin, now, short_id
                     or existing.get("content") != source.public_message):
                 raise ValueError("Message request ID conflicts with an existing turn")
             return PreparedUserTurn(source, existing, now)
+    if origin.agent_originated and origin.agent_message_kind == "assistant_wakeup":
+        # The run needs an internal turn ID but has no public user input to project.
+        return PreparedUserTurn(source, {"id": origin.client_request_id, "createdAt": now}, now)
     should_generate_title = False
     user_entry = {
         "id": short_id("msg"),

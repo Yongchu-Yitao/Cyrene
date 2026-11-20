@@ -222,7 +222,8 @@ class ChatMessageBody(APIBody):
 
 
 class ChatGuidanceBody(APIBody):
-    message: str = Field(min_length=1, max_length=200_000)
+    attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    message: str = Field(default="", max_length=200_000)
     clientRequestId: str | None = Field(default=None, max_length=200)
     uiInstanceId: str | None = Field(default=None, max_length=200)
 

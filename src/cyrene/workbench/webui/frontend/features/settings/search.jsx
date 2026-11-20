@@ -1,12 +1,12 @@
 import { CustomSearchSources } from "./custom-search-sources.jsx"
 import {
+  PageDescription,
   useStateSt,
   useEffectSt,
   useRefSt,
   readSettingsResponse,
   settingsFetch,
   showSettingsToast,
-  SectionTitle,
   FieldRow,
   Toggle,
 } from "./shared.jsx"
@@ -346,11 +346,11 @@ function SearchPanel(p) {
   var state = useSearchConfiguration(p.t);
   if (state.loading) {
     return React.createElement("div", { className: "settings-panel wb-search-settings" },
-      SectionTitle(p.t("settings.searchProviders"), p.t("settings.searchProvidersSubtitle")),
+      PageDescription(p.t("settings.searchProvidersSubtitle")),
       React.createElement("div", { className: "wb-hint" }, p.t("settings.loading")));
   }
   return React.createElement("div", { className: "settings-panel wb-search-settings" },
-    SectionTitle(p.t("settings.searchProviders"), p.t("settings.searchProvidersSubtitle")),
+    PageDescription(p.t("settings.searchProvidersSubtitle")),
     FieldRow(
       p.t("settings.searchEnabled"),
       p.t("settings.searchEnabledHint"),

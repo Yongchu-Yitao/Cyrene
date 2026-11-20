@@ -31,7 +31,7 @@ function wbcAttachmentKey(file) {
   return String(file.id || file.path || file.url || file.name || "")
 }
 
-function useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, running, addResourceFile, addFiles, setDraft }) {
+function useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, addResourceFile, addFiles, setDraft }) {
   useWbcEffect(function () {
     function onDroppedFiles(event) {
       if (awaitingAnswer) return
@@ -61,7 +61,7 @@ function useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, r
       if (!box || !wbcHasFileResourceDrag(event) || wbcComposerAtFileDrop(event) !== box) return
       event.preventDefault()
       event.stopPropagation()
-      if (awaitingAnswer || running) {
+      if (awaitingAnswer) {
         event.dataTransfer.dropEffect = "none"
         return
       }
@@ -76,7 +76,7 @@ function useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, r
       document.removeEventListener("dragover", acceptFileResource, true)
       document.removeEventListener("drop", acceptFileResource, true)
     }
-  }, [composerBoxRef, awaitingAnswer, running, addResourceFile])
+  }, [composerBoxRef, awaitingAnswer, addResourceFile])
 }
 
 function useWbcComposerAttachments({
@@ -88,7 +88,6 @@ function useWbcComposerAttachments({
   draftNamespace,
   model,
   previousChatIdRef,
-  running,
   setDraft,
 }) {
   var [attachments, setAttachments] = useWbcState(function () {
@@ -203,7 +202,7 @@ function useWbcComposerAttachments({
   }
 
   function onPaste(event) {
-    if (running || awaitingAnswer) return
+    if (awaitingAnswer) return
     var clipboard = event && (event.clipboardData || (event.nativeEvent && event.nativeEvent.clipboardData))
     if (!clipboard) return
     var files = Array.prototype.slice.call(clipboard.files || []).filter(function (file) { return !!file })
@@ -217,7 +216,7 @@ function useWbcComposerAttachments({
     addFiles(files)
   }
 
-  useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, running, addResourceFile, addFiles, setDraft })
+  useWbcComposerResourceDrops({ chatId, composerBoxRef, awaitingAnswer, addResourceFile, addFiles, setDraft })
 
   return {
     attachRef, attachments, failedImagePreviews, fileRef, onFilePick, onPaste,

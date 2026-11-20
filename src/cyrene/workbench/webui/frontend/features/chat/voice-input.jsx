@@ -67,8 +67,9 @@ function wbcIsVoiceSilenceTranscript(value) {
   return /<\s*sil(?:ence)?\s*>/i.test(content) && !wbcCleanVoiceTranscript(content);
 }
 
-function wbcTranscribeVoiceBlob(blob) {
+function wbcTranscribeVoiceBlob(blob, options) {
   var form = new FormData();
+  if (options?.reference) form.append("reference", "true");
   form.append("audio", blob, "voice-input.wav");
   return fetch("/api/voice/asr", { method: "POST", body: form })
     .then(function (response) {
@@ -204,6 +205,8 @@ function wbcStartVoiceRecorder(options) {
     var silent = context.createGain();
     var chunks = [];
     var stopped = false;
+    var recordedFrames = 0;
+    var limitReached = false;
     var stopPromise = null;
     var controller = null;
     var detectSilence = recorderOptions.autoStopOnSilence
@@ -218,6 +221,16 @@ function wbcStartVoiceRecorder(options) {
     silent.gain.value = 0;
     processor.onaudioprocess = function (event) {
       var chunk = new Float32Array(event.inputBuffer.getChannelData(0));
+      if (limitReached) return;
+      if (recorderOptions.maxSeconds) {
+        const remaining = recorderOptions.maxSeconds * context.sampleRate - recordedFrames;
+        if (chunk.length >= remaining) {
+          chunk = chunk.subarray(0, remaining);
+          limitReached = true;
+          setTimeout(() => { if (!stopped) recorderOptions.onSilence(controller); }, 0);
+        }
+        recordedFrames += chunk.length;
+      }
       chunks.push(chunk);
       if (detectSilence) detectSilence(chunk, context.sampleRate);
     };

@@ -197,6 +197,7 @@ async def test_post_terminal_driver_failure_does_not_retry(kind):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failures", [3, 4])
 async def test_builtin_result_persistence_retries_before_publishing_error(failures):
+    from cyrene.workbench.chat.chat_application import chat_run_error_message
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
     from cyrene.workbench.chat.chat_runs import ChatRun
@@ -223,6 +224,7 @@ async def test_builtin_result_persistence_retries_before_publishing_error(failur
             capture_workspace_changes_baseline=AsyncMock(return_value={}),
             finalize_workspace_changes=AsyncMock(), settle_chat_running_status=Mock(),
             chat_error_metadata=Mock(return_value={}),
+            chat_run_error_message=chat_run_error_message,
             run_manager=SimpleNamespace(conversation_runtime=SimpleNamespace(kick_commit_outbox=Mock())),
         ),
         controller=SimpleNamespace(_schedule_workspace_finalize=Mock()),

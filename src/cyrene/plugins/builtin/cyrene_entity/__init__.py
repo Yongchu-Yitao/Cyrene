@@ -1,20 +1,18 @@
 """Editable durable-entity Plugin pack."""
 
 from collections.abc import Mapping
-from cyrene.core.hook import TURN_START, HookEvent
 from cyrene.plugins.context import PluginApplicationContext
 from cyrene.core.plugin import (
     PluginPack,
     PluginSetupContext,
 )
-from cyrene.localization import app_language, localized
+from cyrene.localization import app_language
 
 from .delete_entity import plugin as delete_plugin
 from .list_entities import plugin as list_plugin
 from .query_entities import plugin as query_plugin
 from .track_entity import plugin as track_plugin
 from .update_entity import plugin as update_plugin
-from .proactive import render_proactive_entities, select_proactive_entities
 
 
 def _session_id(data: Mapping[str, object]) -> str:
@@ -27,28 +25,13 @@ def _session_id(data: Mapping[str, object]) -> str:
     return ""
 
 
-def _register_proactive_context_hook(context: PluginSetupContext, plugin) -> None:
-    hook_id = "cyrene-entity-proactive-turn-start"
-    legacy_hook_id = "cyrene-entity-proactive-session-start"
-    plugin_id = "cyrene_entity.proactive_context"
-    existing = {hook.id: hook for hook in context.hooks.list()}
-    if legacy_hook_id in existing:
-        context.hooks.unregister(legacy_hook_id)
-    if hook_id in existing:
-        context.hooks.bind_plugin(plugin_id, plugin, replace=True)
-        return
-    context.hooks.register(
-        TURN_START,
-        plugin,
-        plugin_id=plugin_id,
-        hook_id=hook_id,
-        root_only=True,
-        failure_policy="open",
-    )
-
-
 def setup(context: PluginSetupContext) -> None:
-    """Publish entity operations and their proactive context contribution."""
+    """Publish entity operations."""
+
+    if context.hooks is not None:
+        for hook in context.hooks.list():
+            if hook.id in {"cyrene-entity-proactive-session-start", "cyrene-entity-proactive-turn-start"}:
+                context.hooks.unregister(hook.id)
 
     service = context.services.get("entities")
     if service is None:
@@ -70,58 +53,6 @@ def setup(context: PluginSetupContext) -> None:
             language=app_language(explicit_language),
         )
         context.provide("entities", service)
-    if context.hooks is None:
-        return
-
-    async def mount_proactive_entities(event: HookEvent) -> dict[str, str]:
-        details = event.payload if isinstance(event.payload, Mapping) else {}
-        metadata = details.get("metadata")
-        metadata = metadata if isinstance(metadata, Mapping) else {}
-        if not bool(metadata.get("proactive")):
-            return {}
-        run_context = context.data.get("run_context")
-        language = app_language(
-            (
-                run_context.get("language")
-                if isinstance(run_context, Mapping)
-                else None
-            )
-            or context.data.get("language")
-        )
-
-        run_context = context.data.get("run_context")
-        project_id = str(
-            context.data.get("project_id")
-            or (
-                run_context.get("project_id")
-                if isinstance(run_context, Mapping)
-                else ""
-            )
-            or "default"
-        )
-        try:
-            active = await service.list(
-                status="active",
-                project_id=project_id,
-                limit=200,
-            )
-        except Exception:
-            return {}
-        work_items = select_proactive_entities(active, project_id=project_id)
-        if not work_items:
-            return {}
-        return {
-            "context": localized(
-                "## Authoritative proactive work items\n{items}",
-                "## 权威主动工作项\n{items}",
-                language=language,
-                items=render_proactive_entities(work_items),
-            ),
-            "context_kind": "proactive_entities",
-            "context_source": "cyrene_entity",
-        }
-
-    _register_proactive_context_hook(context, mount_proactive_entities)
 
 
 def application_setup(context: PluginApplicationContext) -> None:

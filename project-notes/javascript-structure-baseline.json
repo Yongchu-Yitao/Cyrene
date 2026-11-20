@@ -374,14 +374,14 @@
     "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer-voice.jsx::useWbcComposerVoice": {
-    "lines": 119
+    "lines": 129
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx": {
-    "module_lines": 1588
+    "module_lines": 1592
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer": {
-    "lines": 1382,
-    "decisions": 519,
+    "lines": 1386,
+    "decisions": 525,
     "hooks": 52
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>.<anonymous>#17": {
@@ -396,6 +396,9 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.<anonymous>#9": {
     "decisions": 37
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/composer.jsx::WbcComposer.submit": {
+    "decisions": 24
   },
   "src/cyrene/workbench/webui/frontend/features/chat/context-graph.jsx::GraphInspector": {
     "decisions": 38
@@ -761,8 +764,8 @@
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard": {
     "lines": 334,
-    "decisions": 106,
-    "nesting": 11
+    "decisions": 107,
+    "nesting": 12
   },
   "src/cyrene/workbench/webui/frontend/features/chat/page.jsx::WorkbenchChatPage.renderPaneCard.<anonymous>.<anonymous>#4": {
     "decisions": 23
@@ -976,7 +979,7 @@
     "decisions": 136
   },
   "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx::WbcSideAgentTab": {
-    "lines": 242,
+    "lines": 243,
     "decisions": 30
   },
   "src/cyrene/workbench/webui/frontend/features/chat/split-pane.jsx::WbcSideAgentTab.answerPendingQuestion": {
@@ -1105,6 +1108,9 @@
     "decisions": 123,
     "hooks": 17
   },
+  "src/cyrene/workbench/webui/frontend/features/settings/agents.jsx::AgentsPanel": {
+    "decisions": 23
+  },
   "src/cyrene/workbench/webui/frontend/features/settings/appearance.jsx::AppearancePanel": {
     "lines": 142,
     "decisions": 34
@@ -1134,7 +1140,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/settings/capabilities.jsx::CapabilitiesPanel": {
     "lines": 246,
-    "decisions": 114,
+    "decisions": 151,
     "nesting": 6
   },
   "src/cyrene/workbench/webui/frontend/features/settings/channels.jsx::WeChatConnectionPanel": {
@@ -1162,7 +1168,7 @@
     "decisions": 78
   },
   "src/cyrene/workbench/webui/frontend/features/settings/media.jsx": {
-    "module_lines": 1034
+    "module_lines": 1035
   },
   "src/cyrene/workbench/webui/frontend/features/settings/media.jsx::mediaModelEntries.<anonymous>#2": {
     "decisions": 24
@@ -1241,6 +1247,9 @@
   "src/cyrene/workbench/webui/frontend/features/settings/shortcuts.jsx::ShortcutsPanel": {
     "lines": 282,
     "decisions": 24
+  },
+  "src/cyrene/workbench/webui/frontend/features/settings/voice-controls.jsx::VoiceMethods.<anonymous>#2": {
+    "decisions": 22
   },
   "src/cyrene/workbench/webui/frontend/features/shell/assistant-device-list.jsx::AssistantDeviceList": {
     "decisions": 35
@@ -1396,17 +1405,17 @@
     "decisions": 41
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx": {
-    "module_lines": 2240
+    "module_lines": 2241
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>": {
-    "lines": 1977
+    "lines": 1991
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.LocalModelsSection.<anonymous>": {
     "decisions": 88
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.ModelIdCombobox": {
     "lines": 125,
-    "decisions": 46
+    "decisions": 48
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.OAuthSection": {
     "decisions": 86
@@ -1415,9 +1424,9 @@
     "decisions": 37
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.ServicesPage": {
-    "lines": 767,
-    "decisions": 92,
-    "hooks": 42
+    "lines": 797,
+    "decisions": 114,
+    "hooks": 48
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::<anonymous>.ServicesPage.applyDiscoveredModel.<anonymous>": {
     "decisions": 22
@@ -1435,7 +1444,8 @@
     "decisions": 27
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::renderModelDetailPane": {
-    "decisions": 96
+    "decisions": 96,
+    "nesting": 6
   },
   "src/cyrene/workbench/webui/frontend/settings-model-configuration.jsx::ServicesOverview.row": {
     "decisions": 25
@@ -1444,9 +1454,9 @@
     "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/settings-overlay.jsx::SettingsPage": {
-    "lines": 712,
+    "lines": 722,
     "decisions": 29,
-    "hooks": 52
+    "hooks": 54
   },
   "src/cyrene/workbench/webui/frontend/shared/browser/viewport.jsx": {
     "module_lines": 1463
@@ -1507,10 +1517,10 @@
     "decisions": 33
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-en.jsx": {
-    "module_lines": 4405
+    "module_lines": 4455
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/catalog-zh.jsx": {
-    "module_lines": 4405
+    "module_lines": 4455
   },
   "src/cyrene/workbench/webui/frontend/shared/i18n/extension-translations.jsx": {
     "module_lines": 1301

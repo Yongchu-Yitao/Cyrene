@@ -89,9 +89,7 @@ FTS/text search.
 | `STEWARD_INTERVAL` | Seconds between SOUL.md steward runs (minimum one hour) | `3600` |
 | `PATTERN_DETECTION_INTERVAL` | Seconds between behavior-pattern scans | `600` |
 
-The active proactive cadence is the encrypted runtime setting
-`heartbeat_interval`, exposed in Settings and defaulting to `1800` seconds.
-The scheduler reads it at startup.
+Settings → Assistant behavior → Proactive work (`agent_proactive`) controls private follow-ups on earlier work. Only substantiated changes go to the assistant. Short-term private wakeups remain available independently of this setting and do not appear in the calendar.
 
 ### Search
 

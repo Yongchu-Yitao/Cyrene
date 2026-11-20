@@ -28,7 +28,7 @@ function setup({ confirmed = true, failure = false } = {}) {
     },
     readSettingsResponse: async response => response,
     showSettingsToast: (...args) => notices.push(args),
-    ChoiceCards: () => null, SectionTitle: () => null, SectionBlock: () => element('section'), Toggle: () => null,
+    PageDescription: () => null, ChoiceCards: () => null, SectionTitle: () => null, SectionBlock: () => element('section'), Toggle: () => null,
     FieldRow: (title, hint, control, unused, id) => element('row', { id }, control),
   }
   vm.createContext(sandbox)

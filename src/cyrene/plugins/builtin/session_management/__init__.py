@@ -8,6 +8,7 @@ from cyrene.core.plugin.execution import current_plugin_execution
 from cyrene.plugins.native_runtime import run_context_value
 
 from .presentation import task_result
+from .followup import wake_tool
 
 # Internal operations remain stable for durable receipts and queued work.
 TASK_OPERATIONS = {
@@ -22,7 +23,7 @@ TASK_OPERATIONS = {
 }
 # Temporarily unregistered; retain the implementation and durable operation mapping.
 _DISABLED_TOOL_NAMES = frozenset({"task_organize"})
-TOOL_NAMES = tuple(name for name in TASK_OPERATIONS if name not in _DISABLED_TOOL_NAMES)
+TOOL_NAMES = tuple(name for name in TASK_OPERATIONS if name not in _DISABLED_TOOL_NAMES) + ("wake_self_at",)
 
 ID = {"type": "string", "minLength": 1, "maxLength": 160}
 FILES = {
@@ -151,6 +152,7 @@ plugin_pack = PluginPack(
     id="session_management",
     description="Start and manage task execution, inspect evidence and handle questions.",
     plugins=tuple(tool for tool in (
+        wake_tool,
         _tool(
             "session_create",
             "Start NEW work. If a different goal is active in your context catalog, first call switch_context with context_id=null, a title and a progress checkpoint in a separate response. Has full enabled execution capabilities, including browser and desktop tools, with its own browser state. For retries or follow-ups use task_update on the existing task. Acceptance is not completion.",

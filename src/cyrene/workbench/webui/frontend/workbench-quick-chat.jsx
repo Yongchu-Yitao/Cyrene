@@ -610,14 +610,14 @@ function QuickChatApp() {
     }
   }
 
-  function handleGuidance(message) {
+  function handleGuidance(message, attachments = []) {
     var chatId = activeChatIdRef.current;
     var text = String(message || "").trim();
-    if (!chatId || !text || !sending) return Promise.resolve(null);
+    if (!chatId || (!text && !attachments.length) || !sending) return Promise.resolve(null);
     setSendError("");
-    return model.sendGuidance(chatId, text, "guide_" + Date.now()).catch(function (err) {
+    return model.sendGuidance(chatId, text, "guide_" + Date.now(), attachments).catch(function (err) {
       if (err && err.code === "chat_not_running" && runtimeEngine.deferSend) {
-        runtimeEngine.deferSend(chatId, { message: text }, model);
+        runtimeEngine.deferSend(chatId, { message: text, attachments }, model);
         return { deferred: true };
       }
       showSendError(err);

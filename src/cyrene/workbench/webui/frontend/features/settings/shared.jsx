@@ -226,6 +226,10 @@ function AboutRelatedIcon(name) {
 
 // ── Shared UI helpers ──
 
+function PageDescription(text) {
+  return <div className="wb-section-title"><p>{text}</p></div>;
+}
+
 function SectionTitle(title, subtitle) {
   return React.createElement("div", { className: "wb-section-title" },
     React.createElement("h3", null, title),
@@ -305,6 +309,7 @@ export {
   ExternalChevron,
   AutomationIcon,
   AboutRelatedIcon,
+  PageDescription,
   SectionTitle,
   SectionBlock,
   FieldRow,

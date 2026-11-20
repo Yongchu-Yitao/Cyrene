@@ -94,7 +94,7 @@ class ChatSendController:
                 publish_chat_changed=publish_chat_changed,
                 load_chat_summary=self._load_chat_summary,
                 public_message=service.public_message,
-                error_message=self._public_run_error_message,
+                error_message=service.chat_run_error_message,
                 error_metadata=service.chat_error_metadata,
             )
         )
@@ -124,14 +124,6 @@ class ChatSendController:
     def _load_chat_summary(self, chat_id: str) -> dict[str, Any]:
         chat = self.service.repository.get(chat_id)
         return self.service.public_chat_light(chat) if chat else {}
-
-    @staticmethod
-    def _public_run_error_message(_exc: Exception, language: str = "") -> str:
-        return localized(
-            "The Agent run failed. Please try again.",
-            "Agent 运行失败，请重试。",
-            language=language,
-        )
 
     def _schedule_workspace_finalize(self, **kwargs: Any) -> None:
         schedule_workspace_changes_finalize(self.service, **kwargs)
@@ -312,6 +304,20 @@ class _SendOperation:
                 "chat_not_found",
                 language=self.options.lang,
             )
+        if self.origin.agent_message_kind == "assistant_wakeup":
+            from cyrene.core.plugin import application_plugin_service
+            from cyrene.plugins.builtin.session_management.followup import private_context
+            from cyrene.workbench.projects.assistant import ASSISTANT_ID
+
+            management = application_plugin_service("session_management")
+            self.private_wake_context = ""
+            if (management and self.chat_id == self.origin.origin_session_id == ASSISTANT_ID
+                    and self.chat.get("kind") == "personal-assistant"):
+                self.private_wake_context = private_context(
+                    management.store, self.origin.client_request_id, management.host.version(self.chat))
+            if not self.private_wake_context:
+                return localized_error_response("Private check is no longer pending.", "此内部检查已失效。",
+                                                410, "assistant_wake_stale", language=self.options.lang)
         self.base_chat = copy.deepcopy(self.chat)
         if self.origin.agent_originated and self.chat.get("pendingQuestion"):
             return localized_error_response(
@@ -627,7 +633,8 @@ class _SendOperation:
             self.chat.pop("pendingQuestion", None)
         if self.environment.model.candidate is None and not self.environment.model.agent_managed:
             self.chat["model"] = self.routes.get_model()
-        self.service.mark_user_activity(self.chat, self.turn.now)
+        if self.origin.agent_message_kind != "assistant_wakeup":
+            self.service.mark_user_activity(self.chat, self.turn.now)
         await asyncio.to_thread(
             self.service.repository.write_one,
             self.chat,
@@ -814,6 +821,9 @@ class _SendOperation:
             command_system_prompt(self.turn.input.command),
             self.turn.input.dynamic_command_prompt,
         ]
+
+        if self.origin.agent_message_kind == "assistant_wakeup":
+            turn_system_extras.append(self.private_wake_context)
 
         source = (
             "side_agent"
@@ -1029,7 +1039,8 @@ class _SendOperation:
             "ok": True,
             "awaitingUser": pending is not None,
             "runId": run_id,
-            "userMessage": self.service.public_message(self.turn.user_entry),
+            **({} if self.origin.agent_message_kind == "assistant_wakeup" else
+               {"userMessage": self.service.public_message(self.turn.user_entry)}),
             "assistantMessages": [
                 self.service.public_message(item) for item in additions
             ],
@@ -1346,11 +1357,7 @@ class _SendOperation:
                 {
                     "type": "error",
                     "error": "agent_run_failed",
-                    "message": localized(
-                        "The Agent run failed. Please try again.",
-                        "Agent 运行失败，请重试。",
-                        language=self.options.lang,
-                    ),
+                    "message": self.service.chat_run_error_message(exc, self.options.lang),
                     **self.service.chat_error_metadata(exc),
                 }
             )
@@ -1421,7 +1428,7 @@ class _SendOperation:
                     "truncateAfterMessageId": self.turn.truncate_after_id,
                 }
             )
-        else:
+        elif self.origin.agent_message_kind != "assistant_wakeup":
             ack["userMessage"] = self.service.public_message(self.turn.user_entry)
 
         async def runner(run: ChatRun) -> None:
@@ -1451,7 +1458,8 @@ class _SendOperation:
             run_id=run.run_id,
             run_status="running",
             chatSummary=self.service.public_chat_light(self.chat),
-            userMessage=self.service.public_message(self.turn.user_entry),
+            **({} if self.origin.agent_message_kind == "assistant_wakeup" else
+               {"userMessage": self.service.public_message(self.turn.user_entry)}),
         )
         if self.options.wants_stream:
             if self.detached:
@@ -1480,13 +1488,11 @@ class _SendOperation:
             metadata.pop("message", None)
             metadata.pop("error", None)
             return self._builtin_dispatch_response(
-                payload=localized_error_payload(
-                    "The Agent run failed. Please try again.",
-                    "Agent 运行失败，请重试。",
-                    code,
-                    language=self.options.lang,
+                payload={
+                    "error": self.service.chat_run_error_message(exc, self.options.lang),
+                    "code": code,
                     **metadata,
-                ),
+                },
                 status_code=502,
             )
         payload = outcome.get("payload")
@@ -1589,13 +1595,7 @@ class _SendOperation:
                 }
             }
             return JSONResponse(
-                localized_error_payload(
-                    "The Agent run failed. Please try again.",
-                    "Agent 运行失败，请重试。",
-                    code,
-                    language=self.options.lang,
-                    **metadata,
-                ),
+                {"error": payload["error"], "code": code, **metadata},
                 status_code=lifecycle.status_code,
             )
         return lifecycle.payload or {}

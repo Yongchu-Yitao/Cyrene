@@ -3,7 +3,7 @@ import { requestCard, useCardAnimations, WbcAssistantCard } from './assistant-ca
 import { observeHomeCards } from './card-background-work.mjs';
 import { homePanelId } from './assistant-home-layout.jsx';
 
-export function AssistantHomeCards({ active, sessionId, onReady, visible = true }) {
+export function AssistantHomeCards({ active, sessionId, onReady, onOpenResult, visible = true }) {
   const [cards, setCards] = useState([]);
   const [displayTime, setDisplayTime] = useState(() => new Date());
   useEffect(() => {
@@ -33,19 +33,19 @@ export function AssistantHomeCards({ active, sessionId, onReady, visible = true 
   useCardAnimations(homeElement, shown);
   if (!shown) return null;
   return <section ref={homeElement} className="wbc-home-cards wbc-assistant-home" aria-label="助理首页">
-    {cards.length > 0 && <HomeCardList key={sessionId} cards={cards} displayTime={displayTime} />}
+    {cards.length > 0 && <HomeCardList onOpenResult={onOpenResult} key={sessionId} cards={cards} displayTime={displayTime} />}
     {error && <p className="wbc-card-notice" role="status">{error} <button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button></p>}
   </section>;
 }
 
-function HomeCardList({ cards, displayTime }) {
+function HomeCardList({ cards, displayTime, onOpenResult }) {
   const disclosure = useState(() => {
     const resume = cards.find(card => card.spec.home_kind === 'resume');
     const timeline = resume?.spec.blocks.find(block => block.type === 'timeline');
     return timeline ? homePanelId(resume, timeline) : null;
   });
   return <div className="wbc-home-grid">{cards.map(card =>
-    <WbcAssistantCard key={card.card_id} cardId={card.card_id} initialCard={card}
+    <WbcAssistantCard onOpenResult={onOpenResult} key={card.card_id} cardId={card.card_id} initialCard={card}
       displayTime={displayTime} homeDisclosure={disclosure} managedRefresh />
   )}</div>;
 }

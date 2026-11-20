@@ -1,11 +1,11 @@
 import {
+  PageDescription,
   workbenchServices,
   useStateSt,
   useEffectSt,
   useRefSt,
   readSettingsResponse,
   settingsFetch,
-  SectionTitle,
   SectionBlock,
   FieldRow,
   Toggle,
@@ -327,14 +327,14 @@ function RemotePanel(p) {
 
   if (loading && !remote) {
     return React.createElement("div", { className: "settings-panel" },
-      SectionTitle(t("settings.page.remote"), t("settings.remoteSubtitle")),
+      PageDescription(t("settings.remoteSubtitle")),
       React.createElement("p", { className: "wb-hint" }, t("settings.loading")),
     );
   }
 
   if (!remote) {
     return React.createElement("div", { className: "settings-panel" },
-      SectionTitle(t("settings.page.remote"), t("settings.remoteSubtitle")),
+      PageDescription(t("settings.remoteSubtitle")),
       React.createElement("p", { className: "wb-hint" }, notice || t("settings.remoteLoadFailed")),
     );
   }
@@ -344,7 +344,7 @@ function RemotePanel(p) {
   var directPairing = remote.direct_pairing || {};
   var localAddresses = directPairing.addresses || [];
   return React.createElement("div", { className: "settings-panel remote-settings-panel" },
-    SectionTitle(t("settings.page.remote"), t("settings.remoteSubtitle")),
+    PageDescription(t("settings.remoteSubtitle")),
 
     FieldRow(
       remote.enabled ? t("settings.remoteEnabled") : t("settings.remoteDisabled"),

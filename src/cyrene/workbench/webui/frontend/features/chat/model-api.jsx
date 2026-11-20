@@ -456,12 +456,13 @@ import { wbcErrorText } from "./errors.jsx"
     ).catch(function () { return null; });
   }
 
-  function sendGuidance(chatId, message, clientRequestId) {
+  function sendGuidance(chatId, message, clientRequestId, attachments = []) {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/guidance", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: message || "",
+        attachments,
         clientRequestId: clientRequestId || "",
         uiInstanceId: window.CyreneUI.has("uiSurface")
           ? workbenchServices.uiSurface().getInstanceId()

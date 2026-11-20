@@ -480,7 +480,7 @@ function CliHooksPanel(props) {
   return <section className={'wb-cli-hooks-panel' + (standalone ? ' wb-cli-hooks-page' : '')}>
     <header>
       <div>
-        {standalone ? <h2>{t("settings.hooks", "Automatic triggers")}</h2> : <h4>{t("settings.agentHooks", "CLI Hooks")}</h4>}
+        {!standalone && <h4>{t("settings.agentHooks", "CLI Hooks")}</h4>}
         <p>{standalone ? t("settings.hooksSubtitle") : t("settings.agentHooksSubtitle")}</p>
       </div>
       {customAvailable && <button type="button" className={'wb-btn' + (standalone ? ' primary' : '')}

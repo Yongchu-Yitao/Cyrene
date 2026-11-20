@@ -358,16 +358,30 @@ class WorkbenchHost:
             "Completed notifications include final_reply and block_ids. Use the reply as task evidence; "
             "For a truncated reply use task_inspect(view=latest_result, node_id=the notification node_id, content_offset=final_reply_next_offset). "
             "Inspect blocks only when further evidence is needed; use anchor=end for their tail instead of guessing offsets. "
-            "Answer clarification questions with task_answer_question using known context; ask the user in your own conversation only when you cannot answer. Human permission approvals still require the user. Failures include error details below; recover or report the blocker. "
-            "For model_rate_limited, queue one recovery update for unfinished work. The task queue waits until "
-            "retry_at (Unix time) before dispatch; further updates do not shorten the wait. "
-            "If execution ended before accepting an update, inspect the task before sending another update; "
-            "if the same blocker persists, report it instead of submitting identical work. "
+            "Answer clarification questions with task_answer_question using known context; ask the user in your own conversation only when you cannot answer. Human permission approvals still require the user.\n\n"
+            "Take ownership of recovery: diagnose the issue and pursue safe, authorized remedies until the task "
+            "resumes or you confirm that further progress requires the user. Only then ask for what you need "
+            "or report the unresolved blocker.\n\n"
+            "On failure, check the original task's current run, failure details, and pending updates. Ignore "
+            "stale or duplicate notices. Follow explicit recovery actions, user stops, and approval requirements. "
+            "If the cause is unclear or the last update was never accepted, inspect before resubmitting.\n\n"
+            "For retryable failures on authorized, unfinished work, queue at most one task_update per failed run, "
+            "only when no update is pending. The queue honors retry_at (Unix time) when present. Apply the same "
+            "rule to each new failed run. Confirm queuing before saying a retry is scheduled. If recovery is "
+            "blocked or the retry limit is exhausted, report what you tried and what remains unfinished.\n\n"
             "A cancelled execution is not a completed task. Use cancel_reason, interruption_kind and recovery_action: "
             "resume_existing_task means inspect current task evidence and use task_update on the same task to continue the still-authorized unfinished goal after a system interruption. "
             "wait_for_user/do_not_resume means do not automatically restart a user-stopped task; a later explicit user request to continue can authorize recovery. "
             "inspect_before_retry or missing metadata means establish the cause and current state first, never assume cancellation means success or permission to restart. "
-            "task_update returning queued is not completion.\n" + json.dumps(task_result(event), ensure_ascii=False)
+            "task_update returning queued is not completion."
         )
+        if event.get("status") in {"failed", "blocked"} or (
+            event.get("status") == "cancelled" and event.get("recovery_action") == "resume_existing_task"
+        ):
+            text += (
+                "\nIf further work is authorized, act now when possible. If a later check is needed "
+                "and no queued retry or event will wake you, use wake_self_at with a time and private prompt."
+            )
+        text += "\n" + json.dumps(task_result(event), ensure_ascii=False)
         await port.dispatch_agent_message(owner, text, origin_session_id=target, client_request_id=event_id, agent_message_kind="task_notification", expected_version=payload["owner_version"])
         return True

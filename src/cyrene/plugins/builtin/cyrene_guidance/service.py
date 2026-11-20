@@ -8,12 +8,20 @@ from typing import Any
 from cyrene.localization import localized
 
 
-def _public_attachment_metadata(payloads):
+def _attachment_metadata(payloads):
     from cyrene.platform.attachments import build_public_attachment_payload
 
+    from cyrene.workbench.chat.chat_attachment_service import image_inputs
+
+    user_files = [item for payload in payloads if not payload.get("agent_originated")
+                  for item in payload.get("attachments", [])]
+    images = image_inputs(user_files)
     attachments = [build_public_attachment_payload(item)
                    for payload in payloads for item in payload.get("attachments", [])]
-    return {"public_attachments": attachments} if attachments else {}
+    return {
+        **({"public_attachments": attachments} if attachments else {}),
+        **({"input_images": list(images)} if images else {}),
+    }
 
 
 class GuidanceService:
@@ -128,7 +136,7 @@ class GuidanceService:
             ],
             "authorization_request": local_authorization,
             "metadata": {
-                **_public_attachment_metadata(payloads),
+                **_attachment_metadata(payloads),
                 "source": "cyrene_guidance",
                 "raw_guidance": local_authorization,
                 "peer_guidance": raw_text,

@@ -2,6 +2,7 @@ import { ExtensionFilter } from "./extension-filter.jsx"
 import {ActionIcon} from "./action-icon.jsx"
 import {Disclosure} from "./disclosure.jsx"
 import {
+  PageDescription,
   workbenchServices,
   useStateSt,
   useEffectSt,
@@ -9,7 +10,6 @@ import {
   readSettingsResponse,
   settingsFetch,
   showSettingsToast,
-  SectionTitle,
   Toggle,
 } from "./shared.jsx"
 import { PluginCenterAddButton, PluginCenterPage } from "./plugin-center-add.jsx"
@@ -467,8 +467,7 @@ function usePluginRegistryController(props) {
 function PluginRegistryHeader(props) {
   var c = props.controller
   return React.createElement("header", { className: "wb-extensions-header" },
-    SectionTitle(c.t("settings.pluginRegistry", "Plugin Center"),
-      c.t("settings.pluginRegistryHint", "Inspect loaded Plugin packs and add Skills, MCP servers, or CLI tools.")),
+    PageDescription(c.t("settings.pluginRegistryHint", "Inspect loaded Plugin packs and add Skills, MCP servers, or CLI tools.")),
     React.createElement("div", { className: "wb-extensions-header-actions" },
       props.onAdd && React.createElement(PluginCenterAddButton, { t: c.t, disabled: c.disabled, onClick: props.onAdd }),
       React.createElement("button", { type: "button", className: "wb-btn primary wb-extension-install-button",

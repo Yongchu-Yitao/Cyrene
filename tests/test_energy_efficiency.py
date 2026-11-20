@@ -40,17 +40,15 @@ async def test_scheduler_uses_independent_maintenance_cadences(
 
     assert set(jobs) == {
         "scheduled_tasks",
+        "assistant_revisit_draw",
         "plugin_registry_sync",
         "behavior_learning",
-        "proactive_heartbeat",
         "steward",
         "short_term_cleanup",
         "soul_temporary_cleanup",
     }
     assert jobs["scheduled_tasks"].trigger.interval.total_seconds() == 60
     assert jobs["behavior_learning"].trigger.interval.total_seconds() == 600
-    assert jobs["proactive_heartbeat"].trigger.interval.total_seconds() == 1800
-    assert jobs["proactive_heartbeat"].next_run_time is not None
     assert jobs["steward"].trigger.interval.total_seconds() == 3600
     assert jobs["short_term_cleanup"].trigger.interval.total_seconds() == 86400
     assert jobs["soul_temporary_cleanup"].trigger.interval.total_seconds() == 86400

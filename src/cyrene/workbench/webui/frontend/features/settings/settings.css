@@ -400,7 +400,22 @@ html[data-theme="light"] .wb-tool-list .mono {
   -ms-overflow-style: none;
   padding: 24px 28px 44px;
   background: var(--wb-main-bg);
-  animation: settings-content-in 0.18s ease-out;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .settings-overlay-content[data-settings-active-tab="profile"] {
+    animation: settings-content-in 0.18s ease-out;
+  }
+  html:not([data-performance-mode="on"]) .settings-crumb {
+    animation: settings-crumb-slide 180ms cubic-bezier(.2,.7,.25,1);
+  }
+}
+.settings-overlay-content[data-slide-direction="back"],
+.settings-crumb[data-slide-direction="back"] { --crumb-offset: -12px; }
+.settings-crumb[data-slide-direction="forward"] { --crumb-offset: 12px; }
+
+@keyframes settings-crumb-slide {
+  from { transform: translateX(var(--crumb-offset, 12px)); }
+  to { transform: translateX(0); }
 }
 .settings-overlay-content::-webkit-scrollbar { width: 8px; }
 .settings-overlay-content::-webkit-scrollbar-thumb {
@@ -453,8 +468,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 
 .settings-overlay .wb-section-block,
-.settings-overlay .wb-model-card,
-.settings-overlay .wb-shortcuts-platform {
+.settings-overlay .wb-model-card {
   border-color: color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   border-radius: 16px;
   background: color-mix(in srgb, var(--wb-card-bg) 82%, transparent);
@@ -518,16 +532,19 @@ html[data-theme] .settings-overlay :where(.wb-input, .wb-select, .wb-textarea):f
 }
 
 html[data-theme] .settings-overlay .wb-select {
+  border-radius: var(--wb-settings-control-radius);
+  background-color: var(--wb-settings-control-bg);
+  font-weight: 620;
+}
+
+html[data-theme] :is(.settings-overlay, .aim-field) .wb-select {
   appearance: none;
   -webkit-appearance: none;
   padding-inline: 14px 38px;
-  border-radius: var(--wb-settings-control-radius);
-  background-color: var(--wb-settings-control-bg);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
   background-size: 16px;
-  font-weight: 620;
 }
 
 html[data-theme] .settings-overlay .wb-input::placeholder,

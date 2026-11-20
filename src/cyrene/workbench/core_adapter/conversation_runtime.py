@@ -777,6 +777,8 @@ class ConversationRuntime:
         metadata: Mapping[str, Any] | None = None,
         publish: WorkbenchPublisher | None = None,
     ) -> WorkbenchChatResult:
+        if config.command == "proactive-heartbeat":
+            raise ValueError("Legacy proactive work sessions are disabled")
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
             raise ValueError("run_id cannot be empty")

@@ -20,6 +20,12 @@ function assistantGripPosition(anchor, { loading, welcome, open, logo }) {
 }
 
 export function assistantGripPresentation(anchor, { loading, welcome, open, logo, mounted, arriving }) {
+  // The chat can render before its welcome slot has been measured. Keep the
+  // loading pose until we can transition directly to the measured destination.
+  if (welcome && !open && !anchor.welcome) {
+    loading = true;
+    welcome = false;
+  }
   const position = assistantGripPosition(anchor, { loading, welcome, open, logo });
   const slot = welcome ? anchor.welcome : null;
   const welcomeScale = slot && !open ? slot.size / 36 : 1;
@@ -34,7 +40,7 @@ export function observeAssistantGrip(card, grip, onChange, win = window, welcome
   for (let node = card; node; node = node.parentElement) ancestors.push(node);
   for (let node = welcome?.parentElement; node && node !== card; node = node.parentElement) ancestors.push(node);
   let frame = null, trackingUntil = 0, disposed = false;
-  let previous = '';
+  let previous = '', previousTheme = null;
   let theme = null;
   function readTheme() {
     if (theme) return theme;
@@ -57,7 +63,7 @@ export function observeAssistantGrip(card, grip, onChange, win = window, welcome
       && rect.width > 0 && rect.height > 0 && pane.bottom > 0 && pane.right > 0
       && pane.top < win.innerHeight && pane.left < win.innerWidth;
     const next = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, bottom: rect.bottom,
-      pane: { left: pane.left, top: pane.top, right: pane.right, bottom: pane.bottom }, theme: readTheme(), visible };
+      pane: { left: pane.left, top: pane.top, right: pane.right, bottom: pane.bottom }, visible };
     if (welcome?.isConnected) {
       const slot = welcome.getBoundingClientRect();
       next.welcome = { x: slot.left + slot.width / 2, y: slot.top + slot.height / 2, size: slot.width };
@@ -69,7 +75,12 @@ export function observeAssistantGrip(card, grip, onChange, win = window, welcome
       }
     }
     const encoded = JSON.stringify(next);
-    if (encoded !== previous) { previous = encoded; onChange(next); }
+    const currentTheme = readTheme();
+    if (encoded !== previous || currentTheme !== previousTheme) {
+      previous = encoded;
+      previousTheme = currentTheme;
+      onChange({ ...next, theme: currentTheme });
+    }
   }
   function tick(time) {
     frame = null; measure();
@@ -90,7 +101,10 @@ export function observeAssistantGrip(card, grip, onChange, win = window, welcome
   if (welcome) resize.observe(welcome);
   // Theme tokens change with ancestor attributes, not with every interpolated
   // pixel of a sidebar transition. Reuse the snapshot while following motion.
-  const mutations = new win.MutationObserver(invalidateTheme);
+  const mutations = new win.MutationObserver(records => {
+    if (records.some(record => record.type === 'attributes')) invalidateTheme();
+    else schedule();
+  });
   ancestors.forEach(node => mutations.observe(node, { attributes: true, childList: true,
     attributeFilter: ['class', 'style', 'hidden', 'inert', 'aria-hidden', 'data-theme', 'data-performance-mode'] }));
   const events = [['resize', schedule], ['scroll', schedule], ['transitionrun', followTransition],

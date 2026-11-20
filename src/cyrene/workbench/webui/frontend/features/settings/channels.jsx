@@ -1,11 +1,11 @@
 import {
+  PageDescription,
   useStateSt,
   useEffectSt,
   useRefSt,
   readSettingsResponse,
   settingsFetch,
   showSettingsToast,
-  SectionTitle,
   FieldRow,
   Toggle,
 } from "./shared.jsx"
@@ -23,7 +23,7 @@ function ChannelsPanel(p) {
   }
 
   return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.channels"), t("settings.channelsSubtitle")),
+    PageDescription(t("settings.channelsSubtitle")),
 
     React.createElement("div", { className: "wb-channel-card" },
       React.createElement("div", { className: "wb-channel-head" },

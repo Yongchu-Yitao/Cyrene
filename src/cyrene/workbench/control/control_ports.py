@@ -320,6 +320,8 @@ class WorkbenchChatApplicationPort:
         origin = str(origin_session_id or "").strip()
 
         async def guide_active() -> dict[str, Any]:
+            if request_id.startswith("assistant_followup_"):
+                raise ControlServiceError("Private check waits for the active turn.", status_code=409)
             result = await self._guidance.submit(
                 chat_id=chat_id,
                 message=text,

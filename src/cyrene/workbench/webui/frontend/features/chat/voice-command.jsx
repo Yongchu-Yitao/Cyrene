@@ -262,6 +262,7 @@ import { WBC_TOPBAR_INITIAL_SILENCE_MS, wbcStartVoiceRecorder } from "./voice-in
       if (!ready) throw new Error(wbcT("topbar.voiceModelsNotReady", "Configure both local voice models first"));
       return wbcStartVoiceRecorder({
         autoStopOnSilence: true,
+        maxSeconds: status.asr_provider === "deepseek" ? 120 : 0,
         initialSilenceMs: WBC_TOPBAR_INITIAL_SILENCE_MS,
         onSilence: finishRecording,
       });

@@ -52,6 +52,9 @@ class VoiceService:
     def transcribe(self, payload: bytes) -> dict[str, Any]:
         return engine.transcribe(payload)
 
+    def transcribe_reference(self, payload: bytes) -> dict[str, Any]:
+        return engine.transcribe_reference(payload)
+
     def normalize_tts_text(self, text: str) -> str:
         return engine.normalize_tts_text(text)
 

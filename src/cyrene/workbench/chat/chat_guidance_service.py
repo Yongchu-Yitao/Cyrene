@@ -66,13 +66,13 @@ class ChatGuidanceApplicationService:
         agent_message_kind: str = "",
         attachments: list[dict[str, Any]] | None = None,
     ) -> ChatGuidanceResult:
-        if not message:
+        normalized, public_attachments = _guidance_attachments(attachments)
+        if not message and not normalized:
             return self._error(
                 localized("Guidance message is empty.", "引导消息不能为空。"),
                 "guidance_empty",
                 422,
             )
-        normalized, public_attachments = _guidance_attachments(attachments)
         run = self.dependencies.run_manager.get(chat_id)
         if run is None or run.status != "running":
             return self._not_running()

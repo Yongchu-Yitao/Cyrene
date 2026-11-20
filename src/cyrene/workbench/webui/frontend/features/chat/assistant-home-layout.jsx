@@ -30,7 +30,9 @@ export function AssistantHomeLayout({ card, renderBlock, disclosure, now = new D
   function toggle(block) {
     const id = homePanelId(card, block);
     const fallback = block.type === 'timeline' ? '查看进度' : kind === 'results' ? '交付物' : '事项';
-    return <HomeToggle key={id} id={id} label={block.title || fallback} count={block.items.length} disclosure={disclosure} />;
+    const openTimeline = block.type === 'timeline' && disclosure[0] === id;
+    const label = openTimeline ? (inHeader ? '收起进度' : '收起' + (block.title || '进度')) : block.title || fallback;
+    return <HomeToggle key={id} id={id} label={label} count={openTimeline ? null : block.items.length} disclosure={disclosure} />;
   }
   function panel(block) {
     const id = homePanelId(card, block);

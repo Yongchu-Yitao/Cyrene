@@ -1,3 +1,4 @@
+import { SettingsBreadcrumb } from "./features/settings/breadcrumb.jsx"
 import { EditorDialog } from "./features/settings/editor-dialog.jsx"
 import {Disclosure} from "./features/settings/disclosure.jsx"
 import {ActionIcon} from "./features/settings/action-icon.jsx"
@@ -23,6 +24,8 @@ var MODEL_CONFIGURATION_ERROR_CODE_KEYS = {
   "model_discovery_connection_failed": ["settings.modelDiscoveryConnectionFailed", "Could not connect to the model service."],
   "model_discovery_service_unavailable": ["settings.modelDiscoveryServiceUnavailable", "The model service is temporarily unavailable."],
   "model_connection_failed": ["settings.modelConnectionFailed", "Model connection failed."],
+  "model_rate_limited": ["settings.modelTestRateLimited", "Too many requests. Try testing again shortly."],
+  "model_credentials_missing": ["settings.modelDiscoveryCredentialsMissing", "No API key is configured."],
   "model_tls_failed": ["settings.modelConnectionFailed", "Model connection failed."],
   "model_timeout": ["settings.modelConnectionTimedOut", "Model connection timed out."],
   "model_authentication_failed": ["settings.modelConnectionRejected", "The model service rejected the connection."],
@@ -72,7 +75,7 @@ function ServicesOverview({v,openService,createService}){
       <span className="svc-chevron" aria-hidden="true"><ActionIcon name="chevron-right"/></span>
     </button>
   }
-  return <><header className="svc-heading compact-model-heading"><h2>{t("settings.modelServices")}</h2>
+  return <><header className="svc-heading compact-model-heading">
     <div className="routes-strip">{defaultPicker("primary",t("settings.defaultServiceModel"))}{defaultPicker("embedding",t("settings.embeddingRouteTitle"))}</div></header>
     <div id="setting-model-connections" className="service-index">
       <header className="catalog-heading"><h3>{t("settings.serviceProviders")}</h3><button type="button" className="add-provider" disabled={!v.selectableAdapters.length} onClick={createService}><ActionIcon name="plus"/>{t("settings.addService")}</button></header>
@@ -113,26 +116,9 @@ function ServiceEndpoint({value,onSave}){
   </div>;
 }
 
-function EditableModelList({children}){
-  const t = workbenchServices.i18n().t;
-  const editors=React.Children.toArray(children);
-  const [choice,select]=React.useState(editors[0]?.props.profile.id);
-  const [open,setOpen]=React.useState(true);
-  const region=React.useId(), buttons=React.useRef(new Map());
-  const draft=editors.find(item=>item.props.draft);
-  React.useLayoutEffect(()=>{if(draft){select(draft.props.profile.id);setOpen(true)}},[draft?.props.profile.id]);
-  const active=editors.find(item=>item.props.profile.id===choice)||editors[0];
-  const activeId=active?.props.profile.id;
-  function close(){buttons.current.get(activeId)?.focus({preventScroll:true});setOpen(false)}
-  return <div className="model-split model-split-motion" data-editing={open}>
-    <div className="model-selector" aria-label={t("settings.modelList")}>{editors.map(item=>{
-      const model=item.props.profile,selected=activeId===model.id&&open;
-      return <button key={model.id} ref={node=>{if(node)buttons.current.set(model.id,node);else buttons.current.delete(model.id)}} aria-controls={region} aria-expanded={selected} aria-pressed={selected} onClick={()=>{select(model.id);setOpen(!selected)}}>
-        <ActionIcon name="box"/><span><strong>{model.name||model.model||t("settings.newModel")}</strong><code>{model.model||t("settings.pendingModelId")}</code></span><ActionIcon name="chevron-right"/>
-      </button>})}</div>
-    <Disclosure id={region} open={open}>{active&&React.cloneElement(active,{onClose:close})}</Disclosure>
-  </div>
-}
+const credentialErrors = new Set(["model_discovery_credentials_missing", "model_discovery_authentication_failed", "model_credentials_missing", "model_authentication_failed"]);
+
+const EditableModelList = React.lazy(function loadEditableModelList() { return import("./features/settings/editable-model-list.jsx"); });
 
 function renderModelDetailPane(v) {
   var h = v.h;
@@ -147,13 +133,13 @@ function renderModelDetailPane(v) {
         !v.isCodexConnection(selected) && !v.isLocalConnection(selected) ? h(v.Field, {
           label: v.label(v.props, "settings.apiKey", "API key"),
           wide: true,
-          hint: selected.secret_configured && !selected.secret
+          hint: v.keyIssue ? h("span", {className:"model-issue-text", id:"model-key-error"}, v.keyIssue.error) : selected.secret_configured && !selected.secret
             ? v.label(v.props, "settings.savedKeyLeaveBlank", "API key saved and hidden; leave this blank to keep it unchanged.")
             : String(selected.secret || "").trim()
               ? v.label(v.props, "settings.apiKeyPendingSave", "This API key will be stored in the local configuration.")
               : v.label(v.props, "settings.apiKeyNotConfigured", "No API key is configured. The value you enter is sent only to the local configuration API."),
         }, h("input", {
-          className: "wb-input", type: "password", value: selected.secret,
+          className: "wb-input", type: "password", value: selected.secret, ref: v.keyField, "aria-invalid": !!v.keyIssue, "aria-describedby": v.keyIssue ? "model-key-error" : undefined,
           onChange: function (event) { v.updateConnection("secret", event.target.value); },
           placeholder: selected.secret_configured
             ? v.label(v.props, "settings.apiKeySavedPlaceholder", "Saved key (hidden)")
@@ -162,6 +148,7 @@ function renderModelDetailPane(v) {
           "data-secret-state": selected.secret_configured ? "configured" : "unconfigured",
           "aria-label": v.label(v.props, "settings.apiKeyWriteOnly", "API key (write only)"), "data-cyrene-agent-secret-input": "true", "data-cyrene-risk": "R3",
         })) : null,
+        v.keyIssue?.technicalDetail ? h("button",{type:"button",className:"wb-mcfg-copy-diagnostic",onClick:()=>v.copyModelTechnicalDetail(v.keyIssue.technicalDetail,v.props)},v.label(v.props,"settings.copyTechnicalDetails","Copy technical details")) : null,
         !v.isCodexConnection(selected) ? h("div", {className:"svc-proxy-field"}, h("div", { className: "wb-mcfg-model-proxy-control" },
             h("span", null, v.label(v.props, "settings.useProxy", "Use proxy")),
             h(v.Toggle, { checked: selected.use_proxy === true, label: selected.use_proxy ? v.label(v.props, "settings.disableNamedProxy", "Disable proxy for {name}", { name: selected.name }) : v.label(v.props, "settings.enableNamedProxy", "Enable proxy for {name}", { name: selected.name }), onChange: function (value) { v.updateConnection("use_proxy", value); } })
@@ -171,39 +158,19 @@ function renderModelDetailPane(v) {
     v.pane==="connection" && v.isCodexConnection(selected) ? h(v.OAuthSection, { t:v.props.t, state: v.oauth, busy: v.oauthBusy, cliBusy: v.oauthBusy === "cli", onLogin: v.startOauthLogin, onLogout: v.logoutOauth, onDownloadCli: v.downloadOauthCli, onImportModels: v.importOauthModels, onImportModel: v.importOauthModel }) : null,
     v.isLocalConnection(selected) ? h(v.LocalModelsSection, { t: v.props.t, models: v.localModels, cv2Runtime: v.localRuntime, error: v.localError, busy: v.localBusy, hideHeader: true, onRefresh: v.refreshLocalModels, onManage: v.manageLocalModel }) : null,
     v.pane==="models" && !v.isLocalConnection(selected) ? h("section", { className: "wb-mcfg-form-section", "aria-labelledby": "wb-mcfg-profiles-heading" },
-      h("div", { className: "wb-mcfg-section-head" },
-        h("h4", { id: "wb-mcfg-profiles-heading" }, v.label(v.props, "settings.modelList", "Model list") + " · " + v.profiles.length),
-        h("div", { className: "wb-mcfg-section-actions" },
-          v.discovery && v.discovery.error ? h("span", { className: "wb-mcfg-discovery-error", title: v.discovery.error },
-            h("span", null, v.discovery.error),
-            v.discovery.technicalDetail ? h("button", {
-              type: "button",
-              className: "wb-mcfg-copy-diagnostic",
-              onClick: function () { v.copyModelTechnicalDetail(v.discovery.technicalDetail, v.props); },
-            }, v.label(v.props, "settings.copyTechnicalDetails", "Copy technical details")) : null
-          ) : null,
-          h("button", {
-            type: "button",
-            className: "wb-btn",
-            disabled: !!(v.discovery && v.discovery.loading),
-            onClick: function () { v.discoverConnection({ notify: true, force: true }); },
-          }, v.discovery && v.discovery.loading ? h("span", { className: "wb-spinner small" }) : h(ActionIcon,{name:"refresh"}), v.discovery && v.discovery.loading ? v.label(v.props, "settings.fetchingModels", "Fetching…") : v.label(v.props, "settings.refreshModels", "Refresh models")),
-          h("button", { type: "button", className: "wb-btn", disabled: !!v.profileDraft, onClick: function () { v.addProfile(); } }, h(ActionIcon,{name:"plus"}), v.label(v.props, "settings.addModel", "Add model"))
-        )
-      ),
-      !v.profiles.length && !v.profileDraft ? h("div", { className: "wb-mcfg-inline-empty" }, v.label(v.props, "settings.noModelProfilesHint", "No model profiles yet. Add one to choose a provider model or enter a model ID manually.")) : null,
-      v.profiles.length || v.profileDraft ? h(EditableModelList, { key:selected.id }, v.profiles.concat(v.profileDraft ? [v.profileDraft] : []).map(function (profile) {
+      h(React.Suspense, { fallback:h("span",{className:"wb-spinner small"}) }, h(EditableModelList, { key:selected.id, v, empty:h("div", { className:"wb-mcfg-inline-empty" }, v.label(v.props,"settings.noModelProfilesHint","No model profiles yet. Add one to choose a provider model or enter a model ID manually.")) }, v.profiles.concat(v.profileDraft ? [v.profileDraft] : []).map(function (profile) {
         var isDraft = !!v.profileDraft && profile.id === v.profileDraft.id;
         return h(v.ProfileEditor, { key: profile.id, profile: profile, draft: isDraft, t: v.props.t,
           onChange: function (key, value) { isDraft ? v.updateProfileDraft(key, value) : v.updateProfile(profile.id, key, value); },
           onModelSelect: function (item) { isDraft ? v.applyDiscoveredModelToDraft(item) : v.applyDiscoveredModel(profile.id, item); },
+          testIssue: v.keyIssue && credentialErrors.has(v.testIssues[profile.id]?.code) ? null : v.testIssues[profile.id],
           modelOptions: v.discovery && v.discovery.models || [],
           modelsLoading: !!(v.discovery && v.discovery.loading),
           modelsError: v.discovery && v.discovery.error || "",
           onRemove: function () { isDraft ? v.cancelProfileDraft() : v.removeProfile(profile.id); },
           onCommit: isDraft ? v.commitProfileDraft : undefined,
           onTest: function () { v.testProfile(profile); }, testing: v.busy === "test:" + profile.id });
-      })) : null
+      })))
     ) : null
   ) : h("div", { className: "wb-mcfg-state" },
     h("strong", null, v.label(v.props, "settings.selectOrAddProvider", "Select or add a model provider")),
@@ -495,6 +462,7 @@ function useConnectionMenuLifecycle(v) {
   }
 
   function updateProfilePriceField(raw, field, value) {
+    const idIssue = props.testIssue?.code === "model_unavailable";
     var pricing = profilePriceFields(raw);
     pricing[field] = String(value == null ? "" : value).trim();
     if (!pricing.input && !pricing.output && !pricing.cache) return "";
@@ -1217,7 +1185,7 @@ function useConnectionMenuLifecycle(v) {
           ref: inputRef,
           className: "wb-input",
           value: value,
-          role: "combobox",
+          role: "combobox", "aria-invalid": !!props.errorId, "aria-describedby": props.errorId,
           "aria-label": label(props, "settings.modelId", "Model ID"),
           "aria-autocomplete": "list",
           "aria-expanded": open,
@@ -1275,6 +1243,7 @@ function useConnectionMenuLifecycle(v) {
   function ProfileEditor(props) {
     const t = workbenchServices.i18n().t;
     var profile = props.profile;
+    const idIssue = props.testIssue?.code === "model_unavailable";
     var pricing = profilePriceFields(profile.price);
     var displayName = profile.name || profile.model || label(props, "settings.unnamedModel", "Unnamed model");
     var capabilities = normalizedCapabilities(profile.capabilities);
@@ -1299,8 +1268,9 @@ function useConnectionMenuLifecycle(v) {
             </label>
             <div className="model-field"><span>{t("settings.modelId")}</span>
               <ModelIdCombobox t={props.t} profileId={profile.id} draft={props.draft} value={profile.model || ""}
-                options={props.modelOptions || []} loading={props.modelsLoading} error={props.modelsError}
+                errorId={idIssue ? detailsId+"-error" : undefined} options={props.modelOptions || []} loading={props.modelsLoading} error={props.modelsError}
                 onChange={value=>props.onChange("model",value)} onSelect={props.onModelSelect}/>
+              {idIssue && <small id={detailsId+"-error"} className="model-issue-text" role="status">{props.testIssue.error}</small>}
             </div>
             <div className="model-field"><span id={detailsId+"-caps"}>{t("settings.modelCapabilities")}</span>
               <div className="model-cap-options" role="group" aria-labelledby={detailsId+"-caps"}>
@@ -1337,6 +1307,7 @@ function useConnectionMenuLifecycle(v) {
               </div>
             </div>
           </div>}
+          {props.testIssue && (!idIssue || parametersOpen) && <small className="model-issue-text" role="status">{props.testIssue.error}</small>}
           <div className="wb-mcfg-profile-details-actions">
             {props.draft ? <>
               <button type="button" className="wb-btn primary" disabled={!String(profile.model || "").trim()} onClick={props.onCommit}>{t("common.save")}</button>
@@ -1359,6 +1330,10 @@ function useConnectionMenuLifecycle(v) {
     var config = store.config;
     var [selectedId, setSelectedId] = useState(props.initialConnectionId || "");
     const [inDetail,setInDetail]=useState(!!props.initialConnectionId);
+    const visitedDetail = useRef(false);
+    React.useLayoutEffect(() => {
+      if (inDetail) visitedDetail.current = true;
+    }, [inDetail]);
     const [routesOpen,setRoutesOpen]=useState(false);
     const [pane,setPane]=useState("models");
     useEffect(() => {
@@ -1369,6 +1344,10 @@ function useConnectionMenuLifecycle(v) {
       }
       if (props.initialConnectionId) setSelectedId(props.initialConnectionId);
     },[props.routeAnchor,props.initialConnectionId,props.navigationRequest]);
+    const keyField = useRef(null);
+    React.useLayoutEffect(()=>{
+      if(pane==="connection" && keyField.current?.getAttribute("aria-invalid")==="true") keyField.current.focus();
+    },[pane,selectedId]);
     const serviceEditTrigger=useRef(null);
     var [dirty, setDirty] = useState(false);
     var [saveError, setSaveError] = useState("");
@@ -1395,6 +1374,8 @@ function useConnectionMenuLifecycle(v) {
     var [localError, setLocalError] = useState("");
     var [localBusy, setLocalBusy] = useState("");
     var [proxyMasterEnabled, setProxyMasterEnabled] = useState(false);
+    const [testIssues,setTestIssues] = useState({});
+    const testVersions = useRef({});
     var [modelDiscovery, setModelDiscovery] = useState({});
     var [profileDrafts, setProfileDrafts] = useState({});
     var discoveryRequestVersions = useRef({});
@@ -1489,7 +1470,17 @@ function useConnectionMenuLifecycle(v) {
       scheduleQueuedSave(0);
     }
 
+    function clearTestIssue(id) {
+      testVersions.current[id]=(testVersions.current[id]||0)+1;
+      setTestIssues(previous=>{if(!previous[id])return previous;const next={...previous};delete next[id];return next;});
+    }
     function updateConnection(key, value) {
+      if (["secret","adapter","base_url","use_proxy"].includes(key)) {
+        discoveryRequestVersions.current[selected.id]=(discoveryRequestVersions.current[selected.id]||0)+1;
+        setModelDiscovery(function clearDiscoveryState(previous) { return {...previous, [selected.id]: undefined}; });
+        config.profiles.filter(function belongsToSelectedConnection(profile) { return profile.connection_id === selected.id; })
+          .forEach(function clearProfileTestIssue(profile) { clearTestIssue(profile.id); });
+      }
       if (key === "use_proxy" && value === true) setProxyMasterEnabled(true);
       updateConfig(Object.assign({}, config, {
         connections: config.connections.map(function (connection) {
@@ -1683,6 +1674,7 @@ function useConnectionMenuLifecycle(v) {
     }
 
     function updateProfile(profileId, key, value) {
+      if(key==="model") clearTestIssue(profileId);
       updateConfig(Object.assign({}, config, {
         profiles: config.profiles.map(function (profile) {
           if (profile.id !== profileId) return profile;
@@ -1694,6 +1686,7 @@ function useConnectionMenuLifecycle(v) {
     }
 
     function applyDiscoveredModel(profileId, item) {
+      clearTestIssue(profileId);
       var modelId = String(item && (item.model || item.id || item.name) || "").trim();
       if (!modelId) return;
       updateConfig(Object.assign({}, config, {
@@ -1772,18 +1765,18 @@ function useConnectionMenuLifecycle(v) {
           next[connectionId] = Object.assign({}, previous[connectionId] || {}, {
             loading: false,
             loaded: true,
-            error: message,
+            error: message, code: error.code,
             technicalDetail: modelConfigurationTechnicalDetail(error),
-            models: [],
           });
           return next;
         });
-        if (options.notify) showSettingsToast(message, "error");
+
         return [];
       });
     }
 
     function removeProfile(profileId) {
+      clearTestIssue(profileId);
       var routes = {};
       Object.keys(config.routes).forEach(function (route) {
         routes[route] = config.routes[route].filter(function (id) { return id !== profileId; });
@@ -1796,6 +1789,8 @@ function useConnectionMenuLifecycle(v) {
 
     function testProfile(profile) {
       if (!selected || !profile) return;
+      clearTestIssue(profile.id);
+      const version=testVersions.current[profile.id];
       var busyKey = "test:" + profile.id;
       setBusy(busyKey);
       store.setError("");
@@ -1804,11 +1799,12 @@ function useConnectionMenuLifecycle(v) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ connection: connectionDraftPayload(selected), profile: profile }),
       }).then(function (payload) {
+        if(testVersions.current[profile.id]!==version)return;
         showSettingsToast(String(payload.message || payload.detail || label(props, "settings.modelTestSucceeded", "Model test succeeded.")), "success");
       }).catch(function (error) {
-        var message = localizedModelConfigurationError(error, props);
-        store.setError(message);
-        showSettingsToast(message, "error");
+        if(testVersions.current[profile.id]!==version)return;
+        const issue={code:error.code,error:localizedModelConfigurationError(error, props),technicalDetail:modelConfigurationTechnicalDetail(error)};
+        setTestIssues(previous=>({...previous,[profile.id]:issue}));
       }).finally(function () { setBusy(function (current) { return current === busyKey ? "" : current; }); });
     }
 
@@ -1996,8 +1992,8 @@ function useConnectionMenuLifecycle(v) {
       return function () { clearInterval(timer); };
     }, [selectedId, localModels.some(function (model) { return model.downloading; })]);
 
-    if (store.loading) return h("div", { className: "settings-panel settings-panel-wide wb-model-config-page" }, h(LoadingState, props));
-    if (!config) return h("div", { className: "settings-panel settings-panel-wide wb-model-config-page" }, h(ErrorState, Object.assign({}, props, { error: store.error, onRetry: store.load })));
+    if (store.loading) return <>{props.breadcrumb}{h("div", { className: "settings-panel settings-panel-wide wb-model-config-page" }, h(LoadingState, props))}</>;
+    if (!config) return <>{props.breadcrumb}{h("div", { className: "settings-panel settings-panel-wide wb-model-config-page" }, h(ErrorState, Object.assign({}, props, { error: store.error, onRetry: store.load })))}</>;
 
     var profiles = selected ? config.profiles.filter(function (profile) { return profile.connection_id === selected.id; }) : [];
     var profileDraft = selected ? profileDrafts[selected.id] || null : null;
@@ -2043,7 +2039,9 @@ function useConnectionMenuLifecycle(v) {
     var connectionMenuPortal = connectionMenuNode && typeof ReactDOM !== "undefined" && ReactDOM.createPortal
       ? ReactDOM.createPortal(connectionMenuNode, document.body)
       : connectionMenuNode;
+    const keyIssue = selected && !isCodexConnection(selected) && (credentialErrors.has(discovery?.code) && discovery.error ? discovery : profiles.map(p=>testIssues[p.id]).find(issue=>credentialErrors.has(issue?.code)));
     var modelView = {
+      testIssues, keyIssue, keyField, discoveryKeyError: !!keyIssue && credentialErrors.has(discovery?.code),
       h: h, props: props, label: label, browserIcon: browserIcon, searchIcon: searchIcon,
       copyModelTechnicalDetail: copyModelTechnicalDetail,
       config: config, store: store,
@@ -2083,13 +2081,16 @@ function useConnectionMenuLifecycle(v) {
     function openService(c){setSelectedId(c.id);setPane("models");setInDetail(true);store.setError("")}
     function createService(){addConnection();setPane("connection");setInDetail(true)}
     const local=selected&&isLocalConnection(selected),oauthConnection=selected&&isCodexConnection(selected);
-    return <div id="setting-model-services" className="settings-panel settings-panel-wide wb-model-config-page svc">
+    const breadcrumb = inDetail && selected
+      ? <SettingsBreadcrumb key={selected.id} direction="forward" parent={t("settings.modelServices")} current={connectionDisplayName(selected, props)}
+          onBack={() => { setInDetail(false); setPane("models"); }}/>
+      : visitedDetail.current && props.breadcrumb ? React.cloneElement(props.breadcrumb, { direction: "back" }) : props.breadcrumb;
+    return <>{breadcrumb}<div id="setting-model-services" className="settings-panel settings-panel-wide wb-model-config-page svc">
       {saveError ? h("div", { className: "wb-mcfg-status is-error wb-mcfg-save-error", role: "alert" },
         h("span", null, saveError),
         dirty ? h("button", { type: "button", className: "wb-btn", disabled: store.saveState === "saving", onClick: retryQueuedSave }, label(props, "settings.retrySave", "Retry save")) : null
       ) : null}
       {inDetail&&selected?<div className="svc-detail">
-        <div className="svc-crumb"><span>{t("settings.page.modelsGroup")}</span><ActionIcon name="chevron-right"/><button className="svc-back" onClick={()=>{setPane("models");setInDetail(false)}}>{t("settings.modelServices")}</button></div>
         <header className="svc-detail-head">
           <span className="svc-logo" aria-hidden="true">{connectionProviderMark(selected)}</span>
           <div className="svc-identity"><h2>{connectionDisplayName(selected,props)}</h2>
@@ -2099,7 +2100,7 @@ function useConnectionMenuLifecycle(v) {
           <div className="service-header-actions">
             {local?<button className="wb-btn" onClick={refreshLocalModels}>{t("settings.refreshService")}</button>:<>
               <div className="svc-toggle"><span>{selected.enabled?t("common.enabled"):t("common.disabled")}</span><Toggle checked={selected.enabled} label={t("settings.enableService")} onChange={value=>updateConnection("enabled",value)}/></div>
-              <button ref={serviceEditTrigger} className="wb-btn" aria-haspopup="dialog" onClick={()=>setPane("connection")}><ActionIcon name="pencil"/>{t("settings.editService")}</button>
+              <button ref={serviceEditTrigger} title={keyIssue?.error} aria-label={keyIssue ? t("settings.editService")+" · "+keyIssue.error : undefined} className="wb-btn" aria-haspopup="dialog" onClick={()=>setPane("connection")}><ActionIcon name="pencil"/>{t("settings.editService")}{keyIssue && <span className="service-key-mark"><ActionIcon name="key"/></span>}</button>
             </>}
           </div>
         </header>
@@ -2117,7 +2118,7 @@ function useConnectionMenuLifecycle(v) {
           <Disclosure open={routesOpen} id="model-routing-fields"><ModelRoutes config={config} t={props.t} updateRoute={(route,ids)=>updateConfig({...config,routes:{...config.routes,[route]:ids}},{immediate:true})}/></Disclosure>
         </section></>}
       {connectionMenuPortal}
-    </div>;
+    </div></>;
   }
 
   function supportsRoute(profile, route) {

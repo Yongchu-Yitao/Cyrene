@@ -16,6 +16,7 @@ from dataclasses import is_dataclass, replace as dataclass_replace
 from pathlib import Path
 
 from .clarifications import carried_clarifications, clarification_fallback, transition_clarifications
+from .paths import current_request_start
 
 STATE_KEY = "_task_contexts"
 SHARED_ID = "shared"
@@ -183,17 +184,22 @@ def user_owners(path, state):
     for context_id, doc in state['documents'].items():
         for node_id in doc.get('user_nodes', []):
             owners.setdefault(node_id, set()).add(context_id)
-    latest_user = None
+    request_users = []
+    run_id = None
     for node in path:
         value = node.value
         if value.get('role') == 'user':
-            latest_user = node.id
+            if not (value.get('runtime_guidance') and run_id and run_id == value.get('run_id')):
+                request_users = []
+            run_id = value.get('run_id')
+            request_users.append(node.id)
             if value.get('task_context_id'):
                 owners.setdefault(node.id, set()).add(value['task_context_id'])
         elif value.get('role') == 'assistant' and not value.get('task_control'):
             owner = value.get('task_context_id')
-            if owner and latest_user:
-                owners.setdefault(latest_user, set()).add(owner)
+            if owner:
+                for user_id in request_users:
+                    owners.setdefault(user_id, set()).add(owner)
     return owners
 
 
@@ -243,9 +249,9 @@ def task_nodes(path, state, context_id):
     covered = set(doc.get('covered', []))
     owners = user_owners(path, state)
     # Keep the currently executing request exact outside compaction.
-    current_user = next((n.id for n in reversed(path) if n.value.get('role') == 'user'), None)
-    return [n for n in path[1:] if n.id not in covered and (
-        (n.value.get('role') == 'user' and n.id != current_user and context_id in owners.get(n.id, set()))
+    start = current_request_start(path)
+    return [n for index, n in enumerate(path[1:], 1) if n.id not in covered and (
+        (n.value.get('role') == 'user' and index < start and context_id in owners.get(n.id, set()))
         or (n.value.get('task_context_id') == context_id and n.value.get('role') in {'assistant', 'tool_results'}))]
 
 
@@ -327,11 +333,10 @@ def project_tasks(path, state, *, observation_services=()):
     archived = archived_calls(path, doc)
     owners = user_owners(path, state)
     carried = carried_clarifications(state)
-    current_user = next((n.id for n in reversed(path) if n.value.get("role") == "user"), None)
     # Keep the whole current request's management handshake, including failures
     # before a switch. Otherwise the model can repeat an already completed
     # multi-step transition when the successful load hides its earlier steps.
-    control_start = max((i for i, n in enumerate(path) if n.value.get("role") == "user"), default=0)
+    request_start = current_request_start(path)
     selected = []
     included_calls = {}
     for index, node in enumerate(path):
@@ -357,12 +362,12 @@ def project_tasks(path, state, *, observation_services=()):
         if role in {"context_compaction", "context_reflection"}:
             continue
         if role == 'user':
-            if node.id != current_user and (active not in owners.get(node.id, set()) or node.id in covered):
+            if index < request_start and (active not in owners.get(node.id, set()) or node.id in covered):
                 continue
         elif role == "assistant":
             transition = bool(value.get('tool_calls')) and all(
                 c.get('name') in {'load_context', 'unload_context', 'switch_context'} for c in value['tool_calls'])
-            handshake = bool(value.get('task_control') and index >= control_start and node.id not in covered
+            handshake = bool(value.get('task_control') and index >= request_start and node.id not in covered
                              and (transition or (value.get('task_context_id') == active and node.id not in archived)))
             if not handshake and (not active or value.get('task_context_id') != active or node.id in covered):
                 continue
@@ -495,10 +500,11 @@ class TaskContexts:
             state["active"] = context_id
             self.write(state)
         path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
-        latest_user = next((n.id for n in reversed(path) if n.value.get('role') == 'user'), None)
         users = state['documents'][state['active']].get('user_nodes', [])
-        if latest_user and latest_user not in users:
-            state['documents'][state['active']]['user_nodes'] = [*users, latest_user]
+        new_users = [n.id for n in path[current_request_start(path):]
+                     if n.value.get('role') == 'user' and n.id not in users]
+        if new_users:
+            state['documents'][state['active']]['user_nodes'] = [*users, *new_users]
             self.write(state)
         return state["active"]
 

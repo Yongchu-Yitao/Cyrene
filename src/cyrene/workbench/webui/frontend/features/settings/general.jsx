@@ -8,7 +8,6 @@ import {
   readSettingsResponse,
   settingsFetch,
   showSettingsToast,
-  SectionTitle,
   SectionBlock,
   FieldRow,
   Toggle,
@@ -297,7 +296,6 @@ function GeneralPanel(p) {
   }
 
   return React.createElement("div", { className: "settings-panel wb-general-settings" },
-    SectionTitle(p.integrationsOnly?t("settings.integrations"):t("settings.page."+p.section)),
     p.section==="general" && FieldRow(t("settings.language"), t("settings.languageHint"),
       <ChoiceCards compact label={t("settings.language")} value={lang} onChange={setLang} options={[
         {id:"en",title:"English"},{id:"zh",title:"中文"}

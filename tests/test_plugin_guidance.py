@@ -95,6 +95,42 @@ class _ScriptedChannel:
         self.acknowledged.extend(str(event.get("event_id") or "") for event in events)
 
 
+def test_switch_keeps_original_request_and_guidance_in_weather_context(tmp_path):
+    question = "看看明天中山的天气。"
+    followup = "短袖长裤加一件外套够吗？"
+    old_question = "调整咖啡研磨器"
+    captured = []
+
+    async def model(arguments, _context):
+        messages = arguments["messages"]
+        captured.append(messages)
+        if len(captured) == 2:
+            return {"content": "", "tool_calls": [{"id": "switch", "name": "switch_context",
+                    "arguments": {"context_id": None, "title": "天气", "summary": "研磨器已调整"}}]}
+        return {"content": "done", "tool_calls": []}
+
+    channel = _ScriptedChannel()
+    session = _session(tmp_path, _registry(model), channel)
+    try:
+        session.submit(old_question, run_id="coffee")
+        asyncio.run(session.drain())
+        session.submit(question, run_id="weather")
+        channel.pending.append(_event("clothes", followup))
+        asyncio.run(session.drain())
+        session.submit("我问的是中山的天气。", run_id="correction")
+        asyncio.run(session.drain())
+
+        assert len(captured) == 4
+        for messages in captured[2:]:
+            users = [m["content"] for m in messages if m["role"] == "user"]
+            relevant = [text for text in users if question in text or followup in text]
+            assert len(relevant) == 2
+            assert question in relevant[0] and followup in relevant[1]
+            assert old_question not in users
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize("output_channel", ["reasoning", "reply"])
 @pytest.mark.parametrize("agent_originated", [False, True])
 def test_guidance_preempts_an_inflight_model_and_seals_at_terminal(tmp_path, output_channel, agent_originated):

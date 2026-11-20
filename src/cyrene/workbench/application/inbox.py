@@ -1851,7 +1851,7 @@ def read_workbench_guidance_records(db_path: str) -> list[dict[str, Any]]:
             payload = inbox_payload(payload_json)
             message_id = str(payload.get("public_message_id") or "").strip()
             text = str(payload.get("text") or "").strip()
-            if not message_id or not text:
+            if not message_id or not (text or payload.get("attachments")):
                 continue
             records.append({
                 "sessionId": str(session_id or ""),

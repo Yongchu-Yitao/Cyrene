@@ -560,7 +560,11 @@ var WorkbenchChatRuntimes = (function () {
     if (previous && previous.input) {
       var previousText = String(previous.input.message || "").trim();
       var nextText = String(nextInput.message || "").trim();
-      nextInput = { ...nextInput, message: [previousText, nextText].filter(Boolean).join("\n\n") };
+      nextInput = {
+        ...nextInput,
+        message: [previousText, nextText].filter(Boolean).join("\n\n"),
+        attachments: (previous.input.attachments || []).concat(nextInput.attachments || []),
+      };
     }
     deferredSends[chatId] = { input: nextInput, model: model };
     // A sealed guidance endpoint waits for the old run to finish before

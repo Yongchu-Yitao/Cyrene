@@ -77,7 +77,7 @@ export function DoctorPanel({ scope = {}, onClose }) {
         {item.actions.map((action, index) => <span key={index}>{action.available === false ? <small>{action.reason}</small> : button(t("doctor.reviewRepair"), () => perform(async () => setPlan(await request("reports/" + report.id + "/repair-plan", "POST", { finding_id: item.id, action_index: index }))))}</span>)}
       </article>;
   return <section className="settings-panel wb-doctor-panel" aria-label={t("doctor.title")}>
-    <header className="wb-doctor-head"><span className="wb-doctor-brand"><DoctorIcon name="stethoscope" /></span><div className="wb-section-title"><h3>{t("doctor.title")}</h3><p>{t("doctor.intro")}</p></div>{onClose && <button type="button" className="workbench-icon-btn" aria-label={t("doctor.close")} onClick={onClose}><DoctorIcon name="x" /></button>}</header><div className="wb-doctor-body">
+    <header className="wb-doctor-head"><span className="wb-doctor-brand"><DoctorIcon name="stethoscope" /></span><div className="wb-section-title">{onClose && <h3>{t("doctor.title")}</h3>}<p>{t("doctor.intro")}</p></div>{onClose && <button type="button" className="workbench-icon-btn" aria-label={t("doctor.close")} onClick={onClose}><DoctorIcon name="x" /></button>}</header><div className="wb-doctor-body">
     <div className="wb-doctor-actions">
       {button(t("doctor.recheck"), () => scan(true), busy || refreshing || report?.failure?.status === "running" || (report && report.analysis.status === "running"), "reload")}
 

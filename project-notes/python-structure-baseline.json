@@ -1178,6 +1178,9 @@
   "src/cyrene/plugins/builtin/cyrene_proactive/outcome.py::outcome_from_result": {
     "decisions": 26
   },
+  "src/cyrene/plugins/builtin/cyrene_proactive/revisit.py::report_from": {
+    "decisions": 21
+  },
   "src/cyrene/plugins/builtin/cyrene_proactive/service.py::_heartbeat_proactive_check": {
     "lines": 267,
     "decisions": 44
@@ -1423,7 +1426,7 @@
     "decisions": 28
   },
   "src/cyrene/plugins/builtin/cyrene_voice/engine.py::update_settings": {
-    "decisions": 28
+    "decisions": 36
   },
   "src/cyrene/plugins/builtin/cyrene_voice/routes.py::register_voice_routes": {
     "lines": 103
@@ -1768,14 +1771,14 @@
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
     "methods": 36,
-    "fields": 29
+    "fields": 30
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._dispatch_builtin": {
     "lines": 116
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_chat": {
-    "lines": 106,
-    "decisions": 34
+    "lines": 120,
+    "decisions": 39
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation._load_project_and_model": {
     "lines": 103
@@ -1787,10 +1790,10 @@
     "decisions": 23
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_stream_routes.py::register_run_stream_routes": {
-    "lines": 128
+    "lines": 138
   },
   "src/cyrene/workbench/http/workbench/chat_routes/send_input.py::append_user_message": {
-    "decisions": 26
+    "decisions": 28
   },
   "src/cyrene/workbench/persistence/chat_repository.py::ChatRepository._chat_message_summary": {
     "decisions": 27

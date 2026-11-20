@@ -1,4 +1,5 @@
 import { paneMenuContributions } from "./pane-menu-contributions.jsx"
+import { HomeResultPane } from "./home-result-pane.jsx"
 import { PinnedAssistantCard, unpinConversationCards, usePinnedAssistantCards } from "./pinned-assistant-cards.jsx"
 import { restoreConversationPaneLayout } from "./pane-layout-transforms.jsx"
 import { acceptsAssistantScope } from "./assistant-scope.mjs"
@@ -1678,7 +1679,7 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
       setQuickRenameChat: setQuickRenameChat,
     };
   }
-  function handleGuidance(message) { return wbcHandleGuidance(chatActionContext(), message); }
+  function handleGuidance(message, attachments) { return wbcHandleGuidance(chatActionContext(), message, attachments); }
   function answerQuestionForChat(chatId, questionId, optionText, resumeMode) {
     return wbcAnswerQuestionForChat(chatActionContext(), chatId, questionId, optionText, resumeMode);
   }
@@ -2240,6 +2241,7 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
       sessionId: String(card.payload || activeChatId || requestedChatId),
       chatCache: chatCache,
       gripActions: gripActions,
+      onOpenResult: result => openContentFromPaneCard(card, "home-result", result),
       onOpenFile: function (file, side) {
         if (side === "right") return openContentFromPaneCard(card, "file", file);
         openPaneContent("file", file, { sourceCardId: card.id });
@@ -2631,7 +2633,9 @@ function WorkbenchChatPage({ active, project, modelOverride, railOverride, isola
         onSplitDragStart={dragStart}
         onSplitDragEnd={handlePaneCardDragEnd}
       />;
-      if (card.kind === "file" || card.kind === "viewer") {
+      if (card.kind === "home-result") {
+        content = <HomeResultPane key={card.id} result={card.payload} onClose={close} />;
+      } else if (card.kind === "file" || card.kind === "viewer") {
         var file = card.payload;
         var fileItems = file && file.source === "project"
           ? [{ file: file, role: "project" }].concat(artifactItems.filter(function (item) {

@@ -1,11 +1,11 @@
 import {
+  PageDescription,
   workbenchServices,
   useStateSt,
   useEffectSt,
   readSettingsResponse,
   settingsFetch,
   showSettingsToast,
-  SectionTitle,
   SectionBlock,
   FieldRow,
   Toggle,
@@ -313,7 +313,7 @@ function DataPanel(p) {
   }
 
   return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.data"), t("settings.dataSubtitle")),
+    PageDescription(t("settings.dataSubtitle")),
 
     // Storage usage
     React.cloneElement(SectionBlock(t("settings.storageUsage"), t("settings.storageUsageHint"),

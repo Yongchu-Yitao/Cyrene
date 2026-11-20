@@ -18,6 +18,7 @@ import soundfile as sf
 from cyrene.config import CACHE_DIR
 from cyrene.core.plugin import application_plugin_service
 from cyrene.platform import config_store
+from . import deepseek
 from . import minimax as minimax_tts
 
 
@@ -31,6 +32,7 @@ TTS_MODEL_SELECTIONS = frozenset({
     PRESET_TTS_MODEL_ID,
     CUSTOM_TTS_MODEL_ID,
     *MINIMAX_TTS_MODEL_IDS,
+    deepseek.MODEL_ID,
 })
 VOICE_ROOT = Path(CACHE_DIR) / "voice"
 REFERENCE_AUDIO = VOICE_ROOT / "reference.wav"
@@ -145,6 +147,8 @@ def _settings() -> dict[str, Any]:
     if voice_mode not in {VOICE_MODE_PRESET, VOICE_MODE_CUSTOM}:
         voice_mode = VOICE_MODE_PRESET
     settings = {
+        "asr_provider": "deepseek" if source.get("asr_provider") == "deepseek" else "local",
+        "deepseek_voice_id": source.get("deepseek_voice_id") if source.get("deepseek_voice_id") in deepseek.VOICES else "stella",
         "auto_read": bool(source.get("auto_read", False)),
         "auto_send_after_asr": bool(source.get("auto_send_after_asr", False)),
         "auto_stop_on_silence": bool(source.get("auto_stop_on_silence", True)),
@@ -161,13 +165,15 @@ def _settings() -> dict[str, Any]:
     if settings["voice_preset"] not in _VOICE_PRESET_BY_ID:
         settings["voice_preset"] = DEFAULT_PRESET_ID
     elif (
-        settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
+        settings["tts_model"] == TTS_MODEL_AUTO
+        and settings["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID
         and not _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID)
         and _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID)
     ):
         settings["voice_preset"] = DEFAULT_PRESET_ID
     elif (
-        settings["voice_preset"] != ZIPVOICE_DEFAULT_PRESET_ID
+        settings["tts_model"] == TTS_MODEL_AUTO
+        and settings["voice_preset"] != ZIPVOICE_DEFAULT_PRESET_ID
         and not _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID)
         and _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID)
     ):
@@ -186,18 +192,12 @@ def _local_tts_model(settings: dict[str, Any]) -> str:
 
 def _resolved_tts_model(
     settings: dict[str, Any],
-    *,
-    minimax_configured: bool,
 ) -> tuple[str, str]:
-    selection = str(settings.get("tts_model") or "").strip().lower()
-    if not selection:
-        # Compatibility for tests and callers that still provide the pre-model-
-        # selector settings shape.
+    selection = settings.get("tts_model")
+    if not selection or selection == TTS_MODEL_AUTO:
         return _local_tts_model(settings), "local"
-    if selection == TTS_MODEL_AUTO:
-        if minimax_configured:
-            return minimax_tts.TURBO_MODEL_ID, "minimax"
-        return _local_tts_model(settings), "local"
+    if selection == deepseek.MODEL_ID:
+        return selection, "deepseek"
     if selection in MINIMAX_TTS_MODEL_IDS:
         return selection, "minimax"
     return selection, "local"
@@ -229,11 +229,11 @@ def status() -> dict[str, Any]:
     asr_ready = _knowledge_service().is_local_model_ready(ASR_MODEL_ID)
     preset_model_ready = _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID)
     custom_model_ready = _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID)
-    minimax_configured = minimax_tts.is_configured()
-    selected_model, tts_provider = _resolved_tts_model(
-        settings,
-        minimax_configured=minimax_configured,
-    )
+    minimax_models = minimax_tts.available_models()
+    minimax_configured = bool(minimax_models)
+    deepseek_ready = deepseek.configured_connection() is not None
+    asr_provider = settings.get("asr_provider", "local")
+    selected_model, tts_provider = _resolved_tts_model(settings)
     local_tts_active = tts_provider == "local"
     custom_selected = (
         local_tts_active
@@ -241,8 +241,9 @@ def status() -> dict[str, Any]:
         and settings["voice_mode"] == VOICE_MODE_CUSTOM
     )
     selected_model_ready = (
-        minimax_configured
+        selected_model in minimax_models
         if tts_provider == "minimax"
+        else deepseek_ready if tts_provider == "deepseek"
         else custom_model_ready
         if selected_model == CUSTOM_TTS_MODEL_ID
         else preset_model_ready
@@ -255,25 +256,19 @@ def status() -> dict[str, Any]:
     elif local_tts_active and selected_model == PRESET_TTS_MODEL_ID and preset_model_ready:
         available_presets = [dict(preset) for preset in KOKORO_PRESETS]
     tts_ready = selected_model_ready and selected_voice_ready and (
-        tts_provider == "minimax" or runtime_available
+        not local_tts_active or runtime_available
     )
     tts_models = [
-        {
-            "id": TTS_MODEL_AUTO,
-            "provider": "auto",
-            "available": minimax_configured or (
-                runtime_available and (preset_model_ready or custom_model_ready)
-            ),
-        },
+        {"id": deepseek.MODEL_ID, "provider": "deepseek", "available": deepseek_ready},
         {
             "id": minimax_tts.TURBO_MODEL_ID,
             "provider": "minimax",
-            "available": minimax_configured,
+            "available": minimax_tts.TURBO_MODEL_ID in minimax_models,
         },
         {
             "id": minimax_tts.HD_MODEL_ID,
             "provider": "minimax",
-            "available": minimax_configured,
+            "available": minimax_tts.HD_MODEL_ID in minimax_models,
         },
         {
             "id": PRESET_TTS_MODEL_ID,
@@ -287,18 +282,22 @@ def status() -> dict[str, Any]:
         },
     ]
     return {
-        "asr_model": ASR_MODEL_ID,
+        "asr_model": deepseek.MODEL_ID if asr_provider == "deepseek" else ASR_MODEL_ID,
+        "asr_provider": asr_provider,
+        "local_asr_ready": asr_ready and runtime_available,
+        "deepseek_ready": deepseek_ready,
+        "deepseek_voice_id": settings.get("deepseek_voice_id", "stella"),
         "tts_model": selected_model,
         "preset_tts_model": PRESET_TTS_MODEL_ID,
         "custom_tts_model": CUSTOM_TTS_MODEL_ID,
-        "asr_ready": asr_ready and runtime_available,
-        "tts_model_selection": settings.get("tts_model") or selected_model,
+        "asr_ready": deepseek_ready if asr_provider == "deepseek" else asr_ready and runtime_available,
+        "tts_model_selection": selected_model,
         "tts_models": tts_models,
         "tts_provider": tts_provider,
         "minimax_configured": minimax_configured,
         "minimax_voice_id": settings.get("minimax_voice_id") or minimax_tts.DEFAULT_VOICE_ID,
         "local_tts_active": local_tts_active,
-        "tts_model_ready": selected_model_ready and (tts_provider == "minimax" or runtime_available),
+        "tts_model_ready": selected_model_ready and (not local_tts_active or runtime_available),
         "preset_tts_model_ready": preset_model_ready and runtime_available,
         "custom_tts_model_ready": custom_model_ready and runtime_available,
         "voice_profile_ready": profile_ready,
@@ -323,9 +322,26 @@ def update_settings(
     voice_mode: str | None = None,
     voice_preset: str | None = None,
     tts_model: str | None = None,
+    asr_provider: str | None = None,
+    deepseek_voice_id: str | None = None,
+    minimax_voice_id: str | None = None,
 ) -> dict[str, Any]:
     with _VOICE_PROFILE_LOCK:
         current = _settings()
+        if asr_provider is not None:
+            if asr_provider not in ("local", "deepseek"):
+                raise ValueError("Unknown recognition engine")
+            if asr_provider == "deepseek" and not deepseek.configured_connection():
+                raise RuntimeError("Configure DeepSeek in Model Services")
+            current["asr_provider"] = asr_provider
+        if deepseek_voice_id is not None:
+            if deepseek_voice_id not in deepseek.VOICES:
+                raise ValueError("Unknown DeepSeek voice")
+            current["deepseek_voice_id"] = deepseek_voice_id
+        if minimax_voice_id is not None:
+            if minimax_voice_id not in minimax_tts.VOICES:
+                raise ValueError("Unknown MiniMax voice")
+            current["minimax_voice_id"] = minimax_voice_id
         if auto_read is not None:
             current["auto_read"] = bool(auto_read)
         if auto_send_after_asr is not None:
@@ -338,18 +354,16 @@ def update_settings(
                 raise ValueError("unknown TTS model")
             if (
                 normalized_tts_model in MINIMAX_TTS_MODEL_IDS
-                and not minimax_tts.is_configured()
+                and normalized_tts_model not in minimax_tts.available_models()
             ):
                 raise RuntimeError("Configure MiniMax in Model Services before using MiniMax TTS")
+            if normalized_tts_model == deepseek.MODEL_ID and not deepseek.configured_connection():
+                raise RuntimeError("Configure DeepSeek in Model Services")
             if normalized_tts_model == PRESET_TTS_MODEL_ID:
-                if not _knowledge_service().is_local_model_ready(PRESET_TTS_MODEL_ID):
-                    raise RuntimeError("Kokoro model is not downloaded")
                 current["voice_mode"] = VOICE_MODE_PRESET
                 if current["voice_preset"] == ZIPVOICE_DEFAULT_PRESET_ID:
                     current["voice_preset"] = DEFAULT_PRESET_ID
             elif normalized_tts_model == CUSTOM_TTS_MODEL_ID:
-                if not _knowledge_service().is_local_model_ready(CUSTOM_TTS_MODEL_ID):
-                    raise RuntimeError("ZipVoice model is not downloaded")
                 if current["voice_mode"] != VOICE_MODE_CUSTOM:
                     current["voice_preset"] = ZIPVOICE_DEFAULT_PRESET_ID
             current["tts_model"] = normalized_tts_model
@@ -381,10 +395,7 @@ def update_settings(
                 if normalized_preset == ZIPVOICE_DEFAULT_PRESET_ID
                 else PRESET_TTS_MODEL_ID
             )
-        resolved_model, resolved_provider = _resolved_tts_model(
-            current,
-            minimax_configured=minimax_tts.is_configured(),
-        )
+        resolved_model, resolved_provider = _resolved_tts_model(current)
         if (
             resolved_provider == "local"
             and resolved_model == CUSTOM_TTS_MODEL_ID
@@ -523,6 +534,12 @@ def _clean_asr_text(text: str) -> tuple[str, bool]:
 
 
 def transcribe(payload: bytes) -> dict[str, Any]:
+    if _settings().get("asr_provider") == "deepseek":
+        return deepseek.transcribe(payload)
+    return transcribe_reference(payload)
+
+
+def transcribe_reference(payload: bytes) -> dict[str, Any]:
     samples, source_rate = _decode_audio(payload)
     samples_16k = _resample(samples, source_rate, 16_000)
     with _ASR_LOCK:
@@ -784,32 +801,14 @@ def synthesize(text: str, *, num_steps: int | None = None) -> bytes:
         raise ValueError(f"text must be {MAX_TTS_CHARS} characters or shorter")
     with _VOICE_PROFILE_LOCK:
         settings = _settings()
-        selected_model, tts_provider = _resolved_tts_model(
-            settings,
-            minimax_configured=minimax_tts.is_configured(),
-        )
+        selected_model, tts_provider = _resolved_tts_model(settings)
+    if tts_provider == "deepseek":
+        return deepseek.synthesize(content, settings.get("deepseek_voice_id", "stella"))
     if tts_provider == "minimax":
-        try:
-            return minimax_tts.synthesize(
-                content,
-                model=selected_model,
-                voice_id=settings.get("minimax_voice_id") or minimax_tts.DEFAULT_VOICE_ID,
-            )
-        except RuntimeError:
-            if settings.get("tts_model") != TTS_MODEL_AUTO:
-                raise
-            # Automatic mode prefers MiniMax but keeps the existing local voice
-            # as a transparent availability fallback.
-            fallback_model = _local_tts_model(settings)
-            fallback_ready = _runtime_available() and _knowledge_service().is_local_model_ready(fallback_model)
-            if (
-                fallback_model == CUSTOM_TTS_MODEL_ID
-                and settings["voice_mode"] == VOICE_MODE_CUSTOM
-            ):
-                fallback_ready = fallback_ready and _profile_ready(settings)
-            if not fallback_ready:
-                raise
-            selected_model = fallback_model
+        return minimax_tts.synthesize(
+            content, model=selected_model,
+            voice_id=settings.get("minimax_voice_id") or minimax_tts.DEFAULT_VOICE_ID,
+        )
 
     with _VOICE_PROFILE_LOCK:
         custom_selected = (

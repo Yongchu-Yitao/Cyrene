@@ -93,7 +93,7 @@
 
 /* Keep one logo in the welcome area until the first message starts. */
 .aim-root:is(.is-loading,.is-welcome,.is-arriving) .aim-logo-button {transition:transform 560ms cubic-bezier(.22,1,.36,1)}
-.aim-root.is-loading .aim-logo-button {pointer-events:none;opacity:1;cursor:default}
+.aim-root.is-loading .aim-logo-button {will-change:transform;pointer-events:none;opacity:1;cursor:default}
 .aim-root .aim-logo-button .wbc-side-split-grip-bar-visual {transition:scale 560ms cubic-bezier(.22,1,.36,1)}
 .aim-root.is-loading .aim-logo-button .wbc-side-split-grip-bar-visual {scale:1.6}
 .aim-root.is-welcome .aim-logo-button .wbc-side-split-grip-bar-visual {scale:var(--aim-welcome-scale,1)}

@@ -123,6 +123,9 @@ async def reconcile_background_plugin_hosts(application_host: Any) -> None:
 
 
 def background_job_spec(plugin: Plugin) -> BackgroundJobSpec | None:
+    # Upgrades preserve user-edited packs, including legacy heartbeat definitions.
+    if plugin.name == "proactive.heartbeat":
+        return None
     raw = plugin.metadata.get(BACKGROUND_JOB_METADATA)
     if raw is None:
         return None

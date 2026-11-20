@@ -1636,6 +1636,30 @@ async def test_responses_failed_preserves_cause_even_when_cleanup_fails(code, ex
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("event", [
+    {"type": "error", "error": {"type": "insufficient_quota", "code": "credit_balance_exhausted"}},
+    {"type": "error", "code": "credit_balance_exhausted"},
+    {"type": "response.failed", "response": {"error": {"code": "credit_balance_exhausted"}}},
+    {"type": "response.failed", "response": {"error": {"type": "insufficient_quota"}}},
+])
+async def test_responses_credit_failure_reaches_chat(event):
+    from cyrene.model.error_details import ModelCallError
+    from cyrene.workbench.chat.chat_application import chat_run_error_message
+
+    stream = _CloseFailureStream([event])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _r: httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+    )) as client:
+        with pytest.raises(ModelStreamError) as captured:
+            await handle_stream("openai_responses", client, "https://provider.test/stream",
+                                PreparedRequest({"stream": True}, {}), None)
+    details = classify_model_error(captured.value)
+    assert details.code == "model_quota_exhausted"
+    assert not details.retryable
+    assert "余额不足" in chat_run_error_message(ModelCallError(details), "zh")
+
+
+@pytest.mark.asyncio
 async def test_cleanup_failure_does_not_hide_callback_cancellation():
     import asyncio
     stream = _CloseFailureStream([{"choices": [{"delta": {"content": "partial"}}]}])

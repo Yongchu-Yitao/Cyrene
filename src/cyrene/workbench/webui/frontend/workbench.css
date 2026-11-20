@@ -5459,3 +5459,41 @@ html[data-theme="dark"] .wb-doctor-panel { --doctor-accent: #f19cbd; --doctor-ti
 .workbench-browser-manager-favicon > img[hidden] {
   display: none;
 }
+
+/* Keep native details keyboard and accessibility behavior with the Cyrene chevron. */
+details:where(.settings-overlay *, .wb-plugin-center-popover *, .wb-doctor-panel *, .wbc-assistant-card *, .markdown *, .wbc-card-snapshot, .wbc-fold) > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details:where(.settings-overlay *, .wb-plugin-center-popover *, .wb-doctor-panel *, .wbc-assistant-card *, .markdown *, .wbc-card-snapshot, .wbc-fold) > summary::-webkit-details-marker {
+  display: none;
+}
+details:where(.settings-overlay *, .wb-plugin-center-popover *, .wb-doctor-panel *, .wbc-assistant-card *, .markdown *, .wbc-card-snapshot, .wbc-fold) > summary:where(:not(.wb-doctor-disclosure))::before,
+.browser-view-action:not(.active)::before,
+.settings-overlay .about-version-line button[aria-expanded]::after {
+  content: "";
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  vertical-align: -0.18em;
+  background-color: var(--wb-muted, currentColor);
+  mask: url("/static/app/settings-icons/chevron-down.svg") center / contain no-repeat;
+  transform: rotate(-90deg);
+  transition: transform 160ms ease;
+}
+details:where(.settings-overlay *, .wb-plugin-center-popover *, .wb-doctor-panel *, .wbc-assistant-card *, .markdown *, .wbc-card-snapshot, .wbc-fold) > summary:where(:not(.wb-doctor-disclosure))::before,
+.browser-view-action:not(.active)::before {
+  margin-inline-end: 0.35em;
+}
+.settings-overlay .about-version-line button[aria-expanded]::after {
+  margin-inline-start: 0.25em;
+}
+details:where(.settings-overlay *, .wb-plugin-center-popover *, .wb-doctor-panel *, .wbc-assistant-card *, .markdown *, .wbc-card-snapshot, .wbc-fold)[open] > summary:where(:not(.wb-doctor-disclosure))::before,
+.settings-overlay .about-version-line button[aria-expanded=true]::after {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  details:where(.settings-overlay *, .wb-plugin-center-popover *, .wb-doctor-panel *, .wbc-assistant-card *, .markdown *, .wbc-card-snapshot, .wbc-fold) > summary::before,
+  .settings-overlay .about-version-line button[aria-expanded]::after { transition: none; }
+}

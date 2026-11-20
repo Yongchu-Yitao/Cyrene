@@ -168,7 +168,7 @@ function assistantConversationState(chat, runtime, answeredIds, answering, sendi
   return { visible, pending, running };
 }
 
-function AssistantChat({ sessionId, project, title, onOpenFile, permissionRequests = EMPTY_PERMISSION_REQUESTS, active = true, personalAssistant = false, cache, gripActions }) {
+function AssistantChat({ sessionId, project, title, onOpenFile, onOpenResult, permissionRequests = EMPTY_PERMISSION_REQUESTS, active = true, personalAssistant = false, cache, gripActions }) {
   var chatService = workbenchServices.chat();
   var model = chatService.Model;
   var engine = chatService.Runtimes;
@@ -241,8 +241,8 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
     catch (err) { fail(err); }
     refreshRef.current();
   }
-  async function guidance(text) {
-    try { return await model.sendGuidance(sessionId, text, "assistant_guide_" + Date.now()); }
+  async function guidance(text, attachments) {
+    try { return await model.sendGuidance(sessionId, text, "assistant_guide_" + Date.now(), attachments); }
     catch (err) { fail(err); throw err; }
   }
   async function answer(questionId, value, mode) {
@@ -275,7 +275,7 @@ function AssistantChat({ sessionId, project, title, onOpenFile, permissionReques
       <div className={"wbc-thread" + (visible.length || runtime ? " wbc-thread-messages" : "")} ref={scrollRef} onScroll={onScroll}>
         {showWelcome && <AssistantWelcome personalAssistant={personalAssistant} welcomeRef={welcomeRef} />}
         {personalAssistant && chat
-          ? <AssistantHomeTranscript key={sessionId} Transcript={chatService.Transcript} messages={visible} runtime={runtime} sessionId={sessionId} active={active} onOpenFile={onOpenFile} />
+          ? <AssistantHomeTranscript key={sessionId} Transcript={chatService.Transcript} messages={visible} runtime={runtime} sessionId={sessionId} active={active} onOpenResult={onOpenResult} onOpenFile={onOpenFile} />
           : React.createElement(chatService.Transcript, { messages: visible, runtime: runtime, chatId: sessionId, onOpenFile: onOpenFile })}
         {permissionRequests.map(function (task) {
           return <AssistantTaskPermission key={task.session_id + ":" + task.pending_question.id} task={task} />;

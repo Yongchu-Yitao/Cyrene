@@ -1,6 +1,6 @@
+import {VoiceMethods, VoiceDownload} from "./voice-controls.jsx"
 import {ChoiceCards} from "./choice-cards.jsx"
 import {
-  SectionTitle,
   SectionBlock,
   FieldRow,
   Toggle,
@@ -13,10 +13,24 @@ function CapabilitiesPanel(p) {
     voiceStatus, voiceReferenceText, setVoiceReferenceText,
     voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
     startVoiceReferenceRecording, finishVoiceReferenceRecording,
-    voiceBusy, voiceNotice,
-    saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
+    voiceBusy, voiceNotice, saveVoiceSetting, refreshVoiceStatus,
+    saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
   } = p;
-  var localTtsActive = voiceStatus.tts_provider !== "minimax";
+  const [choosingCloud, setChoosingCloud] = React.useState(false);
+  const localTtsActive = (voiceStatus.tts_provider || "local") === "local";
+  const cloudModels = (voiceStatus.tts_models || []).filter(m => m.provider !== "local" && m.available);
+  const cloudOutput = !localTtsActive || (choosingCloud && cloudModels.length > 0);
+  const selectedModel = voiceStatus.tts_model;
+  const cloudInput = voiceStatus.asr_provider === "deepseek";
+  const zip = selectedModel === "zipvoice-zh-en";
+  function chooseOutput(remote) {
+    if (!remote) {
+      setChoosingCloud(false);
+      if (!localTtsActive) saveVoiceTtsModel("kokoro-zh-en");
+    } else if (cloudModels.length === 1) saveVoiceTtsModel(cloudModels[0].id);
+    else setChoosingCloud(true);
+  }
+
   var customVoiceSelected = localTtsActive && voiceStatus.voice_mode === "custom";
   var voiceReferenceActive = voiceReferencePhase === "starting"
     || voiceReferencePhase === "recording"
@@ -48,7 +62,7 @@ function CapabilitiesPanel(p) {
 
   function voiceTtsModelLabel(model) {
     var id = String(model && model.id || "");
-    if (id === "auto") return t("settings.voiceTtsModelAuto");
+    if (id === "deepseek") return "DeepSeek";
     if (id === "speech-2.8-turbo") return "MiniMax Speech 2.8 Turbo";
     if (id === "speech-2.8-hd") return "MiniMax Speech 2.8 HD";
     if (id === "kokoro-zh-en") return "Kokoro";
@@ -56,31 +70,22 @@ function CapabilitiesPanel(p) {
     return id;
   }
 
-  function voiceTtsModelOptions() {
-    var models = Array.isArray(voiceStatus.tts_models) ? voiceStatus.tts_models : [];
-    var selection = String(voiceStatus.tts_model_selection || "auto");
-    return models.filter(function (model) {
-      return model && (model.available !== false || model.id === selection || model.id === "auto");
-    }).map(function (model) {
-      return React.createElement("option", {
-        key: model.id,
-        value: model.id,
-        disabled: model.available === false,
-      }, voiceTtsModelLabel(model));
-    });
-  }
-
-  return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.voiceTab")),
-
-    React.cloneElement(SectionBlock(t("settings.voiceCapability"), t("settings.voiceCapabilityHint"),
-      React.createElement("div", { className: "wb-voice-settings" },
+  const modelOptions = cloudOutput ? cloudModels : (voiceStatus.tts_models || []).filter(m => m.provider === "local");
+  const selected = modelOptions.some(m => m.id === selectedModel);
+  return React.createElement("div", {className:"settings-panel voice-page", id:"setting-voice"},
+    SectionBlock(t("settings.voice.asr"), voiceStatus.asr_ready ? t(cloudInput ? "settings.voiceCloudReady" : "settings.localModelReady") : null,
+      <VoiceMethods kind="asr" t={t} cloud={cloudInput} available={voiceStatus.deepseek_ready}
+        busy={!!voiceBusy} onChange={remote => saveVoiceSetting("asr_provider", remote ? "deepseek" : "local")}/>,
+      !cloudInput && !voiceStatus.local_asr_ready &&
+        <VoiceDownload id="fireredasr2-aed-int8" name="FireRedASR2" size={904} t={t} onReady={refreshVoiceStatus}/>
+    ),
+    SectionBlock(t("settings.voice.dictation"), null,
         FieldRow(
           t("settings.voiceAutoSend"),
           t("settings.voiceAutoSendHint"),
           Toggle(
             voiceStatus.auto_send_after_asr === true,
-            function () { saveVoiceBooleanSetting("auto_send_after_asr", voiceStatus.auto_send_after_asr !== true); },
+            function () { saveVoiceSetting("auto_send_after_asr", voiceStatus.auto_send_after_asr !== true); },
             voiceBusy === "settings",
             t("settings.voiceAutoSend"),
           ),
@@ -91,12 +96,25 @@ function CapabilitiesPanel(p) {
           t("settings.voiceAutoStopHint"),
           Toggle(
             voiceStatus.auto_stop_on_silence !== false,
-            function () { saveVoiceBooleanSetting("auto_stop_on_silence", voiceStatus.auto_stop_on_silence === false); },
+            function () { saveVoiceSetting("auto_stop_on_silence", voiceStatus.auto_stop_on_silence === false); },
             voiceBusy === "settings",
             t("settings.voiceAutoStop"),
           ),
           "voice-auto-stop",
         ),
+    ),
+    SectionBlock(t("settings.voice.tts"), selected && voiceStatus.tts_ready ? t(cloudOutput ? "settings.voiceCloudReady" : "settings.localModelReady") : null,
+      <VoiceMethods kind="tts" t={t} cloud={cloudOutput} available={cloudModels.length > 0}
+        busy={!!voiceBusy || voiceReferenceActive} onChange={chooseOutput}/>,
+      FieldRow(t("settings.voiceTtsModel"), cloudOutput ? t("settings.voice.ttsCloudDetail") : t("settings.voiceTtsModelLocalHint"),
+        <select className="wb-select" value={selected ? selectedModel : ""} aria-label={t("settings.voiceTtsModel")}
+          disabled={!!voiceBusy || voiceReferenceActive} onChange={event => {setChoosingCloud(false);saveVoiceTtsModel(event.target.value)}}>
+          {!selected && <option disabled value="">{t("settings.voice.choose")}</option>}
+          {modelOptions.map(m => <option key={m.id} value={m.id}>{voiceTtsModelLabel(m)}</option>)}
+        </select>),
+      selected && !cloudOutput && !voiceStatus.tts_model_ready &&
+        <VoiceDownload key={selectedModel} id={selectedModel} name={voiceTtsModelLabel({id:selectedModel})}
+          size={zip ? 532 : 365} t={t} onReady={refreshVoiceStatus}/>,
         FieldRow(
           t("settings.voiceAutoRead"),
           voiceStatus.tts_ready
@@ -104,36 +122,22 @@ function CapabilitiesPanel(p) {
             : t("settings.voiceAutoReadUnavailable"),
           Toggle(
             voiceStatus.auto_read === true,
-            function () { saveVoiceBooleanSetting("auto_read", voiceStatus.auto_read !== true); },
-            !voiceStatus.tts_ready || voiceBusy === "settings",
+            function () { saveVoiceSetting("auto_read", voiceStatus.auto_read !== true); },
+            !selected || !voiceStatus.tts_ready || voiceBusy === "settings",
             t("settings.voiceAutoRead"),
           ),
           "voice-auto-read",
         ),
-        FieldRow(
-          t("settings.voiceTtsModel"),
-          voiceStatus.tts_provider === "minimax"
-            ? t("settings.voiceTtsModelMiniMaxHint", { model: voiceTtsModelLabel({ id: voiceStatus.tts_model }) })
-            : t("settings.voiceTtsModelLocalHint"),
-          React.createElement("select", {
-            className: "wb-select wb-voice-model-select",
-            value: voiceStatus.tts_model_selection || "auto",
-            disabled: voiceBusy === "settings",
-            "aria-label": t("settings.voiceTtsModel"),
-            onChange: function (event) { saveVoiceTtsModel(event.target.value); },
-          }, voiceTtsModelOptions()),
-          "voice-tts-model",
-        ),
-        localTtsActive ? React.createElement("div", { className: "wb-voice-profile" },
-          React.createElement("div", { className: "wb-voice-profile-copy" },
+        selected && !cloudOutput && voiceStatus.tts_model_ready && React.createElement("div", { className: "wb-voice-profile" },
+          zip && React.createElement("div", { className: "wb-voice-profile-copy" },
             React.createElement("b", null, t("settings.voiceProfile")),
             React.createElement("small", null, t("settings.voiceProfileHint")),
           ),
-          <ChoiceCards compact descriptionId={voiceStatus.custom_tts_model_ready?undefined:"voice-mode-unavailable"} label={t("settings.voiceProfile")} value={customVoiceSelected?"custom":"preset"} onChange={saveVoiceMode} options={[
+          zip && <ChoiceCards compact descriptionId={voiceStatus.custom_tts_model_ready?undefined:"voice-mode-unavailable"} label={t("settings.voiceProfile")} value={customVoiceSelected?"custom":"preset"} onChange={saveVoiceMode} options={[
             {id:"preset",title:t("settings.voicePresetMode"),disabled:!!voiceBusy||voiceReferenceActive},
             {id:"custom",title:t("settings.voiceCustomMode"),disabled:!!voiceBusy||voiceReferenceActive||!voiceStatus.custom_tts_model_ready}
           ]}/>,
-          !voiceStatus.custom_tts_model_ready && <small className="voice-mode-note" id="voice-mode-unavailable">{t("settings.voiceCustomRequiresZipVoice")}</small>,
+          zip && !voiceStatus.custom_tts_model_ready && <small className="voice-mode-note" id="voice-mode-unavailable">{t("settings.voiceCustomRequiresZipVoice")}</small>,
           customVoiceSelected
             ? React.createElement("div", { className: "wb-voice-custom-fields" },
                 React.createElement("div", { className: "wb-voice-profile-copy" },
@@ -144,7 +148,7 @@ function CapabilitiesPanel(p) {
                   React.createElement("button", {
                     type: "button",
                     className: "wb-voice-record-btn" + (voiceReferencePhase === "recording" ? " recording" : ""),
-                    disabled: !voiceStatus.asr_ready || voiceReferencePhase === "starting" || voiceReferencePhase === "transcribing" || !!voiceBusy,
+                    disabled: !voiceStatus.local_asr_ready || voiceReferencePhase === "starting" || voiceReferencePhase === "transcribing" || !!voiceBusy,
                     "aria-label": voiceReferencePhase === "recording"
                       ? t("settings.voiceReferenceStop")
                       : t("settings.voiceReferenceRecord"),
@@ -167,13 +171,15 @@ function CapabilitiesPanel(p) {
                     ),
                   ),
                   React.createElement("small", null,
-                    voiceStatus.asr_ready
+                    voiceStatus.local_asr_ready
                       ? voiceReferencePhase === "recording"
                         ? t("settings.voiceReferenceRecordingStatus", { seconds: voiceReferenceElapsed.toFixed(1) })
                         : t("settings.voiceReferenceRecordingHint")
                       : t("settings.voiceReferenceAsrUnavailable")
                   ),
                 ),
+                cloudInput && !voiceStatus.local_asr_ready &&
+                  <VoiceDownload id="fireredasr2-aed-int8" name="FireRedASR2" size={904} t={t} onReady={refreshVoiceStatus}/>,
                 voiceReferenceFile && voiceReferenceText && React.createElement("div", {
                   className: "wb-voice-reference-transcript",
                   role: "status",
@@ -212,30 +218,17 @@ function CapabilitiesPanel(p) {
                   : React.createElement("span", { className: "" }, t("settings.localModelNotDownloaded")),
               ),
           voiceNotice && React.createElement("span", { className: "wb-hint saved" }, voiceNotice),
-        ) : React.createElement("div", { className: "wb-voice-cloud-profile" },
-          React.createElement("div", { className: "wb-voice-profile-copy" },
-            React.createElement("b", null, t("settings.voiceMiniMaxVoice")),
-            React.createElement("small", null, t("settings.voiceMiniMaxVoiceHint")),
-          ),
-          React.createElement("span", { className: voiceStatus.tts_ready ? "ready" : "" },
-            t("settings.voiceMiniMaxDefaultVoice") + " · " + String(voiceStatus.minimax_voice_id || "male-qn-qingse")
-          ),
-          voiceNotice && React.createElement("span", { className: "wb-hint saved" }, voiceNotice),
         ),
-        React.createElement("div", { className: "wb-voice-readiness" },
-          React.createElement("span", { className: voiceStatus.asr_ready ? "ready" : "" },
-            t("settings.voiceAsrStatus") + " · " + t(voiceStatus.asr_ready ? "settings.localModelReady" : "settings.localModelNotDownloaded")
-          ),
-          React.createElement("span", { className: voiceStatus.tts_ready ? "ready" : "" },
-            t("settings.voiceTtsStatus") + " · " + t(voiceStatus.tts_ready
-              ? voiceStatus.tts_provider === "minimax" ? "settings.voiceCloudReady" : "settings.localModelReady"
-              : "settings.voiceTtsNeedsProfile")
-          ),
-        ),
-      ),
-    ), { id: "setting-voice" }),
-
+      selected && cloudOutput && FieldRow(t("settings.voiceProfile"), "",
+        <select className="wb-select" aria-label={t("settings.voiceProfile")} disabled={!!voiceBusy}
+          value={selectedModel === "deepseek" ? voiceStatus.deepseek_voice_id : voiceStatus.minimax_voice_id}
+          onChange={event => saveVoiceSetting(selectedModel === "deepseek" ? "deepseek_voice_id" : "minimax_voice_id", event.target.value)}>
+          {(selectedModel === "deepseek" ? ["stella","tide"] :
+            [...new Set([voiceStatus.minimax_voice_id,"male-qn-qingse","female-shaonv","presenter_female"].filter(Boolean))])
+            .map(id => <option key={id} value={id}>{["stella","tide","male-qn-qingse","female-shaonv","presenter_female"].includes(id) ? t("settings.voice."+id) : id}</option>)}
+        </select>)
+    )
   );
 }
 
-export { CapabilitiesPanel };
+export default CapabilitiesPanel;

@@ -1,3 +1,4 @@
+import { ReplyStyleFields, replyStyleChanges } from "../settings/reply-style.jsx";
 import { workbenchServices } from '../../shared/runtime/services.jsx';
 
 export function menuApi(path, body, method, signal, options = {}) {
@@ -10,21 +11,29 @@ export function MenuSwitch({ label, hint, on, onChange, disabled }) {
 }
 export function AssistantCustomize() {
   const [config, setConfig] = React.useState(null), [error, setError] = React.useState(''), [busy, setBusy] = React.useState(false), [notice, setNotice] = React.useState('');
+  const saved = React.useRef({});
   const data = workbenchServices.data(); data.useVersion();
   const modules = data.state.pluginModules || [];
-  React.useEffect(() => { const abort = new AbortController(); menuApi('/api/settings/config', undefined, undefined, abort.signal).then(setConfig).catch(e => { if (!abort.signal.aborted) setError(e.message); }); return () => abort.abort(); }, []);
+  React.useEffect(() => { const abort = new AbortController(); menuApi('/api/settings/config', undefined, undefined, abort.signal).then(values => { saved.current = values; setConfig(values); }).catch(e => { if (!abort.signal.aborted) setError(e.message); }); return () => abort.abort(); }, []);
   async function save() {
     setBusy(true); setError(''); setNotice('');
     try {
-      if (modules.includes('soul')) await menuApi('/api/settings/soul', { content: config.soul_content || '' }, 'PUT');
-      if (modules.includes('proactive')) await menuApi('/api/settings/config', { agent_proactive: !!config.agent_proactive }, 'PUT');
+      if (modules.includes('soul') && config.soul_content !== saved.current.soul_content) await menuApi('/api/settings/soul', { content: config.soul_content || '' }, 'PUT');
+      const style = modules.includes('response_style') ? replyStyleChanges(config, saved.current) : {};
+      const changes = { ...style };
+      if (modules.includes('proactive') && config.agent_proactive !== saved.current.agent_proactive) changes.agent_proactive = !!config.agent_proactive;
+      if (Object.keys(changes).length) await menuApi('/api/settings/config', changes, 'PUT');
+      saved.current = config;
+      if (Object.keys(style).length) window.dispatchEvent(new CustomEvent("cyrene:reply-style-saved", { detail: style }));
       setNotice('已保存');
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
   return <>{error && <p role="alert" className="aim-error">{error}</p>}{!config ? <p role="status">正在加载…</p> : <>
+    {modules.includes('response_style') && <ReplyStyleFields compact config={config} disabled={busy} t={workbenchServices.i18n().t}
+      change={(key, value) => { setNotice(''); setConfig(previous => ({ ...previous, [key]: value })); }}/>}
     {modules.includes('soul') && <label className="aim-field">你希望助理如何与你协作<textarea disabled={busy} value={config.soul_content || ''} onChange={e => { setNotice(''); setConfig({ ...config, soul_content: e.target.value }); }} /></label>}
-    {modules.includes('proactive') && <MenuSwitch label="主动提醒" hint="重要进展和待办事项" on={config.agent_proactive} disabled={busy} onChange={on => { setNotice(''); setConfig({ ...config, agent_proactive: on }); }} />}
-    {!modules.some(x => ['soul', 'proactive'].includes(x)) ? <p>请先在设置中启用人格或主动行为模块。</p> : <button className="aim-save" disabled={busy} onClick={save}>{busy ? '保存中…' : notice || '保存修改'}</button>}
+    {modules.includes('proactive') && <MenuSwitch label="主动工作" hint={workbenchServices.i18n().t("settings.proactiveWorkHint")} on={config.agent_proactive} disabled={busy} onChange={on => { setNotice(''); setConfig({ ...config, agent_proactive: on }); }} />}
+    {!modules.some(x => ['soul', 'proactive', 'response_style'].includes(x)) ? <p>请先在设置中启用人格或主动行为模块。</p> : <button className="aim-save" disabled={busy} onClick={save}>{busy ? '保存中…' : notice || '保存修改'}</button>}
   </>}</>;
 }
 

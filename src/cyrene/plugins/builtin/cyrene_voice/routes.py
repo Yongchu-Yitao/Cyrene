@@ -45,7 +45,7 @@ def register_voice_routes(router: APIRouter, *, service: Any = engine) -> None:
     @router.put("/api/voice/settings")
     async def api_voice_settings(body: dict[str, Any]):
         boolean_settings = {"auto_read", "auto_send_after_asr", "auto_stop_on_silence"}
-        allowed = boolean_settings | {"voice_mode", "voice_preset", "tts_model"}
+        allowed = boolean_settings | {"voice_mode", "voice_preset", "tts_model", "asr_provider", "deepseek_voice_id", "minimax_voice_id"}
         changes = {key: body[key] for key in allowed if key in body}
         if not changes:
             return localized_error_response(
@@ -101,10 +101,10 @@ def register_voice_routes(router: APIRouter, *, service: Any = engine) -> None:
             )
 
     @router.post("/api/voice/asr")
-    async def api_voice_asr(audio: UploadFile):
+    async def api_voice_asr(audio: UploadFile, reference: bool = Form(False)):
         try:
             payload = await _audio_bytes(audio, service)
-            return await asyncio.to_thread(service.transcribe, payload)
+            return await asyncio.to_thread(service.transcribe_reference if reference else service.transcribe, payload)
         except (ValueError, RuntimeError, OSError) as exc:
             return _error(
                 exc,

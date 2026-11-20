@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from cyrene.platform.attachments import resolve_managed_attachment_id, resolve_managed_attachment_path
 from cyrene.workbench.chat.chat_guidance_service import (
     ChatGuidanceApplicationService,
     ChatGuidanceDependencies,
@@ -13,6 +14,20 @@ from cyrene.workbench.chat.chat_guidance_service import (
 from cyrene.workbench.http import schemas as api_models
 from cyrene.workbench.http.errors import localized_error_response
 from cyrene.workbench.http.workbench.chat_routes.context import ChatRouteContext
+
+
+async def _resolve_guidance_attachment(context, item):
+    # Library references are resolved by the store. Never fall back to a
+    # client-supplied path when the library lookup fails.
+    nested = item.get("file") or {}
+    if item.get("sourceKind") == "library" or isinstance(nested, dict) and nested.get("sourceKind") == "library":
+        reference = {**item, "path": "", "file": {**nested, "path": ""} if isinstance(nested, dict) else {}}
+        resolved = await context.resolve_library_file_payload(reference)
+        return resolved if resolved.get("path") else None
+    path = resolve_managed_attachment_id(item.get("id")) or resolve_managed_attachment_path(item.get("path"))
+    if not path or not path.is_file():
+        return None
+    return {**item, "id": path.name, "path": str(path), "size": path.stat().st_size}
 
 
 def register_run_stream_routes(
@@ -105,10 +120,20 @@ def register_run_stream_routes(
         body_model: api_models.ChatGuidanceBody,
     ):
         body = api_models.body_dict(body_model)
+        attachments = []
+        for item in body_model.attachments:
+            attachment = await _resolve_guidance_attachment(context, item)
+            if attachment is None:
+                return localized_error_response(
+                    "Attachment unavailable. Please attach it again.",
+                    "附件不可用，请重新添加。", 422, "attachment_unavailable",
+                )
+            attachments.append(attachment)
         result = await guidance_service.submit(
             chat_id=chat_id,
             message=str(body.get("message") or "").strip(),
             client_request_id=str(body.get("clientRequestId") or "").strip(),
+            attachments=attachments,
         )
         if result.status_code != 200:
             code = str(
@@ -117,8 +142,8 @@ def register_run_stream_routes(
             )
             messages = {
                 "guidance_empty": (
-                    "A guidance message is required.",
-                    "请输入指导消息。",
+                    "A guidance message or attachment is required.",
+                    "请输入引导消息或添加附件。",
                 ),
                 "chat_not_running": (
                     "This chat has no running reply to guide.",

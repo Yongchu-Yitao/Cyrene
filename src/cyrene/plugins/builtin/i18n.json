@@ -343,12 +343,12 @@
     },
     "cyrene_proactive": {
       "en": {
-        "name": "Proactive Agent",
-        "description": "Run optional proactive Agent work in the background."
+        "name": "Assistant follow-up",
+        "description": "Manage the personal assistant proactive preference."
       },
       "zh": {
-        "name": "主动 Agent",
-        "description": "在后台按策略执行可选的主动 Agent 工作。"
+        "name": "助理主动跟进",
+        "description": "管理个人助理的主动跟进偏好。"
       }
     },
     "cyrene_remote": {
@@ -489,6 +489,16 @@
       "zh": {
         "name": "卡片",
         "description": "会话中的卡片模板、用户输入和持久固定。"
+      }
+    },
+    "cyrene_response_style": {
+      "en": {
+        "name": "Reply style",
+        "description": "Apply the user's preferred reply detail and tone."
+      },
+      "zh": {
+        "name": "回复风格",
+        "description": "根据用户选择调整回复详略和语气。"
       }
     }
   },
@@ -3501,6 +3511,26 @@
       "zh": {
         "name": "整理任务",
         "description": "整理助理侧栏中的已有任务分组，可修改标题、顺序、归档状态和资源可见性，并关联主对话中已交付的文件。不会执行、停止或删除任务；提供的列表替换原选择，省略的设置保持不变。"
+      }
+    },
+    "assistant.revisit_draw": {
+      "en": {
+        "name": "Private assistant follow-up",
+        "description": "Sample an earlier personal assistant context for a private follow-up."
+      },
+      "zh": {
+        "name": "助理私有回访",
+        "description": "私下核对个人助理较早的工作，只在取得有依据的新进展时交由主助理跟进。"
+      }
+    },
+    "wake_self_at": {
+      "en": {
+        "name": "Schedule a private check",
+        "description": "Wake yourself privately at a timezone-qualified future time to recheck the active task. Specify what to inspect and how to decide. Replaces your previous timer for this context. Use only when an existing event will not suffice. Pass at=null to clear the timer after delivery or a stop."
+      },
+      "zh": {
+        "name": "安排内部检查",
+        "description": "为当前工作安排带时区的内部检查，可替换或取消；原有事件足以接续时优先使用事件。"
       }
     }
   }

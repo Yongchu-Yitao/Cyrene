@@ -1450,7 +1450,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
         </div>
       ) : actionLabel && !error && !takeover.pending && !nativeWindow && (
         <div className="browser-view-action">
-          ▸ {actionLabel}
+          {actionLabel}
         </div>
       )}
     </div>

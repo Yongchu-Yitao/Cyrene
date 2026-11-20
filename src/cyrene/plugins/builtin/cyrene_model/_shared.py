@@ -203,7 +203,7 @@ def _client_options(
     discovery: bool,
     create_transport: bool = True,
 ) -> dict[str, Any]:
-    timeout = httpx.Timeout(20.0, connect=5.0) if discovery else _timeout(context, provider)
+    timeout = httpx.Timeout(20.0, connect=10.0) if discovery else _timeout(context, provider)
     # Provider connections must not silently inherit OS or environment proxy
     # settings.  In particular, macOS system proxy discovery can otherwise
     # route private/Tailscale endpoints through a local HTTP proxy even when

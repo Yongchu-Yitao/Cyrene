@@ -47,7 +47,9 @@ def test_successful_switch_retires_history_but_preserves_current_request(success
     new.id = "current"
     boundary = Node("switch", {"role": "tool_results", "results": [
         {"name": "switch_context", "success": success, "call_id": "switch", "value": {}}]})
-    path = [Node("root", {"role": "system", "content": "system"}), old, new, boundary]
+    path = [Node("root", {"role": "system", "content": "system"}), old, new,
+            Node("guidance", {"role": "user", "runtime_guidance": True, "run_id": "r1", "content": "Look closer"}),
+            boundary]
     messages = project_model_messages(path)
     assert has_local_images([messages[1]]) is (not success)
     assert has_local_images([messages[2]])

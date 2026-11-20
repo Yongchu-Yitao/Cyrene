@@ -24,6 +24,9 @@ class PluginToolScope:
         return (
             self.include_all_tools
             or registered.plugin.kind != "tool"
+            # Providers invoke hidden protocol parsers while processing model output.
+            or (registered.plugin.metadata.get("tool_call_parser") is True
+                and registered.plugin.metadata.get("model_visible") is False)
             or (self.include_core and registered.source == "core")
             or registered.plugin.name in self.tool_names
             or registered.pack_id in self.pack_ids

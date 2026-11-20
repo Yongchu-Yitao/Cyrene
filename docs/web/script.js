@@ -73,7 +73,7 @@
     'page.knowledge': { zh: '文档上传、嵌入索引、实体管理', en: 'Document upload, embedding, entity management' },
     'page.browser': { zh: 'Electron / Playwright 浏览器实况与登录接管', en: 'Electron / Playwright browser live view and login takeover' },
     'page.mcp': { zh: 'MCP 协议支持：stdio 和 SSE 传输', en: 'MCP protocol support: stdio and SSE transports' },
-    'page.scheduler': { zh: 'Cron/间隔/一次性任务和主动抽奖系统', en: 'Cron, interval, one-shot tasks and proactive lottery' },
+    'page.scheduler': { zh: 'Cron、间隔和一次性任务', en: 'Cron, interval, and one-shot tasks' },
     'page.search': { zh: 'SimpleXNG 内置搜索和深度研究管道', en: 'SimpleXNG built-in search and deep research pipeline' },
     'page.quick-chat': { zh: '全局快捷键唤起的浮动聊天窗口', en: 'Global shortcut floating chat window' },
     'page.development': { zh: '调试、测试、编码规范、CI/发布流程', en: 'Debugging, testing, conventions, CI/release' },

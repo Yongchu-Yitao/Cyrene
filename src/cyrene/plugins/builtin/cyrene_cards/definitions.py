@@ -116,7 +116,11 @@ WEATHER_OBSERVATION["description"] = (
     "use a short text block instead. Optional range_c is today's forecast in Celsius."
 )
 BLOCK["oneOf"].append(WEATHER_OBSERVATION)
-ACTION = obj({"action_id": ID, "label": TEXT, "kind": {"enum": ["submit", "confirm"]}, "fields": array(ID, 64), "intent": TEXT, "target_context_id": ID, "task_id": ID},
+ACTION = obj({"action_id": ID, "label": TEXT, "kind": {"enum": ["submit", "confirm"]}, "fields": array(ID, 64), "intent": TEXT, "target_context_id": ID, "task_id": ID,
+              "result_target": {"oneOf": [
+                  obj({"card_id": ID, "session_id": ID}, ["card_id"]),
+                  obj({"file_path": TEXT, "session_id": ID}, ["file_path"]),
+              ]}},
              ["action_id", "label", "kind", "fields", "intent"])
 SPEC_PROPERTIES = {
     "home_visible": {"type": "boolean", "description": "Whether this prepared welcome slot is useful to display now. False hides it from conversation without archiving or recreating the slot."},

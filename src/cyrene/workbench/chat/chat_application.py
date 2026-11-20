@@ -1107,15 +1107,6 @@ def remove_retry_replaced_messages(
 def mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
     chat["lastUserMessageAt"] = timestamp
     chat["updatedAt"] = timestamp
-    try:
-        from cyrene.core.plugin import application_plugin_service
-
-        proactive = application_plugin_service("proactive")
-        reset = getattr(proactive, "reset_lottery", None)
-        if callable(reset):
-            reset()
-    except Exception:
-        logger.debug("Could not reset proactive lottery", exc_info=True)
 
 
 def parse_json_object(raw: Any) -> dict[str, Any] | None:

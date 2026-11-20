@@ -868,3 +868,53 @@ async def test_card_dispatch_recognizes_committed_human_input_after_lost_reply(t
     result = await port.dispatch_user_message("b", "submitted selection", client_request_id="card-event",
                                               expected_version=json.dumps(["b", 0]))
     assert result["duplicate"] and result["status"] == "admitted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["", "请参考这些附件"])
+async def test_workbench_guidance_attachments_reach_runtime_and_history(tmp_path, monkeypatch, text):
+    from unittest.mock import AsyncMock
+    from fastapi import APIRouter
+    from PIL import Image
+    from cyrene.platform import attachments
+    from cyrene.plugins.builtin.cyrene_guidance.service import GuidanceService
+    from cyrene.workbench.http.schemas import ChatGuidanceBody
+    from cyrene.workbench.http.workbench.chat_routes.run_stream_routes import register_run_stream_routes
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(attachments, "UPLOADS_DIR", uploads)
+    Image.new("RGB", (2, 2)).save(uploads / "screen.png")
+    (uploads / "notes.txt").write_text("reference")
+    files = [{"id": name, "name": name, "kind": kind, "content_type": mime}
+             for name, kind, mime in [("screen.png", "image", "image/png"), ("notes.txt", "file", "text/plain")]]
+    port = durable_port(tmp_path)
+    repository = port.service.repository
+    inbox = WorkbenchAgentInbox("b", repository._database(), run_id="run")
+    ready = asyncio.Event()
+    ready.set()
+    run = SimpleNamespace(status="running", ready=ready, inbox=inbox, run_id="run", publish=AsyncMock())
+    service = SimpleNamespace(run_manager=SimpleNamespace(get=lambda _: run), repository=repository,
+                              public_message=dict, utc_now_iso=lambda: "2026-01-01", short_id=lambda _: "user-id")
+    guide = register_run_stream_routes(APIRouter(), SimpleNamespace(service=service))["guide_chat"]
+    try:
+        assert (await guide("b", ChatGuidanceBody())).status_code == 422
+        assert (await guide("b", ChatGuidanceBody(attachments=[{"path": str(tmp_path)}]))).status_code == 422
+        body = ChatGuidanceBody(message=text, clientRequestId="request", attachments=files)
+        queued = await guide("b", body)
+        assert queued["queued"]
+        assert (await guide("b", body))["duplicate"]
+        message = queued["userMessage"]
+        assert message["content"] == text
+        assert [item["name"] for item in message["attachments"]] == ["screen.png", "notes.txt"]
+        assert all("path" not in item for item in message["attachments"])
+        events = inbox.collect_guidance_nowait()
+        assert len(events) == 1
+        value = GuidanceService(None).node_value(events, run_id="run")
+        assert value["metadata"]["input_images"] == [{"path": str(uploads / "screen.png")}]
+        assert str(uploads / "notes.txt") in value["content"]
+        repository.mutate_one("b", lambda chat: chat["messages"].clear())
+        assert port.run_manager._reconcile_inbox_guidance_messages() == 1
+        assert repository.get("b")["messages"][0]["attachments"] == message["attachments"]
+    finally:
+        await inbox.close(termination_reason="completed")

@@ -1,400 +1,17 @@
-import asyncio
-import json
 from pathlib import Path
-from datetime import datetime, timezone
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+
+from cyrene.plugins.builtin.cyrene_proactive import plugin_pack
 
 
-def _delivered_proactive_result(report):
-    run_id = "proactive_run_test"
-    return SimpleNamespace(
-        run_id=run_id,
-        text="",
-        model="test-model",
-        pending_question=None,
-        usage={},
-        latest_request_usage={},
-        snapshot={
-            "nodes": [
-                {
-                    "value": {
-                        "role": "tool_results",
-                        "run_id": run_id,
-                        "results": [
-                            {
-                                "name": "finish_proactive",
-                                "success": True,
-                                "value": {
-                                    "decision": "deliver",
-                                    "report": report,
-                                },
-                            }
-                        ],
-                    }
-                }
-            ]
-        },
-    )
-
-
-def _write_chats(path, chats):
-    path.write_text(json.dumps({"chats": chats}, ensure_ascii=False), encoding="utf-8")
-
-
-def _work_item(project_id="project_1"):
-    return {
-        "id": "task-explicit",
-        "type": "task",
-        "title": "Publish release",
-        "content": "Publish the verified artifacts.",
-        "status": "active",
-        "source": "explicit",
-        "priority": "high",
-        "project_id": project_id,
-        "updated_at": "2026-06-17T12:00:00+00:00",
-    }
-
-
-def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_path):
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    chats_path = tmp_path / "workbench_chats.json"
-    _write_chats(chats_path, [
-        {
-            "id": "chat_old",
-            "projectId": "project_a",
-            "title": "Old",
-            "lastUserMessageAt": "2026-06-17T10:00:00+00:00",
-            "updatedAt": "2026-06-18T12:00:00+00:00",
-            "messages": [],
-        },
-        {
-            "id": "chat_latest",
-            "projectId": "project_b",
-            "title": "Latest",
-            "updatedAt": "2026-06-17T11:30:00+00:00",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "latest user turn",
-                    "createdAt": "2026-06-17T11:00:00+00:00",
-                },
-                {
-                    "role": "assistant",
-                    "content": "reply",
-                    "createdAt": "2026-06-17T11:30:00+00:00",
-                },
-            ],
-        },
-    ])
-    monkeypatch.setattr(
-        scheduler,
-        "ChatRepository",
-        lambda _db: type("JsonRepository", (), {
-            "read": lambda self: json.loads(chats_path.read_text(encoding="utf-8")),
-        })(),
-    )
-    monkeypatch.setattr(scheduler, "_workbench_db_path", str(chats_path))
-
-    latest = scheduler._latest_workbench_user_activity()
-
-    assert latest is not None
-    assert latest["chat_id"] == "chat_latest"
-    assert latest["project_id"] == "project_b"
-    assert latest["timestamp"] == datetime(2026, 6, 17, 11, tzinfo=timezone.utc)
-
-
-def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_path):
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    _write_chats(tmp_path / "workbench_chats.json", [
-        {
-            "id": "chat_1",
-            "projectId": "project_1",
-            "lastUserMessageAt": "2026-06-18T02:03:04+00:00",
-            "messages": [],
-        }
-    ])
-    monkeypatch.setattr(
-        scheduler,
-        "ChatRepository",
-        lambda _db: type("JsonRepository", (), {
-            "read": lambda self: json.loads((tmp_path / "workbench_chats.json").read_text(encoding="utf-8")),
-        })(),
-    )
-    monkeypatch.setattr(scheduler, "_workbench_db_path", str(tmp_path / "workbench_chats.json"))
-    monkeypatch.setattr(
-        scheduler,
-        "_memory_service",
-        lambda: SimpleNamespace(latest_archived_user_message_time=lambda: None),
-    )
-    assert scheduler._last_user_message_time() == datetime(
-        2026, 6, 18, 2, 3, 4, tzinfo=timezone.utc
-    )
-
-
-async def test_proactive_skips_when_latest_workbench_chat_is_running(
-    monkeypatch, tmp_path
-):
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    _write_chats(tmp_path / "workbench_chats.json", [
-        {
-            "id": "chat_busy",
-            "projectId": "project_1",
-            "lastUserMessageAt": "2026-06-17T02:03:04+00:00",
-            "messages": [],
-        }
-    ])
-    monkeypatch.setattr(
-        scheduler,
-        "ChatRepository",
-        lambda _db: type("JsonRepository", (), {
-            "read": lambda self: json.loads((tmp_path / "workbench_chats.json").read_text(encoding="utf-8")),
-        })(),
-    )
-    monkeypatch.setattr(scheduler, "_workbench_db_path", str(tmp_path / "workbench_chats.json"))
-    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
-    monkeypatch.setattr(
-        scheduler,
-        "_is_workbench_conversation_running",
-        lambda _db_path, session_id: session_id == "chat_busy",
-    )
-    run = AsyncMock()
-    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run)
-    scheduler._LOTTERY_STATE.update(
-        consecutive_unanswered=0,
-        cooldown_until=0.0,
-        last_proactive_time=0.0,
-        probability=0.5,
-    )
-
-    await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
-
-    run.assert_not_awaited()
-    assert scheduler._LOTTERY_STATE["probability"] == 0.5
-
-
-async def test_proactive_is_persisted_to_new_workbench_chat(
-    monkeypatch, tmp_path
-):
-    from cyrene.observability import debug
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    db_path = str(tmp_path / "runtime.sqlite3")
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    from cyrene.workbench.chat.chat_repository import ChatRepository
-
-    repository = ChatRepository(db_path)
-    repository.write({"chats": [
-        {
-            "id": "chat_latest",
-            "projectId": "project_1",
-            "title": "Launch",
-            "model": "test-model",
-            "lastUserMessageAt": "2026-06-14T02:03:04+00:00",
-            "messages": [],
-        }
-    ]})
-    events = []
-
-    async def publish(event, **_kwargs):
-        events.append(event)
-
-    captured = {}
-
-    async def run_agent(prompt, **kwargs):
-        session_id = kwargs.get("session_id", "")
-        assert session_id.startswith("wbchat_")
-        assert session_id != "chat_latest"
-        captured["session_id"] = session_id
-        captured["lang"] = kwargs.get("lang", "")
-        captured["workspace_dir"] = kwargs.get("workspace_dir", "")
-        return _delivered_proactive_result("How did the launch go?")
-
-    import cyrene.platform.settings_store as settings_store
-    monkeypatch.setattr(
-        settings_store, "get",
-        lambda key, default=None: "zh" if key == "app_language" else default,
-    )
-    import cyrene.workbench.chat.chat_application as chat_application
-    monkeypatch.setattr(
-        chat_application,
-        "_composer_context_service",
-        lambda: SimpleNamespace(
-            default_input_context=lambda: {
-                "soulActive": False,
-                "workspaceActive": True,
-            },
-            normalize=lambda value: value if isinstance(value, dict) else {},
-        ),
-    )
-    monkeypatch.setattr(scheduler, "_workbench_db_path", db_path)
-    monkeypatch.setattr(
-        scheduler,
-        "_workbench_workspace_dir_for_project",
-        lambda _project_id: str(workspace),
-    )
-    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
-    monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
-    monkeypatch.setattr(
-        scheduler,
-        "_authoritative_work_items",
-        AsyncMock(return_value=[_work_item()]),
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "_is_workbench_conversation_running",
-        lambda _db_path, _session_id: False,
-    )
-    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run_agent)
-    monkeypatch.setattr(scheduler, "notify", AsyncMock())
-    monkeypatch.setattr(scheduler, "append_notification", lambda **_kwargs: {})
-    monkeypatch.setattr(debug, "publish_event", publish)
-    scheduler._LOTTERY_STATE.update(
-        consecutive_unanswered=0,
-        cooldown_until=0.0,
-        last_proactive_time=0.0,
-        probability=0.0,
-        evaluated_work_signatures={},
-    )
-
-    await scheduler._heartbeat_proactive_check(
-        None,
-        db_path,
-    )
-
-    saved = repository.read()
-    assert len(saved["chats"]) == 2
-    proactive_chat = saved["chats"][0]
-    original_chat = saved["chats"][1]
-    assert proactive_chat["id"] == captured["session_id"]
-    assert proactive_chat["id"] != original_chat["id"]
-    assert proactive_chat["projectId"] == "project_1"
-    assert proactive_chat["sourceChatId"] == "chat_latest"
-    assert proactive_chat["proactive"] is True
-    assert original_chat["messages"] == []
-    messages = proactive_chat["messages"]
-    assert messages[-1]["content"] == "How did the launch go?"
-    assert messages[-1]["proactive"] is True
-    assert proactive_chat["updatedAt"] == messages[-1]["createdAt"]
-    assert events[-1]["type"] == "workbench_proactive_message"
-    assert events[-1]["chat_id"] == proactive_chat["id"]
-    # ChatRepository persistence and the dedicated proactive debug event are
-    # the observable contracts; chat-change SSE publication has its own event
-    # channel and is not folded into the debug stream.
-    assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 1
-    # The persisted UI language must be threaded into the proactive agent run.
-    assert captured["lang"] == "zh"
-    assert captured["workspace_dir"] == str(workspace)
-
-
-def test_lottery_win_is_consumed_only_after_delivery(monkeypatch):
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    scheduler._LOTTERY_STATE.update(
-        probability=0.6,
-        delta=0.15,
-        max_probability=0.85,
-    )
-    monkeypatch.setattr(scheduler.random, "random", lambda: 0.1)
-
-    assert scheduler._lottery_draw() is True
-    assert scheduler._LOTTERY_STATE["probability"] == 0.6
-
-
-async def test_generation_timeout_preserves_accumulated_probability(
-    monkeypatch, tmp_path
-):
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    async def timeout_run(*_args, **_kwargs):
-        raise asyncio.TimeoutError
-
-    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
-    monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
-    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
-    monkeypatch.setattr(
-        scheduler,
-        "_authoritative_work_items",
-        AsyncMock(return_value=[_work_item("default")]),
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "_default_workbench_project_scope",
-        lambda: {"project_id": "default", "workspace_dir": str(tmp_path)},
-    )
-    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", timeout_run)
-    scheduler._LOTTERY_STATE.update(
-        probability=0.75,
-        consecutive_unanswered=0,
-        cooldown_until=0.0,
-        last_proactive_time=0.0,
-        evaluated_work_signatures={},
-    )
-
-    outcome = await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
-
-    assert outcome == {"status": "generation_timeout"}
-    assert scheduler._LOTTERY_STATE["probability"] == 0.75
-
-
-async def test_proactive_does_not_run_without_explicit_active_work(monkeypatch):
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
-    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
-    monkeypatch.setattr(
-        scheduler,
-        "_default_workbench_project_scope",
-        lambda: {"project_id": "default", "workspace_dir": "/tmp/workspace"},
-    )
-    monkeypatch.setattr(
-        scheduler, "_authoritative_work_items", AsyncMock(return_value=[])
-    )
-    run = AsyncMock()
-    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run)
-
-    outcome = await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
-
-    assert outcome == {"status": "no_actionable_work"}
-    run.assert_not_awaited()
-
-
-async def test_proactive_evaluates_each_work_revision_only_once(monkeypatch):
-    from cyrene.plugins.builtin.cyrene_entity.proactive import proactive_work_signature
-    from cyrene.plugins.builtin.cyrene_proactive import service as scheduler
-
-    item = _work_item("default")
-    monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
-    monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
-    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
-    monkeypatch.setattr(
-        scheduler,
-        "_default_workbench_project_scope",
-        lambda: {"project_id": "default", "workspace_dir": "/tmp/workspace"},
-    )
-    monkeypatch.setattr(
-        scheduler, "_authoritative_work_items", AsyncMock(return_value=[item])
-    )
-    scheduler._LOTTERY_STATE["evaluated_work_signatures"] = {
-        "default": proactive_work_signature([item])
-    }
-    run = AsyncMock()
-    monkeypatch.setattr(scheduler, "_run_plugin_proactive_turn", run)
-
-    outcome = await scheduler._heartbeat_proactive_check(None, "db.sqlite3")
-
-    assert outcome == {"status": "work_unchanged"}
-    run.assert_not_awaited()
+def test_proactive_pack_registers_private_assistant_revisit():
+    from types import SimpleNamespace
+    services = {}
+    modules = []
+    plugin_pack.application_setup(SimpleNamespace(provide=services.__setitem__, expose_frontend=modules.append))
+    assert {tool.name for tool in plugin_pack.plugins} == {"assistant.revisit_draw"}
+    assert modules == ["proactive"]
+    assert set(services) == {"proactive_settings"}
+    assert [spec.key for spec in services["proactive_settings"].specs] == ["agent_proactive", "agent_proactive_daily_frequency"]
 
 
 def test_workbench_frontend_handles_proactive_sse():
@@ -407,3 +24,177 @@ def test_workbench_frontend_handles_proactive_sse():
     assert "wbcApplyProactiveMessage(context, event)" in source
     assert "messages.some(function (item) { return item.id === message.id; })" in source
     assert "messages: messages.concat([message])" in source
+
+
+async def test_legacy_editable_pack_cannot_schedule_or_start_work(tmp_path):
+    import pytest
+    from types import SimpleNamespace
+    from cyrene.plugins.background import background_job_spec
+    from cyrene.workbench.core_adapter.conversation_runtime import ConversationConfig, ConversationRuntime
+
+    legacy = SimpleNamespace(name="proactive.heartbeat", metadata={"background_job": {"id": "proactive_heartbeat"}})
+    assert background_job_spec(legacy) is None
+    config = ConversationConfig(session_id="work", workspace_dir=str(tmp_path), db_path="", command="proactive-heartbeat")
+    with pytest.raises(ValueError, match="Legacy proactive work sessions"):
+        await ConversationRuntime("").send(config, "resume", run_id="legacy")
+
+
+async def test_private_wakes_survive_restart_replace_and_deliver_without_user_text(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from cyrene.plugins.builtin.session_management import followup
+    from cyrene.plugins.builtin.session_management.store import Store
+    from cyrene.workbench.http.workbench.chat_routes.send_request import SendOrigin
+    from cyrene.workbench.http.workbench.chat_routes.send_input import append_user_message, SendInput
+
+    owner = followup.ASSISTANT_ID
+    host = SimpleNamespace(chat=lambda _: {"kind": "personal-assistant"}, version=lambda _: "v1",
+                           status=lambda _: "idle")
+    captured = []
+    async def dispatch(target, message, **kwargs):
+        private = followup.private_context(service.store, kwargs["client_request_id"], kwargs["expected_version"])
+        captured.append(private)
+        assert target == owner and "hidden second" not in message
+        origin = SendOrigin.parse({"clientRequestId": kwargs["client_request_id"], "agentOriginated": True,
+                                   "sourceSessionId": owner, "agentMessageKind": kwargs["agent_message_kind"]})
+        messages = []
+        append_user_message({}, messages, SendInput(message, message, "", [], []), origin, "", lambda _: "id")
+        assert not messages
+    host.port = lambda: SimpleNamespace(dispatch_agent_message=dispatch)
+    service = SimpleNamespace(store=Store(tmp_path / "managed.db"), host=host)
+    at = datetime.fromtimestamp(1010, timezone.utc)
+    monkeypatch.setattr(followup.time, "time", lambda: 1000)
+    monkeypatch.setattr(followup, "long_enabled", lambda: False)
+    followup.schedule(service, owner, "ctx", at, "hidden first", "one")
+    followup.schedule(service, owner, "ctx", at, "hidden second", "two")
+    followup.schedule(service, owner, "ctx", at, "hidden first", "one")
+    service.store = Store(tmp_path / "managed.db")
+    await followup.deliver_due(service)
+    assert not captured and followup.deadline(service.store) == 10
+    monkeypatch.setattr(followup.time, "time", lambda: 1011)
+    await followup.deliver_due(service)
+    await followup.deliver_due(service)
+    assert len(captured) == 1 and "hidden second" in captured[0]
+
+
+def test_private_timer_can_be_cancelled_without_replaying_old_request(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from cyrene.plugins.builtin.session_management import followup
+    from cyrene.plugins.builtin.session_management.store import Store
+    host = SimpleNamespace(chat=lambda _: {"kind": "personal-assistant"}, version=lambda _: "v1")
+    service = SimpleNamespace(store=Store(tmp_path / "db"), host=host)
+    at = datetime.now(timezone.utc) + timedelta(minutes=1)
+    followup.schedule(service, followup.ASSISTANT_ID, "ctx", at, "check", "1")
+    followup.schedule(service, followup.ASSISTANT_ID, "ctx", None, "", "2")
+    followup.schedule(service, followup.ASSISTANT_ID, "ctx", at, "check", "1")
+    with service.store.connect() as db:
+        assert db.execute("SELECT count(*) FROM assistant_wakes WHERE state='pending'").fetchone()[0] == 0
+
+
+def test_revisit_decision_requires_corresponding_work_evidence():
+    import json
+    from types import SimpleNamespace
+    from cyrene.plugins.builtin.cyrene_proactive.revisit import report_from
+    report = {"decision": "report", "source": "https://example.org/new", "previous": "absent", "change": "published", "relevance": "usable"}
+    search = {"name": "WebSearch", "success": True, "value": "source: https://example.org/new"}
+    work = SimpleNamespace(run_id="work", snapshot={"nodes": [
+        {"value": {"role": "tool_results", "run_id": "work", "results": [search]}}]})
+    def check(body, status="completed"):
+        return report_from(work, SimpleNamespace(text=json.dumps(body), status=status),
+                           {"context_id": "ctx1", "current_task_results": {"task:result": "done"}})
+    assert check(report) == report
+    for source in ("context:ctx1", "task:result"):
+        assert check({**report, "source": source})["source"] == source
+    assert check({**report, "source": "context:other"}) is None
+    assert check({"decision": "silent"}) is None
+    assert check({**report, "change": ""}) is None
+    assert check(report, "awaiting_user") is None
+    work.run_id = "other"
+    assert check(report) is None
+
+
+async def test_child_completion_triggers_one_private_decision(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from cyrene.plugins.builtin.cyrene_cards import home_preparation
+    from cyrene.plugins.builtin.cyrene_proactive import revisit
+    from cyrene.workbench import core_adapter
+
+    runtime = SimpleNamespace(send=AsyncMock(), shutdown=AsyncMock())
+    monkeypatch.setattr(core_adapter, "ConversationRuntime", lambda _: runtime)
+    monkeypatch.setattr(home_preparation, "home_model_identity", lambda _: {})
+    service = Mock()
+    service.store.path = tmp_path / "db"
+    for status in ("awaiting_user", "completed"):
+        runtime.send.reset_mock()
+        runtime.send.side_effect = [SimpleNamespace(status=status, run_id="work"),
+                                    SimpleNamespace(status="completed", text='{"decision":"silent"}')]
+        assert await revisit.run_child(service, {}, {"context_id": "ctx"}) is None
+        calls = runtime.send.await_args_list
+        assert len(calls) == (2 if status == "completed" else 1)
+        if status == "completed":
+            work, decision = calls
+            assert work.args[0].session_id == decision.args[0].session_id
+            assert decision.args[1] == revisit.DECISION_PROMPT
+            assert decision.kwargs["run_id"] == "work_decision"
+            assert decision.kwargs["metadata"]["system_initiated"]
+            assert not decision.args[0].tool_scope.tool_names
+
+
+async def test_lottery_only_wakes_parent_for_report(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from datetime import datetime, timezone
+    from cyrene.plugins.builtin.cyrene_proactive import revisit
+    from cyrene.plugins.builtin.session_management.store import Store
+    chat = {"kind": "personal-assistant", "id": "assistant_global"}
+    service = SimpleNamespace(store=Store(tmp_path / "db"), host=SimpleNamespace(
+        chat=lambda _: chat, status=lambda _: "idle", version=lambda _: "v1"))
+    context = SimpleNamespace(services={"session_management": service}, data={"background_job_id": "assistant_revisit_draw"})
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 20, 12, tzinfo=tz or timezone.utc)
+    monkeypatch.setattr(revisit, "datetime", Clock)
+    monkeypatch.setattr(revisit, "get", lambda key, default: "UTC" if key == "timezone" else default)
+    monkeypatch.setattr(revisit, "long_enabled", lambda: True)
+    monkeypatch.setattr(revisit.random, "random", lambda: 0)
+    monkeypatch.setattr(revisit, "select_block", lambda *_: ("research", {}))
+    child = AsyncMock(side_effect=[None, {"decision": "report", "source": "https://example.org/result"}])
+    monkeypatch.setattr(revisit, "run_child", child)
+    parent = Mock()
+    monkeypatch.setattr(revisit, "schedule", parent)
+    await revisit.draw({}, context)
+    for _ in range(2):
+        with service.store.connect() as db:
+            db.execute("UPDATE revisit_lottery SET last_draw=0,p=0.5")
+        await revisit.draw({}, context)
+    assert child.await_count == 2
+    parent.assert_called_once()
+    monkeypatch.setattr(revisit, "long_enabled", lambda: False)
+    assert await revisit.draw({}, context) == {"status": "disabled"}
+
+def test_revisit_mean_sets_existing_job_cadence(monkeypatch):
+    from cyrene.plugins.background import background_job_spec
+    from cyrene.plugins.builtin.cyrene_proactive import revisit
+
+    for frequency in (0.09, 1, 5, 64):
+        monkeypatch.setattr(revisit, "get", lambda key, default: frequency)
+        interval = background_job_spec(revisit.draw_tool).interval_seconds
+        assert 0 < interval <= 3600
+        admission = 3600 / revisit.draw_period() if revisit.draw_period() > 3600 else 1
+        mean_seconds = interval * revisit.DRAWS_PER_WIN / admission
+        assert abs(mean_seconds - 16 * 3600 / frequency) < 2
+
+
+def test_daily_frequency_defaults_and_existing_interval(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_proactive import revisit
+
+    settings = {}
+    monkeypatch.setattr(revisit, "get", settings.get)
+    assert revisit.default_daily_frequency() == 1
+    settings["agent_revisit_mean_minutes"] = 120
+    assert revisit.default_daily_frequency() == 8
+    settings["agent_proactive_daily_frequency"] = 5
+    assert revisit.draw_period() == 16 * 3600 / (5 * revisit.DRAWS_PER_WIN)

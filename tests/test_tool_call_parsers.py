@@ -283,3 +283,19 @@ def test_explicit_schema_cannot_expose_globally_hidden_or_out_of_scope_tool():
     assert not _parse(visible, {**request, "tools": []}).success
     scoped = PluginRuntime(ScopedPluginRegistry(registry, PluginToolScope()))
     assert not _parse(scoped, request).success
+
+
+def test_scoped_session_can_parse_calls_to_its_allowed_tools():
+    from cyrene.core.plugin.tool_scope import PluginToolScope, ScopedPluginRegistry
+
+    registry = PluginRegistry(include_core=False)
+    plugin = _target_plugin()
+    registry.register_plugin(plugin, source="test")
+    ensure_model_router(registry)
+    scope = PluginToolScope(tool_names=frozenset({plugin.name}), include_core=False)
+    runtime = PluginRuntime(ScopedPluginRegistry(registry, scope))
+    request = {
+        "tool_calls": [{"name": plugin.name, "arguments": {"path": "a", "old_string": "b", "new_string": "c"}}],
+        "tools": [plugin.tool_definition()],
+    }
+    assert _parse(runtime, request).success

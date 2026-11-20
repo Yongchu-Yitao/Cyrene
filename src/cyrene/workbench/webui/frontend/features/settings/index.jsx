@@ -2,9 +2,19 @@ export { RemotePanel, RemotePeerCard } from "./remote.jsx"
 export { GeneralPanel } from "./general.jsx"
 export { SearchPanel } from "./search.jsx"
 export { ChannelsPanel } from "./channels.jsx"
-export { AgentsPanel } from "./agents.jsx"
+const AgentSettings = React.lazy(() => import("./agents.jsx"));
+export function AgentsPanel(props) {
+  return <React.Suspense fallback={<span className="wb-spinner small" role="status"/>}>
+    <AgentSettings {...props}/>
+  </React.Suspense>;
+}
 export { AppearancePanel } from "./appearance.jsx"
-export { CapabilitiesPanel } from "./capabilities.jsx"
+const VoiceSettings = React.lazy(() => import("./capabilities.jsx"));
+export function CapabilitiesPanel(props) {
+  return <React.Suspense fallback={<span className="wb-spinner small" role="status"/>}>
+    <VoiceSettings {...props}/>
+  </React.Suspense>;
+}
 export { DataPanel, requestDataPanelStorage } from "./data.jsx"
 export { AboutPanel } from "./about.jsx"
 export { PluginRegistryPanel } from "./custom-plugins.jsx"

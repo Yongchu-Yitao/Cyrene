@@ -8,7 +8,7 @@ import { useWbcComposerContextResource, useWbcComposerCommandCatalog } from "./c
 import { WbcComposerAttachmentView, WbcComposerTopOverlay } from "./composer-attachment-view.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WBC_AGENT_CHAT_FLOW_EVENT, WBC_BUILTIN_AGENT_ID, WBC_BUILTIN_AGENT_INSTALLATION, WBC_COMMANDS, WBC_COMMAND_ICONS, WBC_ICONS, WBC_MODES, WbcVoice, WorkbenchChatModel, useWbcEffect, useWbcRef, useWbcState, wbcAgentAvailability, wbcAgentChatFlowSnapshot, wbcAgentDisplayName, wbcAttachmentTypeLabel, wbcCapabilityEnabled, wbcCapabilityStatus, wbcChatAgent, wbcComposerAgentRow, wbcComposerSlashCommands, wbcCreateComposerVoiceFeedback, wbcCurrentModel, wbcDefaultAgentBinding, wbcErrorText, wbcFriendlyModelName, wbcHasAgentCapabilitySnapshot, wbcIsBuiltinAgent, wbcLocalizedModelDescription, wbcModeMeta, wbcPublishChatModelChanged, wbcReasoningEffortForModel, wbcStartVoiceRecorder, wbcSupportedReasoningEfforts, wbcT, wbcTranscribeVoiceBlob, wbcWorkspaceDisplayName } from "../../workbench-chat.jsx"
-import { WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
+import { WBC_NATIVE_FIELD_SIZING, wbcLoadAttachments, wbcLoadDraft, wbcLoadWorkspaceOverride, wbcSaveAttachments, wbcSaveDraft, wbcSaveWorkspaceOverride, wbcSyncLegacyComposerHeight, wbcWorkspaceContextKey } from "./messages.jsx"
 import { WbcFileVisual, wbcCommandMeta } from "./file-resources.jsx"
 import { WbcVisionModelNotice, useWbcComposerAttachments } from "./composer-attachments.jsx"
 import { useWbcComposerAgentFlow } from "./composer-flow.jsx"
@@ -176,7 +176,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
   var capText = wbcCapabilityEnabled(capabilitySource, "input", "text", { strictUnknown: true });
   var capImage = wbcCapabilityEnabled(capabilitySource, "input", "image", { strictUnknown: true });
   var capFile = wbcCapabilityEnabled(capabilitySource, "input", "file", { strictUnknown: true });
-  var capAudio = wbcCapabilityEnabled(capabilitySource, "input", "audio", { strictUnknown: true });
   var capSteer = wbcCapabilityEnabled(capabilitySource, "interaction", "steer", { strictUnknown: true });
   var capCancel = wbcCapabilityEnabled(capabilitySource, "interaction", "cancel", { strictUnknown: true });
   var capReasoningEffort = wbcCapabilityEnabled(capabilitySource, "model", "reasoningEffort");
@@ -185,7 +184,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
     attachRef, attachments, failedImagePreviews, fileRef, onFilePick, onPaste, pickFiles,
     setAttachments, setFailedImagePreviews, uploading,
   } = useWbcComposerAttachments({
-    awaitingAnswer: awaitingAnswer,
+    awaitingAnswer: awaitingAnswer || (running && !capSteer),
     canAttachFiles: capFile,
     canAttachImages: capImage,
     chatId: chatId,
@@ -193,7 +192,6 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
     draftNamespace: draftNs,
     model: model,
     previousChatIdRef: prevChatIdRef,
-    running: running,
     setDraft: setDraft,
   });
   var effectiveModelAccess = (effectiveCatalogAgent && effectiveCatalogAgent.modelAccess)
@@ -431,13 +429,19 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
       return;
     }
     if (running) {
-      if (!text || !onGuidance) return;
+      if ((!text && !attachments.length) || !capSteer || !onGuidance || attachmentBlocked) return;
       draftRef.current = "";
       setDraft("");
       persistCurrentDraft();
-      onGuidance(text).catch(function () {
-        draftRef.current = text;
-        setDraft(text);
+      setAttachments([]);
+      onGuidance(text, attachments).catch(function () {
+        if (prevChatIdRef.current !== chatId) {
+          wbcSaveDraft(chatId, [text, wbcLoadDraft(chatId, draftNs)].filter(Boolean).join("\n\n"), draftNs);
+          wbcSaveAttachments(chatId, attachments.concat(wbcLoadAttachments(chatId, draftNs)), draftNs);
+          return;
+        }
+        setDraft(function (current) { return [text, current].filter(Boolean).join("\n\n"); });
+        setAttachments(function (current) { return attachments.concat(current); });
       });
       return;
     }
@@ -764,7 +768,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
   // Steer is capability-driven: an Agent that cannot steer mid-run only offers
   // stop, so the running composer never fabricates a guidance send path.
   var canSteerWhileRunning = !running || capSteer;
-  var hasRuntimeGuidance = running && !!draft.trim();
+  var hasRuntimeGuidance = running && (!!draft.trim() || attachments.length > 0 || uploading);
   if (!capSteer) hasRuntimeGuidance = false;
   var cancelUnsupported = running && !capCancel;
   // An Agent without interaction.cancel never shows a misleading Stop action;
@@ -946,7 +950,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
         <div className="wbc-composer-actions">
           <input ref={fileRef} type="file" multiple accept={!capFile && capImage ? "image/*" : undefined} style={{ display: "none" }} onChange={onFilePick} />
           {(capFile || capImage) && (
-            <button type="button" data-tour="chat_attach" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running || awaitingAnswer} onClick={pickFiles}>
+            <button type="button" data-tour="chat_attach" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || !canSteerWhileRunning || awaitingAnswer} onClick={pickFiles}>
               {uploading ? <span className="wb-spinner small" /> : WBC_ICONS.attach}
             </button>
           )}
@@ -1380,7 +1384,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onAnswer, onGuid
               )}
             </span>
           ) : null}
-          {!compact && capAudio && voiceSnapshot.status.asr_ready ? (
+          {!compact && capText && voiceSnapshot.status.asr_ready ? (
             <button
               type="button"
               data-tour="chat_voice"

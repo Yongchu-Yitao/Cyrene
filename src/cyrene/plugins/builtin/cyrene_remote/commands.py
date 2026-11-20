@@ -227,9 +227,9 @@ _REMOTE_SETTING_FIELDS = (
         ],
     ),
     _remote_setting_field(
-        "agent_proactive", "agent", "boolean", "Proactive agent", "Agent 主动工作",
-        description="Allow the desktop agent to initiate relevant work and notifications.",
-        description_zh="允许桌面 Agent 主动发起相关工作与通知。", default=True,
+        "agent_proactive", "agent", "boolean", "Assistant follow-up", "助理主动跟进",
+        description="Personal assistant follow-up preference.",
+        description_zh="个人助理的主动跟进偏好。", default=True,
     ),
     _remote_setting_field(
         "spawn_policy", "agent", "enum", "Sub-agent policy", "子 Agent 策略",
@@ -239,11 +239,6 @@ _REMOTE_SETTING_FIELDS = (
             _option("conservative", "Conservative", "保守"),
             _option("aggressive", "Aggressive", "积极"),
         ],
-    ),
-    _remote_setting_field(
-        "heartbeat_interval", "agent", "integer", "Heartbeat interval", "Agent 心跳间隔",
-        description="Seconds between proactive heartbeat checks.",
-        description_zh="主动心跳检查之间的秒数。", default=1800, minimum=60, maximum=86400,
     ),
     _remote_setting_field(
         "soul_active", "context", "boolean", "Use SOUL.md", "启用 SOUL.md",

@@ -29,9 +29,11 @@ test('open welcome menu uses the menu logo slot and retains the welcome brand', 
   assert.equal(opened.brand, anchor.welcome.brand);
   assert.equal(opened.className, 'aim-root is-open is-travelling is-welcome');
   assert.equal(assistantGripPresentation(anchor, { welcome: true, open: true }).position, anchor.welcome);
-  const unmeasured = { x: 300, y: 60 };
+  const unmeasured = { x: 300, y: 60, pane: { left: 100, right: 500, top: 40, bottom: 640 } };
   const fallback = assistantGripPresentation(unmeasured, { welcome: true });
-  assert.equal(fallback.position, unmeasured);
+  const loading = assistantGripPresentation(unmeasured, { loading: true });
+  assert.deepEqual(fallback.position, loading.position);
+  assert.equal(fallback.className, loading.className);
   assert.equal(fallback.welcomeScale, 1);
   assert.ok(!fallback.brand);
 });
@@ -70,7 +72,10 @@ test('portalled grip follows position, visibility and theme changes without idle
   const stop = observeAssistantGrip(card, grip, value => observations.push(value), win, welcome);
   assert.equal(observations.at(-1).x, 300); assert.equal(frames.size, 0);
   assert.deepEqual(observations.at(-1).welcome, {x: 162, y: 272, size: 64});
-  left = 500; color = '#17181c'; mutation(); flush(0);
+  mutation([{type: 'childList'}]); flush(0);
+  assert.equal(themeReads, 1);
+  assert.equal(observations.length, 1);
+  left = 500; color = '#17181c'; mutation([{type: 'attributes'}]); flush(0);
   assert.equal(observations.at(-1).x, 700); assert.equal(observations.at(-1).theme['--wb-card-bg'], color);
   assert.equal(observations.at(-1).welcome.x, 562, 'welcome logo follows sidebar layout changes');
   const transition = new Event('transitionrun');
@@ -82,7 +87,7 @@ test('portalled grip follows position, visibility and theme changes without idle
   events.dispatchEvent(new Event('transitionrun'));
   events.dispatchEvent(new Event('animationstart'));
   assert.equal(frames.size, 0, 'unrelated or decorative animations do not restart tracking');
-  hidden = true; mutation(); flush(701); assert.equal(observations.at(-1).visible, false);
+  hidden = true; mutation([{type: 'attributes'}]); flush(701); assert.equal(observations.at(-1).visible, false);
   stop(); assert.equal(disconnected, 2); assert.equal(frames.size, 0);
 });
 

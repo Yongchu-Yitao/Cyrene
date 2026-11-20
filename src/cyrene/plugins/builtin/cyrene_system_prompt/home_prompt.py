@@ -55,7 +55,9 @@ For resume, show a relevant unfinished task, factual progress using timeline, an
 a meaningful primary action such as 继续进行. Choose the actual task action rather
 than a generic browser connection step.
 For results, use action_list for actual recent artifacts, with 打开/查看 actions
-referencing their real files in intent. Remove obsolete actions and reconcile
+with a result_target on each open action. Prefer {card_id, session_id} for a
+delivered interactive card; otherwise use {file_path, session_id} with the exact
+delivered file path and owning session. These clicks open in the right pane. Remove obsolete actions and reconcile
 resolved confirmations and changed progress. Hide slots with no relevant items.
 
 Use row action_ids pointing to spec.actions and weather/timeline/native blocks for

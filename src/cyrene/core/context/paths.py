@@ -9,6 +9,21 @@ DIALOGUE_ROLES = frozenset({
 })
 
 
+def current_request_start(path):
+    """Find the first user message behind the latest same-run guidance."""
+    start = len(path)
+    for index in range(len(path) - 1, -1, -1):
+        value = path[index].value
+        if value.get("role") != "user":
+            continue
+        if start < len(path) and value.get("run_id") != path[start].value.get("run_id"):
+            break
+        start = index
+        if not value.get("runtime_guidance") or not value.get("run_id"):
+            break
+    return start
+
+
 def context_path(nodes, leaf_id, *, allow_partial=False):
     by_id = {node.id: node for node in nodes}
     path, visited = [], set()

@@ -40,23 +40,46 @@ function CardField({ field, value, disabled, schema, onEdit, onSave }) {
   return <label className={'wbc-card-field' + (field.type === 'boolean' ? ' checkbox' : '')} htmlFor={id}><span>{field.label}{field.unit && <small> · {field.unit}</small>}</span>{control}</label>;
 }
 
-function CardActionList({ block, card, disabled, onEvent, values }) {
+function CardActionList({ block, card, disabled, onEvent, values, onOpenResult }) {
   const [expanded, setExpanded] = useState(!block.collapsed);
   const actions = new Map(card.spec.actions.map(action => [action.action_id, action]));
-  const rows = <ul className="wbc-card-action-list">{block.items.map(item => <li key={item.item_id}>
-    <div className="wbc-card-action-copy">{card.spec.home_kind === 'results' && <span className="wbc-home-file-icon" aria-hidden="true">{WBC_ICONS.fileText}</span>}<div><strong>{item.label}</strong>{item.detail && <small>{item.detail}</small>}</div></div>
-    <div className="wbc-card-row-actions">{item.action_ids.map(id => { const action = actions.get(id); return action && <button key={id} type="button" disabled={disabled} onClick={() => onEvent(action.kind, values, action)}>{action.label}</button>; })}</div>
-  </li>)}</ul>;
+  const results = card.spec.home_kind === 'results';
+  const rows = <ul className="wbc-card-action-list">{block.items.map(item => {
+    const rowActions = item.action_ids.map(id => actions.get(id)).filter(Boolean);
+    const isPreview = action => results && action.kind === 'submit' && !action.fields?.length
+      && (action.result_target || /^(?:打开|查看|预览|open\b|view\b|preview\b)/i.test(action.label.trim()));
+    const openAction = rowActions.find(isPreview);
+    const remaining = rowActions.filter(action => action !== openAction);
+    function activate(action) {
+      if (onOpenResult && isPreview(action)) {
+        onOpenResult({ label: item.label, action, sessionId: card.origin.session_id });
+      } else onEvent(action.kind, values, action);
+    }
+    return <li key={item.item_id}>
+      <div className="wbc-card-action-copy">
+        {results && <span className="wbc-home-file-icon" aria-hidden="true">{WBC_ICONS.fileText}</span>}
+        <div>{openAction
+          ? <button className="wbc-result-file-link" type="button" disabled={disabled && !onOpenResult} title={openAction.label}
+              onClick={() => activate(openAction)}>{item.label}<span aria-hidden="true"> ↗</span></button>
+          : <strong>{item.label}</strong>}
+          {item.detail && <small>{item.detail}</small>}
+        </div>
+      </div>
+      {remaining.length > 0 && <div className="wbc-card-row-actions">{remaining.map(action =>
+        <button key={action.action_id} type="button" disabled={disabled && !(onOpenResult && isPreview(action))} onClick={() => activate(action)}>{action.label}</button>
+      )}</div>}
+    </li>;
+  })}</ul>;
   return <div>{block.collapsed ? <><button className="wb-btn wbc-card-list-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}><strong>{block.title || '事项'}</strong><span className="wbc-card-list-toggle-end"><span>{block.items.length} 项</span><span className="wbc-card-disclosure-icon" aria-hidden="true">{WBC_ICONS.chevronDown}</span></span></button>{expanded && (block.items.length ? rows : <p className="wbc-card-description">暂无事项</p>)}</> : block.items.length ? rows : <p className="wbc-card-description">暂无事项</p>}</div>;
 }
 
-export function CardBlock({ block, card, values, disabled, snapshot, onEdit, onChange, onEvent }) {
+export function CardBlock({ block, card, values, disabled, snapshot, onEdit, onChange, onEvent, onOpenResult }) {
   const selected = block.selection && values[block.selection.field_id];
   const selectedIds = Array.isArray(selected) ? selected : [selected];
   switch (block.type) {
     case 'weather':
     case 'weather_observation': return <CardWeather block={block} />;
-    case 'action_list': return <CardActionList block={block} card={card} values={values} disabled={disabled} onEvent={onEvent} />;
+    case 'action_list': return <CardActionList onOpenResult={onOpenResult} block={block} card={card} values={values} disabled={disabled} onEvent={onEvent} />;
     case 'text': return <div className="markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(block.text) }} />;
     case 'metrics': return <div className="wbc-card-metrics">{block.items.map((item, i) => <div key={i}><span>{item.label}</span><strong>{asText(item.value)} <small>{item.unit}</small></strong>{item.source && <small>{item.source}</small>}</div>)}</div>;
     case 'fields': return <dl className="wbc-card-fields">{block.items.map((item, i) => <React.Fragment key={i}><dt>{item.label}</dt><dd>{item.value}</dd></React.Fragment>)}</dl>;
@@ -326,7 +349,7 @@ function ScheduleReceipt({ schedule }) {
   </article>;
 }
 
-export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reservePreview = false, initialCard = null, displayTime = new Date(), managedRefresh = false, homeDisclosure, inProse = false }) {
+export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reservePreview = false, initialCard = null, displayTime = new Date(), managedRefresh = false, homeDisclosure, onOpenResult, inProse = false }) {
   const { t } = useWorkbenchI18n();
   const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard, managedRefresh, chatId);
   const localDisclosure = useState(null);
@@ -345,7 +368,7 @@ export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reserv
   const renderBlock = (block, inPanel = false) => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
     {block.title && !inPanel && !(block.type === 'action_list' && block.collapsed) && !(isHome && block.type === 'timeline') && <h4>{block.title}</h4>}
     {block.description && <p className="wbc-card-description">{block.description}</p>}
-    <CardBlock block={inPanel && block.collapsed ? { ...block, collapsed: false } : block} card={card} values={values} disabled={(block.type === 'embed' && busy && pendingEvent?.kind === 'change' ? card.status !== 'active' : disabled) || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => {
+    <CardBlock onOpenResult={onOpenResult} block={inPanel && block.collapsed ? { ...block, collapsed: false } : block} card={card} values={values} disabled={(block.type === 'embed' && busy && pendingEvent?.kind === 'change' ? card.status !== 'active' : disabled) || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => {
       if (kind === 'change') {
         for (const [key, value] of Object.entries(next)) editDraft(key, value);
       } else send(kind, { ...local.current, ...next }, action);

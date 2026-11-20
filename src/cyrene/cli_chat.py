@@ -2385,7 +2385,7 @@ class InteractiveChat:
             "search_mode": ("搜索模式", "Search mode"),
             "search_external_url": ("外部搜索地址", "External search URL"),
             "spawn_policy": ("子任务策略", "Subtask policy"),
-            "heartbeat_interval": ("心跳间隔", "Heartbeat interval"),
+            "agent_proactive": ("助理主动跟进", "Assistant follow-up"),
             "mode": ("权限模式", "Permission mode"),
             "language": ("界面语言", "Interface language"),
             "color": ("彩色显示", "Color output"),

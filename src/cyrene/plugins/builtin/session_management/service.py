@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .host import KIND, OWNER
 from .store import Store
+from . import followup
 from .organization import organize_task
 from .inspection import content_page, inspection_view
 
@@ -399,6 +400,7 @@ class SessionManagementService:
                     continue
                 await self._deliver_message(row)
         await self.notify_tasks()
+        await followup.deliver_due(self)
 
     async def _deliver_message(self, row):
         try:
@@ -445,4 +447,4 @@ class SessionManagementService:
                 if pending:
                     await asyncio.sleep(1)
                 else:
-                    await wait_for_database_change(changed)
+                    await wait_for_database_change(changed, timeout=followup.deadline(self.store))

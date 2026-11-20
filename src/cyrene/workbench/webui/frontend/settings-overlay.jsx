@@ -1,3 +1,6 @@
+import { replyStyleChanges } from "./features/settings/reply-style.jsx"
+import { SettingsBreadcrumb } from "./features/settings/breadcrumb.jsx"
+import { agentSettingsPayload } from "./features/settings/agent-limits.jsx"
 import { SettingsNavigation } from "./features/settings/navigation.jsx"
 import { useWorkbenchI18n } from "./workbench-i18n.jsx"
 import { DoctorPanel } from "./features/doctor/doctor.jsx"
@@ -47,6 +50,8 @@ var SETTINGS_TAB_GROUPS = [
   { labelKey: "settings.page.maintenance", icon: "database", ids: ["data", "usage", "budget", "doctor", "about"] },
 ];
 
+const settingsTabOrder = ["profile", ...SETTINGS_TAB_GROUPS.flatMap(group => group.ids)];
+
 var TABS_BY_ID = TABS.reduce(function (acc, item) {
   acc[item.id] = item;
   return acc;
@@ -58,7 +63,7 @@ var SETTINGS_TAB_MODULES = {
   maps: ["map"],
   models: ["model"],
   media: ["media"],
-  agents: ["soul", "proactive", "skills", "subagent"],
+  agents: ["response_style", "proactive", "soul", "skills", "subagent"],
   voice: ["voice"],
   channels: ["channels"],
   remote: ["remote"],
@@ -82,34 +87,6 @@ var LEGACY_SETTINGS_ANCHORS = {
 };
 
 // ── Settings Page ──
-function agentSettingsPayload(config, agentProactive, pluginModules) {
-  var modules = Array.isArray(pluginModules) ? pluginModules : [];
-  var payload = {};
-  if (modules.indexOf("subagent") >= 0) Object.assign(payload, {
-    spawn_policy: config.spawn_policy || "conservative",
-    subagent_execution_max_tool_calls: Number(config.subagent_execution_max_tool_calls) || 200,
-    subagent_execution_max_wall_seconds: Number(config.subagent_execution_max_wall_seconds) || 1800,
-    subagent_execution_checkpoint_calls: Number(config.subagent_execution_checkpoint_calls) || 20,
-    subagent_execution_max_cost_usd: Number(config.subagent_execution_max_cost_usd == null ? 5 : config.subagent_execution_max_cost_usd),
-    subagent_execution_max_context_tokens: Number(config.subagent_execution_max_context_tokens == null ? 0 : config.subagent_execution_max_context_tokens),
-    subagent_discussion_max_rounds: Number(config.subagent_discussion_max_rounds) || 5,
-    subagent_discussion_max_messages_per_agent: Number(config.subagent_discussion_max_messages_per_agent) || 4,
-    subagent_discussion_max_total_messages: Number(config.subagent_discussion_max_total_messages) || 20,
-    subagent_discussion_max_message_chars: Number(config.subagent_discussion_max_message_chars) || 2000,
-    subagent_discussion_max_wall_seconds: Number(config.subagent_discussion_max_wall_seconds) || 600,
-    subagent_discussion_max_tool_calls: Number(config.subagent_discussion_max_tool_calls) || 50,
-    subagent_discussion_no_new_info_rounds: Number(config.subagent_discussion_no_new_info_rounds) || 2,
-  });
-  if (modules.indexOf("proactive") >= 0) Object.assign(payload, {
-    heartbeat_interval: Number(config.heartbeat_interval) || 1800,
-    agent_proactive: agentProactive,
-  });
-  if (modules.indexOf("skills") >= 0) {
-    payload.background_skill_learning = config.background_skill_learning !== false;
-  }
-  return payload;
-}
-
 function SettingsPage({
   collapsed,
   collapseControl,
@@ -141,13 +118,20 @@ function SettingsPage({
   function navigate(next, anchor = "", connection = "") {
     if (next === "model-usage" && !anchor) anchor = "setting-model-primary-route";
     const indexed = anchor && workbenchServices.settingsIndex().items.find(item => item.id === anchor);
-    setTab(normalizeSettingsTab(indexed?.tab || next));
+    selectTab(normalizeSettingsTab(indexed?.tab || next));
     setNavigation(previous => ({ anchor, connection, revision: previous.revision + 1 }));
   }
   var [tab, setTab] = useStateSt(normalizeSettingsTab(initialTab));
 
+  const tabDirection = useRefSt("forward");
+  function selectTab(next) {
+    if (next === tab) return;
+    tabDirection.current = settingsTabOrder.indexOf(next) < settingsTabOrder.indexOf(tab) ? "back" : "forward";
+    setTab(next);
+  }
+
   useEffectSt(function () {
-    if (!settingsTabAvailable(tab)) setTab("general");
+    if (!settingsTabAvailable(tab)) selectTab("general");
   }, [tab, pluginModules.join("|")]);
 
   // Warm the comparatively expensive storage scan as soon as Settings is
@@ -224,7 +208,7 @@ function SettingsPage({
     model: "—", base_url: "—", assistant_name: "—",
     base_dir: "—", data_dir: "—", soul_path: "—",
     workspace_dir: "—", soul_content: "", spawn_policy: "conservative",
-    heartbeat_interval: 1800, background_skill_learning: true,
+    background_skill_learning: true,
     subagent_execution_max_tool_calls: 200,
     subagent_execution_max_wall_seconds: 1800,
     subagent_execution_checkpoint_calls: 20,
@@ -243,7 +227,6 @@ function SettingsPage({
   var [configLoading, setConfigLoading] = useStateSt(true);
   var [soulDraft, setSoulDraft] = useStateSt("");
   var [soulStatus, setSoulStatus] = useStateSt("");
-  var [agentProactive, setAgentProactive] = useStateSt(true);
 
   // ── Channels state ──
   var [telegramToken, setTelegramToken] = useStateSt("");
@@ -306,7 +289,7 @@ function SettingsPage({
       if (recordedMs > 15000) {
         throw new Error(t("settings.voiceReferenceTooLong"));
       }
-      return wbcTranscribeVoiceBlob(blob).then(function (transcript) {
+      return wbcTranscribeVoiceBlob(blob, {reference:true}).then(function (transcript) {
         if (!voiceReferenceMountedRef.current || session !== voiceReferenceSessionRef.current) return;
         if (transcript === false) throw new Error(t("workbenchChat.noRecognizedSpeech"));
         setVoiceReferenceFile(blob);
@@ -326,7 +309,7 @@ function SettingsPage({
   }
 
   function startVoiceReferenceRecording() {
-    if (!voiceStatus.asr_ready || voiceBusy || voiceReferencePhase !== "idle" && voiceReferencePhase !== "ready") return;
+    if (!voiceStatus.local_asr_ready || voiceBusy || voiceReferencePhase !== "idle" && voiceReferencePhase !== "ready") return;
     setVoiceReferenceFile(null);
     setVoiceReferenceText("");
     setVoiceReferenceElapsed(0);
@@ -475,6 +458,24 @@ function SettingsPage({
     try { localStorage.setItem("cyrene-desktop-notifications", desktopNotifications ? "1" : "0"); } catch (e) {}
   }, [desktopNotifications]);
 
+  const savedReplyStyle = useRefSt({});
+  useEffectSt(() => {
+    function sync(event) {
+      const changes = event.detail;
+      const previous = savedReplyStyle.current;
+      savedReplyStyle.current = { ...previous, ...changes };
+      setConfig(draft => {
+        const next = { ...draft };
+        for (const key of Object.keys(changes)) {
+          if (draft[key] === previous[key]) next[key] = changes[key];
+        }
+        return next;
+      });
+    }
+    window.addEventListener("cyrene:reply-style-saved", sync);
+    return () => window.removeEventListener("cyrene:reply-style-saved", sync);
+  }, []);
+
   // Load settings
   useEffectSt(function () {
     document.documentElement.dataset.density = "cozy";
@@ -485,12 +486,12 @@ function SettingsPage({
     setConfigLoading(true);
     settingsFetch("/api/settings/config").then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
       .then(function (p) {
+        savedReplyStyle.current = p;
         setConfig(p);
         setSoulDraft(p.soul_content || "");
         if (p.notify_telegram !== undefined) setNotifyTelegram(p.notify_telegram);
         if (p.notify_wechat !== undefined) setNotifyWechat(p.notify_wechat);
         if (p.redact_secrets !== undefined) setRedactSecrets(!!p.redact_secrets);
-        if (p.agent_proactive !== undefined) setAgentProactive(p.agent_proactive);
         setConfigLoading(false);
       }).catch(function () { setConfigLoading(false); });
 
@@ -526,7 +527,7 @@ function SettingsPage({
   useEffectSt(function () {
     if (pluginModules.indexOf("voice") < 0) return;
     refreshVoiceStatus();
-  }, [pluginModules.indexOf("voice") >= 0]);
+  }, [pluginModules.indexOf("voice") >= 0, tab]);
 
   useEffectSt(function () {
     var hasChannels = pluginModules.indexOf("channels") >= 0;
@@ -569,9 +570,11 @@ function SettingsPage({
   }
 
   function saveAgents() {
+    const changes = pluginModules.includes("response_style") ? replyStyleChanges(config, savedReplyStyle.current) : {};
     settingsFetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(agentSettingsPayload(config, agentProactive, pluginModules)),
+      body: JSON.stringify({ ...agentSettingsPayload(config, pluginModules), ...changes }),
     }).then(function () {
+      if (Object.keys(changes).length) window.dispatchEvent(new CustomEvent("cyrene:reply-style-saved", { detail: changes }));
       showSettingsToast(t("settings.saved"), "success");
     }).catch(function (error) {
       showSettingsToast(t("settings.error") + ": " + (error.message || ""), "error");
@@ -585,13 +588,13 @@ function SettingsPage({
 
   function refreshVoiceStatus() {
     return settingsFetch("/api/voice/status").then(readSettingsResponse).then(function (payload) {
-      setVoiceStatus(payload);
+      publishVoiceStatus(payload);
       setVoiceReferenceText(payload.reference_text || "");
       return payload;
     }).catch(function () {});
   }
 
-  function saveVoiceBooleanSetting(settingKey, nextEnabled) {
+  function saveVoiceSetting(settingKey, nextEnabled) {
     var previous = voiceStatus;
     publishVoiceStatus({ ...voiceStatus, [settingKey]: nextEnabled });
     setVoiceBusy("settings");
@@ -738,12 +741,14 @@ function SettingsPage({
           };
         },
         actions: [{ action_id: "open", kind: "invoke", risk: "R1", gesture_aliases: ["press", "keyboard"] }],
-        handlers: { open: function () { setTab(item.id); } },
+        handlers: { open: function () { selectTab(item.id); } },
       });
     });
     return function () { unregister.forEach(function (remove) { remove(); }); };
   }, [tab, t, pluginModules.join("|")]);
 
+  const group = SETTINGS_TAB_GROUPS.find(item => item.ids.includes(tab));
+  const breadcrumb = group && <SettingsBreadcrumb parent={t(group.labelKey)} current={t(TABS_BY_ID[tab].labelKey)}/>;
   return React.createElement("div", {
     className: "settings-overlay",
   },
@@ -767,28 +772,29 @@ function SettingsPage({
           className: "settings-overlay-content main-region",
           key: tab,
           "data-settings-active-tab": tab,
+          "data-slide-direction": tabDirection.current,
           "data-cyrene-node-id": "settings_content_" + tab,
         },
-          tab !== "profile" && <div className="settings-crumb">{t(SETTINGS_TAB_GROUPS.find(group => group.ids.includes(tab))?.labelKey)}{tab === "about" && <span className="about-crumb-page" aria-current="page">{t("settings.about")}</span>}</div>,
+          tab !== "models" && breadcrumb,
           tab === "profile" && React.createElement("div", { className: "settings-profile-panel" },
             React.createElement(workbenchServices.profile().Page)
           ),
           ["general","network","maps"].includes(tab) && React.createElement(GeneralPanel, { section: tab, t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project, pluginModules }),
           tab === "search" && React.createElement(SearchPanel, { t: t }),
-          tab === "models" && React.createElement(workbenchServices.modelSettings().ServicesPage, { t: t, project: project, routeAnchor: normalizedScrollToId, initialConnectionId: navigation.connection, navigationRequest: navigation.revision }),
+          tab === "models" && React.createElement(workbenchServices.modelSettings().ServicesPage, { t: t, breadcrumb, project: project, routeAnchor: normalizedScrollToId, initialConnectionId: navigation.connection, navigationRequest: navigation.revision }),
 
           tab === "media" && React.createElement(MediaPanel, { t: t, available: settingsTabAvailable("media") }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
-          tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents, pluginModules }),
+          tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, saveAgents, pluginModules }),
           tab === "appearance" && React.createElement(AppearancePanel, { t, tweaks, setTweak, actualTheme, theme: initialTheme }),
-          tab === "voice" && CapabilitiesPanel({
+          tab === "voice" && React.createElement(CapabilitiesPanel, {
             t,
             voiceStatus, voiceReferenceText, setVoiceReferenceText,
             voiceReferenceFile, setVoiceReferenceFile, voiceReferencePhase, voiceReferenceElapsed,
             startVoiceReferenceRecording, finishVoiceReferenceRecording,
-            voiceBusy, voiceNotice,
-            saveVoiceBooleanSetting, saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
+            voiceBusy, voiceNotice, saveVoiceSetting, refreshVoiceStatus,
+            saveVoiceMode, saveVoicePreset, saveVoiceTtsModel, saveVoiceProfile, deleteVoiceProfile,
           }),
           tab === "plugin-registry" && React.createElement(PluginRegistryPanel, { t: t, pluginModules: pluginModules }),
           tab === "hooks" && React.createElement(HooksPanel, { t: t }),

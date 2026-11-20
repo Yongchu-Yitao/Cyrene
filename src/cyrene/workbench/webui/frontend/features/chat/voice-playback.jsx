@@ -161,7 +161,7 @@ function wbcSetVoiceQueueClearer(clearer) {
     // sentence. Completed short sentences remain one synthesis request.
     // Cloud TTS is request-rate limited, so batch more text per synthesis call
     // while keeping the low-latency local voice chunks unchanged.
-    var maxChars = currentStatus.tts_provider === "minimax" ? 240 : 60;
+    var maxChars = currentStatus.tts_provider === "local" ? 60 : 240;
     sentences.forEach(function (sentence) {
       var remaining = String(sentence || "").trim();
       while (remaining.length > maxChars) {

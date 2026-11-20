@@ -1,52 +1,89 @@
-import {
-  SectionTitle,
-  FieldRow,
-  Toggle,
-} from "./shared.jsx"
+import { ReplyStyleFields } from "./reply-style.jsx"
+import { executionLimits, discussionLimits } from "./agent-limits.jsx"
+import { FieldRow, Toggle } from "./shared.jsx"
 
-// ── Agents Panel ──
-function AgentsPanel(p) {
-  var { t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents } = p;
-  var modules = Array.isArray(p.pluginModules) ? p.pluginModules : [];
-  var hasSoul = modules.indexOf("soul") >= 0;
-  var hasSubagent = modules.indexOf("subagent") >= 0;
-  var hasProactive = modules.indexOf("proactive") >= 0;
-  var hasSkills = modules.indexOf("skills") >= 0;
+function AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft,
+  soulStatus, saveSoul, saveAgents, pluginModules = [] }) {
+  const hasReplyStyle = pluginModules.includes("response_style");
+  const hasProactive = pluginModules.includes("proactive");
+  const hasSoul = pluginModules.includes("soul");
+  const hasSoulSwitch = hasSoul && typeof config.soul_active === "boolean";
+  const hasSubagent = pluginModules.includes("subagent");
+  const hasSkills = pluginModules.includes("skills");
+  function change(key, value) {
+    setConfig(previous => ({ ...previous, [key]: value }));
+  }
 
-  return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.page.agents")),
+  function limitRows(fields) {
+    return fields.map(({ key, label, min, max, step = 1, defaultValue = "" }) => {
+      const hintId = key + "-hint";
+      return FieldRow(<label htmlFor={key}>{t(label)}</label>,
+        <span id={hintId}>{t(label + "Hint")}</span>,
+        <input className="wb-input agent-limit" id={key} type="number" required
+          aria-describedby={hintId} min={min} max={max} step={step} value={config[key] ?? defaultValue}
+          onChange={event => change(key, event.target.value)} />,
+        key, "setting-" + key);
+    });
+  }
 
-    // SOUL.md
-    hasSoul && React.createElement("div", { className: "wb-field wb-field-stack wb-field-soul", id: "setting-soul" },
-      React.createElement("div", { className: "wb-label" }, t("settings.soulMd"), React.createElement("small", null, t("settings.soulMdHint"))),
-      React.createElement("textarea", { className: "wb-textarea mono wb-textarea-soul", value: soulDraft, onChange: function (e) { setSoulDraft(e.target.value); } }),
-      React.createElement("div", { className: "wb-inline-row wb-inline-row-start", style: { marginTop: 8 } },
-        React.createElement("button", { className: "wb-btn primary", onClick: saveSoul }, t("settings.saveSoul")),
-        React.createElement("span", { className: "wb-hint" }, soulStatus || (configLoading ? t("settings.pathLoading") : config.soul_path)),
-      ),
-    ),
-
-    hasSubagent && FieldRow(t("settings.spawnPolicy"), t("settings.spawnPolicyHint"),
-      React.createElement("select", { className: "wb-select", value: config.spawn_policy || "conservative", onChange: function (e) { setConfig({ ...config, spawn_policy: e.target.value }); } },
-        React.createElement("option", { value: "aggressive" }, t("settings.aggressive")),
-        React.createElement("option", { value: "conservative" }, t("settings.conservative")),
-        React.createElement("option", { value: "off" }, t("settings.off")),
-      ),
-      undefined, "setting-spawn-policy",
-    ),
-    hasProactive && FieldRow(t("settings.agentProactive"), t("settings.agentProactiveHint"), Toggle(agentProactive, function () { setAgentProactive(!agentProactive); }),
-      undefined, "setting-agent-proactive"),
-    hasSkills && FieldRow(t("settings.backgroundSkillLearning"), t("settings.backgroundSkillLearningHint"), Toggle(config.background_skill_learning !== false, function () {
-      setConfig({ ...config, background_skill_learning: config.background_skill_learning === false });
-    }), undefined, "setting-background-skill-learning"),
-    hasProactive && FieldRow(t("settings.heartbeatInterval"), t("settings.heartbeatIntervalHint"),
-      React.createElement("input", { className: "wb-input mono", type: "number", min: "60", step: "1", value: config.heartbeat_interval, onChange: function (e) { setConfig({ ...config, heartbeat_interval: e.target.value }); }, style: { maxWidth: 120 } }),
-      undefined, "setting-heartbeat",
-    ),
-    (hasSubagent || hasProactive || hasSkills) && React.createElement("div", { className: "wb-save-actions" },
-      React.createElement("button", { className: "wb-btn primary", onClick: saveAgents }, t("settings.saveApply")),
-    ),
-  );
+  return <form className="settings-panel agent-behavior" onSubmit={event => {
+    event.preventDefault();
+    saveAgents();
+  }}>
+    {hasSoul && <section>
+      <h2 className="settings-heading">{t("settings.soulMd")}</h2>
+      {hasSoulSwitch && FieldRow(t("settings.soulDefault"), t("settings.soulDefaultHint"),
+        Toggle(config.soul_active, () => change("soul_active", !config.soul_active),
+          configLoading, t("settings.soulDefault")), undefined, "setting-soul-default")}
+      <details className="agent-persona-editor" id="setting-soul">
+        <summary className="wb-label">{t("settings.editSoul")}<small>{t("settings.soulMdHint")}</small></summary>
+        <textarea className="wb-textarea mono wb-textarea-soul" aria-label={t("settings.editSoul")}
+          value={soulDraft} onChange={event => setSoulDraft(event.target.value)} />
+        <div className="wb-inline-row wb-inline-row-start">
+          <button className="wb-btn primary" type="button" onClick={saveSoul}>{t("settings.saveSoul")}</button>
+          <span className="wb-hint">{soulStatus || (configLoading ? t("settings.pathLoading") : config.soul_path)}</span>
+        </div>
+      </details>
+    </section>}
+    {hasReplyStyle && <section>
+      <h2 className="settings-heading">{t("settings.replyStyle")}</h2>
+      <ReplyStyleFields config={config} change={change} t={t} disabled={configLoading}/>
+    </section>}
+    {hasSubagent && <section>
+      <h2 className="settings-heading">{t("settings.executionLimits")}</h2>
+      {FieldRow(t("settings.spawnPolicy"), t("settings.spawnPolicyHint"),
+        <select className="wb-select" aria-label={t("settings.spawnPolicy")} value={config.spawn_policy || "conservative"}
+          onChange={event => change("spawn_policy", event.target.value)}>
+          <option value="aggressive">{t("settings.aggressive")}</option>
+          <option value="conservative">{t("settings.conservative")}</option>
+          <option value="off">{t("settings.off")}</option>
+        </select>, undefined, "setting-spawn-policy")}
+      {limitRows(executionLimits)}
+    </section>}
+    {hasSubagent && <section>
+      <h2 className="settings-heading">{t("settings.discussionLimits")}</h2>
+      {limitRows(discussionLimits)}
+    </section>}
+    {(hasProactive || hasSkills) && <section>
+      <h2 className="settings-heading">{t("settings.backgroundActivity")}</h2>
+      {hasProactive && FieldRow(t("settings.proactiveWork"), t("settings.proactiveWorkHint"),
+        Toggle(config.agent_proactive !== false, () => change("agent_proactive", config.agent_proactive === false),
+          configLoading, t("settings.proactiveWork")), undefined, "setting-assistant-proactive")}
+      {hasProactive && config.agent_proactive !== false && limitRows([{
+        key: "agent_proactive_daily_frequency", label: "settings.proactiveFrequency",
+        min: 0.09, max: 64, step: "any", defaultValue: 1,
+      }])}
+      {hasSkills && FieldRow(t("settings.backgroundSkillLearning"), t("settings.backgroundSkillLearningHint"),
+        Toggle(config.background_skill_learning !== false,
+          () => change("background_skill_learning", config.background_skill_learning === false),
+          configLoading, t("settings.backgroundSkillLearning")), undefined, "setting-background-skill-learning")}
+    </section>}
+    {(hasReplyStyle || hasProactive || hasSoulSwitch || hasSubagent || hasSkills) && <div className="wb-save-actions">
+      <button className="wb-btn primary" type="submit" disabled={configLoading || config.revision == null}>
+        {t("settings.saveApply")}
+      </button>
+    </div>}
+  </form>;
 }
 
-export { AgentsPanel };
+export default AgentsPanel;
