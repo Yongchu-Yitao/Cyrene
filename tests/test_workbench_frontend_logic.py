@@ -1980,7 +1980,7 @@ def test_project_text_files_use_codemirror_with_live_markdown_and_conflict_contr
     assert "root.CyreneCodeMirror = Object.freeze({" in editor
     assert "Editor: Editor," in editor
     assert 'key: "Mod-s"' in editor
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.2">' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.3">' in index
     assert 'import "../code/editor.jsx"' in (
         root / "src/cyrene/workbench/webui/frontend/entry/app.jsx"
     ).read_text(encoding="utf-8")
@@ -5120,7 +5120,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in workbench_i18n_source()
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.2"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.3"></script>' in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -8342,7 +8342,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.9.2.2" in index
+    assert "workbench.css?v=0.9.2.3" in index
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
@@ -8362,7 +8362,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.2"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.3"></script>' in index
 
 
 def test_desktop_uses_cross_platform_native_directory_picker():
@@ -8444,13 +8444,16 @@ def test_backup_actions_use_native_file_pickers_and_comfortable_density_only(
     assert "extensions: ['zip']" in main
     assert "ipcRenderer.invoke('dialog:pick-backup-save-path'" in preload
     assert "ipcRenderer.invoke('dialog:pick-backup-file'" in preload
-    assert "await bridge.pickBackupSavePath" in data_panel
-    assert "await bridge.pickBackupFile" in data_panel
-    assert 'settingsFetch("/api/backup/export"' in data_panel
-    assert 'settingsFetch("/api/backup/restore"' in data_panel
-    assert 'JSON.stringify({ path: selection.path })' in data_panel
+    actions = frontend_module_source("features/settings/backup-actions.jsx")
+    assert "await bridge.pickBackupSavePath" in actions
+    assert "await bridge.pickBackupFile" in actions
+    assert 'settingsFetch("/api/backup/export"' in actions
+    assert 'settingsFetch("/api/backup/restore"' in actions
+    assert 'JSON.stringify({ path: selection.path })' in actions
     assert 't("settings.backupRestoreBtn")' in data_panel
-    assert 't("settings.backupHint")' in data_panel
+    assert 't("settings.backupHint")' not in data_panel
+    assert 'runBackup("restoreBackup", b.path)' in data_panel
+    assert actions.index('t("settings.backupConfirmRestore")') < actions.index('settingsFetch("/api/backup/restore"')
     assert 'var [exportSids, setExportSids] = useStateSt([])' in settings
     assert 'settingsFetch("/api/workbench/chats")' not in settings
     assert "(dataState.sessions || []).filter" in data_panel
@@ -8806,7 +8809,7 @@ def test_workbench_tools_menu_combines_content_commands_and_long_workspace_paths
     assert 'className={"wbc-send"' in chat
     assert ".wbc-send span" not in styles
     assert "transform: none;" in styles
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.2"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.3"></script>' in index
 
 
 def test_workbench_api_json_times_out_when_body_stalls_after_headers():
@@ -8863,7 +8866,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert 'requestJson("/api/settings/model-config")' in source
     assert "store.setConfig(snapshot);" in source
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.2"></script>' in index
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.3"></script>' in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -10708,7 +10711,7 @@ def test_workbench_assistant_message_mounts_charts_and_contract_teaches_chart():
     assert ".wbc-chart-spec" in styles
     assert ":::chart line" in contract
     assert "y-binds" in contract
-    assert '<script type="module" src="compiled/app.js?v=0.9.2.2">' in index_html
+    assert '<script type="module" src="compiled/app.js?v=0.9.2.3">' in index_html
     entry_html = (root / "src/cyrene/workbench/webui/frontend/entry/app.jsx").read_text(encoding="utf-8")
     assert 'import "../shared/chart/spec.jsx"' in entry_html
     assert 'import "../shared/chart/mount.jsx"' in entry_html

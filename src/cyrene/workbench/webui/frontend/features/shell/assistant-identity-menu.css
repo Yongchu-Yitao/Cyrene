@@ -1,7 +1,8 @@
 .aim-original-grip {pointer-events:none!important;height:52px!important}
 .aim-original-grip .wbc-side-split-grip-bar-visual {visibility:hidden}
 .wbc-pane-card-grip:has(.aim-original-grip) {top:4px;height:52px}
-.aim-root {position:fixed;inset:0;z-index:3200;pointer-events:none;color:var(--wb-text);font:13px/1.4 var(--wb-font,var(--sans,system-ui));--aim-muted:var(--wb-muted,#717c88);--aim-soft:color-mix(in srgb,currentColor 5%,transparent);--aim-line:var(--wb-line-2,#d2dae2)}
+/* Keep the floating grip above chat content and below the topbar menus (200). */
+.aim-root {position:fixed;inset:0;z-index:190;pointer-events:none;color:var(--wb-text);font:13px/1.4 var(--wb-font,var(--sans,system-ui));--aim-muted:var(--wb-muted,#717c88);--aim-soft:color-mix(in srgb,currentColor 5%,transparent);--aim-line:var(--wb-line-2,#d2dae2)}
 .aim-root * {box-sizing:border-box}
 .aim-root button:where(:not(.wbc-chat-menu-action)),.aim-root textarea,.aim-root select {font:inherit;color:inherit}
 .aim-root button:where(:not(.wbc-chat-menu-action)) {cursor:pointer;border:0;background:transparent}

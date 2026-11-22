@@ -2,6 +2,18 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.3] - 2026-11-22
+
+### Features and interface updates
+
+- Improve weather refreshes on the assistant home screen. Before preparing an update, look up current information for the location saved in the weather card or its weather-unavailable message. Follow the configured search provider order and try subsequent providers when the preferred service is unavailable. If the supplied evidence lacks a valid current observation, the assistant searches local weather again and checks the location, source, and observation time without treating the search time as the observation time. Missing evidence produces a short local weather-unavailable message, retaining the location for later refreshes and restoring weather display when current information becomes available.
+- Open files from Recent Results more accurately in their original tasks. Full paths saved with a result can resolve to files under the original workspace, including path conventions from different operating systems. Distinguish files with the same name in different directories by their actual paths to reduce incorrect or missing matches. If the recorded conversation is missing or has no matching file, check the original task as well. Older results still resolve by card title or file name, and ambiguous matches explicitly direct you to the original task.
+- Refine loading and unavailable states in result previews. Show the result title and loading feedback while opening, and clear the previous content and error when switching results. Missing files, read failures, and ambiguous matches have a dedicated preview with a file icon, result name, specific explanation, and close button, keeping errors separate from regular content and allowing you to close the preview directly.
+- Reorganize Backup settings around Export backup, Restore from file, and Local backups. Local entries show their name, modification time, and size, with a direct restore action for each backup and an empty state when none exist. Before choosing an export destination, explain that backups include app configuration, sessions, attachments, built-in projects, and data from participating plugins, and that external project folders need separate backups.
+- Require confirmation before restoring from either the backup list or a local file. Show the selected file name and explain that restoration replaces corresponding current data, that sessions, attachments, or built-in projects added since the backup may be lost, and that Cyrene needs a restart afterward. Cancelling confirmation or file selection leaves restoration unstarted. Disable backup actions while an operation is in progress to reduce duplicate submissions. Continue showing results and failure details in notifications, and improve backup lists and long file names in narrow windows.
+- Fix incomplete model usage accounting for background home preparation. Preparation remains silent without inserting progress messages into the current conversation. Model usage that has already occurred remains recorded even if that home preparation attempt does not complete successfully.
+- Adjust the assistant's floating entry point so it remains above conversation content while staying below top bar menus, preventing it from covering an open menu.
+
 ## [0.9.2.2] - 2026-11-20
 
 ### Features and interface updates

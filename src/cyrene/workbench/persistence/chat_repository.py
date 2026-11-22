@@ -279,7 +279,8 @@ class ChatRepository:
         try:
             conn.execute('BEGIN')
             row = conn.execute(
-                "SELECT json_extract(payload_json, '$.generatedFiles') "
+                "SELECT json_extract(payload_json, '$.generatedFiles'), "
+                "json_extract(payload_json, '$.workspaceOverride') "
                 "FROM workbench_chats WHERE chat_id = ?", (chat_id,),
             ).fetchone()
             if row is None:
@@ -299,6 +300,8 @@ class ChatRepository:
             result = {'id': chat_id, 'messages': [json.loads(item[0]) for item in messages]}
             if row[0] is not None:
                 result['generatedFiles'] = json.loads(row[0])
+            if row[1]:
+                result['workspaceOverride'] = row[1]
             return result
         finally:
             conn.close()

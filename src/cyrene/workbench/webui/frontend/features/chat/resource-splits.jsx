@@ -8,7 +8,7 @@ import { wbcProjectFileResource } from "./rail.jsx"
 import { wbcCanOpenExternally, wbcChatUsedMap, wbcDownloadLink, wbcStartFileDrag } from "./file-resources.jsx"
 import { WbcMapTab, WbcViewerTab } from "./viewer.jsx"
 
-function wbcChatArtifactFiles(chat) {
+function wbcChatArtifactFiles(chat, { preservePaths = false } = {}) {
   var files = [];
   var seen = new Set();
   var seenAgentNames = new Set();
@@ -18,7 +18,7 @@ function wbcChatArtifactFiles(chat) {
     var pathKey = String(file.path || "").trim().replace(/\\/g, "/");
     var key = pathKey || String(file.url || file.id || file.name || "").trim();
     var agentName = role === "assistant" ? String(file.name || "").trim().toLowerCase() : "";
-    if (agentOriginated && agentName && seenAgentNames.has(agentName)) return;
+    if (!preservePaths && agentOriginated && agentName && seenAgentNames.has(agentName)) return;
     if (!key || seen.has(key)) return;
     seen.add(key);
     if (agentName) seenAgentNames.add(agentName);

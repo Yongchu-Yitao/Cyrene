@@ -20,7 +20,7 @@ test('typed targets preserve the card owner and distinguish same-name files by p
   const files = ['old', 'new'].map(dir => ({ name: 'report.pdf', path: dir + '/report.pdf' }));
   const opened = await resolveHomeResult(typed({ file_path: 'new/report.pdf' }), assert.fail, async owner => {
     assert.equal(owner, 'task');
-    return files;
+    return { candidates: files };
   });
   assert.equal(opened.file, files[1]);
 });
@@ -28,6 +28,18 @@ test('typed targets preserve the card owner and distinguish same-name files by p
 test('legacy file intent opens its file and ambiguous names are reported', async () => {
   const file = { name: 'coffee-pourover.html', path: 'public/coffee-pourover.html' };
   const empty = async () => ({ cards: [] });
-  assert.equal((await resolveHomeResult(result, empty, async () => [file])).file, file);
-  await assert.rejects(resolveHomeResult(result, empty, async () => [file, { ...file, path: 'old/' + file.name }]), /多个文件/);
+  assert.equal((await resolveHomeResult(result, empty, async () => ({ candidates: [file] }))).file, file);
+  await assert.rejects(resolveHomeResult(result, empty, async () => ({ candidates: [file, { ...file, path: 'old/' + file.name }] })), /多个文件/);
+});
+
+test('absolute home links open the exact tracked path in the original task', async () => {
+  const file = { name: 'README.md', path: 'game/README.md' };
+  const action = { ...result.action, result_target: { file_path: '/work/game/README.md', session_id: 'assistant_global' } };
+  const files = async owner => ({
+    workspace: '/work',
+    candidates: owner === 'task' ? [file] : [{ name: 'README.md', path: 'other/README.md' }],
+  });
+  assert.equal((await resolveHomeResult({ ...result, action }, assert.fail, files)).file, file);
+  action.result_target.file_path = '/elsewhere/game/README.md';
+  await assert.rejects(resolveHomeResult({ ...result, action }, assert.fail, files), /找不到/);
 });

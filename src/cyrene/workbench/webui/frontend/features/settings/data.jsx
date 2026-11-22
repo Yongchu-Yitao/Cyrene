@@ -146,9 +146,10 @@ function SessionExportIcon() {
 }
 
 function DataPanel(p) {
-  var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSids, setExportSids, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
+  var { t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, exportSids, setExportSids, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate } = p;
 
   var [storage, setStorage] = useStateSt(dataPanelStorageCache);
+  var [backupBusy, setBackupBusy] = useStateSt(false);
   var [storageError, setStorageError] = useStateSt("");
 
   useEffectSt(function () {
@@ -245,48 +246,16 @@ function DataPanel(p) {
     }
   }
 
-  function backupDefaultName() {
-    var now = new Date();
-    function pad(value) { return String(value).padStart(2, "0"); }
-    return "cyrene_backup_" + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "_" + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds()) + ".zip";
-  }
-
-  async function createBackup() {
-    var bridge = window.cyrene;
-    if (!bridge || typeof bridge.pickBackupSavePath !== "function") {
-      showSettingsToast(t("settings.backupPickerUnavailable"), "error");
-      return;
-    }
+  async function runBackup(action, path) {
+    if (backupBusy) return;
+    setBackupBusy(true);
     try {
-      var selection = await bridge.pickBackupSavePath({ title: t("settings.backupChooseSaveTitle"), defaultName: backupDefaultName() });
-      if (!selection || selection.cancelled || !selection.path) return;
-      setBackupMsg("");
-      showSettingsToast(t("settings.backupExporting"), "info");
-      var response = await settingsFetch("/api/backup/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
-      var result = await response.json();
-      if (!result.ok) throw new Error(result.error || t("settings.failed"));
-      showSettingsToast(t("settings.backupExported", { n: result.entries.length, size: formatBytes(result.size) }), "success");
-      loadBackups();
-    } catch (e) {
-      showSettingsToast(t("settings.failed") + ": " + e.message, "error");
-    }
-  }
-
-  async function restoreBackup() {
-    var bridge = window.cyrene;
-    if (!bridge || typeof bridge.pickBackupFile !== "function") {
-      showSettingsToast(t("settings.backupPickerUnavailable"), "error");
-      return;
-    }
-    try {
-      var selection = await bridge.pickBackupFile({ title: t("settings.backupChooseFileTitle") });
-      if (!selection || selection.cancelled || !selection.path) return;
-      var response = await settingsFetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: selection.path }) });
-      var result = await response.json();
-      if (!result.ok) throw new Error(result.error || (result.errors || []).join(";") || t("settings.backupRestoreFailed"));
-      showSettingsToast(t("settings.backupRestored", { n: result.restored.length }) + " " + t("settings.backupRestartRequired"), "success");
-    } catch (e) {
-      showSettingsToast(t("settings.backupRestoreFailed") + ": " + e.message, "error");
+      var actions = await import("./backup-actions.jsx");
+      await actions[action](p, path);
+    } catch (error) {
+      showSettingsToast(t("settings.failed") + ": " + error.message, "error");
+    } finally {
+      setBackupBusy(false);
     }
   }
 
@@ -378,17 +347,20 @@ function DataPanel(p) {
     ), { id: "setting-paths" }),
 
     // Backup
-    React.cloneElement(SectionBlock(t("settings.backup"), t("settings.backupHint"),
-      React.createElement("div", { className: "wb-inline-row" },
-        React.createElement("button", { className: "wb-btn primary", onClick: createBackup }, t("settings.backupExportBtn")),
-        React.createElement("button", { className: "wb-btn", "data-cyrene-risk": "R3", onClick: restoreBackup }, t("settings.backupRestoreBtn")),
-      ),
-      backupList.map(function (b) {
-        return React.createElement("div", { className: "wb-backup-row", key: b.name },
-          React.createElement("span", { className: "wb-backup-name" }, b.name),
-          React.createElement("span", { className: "wb-backup-meta" }, formatBytes(b.size), " · ", formatDate(b.modified)),
-        );
-      }),
+    React.cloneElement(SectionBlock(t("settings.backup"),
+      <div className="wb-inline-row">
+        <button type="button" className="wb-btn primary" disabled={backupBusy} onClick={() => runBackup("createBackup")}>{t("settings.backupExportBtn")}…</button>
+        <button type="button" className="wb-btn" disabled={backupBusy} data-cyrene-risk="R3" onClick={() => runBackup("restoreBackup")}>{t("settings.backupFromFile")}</button>
+      </div>,
+      <div className="wb-export-session-toolbar"><b>{t("settings.backupLocal")}</b></div>,
+      <div className="wb-export-area">
+        {backupList.length ? backupList.map(b => FieldRow(
+          b.name,
+          formatDate(b.modified) + " · " + formatBytes(b.size),
+          <button type="button" className="wb-btn" disabled={backupBusy} data-cyrene-risk="R3" onClick={() => runBackup("restoreBackup", b.path)}>{t("settings.backupRestoreBtn")}…</button>,
+          b.name,
+        )) : <p className="wb-hint">{t("settings.backupNoBackups")}</p>}
+      </div>,
     ), { id: "setting-backup" }),
 
     // Session export

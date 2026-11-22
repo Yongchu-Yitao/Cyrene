@@ -37,6 +37,7 @@ def _register_resource_index(router, service):
             )
         return {"chat": {
             "id": chat_id,
+            "workspaceOverride": chat.get("workspaceOverride"),
             "messages": [
                 {"role": message.get("role"), "attachments": message["attachments"]}
                 for message in messages_in_chronological_order(chat["messages"])

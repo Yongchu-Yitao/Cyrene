@@ -5,10 +5,10 @@ import { WbcHoverMarquee } from "../chat/rail-model.jsx"
 import { WBC_ICONS, wbcSetResourceDrag, wbcFileDragPayload, wbcFormatTime } from "../../workbench-chat.jsx"
 
 // Use the same uploads, workspace changes and live deliverables as the chat panel.
-export function assistantTaskFiles(chat) {
+export function assistantTaskFiles(chat, options) {
   // Assistant tasks share a virtual project but may have distinct workspaces.
   // Keep the shared index while retaining session-scoped file URLs.
-  return wbcChatArtifactFiles({ ...chat, projectId: "" }).map(function (item) {
+  return wbcChatArtifactFiles({ ...chat, projectId: "" }, options).map(function (item) {
     return { ...item.file, source: item.file.source === "agent" ? "assistant-task" : item.file.source, name: item.file.name || String(item.file.path || "").split("/").pop() || "文件", output: item.role === "assistant" };
   });
 }

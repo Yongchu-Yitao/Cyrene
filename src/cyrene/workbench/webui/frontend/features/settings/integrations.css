@@ -1649,30 +1649,12 @@ html[data-theme] .settings-overlay .wb-wechat-status-row {
   }
 }
 
-/* Backup row */
-.wb-backup-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 10px;
-  border: 1px solid var(--wb-line);
-  border-radius: 7px;
-  margin-bottom: 6px;
+#setting-backup .wb-section-block-head {
+  flex-wrap: wrap;
 }
 
-.wb-backup-name {
-  flex: 1;
-  font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wb-backup-meta {
-  font-family: var(--mono, "IBM Plex Mono", ui-monospace, monospace);
-  font-size: calc(11px * var(--wb-ui-font-scale, 1));
-  color: var(--wb-muted);
+#setting-backup .wb-label {
+  overflow-wrap: anywhere;
 }
 
 /* Export area */

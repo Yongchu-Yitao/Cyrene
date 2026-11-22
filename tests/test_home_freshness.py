@@ -333,3 +333,35 @@ async def test_first_start_window_uses_startup_time_not_poll_time(home_rig, star
     result = await r.home.claim_display('assistant', {
         'timezone': 'Asia/Shanghai', 'client_id': 'second', 'started_at': r.clock[0]})
     assert result['slot'] is None
+
+
+@pytest.mark.asyncio
+async def test_home_weather_uses_configured_provider_order_and_handles_unavailable(monkeypatch):
+    from cyrene.plugins.builtin.cyrene_cards import home_weather
+    from cyrene.plugins.builtin.cyrene_content import search_backend
+    from cyrene.plugins.builtin.cyrene_content.search_service import WebSearchService
+    from cyrene.plugins.builtin.cyrene_content.search_settings import SearchRuntimeSettings
+
+    settings = SearchRuntimeSettings(True, ("brave", "simplexng"))
+    service = WebSearchService()
+    monkeypatch.setattr(home_weather, "application_plugin_service", {"web_search": service}.get)
+    monkeypatch.setattr(search_backend, "runtime_settings", lambda: settings)
+    calls = []
+
+    async def provider(name, query, **options):
+        assert "广州" in query
+        calls.append(name)
+        if name == "brave":
+            raise search_backend.SearchBackendUnavailable("unavailable")
+        return "广州 20°C, 09:00 local, station report"
+
+    monkeypatch.setattr(search_backend, "_run_search_provider", provider)
+    cards = [{"spec": {"home_kind": "overview", "blocks": [
+        {"type": "text", "block_id": "home_weather_status", "text": "广州 · 天气暂缺"}]}}]
+    result = await home_weather.weather_snapshot(cards)
+    assert calls == ["brave", "simplexng"]
+    assert result["location"] == "广州" and "20°C" in result["evidence"]
+    settings = SearchRuntimeSettings(False, ())
+    assert (await home_weather.weather_snapshot(cards))["status"] == "unavailable"
+    assert (await home_weather.weather_snapshot([]))["status"] == "unavailable"
+    assert calls == ["brave", "simplexng"]

@@ -35,7 +35,7 @@ async def test_resource_index_returns_only_public_attachments_and_tracked_files(
     tracked = {"path": "result.md", "source": "agent", "name": "result.md"}
     body = "TRANSCRIPT_BODY_MUST_NOT_BE_DECODED" * 10000
     repo.insert({
-        "id": "task", "generatedFiles": [tracked], "messages": [
+        "id": "task", "workspaceOverride": str(tmp_path), "generatedFiles": [tracked], "messages": [
             {"role": "assistant", "createdAt": "2026-11-11T12:00:00Z", "content": body,
              "trace": [{"result": body}], "attachments": [delivered]},
             {"role": "user", "createdAt": "2026-11-11T11:00:00Z", "content": body,
@@ -62,6 +62,7 @@ async def test_resource_index_returns_only_public_attachments_and_tracked_files(
     payload = await endpoint("task")
     chat = payload["chat"]
     assert chat["files"] == [tracked]
+    assert chat["workspaceOverride"] == str(tmp_path)
     assert {attachment["id"] for message in chat["messages"] for attachment in message["attachments"]} == {"upload", "out"}
     assert all(set(message) == {"role", "attachments"} for message in chat["messages"])
     assert await endpoint("task") == payload

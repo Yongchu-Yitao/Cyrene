@@ -165,7 +165,7 @@ class HomeCards:
                 reasons.append("new local day: reconcile today's completed items")
             weather_due = weather_expired(cards, now) and now - state.get("weather_checked", 0) >= 600
             if weather_due:
-                reasons.append("weather expired (60 minute validity): fetch a current observation")
+                reasons.append("weather expired (60 minute validity)")
             if not reasons:
                 with self.service.store.connect(write=True) as db:
                     self._save_state(db, owner, state)

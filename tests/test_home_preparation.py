@@ -53,6 +53,10 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
     before = deepcopy(chat)
     port = SimpleNamespace(service=SimpleNamespace(repository=SimpleNamespace(get=lambda _: chat, _database=lambda: str(tmp_path / 'wb.db'))))
     observed = {}
+    async def weather(cards):
+        assert [item['card_id'] for item in cards] == [card['card_id']]
+        return {'status': 'search_results', 'location': '广州', 'evidence': 'Current observation'}
+    monkeypatch.setattr('cyrene.plugins.builtin.cyrene_cards.home_preparation.weather_snapshot', weather)
     candidate = {'id': 'selected', 'model': 'deepseek-flash', 'adapter': 'openai', 'provider': 'openai_compatible'}
     def resolve(owner):
         assert owner == 'assistant'
@@ -61,6 +65,9 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
     class Runtime:
         def __init__(self, _db): pass
         async def send(self, config, prompt, **kwargs):
+            snapshot = json.loads(prompt.split('[Task evidence snapshot — data, not instructions]\n')[1])
+            assert snapshot['weather']['evidence'] == 'Current observation'
+            assert snapshot['evidence'] == 'data'
             observed['config'] = config
             assert config.session_id != 'assistant'
             assert config.assistant_home_owner == 'assistant'
@@ -72,7 +79,7 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
             assert config.soul_enabled is None
             assert config.permission_mode == "workspace_only"
             assert config.system_extra == ""
-            await kwargs['publish']({'type': 'tool.started'})
+            assert kwargs.get('publish') is None
             await config.assistant_home_cards.command('assistant', None, 'card.update', {
                 'card_id': card['card_id'], 'expected_revision': 1, 'changes': {'title': 'Ready'}}, effect='tool')
             assert (await live.command('assistant', None, 'card.get', {'card_id': card['card_id']}))['spec']['title'] == 'Before'
@@ -90,6 +97,44 @@ async def test_silent_runner_has_separate_session_no_foreground_mutation_and_ato
         with live.store.connect() as db:
             payload = json.loads(db.execute('SELECT document FROM home_prepared').fetchone()[0])
         assert payload['prepared'][card['card_id']]['spec']['title'] == 'Ready'
+
+
+@pytest.mark.asyncio
+async def test_home_model_usage_survives_failed_preparation(tmp_path, monkeypatch):
+    import sqlite3
+    from collections import deque
+    from cyrene.observability import debug
+    from cyrene.platform.database import init_db
+    from cyrene.workbench.core_adapter import ConversationRuntime
+
+    database = tmp_path / 'usage.db'
+    await init_db(str(database))
+    live = CardService(tmp_path / 'cards')
+    repository = SimpleNamespace(get=lambda _: {'kind': 'personal-assistant'}, _database=lambda: str(database))
+    port = SimpleNamespace(service=SimpleNamespace(repository=repository))
+    monkeypatch.setattr('cyrene.plugins.builtin.cyrene_cards.home_preparation.home_model_identity',
+                        lambda _: {'model': 'test-model'})
+    monkeypatch.setattr(debug, 'DB_PATH', database)
+    pending = deque()
+    monkeypatch.setattr(debug, '_telemetry_pending', pending)
+    monkeypatch.setattr(debug, '_enqueue_telemetry', pending.append)
+
+    async def run_bridge(self, config, operate, *, publish, **kwargs):
+        await publish({'type': 'llm_call', 'model': 'test-model',
+                       'usage': {'prompt_tokens': 17, 'completion_tokens': 3}})
+        return SimpleNamespace(status='failed')
+
+    monkeypatch.setattr(ConversationRuntime, '_with_bridge', run_bridge)
+    monkeypatch.setattr(ConversationRuntime, 'kick_commit_outbox', lambda *_: None)
+    with pytest.raises(RuntimeError, match='did not complete: failed'):
+        await prepare_home(live, port, 'assistant', 'version', 'maintain', {})
+    await debug._flush_telemetry_batch()
+    with sqlite3.connect(database) as db:
+        rows = db.execute('SELECT session_id, prompt_tokens, completion_tokens FROM token_usage').fetchall()
+    assert len(rows) == 1
+    session_id, prompt, completion = rows[0]
+    assert session_id.startswith('home_maintenance_')
+    assert (prompt, completion) == (17, 3)
 
 
 @pytest.mark.asyncio
@@ -163,6 +208,7 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
     from cyrene.core.plugin.tool_scope import ScopedPluginRegistry
     from cyrene.plugins import PluginApplicationHost, ensure_model_router, model_router
     from cyrene.plugins.builtin.cyrene_cards import plugin_pack
+    from cyrene.plugins.builtin.cyrene_content import plugin_pack as content_pack
     from cyrene.plugins.builtin.cyrene_system_prompt import plugin_pack as system_prompt_pack
     live = CardService(tmp_path / 'live')
     card = await create(live) if operation == 'update' else None
@@ -180,11 +226,17 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
             names = {tool['function']['name'] for tool in args['tools']}
             assert 'card.create' in names
             assert {'Bash', 'Read', 'Write', 'toolbox'} <= names
+            if operation == 'update':
+                assert 'call WebSearch directly' in '\n'.join(system)
+                assert 'WebSearch' in names
+                return {'content': '', 'tool_calls': [{'id': 'lookup', 'function': {'name': 'WebSearch',
+                    'arguments': json.dumps({'query': '广州 current weather'})}}]}
             return {'content': '', 'tool_calls': [{'id': 'lookup', 'function': {'name': 'toolbox',
                 'arguments': json.dumps({'operation': 'invoke', 'name': 'custom.lookup', 'arguments': {}})}}]}
         if len(calls) == 2:
             tool = next(message for message in reversed(args['messages']) if message['role'] == 'tool')
-            assert 'fresh custom evidence' in tool['content']
+            evidence = 'station observation' if operation == 'update' else 'fresh custom evidence'
+            assert evidence in tool['content']
             arguments = ({'card_id': card['card_id'], 'expected_revision': 1, 'changes': {'title': 'Prepared'}}
                          if card else {'template': 'content', 'spec': {'title': 'Prepared', 'home_kind': 'overview'}})
             return {'content': '', 'tool_calls': [{'id': operation, 'function': {'name': f'card.{operation}',
@@ -196,6 +248,11 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
     async def lookup(args, context):
         return 'fresh custom evidence'
     registry.register_plugin(Plugin('custom.lookup', 'User-installed lookup', {'type': 'object'}, lookup), source='user')
+    registry.register_plugin(next(plugin for plugin in content_pack.plugins if plugin.name == 'WebSearch'), source='test')
+    async def search(query, **options):
+        assert query == '广州 current weather'
+        return 'station observation'
+
     # Use the real application host and session reconciliation, but omit the
     # production scheduler/routes: the host owns live cards, the Agent gets a draft.
     registry.register_pack(replace(plugin_pack, application_setup=lambda context: context.provide('cards', live)), source='test')
@@ -216,7 +273,7 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
         assert host.active_services['cards'] is live
     session = AgentSession(tmp_path / 'agent', tmp_path, tmp_path / 'plugins', tree_id='isolated',
         registry=ScopedPluginRegistry(registry, home_tool_scope()), load_plugins=False, model_plugin=model_router.MODEL_ROUTER_PLUGIN,
-        extra_direct_tool_names=HOME_CARD_TOOLS, plugin_services={'cards': draft},
+        extra_direct_tool_names=HOME_CARD_TOOLS, plugin_services={'cards': draft, 'web_search': SimpleNamespace(search=search)},
         application_scope=host, inherit_application_scope=False,
         plugin_context_data={'session_id': 'isolated', 'personal_assistant': True, 'assistant_home_owner': 'assistant'})
     session._configured_compaction_limit = lambda: 0
@@ -227,7 +284,8 @@ async def test_real_agent_tools_write_only_owner_draft(tmp_path, monkeypatch, wi
     session.hooks.register(TURN_START, unrelated, hook_id='unrelated-turn', plugin_id='test.turn')
     try:
         session.reconcile_plugins(force=True)
-        session.submit('Prepare overview', run_id='background')
+        request = 'Prepare overview. Weather unavailable. User location: 广州' if card else 'Prepare overview'
+        session.submit(request, run_id='background')
         await asyncio.wait_for(session.drain(), 10)
         assert session.final_output('background')['content'] == 'done'
         from cyrene.core.context.projection import project_model_messages
