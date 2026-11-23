@@ -182,3 +182,12 @@ callbacks use the same four-attempt boundary and persist an exhaustion marker fo
 the controller to pick up; generic runtime retries do not multiply that budget.
 Queue pause is not execution stop. Snapshot admission receipts reconcile lost
 delivery replies, and remote paths never authorize controller file exports.
+
+Completion notifications have an independent, commit-woken consumer of the same
+durable plugin database. Neither remote snapshot refresh nor input delivery's
+command lock blocks this consumer. A dedicated notification lock serializes it
+with explicit notification drains; event IDs, owner versions and acknowledgement
+receipts retain replay protection. Deferred or failed delivery retries, and
+startup replays unacknowledged notices. Both consumers stop with the plugin.
+Old remote tasks continue to be tracked on their original devices without
+delaying notification of newly completed local or remote tasks.

@@ -52,6 +52,7 @@ class SessionManagementService:
         self.host.task_store = self.store
         self.loop = None
         self.lock = None
+        self.notification_lock = None
         self.worker = None
 
     def initialize_assistant(self):
@@ -82,6 +83,7 @@ class SessionManagementService:
     async def start(self):
         self.loop = asyncio.get_running_loop()
         self.lock = asyncio.Lock()
+        self.notification_lock = asyncio.Lock()
         self.worker = asyncio.create_task(self._worker(), name="session-management-delivery")
 
     async def stop(self):
@@ -379,7 +381,10 @@ class SessionManagementService:
             )
 
     async def notify_tasks(self):
-        async with self.lock:
+        # Remote input delivery can hold the command lock through network retries.
+        # Notifications only serialize with each other; host.notify checks owner
+        # versions and dispatches with the durable event ID for replay safety.
+        async with self.notification_lock:
             await self._notify_tasks()
 
     async def _notify_tasks(self):
@@ -463,6 +468,27 @@ class SessionManagementService:
                 self.store.update(row["id"], "queued", str(exc))
 
     async def _worker(self):
+        # Keep both consumers in the plugin's existing startup/shutdown lifetime.
+        # A slow remote refresh or input delivery must not hold up local notices.
+        async with asyncio.TaskGroup() as workers:
+            workers.create_task(self._notification_worker(), name="session-management-notifications")
+            workers.create_task(self._delivery_worker(), name="session-management-inputs")
+
+    async def _notification_worker(self):
+        with database_changes(self.store.path) as changed:
+            while True:
+                changed.clear()
+                pending = True
+                try:
+                    await self.notify_tasks()
+                    pending = bool(self.store.notifications())
+                except Exception:
+                    logger.exception("Managed session notification queue failed")
+                # Retry deferred notices (e.g. an owner awaiting a user answer),
+                # while commits wake newly completed work even during that wait.
+                await wait_for_database_change(changed, timeout=1 if pending else 60)
+
+    async def _delivery_worker(self):
         # Subscribe before replaying durable state: no enqueue can fall between
         # the empty check and sleep. Keep the original retry cadence when busy.
         with database_changes(self.store.path) as changed:
