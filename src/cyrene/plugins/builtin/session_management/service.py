@@ -38,6 +38,13 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def work_device(chat):
+    device = (chat or {}).get("workDevice") or {}
+    if not device.get("device_id") or device["device_id"] == "local":
+        return {"device_id": "local", "display_name": "当前设备（本机）"}
+    return dict(device)
+
+
 class SessionManagementService:
     def __init__(self, directory, host):
         self.store = Store(Path(directory) / "sessions.sqlite3")
@@ -173,6 +180,27 @@ class SessionManagementService:
         return await self._on_owner(perform)
 
     async def _command_existing(self, owner, target, operation, args, key, workspace):
+        if operation in {"session_send_message", "session_answer_question"}:
+            selected = work_device(self.host.chat(owner))
+            original = work_device(self.host.chat(target))
+            if selected["device_id"] != original["device_id"]:
+                return {
+                    "session_id": target,
+                    "status": "blocked",
+                    "reason": "work_device_mismatch",
+                    "selected_work_device": selected,
+                    "task_work_device": original,
+                    "update_queued": False,
+                    "recovery_action": "start_new_task_on_selected_device",
+                    "message": (
+                        f"当前选定的任务执行设备是「{selected.get('display_name') or selected['device_id']}」，"
+                        f"但这个旧子任务绑定在「{original.get('display_name') or original['device_id']}」。"
+                        "本次操作未执行、未入队。请使用 task_start 在当前选定设备上重新创建子任务，"
+                        "不要继续复用旧任务，也不要要求用户重新选择设备。"
+                        "可以读取旧任务的历史和结果作为背景，但必须使用当前设备上的工作区路径。"
+                        "旧任务及其已有队列未被停止或迁移；若仍在运行或状态未知，先核实以避免重复执行。"
+                    ),
+                }
         if operation == "session_organize":
             result = organize_task(self.store, self.host, owner, target, args)
         elif operation == "session_send_message":
@@ -230,6 +258,7 @@ class SessionManagementService:
     async def list(self, owner):
         async def perform():
             async with self.lock:
+                selected = work_device(self.host.chat(owner))
                 result = []
                 for record in self.store.sessions(owner):
                     try:
@@ -253,7 +282,8 @@ class SessionManagementService:
                             "presentation": self.store.presentation(record["id"]),
                             "title": chat.get("title", ""),
                             "workspace_path": chat.get("workspaceOverride", ""),
-                            "work_device": chat.get("workDevice") or {"device_id": "local"},
+                            "work_device": work_device(chat),
+                            "device_matches_selection": work_device(chat)["device_id"] == selected["device_id"],
                             "device_error": chat.get("workDeviceError", ""),
                             "status": status,
                             "pending_messages": self.store.pending_count(record["id"]),
@@ -263,7 +293,7 @@ class SessionManagementService:
                             "updated_at": chat.get("updatedAt", ""),
                         }
                     )
-                return {"sessions": result}
+                return {"sessions": result, "selected_work_device": selected}
 
         return await self._on_owner(perform)
 

@@ -83,6 +83,65 @@ async def create(service, owner="a", effect="create", **args):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("selected,original", [(None, "peer"), ("peer", None), ("peer-a", "peer-b")])
+@pytest.mark.parametrize("operation", ["session_send_message", "session_answer_question"])
+async def test_device_mismatch_rejects_before_side_effects_and_replays(tmp_path, selected, original, operation):
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    try:
+        target = (await create(service))["session_id"]
+        queued = await service.command("a", "session_send_message", {"session_id": target, "message": "previous"}, "previous", tmp_path)
+        service.store.pause(target)
+        host.states[target] = "running"
+        host.chats["a"]["workDevice"] = {"device_id": selected} if selected else None
+        host.chats[target]["workDevice"] = {"device_id": original} if original else None
+        args = {"session_id": target, "message": "new", "files": ["missing-file"],
+                "question_id": "q", "answer": "answer"}
+        result = await service.command("a", operation, args, "mismatch", tmp_path)
+        assert result["reason"] == "work_device_mismatch"
+        assert result["recovery_action"] == "start_new_task_on_selected_device"
+        assert result["update_queued"] is False
+        assert result["selected_work_device"]["device_id"] == (selected or "local")
+        assert result["task_work_device"]["device_id"] == (original or "local")
+        assert "task_start" in result["message"]
+        assert service.store.queued_ids(target) == [queued["message_id"]]
+        assert service.store.session(target)["paused"] == 1
+        assert host.states[target] == "running" and not host.deliveries
+        listing = await service.list("a")
+        assert listing["sessions"][0]["device_matches_selection"] is False
+        assert listing["selected_work_device"] == result["selected_work_device"]
+        assert (await service.blocks("a", {"session_id": target}))["blocks"]
+        await service.command("a", "session_stop", {"session_id": target}, "stop", tmp_path)
+        host.chats["a"]["workDevice"] = host.chats[target]["workDevice"]
+        assert await service.command("a", operation, args, "mismatch", tmp_path) == result
+        accepted = await service.command("a", "session_send_message", {"session_id": target, "message": "new call"}, "new-call", tmp_path)
+        assert accepted["status"] == "queued"
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device", [None, "local", "peer"])
+async def test_matching_device_ignores_names_and_metadata(tmp_path, device):
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    try:
+        target = (await create(service))["session_id"]
+        host.chats["a"]["workDevice"] = {"device_id": device, "display_name": "renamed"} if device else None
+        host.chats[target]["workDevice"] = {"device_id": device, "display_name": "old", "project_id": "project"} if device == "peer" else None
+        result = await service.command("a", "session_send_message", {"session_id": target, "message": "continue"}, "update", tmp_path)
+        assert result["status"] == "queued"
+        assert (await service.list("a"))["sessions"][0]["device_matches_selection"] is True
+        # Selection changes after acceptance must not reroute or revoke queued work.
+        host.chats["a"]["workDevice"] = {"device_id": "different"}
+        await service._deliver_message(service.store.message(result["message_id"]))
+        assert len(host.deliveries) == 1
+        assert await service.command("a", "session_send_message", {"session_id": target, "message": "continue"}, "update", tmp_path) == result
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_create_list_and_backend_ownership(tmp_path):
     host = Host(tmp_path)
     service = await service_at(tmp_path, host)

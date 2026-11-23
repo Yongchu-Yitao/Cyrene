@@ -43,6 +43,10 @@ def setup_work_device_context(context):
                    "New task_start tasks run on the selected work device below, using your controller model configuration. "
                    "Use workspace_path from that device's shared workspaces; local paths do not exist there. "
                    "Existing tasks stay on their original device after selection changes. "
+                   "If task_update or task_answer_question returns work_device_mismatch, the operation was not accepted. "
+                   "Use task_start to create a new task on the currently selected device, with a workspace path on that device. "
+                   "Do not reuse the mismatched task or ask the user to select the device again. "
+                   "You may inspect old evidence for context; check running or unknown old execution before arranging duplicate work. "
                    "Task conversation and returned results are saved locally; workspace files remain on the execution device. "
                    "If the transport reports an unavailable device after three retries, promptly use ask_user to ask what to do. Do not silently switch devices or retry execution before the user decides. Disconnection does not confirm that the remote task stopped.\n" +
                    json.dumps(device or {"device_id": "local"}, ensure_ascii=False))

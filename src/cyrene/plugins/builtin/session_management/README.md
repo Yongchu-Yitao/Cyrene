@@ -144,8 +144,18 @@ Session 的 `ContextChange` Hook 在上下文树提交后，按变更节点读�
 ### Assistant work device
 
 The identity menu saves `workDevice` on the assistant, independently of the
-chat's remote context devices. New tasks snapshot that choice; updates, answers
-and stops always target the original device. The main assistant remains local.
+chat's remote context devices. New tasks snapshot that choice. Updates and answers
+compare the selected and original device IDs before any enqueue or execution. A
+mismatch returns `work_device_mismatch`, both devices, `update_queued=false` and
+`recovery_action=start_new_task_on_selected_device` directly to the Agent. It must
+start a new task on the currently selected device with that device's workspace,
+using old evidence as needed, without asking the user to select a device again.
+Running or unknown old execution must be checked to avoid duplicate work. The
+rejection is saved in the existing effect receipt; replay cannot turn it into an
+accepted update. Existing tasks and accepted queues remain on their original
+device; selection changes do not stop or migrate them. Stops and evidence reads
+remain available across devices. `task_list` exposes `selected_work_device` and
+each task's `device_matches_selection`. The main assistant remains local.
 Remote tasks require Cyrene >= 0.9.2.0, the assistant-task protocol and existing
 chat execution grants on a shared workspace. Workspace paths belong to that device.
 

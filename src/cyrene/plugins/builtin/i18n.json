@@ -3386,21 +3386,21 @@
     "task_update": {
       "en": {
         "name": "Update task",
-        "description": "Continue or retry an existing task, reusing its browser and working state. First resume the matching goal context with load_context if inactive. Resumes completed or stopped work too. Acceptance is not completion; the result arrives automatically."
+        "description": "Continue or retry an existing task, reusing its browser and working state. First resume the matching goal context with load_context if inactive. Resumes completed or stopped work too. If work_device_mismatch is returned, nothing was queued: use task_start on the currently selected device with its workspace path, rather than reusing the old task or asking the user to reselect a device. Check old running or unknown execution to avoid duplicate work. Queued means awaiting delivery, not confirmed execution; acceptance is not completion. The result arrives automatically."
       },
       "zh": {
         "name": "更新任务",
-        "description": "继续或重试已有任务，复用其浏览器和工作状态。如果对应目标上下文未激活，先用 load_context 恢复。也可恢复已完成或已停止的任务。受理不代表完成，结果会自动送达。"
+        "description": "继续或重试已有任务，复用其浏览器和工作状态。如果对应目标上下文未激活，先用 load_context 恢复。也可恢复已完成或已停止的任务。若返回 work_device_mismatch，本次操作未入队：请使用 task_start 在当前选定设备上创建新任务，并使用该设备的工作区路径，不要继续复用旧任务或要求用户重新选择设备。核对仍在运行或状态未知的旧任务，避免重复执行。入队表示等待投递，不代表已经执行；受理不代表完成，结果会自动送达。"
       }
     },
     "task_answer_question": {
       "en": {
         "name": "Answer task question",
-        "description": "Answer a task clarification using known context. Ask the user only when a necessary fact or decision is missing. This tool cannot grant human permission approvals."
+        "description": "Answer a task clarification using known context. On work_device_mismatch, the answer was not sent: use task_start on the currently selected device, carrying over relevant evidence and checking for duplicate execution. Ask the user only when a necessary fact or decision is missing. This tool cannot grant human permission approvals."
       },
       "zh": {
         "name": "回答任务问题",
-        "description": "根据已知上下文回答任务的澄清问题。仅在缺少必要事实或决策时询问用户。此工具不能代替用户授权。"
+        "description": "根据已知上下文回答任务的澄清问题。若返回 work_device_mismatch，答案未发送：请使用 task_start 在当前选定设备上创建新任务，带上相关证据，并检查是否会重复执行。仅在缺少必要事实或决策时询问用户。此工具不能代替用户授权。"
       }
     },
     "task_stop": {

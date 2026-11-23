@@ -191,11 +191,11 @@ plugin_pack = PluginPack(
         ),
         _tool(
             "session_send_message",
-            "Continue or retry an existing task, reusing its browser and working state. First resume the matching goal context with load_context if inactive. Resumes completed or stopped work too. Acceptance is not completion; the result arrives automatically.",
+            "Continue or retry an existing task, reusing its browser and working state. First resume the matching goal context with load_context if inactive. Resumes completed or stopped work too. If work_device_mismatch is returned, nothing was queued: use task_start on the currently selected device with its workspace path, rather than reusing the old task or asking the user to reselect a device. Check old running or unknown execution to avoid duplicate work. Queued means awaiting delivery, not confirmed execution; acceptance is not completion. The result arrives automatically.",
             {"session_id": ID, "message": MESSAGE, "files": FILES},
             ["session_id"],
         ),
-        _tool("session_answer_question", "Answer a task clarification using known context. Ask the user only when a necessary fact or decision is missing. This tool cannot grant human permission approvals.",
+        _tool("session_answer_question", "Answer a task clarification using known context. On work_device_mismatch, the answer was not sent: use task_start on the currently selected device, carrying over relevant evidence and checking for duplicate execution. Ask the user only when a necessary fact or decision is missing. This tool cannot grant human permission approvals.",
               {"session_id": ID, "question_id": ID, "answer": {"type": "string", "minLength": 1, "maxLength": 20000}},
               ["session_id", "question_id", "answer"]),
         _tool("session_stop", "Stop a task and pause pending updates; preserve its evidence and artifacts.", {"session_id": ID}, ["session_id"]),
