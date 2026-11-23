@@ -344,7 +344,7 @@
     "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::WbcAssistantCard": {
-    "decisions": 35
+    "decisions": 38
   },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-home-layout.jsx::AssistantHomeLayout": {
     "decisions": 26
@@ -1814,5 +1814,11 @@
   },
   "src/cyrene/workbench/webui/frontend/features/shell/cyrene-activity.mjs::observeCyreneActivity.refresh": {
     "decisions": 29
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/assistant-card-visuals.jsx::CardEmbed": {
+    "decisions": 23
+  },
+  "src/cyrene/workbench/webui/frontend/features/chat/card-fullscreen-button.jsx::CardFullscreenButton": {
+    "decisions": 27
   }
 }

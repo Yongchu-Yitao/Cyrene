@@ -2,6 +2,16 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.4] - 2026-11-23
+
+### Features and interface updates
+
+- Expand an interactive page within a card independently into its current split pane. Cards containing explanatory text or several content blocks now place the fullscreen entry on the interactive page itself, giving it the available space while surrounding text and other blocks stay in their original positions. Regular cards without interactive pages retain whole-card fullscreen viewing. Entering and leaving fullscreen preserves the running page and its interaction state, and submission confirmation remains accessible in fullscreen.
+- Add Stop running for interactive pages. Stopping ends the current page, clears its pending submission confirmation, and shows a Card stopped message with a Restart action. Restart reloads the interactive page. The stopped view retains its previous display space and remains usable in fullscreen, reducing sudden layout shifts.
+- Refine actions inside paged card groups. Individual cards and interactive pages in a group no longer offer fullscreen buttons, keeping reading and navigation within the group's existing page controls. Interactive pages still offer Stop running. Cards in ordinary conversations, pinned areas, and detached windows retain their supported expansion behavior.
+- Combine fullscreen and Stop running into a compact rounded control bar with consistent button sizes, icons, spacing, and light and dark theme styling. Stop uses a distinct red appearance and becomes disabled after stopping to prevent repeated clicks. Controls appear on top-right hover or keyboard focus and remain visible in fullscreen and on touch devices. Buttons retain descriptive labels, focus indicators, and fullscreen state feedback, while respecting reduced-motion preferences.
+- Improve responsiveness and size positioning when expanding a card for the first time, reducing waits and pauses from repeated layout work. Hidden or disconnected areas do not attempt to expand. The expanded bounds continue following window, scroll, and pane size changes, and exiting restores the original position and keyboard focus.
+
 ## [0.9.2.3] - 2026-11-23
 
 ### Features and interface updates

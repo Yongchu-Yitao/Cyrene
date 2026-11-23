@@ -12,19 +12,22 @@ export function enterCardFullscreen(element, onClose) {
   activePanes.get(pane)?.();
   const doc = element.ownerDocument, win = doc.defaultView;
   const focus = doc.activeElement;
-  const rect = element.getBoundingClientRect(), style = win.getComputedStyle(element);
+  if (!pane.isConnected || !pane.getClientRects().length) return null;
+  // Read both boxes before changing the DOM to avoid an extra synchronous layout.
+  const paneBox = pane.getBoundingClientRect();
+  const rect = element.getBoundingClientRect(), margin = win.getComputedStyle(element).margin;
   // Reserve the inline position without moving/remounting the live iframe.
   const placeholder = doc.createElement('div');
   placeholder.setAttribute('aria-hidden', 'true');
   Object.assign(placeholder.style, { width: rect.width + 'px', height: rect.height + 'px',
-    margin: style.margin, flexShrink: '0', pointerEvents: 'none' });
+    margin, flexShrink: '0', pointerEvents: 'none' });
   element.before(placeholder);
   element.setAttribute('popover', 'manual');
   element.setAttribute('data-card-fullscreen', '');
   let observer, animation, closed = false, previousBounds = '';
-  function measure() {
-    if (!pane.isConnected || !pane.getClientRects().length) { exit(); return; }
-    const box = pane.getBoundingClientRect();
+  function measure(box) {
+    if (!pane.isConnected || (!box && !pane.getClientRects().length)) { exit(); return; }
+    box ||= pane.getBoundingClientRect();
     const bounds = [box.left, box.top, box.width, box.height];
     if (bounds.join() === previousBounds) return;
     previousBounds = bounds.join();
@@ -32,7 +35,7 @@ export function enterCardFullscreen(element, onClose) {
   }
   function scheduleMeasure() {
     win.cancelAnimationFrame(animation);
-    animation = win.requestAnimationFrame(measure);
+    animation = win.requestAnimationFrame(() => measure());
   }
   function onKey(event) {
     if (event.key === 'Escape' && element.contains(doc.activeElement)) {
@@ -65,7 +68,7 @@ export function enterCardFullscreen(element, onClose) {
     }
   }
   activePanes.set(pane, exit);
-  measure();
+  measure(paneBox);
   if (closed) return null;
   try { element.showPopover(); } catch { exit(); return null; }
   observer = new win.ResizeObserver(scheduleMeasure);

@@ -1,3 +1,5 @@
+import { CardFullscreenButton, useCardFullscreen } from './card-fullscreen.jsx';
+import { useWorkbenchI18n } from '../../workbench-i18n.jsx';
 import { cardMapStyles } from './card-map-style.mjs';
 import React, { useEffect, useRef, useState } from 'react';
 import { wbcWgs84ToGcj02, wbcMapProvider, wbcTileConfig } from './map-provider.mjs';
@@ -124,8 +126,12 @@ export function CardChart({ block }) {
   return <div><div className="wbc-card-chart" ref={holder} role="img" aria-label={block.title || '数据图表'} /><details><summary>查看图表数据</summary><table><thead><tr><th>项目</th>{block.series.map((s, i) => <th key={i}>{s.label}</th>)}</tr></thead><tbody>{block.labels.map((label, i) => <tr key={i}><th>{label}</th>{block.series.map((s, j) => <td key={j}>{s.values[i]}</td>)}</tr>)}</tbody></table></details></div>;
 }
 
-export function CardEmbed({ block, card, values, disabled, snapshot, onEvent }) {
+export function CardEmbed({ block, card, values, disabled, snapshot, onEvent, allowFullscreen = true }) {
   const frame = useRef(null);
+  const surface = useRef(null);
+  const { lang } = useWorkbenchI18n();
+  const [stopped, setStopped] = useState(false);
+  const fullscreen = useCardFullscreen(surface);
   const callback = useRef(onEvent); callback.current = onEvent;
   const [height, setHeight] = useState(null);
   const [proposal, setProposal] = useState(null);
@@ -178,5 +184,10 @@ export function CardEmbed({ block, card, values, disabled, snapshot, onEvent }) 
   }, [card.spec.actions, card.spec.input_schema, disabled, view, viewKey]);
   useEffect(publishState, [values, disabled, card.revision]);
   useEffect(() => setProposal(null), [card.revision, block.html]);
-  return <div className="wbc-card-embed" inert={snapshot ? "" : undefined}><iframe ref={frame} data-awaiting-card-size={height == null ? true : undefined} title={block.title || card.spec.title} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={doc} style={{ height: height ?? 96 }} onLoad={publishState} />{proposal && <div className="wbc-card-embed-proposal"><p>{proposal.action.label}</p><ul>{Object.values(proposal.values).map((value, i) => <li key={i}>{Array.isArray(value) ? value.join('、') : String(value)}</li>)}</ul><button type="button" disabled={disabled} onClick={() => { callback.current(proposal.kind, proposal.values, proposal.action); setProposal(null); }}>确认提交</button><button type="button" onClick={() => setProposal(null)}>取消</button></div>}</div>;
+  return <div ref={surface} className="wbc-card-embed" inert={snapshot ? "" : undefined}>
+    {!snapshot && !card.spec.home_kind && <CardFullscreenButton {...fullscreen} allowFullscreen={allowFullscreen} stopped={stopped} onStop={() => { setStopped(true); setProposal(null); }} />}
+    {stopped ? <div className="wbc-card-embed-stopped" role="status" style={{ minHeight: height ?? 96 }}>
+      <p>{lang === 'zh' ? '卡片已停止运行' : 'Card stopped'}</p>
+      <button type="button" onClick={() => setStopped(false)}>{lang === 'zh' ? '重新启动' : 'Restart'}</button>
+    </div> : <iframe ref={frame} data-awaiting-card-size={height == null ? true : undefined} title={block.title || card.spec.title} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={doc} style={{ height: height ?? 96 }} onLoad={publishState} />}{proposal && <div className="wbc-card-embed-proposal"><p>{proposal.action.label}</p><ul>{Object.values(proposal.values).map((value, i) => <li key={i}>{Array.isArray(value) ? value.join('、') : String(value)}</li>)}</ul><button type="button" disabled={disabled} onClick={() => { callback.current(proposal.kind, proposal.values, proposal.action); setProposal(null); }}>确认提交</button><button type="button" onClick={() => setProposal(null)}>取消</button></div>}</div>;
 }

@@ -542,23 +542,30 @@ html[data-theme="light"] .wbc-home-cards.wbc-assistant-home {color-scheme:light}
 .wbc-result-unavailable button:focus-visible {outline:2px solid var(--accent);outline-offset:3px}
 
 /* A live card enters the top layer in place, bounded by its own split pane. */
-.wbc-assistant-card {position:relative}
-.wbc-card-fullscreen-corner {position:absolute;top:0;right:0;width:56px;height:56px;z-index:8;display:flex;align-items:flex-start;justify-content:flex-end;padding:8px;box-sizing:border-box;pointer-events:auto}
-.wbc-assistant-card .wbc-card-fullscreen-button.wb-btn {pointer-events:auto;display:grid;place-items:center;flex:none;width:34px;height:34px;min-height:34px;padding:8px;border-radius:50%;border:1px solid var(--card-line);background:var(--wb-card-bg,var(--surface-1));color:var(--wb-text,var(--text));box-shadow:0 2px 8px #0002;opacity:0;transition:opacity .15s ease;cursor:pointer}
+.wbc-assistant-card, .wbc-card-embed {position:relative}
+.wbc-card-fullscreen-corner {position:absolute;top:0;right:0;z-index:8;padding:8px;box-sizing:border-box;pointer-events:auto}
+.wbc-card-controls {display:flex;align-items:center;padding:1px;border:1px solid color-mix(in srgb,var(--card-line) 65%,transparent);border-radius:17px;background:var(--wb-card-bg,var(--surface-1));box-shadow:0 1px 4px #0001;opacity:0;transition:opacity .15s ease}
+.wbc-assistant-card .wbc-card-controls > .wb-btn {display:flex;align-items:center;justify-content:center;gap:0;flex:none;width:30px;height:30px;min-width:30px;min-height:30px;box-sizing:border-box;margin:0;padding:0;line-height:1;border:0;border-radius:50%;background:transparent;color:var(--card-muted);cursor:pointer}
+.wbc-card-controls > .wb-btn:hover {background:var(--control-bg-hover);color:var(--wb-text,var(--text))}
+.wbc-assistant-card .wbc-card-controls > .wbc-card-stop-button {color:var(--err,#d14343)}
+.wbc-assistant-card .wbc-card-controls > .wbc-card-stop-button:hover:not(:disabled) {color:var(--err,#d14343);background:color-mix(in srgb,var(--err,#d14343) 10%,transparent)}
+.wbc-card-controls > .wb-btn:disabled {opacity:.4;cursor:default}
+.wbc-card-controls:has(.wbc-card-stop-button) {gap:0}
 .wbc-assistant-card:has(> .wbc-card-fullscreen-corner) > header {padding-right:56px}
-.wbc-card-fullscreen-button svg {width:18px;height:18px}
-.wbc-card-fullscreen-corner:hover .wbc-card-fullscreen-button,
-.wbc-card-fullscreen-corner:focus-within .wbc-card-fullscreen-button {opacity:1}
-.wbc-card-fullscreen-button:focus-visible {outline:2px solid var(--accent);outline-offset:2px}
-.wbc-assistant-card[data-card-fullscreen] {position:fixed!important;inset:auto!important;left:var(--card-fullscreen-left)!important;top:var(--card-fullscreen-top)!important;width:var(--card-fullscreen-width)!important;height:var(--card-fullscreen-height)!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0;border:1px solid var(--card-line)!important;border-radius:12px!important;box-sizing:border-box;background:var(--wb-card-bg,var(--surface-1))!important;display:flex;flex-direction:column;overflow:hidden;transform:none!important}
-.wbc-assistant-card[data-card-fullscreen]::backdrop {background:transparent;pointer-events:none}
+.wbc-assistant-card .wbc-card-controls > .wb-btn > svg {display:block;flex:none;width:14px;height:14px;margin:0}
+.wbc-card-fullscreen-corner:hover .wbc-card-controls,
+.wbc-card-fullscreen-corner:focus-within .wbc-card-controls {opacity:1}
+.wbc-card-controls > .wb-btn:focus-visible {outline:2px solid var(--accent);outline-offset:2px}
+:is(.wbc-assistant-card, .wbc-card-embed)[data-card-fullscreen] {position:fixed!important;inset:auto!important;left:var(--card-fullscreen-left)!important;top:var(--card-fullscreen-top)!important;width:var(--card-fullscreen-width)!important;height:var(--card-fullscreen-height)!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0;border:1px solid var(--card-line)!important;border-radius:12px!important;box-sizing:border-box;background:var(--wb-card-bg,var(--surface-1))!important;display:flex;flex-direction:column;overflow:hidden;transform:none!important}
+:is(.wbc-assistant-card, .wbc-card-embed)[data-card-fullscreen]::backdrop {background:transparent;pointer-events:none}
 .wbc-assistant-card[data-card-fullscreen] > header {padding-right:54px;flex:none}
 .wbc-assistant-card[data-card-fullscreen] > form {flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
-.wbc-assistant-card[data-card-fullscreen] > form:has(> .wbc-card-blocks > .type-embed:only-child) {display:flex;flex-direction:column}
-.wbc-assistant-card[data-card-fullscreen] .wbc-card-blocks:has(> .type-embed:only-child) {flex:1;min-height:0;display:flex;flex-direction:column;padding:0;gap:0}
-.wbc-assistant-card[data-card-fullscreen] .type-embed:only-child {flex:1;min-height:0;display:flex;flex-direction:column}
-.wbc-assistant-card[data-card-fullscreen] .type-embed:only-child > .wbc-card-embed {flex:1;min-height:0;display:flex;flex-direction:column}
-.wbc-assistant-card[data-card-fullscreen] .type-embed:only-child > .wbc-card-embed > iframe {flex:1;min-height:0;height:100%!important;border:0;border-radius:0;box-sizing:border-box}
-.wbc-assistant-card[data-card-fullscreen] .wbc-card-embed-proposal {flex:none;max-height:45%;overflow:auto}
-@media(hover:none){.wbc-assistant-card .wbc-card-fullscreen-button.wb-btn{opacity:1}}
-@media(prefers-reduced-motion:reduce){.wbc-assistant-card .wbc-card-fullscreen-button.wb-btn{transition:none}}
+/* Expand the embedded page itself, independently of sibling prose/blocks. */
+.wbc-card-embed[data-card-fullscreen] > iframe {flex:1;min-height:0;height:100%!important;border:0;border-radius:0;box-sizing:border-box}
+.wbc-card-embed[data-card-fullscreen] > .wbc-card-embed-proposal {flex:none;max-height:45%;overflow:auto}
+:is(.wbc-assistant-card, .wbc-card-embed)[data-card-fullscreen] > .wbc-card-fullscreen-corner .wbc-card-controls {opacity:1}
+@media(hover:none){.wbc-card-controls{opacity:1}}
+@media(prefers-reduced-motion:reduce){.wbc-card-controls{transition:none}}
+
+.wbc-card-embed-stopped {display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;box-sizing:border-box;padding:56px 20px;border:1px solid var(--card-line);border-radius:10px;color:var(--card-muted);background:var(--wb-card-bg,var(--surface-1))}
+.wbc-card-embed[data-card-fullscreen] > .wbc-card-embed-stopped {min-height:0!important;border:0}

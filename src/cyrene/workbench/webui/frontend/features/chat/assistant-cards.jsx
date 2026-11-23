@@ -74,7 +74,7 @@ function CardActionList({ block, card, disabled, onEvent, values, onOpenResult }
   return <div>{block.collapsed ? <><button className="wb-btn wbc-card-list-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}><strong>{block.title || '事项'}</strong><span className="wbc-card-list-toggle-end"><span>{block.items.length} 项</span><span className="wbc-card-disclosure-icon" aria-hidden="true">{WBC_ICONS.chevronDown}</span></span></button>{expanded && (block.items.length ? rows : <p className="wbc-card-description">暂无事项</p>)}</> : block.items.length ? rows : <p className="wbc-card-description">暂无事项</p>}</div>;
 }
 
-export function CardBlock({ block, card, values, disabled, snapshot, onEdit, onChange, onEvent, onOpenResult }) {
+export function CardBlock({ allowFullscreen = true, block, card, values, disabled, snapshot, onEdit, onChange, onEvent, onOpenResult }) {
   const selected = block.selection && values[block.selection.field_id];
   const selectedIds = Array.isArray(selected) ? selected : [selected];
   switch (block.type) {
@@ -93,7 +93,7 @@ export function CardBlock({ block, card, values, disabled, snapshot, onEdit, onC
     case 'files': return <ul className="wbc-card-list">{block.items.map(item => <li key={item.artifact_id}><strong>{item.name}</strong><small>{item.media_type || item.artifact_id}</small></li>)}</ul>;
     case 'chart': return <CardChart block={block} />;
     case 'map': return <CardMap block={block} values={values} disabled={disabled} onChange={onChange} />;
-    case 'embed': return <CardEmbed snapshot={snapshot} block={block} card={card} values={values} disabled={disabled} onEvent={onEvent} />;
+    case 'embed': return <CardEmbed allowFullscreen={allowFullscreen} snapshot={snapshot} block={block} card={card} values={values} disabled={disabled} onEvent={onEvent} />;
     default: return <p role="status">暂不支持此内容区块。</p>;
   }
 }
@@ -322,13 +322,13 @@ function HistoricalCard({ cardId, revision, chatId }) {
   </details>;
 }
 
-export function WbcInlineCard({ card, chatId, onOpenFile, inProse, onPageTitle }) {
+export function WbcInlineCard({ card, chatId, onOpenFile, inProse, onPageTitle, allowFullscreen = true }) {
   if (card.snapshot) return <HistoricalCard key={card.card_id + card.revision} chatId={chatId} cardId={card.card_id} revision={card.revision} />;
   if (card.change) return <ScheduleChange change={card.change} />;
   if (card.agenda) return <ScheduleAgenda agenda={card.agenda} />;
   if (card.source) return <KnowledgeSource source={card.source} onOpenFile={onOpenFile} />;
   return card.schedule ? <ScheduleReceipt schedule={card.schedule} />
-    : <WbcAssistantCard key={JSON.stringify([chatId, card.card_id])} reservePreview={!onPageTitle} onPageTitle={onPageTitle} inProse={inProse} chatId={chatId} cardId={card.card_id} revision={card.revision} />;
+    : <WbcAssistantCard key={JSON.stringify([chatId, card.card_id])} reservePreview={!onPageTitle} allowFullscreen={allowFullscreen} onPageTitle={onPageTitle} inProse={inProse} chatId={chatId} cardId={card.card_id} revision={card.revision} />;
 }
 
 function ScheduleReceipt({ schedule }) {
@@ -350,7 +350,7 @@ function ScheduleReceipt({ schedule }) {
   </article>;
 }
 
-export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reservePreview = false, initialCard = null, displayTime = new Date(), managedRefresh = false, homeDisclosure, onOpenResult, inProse = false }) {
+export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reservePreview = false, initialCard = null, displayTime = new Date(), managedRefresh = false, homeDisclosure, onOpenResult, inProse = false, allowFullscreen = true }) {
   const { t } = useWorkbenchI18n();
   const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard, managedRefresh, chatId);
   const localDisclosure = useState(null);
@@ -370,14 +370,14 @@ export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reserv
   const renderBlock = (block, inPanel = false) => <section className={'wbc-card-block type-' + block.type} key={block.block_id}>
     {block.title && !inPanel && !(block.type === 'action_list' && block.collapsed) && !(isHome && block.type === 'timeline') && <h4>{block.title}</h4>}
     {block.description && <p className="wbc-card-description">{block.description}</p>}
-    <CardBlock onOpenResult={onOpenResult} block={inPanel && block.collapsed ? { ...block, collapsed: false } : block} card={card} values={values} disabled={(block.type === 'embed' && busy && pendingEvent?.kind === 'change' ? card.status !== 'active' : disabled) || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => {
+    <CardBlock allowFullscreen={allowFullscreen} onOpenResult={onOpenResult} block={inPanel && block.collapsed ? { ...block, collapsed: false } : block} card={card} values={values} disabled={(block.type === 'embed' && busy && pendingEvent?.kind === 'change' ? card.status !== 'active' : disabled) || awaitingDelivery} onEdit={editDraft} onChange={change} onEvent={(kind, next, action) => {
       if (kind === 'change') {
         for (const [key, value] of Object.entries(next)) editDraft(key, value);
       } else send(kind, { ...local.current, ...next }, action);
     }} />
   </section>;
   const content = <article ref={cardElement} className={'wbc-assistant-card density-' + card.spec.density + (inProse ? ' in-prose' : '') + (isHome ? ' wbc-home-section home-' + card.spec.home_kind : '')} data-card-id={cardId} aria-label={isHome ? homeDisplayTitle(displayCard.spec) : card.spec.title} aria-busy={busy}>
-    {!isHome && <CardFullscreenButton {...fullscreen} />}
+    {allowFullscreen && !isHome && !card.spec.blocks.some(block => block.type === 'embed') && <CardFullscreenButton {...fullscreen} />}
     {!isHome && !inProse && renderCardHeader(card, busy, togglePin, t)}
     <form ref={form} onSubmit={event => event.preventDefault()}>
       {inProse && !isHome && <InlineChecklistHeading card={card} values={values} />}

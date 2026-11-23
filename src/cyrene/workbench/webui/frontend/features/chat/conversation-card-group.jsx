@@ -161,7 +161,7 @@ export function ConversationCardGroup({group, chatId, inPinnedColumn=false}) {
         const rank=(i-page+count)%count, inactive=page!==i||covered||turningCover;
         return <div className="wbc-folio-page" key={member.card_id} ref={el=>{nodes.current[i]=el;}}
           data-rank={Math.min(rank,3)} inert={inactive?'':undefined} aria-hidden={inactive}>
-          <WbcInlineCard card={member} chatId={chatId} onPageTitle={recordTitle}/>
+          <WbcInlineCard card={member} chatId={chatId} onPageTitle={recordTitle} allowFullscreen={false}/>
         </div>;
       })}
       {isBook && <BookCover group={group} open={()=>flipCover(true)}/>}
