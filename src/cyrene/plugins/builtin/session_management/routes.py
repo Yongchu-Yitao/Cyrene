@@ -60,6 +60,8 @@ def register_routes(context, service):
                     return await asyncio.to_thread(service.host.port().service.repository.mutate_one,
                         chat["id"], lambda current: current.update(workDevice=device))
             await service._on_owner(save)
+            from cyrene.workbench.chat.chat_events import publish_chat_changed
+            await publish_chat_changed(chat["id"], chat.get("projectId", ""), "assistant_work_device_updated")
         except (ConnectionError, TimeoutError):
             return JSONResponse({"error": "设备离线，无法切换工作设备。"}, status_code=409)
         except Exception as exc:

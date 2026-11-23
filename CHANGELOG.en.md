@@ -2,6 +2,15 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.5] - 2026-11-23
+
+### Features and interface updates
+
+- Improve immediate synchronization of the personal assistant's task sidebar. Creating, updating, or stopping tasks, receiving or answering questions, and changing the work device refresh the list as changes occur. Combine bursts of changes to reduce repeated loading. Changes arriving during an existing refresh trigger another update afterward so the latest state is not missed.
+- Reduce background sidebar refreshes while idle. Hidden windows pause list updates and cancel pending requests, then synchronize immediately when shown again. Reconnection and conversation reloads also refresh the list. Periodic reconciliation supplements immediate updates to recover missed changes. Failed refreshes retain the displayed tasks and show an error while allowing later recovery, and older responses cannot overwrite state after the window becomes visible again.
+- Improve task-list and status responsiveness with many tasks or long conversation histories, reducing waits and interface pauses from reading lengthy messages and tool output. Local running state, pending questions, failures and retry details, stopped state, and completed results continue following current valid records. Remote tasks retain the status obtained from their execution device, distinguishing unknown status during device errors from tasks that have ended.
+- Keep status viewing compatible with existing conversations and execution history on first open. Subsequent additions, edits, retries, and deletion of execution records update the displayed state. Preserve task branches, committed results, and recovery behavior without restarting tasks or repeating operations just to inspect their status.
+
 ## [0.9.2.4] - 2026-11-23
 
 ### Features and interface updates

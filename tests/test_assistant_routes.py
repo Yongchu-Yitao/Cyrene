@@ -16,7 +16,7 @@ async def test_assistant_entry_is_global_durable_and_does_not_read_contexts(tmp_
     repo = ChatRepository(str(tmp_path / "app.db"))
     port = SimpleNamespace(
         service=SimpleNamespace(repository=repo, create_chat=lambda project, title, model="", **kw: {"projectId": project, "title": title, "messages": []}, public_chat_light=lambda c: c),
-        run_manager=SimpleNamespace(get=lambda _: None, conversation_runtime=SimpleNamespace(context_checkpoint=lambda _: None)),
+        run_manager=SimpleNamespace(get=lambda _: None, conversation_runtime=SimpleNamespace(context_checkpoint=lambda _: None, context_checkpoints=lambda ids: {key: None for key in ids})),
     )
     host = WorkbenchHost(lambda: port)
     host.blocks = lambda _: pytest.fail("The assistant sidebar must not read context blocks")

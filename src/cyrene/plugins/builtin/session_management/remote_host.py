@@ -64,6 +64,15 @@ class RemoteAwareHost(WorkbenchHost):
     def checkpoint(self, target):
         return self.cached(target).get("checkpoint", {}) if self.remote(target) else super().checkpoint(target)
 
+    def task_states(self, chats):
+        local = {target: chat for target, chat in chats.items() if not chat.get("workDevice")}
+        result = super().task_states(local) if local else {}
+        for target, chat in chats.items():
+            if chat.get("workDevice"):
+                snapshot = self.cached(target)
+                result[target] = (snapshot.get("checkpoint", {}), snapshot.get("status", "idle"))
+        return result
+
     def status(self, target):
         if not self.remote(target):
             return super().status(target)

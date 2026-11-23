@@ -1866,6 +1866,9 @@
     "decisions": 33
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime": {
+    "methods": 27
+  },
+  "src/cyrene/plugins/builtin/session_management/service.py::SessionManagementService": {
     "methods": 26
   }
 }

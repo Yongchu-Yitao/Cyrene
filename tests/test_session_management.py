@@ -42,6 +42,9 @@ class Host:
     def status(self, target):
         return self.states.get(target, "idle")
 
+    def task_states(self, chats):
+        return {target: (self.checkpoint(target), self.status(target)) for target in chats}
+
     def version(self, chat):
         return str(chat.get("messageGeneration", 0))
 
@@ -80,6 +83,60 @@ async def service_at(tmp_path, host):
 
 async def create(service, owner="a", effect="create", **args):
     return await service.command(owner, "session_create", {"title": "task", "workspace_path": str(service.store.path.parent), **args}, effect, ".")
+
+
+def test_sidebar_batches_local_checkpoints_and_keeps_remote_state_separate():
+    from cyrene.plugins.builtin.session_management.remote_host import RemoteAwareHost
+
+    calls = []
+    checkpoints = {'done': {'status': 'completed'}, 'live': {'status': 'running'},
+                   'question': {'status': 'completed'}}
+    def batch(chats):
+        calls.append(tuple(chats))
+        return checkpoints
+    manager = SimpleNamespace(
+        conversation_runtime=SimpleNamespace(context_checkpoints=batch),
+        get=lambda target: SimpleNamespace(status='running') if target == 'live' else None,
+    )
+    host = RemoteAwareHost(lambda: SimpleNamespace(run_manager=manager))
+    host.task_store = SimpleNamespace(remote_snapshot=lambda target, node: {
+        'status': 'offline', 'checkpoint': {'status': 'running', 'run_id': 'remote-run'}})
+    states = host.task_states({'done': {}, 'live': {}, 'question': {'pendingQuestion': {'id': 'q'}},
+                               'remote': {'workDevice': {'device_id': 'peer'}}})
+    assert calls == [('done', 'live', 'question')]
+    assert {key: state[1] for key, state in states.items()} == {
+        'done': 'completed', 'live': 'running', 'question': 'awaiting_user', 'remote': 'offline'}
+    assert states['remote'][0]['run_id'] == 'remote-run'
+
+
+@pytest.mark.asyncio
+async def test_sidebar_batches_owned_tasks_off_loop_and_publishes_after_commit(tmp_path, monkeypatch):
+    import threading
+
+    host = Host(tmp_path)
+    service = await service_at(tmp_path, host)
+    events, batches = [], []
+    async def published(target, project, change):
+        assert service.store.session(target) is not None
+        events.append((target, change))
+    monkeypatch.setattr('cyrene.workbench.chat.chat_events.publish_chat_changed', published)
+    owner_thread = threading.get_ident()
+    def states(chats):
+        assert threading.get_ident() != owner_thread
+        batches.append(tuple(chats))
+        return {target: ({'status': 'completed'}, 'completed') for target in chats}
+    host.task_states = states
+    try:
+        target = (await create(service))['session_id']
+        await create(service)  # Replays do not publish a second change.
+        assert events == [(target, 'assistant_task_updated')]
+        listing = await service.list('a')
+        assert batches == [(target,)]
+        assert listing['sessions'][0]['status'] == 'completed'
+        host.chats[target][OWNER] = 'b'
+        assert (await service.list('a'))['sessions'] == []
+    finally:
+        await service.stop()
 
 
 @pytest.mark.asyncio

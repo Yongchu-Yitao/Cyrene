@@ -177,6 +177,9 @@ class SessionManagementService:
                         self.work_device_unavailable(owner, target, str(exc))
                         raise
                 self.store.save(key, fingerprint, result)
+                from cyrene.workbench.chat.chat_events import publish_chat_changed
+                chat = self.host.chat(target) or self.host.chat(owner) or {}
+                await publish_chat_changed(target, chat.get("projectId", ""), "assistant_task_updated")
                 return result
 
         return await self._on_owner(perform)
@@ -257,45 +260,54 @@ class SessionManagementService:
             result["retry_at"] = row["next_attempt"]
         return result
 
+    def _list(self, owner):
+        owner_chat = self.host.chat(owner)
+        selected = work_device(owner_chat)
+        result = []
+        records = self.store.sessions(owner) if owner_chat else []
+        owned = {}
+        for record in records:
+            chat = self.host.chat(record["id"])
+            if chat and chat.get("kind") == KIND and chat.get(OWNER) == owner:
+                owned[record["id"]] = chat
+        states = self.host.task_states(owned)
+        for record in records:
+            chat = owned.get(record["id"])
+            if chat is None:
+                continue
+            checkpoint, status = states[record["id"]]
+            if chat.get("workDevice"):
+                if chat.get("workDeviceStopped"):
+                    status = "stopped"
+                elif chat.get("workDeviceError") and status not in {"completed", "failed", "cancelled", "stopped"}:
+                    status = "unknown"
+            elif record["paused"]:
+                status = "stopped"
+            result.append(
+                {
+                    **{key: checkpoint[key] for key in
+                       ("run_id", "node_id", "cancel_reason", "interruption_kind", "recovery_action", "failure_kind", "retry_at") if key in checkpoint},
+                    "session_id": record["id"],
+                    "presentation": self.store.presentation(record["id"]),
+                    "title": chat.get("title", ""),
+                    "workspace_path": chat.get("workspaceOverride", ""),
+                    "work_device": work_device(chat),
+                    "device_matches_selection": work_device(chat)["device_id"] == selected["device_id"],
+                    "device_error": chat.get("workDeviceError", ""),
+                    "status": status,
+                    "pending_messages": self.store.pending_count(record["id"]),
+                    "delivery_error": self.store.delivery_error(record["id"]),
+                    "pending_question": chat.get("pendingQuestion"),
+                    "created_at": chat.get("createdAt", ""),
+                    "updated_at": chat.get("updatedAt", ""),
+                }
+            )
+        return {"sessions": result, "selected_work_device": selected}
+
     async def list(self, owner):
         async def perform():
             async with self.lock:
-                selected = work_device(self.host.chat(owner))
-                result = []
-                for record in self.store.sessions(owner):
-                    try:
-                        _, chat = self._owned(owner, record["id"])
-                    except ValueError:
-                        continue
-                    checkpoint = self.host.checkpoint(record["id"])
-                    status = self.host.status(record["id"])
-                    if chat.get("workDevice"):
-                        if chat.get("workDeviceStopped"):
-                            status = "stopped"
-                        elif chat.get("workDeviceError") and status not in {"completed", "failed", "cancelled", "stopped"}:
-                            status = "unknown"
-                    elif record["paused"]:
-                        status = "stopped"
-                    result.append(
-                        {
-                            **{key: checkpoint[key] for key in
-                               ("run_id", "node_id", "cancel_reason", "interruption_kind", "recovery_action", "failure_kind", "retry_at") if key in checkpoint},
-                            "session_id": record["id"],
-                            "presentation": self.store.presentation(record["id"]),
-                            "title": chat.get("title", ""),
-                            "workspace_path": chat.get("workspaceOverride", ""),
-                            "work_device": work_device(chat),
-                            "device_matches_selection": work_device(chat)["device_id"] == selected["device_id"],
-                            "device_error": chat.get("workDeviceError", ""),
-                            "status": status,
-                            "pending_messages": self.store.pending_count(record["id"]),
-                            "delivery_error": self.store.delivery_error(record["id"]),
-                            "pending_question": chat.get("pendingQuestion"),
-                            "created_at": chat.get("createdAt", ""),
-                            "updated_at": chat.get("updatedAt", ""),
-                        }
-                    )
-                return {"sessions": result, "selected_work_device": selected}
+                return await asyncio.to_thread(self._list, owner)
 
         return await self._on_owner(perform)
 

@@ -7,14 +7,69 @@ import { AssistantChat } from "./assistant-chat.jsx"
 import { workbenchServices } from "../../shared/runtime/services.jsx"
 import { WbcPaneCardFrame } from "../chat/split-pane.jsx"
 
-async function assistantApi(url) {
-  var response = await fetch(url, { method: "GET" });
+async function assistantApi(url, options = {}) {
+  var response = await fetch(url, { method: "GET", ...options });
   if (!response.ok) {
     var detail = await response.text();
     try { detail = JSON.parse(detail).detail || detail; } catch (_) {}
     throw new Error(detail || String(response.status));
   }
   return response.json();
+}
+
+export function observeAssistantSidebar({ request, subscribe, onSnapshot, onError, target = window }) {
+  const doc = target.document || document;
+  let disposed = false, pending = false, dirty = false, queued = false, timer, controller, generation = 0;
+  const hidden = () => doc.hidden || doc.visibilityState === 'hidden';
+  function clear() { target.clearTimeout(timer); timer = null; queued = false; }
+  function schedule(delay, event = false) {
+    clear();
+    if (disposed || hidden()) return;
+    queued = event;
+    timer = target.setTimeout(refresh, delay);
+  }
+  function invalidate() {
+    if (disposed || hidden()) return;
+    if (pending) { dirty = true; return; }
+    if (!queued) schedule(200, true);
+  }
+  async function refresh() {
+    clear();
+    if (disposed || hidden()) return;
+    if (pending) { dirty = true; return; }
+    pending = true; dirty = false;
+    const revision = generation;
+    controller = new AbortController();
+    try {
+      const next = await request({ signal: controller.signal });
+      if (!disposed && !hidden() && revision === generation) { onSnapshot(next); onError(''); }
+    } catch (error) {
+      if (!disposed && !hidden() && revision === generation && error.name !== 'AbortError') onError(error.message);
+    } finally {
+      pending = false;
+      // Push handles normal changes; reconcile missed events once a minute.
+      schedule(dirty ? 200 : 60000, dirty);
+    }
+  }
+  function visibility() {
+    if (hidden()) { generation++; clear(); controller?.abort(); }
+    else refresh();
+  }
+  const unsubscribe = subscribe(event => {
+    if (['workbench_chat_changed', 'user_question', 'user_question_answered'].includes(event.type)) invalidate();
+  });
+  doc.addEventListener('visibilitychange', visibility);
+  target.addEventListener('online', invalidate);
+  target.addEventListener('cyrene:wbc-chat-lifecycle', invalidate);
+  target.addEventListener('cyrene:wbc-refresh-chats', invalidate);
+  refresh();
+  return () => {
+    disposed = true; clear(); controller?.abort(); unsubscribe();
+    doc.removeEventListener('visibilitychange', visibility);
+    target.removeEventListener('online', invalidate);
+    target.removeEventListener('cyrene:wbc-chat-lifecycle', invalidate);
+    target.removeEventListener('cyrene:wbc-refresh-chats', invalidate);
+  };
 }
 
 function useResourceCounts() {
@@ -66,17 +121,12 @@ function PersonalAssistantPage({ context, active = true }) {
   }, [personalAssistantId, setAssistantSessionId]);
   React.useEffect(function () {
     if (!active) return;
-    var cancelled = false;
-    var timer;
-    async function refresh() {
-      try {
-        var next = await assistantApi(base);
-        if (!cancelled) { snapshotRef.current = next; setSnapshot(next); setError(""); }
-      } catch (err) { if (!cancelled) setError(err.message); }
-      if (!cancelled) timer = setTimeout(refresh, 3000);
-    }
-    refresh();
-    return function () { cancelled = true; clearTimeout(timer); };
+    return observeAssistantSidebar({
+      request: options => assistantApi(base, options),
+      subscribe: listener => workbenchServices.events().subscribe(listener),
+      onSnapshot: next => { snapshotRef.current = next; setSnapshot(next); },
+      onError: setError,
+    });
   }, [base, attempt, active]);
   var chatModel = workbenchServices.chat().Model;
   var managedModel = React.useMemo(function () {

@@ -205,17 +205,29 @@ class ConversationRuntime:
 
     def context_checkpoint(self, chat_id: str, config: ConversationConfig | None = None) -> dict[str, Any] | None:
         """Read a tree's durable outcome without binding Plugins or resuming Hooks."""
+        return self.context_checkpoints((chat_id,), config).get(str(chat_id))
 
-        router = ContextStoreRouter(self._state_root(config) / "context")
-        try:
-            tree = router.get_tree(str(chat_id))
-            nodes = router.get_subtree(tree.id, tree.root_id)
-            committed = router.committed_state(tree.id)[0]
-        except TreeNotFoundError:
-            return None
-        finally:
-            router.close()
-        return context_checkpoint_from_nodes(nodes, committed)
+    def context_checkpoints(self, chat_ids, config: ConversationConfig | None = None):
+        """Batch status reads; unchanged trees reuse only their small checkpoint."""
+        from cyrene.core.context.checkpoint_reads import checkpoint_snapshot
+        from cyrene.workbench.chat.context_read_cache import CONTEXT_READ_CACHE
+
+        result = {}
+        with ContextStoreRouter(self._state_root(config) / "context") as router:
+            for chat_id in dict.fromkeys(str(item) for item in chat_ids):
+                try:
+                    path = router.tree_database_path(chat_id)
+                    result[chat_id] = CONTEXT_READ_CACHE.read(
+                        path,
+                        lambda _owner, target=chat_id: context_checkpoint_from_nodes(
+                            *checkpoint_snapshot(router, target)
+                        ),
+                        lambda _name: None,
+                        variant="checkpoint",
+                    )
+                except TreeNotFoundError:
+                    result[chat_id] = None
+        return result
 
     def stop_interrupted(
         self, chat_id: str, *, reason: str, config: ConversationConfig | None = None,

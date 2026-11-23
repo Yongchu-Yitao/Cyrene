@@ -84,6 +84,19 @@ class WorkbenchHost:
     def checkpoint(self, session_id):
         return self.port().run_manager.conversation_runtime.context_checkpoint(session_id) or {}
 
+    def task_states(self, chats):
+        """Read each durable checkpoint once, then overlay current live state."""
+        manager = self.port().run_manager
+        checkpoints = manager.conversation_runtime.context_checkpoints(chats)
+        result = {}
+        for target, chat in chats.items():
+            checkpoint = checkpoints.get(target) or {}
+            run = manager.get(target)
+            status = (run.status if run else "awaiting_user" if chat.get("pendingQuestion")
+                      else str(checkpoint.get("status") or "idle"))
+            result[target] = (checkpoint, status)
+        return result
+
     def status(self, session_id):
         port = self.port()
         chat = self.chat(session_id)

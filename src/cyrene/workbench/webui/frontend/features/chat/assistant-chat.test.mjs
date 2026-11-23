@@ -397,7 +397,7 @@ test('assistant page uses one global scope across project changes and forwards t
   const context = {store: {activeProject: null}, assistant: {setSessionId: id => identities.push(id)},
     navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
   const service = {Model: {}, Page: 'page'};
-  const h = harness('../shell/assistant-page.jsx', {usePinnedAssistantCards: () => ({cards: [], error: ''}), React, workbenchServices: {chat: () => service},
+  const h = harness('../shell/assistant-page.jsx', {usePinnedAssistantCards: () => ({cards: [], error: ''}), React, workbenchServices: {chat: () => service, events: () => ({subscribe: () => () => {}})},
     WbcRailToolbar: 'rail-toolbar', AssistantTaskGroup: 'task-group', AssistantTaskResources: 'task-resources', AssistantChat: 'assistant-chat', assistantFileOwners: () => ({}), wbcChatRailVisualState: () => ({}), wbcFormatTime: () => '', WBC_ICONS: {}});
   h.context.fetch = async (url, options) => {calls.push([url, options.method]); return {ok:true,json:async () => snapshot};};
   h.context.setTimeout = h.context.window.setTimeout;
@@ -473,7 +473,7 @@ test('assistant API errors are reported without trying an old initialization end
   const calls = [];
   const context = {assistant: {setSessionId: () => {}},
     navigation: {renderCollapseControl: () => null, renderDockSlot: () => null}};
-  const h = harness('../shell/assistant-page.jsx', {usePinnedAssistantCards: () => ({cards: [], error: ''}), React, workbenchServices: {chat: () => ({Model: {}})},
+  const h = harness('../shell/assistant-page.jsx', {usePinnedAssistantCards: () => ({cards: [], error: ''}), React, workbenchServices: {chat: () => ({Model: {}}), events: () => ({subscribe: () => () => {}})},
     WbcRailToolbar: 'rail-toolbar', assistantFileOwners: () => ({}), WBC_ICONS: {}});
   h.context.fetch = async (url, options) => {
     calls.push([url, options.method]);

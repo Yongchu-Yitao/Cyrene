@@ -132,6 +132,8 @@ def ensure_tree_schema(connection: sqlite3.Connection) -> None:
     _ensure_tree_metadata_columns(connection)
     _ensure_graph_revision(connection)
     _ensure_closed_hook_failure_policy(connection)
+    from .checkpoint_reads import ensure_checkpoint_projection
+    ensure_checkpoint_projection(connection)
 
 
 def _ensure_graph_revision(connection: sqlite3.Connection) -> None:
