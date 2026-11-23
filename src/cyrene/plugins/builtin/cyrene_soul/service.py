@@ -14,6 +14,10 @@ from cyrene.localization import app_language, localized
 
 
 def _enabled(data: Mapping[str, object]) -> bool:
+    # Host-owned task identity is inherited by nested execution agents too.
+    # Task workers never mount the assistant's persona, even when enabled in UI.
+    if data.get("assistant_owner_session_id"):
+        return False
     run_context = data.get("run_context")
     if isinstance(run_context, Mapping) and "soul_enabled" in run_context:
         return bool(run_context.get("soul_enabled"))

@@ -303,6 +303,42 @@ def test_catalog_reminders_at_30_and_50_percent_once_per_task_and_branch(tmp_pat
         s.close()
 
 
+@pytest.mark.parametrize('owner,second_archived,expected', [
+    ('assistant_global', None, False),
+    ('assistant_global', True, False),
+    ('assistant_global', False, True),
+    ('', None, True),
+])
+def test_assistant_task_catalog_requires_multiple_live_contexts(
+    tmp_path, monkeypatch, owner, second_archived, expected,
+):
+    from dataclasses import replace
+
+    s = make_session(tmp_path, plugin_context_data={
+        'assistant_owner_session_id': owner,
+    })
+    try:
+        user(s, 'continue', 'r')
+        first = s.task_contexts.ensure('a')
+        if second_archived is not None:
+            command(s, 'switch_context', {
+                'context_id': None, 'title': 'B', 'summary': 'A paused',
+            }, 'b')
+            state = s.task_contexts.read()
+            state['documents'][first]['archived'] = second_archived
+            s.task_contexts.write(state)
+        original_prepare = s._prepare_model_input
+        monkeypatch.setattr(s, '_prepare_model_input',
+                            lambda node: replace(original_prepare(node), compaction_tokens=550000))
+        s._configured_compaction_limit = lambda: 1000000
+        messages = str(prepare(s).messages)
+        assert ('Task catalog capacity:' in messages) is expected
+        # This restriction does not disable the separate active-history warning.
+        assert 'Context capacity:' in messages
+    finally:
+        s.close()
+
+
 def test_catalog_reminder_survives_reopen_without_duplicate(tmp_path, monkeypatch):
     from dataclasses import replace
 

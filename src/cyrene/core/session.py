@@ -129,6 +129,8 @@ def _tool_call_correction_payload(
             for character in name
         ):
             call["name"] = name
+        if raw_call.get("name_validation") == "invalid_format":
+            call["name_validation"] = "invalid_format"
         validation = str(raw_call.get("arguments_validation") or "").strip()
         if validation in {"invalid_json", "not_object", "valid_object"}:
             call["arguments_validation"] = validation
@@ -160,6 +162,12 @@ def _tool_call_correction_payload(
         "Preserve successful earlier tool results and file chunks; do not repeat completed writes.",
         "Return corrected tool calls instead of merely explaining the error.",
     ]
+    if any(call.get("name_validation") == "invalid_format" for call in tool_calls):
+        instructions.extend([
+            "A tool name in the rejected batch contained an invalid protocol format.",
+            "Use exact tool names from the current tool definitions; never include XML tags, protocol markup or whitespace in tool names.",
+            "Regenerate the entire required tool-call batch; none of its calls were executed.",
+        ])
     action: dict[str, Any] = {
         "action": "regenerate_tool_calls", "instructions": instructions,
     }
@@ -3526,7 +3534,7 @@ class AgentSession:
         if invalid_calls:
             invalid = replace(result, success=False, value=None,
                 error="Invalid tool calls: require unique nonempty IDs, names and object arguments.",
-                error_details={"code": "model_response_invalid", "retryable": True, "retry_scope": "immediate"},
+                error_details={"code": "model_response_invalid", "retryable": True, "retry_scope": "different_arguments"},
                 failure=PluginFailure(error_code="model_response_invalid",
                     message="Invalid tool call batch; no tools were executed.",
                     retryable=True, retry_scope="different_arguments", circuit_scope="none"))

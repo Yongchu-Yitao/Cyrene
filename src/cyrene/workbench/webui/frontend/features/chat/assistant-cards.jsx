@@ -1,3 +1,4 @@
+import { CardFullscreenButton, useCardFullscreen } from './card-fullscreen.jsx';
 import { InlineCardPreview } from './inline-card-preview.jsx';
 import { conversationCardsUrl } from './pinned-card-model.mjs';
 import { ScheduleChange, ScheduleAgenda, KnowledgeSource } from './tool-result-cards.jsx';
@@ -354,6 +355,7 @@ export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reserv
   const { card, values, busy, error, pendingEvent, local, form, refresh, editDraft, change, send, togglePin, retryDelivery } = useAssistantCard(cardId, initialCard, managedRefresh, chatId);
   const localDisclosure = useState(null);
   const cardElement = useRef(null);
+  const fullscreen = useCardFullscreen(cardElement);
   useEffect(() => {
     if (!managedRefresh && !document.hidden && revision > (card?.revision ?? 0)) refresh();
   }, [cardId, revision, managedRefresh]);
@@ -375,6 +377,7 @@ export function WbcAssistantCard({ chatId, cardId, revision, onPageTitle, reserv
     }} />
   </section>;
   const content = <article ref={cardElement} className={'wbc-assistant-card density-' + card.spec.density + (inProse ? ' in-prose' : '') + (isHome ? ' wbc-home-section home-' + card.spec.home_kind : '')} data-card-id={cardId} aria-label={isHome ? homeDisplayTitle(displayCard.spec) : card.spec.title} aria-busy={busy}>
+    {!isHome && <CardFullscreenButton {...fullscreen} />}
     {!isHome && !inProse && renderCardHeader(card, busy, togglePin, t)}
     <form ref={form} onSubmit={event => event.preventDefault()}>
       {inProse && !isHome && <InlineChecklistHeading card={card} values={values} />}

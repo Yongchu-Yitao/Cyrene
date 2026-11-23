@@ -119,6 +119,38 @@ def test_soul_plugin_mounts_before_other_session_context(tmp_path):
     store.close()
 
 
+@pytest.mark.parametrize("nested", [False, True])
+def test_assistant_task_never_reads_or_mounts_soul(tmp_path, nested):
+    class ForbiddenSoulService:
+        @staticmethod
+        def persona_context():
+            raise AssertionError("Assistant task must not read SOUL.md")
+
+    store = ContextStoreRouter(tmp_path / "context")
+    try:
+        tree = store.create_tree(tree_id="assistant-task", root_id="root")
+        hooks = store.hooks_for(tree.id)
+        setup_soul(PluginSetupContext(
+            data_directory=tmp_path / "data",
+            plugin_directory=tmp_path / "plugins",
+            workspace=tmp_path,
+            tree=store,
+            tree_id=tree.id,
+            root_id=tree.root_id,
+            hooks=hooks,
+            data={
+                "assistant_owner_session_id": "assistant_global",
+                "subagent_role": "worker" if nested else "",
+                "soul_enabled": True,
+                "run_context": {"soul_enabled": True},
+            },
+            services={"soul": ForbiddenSoulService()},
+        ))
+        assert asyncio.run(hooks.session_start()) == ""
+    finally:
+        store.close()
+
+
 def test_enabled_soul_hook_fails_closed_without_its_application_service(tmp_path):
     store = ContextStoreRouter(tmp_path / "context")
     tree = store.create_tree(tree_id="chat-missing-soul", root_id="root")

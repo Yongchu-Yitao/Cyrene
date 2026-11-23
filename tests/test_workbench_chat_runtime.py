@@ -1033,12 +1033,18 @@ def test_model_selection_rejects_unknown_candidate_without_mutating_chat(monkeyp
 
 
 @pytest.mark.parametrize("retry", [False, True])
-@pytest.mark.parametrize("question_kind", [None, "destructive_confirmation", "clarification"])
+@pytest.mark.parametrize(("question_kind", "notification"), [
+    (None, False),
+    ("destructive_confirmation", False),
+    ("clarification", False),
+    pytest.param(None, True, id="task-notification"),
+])
 def test_builtin_workbench_route_always_uses_new_runtime(
     tmp_path,
     monkeypatch,
     retry,
     question_kind,
+    notification,
 ):
     from cyrene.platform import host_bridge
     from cyrene.workbench.core_adapter.bridge import WorkbenchPendingQuestion
@@ -1098,7 +1104,9 @@ def test_builtin_workbench_route_always_uses_new_runtime(
 
     operation = object.__new__(_SendOperation)
     operation.environment = PreparedSendEnvironment(str(tmp_path / "workspace"), {"skills": ["writer"]}, {"skills": ["writer"]}, SelectedSendModel(None, False))
-    operation.origin = SendOrigin.parse({})
+    operation.origin = SendOrigin.parse(
+        {"agentOriginated": True, "agentMessageKind": "task_notification"} if notification else {}
+    )
     operation.options = SendOptions.parse({})
     operation.chat_id = "chat-route"
     message_id = "msg-original" if retry else "msg-new"
@@ -1180,9 +1188,9 @@ def test_builtin_workbench_route_always_uses_new_runtime(
     assert config.project_id == "project-route"
     assert config.project_memory_snapshot == {}
     assert config.session_title == "Route chat"
-    assert config.memory_write_enabled is True
+    assert config.memory_write_enabled == (not notification)
     assert config.memory_trigger_enabled is True
-    assert config.memory_archive_enabled is True
+    assert config.memory_archive_enabled == (not notification)
     assert config.memory_short_term_enabled is False
     assert config.memory_project_enabled is False
     assert config.completed_turn_count == (2 if retry else 3)

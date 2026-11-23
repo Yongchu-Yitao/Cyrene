@@ -58,8 +58,16 @@ def setup_capacity(context):
         if not limit:
             return {}
         async with session.task_contexts.serial():
-            active = session.task_contexts.read().get("active")
+            state = session.task_contexts.read()
+            active = state.get("active")
             if not active:
+                return {}
+            # Only one context can be selected; count live (unarchived)
+            # workstreams, not the selected context or archived history.
+            if context.data.get("assistant_owner_session_id") and sum(
+                not doc.get("archived", False)
+                for doc in state["documents"].values()
+            ) <= 1:
                 return {}
             path = context.tree.get_path(context.tree_id, trigger.id)
             kinds = {node.value.get("context_kind") for node in path}

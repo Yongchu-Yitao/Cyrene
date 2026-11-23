@@ -699,7 +699,14 @@ async def route_model_call(
             )
             # A malformed request is shared by every candidate. Switching models
             # hides the cause and replays the same invalid tool/message history.
-            if public_failures[-1].code == "model_request_invalid":
+            # A malformed tool name needs a corrected request from the session,
+            # not generation against unchanged history by another candidate.
+            invalid_tool_name = (
+                public_failures[-1].code == "model_response_invalid"
+                and isinstance(stream_diagnostics, Mapping)
+                and stream_diagnostics.get("termination_reason") == "invalid_tool_name"
+            )
+            if public_failures[-1].code == "model_request_invalid" or invalid_tool_name:
                 await _persist_fallback_result(context, candidate, status="failed")
                 raise ModelCallError(public_failures[-1], diagnostics=stream_diagnostics)
             await _publish_next_fallback(context, candidate, eligible, index)

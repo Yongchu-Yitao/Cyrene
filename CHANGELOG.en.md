@@ -2,7 +2,7 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
-## [0.9.2.3] - 2026-11-22
+## [0.9.2.3] - 2026-11-23
 
 ### Features and interface updates
 
@@ -13,6 +13,13 @@
 - Require confirmation before restoring from either the backup list or a local file. Show the selected file name and explain that restoration replaces corresponding current data, that sessions, attachments, or built-in projects added since the backup may be lost, and that Cyrene needs a restart afterward. Cancelling confirmation or file selection leaves restoration unstarted. Disable backup actions while an operation is in progress to reduce duplicate submissions. Continue showing results and failure details in notifications, and improve backup lists and long file names in narrow windows.
 - Fix incomplete model usage accounting for background home preparation. Preparation remains silent without inserting progress messages into the current conversation. Model usage that has already occurred remains recorded even if that home preparation attempt does not complete successfully.
 - Adjust the assistant's floating entry point so it remains above conversation content while staying below top bar menus, preventing it from covering an open menu.
+- Add fullscreen viewing for ordinary conversation cards within their current split pane, making long content and interactive pages easier to use. Pinned cards and cards in detached windows expand within their own areas without taking over other panes. The button appears when hovering over the top-right corner or focusing it with the keyboard, and remains visible on touch devices. Home overview cards keep their existing layout. Only one card expands at a time in each pane.
+- Preserve entered values and the running state of interactive pages when switching card fullscreen mode, then return the card to its original position. The expanded area follows window resizing, scrolling, and pane size changes. A single interactive page can fill the available space, while longer regular content remains scrollable. Exit with the button or Esc, including while working inside an interactive page, and restore the previous keyboard focus afterward.
+- Improve recovery when a model returns malformed actions. Unrecognizable action names or incomplete groups of actions stop the entire current group before anything in it runs, then ask the model to regenerate valid actions. This reduces partial execution and repeated failures from switching models without correcting the actions. Earlier completed actions and file content remain available, with explicit guidance to avoid repeating completed writes. Repeated correction failures terminate normally with an error.
+- Keep the personal assistant's persona out of delegated execution tasks and tasks they further delegate, even when personality is enabled in Settings. These tasks stay focused on their specific requirements with less persona-related distraction. The personal assistant itself continues using the selected personality preferences.
+- Continue applying the original memory guidance when task status notifications return to the main assistant conversation, helping task progress and results stay connected to existing preferences and background. These notifications are not consequently treated as new user information to write or archive into memory.
+- Reduce unnecessary work-organization prompts in execution tasks. With only one unarchived workstream, older archived records no longer trigger a prompt to organize the work list. Reminders remain available when several unarchived workstreams exist, and warnings about the current conversation approaching its history capacity remain in place.
+
 
 ## [0.9.2.2] - 2026-11-20
 

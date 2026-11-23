@@ -335,7 +335,7 @@
     "decisions": 32
   },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-card-visuals.jsx::CardEmbed.<anonymous>.receive": {
-    "decisions": 24
+    "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::CardBlock": {
     "decisions": 21
@@ -344,7 +344,7 @@
     "decisions": 25
   },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-cards.jsx::WbcAssistantCard": {
-    "decisions": 33
+    "decisions": 35
   },
   "src/cyrene/workbench/webui/frontend/features/chat/assistant-home-layout.jsx::AssistantHomeLayout": {
     "decisions": 26

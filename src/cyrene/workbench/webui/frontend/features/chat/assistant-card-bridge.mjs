@@ -29,6 +29,10 @@ export function installCardBridge(fields) {
     send('change', { [key]: value });
   }
   addEventListener('input', onBoundInput);
+  // Keyboard events inside the sandbox do not bubble into the host document.
+  addEventListener('keydown', event => {
+    if (event.isTrusted && event.key === 'Escape') parent.postMessage({ channel: 'cyrene-card-fullscreen-exit' }, '*');
+  }, true);
   const send = (kind, values, action_id) => parent.postMessage({ channel: 'cyrene-card', kind, values, action_id }, '*');
   window.cyreneCard = Object.freeze({
     watch(render) {
@@ -60,6 +64,7 @@ export function installCardBridge(fields) {
       }
     }
     new ResizeObserver(measure).observe(body);
+    addEventListener('resize', measure);
     measure();
   });
   let lastValues = {};

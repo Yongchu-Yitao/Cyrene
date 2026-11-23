@@ -771,7 +771,10 @@ class _SendOperation:
             project_memory_snapshot=memory_snapshot,
             session_title=str(self.chat.get("title") or ""),
             memory_write_enabled=not self.is_side_agent and not self.origin.agent_originated,
-            memory_trigger_enabled=not self.is_side_agent and not self.origin.agent_originated,
+            # A task notification continues the owner's conversation with the same memory prompt.
+            memory_trigger_enabled=not self.is_side_agent and (
+                not self.origin.agent_originated or self.origin.agent_message_kind == "task_notification"
+            ),
             memory_archive_enabled=not self.origin.agent_originated,
             memory_short_term_enabled=self.service.chat_short_term_memory_active(
                 self.chat

@@ -96,6 +96,7 @@ _PUBLIC_TOOL_DIAGNOSTIC_FIELDS = frozenset({
     "arguments_length",
     "arguments_sha256",
     "arguments_validation",
+    "name_validation",
     "index",
     "name",
 })

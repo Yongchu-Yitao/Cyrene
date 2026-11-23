@@ -1,5 +1,6 @@
 """Recover local failures without losing task context or the transition worker."""
 import asyncio
+import json
 import threading
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -26,6 +27,10 @@ def test_invalid_batch_retries_before_execution(tmp_path, response):
         session.submit("work", run_id="run")
         asyncio.run(session.drain())
         assert len(requests) == 2
+        correction = json.loads(requests[1]["messages"][-1]["content"])
+        assert correction["previous_attempt"]["retry_scope"] == "different_arguments"
+        assert correction["previous_attempt"]["tool_calls_executed"] is False
+        assert correction["required_action"]["action"] == "regenerate_tool_calls"
         assert session.snapshot()["status"] == "idle"
     finally:
         session.close()

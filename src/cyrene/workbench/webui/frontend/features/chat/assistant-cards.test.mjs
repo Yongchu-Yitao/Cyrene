@@ -368,3 +368,18 @@ test('groups gather ordinary cards across turns, reserving a single placement pe
     assert.equal(presentConversationMessages([{role:'assistant',content}],'work')[0].markdownParts,undefined);
   }
 });
+
+
+test('sandbox Escape forwards only real keyboard input to the fullscreen host', async () => {
+  const vm = await import('node:vm');
+  const messages = [], listeners = {};
+  const script = customCardDocument('').match(/<script>([\s\S]*?)<\/script>/)[1];
+  vm.runInNewContext(script, { window: {}, parent: { postMessage: data => messages.push(data) },
+    addEventListener: (name, fn) => { listeners[name] = fn; } });
+  listeners.keydown({ key: 'Escape', isTrusted: false });
+  listeners.keydown({ key: 'Enter', isTrusted: true });
+  assert.equal(messages.length, 0);
+  listeners.keydown({ key: 'Escape', isTrusted: true });
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].channel, 'cyrene-card-fullscreen-exit');
+});

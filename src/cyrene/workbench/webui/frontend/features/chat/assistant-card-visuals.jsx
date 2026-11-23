@@ -145,6 +145,7 @@ export function CardEmbed({ block, card, values, disabled, snapshot, onEvent }) 
       if (event.source !== frame.current?.contentWindow || event.origin !== 'null') return;
       const data = event.data;
       if (data?.channel === 'cyrene-card-size' && Number.isFinite(data.height)) {
+        if (frame.current?.closest('[data-card-fullscreen]')) return;
         setHeight(Math.max(24, Math.min(8192, Math.ceil(data.height))));
         return;
       }

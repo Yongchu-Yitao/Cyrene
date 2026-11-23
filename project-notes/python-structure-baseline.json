@@ -194,7 +194,7 @@
     "decisions": 27
   },
   "src/cyrene/core/session.py": {
-    "module_lines": 5073
+    "module_lines": 5081
   },
   "src/cyrene/core/session.py::AgentSession": {
     "methods": 130,
@@ -264,7 +264,7 @@
     "decisions": 23
   },
   "src/cyrene/core/session.py::_tool_call_correction_payload": {
-    "decisions": 30
+    "decisions": 33
   },
   "src/cyrene/model/codex_provider.py": {
     "module_lines": 1645
@@ -1461,8 +1461,8 @@
     "decisions": 24
   },
   "src/cyrene/plugins/model_router.py::route_model_call": {
-    "lines": 207,
-    "decisions": 34
+    "lines": 214,
+    "decisions": 37
   },
   "src/cyrene/plugins/native_runtime.py::guard_shell_command_workspace_write": {
     "decisions": 24
@@ -1767,7 +1767,7 @@
     "fields": 31
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py": {
-    "module_lines": 1617
+    "module_lines": 1620
   },
   "src/cyrene/workbench/http/workbench/chat_routes/run_send_routes.py::_SendOperation": {
     "methods": 36,

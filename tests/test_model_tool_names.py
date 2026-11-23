@@ -52,3 +52,25 @@ async def test_shared_provider_boundary_restores_calls(monkeypatch):
     result = await _shared.complete_model({'model': 'deepseek-flash', 'messages': [{'role': 'user', 'content': 'hi'}],
         'tools': [{'type': 'function', 'function': {'name': 'schedule.create'}}]}, PluginContext(), DEEPSEEK_PROVIDER)
     assert result['tool_calls'][0]['function']['name'] == 'schedule.create'
+
+
+@pytest.mark.parametrize('name', ['Read\n</parameter', ' Read', 'Read ', '', None, 123, 'x' * 65])
+def test_invalid_wire_names_reject_without_mutating_batch(name, caplog):
+    from cyrene.model.error_details import ModelCallError
+    codec = ToolNames()
+    alias = codec.encode('card.list')
+    response = {'tool_calls': [
+        {'function': {'name': alias, 'arguments': '{}'}},
+        {'function': {'name': name, 'arguments': '{"private":"do not log"}'}},
+    ], 'stream_diagnostics': {'adapter': 'openai', 'event_count': 5}}
+    original = deepcopy(response)
+    with pytest.raises(ModelCallError) as caught:
+        codec.response(response)
+    assert response == original
+    assert caught.value.details.code == 'model_response_invalid'
+    assert caught.value.details.retry_scope == 'different_arguments'
+    assert caught.value.diagnostics == {
+        'adapter': 'openai', 'event_count': 5, 'termination_reason': 'invalid_tool_name',
+        'tool_calls': [{'index': 1, 'name_validation': 'invalid_format'}],
+    }
+    assert 'do not log' not in caplog.text
