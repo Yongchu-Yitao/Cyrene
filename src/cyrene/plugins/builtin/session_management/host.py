@@ -237,7 +237,8 @@ class WorkbenchHost:
         blocks = []
         for key in ["shared", *state.get("documents", {})]:
             if key == "shared":
-                content = state.get("shared", {}).get("body", "")
+                from cyrene.core.context.body import body_text
+                content = body_text(state.get("shared", {}))
                 summary = "Shared task agreements"
             else:
                 content = json.dumps(task_messages(path, state, key), ensure_ascii=False, indent=2)

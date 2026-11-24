@@ -80,51 +80,41 @@ the baseline and replays the retained suffix, including unfinished partial text.
 
 ## Task contexts
 
-The fixed core pack exposes `load_context(context_id)`,
-`unload_context(summary)`, `append_context(content, context_id)` and
-`replace_context(content, context_id)`. Control calls must occupy their own
-batch. The root's `_task_contexts` state stores current mutable documents and an
-active ID; it contains no document revisions or titles. The catalog always shows
-all IDs, their last unload summaries and active status. Body edits do not generate
-new summaries. Unload summaries are required and head/tail clipped to 200 Unicode
-code points (100 + ellipsis + 99).
+Each session stores multiple contexts and activates at most one ordinary context.
+`switch_context` atomically checkpoints the previous context and activates an
+existing or new one. `load_context` requires the previous context to be unloaded.
+The current request and its control receipts survive a switch; other inactive
+context histories do not. `shared` is always available independently.
 
-Unloading atomically saves the summary and clears the active pointer. Loading
-validates an existing ID and its retained artifacts before changing the pointer.
-There is no create/delete tool: ordinary tool work or a text answer creates a
-context lazily when none is active. For the first task in a new conversation, the
-entry is established before its first model request to preserve the cache prefix. Management calls do not create contexts.
-Append and replace can edit inactive documents without activating them; they
-change only the body. DeepReflect and compaction rewrite only the active task's
-body/execution projection, under the same read/compute/commit gate as edits.
+A context's `body` is an ordered list containing user messages, assistant replies,
+tool calls/results, and explicit additions. It is no longer a string prepended to
+an independently assembled history. Entries reuse execution-tree record values
+with source IDs; compacted messages and explicit additions retain their message
+roles. The original execution tree remains the audit trail, including records
+that were replaced or compacted out of the editable body. Reconciliation of
+committed records is idempotent and persisted with session progress.
 
-Shared user/assistant prose and lifecycle-owned mounts remain independent of task
-selection. Tools inherit their task ID at the model-output boundary, including
-results that arrive later. Stored observations have tree-owned snapshot paths,
-source paths/URLs when available and hashes; results remain in their original chronological positions and retain full
-content throughout an activation; only reloaded task history uses references. Snapshots are not
-temporary resources: deleting the conversation tree removes them; unloading does
-not. Switching never restores the filesystem or grants additional authority.
+`append_context` adds a structured text record at the end of the target body.
+During a tool call the paired result is kept adjacent to the assistant call,
+followed by the addition. Subsequent dialogue follows that addition. An append
+never rewrites earlier messages. Editing an inactive context does not activate it.
+`replace_context` explicitly replaces the model-visible body, retaining the audit
+trail. DeepReflect and compaction replace only the selected task's body and mark
+covered source records so they cannot reappear. These explicit rewrites, context
+switches and lifecycle mount changes may invalidate provider caches.
 
-The execution tree retains the original events. Context rewriting changes the
-current task projection, never the public transcript or another document. Control
-handshakes remain paired across switching. Every management receipt from the
-current user request remains visible so multi-step switches do not repeat work;
-older receipts follow task ownership and compaction coverage.
+Legacy string bodies and saved `messages` lists migrate into structured entries;
+existing chronological execution records are reconciled by their source IDs.
+Reload keeps the existing policy of converting old tool calls to bounded
+historical records and omitting their tool results. Images retire at the same
+transition/compaction boundaries. Answered clarifications retain their existing
+one-transition handoff. Tool pairing, multimodal materialization and lifecycle
+context projection reuse the existing model-message adapters.
 
-At explicit unload boundaries, shared prose has a separate projection budget (16k estimated tokens by default,
-up to a quarter of the configured window at session creation, with a 1k floor).
-Older omitted prose is available as an exact tree-owned JSON snapshot through
-Read. System mounts and the current exchange are retained even above this budget;
-the catalog is never silently dropped. Very large mandatory input can still
-exceed a provider window and must be handled as an input-size error, not by
-compressing another task or truncating the user's current request.
-
-Within an activation, shared selection, catalog placement and observation text
-are stable. Messages are projected in their original chronological order; ordinary
-model/tool continuation only appends to the previous input. Explicit edits,
-switching, lifecycle mount changes and task compaction can invalidate a prefix.
-No promise is made about provider-side cache accounting or eviction.
+The context inspector exports the structured body as JSON and accepts structured
+edits (legacy plain-text replacement is still supported). Search, capacity
+snapshots, fork replay and task exports use the same body representation. Forks
+replay only successful operations up to their boundary, never later root state.
 
 ### Always-loaded shared task document
 
@@ -138,10 +128,10 @@ receive tool execution ownership, or be rewritten by ordinary DeepReflect or
 compaction. `load_context("shared")` returns an error: it is already always loaded.
 Unload never removes its body. Deleting the conversation removes it with the tree.
 
-The catalog marks shared as `always_loaded`. Its nonempty body is projected once
-as task data, before the catalog and chronological history, independent of shared
-prose budgeting. An unchanged body retains the same prefix across continuations;
-explicit shared edits intentionally change that prefix. It is not a system prompt,
+The catalog marks shared as `always_loaded`. Its structured body contains shared agreements rather than task execution records.
+Initial shared text precedes the catalog; subsequent appends retain their chronological
+positions without rewriting that prefix. Explicit replacement and offloading can
+change the prefix. It is not a system prompt,
 long-term memory or pinned resource. The Agent is instructed to maintain only
 necessary cross-task goals, constraints, interface contracts and verified decisions,
 with source references and scope (all contexts or named IDs). Uncertain/local

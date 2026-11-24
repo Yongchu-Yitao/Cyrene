@@ -219,6 +219,9 @@ def project_model_messages(
                     elif system is not None:
                         system["content"] = base_system_content
             continue
+        if role == "context_body_message":
+            messages.append(deepcopy(value["message"]))
+            continue
         if role in {"system", "user"}:
             from .images import user_content
             content = user_content(value) if role == "user" else str(value.get("content") or "")

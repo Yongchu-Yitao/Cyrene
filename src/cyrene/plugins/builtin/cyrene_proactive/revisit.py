@@ -101,7 +101,8 @@ def select_block(service, chat):
         result = service.host.latest_result(target)
         if result.get("final_reply_node_id") and result.get("content"):
             task_results[f"task:{target}:{result['final_reply_node_id']}"] = result["content"][-2000:]
-    return key, {"context_id": key, "current_task_results": task_results, "title": doc.get("title"), "summary": doc.get("summary"), "body": str(doc.get("body") or "")[-4000:],
+    from cyrene.core.context.body import body_text
+    return key, {"context_id": key, "current_task_results": task_results, "title": doc.get("title"), "summary": doc.get("summary"), "body": body_text(doc)[-4000:],
                  "history": history[-6:], "previous_report": previous[0] if previous else None}
 
 

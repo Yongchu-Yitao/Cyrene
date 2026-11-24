@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from test_task_contexts import body_content
+
 import asyncio
 import json
 
@@ -292,15 +294,15 @@ def test_deep_reflect_tool_rewrites_context_then_continues_without_changing_ui(
     assert session.store.get_node(session.tree.id, original.id).value["role"] == "user"
     assert not any(n.value.get("role") == "context_reflection" for n in nodes)
     document = session.task_contexts.read()["documents"][active]
-    assert "[Cyrene Reflect Pack]" in document["body"]
-    assert "exact visible user message" in document["body"]
+    assert "[Cyrene Reflect Pack]" in body_content(document["body"])
+    assert "exact visible user message" in body_content(document["body"])
     assert nodes[-1].value["content"] == "final answer from better direction"
     assert len(model_inputs) == 2
     assert "[Cyrene Reflect Pack]" in str(model_inputs[-1])
     # Task-local prose was replaced by reflection; the UI transcript below stays exact.
     assert "visible pre-reflection reply" not in str(model_inputs[-1])
     assert len(gateway.calls) == 2
-    assert session.task_contexts.read()["shared"]["body"] == shared
+    assert body_content(session.task_contexts.read()["shared"]["body"]) == shared
     assert all(sum(shared in str(m.get("content", "")) for m in messages) == 1 for messages in model_inputs)
 
     transcript = ContextTreeTranscript(str(tmp_path / "workbench.sqlite3"))

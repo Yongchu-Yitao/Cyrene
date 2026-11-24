@@ -1,3 +1,4 @@
+from test_task_contexts import body_content
 """Capacity boundaries preserve task identity, evidence and append-only input."""
 import json
 from copy import deepcopy
@@ -81,7 +82,7 @@ def test_oversized_load_preserves_state_and_exports_complete_evidence(tmp_path):
         assert info['estimated_tokens'] > info['threshold_tokens'] == 6000
         snapshot = json.loads(Path(info['snapshot_path']).read_text())
         assert snapshot['context_id'] == active
-        assert text(snapshot['document']['body']) == body
+        assert body_content(snapshot['document']['body']) == body
         assert snapshot['document']['summary'] == 'A unfinished; continue analysis'
         assert 'execution_records' in snapshot
         s._configured_compaction_limit = lambda: 1000000
@@ -105,12 +106,12 @@ def test_shared_offload_keeps_task_dialogue_and_shared_edits(tmp_path):
         prepared = prepare(s)
         state = s.task_contexts.read()
         assert state['active'] == before['active']
-        assert state['shared']['body'] == shared
+        assert body_content(state['shared']['body']) == shared
         assert 'current exact request' in str(prepared.messages)
         assert old[:300] in str(prepared.messages)
         assert shared[:300] not in str(prepared.messages)
         original = Path(state['shared_offload']['snapshot_path'])
-        assert text(json.loads(original.read_text())['body']) == shared
+        assert body_content(json.loads(original.read_text())['body']) == shared
         assert not state.get('shared_snapshot')
         assert prepare(s).messages == prepared.messages
         command(s, 'append_context', {'context_id': 'shared', 'content': 'new explicit constraint'}, 'edit')
@@ -119,7 +120,7 @@ def test_shared_offload_keeps_task_dialogue_and_shared_edits(tmp_path):
         current = s.task_contexts.read()
         assert current['shared_offload']['snapshot_path'] != str(original)
         assert original.exists()
-        assert text(json.loads(Path(current['shared_offload']['snapshot_path']).read_text())['body']).endswith('new explicit constraint')
+        assert body_content(json.loads(Path(current['shared_offload']['snapshot_path']).read_text())['body']).endswith('new explicit constraint')
     finally:
         s.close()
 
@@ -164,7 +165,7 @@ def test_model_receives_warning_and_continues_in_new_segment(tmp_path):
         assert len(seen) == 2
         assert len(state['documents']) == 2
         assert state['active'] != original
-        assert state['documents'][original]['body'] == body
+        assert body_content(state['documents'][original]['body']) == body
         assert state['documents'][original]['summary'].startswith('Implementation unfinished')
         assert not any(n.value.get('role') == 'context_compaction'
                        for n in s.store.get_subtree(s.tree.id, s.tree.root_id))

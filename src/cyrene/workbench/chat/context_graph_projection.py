@@ -1,6 +1,7 @@
 """Pure rendering of context nodes and lineage for the graph read model."""
 import hashlib
 import json
+from cyrene.core.context.body import body_text
 
 
 def node_content(value):
@@ -24,7 +25,7 @@ def append_task_nodes(graph_nodes, edges, task_state, cid, leaf, revision, activ
         for task_id, doc in documents.items():
             display_id = f"{cid}:task:{task_id}"
             graph_nodes.append({'id': display_id, 'nodeId': 'task:' + task_id, 'chatId': cid,
-                'role': 'task', 'kind': task_id, 'preview': str(doc.get('body', ''))[:220],
+                'role': 'task', 'kind': task_id, 'preview': body_text(doc)[:220],
                 'canEdit': bool(safe_boundary(leaf)), 'canContinue': False, 'canFork': False,
                 'revision': revision, 'active': active and (task_id == 'shared' or task_state.get('active') == task_id)})
             edges.append({'id': 'task:' + display_id, 'source': f'{cid}:{leaf.id}', 'target': display_id, 'kind': 'mount'})

@@ -1,3 +1,5 @@
+import json
+from test_task_contexts import body_content
 """Branch graph uses real SQLite trees and the existing fork runtime."""
 from types import SimpleNamespace
 from uuid import uuid4
@@ -163,11 +165,11 @@ def test_task_document_edit_is_branch_local_and_replayable(graph_env):
     body = operation(e, e.answer, 'edit', content='new shared contract')
     body['nodeId'] = 'task:shared'
     target = e.graph.materialize('source', body)['chat']['id']
-    assert e.graph.detail(target, 'task:shared')['content'] == 'new shared contract'
+    assert body_content(json.loads(e.graph.detail(target, 'task:shared')['content'])) == 'new shared contract'
     assert e.graph.detail('source', 'task:shared')['content'] == ''
     with ContextStoreRouter(e.directory) as r:
         leaf = r.committed_state(target)[0]
-        assert fork_task_state(r.get_path(target, leaf))['shared']['body'] == 'new shared contract'
+        assert body_content(fork_task_state(r.get_path(target, leaf))['shared']['body']) == 'new shared contract'
 
 
 def test_saved_user_draft_reopens_idle_and_replays_only_once(graph_env, tmp_path):
@@ -433,3 +435,24 @@ def test_graph_cache_handles_equal_timestamp_edits(graph_env):
     second = e.graph.graph('source')
     assert second['graphRevision'] != first['graphRevision']
     assert next(n for n in second['nodes'] if n['nodeId'] == e.answer.id)['preview'] == 'same timestamp edit'
+
+
+def test_structured_task_body_edit_preserves_roles_and_replays(graph_env):
+    from cyrene.core.context.tasks import STATE_KEY, fork_task_state
+    e = graph_env
+    entries = [{'message': {'role': 'user', 'content': 'shared requirement'}},
+               {'message': {'role': 'user', 'content': 'second requirement'}}]
+    with ContextStoreRouter(e.directory) as r:
+        root = r.get_node('source', e.root)
+        r.update_node('source', e.root, {**root.value, STATE_KEY: {
+            'active': None, 'documents': {}, 'shared': {'body': []}, 'receipts': {}}})
+    op = operation(e, e.answer, 'edit', content=json.dumps(entries))
+    op['nodeId'] = 'task:shared'
+    target = e.graph.materialize('source', op)['chat']['id']
+    detail = e.graph.detail(target, 'task:shared')
+    assert detail['format'] == 'json'
+    assert json.loads(detail['content']) == entries
+    with ContextStoreRouter(e.directory) as r:
+        path = r.get_path(target, r.committed_state(target)[0])
+        assert fork_task_state(path)['shared']['body'] == entries
+    assert sum(m.get('content') == 'shared requirement' for m in detail['projection']) == 1

@@ -1388,6 +1388,7 @@ class AgentSession:
         self._detail = detail
         if leaf_id is not None:
             self._leaf_id = leaf_id
+            self.task_contexts.sync()
         return status, detail, self._current_run_id, self._leaf_id
 
     def _emit_state_snapshot(self, snapshot: tuple[str, str, str, str]) -> None:
@@ -2649,10 +2650,9 @@ class AgentSession:
             self._ensure_required_session_packs()
             self._model_tools = self._direct_model_tool_definitions()
             tools = deepcopy(list(self._model_tools))
-            # A brand-new conversation has no context to resume. Establish its
-            # first catalog entry before the first request to keep that prefix
-            # unchanged for subsequent tool/model calls.
-            if not self.task_contexts.read()["documents"]:
+            # Establish the initial catalog before calling the model, and record
+            # new requests in the active context without changing that catalog.
+            if not self.task_contexts.read()["documents"] or self.task_contexts.read()["active"]:
                 self.task_contexts.ensure(trigger.id)
             messages = self._messages(trigger.id)
             latest_trigger = self.store.get_node(self.tree.id, trigger.id)
@@ -2921,8 +2921,8 @@ class AgentSession:
                 doc = state["documents"][state["active"]]
                 path = self.store.get_path(self.tree.id, trigger.id)
                 doc["covered"] = list(dict.fromkeys([*doc["covered"], *(n.id for n in task_nodes(path, state, state["active"]))]))
-                doc["body"] = ""
-                doc["messages"] = [{**m, "role": "user"} if m.get("compacted_block") else m for m in projected]
+                doc["body"] = [{"message": {**m, "role": "user"} if m.get("compacted_block") else m}
+                               for m in projected]
                 if distillation_error:
                     payload["distillation_error"] = distillation_error
                 state["pending_compaction"] = {"node_id": compaction_key, "parent_id": trigger.id, "value": payload}
@@ -4032,8 +4032,8 @@ class AgentSession:
                     return
                 if self._is_cancelled(run_id):
                     return
-                doc["body"] = str(pack.get("rendered_model_context") or "")
-                doc["messages"] = []
+                from .context.body import text_entry
+                doc["body"] = [text_entry(str(pack.get("rendered_model_context") or ""))]
                 doc["covered"] = list(dict.fromkeys([*doc["covered"], *(n.id for n in task_nodes(path, state, active))]))
                 state["receipts"][receipt] = {"context_id": active}
                 self.task_contexts.write(state)

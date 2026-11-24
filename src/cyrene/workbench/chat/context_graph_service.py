@@ -19,6 +19,7 @@ from cyrene.core.context.graph_reads import graph_version, graph_snapshot
 from cyrene.core.context.paths import DIALOGUE_ROLES, context_path, select_context_leaf
 from cyrene.core.context.projection import project_model_messages
 from cyrene.core.context.tasks import STATE_KEY, fork_task_state
+from cyrene.core.context.body import edit_body
 from cyrene.workbench.chat.context_graph_store import ContextGraphStore, GraphConflict
 from cyrene.workbench.chat.context_graph_projection import (
     node_content, safe_boundary, append_task_nodes, project_node, append_lineage_edges,
@@ -195,6 +196,7 @@ class ContextGraphService:
                 'branches': branches, 'view': view}
 
     def detail(self, chat_id, node_id):
+        from cyrene.core.context.body import body_text
         nodes, leaf, revision = self.snapshot(chat_id)
         if node_id.startswith('task:'):
             state = context_path(nodes, leaf.id)[0].value.get(STATE_KEY) or {}
@@ -204,7 +206,7 @@ class ContextGraphService:
                 raise LookupError('Task document not found')
             record = self.store.read('revision:' + chat_id)['value']
             previous = record.get('beforeContent') if record.get('nodeId') == node_id and record.get('mode') == 'edit' else None
-            return {'previousContent': previous, 'revisionSource': record, 'content': str(doc.get('body', '')), 'role': 'task', 'format': 'text',
+            return {'previousContent': previous, 'revisionSource': record, 'content': body_text(doc), 'role': 'task', 'format': 'json' if isinstance(doc.get('body'), list) else 'text',
                     'revision': revision, 'value': doc, 'projection': project_model_messages(context_path(nodes, leaf.id))}
         node = next((n for n in nodes if n.id == node_id), None)
         if node is None:
@@ -336,7 +338,7 @@ class ContextGraphService:
                     doc = state.get('shared') if task_id == 'shared' else state.get('documents', {}).get(task_id)
                     if doc is None:
                         raise ValueError('Task document is unavailable at this boundary')
-                    doc['body'] = content
+                    edit_body(doc, content, shared=task_id == 'shared')
                     router.update_node(target_id, root.id, rv)
                     audit = router.mount(target_id, last_id, {'role': 'context', 'content': '',
                         'context_kind': 'task_revision', 'context_graph_task_edit': {'contextId': task_id, 'content': content},

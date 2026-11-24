@@ -5,7 +5,7 @@ import pytest
 
 from cyrene.core.context.capacity import ContextCapacityError
 from cyrene.core.context.tasks import context_catalog, fork_task_state
-from test_task_contexts import command, make_session, run
+from test_task_contexts import body_content, command, make_session, run
 
 
 def edit(session, action, receipt, **args):
@@ -24,7 +24,7 @@ def test_archive_search_restore_preserves_task_and_survives_reopen(tmp_path):
         assert edit(s, "archive", "archive", context_id=a) == receipt
         state = s.task_contexts.read()
         assert state["active"] == before["active"]
-        assert state["documents"][a]["body"] == "original evidence"
+        assert body_content(state["documents"][a]["body"]) == "original evidence"
         assert state["documents"][a]["last_active_at"] == before["documents"][a]["last_active_at"]
         assert a not in str(s._messages(s._leaf_id))
         assert "1 archived task contexts" in str(s._messages(s._leaf_id))
@@ -144,6 +144,6 @@ def test_real_catalog_tool_handshake_and_fork_replay(tmp_path):
         assert archived["documents"][original]["archived"] is True
         assert state["active"] == original
         assert state["documents"][original]["archived"] is False
-        assert state["documents"][original]["body"] == "Original body"
+        assert body_content(state["documents"][original]["body"]) == "Original body"
     finally:
         s.close()

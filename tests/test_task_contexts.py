@@ -30,6 +30,21 @@ def make_session(tmp_path, model=None, *, tool_plugins=(), **kwargs):
     return session
 
 
+def body_content(body):
+    """Explicit text entries in the structured body (excluding automatic history)."""
+    if isinstance(body, str):
+        return body
+    parts = []
+    for entry in body:
+        message = entry.get('message', {})
+        content = message.get('content', '')
+        if isinstance(content, dict) and 'text_chunks' in content:
+            content = ''.join(content['text_chunks'])
+        if content.startswith(('[Task context data]\n', '[Shared task context data; sources and scope apply]\n')):
+            parts.append(content.split('\n', 1)[1])
+    return '\n\n'.join(parts)
+
+
 def command(s, name, args, receipt):
     return run(s.task_contexts.execute(name, args, receipt))
 
@@ -65,7 +80,7 @@ def test_unload_clip_edit_any_context_and_idempotency(tmp_path):
         b = s.task_contexts.ensure("b")
         command(s, "append_context", {"context_id": a, "content": "first"}, "append")
         command(s, "append_context", {"context_id": a, "content": "first"}, "append")
-        assert s.task_contexts.read()["documents"][a]["body"] == "first"
+        assert body_content(s.task_contexts.read()["documents"][a]["body"]) == "first"
         command(s, "replace_context", {"context_id": a, "content": replacement_body}, "replace")
         assert s.task_contexts.read()["active"] == b
         assert replacement_body not in str(s._messages(s.tree.root_id))
@@ -80,7 +95,7 @@ def test_unload_clip_edit_any_context_and_idempotency(tmp_path):
     reopened = make_session(tmp_path)
     try:
         assert reopened.task_contexts.read()["active"] == a
-        assert reopened.task_contexts.read()["documents"][a]["body"] == replacement_body
+        assert body_content(reopened.task_contexts.read()["documents"][a]["body"]) == replacement_body
     finally:
         reopened.close()
 
@@ -194,7 +209,7 @@ def test_compaction_only_changes_active_document(tmp_path):
         assert outcome["compacted"]
         assert s.task_contexts.read()["shared"] == shared_before
         assert "Shared contract" in str(s._messages(node.id))
-        assert s.task_contexts.read()["documents"][a]["body"] == "A untouched"
+        assert body_content(s.task_contexts.read()["documents"][a]["body"]) == "A untouched"
         effective = s._messages(node.id)
         assert "shared exact request" in str(effective)
         assert "shared answer" in str(effective)
@@ -226,7 +241,7 @@ def test_serial_gate_covers_read_through_commit(tmp_path):
             release.set()
             await asyncio.gather(job, append)
         run(scenario())
-        assert s.task_contexts.read()["documents"][a]["body"] == "rewritten\n\nlater"
+        assert body_content(s.task_contexts.read()["documents"][a]["body"]) == "rewritten\n\nlater"
     finally:
         s.close()
 
@@ -313,7 +328,7 @@ def test_unchanged_context_preserves_exact_prefix_and_full_results(tmp_path):
 def test_shared_is_always_loaded_editable_and_never_active(tmp_path):
     s = make_session(tmp_path)
     try:
-        assert s.task_contexts.read()["shared"] == {"body": ""}
+        assert s.task_contexts.read()["shared"] == {"body": []}
         assert s.task_contexts.read()["active"] is None
         assert not s.task_contexts.read()["documents"]
         assert {"id": "shared", "active": False, "always_loaded": True} in s.snapshot()["taskContexts"]
@@ -337,7 +352,7 @@ def test_shared_is_always_loaded_editable_and_never_active(tmp_path):
         s.close()
     reopened = make_session(tmp_path)
     try:
-        assert reopened.task_contexts.read()["shared"]["body"].startswith("Updated API")
+        assert body_content(reopened.task_contexts.read()["shared"]["body"]).startswith("Updated API")
         assert reopened.task_contexts.read()["active"] == a
     finally:
         reopened.close()
@@ -354,7 +369,8 @@ def test_shared_migration_preserves_existing_task_state(tmp_path):
     reopened = make_session(tmp_path)
     try:
         state = reopened.task_contexts.read()
-        assert state.pop("shared") == {"body": ""}
+        assert state.pop("shared") == {"body": []}
+        old_state.pop("shared", None)
         assert state == old_state
     finally:
         reopened.close()
@@ -374,7 +390,7 @@ def test_core_tools_edit_shared_through_real_model_transition(tmp_path):
         s.submit("Save our common agreement", run_id="r")
         run(s.drain())
         assert len(inputs) == 2
-        assert s.task_contexts.read()["shared"]["body"].startswith("Cross-task agreement")
+        assert body_content(s.task_contexts.read()["shared"]["body"]).startswith("Cross-task agreement")
         assert s.task_contexts.read()["active"] != "shared"
     finally:
         s.close()
@@ -469,7 +485,7 @@ def test_fork_replays_prefix_and_owns_artifacts_after_source_deletion(tmp_path):
     assert runtime.delete_context("agent-session")
     reopened = make_session(tmp_path, tree_id="fork")
     try:
-        assert reopened.task_contexts.read()["shared"]["body"] == "original common contract"
+        assert body_content(reopened.task_contexts.read()["shared"]["body"]) == "original common contract"
         messages = reopened._messages(fork["leaf_id"])
         assert "future contract" not in str(messages)
         node = reopened.store.get_node("fork", result.id)
@@ -541,7 +557,7 @@ def test_sequential_context_edits_keep_success_receipts_until_switch(tmp_path):
         s.submit('Record two constraints once each', run_id='r')
         run(s.drain())
         assert len(inputs) == 3
-        assert s.task_contexts.read()['shared']['body'].count('constraint 1') == 1
+        assert body_content(s.task_contexts.read()['shared']['body']).count('constraint 1') == 1
     finally:
         s.close()
 
@@ -810,5 +826,141 @@ def test_clarification_unload_load_and_mixed_results(tmp_path):
         command(s, 'unload_context', {'summary': 'pause source again'}, 'unload-source-again')
         command(s, 'load_context', {'context_id': target}, 'load-destination')
         assert 'VERSION_TWO' not in json.dumps(s._messages(answer.id), ensure_ascii=False)
+    finally:
+        s.close()
+
+
+@pytest.mark.parametrize('target_shared', [False, True])
+def test_body_records_all_dialogue_and_append_keeps_request_prefix(tmp_path, target_shared):
+    inputs = []
+    async def model(arguments, context):
+        messages = deepcopy(arguments['messages'])
+        if inputs:
+            assert messages[:len(inputs[-1])] == inputs[-1]
+        inputs.append(messages)
+        step = len(inputs)
+        if step == 1:
+            return {'tool_calls': [{'id': 'read', 'name': 'Read', 'arguments': {'path': str(tmp_path / 'evidence.txt')}}]}
+        if step in (2, 3):
+            target = 'shared' if target_shared else s.task_contexts.read()['active']
+            return {'tool_calls': [{'id': f'append{step}', 'name': 'append_context',
+                                   'arguments': {'context_id': target, 'content': f'new fact {step}'}}]}
+        return {'content': 'finished'}
+    (tmp_path / 'evidence.txt').write_text('original tool evidence')
+    s = make_session(tmp_path, model)
+    try:
+        s.submit('read and record findings', run_id='r')
+        run(s.drain())
+        assert len(inputs) == 4
+        state = s.task_contexts.read()
+        active = state['active']
+        body = state['documents'][active]['body']
+        assert isinstance(body, list)
+        roles = [e['value']['role'] for e in body if 'value' in e]
+        assert roles[0] == 'user'
+        assert roles.count('assistant') == 4
+        assert roles.count('tool_results') == 3
+        target = state['shared'] if target_shared else state['documents'][active]
+        additions = [e for e in target['body'] if 'message' in e]
+        assert [e['message']['content'].splitlines()[-1] for e in additions] == ['new fact 2', 'new fact 3']
+        if not target_shared:
+            for addition in additions:
+                index = body.index(addition)
+                assert body[index - 1]['value']['role'] == 'tool_results'
+                assert body[index - 1]['parent_id'] == addition['after_node_id']
+        # The durable body, not just the in-memory projection, contains records.
+        durable = s.store.get_node(s.tree.id, s.tree.root_id).value['_task_contexts']
+        assert durable['documents'][active]['body'] == body
+        before = s._messages(s._leaf_id)
+        leaf = s._leaf_id
+    finally:
+        s.close()
+    s = make_session(tmp_path)
+    try:
+        assert s._messages(leaf) == before
+        command(s, 'unload_context', {'summary': 'saved evidence'}, 'pause')
+        command(s, 'load_context', {'context_id': active}, 'reload')
+        restored = s._messages(leaf)
+        # One standalone appended record each (arguments in audit calls are separate).
+        notes = [m for m in restored if str(m.get('content', '')).startswith(('[Task context data]', '[Shared task context data;'))]
+        assert sum('new fact 2' in m['content'] for m in notes) == 1
+        assert sum('new fact 3' in m['content'] for m in notes) == 1
+    finally:
+        s.close()
+
+
+def test_legacy_body_migration_and_compacted_messages_are_not_duplicated(tmp_path):
+    s = make_session(tmp_path)
+    try:
+        s.submit('original question', run_id='r')
+        run(s.drain())
+        root = s.store.get_node(s.tree.id, s.tree.root_id)
+        state = deepcopy(root.value['_task_contexts'])
+        active = state['active']
+        state['documents'][active]['body'] = 'old saved text'
+        state['documents'][active]['messages'] = [{'role': 'user', 'content': 'old compacted history'}]
+        s.store.update_node(s.tree.id, root.id, {**root.value, '_task_contexts': state})
+        leaf = s._leaf_id
+    finally:
+        s.close()
+    s = make_session(tmp_path)
+    try:
+        s.task_contexts.sync()
+        doc = s.task_contexts.read()['documents'][active]
+        assert isinstance(doc['body'], list) and 'messages' not in doc
+        messages = s._messages(leaf)
+        assert str(messages).count('old saved text') == 1
+        assert str(messages).count('old compacted history') == 1
+        before = deepcopy(doc['body'])
+        s.task_contexts.sync()
+        assert s.task_contexts.read()['documents'][active]['body'] == before
+    finally:
+        s.close()
+
+
+def test_append_to_inactive_body_survives_switch_without_changing_active_input(tmp_path):
+    s = make_session(tmp_path)
+    try:
+        s.submit('task A question', run_id='a')
+        run(s.drain())
+        a = s.task_contexts.read()['active']
+        command(s, 'switch_context', {'context_id': None, 'title': 'B', 'summary': 'A paused'}, 'switch')
+        s.submit('task B question', run_id='b')
+        run(s.drain())
+        before = s._messages(s._leaf_id)
+        command(s, 'append_context', {'context_id': a, 'content': 'additional A evidence'}, 'inactive-edit')
+        assert s._messages(s._leaf_id) == before
+        command(s, 'switch_context', {'context_id': a, 'summary': 'B paused'}, 'return')
+        messages = s._messages(s._leaf_id)
+        text = str(messages)
+        assert text.index('task A question') < text.index('additional A evidence')
+        body = s.task_contexts.read()['documents'][a]['body']
+        assert body[-1]['message']['content'].endswith('additional A evidence')
+    finally:
+        s.close()
+
+
+def test_append_fork_replay_excludes_later_additions(tmp_path):
+    from cyrene.core.context.tasks import fork_task_state
+    inputs = []
+    async def model(arguments, context):
+        inputs.append(arguments['messages'])
+        if len(inputs) <= 2:
+            return {'tool_calls': [{'id': f'c{len(inputs)}', 'name': 'append_context', 'arguments': {
+                'context_id': s.task_contexts.read()['active'], 'content': f'fact-{len(inputs)}'}}]}
+        return {'content': 'done'}
+    s = make_session(tmp_path, model)
+    try:
+        s.submit('record findings', run_id='r')
+        run(s.drain())
+        path = s.store.get_path(s.tree.id, s._leaf_id)
+        first_result = next(i for i, n in enumerate(path) if n.value.get('role') == 'tool_results')
+        prefix = path[:first_result + 1]
+        forked = fork_task_state(prefix)
+        body = forked['documents'][forked['active']]['body']
+        assert body_content(body) == 'fact-1'
+        assert 'fact-2' not in str(body)
+        roles = [e['value']['role'] for e in body if 'value' in e]
+        assert roles == ['user', 'assistant', 'tool_results']
     finally:
         s.close()

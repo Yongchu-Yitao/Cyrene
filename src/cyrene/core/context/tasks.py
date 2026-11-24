@@ -1,4 +1,4 @@
-"""Mutable task documents. The execution tree remains the durable event source.
+"""Ordered editable task bodies. The execution tree retains the audit trail.
 
 The root owns one current document per ID, not document revisions. All mutations
 (including model-assisted rewrites) hold the same loop-neutral session gate.
@@ -17,6 +17,8 @@ from pathlib import Path
 
 from .clarifications import carried_clarifications, clarification_fallback, transition_clarifications
 from .paths import current_request_start
+from .body import (normalize_state, normalize_document, sync_bodies, append_body,
+                   replace_body, body_prefix, insert_additions, edit_body)
 
 STATE_KEY = "_task_contexts"
 SHARED_ID = "shared"
@@ -80,9 +82,13 @@ progress, decisions, unfinished work and next action. Use paths rather than
 source text. Unload pauses work without completing/cancelling it or restoring
 files/environment. Verify key evidence when resuming.
 
-append_context and replace_context edit any listed document's body without
-activating it; they do not edit execution records. Do not copy tool logs into
-bodies or bulky tool output into assistant prose. User/assistant messages belong
+Each context body contains its ordered user messages, assistant replies, tool
+calls/results and explicitly appended content. append_context adds a new record
+at the end without rewriting earlier records or activating the target context.
+Do not duplicate dialogue or tool results: they are already recorded automatically.
+replace_context explicitly replaces the target body; preserve necessary information
+when using it. The original execution audit trail remains unchanged. Do not copy
+bulky tool output into assistant prose. User/assistant messages belong
 to their task and are hidden when it is inactive. Unload preserves their order,
 keeps only tool names and truncated arguments, and discards tool results from the
 restored context; historical calls are records, not pending operations. Answered
@@ -165,7 +171,15 @@ def pause_document(state, target, summary, path):
         *(n.id for n in path if n.value.get('task_context_id') == target
           and n.value.get('role') in {'assistant', 'tool_results'}),
     ]))
-    doc['messages'] = saved_messages(doc.get('messages', []))
+    retained = []
+    for entry in normalize_document(doc):
+        if 'message' in entry:
+            saved = saved_messages([entry['message']])
+            if not saved:
+                continue
+            entry['message'] = saved[0]
+        retained.append(entry)
+    doc['body'] = retained
 
 
 def clip_summary(text: str) -> str:
@@ -271,15 +285,17 @@ def task_messages(path, state, context_id, *, live=False, observation_services=(
     from .interrupted_tools import settle_interrupted_tool_calls
     # Retain interruption evidence before task filtering removes terminal nodes.
     path = settle_interrupted_tool_calls(path)
-    doc = state['documents'][context_id]
     from .images import retire_historical_images
     path = retire_historical_images(path, state.get("retired_image_nodes", ()))
+    state = sync_bodies(deepcopy(state), path)
+    doc = state['documents'][context_id]
+    records = {e["id"]: e["value"] for e in doc["body"] if "value" in e}
     nodes = task_nodes(path, state, context_id)
     archived = archived_calls(path, doc)
     selected = []
     included_calls = {}
     for node in nodes:
-        value = deepcopy(node.value)
+        value = deepcopy(records.get(node.id, node.value))
         role = value.get('role')
         if role == 'assistant':
             if node.id in archived:
@@ -290,10 +306,8 @@ def task_messages(path, state, context_id, *, live=False, observation_services=(
             append_tool_results(selected, node, value, included_calls)
             continue
         selected.append(replace(node, value=value))
-    messages = []
-    if doc.get('body'):
-        messages.append({'role': 'user', 'content': '[Task context data]\n' + doc['body']})
-    messages.extend(deepcopy(doc.get('messages', [])))
+    selected = insert_additions(selected, path, [doc])
+    messages = body_prefix(doc)
     root = replace(path[0], value={'role': 'system', 'content': ''})
     projected = project_model_messages([root, *selected], observation_services=observation_services)
     messages.extend(m for m in projected if m.get('role') != 'system' or m.get('content'))
@@ -327,8 +341,10 @@ def project_tasks(path, state, *, observation_services=()):
     particular, a new model call never evicts a prior observation on its own.
     """
     from .projection import project_model_messages
+    state = sync_bodies(deepcopy(state), path)
     active = state.get("active")
     doc = state["documents"].get(active, {})
+    records = {e["id"]: e["value"] for e in doc.get("body", []) if "value" in e}
     covered = set(doc.get("covered", []))
     archived = archived_calls(path, doc)
     owners = user_owners(path, state)
@@ -343,7 +359,7 @@ def project_tasks(path, state, *, observation_services=()):
         # The task-state snapshot is removed before projection. Do not traverse
         # its (potentially large) archived documents just to throw it away.
         # Copy the remaining graph together to preserve aliases and isolation.
-        value = deepcopy({k: v for k, v in node.value.items() if k != STATE_KEY})
+        value = deepcopy({k: v for k, v in records.get(node.id, node.value).items() if k != STATE_KEY})
         value.pop(STATE_KEY, None)
         role = value.get("role")
         if not capacity_context_matches(value, active):
@@ -388,6 +404,10 @@ def project_tasks(path, state, *, observation_services=()):
         elif role not in {"system", "user", "context"}:
             continue
         selected.append(replace(node, value=value))
+    from .capacity import shared_reference
+    shared_doc = state.get(SHARED_ID, {})
+    shared_path = shared_reference(state)
+    selected = insert_additions(selected, path, [doc, *([] if shared_path else [shared_doc])])
     messages = project_model_messages(selected, observation_services=observation_services)
     system = next((m for m in messages if m.get("role") == "system"), None)
     if system is None:
@@ -396,23 +416,18 @@ def project_tasks(path, state, *, observation_services=()):
         system["content"] = str(system.get("content") or "") + "\n\n" + PROMPT
     catalog = context_catalog(state, include_archived=False)
     mounts = []
-    shared_body = state.get(SHARED_ID, {}).get("body", "")
-    from .capacity import shared_reference
-    shared_path = shared_reference(state)
     if shared_path:
         mounts.append({"role": "user", "content":
                        "[Shared task data offloaded; sources and scope apply. Read relevant sections before relying on or editing shared.] " + shared_path})
-    elif shared_body:
-        mounts.append({"role": "user", "content": "[Shared task context data; sources and scope apply]\n" + shared_body})
+    else:
+        mounts.extend(body_prefix(shared_doc))
     mounts.append({"role": "user", "content": "<task_context_catalog>\n" + json.dumps(catalog, ensure_ascii=False) + "\n</task_context_catalog>"})
     archived_count = len(state["documents"]) + 1 - len(catalog)
     if archived_count:
         mounts[-1]["content"] += f"\n{archived_count} archived task contexts. Find them with edit_context_catalog(action=search)."
-    if doc.get("body"):
-        mounts.append({"role": "user", "content": "[Task context data]\n" + doc["body"]})
-    mounts.extend(deepcopy(doc.get("messages", [])))
+    mounts.extend(body_prefix(doc))
     # A byte-stable prefix followed by the original append-only chronological
-    # dialogue. Catalog/document edits and load/unload explicitly change it.
+    # dialogue. Append entries stay at their original chronological position.
     insertion = next((i for i, m in enumerate(messages) if m.get("role") != "system"), len(messages))
     messages[insertion:insertion] = mounts
     return messages
@@ -437,13 +452,22 @@ class TaskContexts:
 
     def read(self):
         s = self.session
-        return deepcopy(s.store.get_node(s.tree.id, s.tree.root_id).value[STATE_KEY])
+        state = deepcopy(s.store.get_node(s.tree.id, s.tree.root_id).value[STATE_KEY])
+        path = s.store.get_path(s.tree.id, s._leaf_id)
+        return sync_bodies(state, path)
 
     def write(self, state):
         s = self.session
         with s._linearized_context_commit():
             root = s.store.get_node(s.tree.id, s.tree.root_id)
-            s.store.update_node(s.tree.id, root.id, {**root.value, STATE_KEY: state})
+            s.store.update_node(s.tree.id, root.id, {**root.value, STATE_KEY: normalize_state(state)})
+
+    def sync(self):
+        """Persist the body at the same session commit boundary as its records."""
+        state = self.read()
+        root = self.session.store.get_node(self.session.tree.id, self.session.tree.root_id)
+        if state != root.value.get(STATE_KEY):
+            self.write(state)
 
     def initialize(self):
         s = self.session
@@ -451,11 +475,12 @@ class TaskContexts:
         if STATE_KEY in root.value:
             state = deepcopy(root.value[STATE_KEY])
             if SHARED_ID not in state:
-                state[SHARED_ID] = {"body": ""}
+                state[SHARED_ID] = {"body": []}
                 self.write(state)
+            self.write(normalize_state(state))
             return
         limit = s._configured_compaction_limit()
-        self.write({"active": None, "documents": {}, SHARED_ID: {"body": ""}, "receipts": {},
+        self.write({"active": None, "documents": {}, SHARED_ID: {"body": []}, "receipts": {},
                     "shared_token_budget": min(16000, max(1024, limit // 4)) if limit else 16000})
         # Preserve ownership of legacy history without semantic reclassification.
         nodes = s.store.get_subtree(s.tree.id, s.tree.root_id)
@@ -469,9 +494,9 @@ class TaskContexts:
                 last = max(checkpoints, key=lambda n: n.created_at)
                 state = self.read()
                 doc = state["documents"][owner]
-                doc["messages"] = [{**m, "role": "user"} if m.get("compacted_block") else m
-                                   for m in last.value.get("messages", [])
-                                   if m.get("compacted_block") or m.get("role") != "system"]
+                doc["body"] = [{"message": {**m, "role": "user"} if m.get("compacted_block") else m}
+                               for m in last.value.get("messages", [])
+                               if m.get("compacted_block") or m.get("role") != "system"]
                 doc["covered"] = [n.id for n in s.store.get_path(s.tree.id, last.id)]
                 self.write(state)
 
@@ -494,7 +519,7 @@ class TaskContexts:
         state = self.read()
         if not state["active"]:
             context_id = "ctx_" + hashlib.sha256(str(key).encode()).hexdigest()[:16]
-            state["documents"].setdefault(context_id, {"body": "", "summary": "", "messages": [], "covered": [],
+            state["documents"].setdefault(context_id, {"body": [], "summary": "", "covered": [],
                                                       "title": "", "last_active_at": activity_time()})
             transition_clarifications(state, None, context_id, [])
             state["active"] = context_id
@@ -521,6 +546,7 @@ class TaskContexts:
             if receipt in state["receipts"]:
                 return state["receipts"][receipt]
             target = args.get("context_id")
+            previous_active = state["active"]
             metadata = {}
             if name == "edit_context_catalog":
                 from .catalog import edit_catalog
@@ -538,8 +564,8 @@ class TaskContexts:
                 metadata = {target: {'last_active_at': state['documents'][target]['last_active_at']}}
                 state['active'] = None
             else:
-                metadata = self._edit_or_load(state, target, name, args)
-            if name in {"switch_context", "load_context", "unload_context"}:
+                metadata = self._edit_or_load(state, target, name, args, receipt=receipt)
+            if name in {"switch_context", "load_context", "unload_context"} and previous_active != state["active"]:
                 from .images import retire_task_images
                 retire_task_images(state, self.session.store.get_path(self.session.tree.id, self.session._leaf_id))
             result = {"context_id": target, "active_context_id": state["active"], "saved": True}
@@ -549,7 +575,7 @@ class TaskContexts:
             self.write(state)
             return result
 
-    def _edit_or_load(self, state, target, name, args):
+    def _edit_or_load(self, state, target, name, args, *, receipt=""):
         metadata = {}
         if target == SHARED_ID:
             if name != "append_context" and name != "replace_context":
@@ -578,9 +604,10 @@ class TaskContexts:
                 metadata[target]["archived"] = doc["archived"]
             state["active"] = target
         elif name == "append_context":
-            doc["body"] += ("\n\n" if doc["body"] else "") + args["content"]
+            append_body(doc, args["content"], shared=target == SHARED_ID,
+                        after=self.session._leaf_id, receipt=receipt)
         elif name == "replace_context":
-            doc["body"] = args["content"]
+            replace_body(doc, args["content"], shared=target == SHARED_ID, control_id=self.session._leaf_id)
         else:
             raise ValueError("Unknown context operation")
         return metadata
@@ -596,7 +623,7 @@ class TaskContexts:
             if title is None:
                 raise ValueError("A new context requires a title")
             target = "ctx_" + hashlib.sha256(receipt.encode()).hexdigest()[:16]
-            state['documents'][target] = {"body": "", "summary": "", "messages": [], "covered": []}
+            state['documents'][target] = {"body": [], "summary": "", "covered": []}
         if previous and previous != target:
             path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
             transition_clarifications(state, previous, target, path)
@@ -661,19 +688,15 @@ def fork_task_state(path):
     original = state_from(path)
     if original is None:
         return None
-    state = {"active": None, "documents": {}, SHARED_ID: {"body": ""}, "receipts": {},
+    state = {"active": None, "documents": {}, SHARED_ID: {"body": []}, "receipts": {},
              "shared_token_budget": original.get("shared_token_budget", 16000)}
     by_id = {n.id: n for n in path}
-    for node in path[1:]:
+    for index, node in enumerate(path[1:], 1):
         value = node.value
+        if value.get("context_graph_task_edit"):
+            sync_bodies(state, path[:index])
         replay_manual_context_edit(state, value)
-        owner = value.get("task_context_id")
-        if owner and owner != SHARED_ID:
-            state["documents"].setdefault(owner, {"body": "", "summary": "", "messages": [], "covered": []})
-        if value.get("role") == "assistant" and owner:
-            if state['active'] is None:
-                transition_clarifications(state, None, owner, [])
-            state["active"] = owner
+        owner = replay_context_owner(state, value, path[:index + 1])
         if value.get("role") != "tool_results":
             continue
         parent = by_id.get(node.parent_id)
@@ -686,7 +709,7 @@ def fork_task_state(path):
             args = call.get("arguments", {})
             target = args.get("context_id")
             payload = result.get('value') or {}
-            if name in {"switch_context", "load_context", "unload_context"}:
+            if name in {"switch_context", "load_context", "unload_context"} and state["active"] != payload.get("active_context_id"):
                 from .images import retire_task_images
                 retire_task_images(state, path[:path.index(node) + 1])
             if name == "switch_context":
@@ -706,9 +729,24 @@ def fork_task_state(path):
                     transition_clarifications(state, state['active'], target, [])
                     state["active"] = target
             elif name in {"append_context", "replace_context"}:
-                replay_context_body(state, target, name, args)
+                replay_context_body(state, target, name, args, path=path[:path.index(node) + 1],
+                                    after=node.parent_id, receipt=f"{node.parent_id}:{name}")
             restore_context_metadata(state, payload)
-    return state
+    return sync_bodies(state, path)
+
+
+def replay_context_owner(state, value, request):
+    owner = value.get("task_context_id")
+    if owner and owner != SHARED_ID:
+        state["documents"].setdefault(owner, {"body": [], "summary": "", "covered": []})
+    if value.get("role") == "assistant" and owner:
+        doc = state["documents"][owner]
+        doc["user_nodes"] = list(dict.fromkeys([*doc.get("user_nodes", []),
+            *(n.id for n in request[current_request_start(request):] if n.value.get("role") == "user")]))
+        if state['active'] is None:
+            transition_clarifications(state, None, owner, [])
+        state["active"] = owner
+    return owner
 
 
 def restore_context_metadata(state, payload):
@@ -723,7 +761,7 @@ def replay_context_switch(state, payload, args, path, node):
     transition_clarifications(state, previous, target, path[:path.index(node) + 1])
     if previous and previous != target:
         pause_document(state, previous, args['summary'], path[:path.index(node) + 1])
-    state['documents'].setdefault(target, {"body": "", "summary": "", "messages": [], "covered": []})
+    state['documents'].setdefault(target, {"body": [], "summary": "", "covered": []})
     state['active'] = target
 
 
@@ -733,11 +771,15 @@ def replay_manual_context_edit(state, value):
         target = manual.get("contextId")
         doc = state[SHARED_ID] if target == SHARED_ID else state["documents"].get(target)
         if doc is not None:
-            doc["body"] = str(manual.get("content", ""))
+            edit_body(doc, str(manual.get("content", "")), shared=target == SHARED_ID)
 
 
-def replay_context_body(state, target, name, args):
+def replay_context_body(state, target, name, args, *, path=(), after=None, receipt=""):
+    sync_bodies(state, path)
     doc = state[SHARED_ID] if target == SHARED_ID else state["documents"].get(target)
     if doc is not None:
         content = str(args.get("content", ""))
-        doc["body"] = ((doc["body"] + "\n\n") if doc["body"] else "") + content if name == "append_context" else content
+        if name == "append_context":
+            append_body(doc, content, shared=target == SHARED_ID, after=after, receipt=receipt)
+        else:
+            replace_body(doc, content, shared=target == SHARED_ID, control_id=after)

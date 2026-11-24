@@ -1,11 +1,13 @@
 """Read-only keyword search over the current branch's task contexts."""
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 from bisect import bisect_left
 
 from .tasks import SHARED_ID, user_owners
+from .body import normalize_document
 
 
 def _snippets(text, query):
@@ -26,6 +28,24 @@ def _snippets(text, query):
         previous_end = end
 
 
+def _body_sources(doc, key, path_ids):
+    body = normalize_document(deepcopy(doc), shared=key == SHARED_ID)
+    notes, messages = [], []
+    for entry in body:
+        if entry.get('after_node_id') and entry['after_node_id'] not in path_ids:
+            continue
+        if 'message' in entry:
+            message = entry['message']
+            content = message.get('content', '')
+            if isinstance(content, str) and content.startswith(('[Task context data]\n', '[Shared task context data; sources and scope apply]\n')):
+                notes.append(content.split('\n', 1)[1])
+            else:
+                messages.append(message)
+        elif 'value' in entry and entry.get('id') in path_ids and not entry['value'].get('task_control'):
+            messages.append(entry['value'])
+    return notes, messages
+
+
 def _sources(state, path, targets):
     owners = user_owners(path, state)
     histories = {key: [] for key in targets}
@@ -40,12 +60,15 @@ def _sources(state, path, targets):
                 histories[key].append(value)
     for key in targets:
         doc = state[SHARED_ID] if key == SHARED_ID else state["documents"][key]
-        for field in ("title", "summary", "body"):
+        for field in ("title", "summary"):
             yield key, field, None, doc.get(field, "")
+        body_notes, body_messages = _body_sources(doc, key, {node.id for node in path})
+        for content in body_notes:
+            yield key, 'body', None, content
         seen = set()
         # Raw branch records retain dialogue hidden by compaction. Saved
         # messages also cover legacy histories, without repeating exact text.
-        for message in [*histories[key], *doc.get("messages", [])]:
+        for message in [*histories[key], *body_messages]:
             role, content = message.get("role"), message.get("content")
             if role not in {"user", "assistant"} or message.get("compacted_block"):
                 continue

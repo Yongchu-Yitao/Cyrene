@@ -61,7 +61,7 @@ def snapshot_valid(location):
 
 
 def body_digest(body):
-    return hashlib.sha256(body.encode()).hexdigest()
+    return hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
 def shared_reference(state):
