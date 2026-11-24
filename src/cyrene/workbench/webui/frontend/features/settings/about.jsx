@@ -150,7 +150,6 @@ function UpdateSection({ t, config }) {
     if (!info || downloading) return "";
     if (downloaded && progress.verified) return t("settings.updateVerified", null, "Downloaded and verified");
     if (progress && progress.verification_error) return t("settings.updateVerificationFailed", null, "Verification failed") + ": " + progress.verification_error;
-    if (info.update_available && !info.checksum_available) return t("settings.updateCannotVerify", null, "Cannot verify: release has no sha256 checksum.");
     return "";
   }
 
@@ -206,7 +205,7 @@ function UpdateSection({ t, config }) {
 
   if (downloading) actionLabel = t("settings.updateDownloading");
   var actionHandler = downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate);
-  var statusDetail = checking ? "" : downloadStatus();
+  var statusDetail = checking ? "" : (error || downloadStatus());
   var progressTotal = Number(progress.total || (info && info.asset_size) || 0);
   // A verified download is the terminal state. The last byte-progress event can
   // arrive just below the reported total, so completion must take precedence
@@ -270,7 +269,7 @@ function UpdateSection({ t, config }) {
         <div className="about-release">
           <div className="about-version-line">
             <button onClick={() => setChangelogOpen(open => !open)} aria-expanded={changelogOpen} aria-controls="about-notes" aria-label={versionLabel + " · " + t("settings.relatedChangelog")}>{versionLabel}</button>
-            <span role="status" data-current={!!info && !info.update_available && !checking && !error}>{error||statusText}</span>
+            <span role="status" data-current={!!info && !info.update_available && !checking && !error}>{error && !info?.update_available ? "" : statusText}</span>
           </div>
           <div className="about-buttons">
             <button className="wb-btn" data-cyrene-risk={downloaded ? "R3" : "R2"} disabled={actionDisabled} onClick={actionHandler}>
@@ -288,7 +287,7 @@ function UpdateSection({ t, config }) {
           ? <progress max="100" value={heroProgress} aria-label={actionLabel}/>
           : <progress aria-label={actionLabel}/>}
       </div>}
-      {statusDetail&&<p>{statusDetail}</p>}
+      {statusDetail&&<p role="status">{statusDetail}</p>}
     </header>
     <div className="about-drawers">
       <Disclosure id="about-notes" open={changelogOpen}><div className="about-notes-text">

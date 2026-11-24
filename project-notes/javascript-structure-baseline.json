@@ -1105,7 +1105,7 @@
   },
   "src/cyrene/workbench/webui/frontend/features/settings/about.jsx::UpdateSection": {
     "lines": 322,
-    "decisions": 123,
+    "decisions": 128,
     "hooks": 17
   },
   "src/cyrene/workbench/webui/frontend/features/settings/agents.jsx::AgentsPanel": {
