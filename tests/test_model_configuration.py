@@ -897,7 +897,7 @@ def test_default_provider_connections_include_managed_local_provider(
         "adapter": "openai",
         "enabled": True,
         "use_proxy": False,
-        "base_url": "https://opencode.ai/zen/go/v1",
+        "base_url": "https://opencode.ai/inference/go/openai/v1",
         "api_key": "",
         "options": {"provider_preset": "opencode_go"},
     }

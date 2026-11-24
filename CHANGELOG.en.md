@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.6] - 2026-11-24
+
+### Features and interface updates
+
+- Add the Current time plugin, enabled by default, to provide the main assistant and execution tasks with time references in your configured timezone. Record the time when processing begins, then refresh during subsequent processing after five minutes, at a date boundary, after a timezone change, or when the system clock moves backward. Include elapsed time since the previous record to help with time-sensitive work. Reopened conversations reuse their saved reference, and compressed histories receive a new sample when needed. Idle models are not awakened just to update time, and the plugin can be disabled in plugin settings.
+- Update OpenCode Go's default connection and model discovery to improve subscription model listing and conversation connectivity. Select the appropriate conversation endpoint for the model protocol and maintain consistent service routing across turns and tool calls in the same conversation. Routing identifiers do not expose original local conversation IDs; independent connection tests use separate identifiers, and custom service addresses retain their configured behavior.
+- Improve model connection tests in Settings by allowing a sufficient but bounded response budget for models that reason before producing an answer. Reduce false failures caused by cutting the response off too early. Standard chat, Responses, Anthropic, and Gemini protocol tests use a consistent budget while still requesting a short confirmation.
+
 ## [0.9.2.5] - 2026-11-23
 
 ### Features and interface updates

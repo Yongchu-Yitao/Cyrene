@@ -12,6 +12,7 @@ import hashlib
 import logging
 import math
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
@@ -924,6 +925,23 @@ async def _complete_model_wire(
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+
+    if provider.id == "opencode_go":
+        # Go requires a stable routing identity across turns and tool calls.
+        # Hash local IDs so arbitrary Unicode and private identifiers stay local.
+        run_context = context.data.get("run_context")
+        run_context = run_context if isinstance(run_context, Mapping) else {}
+        session_id = (
+            context.data.get("session_id")
+            or run_context.get("session_id")
+            or context.tree_id
+        )
+        routing_id = (
+            hashlib.sha256(str(session_id).encode("utf-8")).hexdigest()
+            if session_id else uuid.uuid4().hex
+        )
+        # This also updates prepared.headers for native protocol requests.
+        headers["x-opencode-session"] = f"ses_cyrene_{routing_id}"
 
     preferred_endpoint = str(_candidate(context).get("preferred_endpoint") or "")
     ordered_endpoints = list(endpoints)

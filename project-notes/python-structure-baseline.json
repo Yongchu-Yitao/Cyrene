@@ -289,7 +289,7 @@
     "decisions": 41
   },
   "src/cyrene/model/protocol_adapters.py": {
-    "module_lines": 1464
+    "module_lines": 1473
   },
   "src/cyrene/model/protocol_adapters.py::_anthropic_messages": {
     "decisions": 28
@@ -1055,7 +1055,7 @@
     "decisions": 37
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py": {
-    "module_lines": 1299
+    "module_lines": 1317
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::_complete_stream_endpoint": {
     "lines": 142,
@@ -1862,8 +1862,8 @@
     "lines": 115
   },
   "src/cyrene/plugins/builtin/cyrene_model/_shared.py::_complete_model_wire": {
-    "lines": 161,
-    "decisions": 33
+    "lines": 178,
+    "decisions": 38
   },
   "src/cyrene/workbench/core_adapter/conversation_runtime.py::ConversationRuntime": {
     "methods": 27

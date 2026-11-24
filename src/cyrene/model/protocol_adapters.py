@@ -113,6 +113,11 @@ def official_versioned_chat_endpoint(base_url: str) -> str | None:
 def protocol_endpoints(adapter_id: str, base_url: str, model: str) -> list[str]:
     adapter = str(adapter_id or "openai_compatible").strip().lower()
     base = str(base_url or "").strip().rstrip("/")
+    if base == "https://opencode.ai/inference/go/openai/v1":
+        if adapter == "anthropic":
+            base = "https://opencode.ai/inference/go/anthropic/v1"
+        elif adapter == "gemini":
+            base = "https://opencode.ai/inference/go/google/v1beta"
     if adapter == "openai_responses":
         return [f"{base}/responses"]
     if adapter == "anthropic":
@@ -155,6 +160,10 @@ def discovery_request(
     adapter = str(adapter_id or "openai_compatible").strip().lower()
     base = str(base_url or "").strip().rstrip("/")
     preset = str(provider_preset or "").strip().lower()
+    if preset == "opencode_go" and base == "https://opencode.ai/inference/go/openai/v1":
+        return "https://opencode.ai/inference/go/v1/models", {
+            "Authorization": f"Bearer {api_key}"
+        }
     if preset == "aliyun_bailian":
         return _aliyun_bailian_discovery_url(base), {
             "Authorization": f"Bearer {api_key}"

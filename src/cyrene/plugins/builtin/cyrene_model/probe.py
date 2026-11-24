@@ -15,7 +15,7 @@ from cyrene.plugins.model_catalog import (
 
 # Reasoning models may spend tokens before emitting even a one-word answer.
 # Keep probes bounded without truncating that pre-answer reasoning at 48 tokens.
-_PROBE_MAX_TOKENS = 1024
+PROBE_MAX_TOKENS = 1024
 
 
 _VISION_CAPABILITY_TEST_IMAGE = (
@@ -77,7 +77,7 @@ class ModelProbeService:
             base_url,
             model,
             messages=[{"role": "user", "content": "Reply with OK."}],
-            max_tokens=_PROBE_MAX_TOKENS,
+            max_tokens=PROBE_MAX_TOKENS,
             registry=self._registry,
             runtime=self._runtime,
             provider_id=provider_id,
@@ -115,7 +115,7 @@ class ModelProbeService:
                 base_url,
                 model,
                 messages=messages,
-                max_tokens=_PROBE_MAX_TOKENS,
+                max_tokens=PROBE_MAX_TOKENS,
                 registry=self._registry,
                 runtime=self._runtime,
                 provider_id=provider_id,
@@ -219,4 +219,4 @@ async def _complete(
     return dict(outcome.value)
 
 
-__all__ = ["ModelProbePort", "ModelProbeService"]
+__all__ = ["ModelProbePort", "ModelProbeService", "PROBE_MAX_TOKENS"]

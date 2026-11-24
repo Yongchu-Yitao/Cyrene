@@ -7,7 +7,7 @@ OPENCODE_GO_PROVIDER = ModelProvider(
     name="OpenCode Go",
     plugin_name="OpenCodeGo",
     adapter="openai",
-    default_base_url="https://opencode.ai/zen/go/v1",
+    default_base_url="https://opencode.ai/inference/go/openai/v1",
     capabilities=("chat", "vision", "tools", "reasoning"),
     icon="opencode",
 )

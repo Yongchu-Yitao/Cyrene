@@ -500,6 +500,16 @@
         "name": "回复风格",
         "description": "根据用户选择调整回复详略和语气。"
       }
+    },
+    "cyrene_time_context": {
+      "en": {
+        "name": "Current time",
+        "description": "Refresh the current time in the user's configured timezone every five minutes."
+      },
+      "zh": {
+        "name": "当前时间",
+        "description": "在模型调用前按五分钟间隔更新用户所设时区的当前时间。"
+      }
     }
   },
   "plugins": {

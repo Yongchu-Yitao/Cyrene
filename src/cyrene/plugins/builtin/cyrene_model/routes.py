@@ -22,6 +22,7 @@ from cyrene.plugins.model_catalog import (
     resolve_registered_model_plugin,
 )
 from cyrene.localization import app_language, localized
+from .probe import PROBE_MAX_TOKENS
 from .configuration import (
     get_model_configuration,
     model_configuration_hash,
@@ -494,7 +495,7 @@ async def _test_model(
                 "operation": "complete",
                 "messages": [{"role": "user", "content": "Reply with OK."}],
                 "model": model,
-                "max_tokens": 8,
+                "max_tokens": PROBE_MAX_TOKENS,
                 "reasoning_effort": str(profile.get("reasoning_effort") or ""),
             },
             PluginContext(
