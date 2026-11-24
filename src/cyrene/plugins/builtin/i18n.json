@@ -3316,21 +3316,21 @@
     "append_context": {
       "en": {
         "name": "Append task context",
-        "description": "Save new task notes in any context without activating it. Use shared for new supported cross-task agreements with source and scope. Skip information already covered; keep local or uncertain conclusions in their task. To correct an existing agreement, use replace_context instead of appending contradictory text. Execution records are managed separately. Call alone and wait for success."
+        "description": "Append new content to the end of any context body without activating it or changing earlier records. Dialogue and tool results are recorded automatically; do not copy them. Use shared for new supported cross-task agreements with source and scope. Skip information already covered; keep local or uncertain conclusions in their task. To correct an existing agreement, use replace_context instead of appending contradictory text. The original execution audit trail is retained. Call alone and wait for success."
       },
       "zh": {
         "name": "追加任务上下文",
-        "description": "向任意上下文保存新的任务记录而不切换任务。新的跨任务共同约定写入 shared，并注明来源与范围；跳过已有内容，把局部或不确定结论留在对应任务中。修正已有约定时应完整替换，不追加相互矛盾的内容。执行记录独立管理，此工具必须单独调用并等待成功。"
+        "description": "向任意上下文 body 的末尾追加新内容，不切换任务，也不修改已有记录。对话和工具结果会自动记录，不要重复复制。新的跨任务共同约定写入 shared，并注明来源与范围；局部或不确定结论留在对应任务。修正已有约定时使用 replace_context，避免追加矛盾内容。原始执行记录保留。此工具必须单独调用并等待成功。"
       }
     },
     "replace_context": {
       "en": {
         "name": "Replace task context",
-        "description": "Correct or update any context body without activating it. Supply the complete replacement; there is no revision history. For shared, replace outdated or incorrect agreements while preserving other valid information, sources and scope. Do not rewrite unchanged content or add unsupported requirements. Execution records are managed separately. Call alone and wait for success."
+        "description": "Replace the complete model-visible context body without activating it. This is an explicit rewrite, including its retained conversation; preserve all necessary information. Supply the complete replacement; there is no revision history. For shared, replace outdated or incorrect agreements while preserving other valid information, sources and scope. Do not rewrite unchanged content or add unsupported requirements. The original execution audit trail is retained. Call alone and wait for success."
       },
       "zh": {
         "name": "替换任务上下文",
-        "description": "修正或更新任意上下文而不切换任务。提供完整替换内容，且不保留修订历史；更新 shared 时替换过时或错误约定，同时保留其他有效信息、来源与范围。不要重写未变化内容或加入没有依据的要求。执行记录独立管理，此工具必须单独调用并等待成功。"
+        "description": "替换模型可见的完整上下文 body，不切换任务。这会重写其中保留的对话，请提供完整替换内容并保留必要信息。更新 shared 时替换过时或错误约定，同时保留其他有效信息、来源与范围。不要重写未变化内容或加入没有依据的要求。原始执行记录保留。此工具必须单独调用并等待成功。"
       }
     },
     "list_sessions": {

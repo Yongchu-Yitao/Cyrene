@@ -133,7 +133,7 @@ def test_compacted_tool_tail_survives_unload_reload_and_reopen(tmp_path):
         node, outcome = run(s._compact_at_node(
             result, context_limit=0, force=True, reason='manual', resume_model=False))
         assert outcome['compacted']
-        before = s.task_contexts.read()['documents'][active]['messages']
+        before = [entry['message'] for entry in s.task_contexts.read()['documents'][active]['body'] if 'message' in entry]
         assert any(c.get('function', {}).get('name') == 'Read'
                    for m in before for c in m.get('tool_calls', []))
         assert 'TAIL_RESULT_SECRET' in str(before)

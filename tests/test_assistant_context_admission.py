@@ -25,7 +25,8 @@ async def test_reference_survives_compaction_rebuild_and_replacement(tmp_path):
         await s.drain()
         assert str(seen[-1]).count("REFERENCE_A") == 1
         active = s.task_contexts.read()["active"]
-        await s.task_contexts.execute("append_context", {"context_id": active, "content": "evidence " * 5000}, "notes")
+        # Seed replaceable prior context; append now deliberately adds a new tail record.
+        await s.task_contexts.execute("replace_context", {"context_id": active, "content": "evidence " * 5000}, "notes")
         class Gateway:
             async def complete(self, messages, **kwargs):
                 assert "REFERENCE_A" not in str(messages)

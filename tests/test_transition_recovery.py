@@ -10,7 +10,7 @@ import pytest
 
 from cyrene.core.plugin import Plugin, PluginCallResult, PluginContext, PluginPack, PluginRegistry, PluginRuntime
 from cyrene.core.transition_driver import TransitionCallbacks, TransitionDriver
-from test_task_contexts import make_session
+from test_task_contexts import body_content, make_session
 
 
 @pytest.mark.parametrize("response", [
@@ -74,7 +74,7 @@ def test_reflection_preserves_context_on_failure_and_continues(tmp_path, mode):
         asyncio.run(session.drain())
         assert len(requests) == (1 if mode == "user_cancel" else 2)
         state = session.task_contexts.read()
-        assert state["documents"][active]["body"] == (
+        assert body_content(state["documents"][active]["body"]) == (
             "NEW_CONTEXT" if mode == "success" else "ORIGINAL_CONTEXT")
         assert any(k.startswith("reflect:") for k in state["receipts"]) == (mode == "success")
         assert session.snapshot()["status"] == "idle"

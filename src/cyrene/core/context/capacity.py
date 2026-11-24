@@ -73,7 +73,7 @@ def shared_reference(state):
 
 
 def check_load(service, state, target):
-    from .tasks import project_tasks, historical_assistant, user_owners
+    from .tasks import project_tasks, historical_assistant, user_owners, task_messages
     s = service.session
     limit = threshold(s)
     if not limit:
@@ -94,7 +94,9 @@ def check_load(service, state, target):
                 else {'role': 'user', 'content': n.value.get('content', '')}} for n in path
                if (n.value.get('role') == 'assistant' and n.value.get('task_context_id') == target)
                or (n.value.get('role') == 'user' and target in owners.get(n.id, set()))]
-    location = snapshot(s, {'context_id': target, 'document': state['documents'][target],
+    document = deepcopy(state['documents'][target])
+    document['body'] = [{'message': message} for message in task_messages(path, state, target)]
+    location = snapshot(s, {'context_id': target, 'document': document,
                             'execution_records': records,
                             'note': 'Read-only evidence snapshot. Original sources retain their trust and scope.'}, 'context')
     raise ContextCapacityError({'context_id': target, 'estimated_tokens': estimated,
