@@ -2,6 +2,15 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.7] - 2026-11-25
+
+### Features and interface updates
+
+- Keep user messages, assistant replies, tool calls and results, and later background additions together in each task context in chronological order. Inspect and edit the complete work record to understand the evidence and progress behind a task. Existing contexts and previously saved content remain compatible, and reopening a conversation does not duplicate already recorded entries.
+- Improve how additional task and shared background joins ongoing work. New material stays where it was actually added rather than moving ahead of earlier conversation, and tool calls remain paired with their results. Repeated additions retain prior records and ordering, reducing unnecessary reorganization of older content and keeping later processing grounded in the existing background.
+- Refine deliberate context organization and editing. The assistant can explicitly replace task background, and the context inspector can adjust retained conversation and execution content. Subsequent work uses the edited content while the original execution history remains traceable. Explicitly removed or replaced content does not reappear during synchronization. Switching and resuming tasks retain their respective backgrounds without treating historical tool calls as operations to run again.
+- Update context search, task evidence reading, and the context graph to follow the complete ordered record, retaining work and source associations while reducing duplicate display. Reading, searching, and preparing subsequent model input keep snapshots independent so one read or edit does not unexpectedly alter another snapshot or another task's background.
+
 ## [0.9.2.6] - 2026-11-24
 
 ### Features and interface updates
