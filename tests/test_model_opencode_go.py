@@ -89,4 +89,3 @@ def test_go_default_and_discovery_use_subscription_endpoint():
     assert protocol_endpoints("anthropic", "https://custom.example/v1", "minimax-m3") == [
         "https://custom.example/v1/messages",
     ]
-
