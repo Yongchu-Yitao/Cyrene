@@ -24,6 +24,41 @@ def context_is_turn(value: Mapping[str, Any]) -> bool:
     )
 
 
+def scope_turn_suffixes(path, selected):
+    """Keep TurnStart mounts with their source user when task history is filtered."""
+    sources = {}
+    preceding_user = None
+    for node in path:
+        value = node.value
+        if value.get("role") == "user":
+            preceding_user = node
+        elif (value.get("role") == "context" and context_is_turn(value)
+              and value.get("context_lifecycle") != "model"):
+            source = value.get("source_node_id")
+            # Resolve legacy mounts on the original path, before a different
+            # task's user can become the nearest surviving user.
+            if not source and preceding_user is not None:
+                if not value.get("run_id") or value["run_id"] == preceding_user.value.get("run_id"):
+                    source = preceding_user.id
+            sources[node.id] = source
+
+    if not sources:
+        return selected
+    # The regular projector attaches a suffix to the preceding user message.
+    # Pair them here so a reference or tool observation cannot receive it.
+    suffixes = {}
+    for node in selected:
+        if node.id in sources:
+            suffixes.setdefault(sources[node.id], []).append(node)
+    result = []
+    for node in selected:
+        if node.id not in sources:
+            result.append(node)
+            if node.value.get("role") == "user":
+                result.extend(suffixes.get(node.id, ()))
+    return result
+
+
 def selected_context_node_ids(
     nodes: Sequence[Any],
     current_run_id: str,
@@ -119,7 +154,8 @@ def _apply_graph_overrides(path):
     overrides = path[0].value.get("context_graph_overrides", {}) if path and isinstance(path[0].value, Mapping) else {}
     if overrides:
         adjusted = []
-        current_run = next((str(n.value.get("run_id") or "") for n in reversed(path) if n.value.get("role") == "user"), "")
+        current_user = next((n for n in reversed(path) if n.value.get("role") == "user"), None)
+        current_run = str(current_user.value.get("run_id") or "") if current_user else ""
         templates, current_kinds = {}, set()
         for node in path:
             value = node.value if isinstance(node.value, Mapping) else {}
@@ -138,7 +174,7 @@ def _apply_graph_overrides(path):
         # makes the transformation idempotent.
         for kind, template in templates.items():
             if kind not in current_kinds:
-                value = dict(template.value, run_id=current_run)
+                value = dict(template.value, run_id=current_run, source_node_id=current_user.id if current_user else "")
                 adjusted.append(replace(template, id=template.id + "-graph-override-" + current_run, value=value))
         path = adjusted
 

@@ -340,7 +340,7 @@ def project_tasks(path, state, *, observation_services=()):
     Only task ownership, explicit rewrites and a reload remove material. In
     particular, a new model call never evicts a prior observation on its own.
     """
-    from .projection import project_model_messages
+    from .projection import project_model_messages, scope_turn_suffixes
     state = sync_bodies(deepcopy(state), path)
     active = state.get("active")
     doc = state["documents"].get(active, {})
@@ -408,6 +408,7 @@ def project_tasks(path, state, *, observation_services=()):
     shared_doc = state.get(SHARED_ID, {})
     shared_path = shared_reference(state)
     selected = insert_additions(selected, path, [doc, *([] if shared_path else [shared_doc])])
+    selected = scope_turn_suffixes(path, selected)
     messages = project_model_messages(selected, observation_services=observation_services)
     system = next((m for m in messages if m.get("role") == "system"), None)
     if system is None:

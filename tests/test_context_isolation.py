@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from cyrene.core.hook import TURN_START
 from cyrene.core.plugin import Plugin, PluginPack
 from cyrene.core.context.tasks import ARGUMENT_PREVIEW_CHARS, historical_assistant, saved_messages
 from test_task_contexts import make_session, run
@@ -16,6 +17,9 @@ def test_round_trip_restores_order_without_other_task_prose_or_results(tmp_path)
 
     async def echo(arguments, context):
         return 'RESULT_SECRET_' + arguments['task']
+
+    async def turn_hint(event):
+        return {'context': 'hint/' + event.payload['run_id']}
 
     async def model(arguments, context):
         inputs.append(deepcopy(arguments['messages']))
@@ -36,6 +40,8 @@ def test_round_trip_restores_order_without_other_task_prose_or_results(tmp_path)
             assert 'A intro' not in str(arguments['messages'])
             assert 'A original request' not in str(arguments['messages'])
             assert 'RESULT_SECRET_A' not in str(arguments['messages'])
+            assert 'hint/run-0' not in str(arguments['messages'])
+            assert 'B original request\n\nhint/run-1' in [m['content'] for m in arguments['messages']]
             return {'content': 'B intro', 'tool_calls': [
                 {'id': 'b-tool', 'name': 'Echo', 'arguments': {'task': 'B', 'payload': 'B arguments'}}]}
         if index == 5:
@@ -51,6 +57,9 @@ def test_round_trip_restores_order_without_other_task_prose_or_results(tmp_path)
             rendered = str(arguments['messages'])
             assert f'{own} original request' in rendered
             assert f'{other} original request' not in rendered
+            own_hint, other_hint = ('hint/run-0', 'hint/run-1') if own == 'A' else ('hint/run-1', 'hint/run-0')
+            assert f'{own} original request\n\n{own_hint}' in [m['content'] for m in arguments['messages']]
+            assert other_hint not in rendered
             assert f'{other} intro' not in rendered
             assert f'{other} conclusion' not in rendered
             assert 'RESULT_SECRET_' not in rendered
@@ -63,6 +72,7 @@ def test_round_trip_restores_order_without_other_task_prose_or_results(tmp_path)
 
     s = make_session(tmp_path, model)
     try:
+        s.hooks.register(TURN_START, turn_hint, plugin_id='round-trip-hint', root_only=True)
         s.registry.register_pack(PluginPack('echo', 'test', (
             Plugin('Echo', 'test', {'type': 'object', 'properties': {'task': {'type': 'string'}, 'payload': {'type': 'string'}}},
                    echo, metadata={'agent_exposure': 'direct', 'permission_review': False}),
@@ -81,9 +91,57 @@ def test_round_trip_restores_order_without_other_task_prose_or_results(tmp_path)
         restored = str(reopened._messages(leaf))
         assert 'B intro' in restored and 'B conclusion' in restored
         assert 'A intro' not in restored and 'A original request' not in restored
+        assert restored.count('hint/run-1') == 1 and 'hint/run-0' not in restored
         assert 'RESULT_SECRET_' not in restored
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_turn_suffix_follows_its_visible_source_across_reference_and_replacement(legacy):
+    from datetime import datetime, timezone
+    from cyrene.core.context.projection import project_model_messages
+    from cyrene.core.context.tasks import STATE_KEY
+    from cyrene.core.context.tree import ContextNode
+
+    stamp = datetime.now(timezone.utc)
+
+    def node(key, role, content, **fields):
+        return ContextNode(key, 'tree', None, dict(role=role, content=content, **fields), stamp, stamp)
+
+    def suffix(key, user, text):
+        fields = {} if legacy else {'source_node_id': user.id, 'context_lifecycle': 'turn'}
+        return node(key, 'context', text, context_kind='turn_hint', run_id=user.value['run_id'], **fields)
+
+    doc = {'body': [], 'covered': []}
+    state = {'active': 'A', 'documents': {'A': doc, 'B': {'body': []}}}
+    root = node('root', 'system', 'base', **{STATE_KEY: state})
+    a = node('a', 'user', 'original A', task_context_id='A', run_id='first')
+    b = node('b', 'user', 'hidden B', task_context_id='B', run_id='other')
+    current = node('current', 'user', 'continue A', run_id='current')
+    reference = node('ref', 'context', 'work device', context_lifecycle='reference')
+    path = [root, a, suffix('a_hint', a, 'only A'), b, suffix('b_hint', b, 'only B'),
+            current, reference, suffix('current_hint', current, 'current hint')]
+    if not legacy:
+        # Even with the current run ID, an explicit link to a hidden user wins.
+        late = suffix('late', b, 'late B')
+        late.value['run_id'] = 'current'
+        path.append(late)
+
+    def contents():
+        return [m['content'] for m in project_model_messages(path)
+                if m['role'] == 'user' and not m['content'].startswith('<task_context_catalog>')]
+
+    assert contents() == ['original A\n\nonly A', 'continue A\n\ncurrent hint', 'work device']
+    doc['covered'] = [a.id]
+    assert contents() == ['continue A\n\ncurrent hint', 'work device']
+
+    # A future graph override materializes a fresh mount on the current request.
+    historical = suffix('past', b, 'old setting')
+    historical.value['context_kind'] = 'turn_setting'
+    path.insert(path.index(current), historical)
+    root.value['context_graph_overrides'] = {'turn_setting': {'content': 'branch setting'}}
+    assert contents() == ['continue A\n\ncurrent hint\n\nbranch setting', 'work device']
 
 
 @pytest.mark.parametrize('call_format', ['flat', 'function_object', 'function_json'])

@@ -2,6 +2,13 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.9] - 2026-11-27
+
+### Features and interface updates
+
+- Fix older language, workspace, and execution-policy guidance from previous task turns repeatedly entering the current task after a switch. Per-turn guidance now stays with its originating user message when that message is retained or removed. Current work keeps its own guidance, reducing unrelated background occupying context and unexpectedly oversized requests after switching tasks.
+- Improve guidance ownership when reloading tasks, reopening conversations, and reading older history. Guidance without explicit source information is matched against the original conversation order rather than attached to another task. Guidance adjusted in the context inspector continues to apply with the current message. Preserve system instructions, current user text, tool calls and results, and existing append, replacement, and history-compaction behavior.
+
 ## [0.9.2.8] - 2026-11-27
 
 ### Features and interface updates
