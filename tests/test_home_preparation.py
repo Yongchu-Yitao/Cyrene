@@ -342,3 +342,41 @@ async def test_weather_write_boundary_preserves_legacy_and_accepts_replacement(t
     draft.publish()
     saved = await service.command("assistant", None, "card.get", {"card_id": card_id})
     assert saved["spec"]["blocks"] == [reading]
+
+
+def test_home_snapshot_filters_before_taking_twenty_real_messages():
+    from cyrene.plugins.builtin.cyrene_cards.home_preparation import source_snapshot
+    messages = []
+    for i in range(12):
+        messages.extend([
+            {'role': 'user', 'content': f'question {i}', 'createdAt': str(i)},
+            {'role': 'assistant', 'content': f'answer {i}', 'createdAt': str(i),
+             'trace': ['tool output'], 'reasoning': 'private thinking',
+             'attachments': [{'content': 'large attachment'}]},
+        ])
+    expected = [{k: m[k] for k in ('role', 'content', 'createdAt')} for m in messages[-20:]]
+    messages.extend([
+        {'role': 'user', 'content': 'notification', 'agentMessageKind': 'task_notification'},
+        {'role': 'user', 'content': 'agent input', 'agentOriginated': True},
+        {'role': 'assistant', 'content': 'background', 'systemInitiated': True},
+        {'role': 'assistant', 'content': 'progress', 'intermediate': True},
+        {'role': 'assistant', 'content': 'progress', 'intermediate_reply': True},
+        {'role': 'assistant', 'content': 'tool activity', 'activityCard': True},
+        {'role': 'assistant', 'content': 'notice', 'notificationCard': True},
+        {'role': 'tool', 'content': 'tool result'},
+        {'role': 'assistant', 'content': '   '},
+    ] + [{'role': 'assistant', 'content': ''} for _ in range(40)] + [
+        {'role': 'user', 'agentMessageKind': 'welcome_refresh', 'content': 'maintenance'},
+        {'role': 'assistant', 'content': 'legacy maintenance reply'},
+    ])
+    chat = {'messages': messages, 'pendingQuestion': {'content': 'not dialogue'},
+            'task_documents': {'old': {'body': 'x' * 1_000_000}}}
+    assert source_snapshot(chat) == {'recent_messages': expected}
+    messages.extend([{'role': 'user', 'content': 'new question'},
+                     {'role': 'assistant', 'content': 'new answer'}])
+    result = source_snapshot(chat)['recent_messages']
+    assert len(result) == 20
+    assert result[-2:] == [
+        {'role': 'user', 'content': 'new question', 'createdAt': None},
+        {'role': 'assistant', 'content': 'new answer', 'createdAt': None},
+    ]

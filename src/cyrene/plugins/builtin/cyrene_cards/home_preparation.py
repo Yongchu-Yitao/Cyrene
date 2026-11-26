@@ -10,6 +10,7 @@ from uuid import uuid4
 from .schemas import CardError
 from .service import CardService
 from .home_weather import weather_snapshot
+from .home_freshness import recent_dialogue
 from .home_publication import documents, ensure_pending_table, publish_documents
 
 HOME_CARD_TOOLS = ("card.create", "card.update", "card.get", "card.list")
@@ -80,17 +81,8 @@ class HomeDraft:
                 db.execute("DELETE FROM home_prepared WHERE owner=?", (self.owner,))
 
 
-def source_snapshot(chat, siblings, contexts):
-    messages, maintenance = [], False
-    for message in chat.get("messages", []):
-        if message.get("role") == "user":
-            maintenance = message.get("agentMessageKind") == "welcome_refresh"
-        if not maintenance and message.get("role") in {"user", "assistant"}:
-            messages.append({key: message.get(key) for key in ("role", "content", "attachments", "createdAt")})
-    return {"recent_messages": messages[-40:], "pending_question": chat.get("pendingQuestion"),
-            "task_documents": contexts,
-            "tasks": [item for item in siblings if item.get("id") != chat.get("id")
-                      and item.get("projectId") == chat.get("projectId")]}
+def source_snapshot(chat):
+    return {"recent_messages": recent_dialogue(chat)}
 
 
 async def prepare_home(service, port, owner, version, prompt, snapshot, *, publish_at=None):

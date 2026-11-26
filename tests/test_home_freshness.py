@@ -88,7 +88,6 @@ async def test_task_changes_weather_expiry_and_restart(home_rig):
     assert not any('weather expired' in reason for reason in changed['reasons'])
     assert (await r.home.refresh('assistant', {}))['status'] == 'current'
     r.siblings.append({'id': 'task1', 'projectId': 'personal', 'status': 'completed', 'updatedAt': 'new'})
-    assert (await r.home.refresh('assistant', {}))['status'] == 'updated'
     assert (await r.home.refresh('assistant', {}))['status'] == 'current'
     r.clock[0] += 3600
     assert any('weather expired' in reason for reason in (await r.home.refresh('assistant', {}))['reasons'])
@@ -129,10 +128,10 @@ def test_weather_timestamps_and_fingerprint():
         stale[0]['spec']['blocks'][0]['updated_at'] = stamp
         assert weather_expired(stale, now)
     chat = {'id': 'a', 'messages': [{'role': 'user', 'content': 'go'}]}
-    before = evidence(chat, [], {'task': {'body': 'in progress'}})
-    assert before != evidence(chat, [], {'task': {'body': 'done'}})
+    from cyrene.plugins.builtin.cyrene_cards.home_preparation import source_snapshot
+    before = evidence(source_snapshot(chat))
     chat['messages'].extend([{'role': 'user', 'agentMessageKind': 'welcome_refresh'}, {'role': 'assistant', 'content': 'refreshed'}])
-    assert before == evidence(chat, [], {'task': {'body': 'in progress'}})
+    assert before == evidence(source_snapshot(chat))
 
 
 @pytest.mark.asyncio
@@ -365,3 +364,22 @@ async def test_home_weather_uses_configured_provider_order_and_handles_unavailab
     assert (await home_weather.weather_snapshot(cards))["status"] == "unavailable"
     assert (await home_weather.weather_snapshot([]))["status"] == "unavailable"
     assert calls == ["brave", "simplexng"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_uses_only_dialogue_and_never_reads_task_history(home_rig):
+    r = home_rig
+    def forbidden():
+        raise AssertionError("Home must not read historical task lists")
+    r.port.service.repository.read_summaries = forbidden
+    r.chat['messages'] = [{'role': 'user', 'content': '小游戏不用管了'}]
+    r.chat['pendingQuestion'] = {'body': 'not dialogue'}
+    await add_overview(r)
+    await r.home.refresh('assistant', {})
+    assert r.calls[-1][5] == {'recent_messages': [
+        {'role': 'user', 'content': '小游戏不用管了', 'createdAt': None}]}
+    r.chat['messages'].extend([
+        {'role': 'user', 'agentMessageKind': 'task_notification', 'content': 'task changed'},
+        {'role': 'assistant', 'content': '', 'trace': ['large tool output']},
+    ])
+    assert (await r.home.refresh('assistant', {}))['status'] == 'current'

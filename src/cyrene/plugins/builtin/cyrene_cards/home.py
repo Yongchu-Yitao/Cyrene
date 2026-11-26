@@ -13,7 +13,7 @@ from .schemas import validate
 
 from .home_publication import ensure_pending_table, publish_due
 from .home_preparation import HomeModelUnavailable, prepare_home, source_snapshot
-from .home_freshness import RETRY_SECONDS, evidence, weather_expired, display_slot, preparation_target, task_documents
+from .home_freshness import RETRY_SECONDS, evidence, weather_expired, display_slot, preparation_target
 logger = logging.getLogger(__name__)
 HOME_CHECK_INTERVAL_SECONDS = 60
 
@@ -149,10 +149,8 @@ class HomeCards:
             if now < state.get("retry_after", 0):
                 return {"status": "retry_pending"}
             cards = (await self.saved(owner))["cards"]
-            repository = port.service.repository
-            siblings = (await asyncio.to_thread(repository.read_summaries))["chats"] if hasattr(repository, "read_summaries") else []
-            contexts = await asyncio.to_thread(task_documents, port, owner)
-            source = evidence(chat, siblings, contexts)
+            snapshot = source_snapshot(chat)
+            source = evidence(snapshot)
             target = preparation_target(local)
             target_key = target.isoformat()
             scheduled_due = state.get("prepared_slot") != target_key
@@ -160,7 +158,7 @@ class HomeCards:
             if scheduled_due:
                 reasons.append("display period due: prepare the full headline and supporting copy for the target time")
             if source != state.get("source"):
-                reasons.append("task evidence changed: reconcile confirmations, progress and delivered artifacts")
+                reasons.append("recent dialogue changed: reconcile confirmations, progress and delivered artifacts")
             if local.date().isoformat() != state.get("day"):
                 reasons.append("new local day: reconcile today's completed items")
             weather_due = weather_expired(cards, now) and now - state.get("weather_checked", 0) >= 600
@@ -180,7 +178,7 @@ class HomeCards:
                 f"Existing slots: {json.dumps(cards, ensure_ascii=False)}"
             )
             try:
-                await self.prepare(self.service, port, owner, version, prompt, source_snapshot(chat, siblings, contexts),
+                await self.prepare(self.service, port, owner, version, prompt, snapshot,
                                    publish_at=target.timestamp())
             except asyncio.CancelledError:
                 raise

@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.8] - 2026-11-27
+
+### Features and interface updates
+
+- Fix home greetings remaining stuck in an earlier time period after long conversations. Home preparation now uses the latest 20 real user messages and main assistant replies combined, reducing refresh failures caused by excessive history. Filter task notifications, background maintenance, tool activity, intermediate progress, and blank records before selecting recent dialogue so they do not displace useful exchanges.
+- Reconcile confirmations, progress, and results from recent dialogue without additionally reading complete historical task content or task lists. Hide stale items unsupported by the latest conversation, reducing old work lingering on the home screen after it is no longer relevant. Existing cards retain presentation state without being treated as fresh evidence of task status.
+- Align dialogue-change detection with the conversation actually used for home preparation, reducing unnecessary preparation caused by unrelated task states, tool output, or notifications. Time-period, new-day, and expired-weather updates remain available, and home preparation continues silently in the background.
+
 ## [0.9.2.7] - 2026-11-25
 
 ### Features and interface updates

@@ -31,6 +31,7 @@ from cyrene.platform import version
     ("0.9.2.5", "0.9.2.5"),
     ("0.9.2.6", "0.9.2.6"),
     ("0.9.2.7", "0.9.2.7"),
+    ("0.9.2.8", "0.9.2.8"),
 ])
 def test_package_metadata_keeps_public_release_label(monkeypatch, metadata, label):
     monkeypatch.setattr(version, "_pyproject_candidates", lambda: [])

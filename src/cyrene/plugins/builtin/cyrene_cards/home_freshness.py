@@ -12,19 +12,30 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def evidence(chat, siblings, contexts=None):
-    # Maintenance inputs and their generated replies must not wake maintenance again.
+def recent_dialogue(chat):
+    """Select real dialogue before limiting; activity rows must not consume slots."""
     messages, maintenance = [], False
     for message in chat.get("messages", []):
-        if message.get("role") == "user":
+        role = message.get("role")
+        if role == "user":
             maintenance = message.get("agentMessageKind") == "welcome_refresh"
-        if not maintenance:
-            messages.append({key: message.get(key) for key in
-                             ("id", "role", "content", "attachments", "trace", "modelStatus")})
-    tasks = [{key: item.get(key) for key in ("id", "title", "status", "updatedAt", "activeGoal", "preview")}
-             for item in siblings if item.get("id") != chat.get("id")
-             and item.get("projectId") == chat.get("projectId")]
-    return digest([messages, sorted(tasks, key=lambda item: str(item["id"])), chat.get("pendingQuestion"), contexts])
+        if maintenance or role not in {"user", "assistant"}:
+            continue
+        if any(message.get(key) for key in (
+            "agentOriginated", "agentMessageKind", "systemInitiated", "intermediate",
+            "intermediate_reply", "activityCard", "notificationCard",
+        )):
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        messages.append({"role": role, "content": content, "createdAt": message.get("createdAt")})
+    return messages[-20:]
+
+
+def evidence(snapshot):
+    # Refresh only when the same dialogue supplied to the model changes.
+    return digest(snapshot)
 
 
 def weather_expired(cards, now):
@@ -59,24 +70,3 @@ def preparation_target(now):
         return (ahead - timedelta(days=1)).replace(hour=DISPLAY_HOURS[-1], minute=0, second=0, microsecond=0)
     hour = max(hour for hour in DISPLAY_HOURS if hour <= ahead.hour)
     return ahead.replace(hour=hour, minute=0, second=0, microsecond=0)
-
-
-def task_documents(port, owner):
-    """Read durable task documents without opening an Agent or changing context."""
-    from cyrene.core.context import ContextStoreRouter, TreeNotFoundError
-    from cyrene.core.context.tasks import STATE_KEY
-    context = getattr(port, "context", None)
-    if context is None:
-        return {}
-    directory = context.conversation_context.agent_states.context_directory
-    if not (directory / "index.sqlite3").is_file():
-        return {}
-    try:
-        with ContextStoreRouter(directory) as router:
-            tree = router.get_tree(owner)
-            root = router.get_node(tree.id, tree.root_id)
-            state = root.value.get(STATE_KEY, {})
-            return {key: {field: doc.get(field) for field in ("title", "summary", "body")}
-                    for key, doc in state.get("documents", {}).items()}
-    except TreeNotFoundError:
-        return {}
