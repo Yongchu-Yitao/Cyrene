@@ -188,7 +188,7 @@ async def test_runtime_persists_image_paths_with_user_turn(tmp_path, monkeypatch
     result = object()
 
     class Bridge:
-        def snapshot(self):
+        def snapshot(self, *, include_history=True):
             return {"status": "idle", "run_id": ""}
 
         async def submit_result(self, text, **kwargs):

@@ -447,3 +447,77 @@ def test_graph_snapshot_keeps_nodes_and_commit_pointer_in_one_read(tmp_path, mon
         nodes, leaf, _version = graph_snapshot(reader, tree.id)
         assert leaf == first.id
         assert {n.id for n in nodes} == {tree.root_id, first.id}
+
+
+def test_projection_path_refreshes_across_appends_branches_and_external_edits(tmp_path, monkeypatch):
+    from cyrene.core.context.graph_reads import model_path, latest_path_value, model_read_scope
+
+    with ContextStoreRouter(tmp_path) as router, ContextStoreRouter(tmp_path) as editor:
+        tree = router.create_tree({"role": "system"}, tree_id="t", root_id="root")
+        with model_read_scope(router, tree.id):
+            a = router.mount(tree.id, "root", {"role": "context", "items": [1]}, node_id="a")
+            first = model_path(router, tree.id, "a")
+            reads = []
+            original = ContextTreeStore.get_path
+            def counted(store, leaf):
+                reads.append(leaf)
+                return original(store, leaf)
+            monkeypatch.setattr(ContextTreeStore, 'get_path', counted)
+            router.mount(tree.id, a.id, {"role": "user"}, node_id="b")
+            assert model_path(router, tree.id, "b")[1] is first[1]
+            latest_path_value(router, tree.id, 'b', role='context')['items'].append(9)
+            router.update_node(tree.id, a.id, {"role": "context", "items": [2]})
+            assert model_path(router, tree.id, "b")[1].value['items'] == [2]
+            assert first[1].value['items'] == [1]
+            router.mount(tree.id, 'root', {"role": "user"}, node_id="sibling")
+            assert [n.id for n in model_path(router, tree.id, "sibling")] == ['root', 'sibling']
+            assert not reads
+            assert model_path(router, tree.id, "b")[1].value['items'] == [2]
+            reads.clear()
+            editor.update_node(tree.id, "a", {"role": "context", "items": [3]})
+            assert model_path(router, tree.id, "b")[1].value['items'] == [3]
+            assert reads == ['b']
+
+
+def test_model_reads_release_history_after_nested_scopes_and_failures(tmp_path):
+    from cyrene.core.context.graph_reads import model_path, model_read_scope
+
+    with ContextStoreRouter(tmp_path) as router:
+        tree = router.create_tree({"role": "system"})
+        leaf = router.mount(tree.id, tree.root_id, {"content": "x" * 8192})
+        with pytest.raises(RuntimeError, match="interrupted"):
+            with model_read_scope(router, tree.id) as cache:
+                with model_read_scope(router, tree.id):
+                    model_path(router, tree.id, leaf.id)
+                assert cache.nodes[-1].id == leaf.id
+                raise RuntimeError("interrupted")
+        assert not cache.nodes and not cache.positions and not cache.changed
+        assert model_path(router, tree.id, leaf.id)[-1] == leaf
+        assert not cache.nodes
+
+
+def test_cold_branch_extension_uses_one_ancestry_read(tmp_path, monkeypatch):
+    from cyrene.core.context import graph_reads
+    from cyrene.core.context.graph_reads import model_read_scope, model_path
+
+    with ContextStoreRouter(tmp_path) as router:
+        tree = router.create_tree({"role": "system"})
+        parent = tree.root_id
+        for i in range(64):
+            parent = router.mount(tree.id, parent, {"content": str(i)}).id
+        other = router.mount(tree.id, tree.root_id, {"content": "sibling"})
+        with model_read_scope(router, tree.id):
+            model_path(router, tree.id, other.id)
+            leaf = router.mount(tree.id, parent, {"content": "new"})
+            expected = router.get_path(tree.id, leaf.id)
+            reads = []
+            path_nodes = graph_reads.path_nodes
+
+            def read(store, node_id, *, cached_root=None):
+                reads.append((node_id, cached_root.id))
+                return path_nodes(store, node_id, cached_root=cached_root)
+
+            monkeypatch.setattr(graph_reads, "path_nodes", read)
+            monkeypatch.setattr(ContextTreeStore, "get_node", lambda *args: pytest.fail("per-ancestor read"))
+            assert list(model_path(router, tree.id, leaf.id)) == expected
+            assert reads == [(leaf.id, tree.root_id)]

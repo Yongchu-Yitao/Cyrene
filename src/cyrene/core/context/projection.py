@@ -196,11 +196,11 @@ def project_model_messages(
 
     path = _apply_graph_overrides(path)
 
-    from .tasks import state_from, project_tasks
+    from .tasks import STATE_KEY, project_tasks
     # A bounded worker can restrict model-visible context without disabling the
     # internal execution ledger. Persisted policy also applies on replay.
     path = apply_context_projection(path)
-    task_state = state_from(path)
+    task_state = path[0].value.get(STATE_KEY) if path and isinstance(path[0].value, dict) else None
     from .images import retire_historical_images
     path = retire_historical_images(path, (task_state or {}).get("retired_image_nodes", ()))
     if task_state is not None:

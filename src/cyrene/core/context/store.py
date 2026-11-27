@@ -13,10 +13,12 @@ from uuid import uuid4
 
 from ..hook import CONTEXT_CHANGE, CONTEXT_USED, ContextUsed, HookEvent
 from ..observability import log_operation
+from .graph_reads import _version, path_nodes
 from .hook_store import TreeHookStore
 from .errors import (
     ContextError,
     NodeHasChildrenError,
+    NodeChangedError,
     NodeNotFoundError,
     RootDeletionError,
     TreeNotFoundError,
@@ -57,6 +59,7 @@ class ContextTreeStore:
         self._token_counter = token_counter
         self._token_limit = int(token_limit)
         self._lock = threading.RLock()
+        self._model_path = None
         self._closed = False
         self._deleted = False
         self._connection = connect(self.database)
@@ -576,6 +579,9 @@ class ContextTreeStore:
                             parent_id=parent_id,
                         )
                     )
+                    version = _version(self) if self._model_path is not None else None
+                if version is not None:
+                    self._model_path.record(version, node_id, parent_id, appended=True)
             except sqlite3.IntegrityError as exc:
                 raise ContextError(f"context node id already exists: {node_id}") from exc
         node = ContextNode(node_id, self._tree.id, parent_id, decode_value(encoded), created_at, created_at)
@@ -679,7 +685,8 @@ class ContextTreeStore:
             with transaction(self._connection):
                 existing = self._require_node_row(node_id)
                 if expected_updated_at and str(existing["updated_at"]) != expected_updated_at:
-                    raise ValueError("context node changed before this update")
+                    if datetime.fromisoformat(existing["updated_at"]).isoformat() != expected_updated_at:
+                        raise NodeChangedError("context node changed before this update")
                 token_delta = self_tokens - int(existing["self_token_count"] or 0)
                 self._connection.execute(
                     "UPDATE context_nodes SET value_json = ?, self_token_count = ?, "
@@ -715,6 +722,9 @@ class ContextTreeStore:
                         ),
                     )
                 )
+                version = _version(self) if self._model_path is not None else None
+            if version is not None:
+                self._model_path.record(version, node_id, existing["parent_id"])
         node = ContextNode(
             node_id,
             self._tree.id,
@@ -934,30 +944,7 @@ class ContextTreeStore:
 
     def get_path(self, node_id: str) -> list[ContextNode]:
         node_id = str(node_id)
-        with self._lock:
-            self._ensure_available()
-            self._require_node_row(node_id)
-            rows = self._connection.execute(
-                """
-                WITH RECURSIVE ancestors(
-                    node_id, parent_id, value_json, created_at, updated_at, depth
-                ) AS (
-                    SELECT node_id, parent_id, value_json, created_at, updated_at, 0
-                    FROM context_nodes
-                    WHERE node_id = ?
-                    UNION ALL
-                    SELECT parent.node_id, parent.parent_id, parent.value_json,
-                           parent.created_at, parent.updated_at, ancestors.depth + 1
-                    FROM context_nodes AS parent
-                    JOIN ancestors ON parent.node_id = ancestors.parent_id
-                )
-                SELECT node_id, parent_id, value_json, created_at, updated_at
-                FROM ancestors
-                ORDER BY depth DESC
-                """,
-                (node_id,),
-            ).fetchall()
-        result = [self._node_from_row(row) for row in rows]
+        result = path_nodes(self, node_id)
         log_operation(
             logger,
             "context.store",

@@ -99,3 +99,18 @@ def test_projection_does_not_turn_nonobject_values_into_dialogue(state):
     router, tree, user, runtime = state
     router.mount(tree.id, user.id, ['role', 'assistant'])
     assert runtime.context_checkpoint(tree.id)['node_id'] == user.id
+
+
+def test_authorizations_match_original_run_id_normalization_across_branches(state):
+    from cyrene.core.context.checkpoint_reads import run_authorization_nodes
+
+    router, tree, user, _ = state
+    for run_id in (42, "42", "042", 42.0, 2**64, True, False, 0, "0", 1e-7, None):
+        router.mount(tree.id, tree.root_id, {"role": "user", "run_id": run_id})
+    router.mount(tree.id, user.id, {"role": "context_reflection", "run_id": 42})
+    router.mount(tree.id, user.id, {"role": "assistant", "run_id": "42"})
+    history = sorted(router.get_subtree(tree.id, tree.root_id), key=lambda node: (node.created_at, node.id))
+    for target in ("42", "042", "42.0", str(2**64), "True", "1", "False", "0", "1e-07", "missing"):
+        expected = [n for n in history if n.value.get("role") in {"user", "context_reflection"}
+                    and str(n.value.get("run_id") or "") == target]
+        assert run_authorization_nodes(router, tree.id, target) == expected

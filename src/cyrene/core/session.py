@@ -8,6 +8,8 @@ from .plugin.session_plugins import SessionPlugins
 from .context.mounts import stored_context_mounts, unique_context_mounts, contribution_mounts
 from .plugin.result_codec import json_value, decoded_plugin_value, question_options, stored_result, restored_result
 
+from .context.graph_reads import model_path, model_read_scope
+from .context.checkpoint_reads import checkpoint_snapshot, durable_event_node_count, run_authorization_nodes
 from .context.tasks import TaskContexts, TOOLS as TASK_CONTEXT_TOOLS, task_messages, task_nodes, context_catalog, STATE_KEY as TASK_STATE_KEY
 
 import asyncio
@@ -90,12 +92,13 @@ _MODEL_RESPONSE_RETRY_STATE_KEY = "_model_response_retry"
 _MODEL_TOOL_CALL_CORRECTION_TYPE = "cyrene.tool_call_correction"
 
 
-def _projection_root(store, tree, projection):
+def _initial_root_value(store, tree, projection):
     root = store.get_node(tree.id, tree.root_id)
     if projection is not None:
         store.update_node(tree.id, tree.root_id, dict(root.value, context_projection=deepcopy(projection)))
         root = store.get_node(tree.id, tree.root_id)
-    return root
+    value = root.value
+    return deepcopy({k: v for k, v in value.items() if k != TASK_STATE_KEY} if isinstance(value, dict) else value)
 
 
 def _l(en: str, zh: str, **values: Any) -> str:
@@ -477,10 +480,7 @@ class AgentSession:
             self.tree.id, self.events, AgentSessionEvent, logger, event_listener,
         )
         self._transitions.tree_id = self.tree.id
-        root_node = _projection_root(self.store, self.tree, context_values.get("context_projection"))
-        self._initial_root_value = deepcopy(root_node.value)
-        if isinstance(self._initial_root_value, dict):
-            self._initial_root_value.pop(TASK_STATE_KEY, None)
+        self._initial_root_value = _initial_root_value(self.store, self.tree, context_values.get("context_projection"))
         self._leaf_id = self.tree.root_id
         self.task_contexts = TaskContexts(self)
         self.task_contexts.initialize()
@@ -531,19 +531,17 @@ class AgentSession:
             )
         self._attach_plugin_packs()
         self.hooks.set_before_dispatch(self.reconcile_plugins)
-        nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
-        self._events.initialize_sequence(sum(
-            self._event_for_node(node, sequence=0) is not None for node in nodes
-        ))
+        self._events.initialize_sequence(durable_event_node_count(self.store, self.tree.id))
         self._unsubscribe_context_events = self.store.subscribe(
             self._context_output_changed,
             tree_id=self.tree.id,
         )
-        self.task_contexts.recover_compaction()
-        if resume_on_restore:
-            self._restore()
-        else:
-            self._restore(resume=False)
+        with model_read_scope(self.store, self.tree.id):
+            self.task_contexts.recover_compaction()
+            if resume_on_restore:
+                self._restore()
+            else:
+                self._restore(resume=False)
         log_operation(
             logger,
             "cyrene.core.session",
@@ -1368,7 +1366,7 @@ class AgentSession:
         if outermost:
             self._context_event_deferral.changes = []
         try:
-            with self._state_lock:
+            with self._state_lock, model_read_scope(self.store, self.tree.id):
                 yield
         finally:
             if outermost:
@@ -1470,11 +1468,7 @@ class AgentSession:
             return ""
         fallback = ""
         authorizations: list[str] = []
-        nodes = sorted(
-            self.store.get_subtree(self.tree.id, self.tree.root_id),
-            key=lambda item: (item.created_at, item.id),
-        )
-        for node in nodes:
+        for node in run_authorization_nodes(self.store, self.tree.id, target_run_id):
             value = node.value if isinstance(node.value, Mapping) else {}
             if (
                 value.get("role") not in {"user", "context_reflection"}
@@ -1908,13 +1902,8 @@ class AgentSession:
             self._emit_state_snapshot(cancelled_state)
     def _wait_for_transitions(self) -> None:
         self._transitions.wait()
-    def _select_restore_leaf(self, nodes: Sequence[ContextNode]) -> ContextNode:
-        from cyrene.core.context.paths import select_context_leaf
-        committed, _ = self.store.committed_state(self.tree.id)
-        return select_context_leaf(nodes, committed)
-
     def _restore_run_context(self, leaf: ContextNode) -> None:
-        path = self.store.get_path(self.tree.id, leaf.id)
+        path = self.task_contexts._path(leaf.id)
         latest_user = next(
             (
                 node
@@ -1993,16 +1982,10 @@ class AgentSession:
             tree_id=self.tree.id,
             root_id=self.tree.root_id,
         )
-        nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
-        root_value = next(
-            (
-                node.value
-                for node in nodes
-                if node.id == self.tree.root_id and isinstance(node.value, Mapping)
-            ),
-            {},
-        )
-        self._permission_grants.restore(root_value)
+        from .context.paths import select_context_leaf
+        nodes, committed = checkpoint_snapshot(self.store, self.tree.id)
+        root = self.store.get_node(self.tree.id, self.tree.root_id)
+        self._permission_grants.restore(root.value if isinstance(root.value, Mapping) else {})
         self._cancelled_run_ids = {
             str(node.value.get("run_id") or "")
             for node in nodes
@@ -2017,7 +2000,7 @@ class AgentSession:
             and node.value.get("error") is True
             and node.value.get("run_id")
         }
-        leaf = self._select_restore_leaf(nodes)
+        leaf = self.store.get_node(self.tree.id, select_context_leaf(nodes, committed).id)
         self._leaf_id = leaf.id
         self._restore_run_context(leaf)
         value = leaf.value if isinstance(leaf.value, Mapping) else {}
@@ -2197,7 +2180,7 @@ class AgentSession:
                     "The Agent is still processing the previous message.",
                     "Agent 仍在处理上一条消息。",
                 ))
-            path = self.store.get_path(self.tree.id, self._leaf_id)
+            path = self.task_contexts._path()
             terminal = terminal_run_ancestor(path[-1], path)
             terminal_value = terminal.value if isinstance(terminal.value, Mapping) else {}
             if self._is_run_terminated(normalized_run_id) or (
@@ -2652,7 +2635,8 @@ class AgentSession:
             tools = deepcopy(list(self._model_tools))
             # Establish the initial catalog before calling the model, and record
             # new requests in the active context without changing that catalog.
-            if not self.task_contexts.read()["documents"] or self.task_contexts.read()["active"]:
+            state = self.task_contexts._stored()
+            if not state["documents"] or state["active"]:
                 self.task_contexts.ensure(trigger.id)
             messages = self._messages(trigger.id)
             latest_trigger = self.store.get_node(self.tree.id, trigger.id)
@@ -2790,7 +2774,7 @@ class AgentSession:
 
     async def _compact_at_node(self, trigger, **kwargs):
         async with self.task_contexts.serial():
-            if not self.task_contexts.read()["active"]:
+            if not self.task_contexts.field("active"):
                 return None, {"compacted": False, "reason": "no_active_context", "before": 0, "after": 0}
             return await self._compact_task_at_node(trigger, **kwargs)
 
@@ -2825,7 +2809,7 @@ class AgentSession:
                 (
                     trigger.id,
                     trigger.updated_at.isoformat(),
-                    json.dumps(self.task_contexts.read()["documents"][self.task_contexts.read()["active"]], sort_keys=True, ensure_ascii=False),
+                    json.dumps(self.task_contexts.document(), sort_keys=True, ensure_ascii=False),
                     str(limit),
                     reason,
                 )
@@ -2915,7 +2899,7 @@ class AgentSession:
                     "before_tokens": before,
                     "after_tokens": after,
                     "distilled": distilled,
-                    "task_context_id": self.task_contexts.read()["active"],
+                    "task_context_id": self.task_contexts.field("active"),
                 }
                 state = self.task_contexts.read()
                 doc = state["documents"][state["active"]]
@@ -2947,8 +2931,8 @@ class AgentSession:
         model_input = prepared or self._prepare_model_input(trigger)
         if model_input.trigger_id != trigger.id:
             raise ValueError("prepared model input does not match compaction trigger")
-        path = self.store.get_path(self.tree.id, trigger.id)
-        state = self.task_contexts.read()
+        path = self.task_contexts._path(trigger.id)
+        state = path[0].value[TASK_STATE_KEY]
         active = state["active"]
         selected = task_messages(path, state, active, live=True) if active else []
         reserved = model_input.tool_tokens + max(0, model_input.message_tokens - messages_token_estimate(selected))
@@ -3329,6 +3313,33 @@ class AgentSession:
                        tool_tokens=tool_tokens, compaction_tokens=message_tokens + tool_tokens,
                        routing_tokens=message_tokens + tool_tokens)
 
+    async def _prepare_advance_input(self, trigger, run_id):
+        with model_read_scope(self.store, self.tree.id):
+            prepared = self._prepare_model_input(trigger)
+            model_start_runtime = {"prepared_model_input": prepared,
+                                   "resuming_hook_question": "hook_model_actions" in trigger.value}
+            contributions = await self.hooks.model_start_mounts({
+                "node_id": trigger.id, "run_id": run_id,
+            }, runtime=model_start_runtime)
+            mounts = self._contribution_mounts(
+                contributions, system_kind="model_system", ordinary_kind="model_context",
+                system_source="ModelStart", ordinary_source="ModelStart", lifecycle="model",
+            )
+            if mounts:
+                self._mount_context_nodes(trigger, run_id, mounts)
+                return None
+            # Plugins may replace the prepared snapshot after offloading task data.
+            prepared = model_start_runtime["prepared_model_input"]
+            trigger_value = trigger.value if isinstance(trigger.value, Mapping) else {}
+            if trigger_value.get("role") not in {
+                "context_compaction",
+                "context_reflection",
+            }:
+                trigger, prepared, run_id = await self._automatic_compaction(
+                    trigger, prepared, run_id
+                )
+            return trigger, prepared, run_id
+
     async def _advance(self, trigger: ContextNode) -> None:
         run_id = self._node_run_id(trigger)
         if self._is_cancelled(run_id):
@@ -3359,29 +3370,10 @@ class AgentSession:
                 )
                 if mounted_guidance is not None:
                     return
-        prepared = self._prepare_model_input(trigger)
-        model_start_runtime = {"prepared_model_input": prepared,
-                               "resuming_hook_question": "hook_model_actions" in trigger.value}
-        contributions = await self.hooks.model_start_mounts({
-            "node_id": trigger.id, "run_id": run_id,
-        }, runtime=model_start_runtime)
-        mounts = self._contribution_mounts(
-            contributions, system_kind="model_system", ordinary_kind="model_context",
-            system_source="ModelStart", ordinary_source="ModelStart", lifecycle="model",
-        )
-        if mounts:
-            self._mount_context_nodes(trigger, run_id, mounts)
+        model_input = await self._prepare_advance_input(trigger, run_id)
+        if model_input is None:
             return
-        # Plugins may replace the prepared snapshot after offloading task data.
-        prepared = model_start_runtime["prepared_model_input"]
-        trigger_value = trigger.value if isinstance(trigger.value, Mapping) else {}
-        if trigger_value.get("role") not in {
-            "context_compaction",
-            "context_reflection",
-        }:
-            trigger, prepared, run_id = await self._automatic_compaction(
-                trigger, prepared, run_id
-            )
+        trigger, prepared, run_id = model_input
         prepared = await self._prepare_hook_model_actions(trigger, run_id, prepared)
         if prepared is None:
             return
@@ -3553,28 +3545,29 @@ class AgentSession:
             + json.dumps(calls, ensure_ascii=False, sort_keys=True, default=str),
         )
         control_batch = any(call.get("name") in TASK_CONTEXT_TOOLS for call in calls) or self._reflection_call(calls) is not None
-        owner = (self.task_contexts.read()["active"] if control_batch
-                 else self.task_contexts.ensure(transition_key))
-        with self._linearized_context_commit():
-            if self._transitions.closed or run_id in self._cancelled_run_ids:
-                return
-            assistant = self.store.mount(
-                self.tree.id,
-                trigger.id,
-                {**self._assistant_model_value(
-                    output, calls, streamed=streamed, transition_key=transition_key,
-                    run_id=run_id, batch_key=batch_key,
-                ), "task_context_id": owner, "task_control": control_batch,
-                    "answer_complete": not calls},
-                node_id=self._stable_id("assistant", transition_key),
-            )
-            assistant_state = self._set_state_locked(
-                "tools" if calls else "finalizing",
-                _l("Executing tools", "正在执行工具")
-                if calls
-                else _l("Running SessionEnd hooks", "正在运行 SessionEnd Hook"),
-                leaf_id=assistant.id,
-            )
+        with model_read_scope(self.store, self.tree.id):
+            owner = (self.task_contexts.field("active") if control_batch
+                     else self.task_contexts.ensure(transition_key))
+            with self._linearized_context_commit():
+                if self._transitions.closed or run_id in self._cancelled_run_ids:
+                    return
+                assistant = self.store.mount(
+                    self.tree.id,
+                    trigger.id,
+                    {**self._assistant_model_value(
+                        output, calls, streamed=streamed, transition_key=transition_key,
+                        run_id=run_id, batch_key=batch_key,
+                    ), "task_context_id": owner, "task_control": control_batch,
+                        "answer_complete": not calls},
+                    node_id=self._stable_id("assistant", transition_key),
+                )
+                assistant_state = self._set_state_locked(
+                    "tools" if calls else "finalizing",
+                    _l("Executing tools", "正在执行工具")
+                    if calls
+                    else _l("Running SessionEnd hooks", "正在运行 SessionEnd Hook"),
+                    leaf_id=assistant.id,
+                )
         self._emit_state_snapshot(assistant_state)
         if not calls:
             await self._finish_success(assistant)
@@ -4420,8 +4413,14 @@ class AgentSession:
         from .context.tool_results import project_tool_messages, result_session_id
 
         services = self._plugin_services()
+        path = model_path(self.store, self.tree.id, node_id)
+        root = path[0].value if path and isinstance(path[0].value, Mapping) else {}
+        policy = root.get("context_projection") or {}
+        if isinstance(self.store, ContextStoreRouter) and (TASK_STATE_KEY not in root or policy.get("task_context") is False):
+            # A plugin observation builder may consume mutable raw tool results.
+            path = self.store.get_path(self.tree.id, node_id)
         messages = project_model_messages(
-            self.store.get_path(self.tree.id, node_id),
+            path,
             observation_services=tuple(services.values()),
         )
         return project_tool_messages(
@@ -4829,8 +4828,8 @@ class AgentSession:
         )
         return result
 
-    def snapshot(self) -> dict[str, Any]:
-        nodes = self.store.get_subtree(self.tree.id, self.tree.root_id)
+    def snapshot(self, *, include_history: bool = True) -> dict[str, Any]:
+        nodes = self.store.get_subtree(self.tree.id, self.tree.root_id) if include_history else ()
         with self._state_lock:
             status = self._status
             detail = self._detail
@@ -4867,7 +4866,7 @@ class AgentSession:
             "run_id": run_id,
             "event_sequence": event_sequence,
             "workspace": str(self.workspace),
-            "taskContexts": context_catalog(self.task_contexts.read()),
+            "taskContexts": context_catalog(self.task_contexts._stored()) if include_history else [],
             "nodes": [
                 {
                     "id": node.id,

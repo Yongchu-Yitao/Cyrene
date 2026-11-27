@@ -5,6 +5,8 @@ or saved task documents just to display a task's status.
 """
 from __future__ import annotations
 
+import json
+
 
 _FIELDS = (
     "role", "run_id", "runtime_guidance", "trigger_model", "pending_question",
@@ -27,7 +29,12 @@ def _projection(source):
         FROM json_each({source}) WHERE key IN ({keys}))"""
 
 
+def _legacy_run_id(raw):
+    return str(json.loads(raw) or "") if raw is not None else ""
+
+
 def ensure_checkpoint_projection(connection):
+    connection.create_function("cyrene_legacy_run_id", 1, _legacy_run_id, deterministic=True)
     if connection.execute(
         "SELECT 1 FROM sqlite_master WHERE name='context_checkpoint_nodes'"
     ).fetchone():
@@ -76,3 +83,28 @@ def checkpoint_snapshot(router, tree_id):
             CROSS JOIN context_tree_metadata m WHERE m.singleton=1
         """).fetchall()
         return [store._node_from_row(row) for row in rows], str(rows[0]['committed_leaf_id'] or '') if rows else ''
+
+
+def durable_event_node_count(router, tree_id):
+    """Count persisted input/assistant/tool events when reconnecting a session."""
+    with router._lease(tree_id) as store, store._lock:
+        row = store._connection.execute("""
+            SELECT count(*) FROM context_checkpoint_nodes
+            WHERE json_extract(value_json, '$.role') IN ('user', 'assistant', 'tool_results')
+        """).fetchone()
+        return row[0]
+
+
+def run_authorization_nodes(router, tree_id, run_id):
+    """Authorization includes every branch of the run, in original order."""
+    with router._lease(tree_id) as store, store._lock:
+        rows = store._connection.execute("""
+            SELECT n.node_id, n.parent_id, n.value_json, n.created_at, n.updated_at
+            FROM context_checkpoint_nodes p JOIN context_nodes n USING (node_id)
+            WHERE json_extract(p.value_json, '$.role') IN ('user', 'context_reflection')
+              AND CASE WHEN json_type(p.value_json, '$.run_id') = 'text'
+                      THEN json_extract(p.value_json, '$.run_id')
+                      ELSE cyrene_legacy_run_id(n.value_json -> '$.run_id') END = ?
+        """, (run_id,)).fetchall()
+        nodes = (store._node_from_row(row) for row in rows)
+        return sorted(nodes, key=lambda node: (node.created_at, node.id))

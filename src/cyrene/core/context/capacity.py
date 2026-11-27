@@ -109,7 +109,7 @@ async def prepare_capacity(session, trigger, prepared):
     limit = threshold(session)
     service = session.task_contexts
     async with service.serial():
-        state = service.read()
+        state = service._stored()
         reference = state.get('shared_offload', {})
         body = state['shared']['body']
         if reference.get('body_digest') == body_digest(body) and not shared_reference(state):
@@ -117,13 +117,15 @@ async def prepare_capacity(session, trigger, prepared):
             # or when the provider no longer reports a context window.
             location = snapshot(session, {'context_id': 'shared', 'body': body,
                                           'note': 'Shared task data; original sources and scope apply.'}, 'shared-body')
+            state = service.read()
             state['shared_offload'] = {'body_digest': body_digest(body), 'snapshot_path': location}
             service.write(state)
             prepared = session._prepare_model_input(trigger)
         if not limit or prepared.compaction_tokens < int(limit * WARNING_RATIO):
             return prepared
-        path = session.store.get_path(session.tree.id, trigger.id)
-        public = deepcopy(state)
+        path = service._path(trigger.id)
+        state = service.read()
+        public = dict(state)
         public['active'] = None
         public_tokens = messages_token_estimate(project_tasks(path, public)) + prepared.tool_tokens
         changed = False

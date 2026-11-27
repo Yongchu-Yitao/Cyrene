@@ -241,7 +241,7 @@ async def run_workbench_chat(
         await _publish_without_final_reply(run.publish, event)
 
     try:
-        snapshot = bridge.snapshot()
+        snapshot = bridge.snapshot(include_history=False)
         restored_run_id = str(snapshot.get("run_id") or "")
         if (
             str(snapshot.get("status") or "") == "idle"

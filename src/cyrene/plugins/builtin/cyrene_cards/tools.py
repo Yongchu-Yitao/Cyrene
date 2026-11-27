@@ -1,5 +1,6 @@
 """Assistant tools: authority comes from the host, never from model arguments."""
 
+from cyrene.core.context.tasks import task_state_field
 from cyrene.core.plugin import Plugin
 from cyrene.core.plugin.execution import require_plugin_execution
 from cyrene.plugins.native_runtime import resolve_exportable_path, run_context_value
@@ -16,7 +17,7 @@ def caller(context):
     if not owner:
         raise CardError("missing_session", "Card tools require a conversation session")
     tasks = context.services.get("task_contexts")
-    context_id = tasks.read().get("active") if tasks is not None else None
+    context_id = task_state_field(tasks, "active") if tasks is not None else None
     return owner, context_id
 
 

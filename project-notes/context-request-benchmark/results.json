@@ -1,0 +1,330 @@
+{
+  "baseline": "4abe729f (v0.9.2.9)",
+  "comparison": "First optimization before follow-up review. See review_follow_up for the current working tree.",
+  "fixture": {
+    "source": "installed assistant_global; counts only",
+    "observed_user_role_messages": 220,
+    "observed_tool_result_nodes": 536,
+    "observed_task_documents": 20,
+    "scale": 10,
+    "history_user_messages": 2200,
+    "history_tool_results": 5360,
+    "task_documents": 200,
+    "tree_nodes_including_root": 15121,
+    "historical_tool_result_payload_chars": 640,
+    "active_documents": 1,
+    "historical_text": "synthetic"
+  },
+  "method": "Separate processes and a fresh copy of the same SQLite fixture per sample. Real AgentSession initialization, status preflight, submit, context hooks, tool dispatch and drain; deterministic local model and Probe tool. Elapsed seconds from perf_counter. Production UI, remote providers and optional desktop plugins excluded.",
+  "stages": {
+    "open": "constructor only",
+    "first": "begin opening session to first model handler entry (includes open)",
+    "next": "tool.completed event to second model handler entry",
+    "both": "SHA-256 of both model requests, including messages and tool schemas"
+  },
+  "samples_before": [
+    {
+      "open": 22.027484874997754,
+      "first": 43.14954141600174,
+      "next": 8.538911709008971,
+      "both": [
+        "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+        "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+      ]
+    },
+    {
+      "open": 18.86973133299034,
+      "first": 36.36022341600619,
+      "next": 6.241508500010241,
+      "both": [
+        "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+        "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+      ]
+    },
+    {
+      "open": 16.551670332992217,
+      "first": 36.851590125006624,
+      "next": 8.10156358400127,
+      "both": [
+        "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+        "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+      ]
+    }
+  ],
+  "samples_after": [
+    {
+      "open": 0.47436062499764375,
+      "first": 0.9163985420018435,
+      "next": 0.38781316598760895,
+      "both": [
+        "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+        "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+      ]
+    },
+    {
+      "open": 0.4631877090141643,
+      "first": 0.9201709170010872,
+      "next": 0.38766495799063705,
+      "both": [
+        "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+        "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+      ]
+    },
+    {
+      "open": 0.4693567909998819,
+      "first": 0.9128468330018222,
+      "next": 0.3821758330159355,
+      "both": [
+        "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+        "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+      ]
+    }
+  ],
+  "median": {
+    "open": {
+      "before_seconds": 18.86973133299034,
+      "after_seconds": 0.4693567909998819,
+      "reduction_percent": 97.51,
+      "speedup": 40.2
+    },
+    "first": {
+      "before_seconds": 36.851590125006624,
+      "after_seconds": 0.9163985420018435,
+      "reduction_percent": 97.51,
+      "speedup": 40.21
+    },
+    "next": {
+      "before_seconds": 8.10156358400127,
+      "after_seconds": 0.38766495799063705,
+      "reduction_percent": 95.21,
+      "speedup": 20.9
+    }
+  },
+  "validation": {
+    "suite_tests_passed": 373,
+    "matching_historical_message_projections": 24,
+    "all_benchmark_request_hashes_match": true
+  },
+  "reproduce": [
+    "Set BASELINE_SRC to the src directory of commit 4abe729f and FIXTURE_DIR to a new temporary directory. Run from the project root using its Python environment.",
+    "PYTHONPATH=\"$BASELINE_SRC\" .venv/bin/python project-notes/context-request-benchmark/benchmark.py seed \"$FIXTURE_DIR\"",
+    "Run the following command three times per version, setting SOURCE to \"$BASELINE_SRC\" or the working tree src directory.",
+    "PYTHONPATH=\"$SOURCE\" .venv/bin/python project-notes/context-request-benchmark/benchmark.py measure \"$FIXTURE_DIR\""
+  ],
+  "review_follow_up": {
+    "date": "2026-11-27",
+    "versions": {
+      "release": "4abe729f (v0.9.2.9)",
+      "previous": "Snapshot of the uncommitted first optimization taken immediately before the review fixes.",
+      "final": "Working tree after the review fixes."
+    },
+    "verified_installed_counts": {
+      "assistant_global_workbench_user_messages": 220,
+      "assistant_global_tool_result_nodes": 536,
+      "assistant_global_task_documents": 20
+    },
+    "method": "Same 10x fixture and deterministic model as above. Each of three rounds uses a fresh process and private SQLite copy per version. Round order is release/previous/final, final/release/previous, previous/final/release. Samples are sequential. Reported times are medians.",
+    "path_method": "In each path process, tracemalloc records net Python allocations after releasing the path reader and collecting garbage; excludes SQLite native memory, peak and whole-process RSS. On the same 15121-node fixture, warm a sibling, append below the deep leaf, and read the 15122-node path. One SQL-traced sample verifies equality to get_path and counts SELECT/WITH statements. Five untraced samples measure read time per process. Temporary fixture mutations bypass async hook delivery to isolate storage.",
+    "elapsed_samples": {
+      "release": [
+        {
+          "open": 31.488506291992962,
+          "first": 53.79343312498531,
+          "next": 6.279968375019962,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        },
+        {
+          "open": 24.644726916012587,
+          "first": 47.448274124995805,
+          "next": 6.35067991600954,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        },
+        {
+          "open": 24.60210845898837,
+          "first": 46.88584891697974,
+          "next": 6.263227291987278,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        }
+      ],
+      "previous": [
+        {
+          "open": 0.4692687909991946,
+          "first": 0.9234855410177261,
+          "next": 0.4070332499977667,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        },
+        {
+          "open": 0.4674097499810159,
+          "first": 0.9175868749734946,
+          "next": 0.3852811670221854,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        },
+        {
+          "open": 0.4793272500101011,
+          "first": 0.9438753330032341,
+          "next": 0.3877428330015391,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        }
+      ],
+      "final": [
+        {
+          "open": 0.3917872080055531,
+          "first": 1.1075872500077821,
+          "next": 0.5489745000086259,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        },
+        {
+          "open": 0.4001770410104655,
+          "first": 1.1280375829956029,
+          "next": 0.5536242079979274,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        },
+        {
+          "open": 0.41716145901591517,
+          "first": 1.1039817499986384,
+          "next": 0.5346691669838037,
+          "both": [
+            "ceeb933d0bf28ac74a687788b125081c2b17a02d58d9ca1468c20ed6a3343e97",
+            "3667f95e01d25ad853852670e311e6755d49f5707a81295b695141ff1cd14f8e"
+          ]
+        }
+      ]
+    },
+    "path_samples": {
+      "previous": [
+        {
+          "retained_python_bytes": 42969093,
+          "branch_sql_reads": 15122,
+          "branch_seconds": [
+            0.10654254100518301,
+            0.08870633400510997,
+            0.09541120799258351,
+            0.10315337500651367,
+            0.08820850000483915
+          ]
+        },
+        {
+          "retained_python_bytes": 42969093,
+          "branch_sql_reads": 15122,
+          "branch_seconds": [
+            0.11789087500073947,
+            0.09637437498895451,
+            0.09774175001075491,
+            0.10531070799333975,
+            0.09136500000022352
+          ]
+        },
+        {
+          "retained_python_bytes": 42969093,
+          "branch_sql_reads": 15122,
+          "branch_seconds": [
+            0.1074843330134172,
+            0.09108854198711924,
+            0.09692437501507811,
+            0.10709729199879803,
+            0.09202545799780637
+          ]
+        }
+      ],
+      "final": [
+        {
+          "retained_python_bytes": 1337,
+          "branch_sql_reads": 2,
+          "branch_seconds": [
+            0.09225945800426416,
+            0.07656858299742453,
+            0.08682470899657346,
+            0.09526904200902209,
+            0.07510175000061281
+          ]
+        },
+        {
+          "retained_python_bytes": 1337,
+          "branch_sql_reads": 2,
+          "branch_seconds": [
+            0.10485725000035018,
+            0.07924241697764955,
+            0.08789558301214129,
+            0.09308249998139217,
+            0.07666074999724515
+          ]
+        },
+        {
+          "retained_python_bytes": 1337,
+          "branch_sql_reads": 2,
+          "branch_seconds": [
+            0.09402525000041351,
+            0.07940466701984406,
+            0.08761912499903701,
+            0.09187404200201854,
+            0.07593695801915601
+          ]
+        }
+      ]
+    },
+    "medians": {
+      "release": {
+        "open": 24.644726916012587,
+        "first": 47.448274124995805,
+        "next": 6.279968375019962
+      },
+      "previous": {
+        "open": 0.4692687909991946,
+        "first": 0.9234855410177261,
+        "next": 0.3877428330015391,
+        "branch_seconds": 0.09692437501507811,
+        "branch_sql_reads": 15122,
+        "retained_python_bytes": 42969093
+      },
+      "final": {
+        "open": 0.4001770410104655,
+        "first": 1.1075872500077821,
+        "next": 0.5489745000086259,
+        "branch_seconds": 0.08761912499903701,
+        "branch_sql_reads": 2,
+        "retained_python_bytes": 1337
+      }
+    },
+    "percent_faster_than_release": {
+      "open": 98.38,
+      "first": 97.67,
+      "next": 91.26
+    },
+    "validation": {
+      "focused_pytest_passed": 546,
+      "path_store_tests_after_lock_scope_review": 19,
+      "ruff": "passed",
+      "complexity_gate": "passed with original budgets",
+      "matching_real_history_projections": 24,
+      "unique_model_request_hash_pairs_across_9_runs": 1
+    },
+    "reproduce": [
+      "Use the existing seed/measure instructions with one common fixture and separate source directories.",
+      "For path measurements, run benchmark.py path FIXTURE_DIR in a fresh process for each repetition, selecting the previous or final source directory with PYTHONPATH."
+    ]
+  }
+}

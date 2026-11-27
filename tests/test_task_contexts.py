@@ -964,3 +964,39 @@ def test_append_fork_replay_excludes_later_additions(tmp_path):
         assert roles == ['user', 'assistant', 'tool_results']
     finally:
         s.close()
+
+
+def test_body_sync_checkpoint_survives_scope_exit_and_reconciles_external_edits(tmp_path):
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.core.context.tasks import STATE_KEY
+
+    s = make_session(tmp_path)
+    try:
+        owner = s.task_contexts.ensure("initial")
+        value = {"role": "assistant", "task_context_id": owner, "content": "first"}
+        first = s.store.mount(s.tree.id, s.tree.root_id, value)
+        second = s.store.mount(s.tree.id, first.id, dict(value, content="second"))
+        s._leaf_id = second.id
+        s.task_contexts.sync()
+
+        def persisted():
+            state = s.store.get_node(s.tree.id, s.tree.root_id).value[STATE_KEY]
+            assert state == s.task_contexts.read()
+            return [entry["value"]["content"] for entry in state["documents"][owner]["body"]]
+
+        assert persisted() == ["first", "second"]
+        with ContextStoreRouter(s.store.directory) as writer:
+            writer.update_node(s.tree.id, first.id, dict(value, content="edited"))
+            sibling = writer.mount(s.tree.id, first.id, dict(value, content="sibling"))
+        # A local append observes the skipped external revisions before the next read.
+        third = s.store.mount(s.tree.id, second.id, dict(value, content="third"))
+        s._leaf_id = third.id
+        s.task_contexts.sync()
+        assert persisted() == ["edited", "second", "third"]
+        s._leaf_id = sibling.id
+        s.task_contexts.sync()
+        assert persisted() == ["edited", "sibling"]
+        with s.store._lease(s.tree.id) as store:
+            assert not store._model_path.nodes
+    finally:
+        s.close()

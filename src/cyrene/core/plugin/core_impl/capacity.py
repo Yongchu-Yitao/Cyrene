@@ -3,7 +3,6 @@ from ...hook import MODEL_START
 from ...context.capacity import WARNING_RATIO, prepare_capacity, threshold
 from ...context.compaction import messages_token_estimate
 from ...context.tasks import project_tasks
-from copy import deepcopy
 
 _HOOK_ID = "core-context-capacity-model-start"
 _PLUGIN_ID = "core.context_capacity.mount"
@@ -26,14 +25,14 @@ def setup_capacity(context):
         if not limit or prepared.compaction_tokens < int(limit * WARNING_RATIO):
             return {}
         async with session.task_contexts.serial():
-            state = session.task_contexts.read()
-            path = context.tree.get_path(context.tree_id, trigger.id)
+            state = session.task_contexts._stored()
+            path = session.task_contexts._path(trigger.id)
             kind = f"task_capacity.{state.get('active')}"
             # The mount itself survives task compaction. Inspect the current path,
             # not a permanent flag or a node on an abandoned retry branch.
             if any(n.value.get("context_kind") == kind for n in path):
                 return {}
-            public = deepcopy(state)
+            public = dict(state)
             public['active'] = None
             public_tokens = messages_token_estimate(project_tasks(path, public)) + prepared.tool_tokens
             if public_tokens >= int(limit * WARNING_RATIO):
@@ -58,7 +57,7 @@ def setup_capacity(context):
         if not limit:
             return {}
         async with session.task_contexts.serial():
-            state = session.task_contexts.read()
+            state = session.task_contexts._stored()
             active = state.get("active")
             if not active:
                 return {}
@@ -69,7 +68,7 @@ def setup_capacity(context):
                 for doc in state["documents"].values()
             ) <= 1:
                 return {}
-            path = context.tree.get_path(context.tree_id, trigger.id)
+            path = session.task_contexts._path(trigger.id)
             kinds = {node.value.get("context_kind") for node in path}
             # The higher reminder covers both levels if input jumps past 50%.
             for percent in (50, 30):

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
+from cyrene.core.context.graph_reads import latest_path_value
 from cyrene.core.hook import MODEL_START
 from cyrene.platform import settings_store
 
@@ -13,11 +14,8 @@ HOOK_ID = "cyrene-time-context-model-start"
 PLUGIN_ID = "cyrene_time_context.mount"
 
 
-def _previous(path):
-    for node in reversed(path):
-        value = node.value
-        if value.get("role") != "context" or value.get("context_source") != SOURCE:
-            continue
+def _previous(value):
+    if value is not None:
         try:
             snapshot = ElementTree.fromstring(value["content"])
             stamp = datetime.fromisoformat(snapshot.findtext("sampled_at", ""))
@@ -25,7 +23,6 @@ def _previous(path):
                 return stamp, snapshot.findtext("timezone", "")
         except (ValueError, KeyError, ElementTree.ParseError):
             pass
-        return None
     return None
 
 
@@ -37,8 +34,8 @@ def setup(context):
         now = event.time.astimezone(timezone.utc)
         local = now.astimezone(zone)
         node_id = (event.payload or {}).get("node_id")
-        path = context.tree.get_path(context.tree_id, node_id) if node_id else []
-        previous = _previous(path)
+        previous = _previous(latest_path_value(context.tree, context.tree_id, node_id,
+                                               role="context", context_source=SOURCE))
         elapsed_text = "首次注入"
         if previous:
             stamp, previous_zone = previous

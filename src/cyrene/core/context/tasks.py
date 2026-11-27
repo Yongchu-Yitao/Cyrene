@@ -12,10 +12,12 @@ import threading
 from contextlib import asynccontextmanager
 from copy import copy, deepcopy
 from datetime import datetime, timezone
-from dataclasses import is_dataclass, replace as dataclass_replace
+from dataclasses import dataclass, is_dataclass, replace as dataclass_replace
 from pathlib import Path
 
 from .clarifications import carried_clarifications, clarification_fallback, transition_clarifications
+from .errors import NodeChangedError
+from .graph_reads import graph_version, model_path, model_path_snapshot, model_root_value
 from .paths import current_request_start
 from .body import (normalize_state, normalize_document, sync_bodies, append_body,
                    replace_body, body_prefix, insert_additions, edit_body)
@@ -273,11 +275,19 @@ def append_tool_results(selected, node, value, included_calls, include_clarifica
     """Keep paired tool results and preserve otherwise hidden user answers."""
     calls = included_calls.get(getattr(node, 'parent_id', None), set())
     fallback = clarification_fallback(value, calls) if include_clarification else None
-    value['results'] = [r for r in value.get('results', []) if r.get('call_id') in calls]
-    if value['results']:
-        selected.append(replace(node, value=value))
+    results = [r for r in value.get('results', []) if r.get('call_id') in calls]
+    if results:
+        selected.append(replace(node, value=deepcopy({**value, 'results': results})))
     if fallback:
         selected.append(replace(node, value=fallback))
+
+
+def _projection_document(state, path, context_id):
+    """Only the selected document's editable records participate in projection."""
+    if context_id not in state['documents']:
+        return {}
+    local = {'documents': {context_id: deepcopy(state['documents'][context_id])}}
+    return sync_bodies(local, path)['documents'][context_id]
 
 
 def task_messages(path, state, context_id, *, live=False, observation_services=()):
@@ -287,8 +297,7 @@ def task_messages(path, state, context_id, *, live=False, observation_services=(
     path = settle_interrupted_tool_calls(path)
     from .images import retire_historical_images
     path = retire_historical_images(path, state.get("retired_image_nodes", ()))
-    state = sync_bodies(deepcopy(state), path)
-    doc = state['documents'][context_id]
+    doc = _projection_document(state, path, context_id)
     records = {e["id"]: e["value"] for e in doc["body"] if "value" in e}
     nodes = task_nodes(path, state, context_id)
     archived = archived_calls(path, doc)
@@ -341,9 +350,8 @@ def project_tasks(path, state, *, observation_services=()):
     particular, a new model call never evicts a prior observation on its own.
     """
     from .projection import project_model_messages, scope_turn_suffixes
-    state = sync_bodies(deepcopy(state), path)
     active = state.get("active")
-    doc = state["documents"].get(active, {})
+    doc = _projection_document(state, path, active)
     records = {e["id"]: e["value"] for e in doc.get("body", []) if "value" in e}
     covered = set(doc.get("covered", []))
     archived = archived_calls(path, doc)
@@ -356,11 +364,8 @@ def project_tasks(path, state, *, observation_services=()):
     selected = []
     included_calls = {}
     for index, node in enumerate(path):
-        # The task-state snapshot is removed before projection. Do not traverse
-        # its (potentially large) archived documents just to throw it away.
-        # Copy the remaining graph together to preserve aliases and isolation.
-        value = deepcopy({k: v for k, v in records.get(node.id, node.value).items() if k != STATE_KEY})
-        value.pop(STATE_KEY, None)
+        # Discard inactive payloads before copying the model-visible values.
+        value = records.get(node.id, node.value)
         role = value.get("role")
         if not capacity_context_matches(value, active):
             continue
@@ -392,7 +397,7 @@ def project_tasks(path, state, *, observation_services=()):
             else:
                 included_calls[node.id] = {c.get('id') for c in value.get('tool_calls', [])}
             if handshake and value.get('task_context_id') != active:
-                value['content'] = ''
+                value = dict(value, content='')
                 value.pop('reasoning_details', None)
             if not value.get('content') and not value.get('tool_calls'):
                 continue
@@ -403,10 +408,11 @@ def project_tasks(path, state, *, observation_services=()):
             continue
         elif role not in {"system", "user", "context"}:
             continue
-        selected.append(replace(node, value=value))
+        selected.append(replace(node, value=deepcopy({k: v for k, v in value.items() if k != STATE_KEY})))
     from .capacity import shared_reference
-    shared_doc = state.get(SHARED_ID, {})
-    shared_path = shared_reference(state)
+    shared_doc = deepcopy(state.get(SHARED_ID, {}))
+    normalize_document(shared_doc, shared=True)
+    shared_path = shared_reference({**state, SHARED_ID: shared_doc})
     selected = insert_additions(selected, path, [doc, *([] if shared_path else [shared_doc])])
     selected = scope_turn_suffixes(path, selected)
     messages = project_model_messages(selected, observation_services=observation_services)
@@ -435,10 +441,30 @@ def project_tasks(path, state, *, observation_services=()):
 
 
 
+def task_state_field(service, key):
+    """Existing plugin hosts may supply just the original read() interface."""
+    if isinstance(service, TaskContexts):
+        return service.field(key)
+    return service.read().get(key)
+
+
+@dataclass(frozen=True, slots=True)
+class _SyncedPrefix:
+    version: tuple[str, int]
+    length: int
+    leaf_id: str
+
+    def matches(self, path, version, append_base):
+        incarnation, revision = self.version
+        return (incarnation == version[0] and append_base <= revision <= version[1]
+                and self.length <= len(path) and path[self.length - 1].id == self.leaf_id)
+
+
 class TaskContexts:
     def __init__(self, session):
         self.session = session
         self._gate = threading.Lock()
+        self._synced_prefix = None
 
     @asynccontextmanager
     async def serial(self):
@@ -451,11 +477,26 @@ class TaskContexts:
         finally:
             self._gate.release()
 
-    def read(self):
+    def _path(self, node_id=None):
+        """Internal read-only path, shared until a graph write or branch change."""
         s = self.session
-        state = deepcopy(s.store.get_node(s.tree.id, s.tree.root_id).value[STATE_KEY])
-        path = s.store.get_path(s.tree.id, s._leaf_id)
-        return sync_bodies(state, path)
+        return model_path(s.store, s.tree.id, s._leaf_id if node_id is None else node_id)
+
+    def _stored(self):
+        return model_root_value(self.session.store, self.session.tree.id)[STATE_KEY]
+
+    def read(self):
+        path = self._path()
+        return sync_bodies(deepcopy(path[0].value[STATE_KEY]), path)
+
+    def document(self):
+        path = self._path()
+        stored = path[0].value[STATE_KEY]
+        return _projection_document(stored, path, stored["active"])
+
+    def field(self, key):
+        """Read independent metadata without reconciling editable dialogue."""
+        return deepcopy(self._stored().get(key))
 
     def write(self, state):
         s = self.session
@@ -465,20 +506,43 @@ class TaskContexts:
 
     def sync(self):
         """Persist the body at the same session commit boundary as its records."""
-        state = self.read()
-        root = self.session.store.get_node(self.session.tree.id, self.session.tree.root_id)
-        if state != root.value.get(STATE_KEY):
-            self.write(state)
+        s = self.session
+        prefix = self._synced_prefix
+        if prefix and s._leaf_id == prefix.leaf_id and graph_version(s.store, s.tree.id) == prefix.version:
+            return
+        while True:
+            try:
+                self._sync_path(*model_path_snapshot(s.store, s.tree.id, s._leaf_id))
+                return
+            except NodeChangedError:
+                # Graph editor or another store committed between read and write.
+                continue
+
+    def _sync_path(self, path, version, append_base):
+        stored = path[0].value[STATE_KEY]
+        prefix = self._synced_prefix
+        start = prefix.length if prefix and prefix.matches(path, version, append_base) else None
+        if start == len(path):
+            return
+        state = sync_bodies(deepcopy(stored) if start is None else stored, path, appended_from=start)
+        if state != stored:
+            root = path[0]
+            with self.session._linearized_context_commit():
+                self.session.store.update_node(root.tree_id, root.id, {**root.value, STATE_KEY: state},
+                                               expected_updated_at=root.updated_at.isoformat())
+            # Our root update advances the revision once. Any intervening write
+            # raises the append-only floor past this checkpoint on the next read.
+            version = (version[0], version[1] + 1)
+        self._synced_prefix = _SyncedPrefix(version, len(path), path[-1].id)
 
     def initialize(self):
         s = self.session
         root = s.store.get_node(s.tree.id, s.tree.root_id)
         if STATE_KEY in root.value:
-            state = deepcopy(root.value[STATE_KEY])
-            if SHARED_ID not in state:
-                state[SHARED_ID] = {"body": []}
-                self.write(state)
-            self.write(normalize_state(state))
+            current = root.value[STATE_KEY]
+            if not all(isinstance(doc.get("body"), list) and "messages" not in doc
+                       for doc in (*current["documents"].values(), current.get(SHARED_ID, {}))):
+                self.write(deepcopy(current))
             return
         limit = s._configured_compaction_limit()
         self.write({"active": None, "documents": {}, SHARED_ID: {"body": []}, "receipts": {},
@@ -502,8 +566,7 @@ class TaskContexts:
                 self.write(state)
 
     def recover_compaction(self):
-        state = self.read()
-        pending = state.get("pending_compaction")
+        pending = self.field("pending_compaction")
         if not pending:
             return None
         s = self.session
@@ -512,11 +575,18 @@ class TaskContexts:
             node = s.store.get_node(s.tree.id, pending["node_id"])
         except NodeNotFoundError:
             node = s.store.mount(s.tree.id, pending["parent_id"], pending["value"], node_id=pending["node_id"])
+        state = self.read()
         state.pop("pending_compaction", None)
         self.write(state)
         return node
 
     def ensure(self, key):
+        path = self._path()
+        stored = path[0].value[STATE_KEY]
+        active = stored['active']
+        request = [n.id for n in path[current_request_start(path):] if n.value.get('role') == 'user']
+        if active and all(node_id in stored['documents'][active].get('user_nodes', ()) for node_id in request):
+            return active
         state = self.read()
         if not state["active"]:
             context_id = "ctx_" + hashlib.sha256(str(key).encode()).hexdigest()[:16]
@@ -525,10 +595,8 @@ class TaskContexts:
             transition_clarifications(state, None, context_id, [])
             state["active"] = context_id
             self.write(state)
-        path = self.session.store.get_path(self.session.tree.id, self.session._leaf_id)
         users = state['documents'][state['active']].get('user_nodes', [])
-        new_users = [n.id for n in path[current_request_start(path):]
-                     if n.value.get('role') == 'user' and n.id not in users]
+        new_users = [node_id for node_id in request if node_id not in users]
         if new_users:
             state['documents'][state['active']]['user_nodes'] = [*users, *new_users]
             self.write(state)

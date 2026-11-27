@@ -813,7 +813,7 @@ class ConversationRuntime:
         )
 
         async def operate(bridge: WorkbenchSessionBridge) -> WorkbenchChatResult:
-            snapshot = bridge.snapshot()
+            snapshot = bridge.snapshot(include_history=False)
             status = str(snapshot.get("status") or "")
             restored_run_id = str(snapshot.get("run_id") or "")
             if status == "awaiting_user":
@@ -833,7 +833,7 @@ class ConversationRuntime:
                 await bridge.cancel(
                     "replaced_by_retry" if retry_branch else "replaced_by_new_message"
                 )
-                status = str(bridge.snapshot().get("status") or "")
+                status = str(bridge.snapshot(include_history=False).get("status") or "")
             if status != "idle":
                 if restored_run_id == normalized_run_id:
                     return await bridge.resume_result(

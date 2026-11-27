@@ -211,10 +211,10 @@ def test_session_end_final_write_failure_does_not_repeat_hooks(tmp_path, monkeyp
         calls.append(True)
     session.hooks.register(SESSION_END, hook, hook_id="once")
     update = session.store.update_node
-    def fail_final(tree, node, value):
+    def fail_final(tree, node, value, **kwargs):
         if value.get("session_end_complete"):
             raise OSError("completion write failed")
-        return update(tree, node, value)
+        return update(tree, node, value, **kwargs)
     monkeypatch.setattr(session.store, "update_node", fail_final)
     try:
         session.submit("work", run_id="run")
@@ -267,7 +267,7 @@ async def test_caller_cancel_does_not_release_bridge_or_chat_lock(tmp_path, monk
 async def test_agent_message_does_not_cancel_unfinished_run(tmp_path, monkeypatch):
     runtime = ConversationRuntime()
     cancelled = []
-    bridge = SimpleNamespace(snapshot=lambda: {"status": "tools", "run_id": "old"},
+    bridge = SimpleNamespace(snapshot=lambda **kwargs: {"status": "tools", "run_id": "old"},
                              cancel=lambda reason: cancelled.append(reason))
     async def use_bridge(config, operation, **kwargs):
         return await operation(bridge)

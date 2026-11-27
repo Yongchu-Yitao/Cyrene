@@ -44,11 +44,47 @@ def body_text(doc):
     return json.dumps(body, ensure_ascii=False, indent=2)
 
 
-def sync_bodies(state, path):
-    """Reconcile committed dialogue into its owning body's ordered records."""
+def _owned_dialogue(recent, state):
     from .tasks import user_owners
-    normalize_state(state)
-    owners = user_owners(path, state)
+    owners = user_owners(recent, state)
+    owned = {}
+    for node in recent:
+        value = node.value
+        role = value.get('role')
+        if role == 'user':
+            keys = owners.get(node.id, ())
+        elif role in {'assistant', 'tool_results'}:
+            keys = (value.get('task_context_id'),)
+        else:
+            continue
+        for key in keys:
+            owned.setdefault(key, []).append(node)
+    return owned
+
+
+def sync_bodies(state, path, *, appended_from=None):
+    """Reconcile committed dialogue into its owning body's ordered records."""
+    from .paths import current_request_start
+
+    # An appended assistant may establish ownership of the preceding user
+    # request (including guidance). Reconsider that request as well as new nodes.
+    if appended_from is None:
+        normalize_state(state)
+        recent = path
+    else:
+        start = current_request_start(path[:appended_from])
+        recent = path[start:]
+    owned = _owned_dialogue(recent, state)
+    if appended_from is not None:
+        # Only these bodies can change on a proven extension. The persisted
+        # snapshot stays read-only, even if a caller is holding an earlier view.
+        state = {**state, 'documents': dict(state['documents'])}
+        keys = owned.keys() & state['documents'].keys()
+        for key in keys:
+            doc = state['documents'][key]
+            state['documents'][key] = {**doc, 'body': [dict(entry) for entry in doc['body']]}
+    else:
+        keys = state['documents'].keys()
     positions = {node.id: index for index, node in enumerate(path)}
     path_ids = set(positions)
     results = {node.parent_id: node.id for node in path if node.value.get("role") == "tool_results"}
@@ -59,28 +95,30 @@ def sync_bodies(state, path):
             anchor = entry["after_node_id"]
             return positions.get(results.get(anchor, anchor), -1) + .5
         return -1
-    for key, doc in state.get('documents', {}).items():
+    for key in keys:
+        doc = state['documents'][key]
         body = doc['body'] = [entry for entry in doc['body']
                               if 'value' not in entry or entry['id'] in path_ids]
         known = {entry['id']: entry for entry in body if 'value' in entry}
         covered = set(doc.get('covered', []))
-        for node in path:
-            value = node.value
-            role = value.get('role')
-            belongs = key in owners.get(node.id, ()) if role == 'user' else value.get('task_context_id') == key
-            if role not in {'user', 'assistant', 'tool_results'} or not belongs or node.id in covered:
+        last_position = max(map(position, body), default=-1)
+        for node in owned.get(key, ()):
+            if node.id in covered:
                 continue
-            record = {'id': node.id, 'parent_id': node.parent_id, 'value': deepcopy(value)}
-            if node.id in known:
-                if not known[node.id].get('edited'):
-                    known[node.id].update(record)
+            previous = known.get(node.id)
+            if previous is not None:
+                if not previous.get('edited'):
+                    previous['parent_id'] = node.parent_id
+                    previous['value'] = deepcopy(node.value)
                 continue
-            # append_context commits before its tool result is mounted. Keep the
-            # protocol call/result pair together, then the newly appended text.
-            insertion = next((i for i, entry in enumerate(body)
-                              if position(entry) > positions[node.id]), len(body))
-            body.insert(insertion, record)
-            known[node.id] = record
+            record = {'id': node.id, 'parent_id': node.parent_id, 'value': deepcopy(node.value)}
+            index = positions[node.id]
+            if index >= last_position:
+                body.append(record)
+                last_position = index
+            else:
+                insertion = next(i for i, entry in enumerate(body) if position(entry) > index)
+                body.insert(insertion, record)
     return state
 
 

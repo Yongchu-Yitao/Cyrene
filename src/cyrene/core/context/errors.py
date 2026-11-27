@@ -23,3 +23,7 @@ class RootDeletionError(ContextError):
 
 class ContextValueError(ContextError, ValueError):
     """Raised when a node value cannot be stored losslessly as JSON."""
+
+
+class NodeChangedError(ContextError, ValueError):
+    """A compare-and-set update observed a newer node."""

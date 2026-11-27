@@ -2,6 +2,15 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.10] - 2026-11-27
+
+### Features and interface updates
+
+- Improve conversation opening, restoration, and preparation after sending in long conversations and workspaces with many tasks. Reduce repeated full-history reads just to obtain current state. Reuse unchanged material more efficiently when preparing replies, continuing after tools complete, and appending task background, improving responsiveness with larger histories.
+- Reduce unnecessary history reconciliation during status viewing and background updates. Cards, current time, task evidence, and work-device context retain their existing refresh conditions, while permissions and recovery evidence continue using the corresponding records. Preserve the actual model messages, tool definitions, and execution order without reducing task background to gain responsiveness.
+- Strengthen context synchronization during concurrent edits, task switches, appends, deletions, and reopening. Reuse previously read content only after confirming the original records remain unchanged, and recheck when other writes occur. Handle conflicts where an earlier edit could overwrite newer records, reducing stale content or state being reused incorrectly. Task-background snapshots remain isolated from subsequent modifications.
+- Reduce repeated loading and copying of lengthy history and tool output during conversation processing, and release temporarily retained history when related reads finish. Preserve committed results, pending questions, cancellation and failure state, retries, and history-compaction behavior while remaining compatible with existing conversations.
+
 ## [0.9.2.9] - 2026-11-27
 
 ### Features and interface updates

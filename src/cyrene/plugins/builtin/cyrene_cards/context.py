@@ -2,6 +2,7 @@
 
 import json
 
+from cyrene.core.context.graph_reads import latest_path_value
 from cyrene.core.hook import MODEL_START
 from .tools import caller
 
@@ -20,9 +21,8 @@ def setup(context):
         snapshot = await service.context_snapshot(owner, context_id)
         payload = event.payload or {}
         node_id = payload.get("node_id")
-        path = context.tree.get_path(context.tree_id, node_id) if node_id else []
-        previous = next((node.value for node in reversed(path)
-                         if node.value.get("role") == "context" and node.value.get("context_kind") == "assistant_cards"), None)
+        previous = latest_path_value(context.tree, context.tree_id, node_id,
+                                     role="context", context_kind="assistant_cards")
         if not snapshot["cards"] and previous is None:
             return {}
         content = (

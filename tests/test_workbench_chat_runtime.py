@@ -770,7 +770,7 @@ def test_production_runtime_seeds_forwards_context_and_leaves_final_reply_to_lif
         return PluginRegistry(), True
 
     class FakeBridge:
-        def snapshot(self):
+        def snapshot(self, *, include_history=True):
             return {"status": "idle", "run_id": ""}
 
         async def submit_result(self, text, *, run_id, metadata, publish):

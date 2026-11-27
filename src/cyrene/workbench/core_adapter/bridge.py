@@ -764,8 +764,8 @@ class WorkbenchSessionBridge:
             event_stream=event_stream,
         )
 
-    def snapshot(self) -> dict[str, Any]:
-        return self.session.snapshot()
+    def snapshot(self, *, include_history: bool = True) -> dict[str, Any]:
+        return self.session.snapshot(include_history=include_history)
 
     def has_graph_draft(self) -> bool:
         """A saved graph draft is durable input, but has never been executed."""
