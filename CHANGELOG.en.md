@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.9.2.11] - 2026-11-28
+
+### Features and interface updates
+
+- Fix permission decisions losing their authorization meaning while passing through the conversation interface. Confirmation cards preserve the decision and scope behind Allow once, Allow for this session, and Deny, and resume using the actual option selected from the current card. Conversation history still displays readable option labels. One-time grants, session grants, and refusals retain their existing scope. Ordinary clarification questions remain text-based, and assistant answers cannot replace human authorization.
+- Improve distinction and continuation between successive permission requests. Requesting the same operation again after a refusal produces a new visible confirmation rather than being hidden by interface deduplication. Answers to earlier cards cannot apply to later requests. Answers that do not select an issued option from the current permission card prompt you to choose again while retaining the pending request, preventing similar text, stale client submissions, or repeated answers from granting unintended permission.
+- Restore permission options left pending by older versions during upgrade. Existing conversation cards that cached only display labels recover their complete options from the original execution record and retain the original request. Recovery neither grants permission nor reissues the operation, allowing correct choices after reopening the app.
+
 ## [0.9.2.10] - 2026-11-27
 
 ### Features and interface updates

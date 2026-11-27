@@ -14,6 +14,7 @@ from typing import Any, TypeAlias
 from uuid import uuid4
 
 from cyrene.core.plugin import ApplicationPluginScope, PluginRegistry
+from cyrene.core.plugin.result_codec import question_options
 from cyrene.core.session import AgentSession, AgentSessionEvent
 from cyrene.model.protocol_trace import create_model_protocol_trace
 
@@ -47,7 +48,7 @@ class AgentSessionCancelledError(RuntimeError):
 class WorkbenchPendingQuestion:
     id: str
     text: str
-    options: tuple[str, ...]
+    options: tuple[str | dict[str, str], ...]
     allow_custom: bool
     kind: str
     round_id: str
@@ -61,18 +62,15 @@ class WorkbenchPendingQuestion:
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> WorkbenchPendingQuestion:
-        options: list[str] = []
-        for item in raw.get("options") if isinstance(raw.get("options"), list) else ():
-            if isinstance(item, Mapping):
-                label = str(item.get("label") or item.get("text") or "").strip()
-            else:
-                label = str(item or "").strip()
-            if label:
-                options.append(label)
+        # Permission decisions travel by ID. Clarification answers remain free text.
+        options = tuple(
+            option if "decision" in option else option["label"]
+            for option in question_options(raw.get("options"))
+        )
         return cls(
             id=str(raw.get("id") or raw.get("question_id") or ""),
             text=str(raw.get("text") or ""),
-            options=tuple(options[:6]),
+            options=options,
             allow_custom=bool(raw.get("allow_custom", True)),
             kind=str(raw.get("kind") or "clarification"),
             round_id=str(raw.get("round_id") or ""),
@@ -89,7 +87,7 @@ class WorkbenchPendingQuestion:
         return {
             "id": self.id,
             "text": self.text,
-            "options": list(self.options),
+            "options": [dict(item) if isinstance(item, dict) else item for item in self.options],
             "allowCustom": self.allow_custom,
             "kind": self.kind,
             "roundId": self.round_id,

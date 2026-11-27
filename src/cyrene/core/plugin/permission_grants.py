@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
+from uuid import uuid4
 
 class PermissionGrants:
     def __init__(self, lock: Any) -> None:
@@ -87,14 +88,8 @@ class PermissionGrants:
         """Grant only an offered affirmative choice, under the state lock."""
         permission = pending["permission"]
         fingerprint = str(permission.get("fingerprint") or "").strip()
-        choices = [
-            item for item in pending.get("options") or ()
-            if isinstance(item, Mapping) and item.get("id") == answer
-        ]
-        if not fingerprint or len(choices) != 1:
-            return
-        choice = choices[0]
-        if choice.get("decision") != "allow":
+        choice = permission_choice(pending.get("options"), answer)
+        if not fingerprint or choice is None or choice.get("decision") != "allow":
             return
         scope = choice.get("scope")
         if scope not in {"once", "session"}:
@@ -124,6 +119,12 @@ class PermissionGrants:
         value["permission_session_grants"] = sorted(grants)
         store.update_node(tree.id, root.id, value)
 
+
+
+def permission_choice(options, answer: str) -> Mapping[str, Any] | None:
+    """Resolve an issued option ID without interpreting its display label."""
+    matches = [item for item in options or () if isinstance(item, Mapping) and item.get("id") == answer]
+    return matches[0] if len(matches) == 1 else None
 
 
 def permission_options(once_label="允许这次", *, allow_session=False):
@@ -165,7 +166,8 @@ def permission_question(
     )
     return {
         "status": "awaiting_user",
-        "question_id": f"permission_{fingerprint[:24]}",
+        # A grant identifies an operation. A reply addresses one issued prompt.
+        "question_id": f"permission_{uuid4().hex}",
         "kind": kind,
         "text": (
             f"⚠️ Agent 尝试执行 {scope_hint}{operation}\n\n"

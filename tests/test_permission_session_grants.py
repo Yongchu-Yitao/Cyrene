@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,7 @@ from cyrene.core.plugin.core_impl.permission_boundaries import bash_boundary
 from cyrene.core.plugin.permission_grants import PermissionGrants
 from cyrene.core.session import AgentSession
 from cyrene.plugins.builtin.cyrene_remote.permission import remote_permission_request
+from cyrene.workbench.core_adapter.bridge import WorkbenchSessionBridge
 
 
 @pytest.mark.parametrize("answer", ["允许这次", "本次会话内总是允许", "拒绝"])
@@ -47,22 +49,23 @@ def test_sequential_deletions_respect_once_or_session_and_restore(tmp_path, answ
         )
 
     session = open_session()
+    bridge = WorkbenchSessionBridge(session)
     try:
-        session.submit("Delete the temporary files", run_id="delete-run")
-        asyncio.run(session.drain())
-        pending = session.pending_output()
+        result = asyncio.run(bridge.submit_result("Delete the temporary files", run_id="delete-run"))
+        pending = result.pending_question.as_dict()
         assert pending["kind"] == "destructive_confirmation"
         assert (workspace / "first.txt").exists()
-        if answer == "本次会话内总是允许":
-            with patch.object(session, "_permission_fingerprint", side_effect=AssertionError(
-                "Session-approved deletions must not serialize or hash the full invocation"
-            )):
-                session.answer(pending["id"], {"允许这次": "allow_once", "本次会话内总是允许": "allow_session", "拒绝": "deny"}[answer])
-                asyncio.run(session.drain())
-        else:
-            session.answer(pending["id"], {"允许这次": "allow_once", "本次会话内总是允许": "allow_session", "拒绝": "deny"}[answer])
-            asyncio.run(session.drain())
+        choice = next(option for option in pending["options"] if option["label"] == answer)
+        skip_exact_hash = patch.object(session, "_permission_fingerprint", side_effect=AssertionError(
+            "Session-approved deletions must not serialize or hash the full invocation"
+        ))
+        with skip_exact_hash if choice["scope"] == "session" else nullcontext():
+            resumed = asyncio.run(bridge.answer_result(pending["id"], choice["id"]))
         if answer == "拒绝":
+            # A fresh request for the exact same command must survive UI deduplication.
+            assert resumed.pending_question.id != pending["id"]
+            with pytest.raises(ValueError):
+                session.answer(pending["id"], choice["id"])
             assert (workspace / "first.txt").exists()
             assert (workspace / "second.txt").exists()
             assert session.pending_output()["kind"] == "destructive_confirmation"
@@ -76,7 +79,7 @@ def test_sequential_deletions_respect_once_or_session_and_restore(tmp_path, answ
         assert session.pending_output() is None
         assert session.final_output("delete-run")["content"] == "done"
     finally:
-        session.close()
+        bridge.close()
 
     def request(session, command, **overrides):
         arguments = {"command": command}
@@ -101,6 +104,47 @@ def test_sequential_deletions_respect_once_or_session_and_restore(tmp_path, answ
         assert request(separate, "rm third.txt")["status"] == "awaiting_user"
     finally:
         separate.close()
+
+
+def test_upgrade_recovers_pending_card_options_without_granting_or_reissuing(tmp_path):
+    from types import SimpleNamespace
+
+    from cyrene.core.context import ContextStoreRouter
+    from cyrene.core.plugin.permission_grants import permission_options
+    from cyrene.workbench.chat.chat_runs import ChatRunManager
+    from cyrene.workbench.http.workbench.chat_routes.run_answer_routes import _AnswerOperation
+
+    manager = ChatRunManager()
+    manager.configure(str(tmp_path / "workbench.sqlite3"))
+    options = permission_options(allow_session=True)
+    pending = {"id": "permission_legacy", "kind": "destructive_confirmation",
+               "turn_id": "turn", "options": options}
+    with ContextStoreRouter(tmp_path / "agent-state" / "context") as router:
+        tree = router.create_tree({"role": "system"}, tree_id="upgrade")
+        node = router.mount(tree.id, tree.root_id, {
+            "role": "tool_results", "run_id": "run", "trigger_model": False,
+            "pending_question": pending,
+        })
+        router.commit_state(tree.id, node.id, "run")
+    manager._repository.insert({
+        "id": tree.id, "status": "idle", "messages": [],
+        "pendingQuestion": {"id": pending["id"], "options": [item["label"] for item in options]},
+    })
+
+    manager.startup()
+    card = manager._repository.get(tree.id)["pendingQuestion"]
+    assert card == {"id": pending["id"], "options": options}
+
+    # A stale client submitting the old display text cannot consume the card.
+    service = SimpleNamespace(repository=manager._repository, run_manager=manager)
+    operation = _AnswerOperation(SimpleNamespace(service=service), tree.id, {
+        "question_id": card["id"], "answer": options[1]["label"],
+    })
+    response = asyncio.run(operation.execute())
+    assert response.status_code == 400
+    assert b"invalid_permission_option" in response.body
+    assert manager._repository.get(tree.id)["pendingQuestion"] == card
+    assert manager.conversation_runtime.context_checkpoint(tree.id)["status"] == "awaiting_user"
 
 
 def test_remote_delete_scope_changes_with_device_project_and_operation(tmp_path):

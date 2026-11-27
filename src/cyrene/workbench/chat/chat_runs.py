@@ -1602,6 +1602,23 @@ class ChatRunManager:
                     if completed_at:
                         chat["updatedAt"] = completed_at
                     changed = True
+                else:
+                    # Older Workbench versions cached only labels for an idle
+                    # chat's pending authorization. Restore the issued choices.
+                    cached = chat.get("pendingQuestion")
+                    if (
+                        not isinstance(cached, dict)
+                        or not str(cached.get("id") or "").startswith("permission_")
+                        or not any(isinstance(item, str) for item in cached.get("options") or ())
+                    ):
+                        continue
+                    checkpoint = self.conversation_runtime.context_checkpoint(chat_id) or {}
+                    pending = checkpoint.get("pending_question")
+                    if pending and pending.id == cached["id"]:
+                        options = pending.as_dict()["options"]
+                        if options != cached.get("options"):
+                            cached["options"] = options
+                            changed = True
             if changed:
                 self._repository.write(payload)
         except Exception:

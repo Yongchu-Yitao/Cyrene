@@ -1521,7 +1521,8 @@ def test_persisted_answer_clears_card_and_acknowledges_stream(monkeypatch, agent
     operation.project_id = "project"
     operation.question_id = "question"
     operation.body = {"agentOriginated": agent_originated, "sourceSessionId": "assistant", "clientRequestId": "answer-1"}
-    operation.answer_text = "全部要"
+    operation.answer_text = "全部要" if agent_originated else "allow_session"
+    operation.answer_label = "全部要" if agent_originated else "本次会话内总是允许"
     operation.chat = {"id": "chat", "pendingQuestion": {"id": "question"}, "messages": []}
     operation.base_chat = dict(operation.chat)
     operation.wants_stream = True
@@ -1558,6 +1559,7 @@ def test_persisted_answer_clears_card_and_acknowledges_stream(monkeypatch, agent
     assert operation.answer_persisted is True
     assert events[0]["type"] == "ack"
     assert events[0]["userMessage"]["answerToQuestionId"] == "question"
+    assert events[0]["userMessage"]["content"] == operation.answer_label
 
     if agent_originated:
         assert saved[0]["messages"][0]["agentOriginated"] is True

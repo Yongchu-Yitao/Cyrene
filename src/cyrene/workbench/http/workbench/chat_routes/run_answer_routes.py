@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from cyrene.core.plugin.permission_grants import permission_choice
 from cyrene.localization import app_language, localized
 from cyrene.workbench.chat.chat_events import publish_chat_changed
 from cyrene.workbench.chat.chat_runs import ChatRun
@@ -186,6 +187,17 @@ class _AnswerOperation:
             if pending.get("kind", "clarification") != "clarification":
                 return localized_error_response("Human authorization required.", "需要用户授权。", 403, "human_authorization_required")
             self.answer_text = "[Answer from assistant session " + str(self.body.get("sourceSessionId") or "") + "; not new human authorization]\n" + self.answer_text
+        self.answer_label = self.answer_text
+        options = pending.get("options") or ()
+        if any(isinstance(option, dict) and "decision" in option for option in options):
+            selected = permission_choice(options, self.answer_text)
+            if selected is None:
+                return localized_error_response(
+                    "Choose an option from the current permission request.",
+                    "请从当前权限请求中选择一个选项。",
+                    400, "invalid_permission_option", language=self.language,
+                )
+            self.answer_label = selected["label"]
         self._apply_pending_context(pending, checkpoint)
         self.routes = self.context.runtime()
         self.project_id = str(self.chat.get("projectId") or "")
@@ -223,7 +235,7 @@ class _AnswerOperation:
     async def _persist_answer(self, run: ChatRun) -> None:
         self.now = self.service.utc_now_iso()
         self.answer_entry = _answer_message(
-            self.answer_text,
+            self.answer_label,
             self.question_id,
             self.now,
             self.service.short_id,
